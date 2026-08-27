@@ -108,6 +108,16 @@ export type {
 } from "./src/deno/workspace/agent-sessions.ts";
 export { transactAgentSessions } from "./src/deno/workspace/private.ts";
 export type { AgentSessions } from "./src/deno/workspace/agent-sessions.ts";
+export { createWorkflowPromptPublisher } from "./src/deno/agent-publication.ts";
+export type {
+  RetainedSessionKey,
+  WorkflowPromptPublisherOptions,
+} from "./src/deno/agent-publication.ts";
+export { transactAgentPromptCheckpoints } from "./src/deno/workspace/private.ts";
+export type {
+  AgentPromptCheckpoints,
+  AgentPromptCheckpointRecord,
+} from "./src/deno/workspace/agent-checkpoints.ts";
 export {
   WORKSPACE_GIT_ADD,
   WORKSPACE_GIT_SWITCH,

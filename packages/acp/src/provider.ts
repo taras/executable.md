@@ -570,7 +570,7 @@ export function createPartitionedAcpxProvider(select: AcpxPartitionSelector): Ag
           return {
             *[Symbol.iterator]() {
               const state = yield* selected();
-              return yield* state.promptStream(content, options);
+              return yield* state.promptStream(content, options, authority);
             },
           };
         },
@@ -610,6 +610,20 @@ export function createAcpxProvider(dependencies?: AcpxProviderDependencies): Age
 /** Everything the provider does, including the authoritative launch path. */
 interface AcpxProviderState extends AcpxProvider {
   launch(request: AgentLaunchRequest, authority: AgentProviderAuthority): Operation<void>;
+  /**
+   * The same turn, with the authority that can name which turn it was.
+   *
+   * Optional here and absent from {@link AcpxProvider}: an embedder holding a
+   * partition drives turns without an authority and names none, and the public
+   * handle forwards no third argument. A checkpoint is durable identity, so the
+   * ability to state one arrives the way a launch's does — delivered to the
+   * installed factory, never reachable from a handle.
+   */
+  promptStream(
+    content: string,
+    options?: PromptOptions,
+    authority?: AgentProviderAuthority,
+  ): Stream<AgentPromptEvent, string>;
   /**
    * The same resolution, with the authority that can read a placement.
    *
@@ -1750,6 +1764,7 @@ function* useAcpxProviderState(
   function promptStream(
     content: string,
     options: PromptOptions | undefined,
+    authority?: AgentProviderAuthority,
   ): Stream<AgentPromptEvent, string> {
     return {
       *[Symbol.iterator]() {
@@ -1870,6 +1885,9 @@ function* useAcpxProviderState(
                 completed = true;
               },
               () => (denials.denied ? new AgentToolPermissionRefused() : undefined),
+              authority === undefined
+                ? undefined
+                : (terminal, token) => authority.checkpoint(terminal, token),
             ),
           );
           return subscription;

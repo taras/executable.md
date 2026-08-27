@@ -164,10 +164,12 @@ function deliveryOf(value: unknown): {
   const perform = Reflect.get(authority, "perform");
   const refuse = Reflect.get(authority, "refuse");
   const sessionIdentity = Reflect.get(authority, "sessionIdentity");
+  const checkpoint = Reflect.get(authority, "checkpoint");
   if (
     typeof perform !== "function" ||
     typeof refuse !== "function" ||
-    typeof sessionIdentity !== "function"
+    typeof sessionIdentity !== "function" ||
+    typeof checkpoint !== "function"
   ) {
     throw new AgentProviderInstallError(
       "the live agent provider installation carried no launch authority",
@@ -186,6 +188,9 @@ function deliveryOf(value: unknown): {
           );
         }
         return identity;
+      },
+      checkpoint: (terminal, token) => {
+        Reflect.apply(checkpoint, authority, [terminal, token]);
       },
     },
   };

@@ -6083,9 +6083,11 @@ async function runPromptTurn(params) {
 			timeoutMs: SESSION_REPLY_DRAIN_TIMEOUT_MS
 		}).catch(() => {});
 		recordPromptResponseUsage(params.conversation, response.usage, params.promptMessageId);
+		const checkpointMeta = response._meta;
 		return {
 			stopReason: response.stopReason,
-			source: "rpc"
+			source: "rpc",
+			...checkpointMeta === void 0 ? {} : { checkpointMeta }
 		};
 	} catch (error) {
 		if (!(error instanceof TimeoutError) || !params.promptMessageId) throw error;

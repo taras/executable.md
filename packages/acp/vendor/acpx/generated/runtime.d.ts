@@ -190,9 +190,11 @@ type AcpRuntimeTurnResultError = {
   detailCode?: string;
   retryable?: boolean;
 };
+type CheckpointMeta = Record<string, unknown>;
 type AcpRuntimeTurnResult = {
   status: "completed";
   stopReason?: string;
+  _meta?: CheckpointMeta;
 } | {
   status: "cancelled";
   stopReason?: string;

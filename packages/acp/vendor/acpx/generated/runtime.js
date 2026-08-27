@@ -991,9 +991,11 @@ var AcpRuntimeManager = class {
 				promptMessageId: turn.promptMessageId
 			});
 			await this.saveCompletedRuntimeTurn(turn, response.stopReason);
+			const checkpointMeta = response.stopReason === "cancelled" ? void 0 : response.checkpointMeta;
 			task.settleResult({
 				status: response.stopReason === "cancelled" ? "cancelled" : "completed",
-				...response.stopReason ? { stopReason: response.stopReason } : {}
+				...response.stopReason ? { stopReason: response.stopReason } : {},
+				...checkpointMeta === void 0 ? {} : { _meta: checkpointMeta }
 			});
 		} catch (error) {
 			this.failRuntimeTurn(task, error);

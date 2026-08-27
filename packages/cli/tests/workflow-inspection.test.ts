@@ -154,6 +154,68 @@ function* fingerprint(path: string): Operation<string> {
   return `${bytes.toString("base64")}:${(yield* stat(path)).mode}`;
 }
 
+/** A checkpoint kind and value that exist nowhere else in this repository. */
+const TOKEN_KIND = "wfi-canary-kind-8f2a1c";
+const TOKEN_VALUE = "wfi-canary-value-4d7b6e";
+
+/**
+ * Give a run a retained Prompt checkpoint, the way a run with an Agent has one.
+ *
+ * Planted rather than earned: what an adapter puts on a response is proven
+ * elsewhere, and this suite is asking a different question — whether a run
+ * carrying one shows it to anybody. The values are canaries, so a single
+ * appearance anywhere in any output is unambiguous.
+ */
+function plantCheckpoint(path: string): void {
+  const database = new DatabaseSync(path);
+  try {
+    database.exec("PRAGMA foreign_keys = ON");
+    const event = database
+      .prepare("SELECT event_id FROM journal_events ORDER BY sequence LIMIT 1")
+      .get();
+    const eventId = event?.["event_id"];
+    if (typeof eventId !== "string") {
+      throw new Error("this run journaled nothing, so there is no event to name");
+    }
+    database
+      .prepare(
+        `INSERT INTO agent_sessions (session_key, provider, agent_command, session_identity,
+           policy, assertion_kind, assertion_value, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "xmd:workflow:v1:canary",
+        "acpx",
+        "codex-cmd",
+        "expansion:canary",
+        "policy",
+        "acpx.agentSessionId",
+        "agent-session:canary",
+        "2026-01-01T00:00:00.000Z",
+      );
+    database
+      .prepare(
+        `INSERT INTO agent_prompt_checkpoints (event_id, session_key, provider, token_kind,
+           token_value)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(eventId, "xmd:workflow:v1:canary", "codex", TOKEN_KIND, TOKEN_VALUE);
+  } finally {
+    database.close();
+  }
+}
+
+/** How many associations this run still holds. */
+function checkpointCount(path: string): number {
+  const database = new DatabaseSync(path);
+  try {
+    const row = database.prepare("SELECT count(*) AS total FROM agent_prompt_checkpoints").get();
+    return Number(row?.["total"]);
+  } finally {
+    database.close();
+  }
+}
+
 interface HistoryRow {
   readonly eventId: string;
   readonly event: { readonly type: string; readonly description?: { readonly type: string } };
@@ -365,6 +427,37 @@ describe("Tier WFI — xmd workflow status, list and history", () => {
       yield* xmd(fixture, ["workflow", "history", "release-1", "--json"]).expect();
 
       expect(yield* fingerprint(path)).toBe(before);
+    });
+  });
+
+  it("WFI12: a retained Prompt checkpoint reaches no status or history output", function* () {
+    yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
+      yield* xmd(fixture, ["workflow", "start", "--id=release-1", "flows/release.md"]).expect();
+      const path = workflowRunPath(fixture.runs, "release-1");
+      plantCheckpoint(path);
+      expect(checkpointCount(path)).toBe(1);
+
+      const outputs = [
+        yield* xmd(fixture, ["workflow", "status", "release-1"]).expect(),
+        yield* xmd(fixture, ["workflow", "status", "release-1", "--json"]).expect(),
+        yield* xmd(fixture, ["workflow", "list"]).expect(),
+        yield* xmd(fixture, ["workflow", "list", "--json"]).expect(),
+        yield* xmd(fixture, ["workflow", "history", "release-1"]).expect(),
+        yield* xmd(fixture, ["workflow", "history", "release-1", "--json"]).expect(),
+      ];
+
+      for (const output of outputs) {
+        // Neither the kind nor the value, on either stream. A checkpoint is a
+        // way back into somebody's conversation, and inspection is what a
+        // person pastes into an issue.
+        const whole = `${output.stdout}${output.stderr}`;
+        expect(whole).not.toContain(TOKEN_KIND);
+        expect(whole).not.toContain(TOKEN_VALUE);
+      }
+
+      // Still there afterwards: absent from the output because nothing presents
+      // it, not because reading the run took it away.
+      expect(checkpointCount(path)).toBe(1);
     });
   });
 

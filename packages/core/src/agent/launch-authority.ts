@@ -16,7 +16,8 @@
  */
 
 import type { Operation } from "effection";
-import type { SessionLaunchResult } from "./agent-api.ts";
+import type { AgentPromptEvent, SessionLaunchResult } from "./agent-api.ts";
+import { associateCheckpoint } from "./checkpoint.ts";
 import { AgentLaunchProtocolError } from "./launch-request.ts";
 import type { AgentLaunchRequest, IssuedLaunch } from "./launch-request.ts";
 import { readPlacement } from "./session-request.ts";
@@ -65,6 +66,21 @@ export interface AgentProviderAuthority {
    * `<Session>` or already read refuses here.
    */
   sessionIdentity(request: AgentSessionRequest): string;
+  /**
+   * Say which provider turn a successful Prompt completion was.
+   *
+   * Delivered rather than published, for the same reason `perform` is. A
+   * checkpoint is the identity a later run would continue that exact
+   * conversation from, so a way to write one that travelled the public chain
+   * would be a way for any handler to name a turn it did not have.
+   *
+   * The terminal event is the whole address: this associates a checkpoint with
+   * that exact completion and with nothing else, so two turns in flight stay
+   * two turns and there is no "the latest completion" to reach for. It retains
+   * nothing by itself — what a host does with the association is decided where
+   * the Prompt publishes.
+   */
+  checkpoint(terminal: AgentPromptEvent, token: unknown): void;
 }
 
 /** How one launch retains its phases, supplied by the invocation that issued it. */
@@ -166,6 +182,12 @@ export function createLaunchAuthority(
     // lookup, and the provider is the one that decides what to do with it.
     sessionIdentity(request) {
       return readPlacement(request).sessionIdentity;
+    },
+    // Nothing to locate: the completion names itself. Every refusal — a turn
+    // that did not complete, a token that is not one, a second association —
+    // belongs to the carrier, which is where the association actually lives.
+    checkpoint(terminal, token) {
+      associateCheckpoint(terminal, token);
     },
     *perform(request, phases) {
       const launch = locate(request);

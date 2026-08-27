@@ -6,6 +6,7 @@ import type { WorkflowRunConnections, WorkflowRunTransactionToken } from "../con
 import { createDenoWorkspaceFilesystem, type DenoWorkspaceFilesystem } from "./filesystem.ts";
 import { createWorkspaceMetadata, type WorkspaceMetadata } from "./repositories.ts";
 import { createAgentSessions, type AgentSessions } from "./agent-sessions.ts";
+import { createAgentPromptCheckpoints, type AgentPromptCheckpoints } from "./agent-checkpoints.ts";
 import { type StoredWorkspaceRoot } from "./manifest.ts";
 import {
   captureWorkspaceRoot,
@@ -35,6 +36,22 @@ export interface PrivateWorkspaceTransaction {
    * the run did not would describe a session this run never had.
    */
   readonly agentSessions: AgentSessions;
+  /**
+   * Which provider turn each retained Prompt was, inside this same
+   * transaction.
+   *
+   * Beside the session mapping for the same reason that sits beside the
+   * filesystem: a Prompt and the record naming the turn it was are one fact.
+   */
+  readonly agentCheckpoints: AgentPromptCheckpoints;
+  /**
+   * The opaque id of every event appended through this transaction, in order.
+   *
+   * What lets a caller retain something against the exact event it just
+   * appended. Reading the journal for its last row instead would be reading
+   * position and calling it identity.
+   */
+  appendedEventIds(): readonly string[];
   currentRoot(): Operation<string>;
   capture(options?: CaptureWorkspaceRootOptions): Operation<StoredWorkspaceRoot>;
   publish(rootId: string): Operation<void>;
@@ -152,6 +169,13 @@ export function usePrivateWorkspace(
 
           agentSessions: createAgentSessions(connection.database, authorize),
 
+          agentCheckpoints: createAgentPromptCheckpoints(connection.database, authorize),
+
+          appendedEventIds(): readonly string[] {
+            authorize();
+            return [...active.appended];
+          },
+
           // deno-lint-ignore require-yield
           *currentRoot(): Operation<string> {
             authorize();
@@ -238,6 +262,21 @@ export function* transactAgentSessions<T>(
   body: (sessions: AgentSessions) => Operation<T>,
 ): Operation<Result<T>> {
   return yield* transactWorkspaceRoots(database, (workspace) => body(workspace.agentSessions));
+}
+
+/**
+ * Run `body` with this run's Prompt checkpoint associations, in one
+ * transaction.
+ *
+ * The reading half. Retaining one belongs in the transaction that appends the
+ * Prompt it describes, which is a transaction the publisher opens; this is for
+ * a caller that only has to see what a run already holds.
+ */
+export function* transactAgentPromptCheckpoints<T>(
+  database: WorkflowRunDatabase,
+  body: (checkpoints: AgentPromptCheckpoints) => Operation<T>,
+): Operation<Result<T>> {
+  return yield* transactWorkspaceRoots(database, (workspace) => body(workspace.agentCheckpoints));
 }
 
 export function withPrivateWorkspaceTransaction<T>(

@@ -275,6 +275,11 @@ export type {
 export { AgentLaunchProtocolError } from "./src/agent/launch-request.ts";
 export type { AgentLaunchRequest } from "./src/agent/launch-request.ts";
 export type { AgentLaunchPhases, AgentProviderAuthority } from "./src/agent/launch-authority.ts";
+// The checkpoint type, because the authority's signature names it. The carrier
+// itself is exported from nowhere: writing one is reachable only through a
+// delivered authority, and reading one only from the prompt core is running.
+export { AgentPromptCheckpointError } from "./src/agent/checkpoint.ts";
+export type { AgentPromptCheckpoint } from "./src/agent/checkpoint.ts";
 export { launchAgentSession } from "./src/agent/launch-install.ts";
 export { AgentProviders, registerAgentProvider } from "./src/agent/provider-api.ts";
 // `installAgentProvider` is deliberately absent: it takes a launch authority,

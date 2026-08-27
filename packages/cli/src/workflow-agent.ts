@@ -30,6 +30,16 @@
  * placing a second session beside it. It is emptied before use — the same path
  * can hold residue after an unstructured process death — and nothing is ever
  * copied into it or read back out of it.
+ *
+ * ## Where a Prompt lands in that conversation
+ *
+ * The session row says which conversation this run is having. Which turn each
+ * Prompt was is a second fact, and it is retained the same way: in the run's own
+ * database, in the transaction that appends that Prompt. This module installs
+ * the publisher that opens it, because this is the only side that holds both the
+ * run and the placement that made the session — the provider names the turn, the
+ * placement names the session, and neither is recovered from the spelling of the
+ * other.
  */
 
 import { createHash } from "node:crypto";
@@ -51,8 +61,10 @@ import {
   registerAgentProvider,
 } from "@executablemd/core";
 import type { AgentProviderFactory } from "@executablemd/core";
+import { useAgentPromptPublisher } from "@executablemd/core/host";
 import {
   agentSessionKey,
+  createWorkflowPromptPublisher,
   providerSessionDirectory,
   resolveAgentSession,
   transactAgentSessions,
@@ -196,7 +208,7 @@ function sessionPolicy(
   paths: ProviderSessionPaths,
   policy: string,
   store: AcpxSessionStore,
-): AcpxSessionPolicy {
+): { policy: AcpxSessionPolicy; retainedSessionKey: (placementKey: string) => string | undefined } {
   const assertions = assertionsFor(store);
   const emptied = new Set<string>();
   /** What each placement key was placed for, so the commit names the same thing. */
@@ -210,7 +222,21 @@ function sessionPolicy(
     };
   }
 
-  return {
+  /**
+   * What this run retains the session behind one ACPX placement key under.
+   *
+   * A lookup of what the placement recorded, never a parse of the key. The
+   * placement key namespaces the provider and command into the retained key
+   * because ACPX's store is shared; recovering one from the other by taking the
+   * spelling apart would be reading arrangement as identity, and would keep
+   * working right up until the two namespaces diverged.
+   */
+  function retainedSessionKey(placementKey: string): string | undefined {
+    const identity = placed.get(placementKey);
+    return identity === undefined ? undefined : agentSessionKey(identity);
+  }
+
+  const acpxPolicy: AcpxSessionPolicy = {
     *place(context) {
       if (context.sessionIdentity === undefined) {
         throw new WorkflowAgentSessionError(
@@ -279,6 +305,8 @@ function sessionPolicy(
       }
     },
   };
+
+  return { policy: acpxPolicy, retainedSessionKey };
 }
 
 /** Install the workflow Agent profile for one live or partial attachment. */
@@ -300,6 +328,7 @@ export function* useWorkflowAgentProfile(options: WorkflowAgentProfileOptions): 
   const store = options.sessionStore ?? createAcpxSessionStore(paths.store);
   const policy = workflowSessionPolicyDigest();
   const defaultAgent = options.defaultAgent ?? DEFAULT_AGENT_NAME;
+  const sessions = sessionPolicy(options.attachment.database, paths, policy, store);
 
   const factory: AgentProviderFactory = createAcpxProvider({
     sessionStore: store,
@@ -325,9 +354,19 @@ export function* useWorkflowAgentProfile(options: WorkflowAgentProfileOptions): 
       systemPrompt: WORKFLOW_SESSION_INSTRUCTIONS,
     },
     permissions: "strict",
-    sessions: sessionPolicy(options.attachment.database, paths, policy, store),
+    sessions: sessions.policy,
   });
 
+  // Before the components, so every Prompt they register publishes through it.
+  // Bound to this attachment's exact run: a publisher is where a Prompt's event
+  // is appended from, and one that could be reached for another run would be a
+  // way to journal a turn into a run that never had it.
+  yield* useAgentPromptPublisher(
+    createWorkflowPromptPublisher({
+      database: options.attachment.database,
+      retainedSessionKey: sessions.retainedSessionKey,
+    }),
+  );
   yield* registerAgentProvider(PROVIDER, factory);
   yield* installAgentComponents({
     defaultAgent,

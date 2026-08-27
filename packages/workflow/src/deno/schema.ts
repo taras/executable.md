@@ -78,6 +78,21 @@ function coherentStopReason(): string {
 interface DeclaredObject {
   readonly type: "table" | "index";
   readonly sql: string;
+  /**
+   * Whether a version-1 file may be read without this object.
+   *
+   * Almost nothing is. Version 1 declares a fixed set, and a file missing one
+   * of them is a file disagreeing with its own header. One table is different:
+   * `agent_prompt_checkpoints` retains something a run acquires rather than
+   * something it is born with, and every version-1 database written before it
+   * existed is still exactly the run it was. So its absence is zero
+   * associations, and a run that never needs one never writes it.
+   *
+   * Optional is about presence and nothing else. A table that is there is held
+   * to this exact shape, so a partial, altered or look-alike one is damage on
+   * the same terms as any other object here.
+   */
+  readonly optional?: true;
 }
 
 const OBJECTS: ReadonlyMap<string, DeclaredObject> = new Map([
@@ -335,6 +350,23 @@ const OBJECTS: ReadonlyMap<string, DeclaredObject> = new Map([
     },
   ],
   [
+    "agent_prompt_checkpoints",
+    {
+      type: "table",
+      optional: true,
+      sql: `CREATE TABLE agent_prompt_checkpoints (
+  event_id TEXT PRIMARY KEY
+    REFERENCES journal_events(event_id) ON DELETE RESTRICT,
+  session_key TEXT NOT NULL
+    REFERENCES agent_sessions(session_key) ON DELETE RESTRICT,
+  provider TEXT NOT NULL CHECK (length(provider) > 0),
+  token_kind TEXT NOT NULL CHECK (length(token_kind) > 0),
+  token_value TEXT NOT NULL CHECK (length(token_value) > 0),
+  UNIQUE (session_key, provider, token_kind, token_value)
+) STRICT`,
+    },
+  ],
+  [
     "workflow_run",
     {
       type: "table",
@@ -473,13 +505,56 @@ export const EXPECTED_SCHEMA = Object.freeze(
   ),
 );
 
-/** Objects version 1 declares, including the pinned Cloudflare structure. */
-export const REQUIRED_OBJECTS: readonly string[] = Object.freeze([...OBJECTS.keys()]);
-
-/** Tables version 1 declares. */
-export const REQUIRED_TABLES: readonly string[] = Object.freeze(
-  [...OBJECTS.entries()].filter(([, object]) => object.type === "table").map(([name]) => name),
+/**
+ * Objects a version-1 file must hold, including the pinned Cloudflare
+ * structure.
+ *
+ * The optional ones are absent from this list and only from this list: they are
+ * created with every new database, compared against their declaration wherever
+ * they are found, and simply not demanded of a file written before they
+ * existed.
+ */
+export const REQUIRED_OBJECTS: readonly string[] = Object.freeze(
+  [...OBJECTS.entries()].filter(([, object]) => object.optional !== true).map(([name]) => name),
 );
+
+/** Tables a version-1 file must hold. */
+export const REQUIRED_TABLES: readonly string[] = Object.freeze(
+  [...OBJECTS.entries()]
+    .filter(([, object]) => object.type === "table" && object.optional !== true)
+    .map(([name]) => name),
+);
+
+/** Every object version 1 declares, required or not. */
+export const DECLARED_OBJECTS: readonly string[] = Object.freeze([...OBJECTS.keys()]);
+
+/**
+ * The objects a version-1 file may hold or not hold.
+ *
+ * Held apart because presence tells you nothing about which build wrote a file:
+ * an optional object is created with every new database and acquired by an old
+ * one the first time it needs it, so a file at any amendment level may be
+ * carrying one or not. Reading the amendment level therefore ignores them.
+ */
+const OPTIONAL_OBJECTS: ReadonlySet<string> = new Set(
+  [...OBJECTS.entries()].filter(([, object]) => object.optional === true).map(([name]) => name),
+);
+
+/**
+ * The exact declaration of one optional table, for the transaction that first
+ * needs it.
+ *
+ * There is one spelling of this table and it is the one above. A caller creates
+ * it from this rather than writing its own, because a second copy of a CREATE
+ * statement is a second shape that verification would then call damage.
+ */
+export function declaredObjectSql(name: string): string {
+  const declared = OBJECTS.get(name);
+  if (declared === undefined || declared.optional !== true) {
+    throw new Error(`version ${SCHEMA_VERSION} declares no optional object named ${name}`);
+  }
+  return declared.sql;
+}
 
 /** Version 1 in full. */
 export const SCHEMA_SQL = [...OBJECTS.values()]
@@ -651,7 +726,12 @@ const PRIOR_COMPLETE_SHAPES: readonly (readonly string[])[] = Object.freeze(
  * pre-release rather than as corruption.
  */
 function isIncompletePreReleaseShape(objects: readonly SchemaObject[]): boolean {
-  const present = new Set(objects.map((object) => object.name));
+  // Optional objects are not part of any shape's identity: one may be present
+  // at every amendment level or at none, so counting it would read a file's
+  // history off something that says nothing about it.
+  const present = new Set(
+    objects.map((object) => object.name).filter((name) => !OPTIONAL_OBJECTS.has(name)),
+  );
   if (LATEST_AMENDMENT.some((name) => present.has(name))) {
     return false;
   }

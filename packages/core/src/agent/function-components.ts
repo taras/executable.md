@@ -43,6 +43,9 @@ import { serializePromptFailure } from "./errors.ts";
 import type { SerializedPromptFailure } from "./errors.ts";
 import { persistPrompt, promptFailureFromRecord } from "./journal.ts";
 import type { PromptRecord } from "./journal.ts";
+import { checkpointOf } from "./checkpoint.ts";
+import type { AgentPromptCheckpoint } from "./checkpoint.ts";
+import type { AgentPromptAssociation } from "./publication.ts";
 
 export const AGENT_PROVIDER_PROPS: PropsSchema = {
   type: "object",
@@ -261,9 +264,13 @@ export function* Prompt(props: Record<string, Json>): Operation<Json> {
   const ordinal = yield* AgentInternal.operations.promptOrdinal(location);
   const sequence = yield* AgentInternal.operations.nextPromptSequence();
 
+  // Held here rather than on the record: what the journal keeps about a prompt
+  // is unchanged, and this is what a host may retain beside it.
+  const carried: { association?: AgentPromptAssociation } = {};
   const record = yield* persistPrompt(
     { name: `prompt:${location}#${ordinal}`, input: text, position: expansion.position },
-    () => runPrompt(text, options, sequence, throwOnError),
+    () => runPrompt(text, options, sequence, throwOnError, carried),
+    () => carried.association,
   );
 
   const failure = promptFailureFromRecord(record);
@@ -293,6 +300,14 @@ interface ConsumedTurn {
   stopReason?: string;
   failure?: SerializedPromptFailure;
   text: string;
+  /**
+   * Which provider turn this completion was, when the provider said.
+   *
+   * Read off the exact terminal event the provider produced, through a carrier
+   * only the delivered provider authority can write to. A terminal event a
+   * handler substituted carries nothing, which retains nothing.
+   */
+  checkpoint?: AgentPromptCheckpoint;
 }
 
 function* runPrompt(
@@ -300,6 +315,7 @@ function* runPrompt(
   options: PromptOptions,
   sequence: number,
   throwOnError: boolean,
+  carried: { association?: AgentPromptAssociation },
 ): Operation<PromptRecord> {
   let consumed: ConsumedTurn = { text: "" };
 
@@ -328,6 +344,10 @@ function* runPrompt(
           }
           if (event.error) {
             result.failure = serializePromptFailure(event.error);
+          }
+          const checkpoint = checkpointOf(event);
+          if (checkpoint !== undefined) {
+            result.checkpoint = checkpoint;
           }
         }
         next = yield* subscription.next();
@@ -373,6 +393,15 @@ function* runPrompt(
   }
   if (throwOnError && status !== "completed") {
     record.raised = true;
+  }
+  // Only a turn that completed under a session the provider named. Both halves
+  // are the provider's own account of this exact turn; neither is inferred, and
+  // a turn missing either offers nothing to retain.
+  if (status === "completed" && consumed.checkpoint !== undefined && consumed.sessionKey) {
+    carried.association = {
+      checkpoint: consumed.checkpoint,
+      sessionKey: consumed.sessionKey,
+    };
   }
   return record;
 }

@@ -112,6 +112,12 @@ function collectingAuthority(records: LaunchRecord[]): AgentProviderAuthority {
     sessionIdentity: () => {
       throw new Error("this stub authority routes no session placement");
     },
+    // As with a placement, these suites name no provider turn. Throwing means a
+    // checkpoint that did reach here fails loudly rather than being recorded by
+    // an authority nothing is asserting against.
+    checkpoint: () => {
+      throw new Error("this stub authority names no provider turn");
+    },
     *perform(_request, phases) {
       const prepared = yield* phases.prepare();
       records.push(prepared);
@@ -136,6 +142,12 @@ function performingAuthority(records: LaunchRecord[]): AgentProviderAuthority {
     // As above: these suites route launches, never a `<Session>` placement.
     sessionIdentity: () => {
       throw new Error("this stub authority routes no session placement");
+    },
+    // As with a placement, these suites name no provider turn. Throwing means a
+    // checkpoint that did reach here fails loudly rather than being recorded by
+    // an authority nothing is asserting against.
+    checkpoint: () => {
+      throw new Error("this stub authority names no provider turn");
     },
     *perform(_request, phases) {
       const prepared = yield* phases.prepare();

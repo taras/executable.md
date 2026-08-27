@@ -384,6 +384,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/367",
   },
   {
+    path: "packages/workflow/tests/workflow-agent-checkpoints.test.ts",
+    reason:
+      "publishes real Prompts into a real node:sqlite WorkflowRun database and reads the retained association back through the Deno storage adapter, including a legacy-shape fixture it edits with node:sqlite directly; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
+    issue: "https://github.com/taras/executable.md/issues/367",
+  },
+  {
     path: "packages/workflow/tests/generated-agent-component.test.ts",
     reason:
       "drives `<Evaluate>` against a real node:sqlite WorkflowRun database and the Deno DOFS Workspace adapter, because what is under test is that the stated ceiling is the run's own roots; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",

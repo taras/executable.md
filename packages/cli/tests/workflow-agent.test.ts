@@ -28,6 +28,7 @@ import { API, useHostFiles } from "@executablemd/runtime";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import {
   evaluationComponents,
+  transactAgentPromptCheckpoints,
   withWorkflowWorkspace,
   workflowProviderSessions,
 } from "@executablemd/workflow/deno";
@@ -66,6 +67,29 @@ function observation(source: string): ScriptedTurn {
 
 function proposal(source: string): ScriptedTurn {
   return { reply: JSON.stringify({ kind: "proposal", source }) };
+}
+
+/** A turn identity that exists nowhere else in this repository. */
+const TOKEN_VALUE = "wal-canary-turn-6b3f9d";
+
+/** The kind this host records that identity under. */
+const TOKEN_KIND = "app-server-turn-id";
+
+/** Which provider turn each Prompt of this run was, as the run retained it. */
+function* retained(
+  database: WorkflowRunDatabase,
+): Operation<{ eventId: string; tokenKind: string; tokenValue: string }[]> {
+  const read = yield* transactAgentPromptCheckpoints(database, function* (checkpoints) {
+    return checkpoints.readAll();
+  });
+  if (!read.ok) {
+    throw read.error;
+  }
+  return read.value.map((row) => ({
+    eventId: row.eventId,
+    tokenKind: row.tokenKind,
+    tokenValue: row.tokenValue,
+  }));
 }
 
 interface Attempt {
@@ -390,6 +414,38 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       expect(resumed.ensured.map((input) => input.sessionKey)).toEqual(
         interrupted.ensured.map((input) => input.sessionKey),
       );
+    });
+  });
+
+  it("WAL10: a named turn is retained against its Prompt and rendered nowhere", function* () {
+    const root = yield* useStorageRoot();
+    const source = yield* documentWithNote();
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const fake = createFakeAcp();
+      fake.script({ ...observation(`<File path="notes.md" />`), turnId: `${TOKEN_VALUE}-1` });
+      fake.script({ ...proposal("Trim the checklist to two items."), turnId: `${TOKEN_VALUE}-2` });
+
+      const attempt = yield* runFixture(root, database, source, { createRuntime: fake.create });
+
+      expect(attempt.failure).toBe(undefined);
+      // Retained, and against the run's own Prompt events. Without this the
+      // absence below would be the absence of something that never existed.
+      const rows = yield* retained(database);
+      expect(rows.map((row) => row.tokenValue)).toEqual([`${TOKEN_VALUE}-1`, `${TOKEN_VALUE}-2`]);
+      expect(rows.every((row) => row.tokenKind === TOKEN_KIND)).toBe(true);
+      const promptEvents = typed(attempt.events, "agent_prompt").map((event) => event);
+      expect(promptEvents).toHaveLength(2);
+
+      // And present in nothing a reader sees. The rendered document is what the
+      // person running it reads, and the journal is what an inspection prints.
+      const rendered = reported(attempt);
+      expect(rendered).not.toContain(TOKEN_VALUE);
+      expect(rendered).not.toContain(TOKEN_KIND);
+      const journal = JSON.stringify(attempt.events);
+      expect(journal).not.toContain(TOKEN_VALUE);
+      expect(journal).not.toContain(TOKEN_KIND);
     });
   });
 
