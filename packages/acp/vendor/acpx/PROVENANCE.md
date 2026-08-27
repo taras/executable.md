@@ -123,9 +123,13 @@ it. ACPX 0.13.1 does not — its `SessionAgentOptions.env` is persisted with the
 session record and reloaded, which is the retention that contract forbids.
 Closed issue #526 is not reopened for it.
 
-Issue #622 carries `checkpointMeta`: <https://github.com/taras/executable.md/issues/622>.
-A released ACPX version that carries the completing turn's own
-`PromptResponse._meta` out to its consumer replaces it.
+Issue #622 carries `checkpointMeta`, and issue #629 owns its exit gate:
+<https://github.com/taras/executable.md/issues/629>. A released ACPX version
+that carries the completing turn's own `PromptResponse._meta` out to its
+consumer replaces it.
+
+The two patches are removed independently. This snapshot goes when both have
+been, not when either has.
 
 ## Both patches, one snapshot
 
