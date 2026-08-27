@@ -696,6 +696,29 @@ function mintDomain(component: string): Minted {
   };
 }
 
+/**
+ * One name per identity component, whoever is reading the declarations.
+ *
+ * A `Map` keyed by name silently keeps the last of two declarations, and which
+ * one that is depends on argument order rather than on anything a host said. So
+ * the set is refused instead — the same refusal for the execution that would
+ * build implementations from it and for the inspection that only reads it, from
+ * this one function so the two cannot come to disagree about what a host may
+ * declare.
+ */
+export function assertDistinctIdentityNames(components: readonly IdentityComponent[]): void {
+  const seen = new Set<string>();
+  for (const component of components) {
+    if (seen.has(component.name)) {
+      throw new ComponentInvocationError(
+        `this execution was given two identity components called "${component.name}", and one ` +
+          "component names its durable work in one domain",
+      );
+    }
+    seen.add(component.name);
+  }
+}
+
 /** One built implementation, ready for core's own registration path. */
 export interface IdentityRegistration extends ComponentDocumentation {
   readonly name: string;
@@ -726,15 +749,14 @@ export interface IdentityInstallation {
  * that answers for nothing.
  */
 export function installIdentities(components: readonly IdentityComponent[]): IdentityInstallation {
+  // Before any factory: a set nobody can register is a set nobody may build
+  // implementations from either, and a duplicate that reached a factory would
+  // have minted a claimant for a domain that is about to be discarded.
+  assertDistinctIdentityNames(components);
+
   const minted = new Map<string, Minted>();
   const registrations: IdentityRegistration[] = [];
   for (const component of components) {
-    if (minted.has(component.name)) {
-      throw new ComponentInvocationError(
-        `this execution was given two identity components called "${component.name}", and one ` +
-          "component names its durable work in one domain",
-      );
-    }
     const domain = mintDomain(component.name);
     minted.set(component.name, domain);
     // Built here, and held by identity: this exact function is what canonical

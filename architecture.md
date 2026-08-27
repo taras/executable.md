@@ -3255,6 +3255,17 @@ environments. JSON is the canonical, lossless projection; Markdown is written
 for a person and labels a schema it cannot faithfully summarize rather than
 inventing a type for it.
 
+**A declaration set is admitted on execution's terms, or not at all.** The
+identity components a host would declare to an execution are read here without
+an execution existing, so the question "would this run" has to be asked from the
+one place that answers it: two declarations of one name are refused, and each
+declaration's name, origin, schemas, captures and forms are held to the check
+registration performs. Both checks live in one function each, used by the
+execution that builds implementations from a set and by the inspection that only
+reads it, so a set admissible to one is admissible to the other. Describing an
+environment no document could run in would be describing a run that cannot
+happen.
+
 **Inspection is observation, never authority.** Producing a catalog installs
 only the declarative registration layer selection needs. It does not enter
 `execute()`, construct a durable stream, install a Files, Service, Agent or
@@ -3272,13 +3283,19 @@ restated anywhere, and a repository component that overrides a default appears
 once, under user-provided, with its repository origin.
 
 **A partial catalog is never presented as a complete one.** A missing include is
-ordinary absence. An include that exists but cannot be enumerated — a
-non-directory, an unreadable tree, a symbolic link where a directory was named,
-or a link that could have supplied a name and leads to a directory or to
-nothing — fails the whole request. Traversal never follows a link to a
-directory, so refusing is what stops the catalog silently omitting everything
-beneath one. The diagnostic names the configured include and the logical entry,
-never the resolved host path.
+ordinary absence. An include that exists but cannot be enumerated fails the
+whole request: a non-directory, an unreadable tree, a symbolic link where a
+directory was named, and any logical entry that is a symbolic link to anything
+other than a file. Traversal never follows a link to a directory, so refusing is
+what stops the catalog silently omitting everything beneath one — and the
+refusal cannot depend on how the link is spelled, because what a link holds is
+unknown precisely because it was not walked. The diagnostic names the configured
+include and the logical entry, never the resolved host path.
+
+The cost is deliberate and visible: a directory holding a package tree of
+symbolic links cannot be listed, and the default `["components", "."]` reaches
+one in most repositories. A caller names directories that hold no such link
+instead, and the refusal says so.
 
 **Documented forms are canonical and checked.** A declaration says which
 authored forms a component accepts, and the spelling is closed: omission means
@@ -3307,7 +3324,7 @@ Status is measured against main.
 
 | Construct | Does | Status |
 | --- | --- | --- |
-| `xmd syntax` | describes every structural construct and every selected component the production `run` profile would let a document write in the contextual working directory, as deterministic Markdown or as version-1 JSON, from one catalog. Inspection only: it registers the run profile's declarations in a bounded scope and reads the filesystem for which files exist and, for a selected Markdown component, that file's frontmatter. It runs no body, imports no repository TypeScript module, installs no provider, mints no authority and writes no journal. An include it cannot enumerate fails the whole request rather than printing a healthy subset | built on the #632 stack |
+| `xmd syntax` | describes every structural construct and every selected component the production `run` profile would let a document write in the contextual working directory, as deterministic Markdown or as version-1 JSON, from one catalog. Inspection only: it registers the run profile's declarations in a bounded scope and reads the filesystem for which files exist and, for a selected Markdown component, that file's frontmatter. It runs no body, imports no repository TypeScript module, installs no provider, mints no authority and writes no journal. An include it cannot enumerate — a symbolic link to a directory anywhere beneath it included — fails the whole request rather than printing a healthy subset | built on the #632 stack |
 | `<PrintErrors>` / `printErrors(fn)` | prints failures | built on main |
 | `<Let as="name">` | binds one name in the current environment from exactly one source: the content it renders, or the exact value `value` names, bound by reference and never through the JSON boundary component props cross — the scanner resolves no JSON for that one prop, and expansion projects none. Which source it has is read from what the author wrote, before either one runs, so a construct naming both expands no child and evaluates no expression. It opens no scope, owns no resource, adds no middleware boundary and writes no journal record — replay reconstructs both sources through ordinary expansion | built on the #527 stack |
 | `<Json value={…} />` | renders one supplied value as JSON text where the element was written, from one native two-space `JSON.stringify` call. An ordinary overridable core default whose operand is a capture: the exact evaluation result arrives by reference and is never mutated, cloned, replaced or frozen. It binds nothing, and `as`, content and a missing `value` are all refused before the operand evaluates. A value with no JSON text and a serialization that threw are distinct failures, each positioned at the invocation, emitting no partial output and preserving the original error as its cause. No scope, resource, authority or JSON-specific durable effect: replay reaches it through ordinary expansion, and a surrounding `<Prompt>` or `<File>` keeps its own record of the text it consumed | built on the #452 stack |

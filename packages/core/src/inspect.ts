@@ -19,12 +19,12 @@ import {
 import type { DocumentTargetInfo } from "./document-targets.ts";
 import { Component } from "./component-api.ts";
 import { DEFAULT_INCLUDES, effectiveRegistry, selectComponent } from "./components/select.ts";
-import { ComponentRegistrationError, mergeRegistry } from "./components/registration.ts";
+import { admitDeclaration, mergeRegistry } from "./components/registration.ts";
 import { repositoryCandidateNames } from "./components/candidates.ts";
 import { documentationOf } from "./components/documentation.ts";
 import type { ComponentDocumentation } from "./components/documentation.ts";
 import { STRUCTURAL_DECLARATIONS } from "./structural.ts";
-import { formsRefusal } from "./invocation-identity.ts";
+import { assertDistinctIdentityNames } from "./invocation-identity.ts";
 import type { IdentityComponent } from "./invocation-identity.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
 import type { RootDocumentSource } from "./root-source.ts";
@@ -342,11 +342,13 @@ export interface InspectSyntaxOptions {
   readonly includes?: readonly string[];
   /**
    * Identity components the host would declare to an execution, with the same
-   * meaning `ExecuteOptions.components` gives them.
+   * meaning `ExecuteOptions.components` gives them — admissibility included.
    *
-   * Read for their structural metadata alone. The factory is never called: it
-   * takes an execution's claimant, and describing an environment mints no
-   * execution and no claimant to give it.
+   * A set an execution would refuse is refused here too: two declarations of
+   * one name, and any declaration registration would not accept. Read for their
+   * structural metadata alone; the factory is never called, because it takes an
+   * execution's claimant and describing an environment mints no execution and
+   * no claimant to give it.
    */
   readonly components?: readonly IdentityComponent[];
 }
@@ -368,10 +370,16 @@ export interface InspectSyntaxOptions {
  */
 export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxCatalog> {
   const includes = options.includes ?? DEFAULT_INCLUDES;
-  const registry = mergeRegistry(
-    yield* Component.operations.registry,
-    declaredRegistry(options.components ?? []),
-  );
+  const declared = options.components ?? [];
+  // The whole declaration set is admitted before anything is built from it, on
+  // exactly the terms ordinary execution admits it on. A set an execution would
+  // refuse describes an environment no document could ever run in, and
+  // answering for it would be describing a run that cannot happen.
+  assertDistinctIdentityNames(declared);
+  for (const component of declared) {
+    yield* admitDeclaration(component);
+  }
+  const registry = mergeRegistry(yield* Component.operations.registry, declaredRegistry(declared));
 
   const names = yield* repositoryCandidateNames(includes);
   for (const declaration of STRUCTURAL_DECLARATIONS) {
@@ -449,16 +457,6 @@ function byCodePoint(left: string, right: string): number {
 function declaredRegistry(components: readonly IdentityComponent[]): ComponentRegistry {
   const entries = new Map<string, RegistryEntry>();
   for (const component of components) {
-    // The same check registration makes, at the other place a declaration
-    // enters: ordinary execution registers these, and inspection reads them
-    // without registering anything, so a malformed one has to be refused twice
-    // or it is refused only when a document happens to run.
-    const badForms = formsRefusal(component.forms);
-    if (badForms !== undefined) {
-      throw new ComponentRegistrationError(
-        `the identity component "${component.name}" ${badForms}`,
-      );
-    }
     const definition: FunctionComponentDefinition = {
       kind: "function",
       name: component.name,

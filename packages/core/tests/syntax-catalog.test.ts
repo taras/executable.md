@@ -488,28 +488,64 @@ describe("Tier SY: include boundaries", () => {
     expect(failure.message).toContain("nothing");
   });
 
-  it("SY18: ignores a link that could not have contributed a name at all", function* () {
-    const catalog = yield* catalogFor(
-      {
-        components: { kind: "directory" },
-        "components/node_modules": { kind: "link", to: "directory" },
-        "components/readme.md": { kind: "link", to: "nothing" },
-        // A dotted spelling is not a segment, so no candidate path runs through
-        // this directory and what it leads to is not this enumeration's
-        // business — refusing it would fail a request nothing was missing from.
-        "components/File.Delete": { kind: "link", to: "directory" },
-        "components/File.Delete.md": { kind: "link", to: "nothing" },
-        "components/Kept.md": markdown("kept\n"),
-      },
-      ["components"],
+  it("SY18: refuses a linked directory however it is spelled", function* () {
+    // What a linked directory holds is unknown precisely because it was not
+    // walked, so the link's own spelling says nothing about the names inside
+    // it. Each of these is refused for the same reason `Widget` is.
+    for (const spelling of ["node_modules", "helpers", "File.Delete", ".hidden"]) {
+      const failure = yield* raised(
+        catalogFor(
+          {
+            components: { kind: "directory" },
+            [`components/${spelling}`]: { kind: "link", to: "directory" },
+            "components/Kept.md": markdown("kept\n"),
+          },
+          ["components"],
+        ),
+      );
+
+      expect(failure.name).toBe("ComponentIncludeError");
+      expect(failure.message).toContain('--include "components"');
+      expect(failure.message).toContain(JSON.stringify(spelling));
+      expect(failure.message).toContain("a directory");
+    }
+  });
+
+  it("SY18b: refuses a link that leads nowhere however it is spelled", function* () {
+    const failure = yield* raised(
+      catalogFor(
+        {
+          components: { kind: "directory" },
+          "components/readme.md": { kind: "link", to: "nothing" },
+          "components/Kept.md": markdown("kept\n"),
+        },
+        ["components"],
+      ),
     );
 
-    expect(names(userProvided(catalog))).toEqual(["Kept"]);
-    expect(find(builtIn(catalog), "File.Delete").origin).toEqual({
-      kind: "registered",
-      origin: "@executablemd/core",
-      reserved: false,
-    });
+    expect(failure.name).toBe("ComponentIncludeError");
+    expect(failure.message).toContain('"readme.md"');
+    expect(failure.message).toContain("nothing");
+  });
+
+  it("SY18c: names the include and the logical entry, never the resolved target", function* () {
+    const failure = yield* raised(
+      catalogFor(
+        {
+          components: { kind: "directory" },
+          "components/Widget": { kind: "link", to: "directory" },
+          elsewhere: { kind: "directory" },
+        },
+        ["components"],
+      ),
+    );
+
+    expect(failure.message).toContain('--include "components"');
+    expect(failure.message).toContain('"Widget"');
+    // The classification asked what the link leads to, never where. A host path
+    // in the diagnostic would publish a resolution the walk deliberately did
+    // not expose.
+    expect(failure.message).not.toContain("elsewhere");
   });
 });
 
@@ -687,8 +723,9 @@ describe("Tier SY: complete component contracts", () => {
         }),
       );
 
+      // The same refusal registration raises, because it is the same check.
       expect(failure.name).toBe("ComponentRegistrationError");
-      expect(failure.message).toContain('identity component "Ledger"');
+      expect(failure.message).toContain('the declaration for "Ledger"');
       expect(failure.message).toContain("self-closing");
     }
   });
@@ -743,6 +780,81 @@ describe("Tier SY: inspection is observation, never authority", () => {
     expect(entry.description).toBe("Names durable work after its own invocation.");
     expect(entry.context).toBe("Markdown whose durable work this names.");
     expect(entry.as).toBeUndefined();
+  });
+
+  it("SY26b: refuses two declarations of one name, before either factory", function* () {
+    const calls: string[] = [];
+    const declaring = (origin: string): IdentityComponent => ({
+      ...ledger(),
+      origin,
+      factory: () => {
+        calls.push(origin);
+        throw new Error("a refused declaration set never reaches a factory");
+      },
+    });
+
+    let catalog: SyntaxCatalog | undefined;
+    const failure = yield* raised(
+      scoped(function* () {
+        yield* useTree({});
+        catalog = yield* inspectSyntax({
+          includes: [],
+          components: [declaring("first-host"), declaring("second-host")],
+        });
+        return catalog;
+      }),
+    );
+
+    // A `Map` keyed by name would have kept the second and answered as though a
+    // host had declared one component. The set is refused instead.
+    expect(failure.name).toBe("ComponentInvocationError");
+    expect(failure.message).toContain('two identity components called "Ledger"');
+    expect(catalog).toBeUndefined();
+    expect(calls).toEqual([]);
+  });
+
+  it("SY26c: admits a declaration on the terms registration admits one", function* () {
+    const refused: Partial<IdentityComponent>[] = [
+      // Structural syntax the engine owns.
+      { name: "Let" },
+      // A name a document could not write.
+      { name: "widget" },
+      // No origin to report.
+      { origin: "" },
+      // A capture the schema also describes, and one the engine owns.
+      { props: { type: "object", properties: { value: { type: "string" } } }, captures: ["value"] },
+      { captures: ["as"] },
+      // A props schema that cannot be compiled.
+      { props: { type: "object", properties: { bad: { type: "nonsense" } } } },
+    ];
+
+    for (const change of refused) {
+      const declaration = { ...ledger(), ...change };
+      const inspected = yield* raised(
+        scoped(function* () {
+          yield* useTree({});
+          return yield* inspectSyntax({ includes: [], components: [declaration] });
+        }),
+      );
+      // The same declaration, offered to the path ordinary execution takes.
+      const registered = yield* raised(
+        scoped(function* () {
+          yield* registerComponents([
+            {
+              ...declaration,
+              fn: function* () {
+                return "";
+              },
+            },
+          ]);
+        }),
+      );
+
+      // Same input, same refusal: the two read one check, so neither can come
+      // to accept what the other rejects.
+      expect(inspected.name).toBe(registered.name);
+      expect(inspected.message).toBe(registered.message);
+    }
   });
 
   it("SY27: lets a repository file override a declared identity component", function* () {

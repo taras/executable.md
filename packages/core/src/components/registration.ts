@@ -224,6 +224,50 @@ function assertUsableCaptures(
   }
 }
 
+/**
+ * What a component declaration has to be for this scope to accept it, whoever
+ * is declaring.
+ *
+ * Extracted from the registration loop rather than restated beside it, because
+ * two things declare components: a host registering them, and a host telling an
+ * execution that one of its components names durable work (§5.6). The second
+ * reaches expansion through the first — the execution registers what its
+ * factories built — so anything that reads such a declaration *without*
+ * registering it has to ask the same question here, or a declaration would be
+ * admissible until a document happened to run.
+ *
+ * Every check is on the declaration alone. Nothing here calls an
+ * implementation, so it is usable where there is no implementation yet.
+ */
+export function* admitDeclaration(declaration: ComponentDeclaration): Operation<void> {
+  const { name, origin, props, returns, captures, forms } = declaration;
+  assertUsableName(name);
+  if (origin.length === 0) {
+    throw new ComponentRegistrationError(
+      `the declaration for "${name}" needs an origin naming where it came from`,
+    );
+  }
+  yield* compilePropsSchema(props);
+  if (returns !== undefined) {
+    yield* compileReturnsSchema(returns);
+  }
+  assertUsableCaptures(name, captures, props);
+  const badForms = formsRefusal(forms);
+  if (badForms !== undefined) {
+    throw new ComponentRegistrationError(`the declaration for "${name}" ${badForms}`);
+  }
+}
+
+/** Everything a declaration says about itself, apart from what implements it. */
+export interface ComponentDeclaration extends ComponentDocumentation {
+  readonly name: string;
+  readonly origin: string;
+  readonly props: PropsSchema;
+  readonly returns?: ReturnsSchema;
+  readonly captures?: readonly string[];
+  readonly forms?: readonly InvocationForm[];
+}
+
 export function* registerComponents(
   registrations: readonly ComponentRegistration[],
 ): Operation<void> {
@@ -236,21 +280,7 @@ export function* registerComponents(
 
   for (const registration of registrations) {
     const { name, origin, fn, props, returns, captures, forms } = registration;
-    assertUsableName(name);
-    if (origin.length === 0) {
-      throw new ComponentRegistrationError(
-        `the registration for "${name}" needs an origin naming where it came from`,
-      );
-    }
-    yield* compilePropsSchema(props);
-    if (returns !== undefined) {
-      yield* compileReturnsSchema(returns);
-    }
-    assertUsableCaptures(name, registration.captures, props);
-    const badForms = formsRefusal(forms);
-    if (badForms !== undefined) {
-      throw new ComponentRegistrationError(`the registration for "${name}" ${badForms}`);
-    }
+    yield* admitDeclaration(registration);
 
     const kind = kindOf(registration);
     const already = additions.get(name)?.[kind];

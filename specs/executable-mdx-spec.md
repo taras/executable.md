@@ -2848,12 +2848,28 @@ appears once, under user-provided, with its repository origin.
 **A partial catalog is never presented as a complete one.** A missing include
 contributes nothing, exactly as it does during execution. An include that exists
 but cannot be enumerated fails the whole request: one that is not a directory,
-one that cannot be read, and one that is itself a symbolic link. Traversal
-reports a symbolic link and never follows it, so a link that could have supplied
-a candidate is classified: one leading to a file is an ordinary candidate that
-selection reads through its repository path, and one leading to a directory or
-to nothing fails the include. The diagnostic names the configured include and
-the logical entry, never the resolved host path.
+one that cannot be read, and one that is itself a symbolic link.
+
+Traversal reports a symbolic link and never follows it, so every link it reports
+is classified by what it leads to. One leading to a file is an ordinary
+candidate that selection reads through its repository path. Any other — a
+directory, or nothing — fails the include, whatever the link is called. A
+lower-case or dotted name could not itself have described a component, but what
+the link holds is unknown precisely because it was not walked, so its spelling
+says nothing about the names inside it. The diagnostic names the configured
+include and the logical entry, never the resolved host path.
+
+The consequence is a caller's to manage: a directory holding a package tree of
+symbolic links cannot be listed, and `.` reaches one in most repositories. The
+refusal names a spelling that works.
+
+**A declared component is admitted the way an execution would admit it.** A host
+may hand inspection the identity components it would declare to an execution
+(§5.6). They are read without an execution existing, so the admissibility
+question is asked from the one place that answers it for both: two declarations
+of one name fail, and each declaration's name, origin, props and returns
+schemas, captures and forms are held to the check registration performs. What
+inspection does not do is build anything from them.
 
 **Inspection is observation, never authority.** Building a catalog installs only
 the declarative registration layer selection needs. It enters no execution,
@@ -9448,11 +9464,11 @@ so the include-boundary rows are the same on every host. Defined in §5.3.
 | SY5 | Structural stays structural | A repository file named after a construct never moves it out of the structural category |
 | SY6/SY7 | Repository mapping | Direct `.md`/`.ts`, direct `index`, nested dotted and nested index paths describe names; a lowercase segment, an empty stem, a dotted stem and a dotted directory describe none, and the inversion is held to the single-segment grammar directly |
 | SY8–SY11 | Selection decides | Include order, `.md` before `.ts`, direct before index, registered fallback, and a repository override appearing once as user-provided |
-| SY12–SY18 | Include boundaries | An absent include contributes nothing; a non-directory root, a symbolic-link root, a linked directory and a link leading nowhere each fail the whole request naming the include and the logical entry; a link to a file is selected; a link that could have supplied no name — a lowercase directory, a dotted one — is ignored rather than refused |
+| SY12–SY18c | Include boundaries | An absent include contributes nothing; a non-directory root, a symbolic-link root, a linked directory and a link leading nowhere each fail the whole request; a link to a file is selected; a linked directory is refused however it is spelled, and the diagnostic names the configured include and the logical entry rather than the resolved target |
 | SY19–SY22 | Markdown documentation | String `description`/`as`/`context` reach the catalog; a non-string value documents nothing; an undocumented component stays complete; a declared `returns` reports `value` mode with its schema |
 | SY23 | Opaque TypeScript | A repository `.ts` entry is origin-only and carries no contract field |
 | SY24/SY25 | Complete contracts | `<File>`'s two forms, `<File.Delete>`'s one, `<Json>`'s one and its capture, and text and value return modes; declaration order of captures and forms survives, each canonical forms spelling is accepted, and every other one is refused |
-| SY26/SY27 | No authority | A declared identity component is described without its factory being called, and a repository file still overrides it |
+| SY26–SY27 | Declared components | One is described without its factory being called and a repository file still overrides it; two declarations of one name are refused before either factory; and a declaration inspection refuses is refused identically by registration |
 | SY28 | First-party documentation | Every complete built-in in the core and Agent profile states a description |
 | SY29 | Determinism | Two inspections of one environment are equal, and entries are sorted within each category |
 

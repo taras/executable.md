@@ -18,8 +18,16 @@
  * this refuses. Probing follows a link and finds a file; traversal cannot follow
  * a link to a directory without risking a cycle, and would silently miss every
  * component beneath it. A link to a file is therefore an ordinary candidate,
- * and any other link that could have contributed one fails the whole request
- * rather than producing a catalog that quietly omits things.
+ * and any other link fails the whole request rather than producing a catalog
+ * that quietly omits things.
+ *
+ * The refusal does not depend on how the link is spelled. What a linked
+ * directory holds is unknown precisely because it was not walked, so a name
+ * that could not have come from the link's own path says nothing about the
+ * names that could have come from inside it — and a lower-case or dotted
+ * directory is where a `components/` tree is as likely to be reached from as
+ * anywhere else. Refusing on the spelling would be answering a question the
+ * traversal deliberately did not ask.
  */
 
 import { glob, lstat, stat } from "@executablemd/runtime";
@@ -80,22 +88,6 @@ function withoutSuffix(segments: string[]): string[] | undefined {
 }
 
 /**
- * Whether a logical entry could have taken part in a candidate path at all.
- *
- * Two ways it could: it is a candidate path itself, or every one of its
- * segments could be a name segment — which is what a directory holding
- * `index.md`, or an ancestor of one, looks like. Anything else is a path
- * probing would never have visited, so what it is made of is not this
- * enumeration's business.
- */
-function couldContribute(path: string): boolean {
-  if (repositoryComponentName(path) !== undefined) {
-    return true;
-  }
-  return path.split("/").every(isComponentNameSegment);
-}
-
-/**
  * Every component name the configured includes could supply, in no particular
  * order and without duplicates.
  *
@@ -130,9 +122,7 @@ export function* repositoryCandidateNames(includes: readonly string[]): Operatio
 
       // Reported and not a file: `glob` reports a symbolic link by its own path
       // and never follows it, so this is the one shape left.
-      if (!couldContribute(entry.path)) {
-        continue;
-      }
+      //
       // `stat` follows the link, which is the only thing asked of it here — what
       // the link leads to, never where. The resolved host path stays out of the
       // classification and out of every message below.
@@ -145,7 +135,9 @@ export function* repositoryCandidateNames(includes: readonly string[]): Operatio
         include,
         `${JSON.stringify(entry.path)} is a symbolic link to ${
           target.exists ? "a directory" : "nothing"
-        }, so the components it could have supplied cannot be listed.`,
+        }, and a link is never followed — so what lies beyond it cannot be listed and this ` +
+          "include cannot be complete. Name directories that hold no such link, as in " +
+          "`xmd syntax --include components`.",
       );
     }
   }
