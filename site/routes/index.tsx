@@ -27,7 +27,7 @@ import {
 
 const GITHUB = "https://github.com/taras/executable.md";
 const SPEC = `${GITHUB}/blob/main/specs/executable-mdx-spec.md`;
-const VERSION = "v0.8.1";
+const VERSION = "v0.9.2";
 
 const STEP_NUMBER =
   `${MONO}font-size:0.8125rem;font-weight:700;letter-spacing:0.1em;color:var(--green);`;

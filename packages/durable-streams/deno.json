@@ -1,5 +1,5 @@
 {
   "name": "@executablemd/durable-streams",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "exports": "./mod.ts"
 }
