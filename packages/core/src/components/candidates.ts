@@ -24,7 +24,7 @@
 
 import { glob, lstat, stat } from "@executablemd/runtime";
 import type { Operation } from "effection";
-import { isComponentName } from "./registration.ts";
+import { isComponentName, isComponentNameSegment } from "./registration.ts";
 
 /** An include that exists but cannot be enumerated as a component directory. */
 export class ComponentIncludeError extends Error {
@@ -51,9 +51,9 @@ function within(include: string, path: string): string {
  * The name a repository path answers to, or `undefined` when it answers to
  * none.
  *
- * Each segment is held to the single-segment grammar rather than to the dotted
- * one, because that is what the forward mapping produces: `File.Delete` is
- * probed at `File/Delete.md`, so a file literally named `File.Delete.md`
+ * Each path segment is held to the single-segment grammar rather than to the
+ * dotted one, because that is what the forward mapping produces: `File.Delete`
+ * is probed at `File/Delete.md`, so a file literally named `File.Delete.md`
  * answers to no name at all and must not be reported as though it did.
  */
 export function repositoryComponentName(path: string): string | undefined {
@@ -64,7 +64,7 @@ export function repositoryComponentName(path: string): string | undefined {
   }
   const stem =
     last === "index.md" || last === "index.ts" ? segments.slice(0, -1) : withoutSuffix(segments);
-  if (stem === undefined || stem.length === 0 || !stem.every(isComponentName)) {
+  if (stem === undefined || stem.length === 0 || !stem.every(isComponentNameSegment)) {
     return undefined;
   }
   const name = stem.join(".");
@@ -92,7 +92,7 @@ function couldContribute(path: string): boolean {
   if (repositoryComponentName(path) !== undefined) {
     return true;
   }
-  return path.split("/").every(isComponentName);
+  return path.split("/").every(isComponentNameSegment);
 }
 
 /**

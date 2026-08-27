@@ -20,6 +20,7 @@ import { scoped } from "effection";
 import type { Operation } from "effection";
 import { API } from "@executablemd/runtime";
 import type { LinkStatResult, StatResult } from "@executablemd/runtime";
+import { repositoryComponentName } from "../src/components/candidates.ts";
 import {
   AGENT_REGISTRATIONS,
   agentIdentityComponents,
@@ -36,6 +37,7 @@ import type {
   SyntaxCatalog,
 } from "../mod.ts";
 import type { IdentityComponent } from "../host.ts";
+import type { InvocationForm } from "../mod.ts";
 
 /**
  * One entry in a stubbed tree.
@@ -308,7 +310,12 @@ describe("Tier SY: repository mapping", () => {
         components: { kind: "directory" },
         "components/notes.md": markdown("lowercase\n"),
         "components/.md": markdown("empty stem\n"),
-        "components/File.Delete.md": markdown("a dot is a separator, not a stem\n"),
+        // A dot is a separator, never part of a segment. `File.Delete` is
+        // probed at `File/Delete.md`, so neither of these two spellings answers
+        // to a name and neither may displace the core default.
+        "components/File.Delete.md": markdown("a flat dotted file\n"),
+        "components/File.Delete": { kind: "directory" },
+        "components/File.Delete/index.md": markdown("a flat dotted directory\n"),
         "components/helpers": { kind: "directory" },
         "components/helpers/Thing.md": markdown("lowercase ancestor\n"),
         "components/Kept.md": markdown("kept\n"),
@@ -317,13 +324,29 @@ describe("Tier SY: repository mapping", () => {
     );
 
     expect(names(userProvided(catalog))).toEqual(["Kept"]);
-    // `File.Delete` is probed at `File/Delete.md`, so the flat spelling answers
-    // to no name and must not displace the core default.
     expect(find(builtIn(catalog), "File.Delete").origin).toEqual({
       kind: "registered",
       origin: "@executablemd/core",
       reserved: false,
     });
+  });
+
+  it("SY7b: inverts a path only through single-segment names", function* () {
+    for (const path of [
+      "File.Delete.md",
+      "File.Delete.ts",
+      "File.Delete/index.md",
+      "Ns/File.Delete.md",
+      "notes.md",
+      "Widget.txt",
+      "index.md",
+      ".md",
+    ]) {
+      expect(repositoryComponentName(path)).toBeUndefined();
+    }
+    expect(repositoryComponentName("File/Delete.md")).toBe("File.Delete");
+    expect(repositoryComponentName("Widget.ts")).toBe("Widget");
+    expect(repositoryComponentName("Ns/Widget/index.md")).toBe("Ns.Widget");
   });
 });
 
@@ -471,12 +494,22 @@ describe("Tier SY: include boundaries", () => {
         components: { kind: "directory" },
         "components/node_modules": { kind: "link", to: "directory" },
         "components/readme.md": { kind: "link", to: "nothing" },
+        // A dotted spelling is not a segment, so no candidate path runs through
+        // this directory and what it leads to is not this enumeration's
+        // business — refusing it would fail a request nothing was missing from.
+        "components/File.Delete": { kind: "link", to: "directory" },
+        "components/File.Delete.md": { kind: "link", to: "nothing" },
         "components/Kept.md": markdown("kept\n"),
       },
       ["components"],
     );
 
     expect(names(userProvided(catalog))).toEqual(["Kept"]);
+    expect(find(builtIn(catalog), "File.Delete").origin).toEqual({
+      kind: "registered",
+      origin: "@executablemd/core",
+      reserved: false,
+    });
   });
 });
 
@@ -604,9 +637,14 @@ describe("Tier SY: complete component contracts", () => {
 
     expect(find(entries, "File").forms).toEqual(["self-closing", "paired"]);
     expect(find(entries, "File.Delete").forms).toEqual(["self-closing"]);
+    // Form-sensitive without a dispatcher: `<Json>` refuses content in its own
+    // body, and `json-component.test.ts` is where that refusal is proved. What
+    // this checks is that the catalog reports the form the refusal leaves.
+    expect(find(entries, "Json").forms).toEqual(["self-closing"]);
     expect(find(entries, "Json").captures).toEqual(["value"]);
     expect(find(entries, "Json").returnMode).toBe("text");
     expect(find(entries, "Json").returns).toEqual({ type: "string" });
+    expect(find(entries, "TempDir").forms).toEqual(["self-closing", "paired"]);
     expect(find(entries, "Glob").returnMode).toBe("value");
     expect(find(entries, "Glob").returns).toEqual({ type: "array", items: { type: "string" } });
   });
@@ -632,6 +670,50 @@ describe("Tier SY: complete component contracts", () => {
 
     expect(find(builtIn(catalog), "Ordered").captures).toEqual(["second", "first"]);
     expect(find(builtIn(catalog), "Ordered").forms).toEqual(["paired"]);
+  });
+
+  it("SY25b: refuses a forms declaration that is not one of the three spellings", function* () {
+    for (const forms of [
+      [],
+      ["paired", "self-closing"],
+      ["paired", "paired"],
+      ["either"],
+      "both",
+    ]) {
+      const failure = yield* raised(
+        scoped(function* () {
+          yield* useTree({});
+          return yield* inspectSyntax({ includes: [], components: [ledgerDeclaring(forms)] });
+        }),
+      );
+
+      expect(failure.name).toBe("ComponentRegistrationError");
+      expect(failure.message).toContain('identity component "Ledger"');
+      expect(failure.message).toContain("self-closing");
+    }
+  });
+
+  it("SY25c: accepts each canonical forms declaration, and omission", function* () {
+    const canonical: readonly (readonly InvocationForm[] | undefined)[] = [
+      undefined,
+      ["self-closing"],
+      ["paired"],
+      ["self-closing", "paired"],
+    ];
+
+    for (const forms of canonical) {
+      const catalog = yield* scoped(function* () {
+        yield* useTree({});
+        return yield* inspectSyntax({
+          includes: [],
+          components: [forms === undefined ? ledger() : { ...ledger(), forms }],
+        });
+      });
+
+      // Omission means both, which is what a declaration meant before forms
+      // could be written at all.
+      expect(find(builtIn(catalog), "Ledger").forms).toEqual(forms ?? BOTH);
+    }
   });
 });
 
@@ -722,6 +804,33 @@ describe("Tier SY: determinism", () => {
     expect(names(userProvided(first))).toEqual(["Alpha", "Ns.Mid", "Zebra"]);
   });
 });
+
+const BOTH: readonly InvocationForm[] = ["self-closing", "paired"];
+
+/** A host-declared identity component with nothing said about its forms. */
+function ledger(): IdentityComponent {
+  return {
+    name: "Ledger",
+    origin: "test-host",
+    props: { type: "object", properties: {}, additionalProperties: false },
+    factory: () => {
+      throw new Error("a declaration this refuses never reaches a factory");
+    },
+  };
+}
+
+/**
+ * The same declaration with `forms` written to whatever a host wrote.
+ *
+ * Planted rather than declared, because the values worth refusing are the ones
+ * the type already excludes: a host reaches this boundary from JavaScript, and
+ * the refusal exists for exactly what the compiler could not have stopped.
+ */
+function ledgerDeclaring(forms: unknown): IdentityComponent {
+  const declaration = ledger();
+  Reflect.set(declaration, "forms", forms);
+  return declaration;
+}
 
 /** The error an operation raised, as a value the row can read. */
 function* raised(operation: Operation<unknown>): Operation<Error> {

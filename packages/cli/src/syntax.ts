@@ -71,17 +71,20 @@ export function renderSyntaxJson(catalog: SyntaxCatalog): string {
   return `${JSON.stringify(catalog, null, 2)}\n`;
 }
 
-const HEADINGS = {
+/** The three category kinds, taken from the catalog rather than restated. */
+type CategoryKind = SyntaxCatalog["categories"][number]["kind"];
+
+const HEADINGS: Record<CategoryKind, string> = {
   structural: "## Built-in structural syntax",
   "built-in": "## Built-in components",
   "user-provided": "## User-provided components",
-} as const;
+};
 
-const EMPTY = {
+const EMPTY: Record<CategoryKind, string> = {
   structural: "No structural constructs are reserved.",
   "built-in": "No components are registered in this profile.",
   "user-provided": "No components were found in the configured includes.",
-} as const;
+};
 
 export function renderSyntaxMarkdown(catalog: SyntaxCatalog): string {
   const sections = catalog.categories.map((category) => {
@@ -214,12 +217,23 @@ function propertyRows(props: PropsSchema): string[] {
   );
   const rows: string[] = [];
   for (const [name, schema] of Object.entries(properties)) {
+    // Every cell is escaped on the way in, the prop name included: a schema
+    // property may be spelled with anything, and one pipe in a name would
+    // shift every column after it.
     rows.push(
-      `| ${code(name)} | ${summarizeType(schema)} | ${required.has(name) ? "yes" : "no"} | ` +
-        `${cell(describeProp(schema))} |`,
+      row([
+        code(name),
+        summarizeType(schema),
+        required.has(name) ? "yes" : "no",
+        describeProp(schema),
+      ]),
     );
   }
   return rows;
+}
+
+function row(cells: readonly string[]): string {
+  return `| ${cells.map(cell).join(" | ")} |`;
 }
 
 /**
@@ -238,7 +252,9 @@ function summarizeType(schema: Json): string {
     return code(type);
   }
   if (Array.isArray(type) && type.every((member) => typeof member === "string")) {
-    return type.map(code).join(" \\| ");
+    // Unescaped: `row()` escapes every cell once, and escaping here as well
+    // would put a backslash in front of the backslash.
+    return type.map(code).join(" | ");
   }
   return "JSON Schema";
 }

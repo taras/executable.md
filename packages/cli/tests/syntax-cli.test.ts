@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { API } from "@executablemd/runtime";
 import { CORE_COMPONENT_NAMES } from "@executablemd/core";
-import type { SyntaxCatalog } from "@executablemd/core";
+import type { PropsSchema, SyntaxCatalog } from "@executablemd/core";
 import { renderSyntaxJson, renderSyntaxMarkdown, syntaxCatalog } from "../src/syntax.ts";
 
 function* useWorkspace<T>(
@@ -92,6 +92,34 @@ function names(entries: readonly { name: string }[]): string[] {
   return entries.map((entry) => entry.name);
 }
 
+/** One built-in entry carrying `props`, for a renderer row that supplies its own. */
+function catalogWith(props: PropsSchema): SyntaxCatalog {
+  return {
+    version: 1,
+    categories: [
+      { kind: "structural", entries: [] },
+      {
+        kind: "built-in",
+        entries: [
+          {
+            kind: "component",
+            name: "Awkward",
+            origin: { kind: "registered", origin: "test", reserved: false },
+            sourceKind: "registered",
+            inspectability: "complete",
+            forms: ["self-closing"],
+            props,
+            captures: [],
+            returnMode: "text",
+            returns: { type: "string" },
+          },
+        ],
+      },
+      { kind: "user-provided", entries: [] },
+    ],
+  };
+}
+
 describe("Tier SX — the run profile the command describes", () => {
   it("SX1: names core, Agent, testing and web defaults, and <Session>", function* () {
     const catalog = yield* syntaxCatalog([]);
@@ -125,6 +153,36 @@ describe("Tier SX — the run profile the command describes", () => {
     );
 
     expect(names(undocumented)).toEqual([]);
+  });
+
+  it("SX2b: reports the testing contracts as they actually are", function* () {
+    const catalog = yield* syntaxCatalog([]);
+    const entries = catalog.categories[1].entries;
+
+    const throws = entries.find((entry) => entry.name === "AssertThrows");
+    // `message` is a capture, so it is deliberately absent from the schema —
+    // which is exactly why the prose has to say it is required.
+    expect(throws?.captures).toEqual(["message"]);
+    expect(throws?.props.properties).toEqual({});
+    expect(throws?.description).toContain("required");
+    // The return binds by reference, so `as` receives the segment itself.
+    expect(throws?.as).toContain("caught error segment");
+
+    // An ordinary assertion returns its report, so `as` binds text — not the
+    // outcome, which a failing assertion never returns at all.
+    const equals = entries.find((entry) => entry.name === "AssertEquals");
+    expect(equals?.as).toContain("diagnostic report");
+    expect(equals?.returnMode).toBe("text");
+
+    // A kind that reads expected children accepts both forms; one that refuses
+    // them accepts one, and `assertions.test.ts` proves the refusal.
+    expect(equals?.forms).toEqual(["self-closing", "paired"]);
+    expect(entries.find((entry) => entry.name === "Assert")?.forms).toEqual(["self-closing"]);
+    expect(entries.find((entry) => entry.name === "AssertMatch")?.forms).toEqual(["self-closing"]);
+    expect(entries.find((entry) => entry.name === "AssertStringIncludes")?.forms).toEqual([
+      "self-closing",
+      "paired",
+    ]);
   });
 
   it("SX3: describes <Session> without minting an execution claimant", function* () {
@@ -174,6 +232,30 @@ describe("Tier SX — the renderers take a value", () => {
 
     expect(rendered.markdown).toContain("## Built-in components");
     expect(rendered.json.endsWith("\n")).toBe(true);
+  });
+
+  it("SX4b: escapes a table cell that would otherwise shift the columns", function* () {
+    const markdown = renderSyntaxMarkdown(
+      catalogWith({
+        type: "object",
+        properties: {
+          "left|right": { type: "string", description: "a | in the description, and\na break" },
+          plain: { type: ["string", "number"] },
+        },
+        required: ["left|right"],
+        additionalProperties: false,
+      }),
+    );
+
+    const rows = markdown.split("\n").filter((line) => line.startsWith("| `"));
+    expect(rows).toEqual([
+      "| `left\\|right` | `string` | yes | a \\| in the description, and a break |",
+      "| `plain` | `string` \\| `number` | no |  |",
+    ]);
+    // Every row still has the four columns the header declares.
+    for (const line of rows) {
+      expect(line.split(/(?<!\\)\|/).length).toBe(6);
+    }
   });
 
   it("SX5: renders the same bytes twice from the same catalog", function* () {

@@ -3280,6 +3280,19 @@ directory, so refusing is what stops the catalog silently omitting everything
 beneath one. The diagnostic names the configured include and the logical entry,
 never the resolved host path.
 
+**Documented forms are canonical and checked.** A declaration says which
+authored forms a component accepts, and the spelling is closed: omission means
+both, and the only arrays are `["self-closing"]`, `["paired"]` and
+`["self-closing", "paired"]`. One spelling per meaning is what lets a catalog be
+compared without being normalized, so an empty array, a reversed pair, a
+repeated member and a form no invocation has are refused where the declaration
+is made — at registration and at the identity declarations inspection reads,
+because a declaration refused in only one of those places is refused only when a
+document happens to run. What a component accepts and what it says it accepts
+come from one value: a dispatcher's forms are read off its own `FormDeclaration`,
+and a component that refuses a form in its own body declares the form that
+leaves.
+
 **Documentation is descriptive metadata and nothing else.** `description`, `as`
 and `context` take no part in expansion, resolution, validation, authority or
 the journal. For a Markdown component they are ordinary frontmatter: a string is

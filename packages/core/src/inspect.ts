@@ -19,11 +19,12 @@ import {
 import type { DocumentTargetInfo } from "./document-targets.ts";
 import { Component } from "./component-api.ts";
 import { DEFAULT_INCLUDES, effectiveRegistry, selectComponent } from "./components/select.ts";
-import { mergeRegistry } from "./components/registration.ts";
+import { ComponentRegistrationError, mergeRegistry } from "./components/registration.ts";
 import { repositoryCandidateNames } from "./components/candidates.ts";
 import { documentationOf } from "./components/documentation.ts";
 import type { ComponentDocumentation } from "./components/documentation.ts";
 import { STRUCTURAL_DECLARATIONS } from "./structural.ts";
+import { formsRefusal } from "./invocation-identity.ts";
 import type { IdentityComponent } from "./invocation-identity.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
 import type { RootDocumentSource } from "./root-source.ts";
@@ -448,6 +449,16 @@ function byCodePoint(left: string, right: string): number {
 function declaredRegistry(components: readonly IdentityComponent[]): ComponentRegistry {
   const entries = new Map<string, RegistryEntry>();
   for (const component of components) {
+    // The same check registration makes, at the other place a declaration
+    // enters: ordinary execution registers these, and inspection reads them
+    // without registering anything, so a malformed one has to be refused twice
+    // or it is refused only when a document happens to run.
+    const badForms = formsRefusal(component.forms);
+    if (badForms !== undefined) {
+      throw new ComponentRegistrationError(
+        `the identity component "${component.name}" ${badForms}`,
+      );
+    }
     const definition: FunctionComponentDefinition = {
       kind: "function",
       name: component.name,

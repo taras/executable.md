@@ -30,7 +30,13 @@ import { parseJsonObject } from "../json.ts";
 import { declaredForms, formDispatcher } from "../invocation-identity.ts";
 import { documented } from "./documentation.ts";
 import type { FirstPartyDocumentation } from "./documentation.ts";
-import type { FormDeclaration, FunctionComponent, PropsSchema, ReturnsSchema } from "../types.ts";
+import type {
+  FormDeclaration,
+  FunctionComponent,
+  InvocationForm,
+  PropsSchema,
+  ReturnsSchema,
+} from "../types.ts";
 
 /** The origin every core component reports to inspection. */
 export const CORE_ORIGIN = "@executablemd/core";
@@ -45,6 +51,16 @@ export const CORE_ORIGIN = "@executablemd/core";
 interface CoreOptions {
   returns?: ReturnsSchema;
   captures?: readonly string[];
+  /**
+   * The forms this component accepts, when it is form-sensitive without being
+   * a dispatcher.
+   *
+   * A component that hands over a `FormDeclaration` needs none of this: its
+   * forms are read off that declaration below. This is for one that refuses a
+   * form in its own body — `<Json>`, which will not render content — so what it
+   * accepts and what it says it accepts are still written once each and agree.
+   */
+  forms?: readonly InvocationForm[];
 }
 
 /**
@@ -71,6 +87,7 @@ function core(
   const declaration = typeof implementation === "function" ? undefined : implementation;
   const fn = typeof implementation === "function" ? implementation : formDispatcher(implementation);
   const { returns, captures } = options;
+  const forms = declaration === undefined ? options.forms : declaredForms(declaration);
   return [
     name,
     {
@@ -81,7 +98,7 @@ function core(
           props,
           ...(returns === undefined ? {} : { returns }),
           ...(captures === undefined ? {} : { captures }),
-          ...(declaration === undefined ? {} : { forms: declaredForms(declaration) }),
+          ...(forms === undefined ? {} : { forms }),
           ...documented(documentation),
           fn,
         },
@@ -163,11 +180,12 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
       description:
         "Renders a structured value as JSON text at the position it is written. There is no " +
         "indent, replacer or sorting option: the whole transformation is one value to one " +
-        "piece of text.",
+        "piece of text. It renders the value it is given rather than content, so the paired " +
+        "form is refused.",
       as: null,
       context: null,
     },
-    { captures: ["value"] },
+    { captures: ["value"], forms: ["self-closing"] },
   ),
   core(
     "Parse",

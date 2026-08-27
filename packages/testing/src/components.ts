@@ -49,11 +49,13 @@ import { requireCompleteTestingActivation } from "./activation.ts";
 import type { BoundaryOutcome, TestResult } from "./test-api.ts";
 import { readCompletedRun } from "./journal.ts";
 import {
+  ASSERTION_BINDING,
   ASSERTION_PROPS,
   ASSERTIONS,
   assertionComponent,
   assertionContext,
   assertionDescription,
+  assertionForms,
   capturesFor,
 } from "./assertions.ts";
 import { AssertThrows, ASSERT_THROWS_PROPS, createTestHandlers } from "./handlers.ts";
@@ -121,9 +123,12 @@ export const TESTING_REGISTRATIONS: readonly ComponentRegistration[] = [
     captures: ["message"],
     ...documented({
       description:
-        "Passes when expanding its content fails. The optional `message` operand constrains " +
-        "which failure counts.",
-      as: null,
+        "Passes when expanding its content fails with a message the required `message` operand " +
+        "matches. `message` is a capture and takes a string or a RegExp; an invocation that " +
+        "writes none is a configuration error.",
+      as:
+        "Optional. The complete caught error segment, bound by reference — its `message`, " +
+        "`source` and structured `cause` as they were raised, not a description of them.",
       context: "The Markdown expected to fail.",
     }),
   },
@@ -140,9 +145,10 @@ export const TESTING_REGISTRATIONS: readonly ComponentRegistration[] = [
     fn: assertionComponent(assertion),
     props: ASSERTION_PROPS,
     captures: capturesFor(assertion.kind),
+    forms: assertionForms(assertion.kind),
     ...documented({
       description: assertionDescription(assertion),
-      as: null,
+      as: ASSERTION_BINDING,
       context: assertionContext(assertion.kind),
     }),
   })),

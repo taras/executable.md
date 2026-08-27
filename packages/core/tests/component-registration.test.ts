@@ -28,7 +28,12 @@ import type { ComponentRegistration } from "../src/components/registration.ts";
 import { DEFAULT_INCLUDES, selectComponent } from "../src/components/select.ts";
 import * as core from "../mod.ts";
 import { CORE_ORIGIN } from "../src/components/registry.ts";
-import type { ComponentRegistry, ComponentSelection, Json as CoreJson } from "../src/types.ts";
+import type {
+  ComponentRegistry,
+  ComponentSelection,
+  InvocationForm,
+  Json as CoreJson,
+} from "../src/types.ts";
 
 const NO_PROPS = { type: "object", properties: {}, additionalProperties: false };
 
@@ -878,6 +883,64 @@ describe("Tier CR — selection is journaled", () => {
         }
       });
       expect(thrown).toBeInstanceOf(ComponentRegistrationError);
+    }
+  });
+
+  // Forms are documentation, and documentation nobody can act on is worse than
+  // none: one canonical spelling per meaning means a catalog is comparable
+  // without normalizing it first.
+  it("CR-FORM: rejects a forms declaration that is not canonical", function* () {
+    const bad: unknown[] = [
+      [],
+      ["paired", "self-closing"],
+      ["paired", "paired"],
+      ["self-closing", "self-closing"],
+      ["either"],
+      ["self-closing", "paired", "self-closing"],
+      "paired",
+      null,
+    ];
+
+    for (const forms of bad) {
+      let thrown: unknown;
+      yield* scoped(function* () {
+        const declaration = registration("Widget", "host");
+        // Planted rather than declared: a host reaches registration from
+        // JavaScript, so the refusal exists for what the compiler could not
+        // have stopped.
+        Reflect.set(declaration, "forms", forms);
+        try {
+          yield* registerComponents([declaration]);
+        } catch (error) {
+          thrown = error;
+        }
+      });
+      expect(thrown).toBeInstanceOf(ComponentRegistrationError);
+      expect(String(thrown)).toContain("self-closing");
+    }
+  });
+
+  it("CR-FORM: accepts the three canonical spellings, and carries them through", function* () {
+    const canonical: readonly (readonly InvocationForm[] | undefined)[] = [
+      undefined,
+      ["self-closing"],
+      ["paired"],
+      ["self-closing", "paired"],
+    ];
+
+    for (const forms of canonical) {
+      yield* scoped(function* () {
+        yield* registerComponents([
+          registration("Widget", "host", forms === undefined ? {} : { forms }),
+        ]);
+        const selected = yield* select("Widget", []);
+        expect(selected.kind).toBe("registered");
+        if (selected.kind === "registered") {
+          // Omission stays omission on the definition: absence is what every
+          // registration written before forms existed already means.
+          expect(selected.definition.forms).toEqual(forms);
+        }
+      });
     }
   });
 });

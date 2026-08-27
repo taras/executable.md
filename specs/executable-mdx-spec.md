@@ -2676,12 +2676,20 @@ JSON projection of it. A capture may not also be a schema property — a schema
 cannot describe a value it never sees — nor may it be `as` or `slot`, which the
 engine owns.
 
-`forms` names the authored forms the component accepts — `self-closing`,
-`paired`, or both in that canonical order. It is documentation, never dispatch:
-a component that will not run in a form enforces that with a form declaration,
-which canonical core turns into the engine-owned body that decides (§5.6), and
-declares the same ordered forms here so the two cannot drift. Omitting it means
-both forms, which is what every registration meant before it existed.
+`forms` names the authored forms the component accepts. It is documentation,
+never dispatch: what a form-sensitive component actually runs is decided by the
+engine-owned body a form declaration produces (§5.6), or by the component's own
+refusal, and this says the same thing where inspection can read it.
+
+Its spelling is canonical and is checked where the declaration is made. Omitting
+it means both forms — what every registration meant before it existed — and the
+only arrays accepted are `["self-closing"]`, `["paired"]` and
+`["self-closing", "paired"]`. An empty array, a reversed pair, a repeated member
+and a form no invocation has are each refused there, so a catalog can be
+compared without being normalized first and a reader never has to wonder whether
+a different order meant something else. The identity components a host declares
+to an execution (§5.6) are held to the same rule, whether they are registered by
+a run or read by inspection.
 
 A registration may also carry `description`, `as` and `context` — the same three
 descriptive fields Markdown frontmatter carries, with the same meaning and the
@@ -2827,8 +2835,11 @@ must not do, so the absence is stated rather than rendered as an empty contract.
 structural table, from the effective registrations, and from repository paths
 that invert the mapping `probeComponentPath()` uses: `Name.md`, `Name.ts`,
 `Name/index.md` and `Name/index.ts`, with nested path segments becoming dotted
-name segments. A path whose segments could not have been written as name
-segments describes no name and is not a candidate. Names are de-duplicated and
+name segments. Each path segment carries exactly one name segment, so a segment
+is held to the single-segment grammar rather than to the dotted one: `File.Delete`
+is probed at `File/Delete.md`, which means a file called `File.Delete.md` and a
+directory called `File.Delete` each describe no name at all and neither is a
+candidate. Names are de-duplicated and
 then each is passed through `selectComponent()`, so the tiers, include order,
 candidate order, repository override and registered fallback above are not
 restated anywhere. A repository component that overrides an ordinary default
@@ -9419,6 +9430,7 @@ Each row names the derivation it kills.
 | CR23 | Broken local component | A file that exists but cannot be used fails; it does not fall back to the default |
 | CR24 | Structural is not shadowed | A file named after a construct never supplies it |
 | CR25–CR29 | Inspection | Inspection agrees with execution, describes structural and unresolved names, and never imports a repository `.ts` |
+| CR-FORM | Canonical forms | Only the three canonical spellings are accepted, and each is carried through to the definition; omission stays omission |
 | CR30 | Defaults are journaled | A core default records an `import_component` entry and replays without re-running |
 | CR31 | Repository replay | The entry holds path and content, and a replay never probes the filesystem |
 | CR32 | Registration replay | A reserved registration records its origin and replays |
@@ -9434,12 +9446,12 @@ so the include-boundary rows are the same on every host. Defined in §5.3.
 | SY1/SY2 | Versioned shape | `version` is 1, the categories are the fixed tuple, and one structural, one registered and one repository entry appear together |
 | SY3/SY4 | Structural vocabulary | The declarations are exactly the reserved names, each with authored forms and a description; `Let`, `Content`, `Else`, `Break`, `Answers` and `Answer` carry the frozen forms, and `as` applies to `Let` and `Each` alone |
 | SY5 | Structural stays structural | A repository file named after a construct never moves it out of the structural category |
-| SY6/SY7 | Repository mapping | Direct `.md`/`.ts`, direct `index`, nested dotted and nested index paths describe names; a lowercase segment, an empty stem and a dotted stem describe none |
+| SY6/SY7 | Repository mapping | Direct `.md`/`.ts`, direct `index`, nested dotted and nested index paths describe names; a lowercase segment, an empty stem, a dotted stem and a dotted directory describe none, and the inversion is held to the single-segment grammar directly |
 | SY8–SY11 | Selection decides | Include order, `.md` before `.ts`, direct before index, registered fallback, and a repository override appearing once as user-provided |
-| SY12–SY18 | Include boundaries | An absent include contributes nothing; a non-directory root, a symbolic-link root, a linked directory and a link leading nowhere each fail the whole request naming the include and the logical entry; a link to a file is selected; a link that could have supplied no name is ignored |
+| SY12–SY18 | Include boundaries | An absent include contributes nothing; a non-directory root, a symbolic-link root, a linked directory and a link leading nowhere each fail the whole request naming the include and the logical entry; a link to a file is selected; a link that could have supplied no name — a lowercase directory, a dotted one — is ignored rather than refused |
 | SY19–SY22 | Markdown documentation | String `description`/`as`/`context` reach the catalog; a non-string value documents nothing; an undocumented component stays complete; a declared `returns` reports `value` mode with its schema |
 | SY23 | Opaque TypeScript | A repository `.ts` entry is origin-only and carries no contract field |
-| SY24/SY25 | Complete contracts | `<File>`'s two forms, `<File.Delete>`'s one, `<Json>`'s capture, and text and value return modes; declaration order of captures and forms survives |
+| SY24/SY25 | Complete contracts | `<File>`'s two forms, `<File.Delete>`'s one, `<Json>`'s one and its capture, and text and value return modes; declaration order of captures and forms survives, each canonical forms spelling is accepted, and every other one is refused |
 | SY26/SY27 | No authority | A declared identity component is described without its factory being called, and a repository file still overrides it |
 | SY28 | First-party documentation | Every complete built-in in the core and Agent profile states a description |
 | SY29 | Determinism | Two inspections of one environment are equal, and entries are sorted within each category |
@@ -9449,8 +9461,8 @@ so the include-boundary rows are the same on every host. Defined in §5.3.
 | # | Test | Verify |
 |---|------|--------|
 | SX1–SX3 | The run profile | Core, Agent, testing and web defaults and `<Session>` are described from the declarations the runtime installers register, with no execution claimant minted |
-| SX2 | Documentation completeness | Every complete built-in in the profile states a description |
-| SX4–SX6 | Renderers take a value | Both formats render from a supplied catalog with the filesystem refusing every call, twice with identical bytes, under the fixed category headings |
+| SX2 | Documentation completeness | Every complete built-in in the profile states a description, and the testing contracts read as they are: `<AssertThrows>` requires `message` and binds the caught error segment, an ordinary assertion binds its diagnostic report, and an assertion that refuses expected children reports one form |
+| SX4–SX6 | Renderers take a value | Both formats render from a supplied catalog with the filesystem refusing every call, twice with identical bytes, under the fixed category headings; every table cell is escaped, a prop name holding a pipe included |
 | SX7/SX8 | Includes | Repeated values select in caller order and replace the defaults; absent, the defaults apply |
 | SX9 | Failure | An unusable include exits 1, reports on stderr and prints no catalog |
 | SX10/SX11 | Formats | Markdown by default, version-1 JSON with `--json`, and no `prompt` command |

@@ -41,7 +41,13 @@ import {
   raise,
   renderSegments,
 } from "@executablemd/core";
-import type { ErrorSegment, FunctionComponent, Json, PropsSchema } from "@executablemd/core";
+import type {
+  ErrorSegment,
+  FunctionComponent,
+  InvocationForm,
+  Json,
+  PropsSchema,
+} from "@executablemd/core";
 import { inTest, testing, verbose } from "./test-api.ts";
 
 export type AssertionKind =
@@ -79,6 +85,11 @@ function entry(
   return [name, { name, kind, run, allowsExpectedChildren, description }];
 }
 
+/** Whether an assertion of `kind` reads content as its expected value. */
+function readsExpectedChildren(kind: AssertionKind): boolean {
+  return kind === "binary-eq" || kind === "string-includes";
+}
+
 /**
  * What the content of an assertion means, decided by kind.
  *
@@ -87,9 +98,20 @@ function entry(
  * configuration error rather than an undocumented affordance.
  */
 export function assertionContext(kind: AssertionKind): string | null {
-  return kind === "binary-eq" || kind === "string-includes"
+  return readsExpectedChildren(kind)
     ? "The expected value, in place of the `expected` prop."
     : null;
+}
+
+/**
+ * The forms an assertion of `kind` accepts.
+ *
+ * The same fact `allowsExpectedChildren` already decides, spelled where a
+ * reader is told about it: a kind that does not read expected children refuses
+ * an invocation that was written with any, so it accepts one form and says so.
+ */
+export function assertionForms(kind: AssertionKind): readonly InvocationForm[] {
+  return readsExpectedChildren(kind) ? ["self-closing", "paired"] : ["self-closing"];
 }
 
 /** The operands an assertion of `kind` takes, spelled for a reader. */
@@ -109,6 +131,12 @@ export function assertionDescription(assertion: AssertionEntry): string {
     "The optional `msg` prop replaces the reported failure message."
   );
 }
+
+/** What `as` binds on an assertion: the report, not the outcome. */
+export const ASSERTION_BINDING =
+  "Optional. The diagnostic report this assertion rendered, as text — a passing assertion " +
+  "renders one only while testing or verbose output is on, so the binding is empty otherwise. " +
+  "A failing assertion does not return.";
 
 export const ASSERTIONS: Map<string, AssertionEntry> = new Map([
   entry("Assert", "unary-truthy", "Passes when the operand is truthy.", (v) =>

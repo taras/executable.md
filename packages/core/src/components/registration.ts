@@ -17,6 +17,7 @@ import type { Context, Operation } from "effection";
 import { Component } from "../component-api.ts";
 import { updateOwn } from "../scope-local.ts";
 import { RESERVED_STRUCTURAL } from "../structural.ts";
+import { formsRefusal } from "../invocation-identity.ts";
 import { documentationOf } from "./documentation.ts";
 import type { ComponentDocumentation } from "./documentation.ts";
 import { compilePropsSchema, compileReturnsSchema } from "../validate.ts";
@@ -95,6 +96,21 @@ const OwnContributions: Context<OwnIndex> = createContext<OwnIndex>(
 const SEGMENT = /^[A-Z][A-Za-z0-9_]*$/;
 
 /**
+ * Whether `segment` is spelled the way one dot-separated part of a component
+ * name is.
+ *
+ * Distinct from the whole-name predicate below, and the distinction matters
+ * wherever a name is taken apart: a path segment carries exactly one part, so
+ * `File.Delete` is a two-part *name* and never a one-part *segment*. A caller
+ * that inverts a path asks this, because `File.Delete` is written at
+ * `File/Delete.md` and a file literally called `File.Delete.md` answers to
+ * nothing.
+ */
+export function isComponentNameSegment(segment: string): boolean {
+  return SEGMENT.test(segment);
+}
+
+/**
  * Whether `name` is spelled the way a document writes a component name.
  *
  * The grammar registration is held to, offered as a predicate so a host
@@ -103,7 +119,7 @@ const SEGMENT = /^[A-Z][A-Za-z0-9_]*$/;
  * registration, or a name nothing supplies.
  */
 export function isComponentName(name: string): boolean {
-  return name.length > 0 && name.split(".").every((segment) => SEGMENT.test(segment));
+  return name.length > 0 && name.split(".").every(isComponentNameSegment);
 }
 
 function kindOf(registration: ComponentRegistration): Kind {
@@ -231,6 +247,10 @@ export function* registerComponents(
       yield* compileReturnsSchema(returns);
     }
     assertUsableCaptures(name, registration.captures, props);
+    const badForms = formsRefusal(forms);
+    if (badForms !== undefined) {
+      throw new ComponentRegistrationError(`the registration for "${name}" ${badForms}`);
+    }
 
     const kind = kindOf(registration);
     const already = additions.get(name)?.[kind];
