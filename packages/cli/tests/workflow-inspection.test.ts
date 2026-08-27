@@ -945,32 +945,51 @@ describe("Tier WFI — xmd workflow status and history over a sealed artifact", 
         throw written.error;
       }
 
-      const outputs = [];
-      for (const args of [
-        ["workflow", "status", `--artifact=${artifact}`],
-        ["workflow", "status", `--artifact=${artifact}`, "--json"],
-        ["workflow", "history", `--artifact=${artifact}`],
-        ["workflow", "history", `--artifact=${artifact}`, "--json"],
-        ["workflow", "history", `--artifact=${artifact}`, "--forkable"],
-        ["workflow", "history", `--artifact=${artifact}`, "--forkable", "--json"],
-      ]) {
-        outputs.push(yield* xmd(fixture, args).expect());
-      }
+      const status = yield* xmd(fixture, ["workflow", "status", `--artifact=${artifact}`]).expect();
+      const statusJson = yield* xmd(fixture, [
+        "workflow",
+        "status",
+        `--artifact=${artifact}`,
+        "--json",
+      ]).expect();
+      const history = yield* xmd(fixture, [
+        "workflow",
+        "history",
+        `--artifact=${artifact}`,
+      ]).expect();
+      const historyJson = yield* xmd(fixture, [
+        "workflow",
+        "history",
+        `--artifact=${artifact}`,
+        "--json",
+      ]).expect();
+      const forkable = yield* xmd(fixture, [
+        "workflow",
+        "history",
+        `--artifact=${artifact}`,
+        "--forkable",
+      ]).expect();
+      const forkableJson = yield* xmd(fixture, [
+        "workflow",
+        "history",
+        `--artifact=${artifact}`,
+        "--forkable",
+        "--json",
+      ]).expect();
 
       // Each command really answered about this artifact, so "the canary is
       // absent" is a fact about output that exists.
-      const [human, structured, , historyJson, forkableHuman, forkableJson] = outputs;
-      expect(heading(human?.stdout ?? "", "artifact identity")).toBe(written.value.identity);
-      const projected = JSON.parse(structured?.stdout ?? "{}");
+      expect(heading(status.stdout, "artifact identity")).toBe(written.value.identity);
+      const projected = JSON.parse(statusJson.stdout);
       expect(projected.artifact.identity).toBe(written.value.identity);
       expect(projected.record.runId).toBe("release-1.4");
-      const entries = JSON.parse(historyJson?.stdout ?? "{}").entries;
+      const entries = JSON.parse(historyJson.stdout).entries;
       expect(entries.length).toBe(finalizedArtifact().journal.length);
       // The intrinsic classification is the one already delivered: an Agent
       // turn is unforkable, and retained portability evidence does not change
       // that here.
-      expect(forkableHuman?.stdout).toContain("agent-state-unavailable");
-      expect(JSON.parse(forkableJson?.stdout ?? "{}").entries.length).toBe(entries.length);
+      expect(forkable.stdout).toContain("agent-state-unavailable");
+      expect(JSON.parse(forkableJson.stdout).entries.length).toBe(entries.length);
 
       const canaries = [
         CHECKPOINT_TOKENS.portableFirst,
@@ -980,15 +999,15 @@ describe("Tier WFI — xmd workflow status and history over a sealed artifact", 
         BUNDLE_SECRET_CANARY,
         BUNDLE_PATH_CANARY,
       ];
-      for (const output of outputs) {
+      for (const output of [status, statusJson, history, historyJson, forkable, forkableJson]) {
         for (const canary of canaries) {
-          expect(output?.stdout ?? "").not.toContain(canary);
-          expect(output?.stderr ?? "").not.toContain(canary);
+          expect(output.stdout).not.toContain(canary);
+          expect(output.stderr).not.toContain(canary);
         }
         // Nor the vocabulary that would carry them.
-        expect(output?.stdout ?? "").not.toContain("agent-session-portability");
-        expect(output?.stdout ?? "").not.toContain("agentEvidence");
-        expect(output?.stdout ?? "").not.toContain("bundleSha256");
+        expect(output.stdout).not.toContain("agent-session-portability");
+        expect(output.stdout).not.toContain("agentEvidence");
+        expect(output.stdout).not.toContain("bundleSha256");
       }
     });
   });
