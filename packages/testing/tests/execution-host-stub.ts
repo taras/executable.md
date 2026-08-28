@@ -15,6 +15,7 @@
  * `packages/cli/tests/testing-execution-host.test.ts` is where it is held.
  */
 
+import { ensure } from "effection";
 import type { Operation } from "effection";
 import { forEach } from "@effectionx/stream-helpers";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -54,6 +55,14 @@ export interface StubHostOptions {
    * chunk happens; a document cannot be asked to emit on cue without a timer.
    */
   readonly emit?: (chunk: (text: string) => Operation<void>) => Operation<void>;
+  /**
+   * Called from the child's own scope when that scope is dismantled.
+   *
+   * What a declaration installs there belongs to the child, so when its
+   * teardown happens relative to the assertions is observable only from inside
+   * it.
+   */
+  readonly onTeardown?: () => void;
 }
 
 export function stubExecutionHost(options: StubHostOptions): StubExecutionHost {
@@ -67,6 +76,10 @@ export function stubExecutionHost(options: StubHostOptions): StubExecutionHost {
       // it from this document's, so the child reads nothing this document
       // installed.
       yield* useStubFs(options.files);
+      const onTeardown = options.onTeardown;
+      if (onTeardown !== undefined) {
+        yield* ensure(() => onTeardown());
+      }
 
       if (options.emit !== undefined) {
         yield* options.emit((text: string) => invocation.chunk(text));

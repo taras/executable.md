@@ -122,7 +122,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function resolveBinding(path: string, env: Record<string, unknown>): string | undefined {
+/**
+ * The string a `{binding}` hole stands for, or `undefined` when the path names
+ * no bound string.
+ *
+ * Exported because a matcher set that travels to another execution resolves its
+ * holes where they are written: the bindings do not cross, so what crosses is
+ * the text each one already stood for.
+ */
+export function resolveBinding(path: string, env: Record<string, unknown>): string | undefined {
   const segments = path.split(".");
   let current: unknown = env;
   for (const segment of segments) {

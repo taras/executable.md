@@ -70,6 +70,20 @@ export { ExecutionHost, ExecutionHostError } from "./src/execution-host.ts";
 // canonical `<Test>` calls it with each invocation's harness; a document run
 // without it recognizes `<Execution>` and refuses it.
 export { testHarnessInstallation } from "./src/execution-harness.ts";
+// The closed data path a test declares deterministic dependencies through. A
+// package contributes a `ChildDeclaration`; the trusted host switches over the
+// variants and builds what each one describes inside the isolated child.
+export { detachChildConfiguration } from "./src/child-configuration.ts";
+export type {
+  AnswersChildConfiguration,
+  ChildConfiguration,
+  ChildConfigurationCollector,
+  ChildDeclaration,
+  ChildDeclarationChild,
+  ChildScenario,
+  OpenChildDeclaration,
+  TestAgentChildConfiguration,
+} from "./src/child-configuration.ts";
 export type {
   ChildInvocation,
   ChildSettlement,

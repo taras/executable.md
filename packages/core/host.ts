@@ -130,3 +130,21 @@ export type {
  */
 export { AGENT_PROMPT, parsePromptRecord } from "./src/agent/journal.ts";
 export type { PromptRecord } from "./src/agent/journal.ts";
+
+/**
+ * `<Answers>` as detached configuration, for the host that installs it.
+ *
+ * A nested run's answers are declared in one document and answered in another,
+ * so the matcher language and the provider that reads it are separated here:
+ * `AnswersDeclaration` is where a trusted harness collects what a declaration
+ * parsed to, and `installAnswerProvider()` is what turns that data back into
+ * this scope's elicitation provider. Nothing authored reaches either — the
+ * recorder answers for the expansions the harness itself recognized, and what
+ * it records is read from that harness's own closure.
+ */
+export { AnswersDeclaration, installAnswerProvider } from "./src/answers.ts";
+export type {
+  AnswerConfiguration,
+  AnswerMatcher,
+  AnswersDeclarationRecorder,
+} from "./src/answers.ts";

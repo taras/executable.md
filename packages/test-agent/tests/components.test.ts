@@ -8,19 +8,29 @@
 import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "@executablemd/core";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped } from "effection";
+import { ensure, Ok, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
+import { forEach } from "@effectionx/stream-helpers";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
-import { agentIdentityComponents, Component, installAgentComponents } from "@executablemd/core";
+import {
+  agentIdentityComponents,
+  Component,
+  Elicitation,
+  installAgentComponents,
+  parseTemplate,
+} from "@executablemd/core";
+import { installAnswerProvider } from "@executablemd/core/host";
+import type { AnswerConfiguration } from "@executablemd/core/host";
 import { executeInstalled } from "@executablemd/core/host";
 import { API } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { installTestingComponents, useTesting } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
 import { installTestAgentComponents } from "../src/components.ts";
+import { installChildTestAgent } from "../src/child-configuration.ts";
 import { useCommand } from "./command.ts";
 import { cliBase } from "@executablemd/test-support/launch";
 import type { Json } from "@executablemd/core";
@@ -568,3 +578,200 @@ describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResou
     expect(scenarioRun.output).toContain("LOCAL SCENARIO");
   });
 });
+
+/**
+ * Tier TN — `<TestAgent>` as one nested run's configuration
+ * (specs/test-agent-spec.md acceptance §6).
+ *
+ * These call the child assembler the trusted host calls, with the frozen data
+ * a declaration produces, so what they are about is the assembly itself: that
+ * the provider, its worker and its controller belong to the child's scope and
+ * finish teardown with it, and that a completed journal replays without
+ * reaching any of them.
+ */
+describe(
+  "Tier TN — nested-run configuration",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    beforeAll(() => useTempFileCompiler());
+
+    /**
+     * The whole argv, not a base: a child inherits no `API.Env` handler, so the
+     * trusted host reads its own relaunch before the child's scope exists and
+     * hands over the exact command.
+     */
+    const NESTED_WORKER = [...cliBase(), "test-agent"];
+
+    const NESTED_BEHAVIOR = [
+      '<WhenPrompt as="review" template="Review {?subject}" />',
+      "",
+      "reviewed **{review.subject}**",
+      "",
+    ].join("\n");
+
+    interface ChildRun {
+      readonly result: Result<Json>;
+      readonly output: string;
+    }
+
+    interface ChildOptions {
+      readonly worker: readonly string[];
+      readonly stream: InMemoryStream;
+      /** Answer matchers, as a declaration's detached data. */
+      readonly answers?: AnswerConfiguration;
+      /** Registered before the execution, so the child's own scope holds it. */
+      readonly nearer?: () => Operation<void>;
+      /** Where the child scope records its own teardown, for a case that halts. */
+      readonly torn?: string[];
+    }
+
+    /** One matcher set, as `<Answers>` would have handed it over. */
+    function answering(template: string, value: Json): AnswerConfiguration {
+      const parsed = parseTemplate(template);
+      if (!parsed.ok) {
+        throw parsed.error;
+      }
+      return { matchers: [{ template: parsed.value, value }], bindings: {} };
+    }
+
+    /**
+     * Assemble one child exactly as the trusted `run` profile does, and run it.
+     *
+     * The scope is the child's, so returning from it is the teardown the harness
+     * performs before the outcome reaches the test that asked for the child.
+     */
+    function runChild(
+      files: Record<string, string>,
+      options: ChildOptions,
+    ): Operation<ChildRun & { torn: string[] }> {
+      return scoped(function* () {
+        const dir = path.join(os.tmpdir(), `xmd-tn-${randomUUID()}`);
+        yield* ensureDir(dir);
+        yield* ensure(() => rm(dir, { recursive: true, force: true }));
+        for (const [name, content] of Object.entries(files)) {
+          const target = path.join(dir, name);
+          yield* ensureDir(path.dirname(target));
+          yield* writeTextFile(target, content);
+        }
+        const torn = options.torn ?? [];
+        const run = yield* scoped(function* () {
+          yield* ensure(() => {
+            torn.push("the child scope");
+          });
+          const agent = yield* installChildTestAgent(
+            {
+              kind: "test-agent",
+              defaultAgent: "test",
+              scenarios: [
+                {
+                  agent: "test",
+                  session: "review",
+                  rootDir: dir,
+                  document: { path: "behavior.md", source: NESTED_BEHAVIOR },
+                },
+              ],
+            },
+            { workerCommand: options.worker },
+          );
+          yield* installAgentComponents(agent);
+          if (options.answers) {
+            yield* installAnswerProvider(options.answers);
+          }
+          if (options.nearer) {
+            yield* options.nearer();
+          }
+          const execution = yield* executeInstalled(
+            { path: path.join(dir, "doc.md"), stream: options.stream },
+            [{ components: agentIdentityComponents() }],
+          );
+          const output = yield* forEach(function* () {}, execution.output);
+          return { result: yield* execution, output };
+        });
+        return { ...run, torn };
+      });
+    }
+
+    const ELICIT_SCHEMA =
+      '{"type":"object","properties":{"decision":{"type":"string"}},' +
+      '"required":["decision"],"additionalProperties":false}';
+
+    const CHILD = [
+      '<Session name="review">',
+      '<Prompt text="Review the plan" as="reply" />',
+      "</Session>",
+      "",
+      `<Elicit schema='${ELICIT_SCHEMA}' as="verdict">Approve the review?</Elicit>`,
+      "",
+      "reply: {reply} decision: {verdict.decision}",
+      "",
+    ].join("\n");
+
+    it("TN1: a completed journal replays without contacting the provider or the answers", function* () {
+      const stream = new InMemoryStream();
+      const live = yield* runChild(
+        { "doc.md": CHILD },
+        {
+          worker: NESTED_WORKER,
+          stream,
+          answers: answering("Approve the review?", { decision: "approve" }),
+        },
+      );
+      expect(live.result.ok ? "ok" : live.result.error.message).toBe("ok");
+      expect(live.output).toContain("reviewed **the plan**");
+      expect(live.output).toContain("decision: approve");
+      expect(live.torn).toEqual(["the child scope"]);
+
+      const appended = stream.appendCount;
+      // An unspawnable worker and a matcher set that answers nothing: a replay
+      // that reached either would fail rather than repeat.
+      const replay = yield* runChild(
+        { "doc.md": CHILD },
+        {
+          worker: ["/nonexistent/xmd-test-agent-must-not-spawn"],
+          stream,
+          answers: answering("a template this child never asks for", { decision: "refuse" }),
+        },
+      );
+      expect(replay.result).toEqual(live.result);
+      expect(replay.output).toBe(live.output);
+      expect(stream.appendCount).toBe(appended);
+    });
+
+    it("TN2: halting a child mid-turn finishes its teardown before the halt returns", function* () {
+      const asked = withResolvers<void>();
+      const torn: string[] = [];
+      // Halted from outside, which is what cancelling the owning test does to the
+      // scope the harness created for a child.
+      const child = yield* spawn(() =>
+        runChild(
+          { "doc.md": CHILD },
+          {
+            worker: NESTED_WORKER,
+            stream: new InMemoryStream(),
+            torn,
+            *nearer(): Operation<void> {
+              // The child stops here, with its session established and its
+              // worker connected — a halt mid-turn rather than one before any.
+              yield* Elicitation.around(
+                {
+                  *elicit(): Operation<unknown> {
+                    asked.resolve();
+                    yield* suspend();
+                    return null;
+                  },
+                },
+                { at: "min" },
+              );
+            },
+          },
+        ),
+      );
+      yield* asked.operation;
+      expect(torn).toEqual([]);
+      yield* child.halt();
+      // Every `ensure` the child scope held has run, so its provider, worker
+      // connection and controller went with it before this line.
+      expect(torn).toEqual(["the child scope"]);
+    });
+  },
+);

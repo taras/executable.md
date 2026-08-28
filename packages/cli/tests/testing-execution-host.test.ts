@@ -16,7 +16,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, resource } from "effection";
+import { Err, ensure, resource, scoped } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, readdir, rm, writeTextFile } from "@effectionx/fs";
 import { mkdtemp } from "node:fs/promises";
@@ -24,6 +24,7 @@ import { until } from "effection";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runCli } from "@executablemd/test-support/launch";
+import { testingExecutionHost } from "../src/testing-host.ts";
 
 function doc(...lines: string[]): string {
   return `${lines.join("\n")}\n`;
@@ -66,6 +67,24 @@ const CHILD = doc(
 );
 
 const GUIDE = doc("# First", "", "first body", "", "# Second", "", "second body");
+
+/** A declared child relaunches `xmd` as its agent worker, so it needs both. */
+const WORKER = { inheritEnv: true, timeout: 180_000 };
+
+/** A repository component taking one string prop, so shadowing one validates. */
+function repositoryComponent(prop: string, marker: string): string {
+  return doc(
+    "---",
+    "props:",
+    "  type: object",
+    "  properties:",
+    `    ${prop}: { type: string }`,
+    "  additionalProperties: false",
+    "---",
+    "",
+    marker,
+  );
+}
 
 describe("nested execution under the production run host", () => {
   it("runs referenced documents, targets and inline source as real roots", function* () {
@@ -192,5 +211,334 @@ describe("nested execution under the production run host", () => {
     const result = yield* runCli(["test", "README.md"], { cwd: project }).join();
     expect(result.stdout + result.stderr).toContain("no workflow profile");
     expect(result.code).not.toBe(0);
+  });
+});
+
+/**
+ * Deterministic dependencies declared for one nested child (issue #641).
+ *
+ * `packages/testing/tests/execution-harness.test.ts` holds the seam — what a
+ * declaration is recognized by, what crosses, and what refuses. What only this
+ * file can hold is that the trusted host builds the *real* thing from that
+ * data: this package's controlled provider and a real `xmd test-agent` worker,
+ * the first-party Agent defaults, and the run profile's own elicitation
+ * ordering. So these run `xmd test` on a real project and let a real child
+ * document meet them.
+ */
+
+const SCHEMA =
+  '{"type":"object","properties":{"decision":{"type":"string"}},' +
+  '"required":["decision"],"additionalProperties":false}';
+
+/**
+ * A behavior document with a third stage nothing sends.
+ *
+ * `unsentstagemarker` is in the scenario source and in no prompt and no reply,
+ * so a journal that mentions it retained configuration rather than results.
+ */
+const BEHAVIOR = doc(
+  '<WhenPrompt as="review" template="Review {?subject}" />',
+  "",
+  "reviewed **{review.subject}**",
+  "",
+  '<WhenPrompt template="Summarize {review.subject}" />',
+  "",
+  "summarized **{review.subject}**",
+  "",
+  '<WhenPrompt template="unsentstagemarker" />',
+  "",
+  "never reached",
+);
+
+/** Two `<Session>` invocations naming one conversation, then an elicitation. */
+const TWO_TURNS = doc(
+  "# The document under test",
+  "",
+  '<Session name="review">',
+  '<Prompt text="Review the plan" as="first" />',
+  "</Session>",
+  "",
+  '<Session name="review">',
+  '<Prompt text="Summarize the plan" as="second" />',
+  "</Session>",
+  "",
+  `<Elicit schema='${SCHEMA}' as="verdict">Approve the review?</Elicit>`,
+  "",
+  "first: {first} second: {second} decision: {verdict.decision}",
+);
+
+/** One turn, so two siblings running it both have to be at stage one. */
+const ONE_TURN = doc(
+  '<Session name="review">',
+  '<Prompt text="Review the plan" as="first" />',
+  "</Session>",
+  "",
+  "sibling saw: {first}",
+);
+
+const DECLARATION = [
+  "<TestAgent>",
+  '<TestAgent.Scenario session="review" src="./agents/review.md" />',
+  "</TestAgent>",
+];
+
+describe("deterministic dependencies declared for a nested run", () => {
+  it("gives a declared child the agent defaults, its own session and its answers", function* () {
+    const project = yield* useProject({
+      "agents/review.md": BEHAVIOR,
+      "two-turns.md": TWO_TURNS,
+      "one-turn.md": ONE_TURN,
+      "bare.md": doc('<Session name="review">', "nothing here", "</Session>"),
+      "README.md": doc(
+        '<Test name="scripted agent and declared answers" timeout="120s">',
+        '<Execution host="run" target="./two-turns.md" as="run">',
+        ...DECLARATION,
+        "",
+        "<Answers>",
+        `<Answer template="Approve the review?" value={{ decision: "approve" }} />`,
+        // Never fires, so its template is configuration and nothing else.
+        `<Answer template="unusedmatchermarker" value={{ decision: "no" }} />`,
+        "</Answers>",
+        "",
+        "<DiagnosticJournal />",
+        '<CollectOutput as="output" />',
+        '<CollectJournal as="journal" />',
+        "",
+        "<AssertEquals actual={run.result.ok} expected={true} />",
+        // The first-party <Session> and <Prompt> ran a scripted turn, and
+        // reopening the named session continued the same conversation rather
+        // than starting it again.
+        '<AssertStringIncludes actual={output} expected="reviewed **the plan**" />',
+        // The second stage answers only after the first has been sent, so
+        // reaching it is the named session having continued rather than
+        // restarted.
+        '<AssertStringIncludes actual={output} expected="summarized **the plan**" />',
+        '<AssertStringIncludes actual={output} expected="decision: approve" />',
+        "",
+        // What the child actually did is retained; what configured it is not.
+        '<AssertEquals actual={JSON.stringify(journal).includes("agent_prompt")} expected={true} />',
+        '<AssertEquals actual={JSON.stringify(journal).includes("elicit")} expected={true} />',
+        '<AssertEquals actual={JSON.stringify(journal).includes("unsentstagemarker")} expected={false} />',
+        '<AssertEquals actual={JSON.stringify(journal).includes("unusedmatchermarker")} expected={false} />',
+        "</Execution>",
+        "</Test>",
+        "",
+        '<Test name="sibling executions each start at stage one" timeout="120s">',
+        '<Execution host="run" target="./one-turn.md" as="left">',
+        ...DECLARATION,
+        "",
+        '<CollectOutput as="leftOutput" />',
+        "",
+        "<AssertEquals actual={left.result.ok} expected={true} />",
+        '<AssertStringIncludes actual={leftOutput} expected="reviewed **the plan**" />',
+        "</Execution>",
+        "",
+        '<Execution host="run" target="./one-turn.md" as="right">',
+        ...DECLARATION,
+        "",
+        '<CollectOutput as="rightOutput" />',
+        "",
+        // A shared partition would have this one at stage two, where "Review
+        // the plan" is not the active template.
+        "<AssertEquals actual={right.result.ok} expected={true} />",
+        '<AssertStringIncludes actual={rightOutput} expected="reviewed **the plan**" />',
+        "</Execution>",
+        "</Test>",
+        "",
+        '<Test name="a child with no declaration has no agent surface" timeout="120s">',
+        '<Execution host="run" target="./bare.md" as="bare">',
+        "<AssertEquals actual={bare.result.ok} expected={false} />",
+        '<AssertStringIncludes actual={bare.result.error.message} expected="Session" />',
+        "</Execution>",
+        "</Test>",
+      ),
+    });
+    const result = yield* runCli(["test", "README.md"], { cwd: project, ...WORKER }).join();
+    expect(result.stdout + result.stderr).not.toContain("❌");
+    expect(result.code).toBe(0);
+  });
+
+  it("keeps the outer test's agent and answers out of the child", function* () {
+    const project = yield* useProject({
+      "agents/review.md": BEHAVIOR,
+      // The outer wrapper's scenario answers a prompt the child never sends,
+      // so a scenario that leaked inward would mismatch rather than pass.
+      "agents/outer.md": doc(
+        '<WhenPrompt template="an outer prompt" />',
+        "",
+        "the outer scenario answered",
+      ),
+      "two-turns.md": TWO_TURNS,
+      "README.md": doc(
+        "<TestAgent>",
+        '<TestAgent.Scenario session="review" src="./agents/outer.md" />',
+        "",
+        "<Answers>",
+        `<Answer value={{ decision: "the outer answer" }} />`,
+        "",
+        '<Test name="the child reaches only what it declared" timeout="120s">',
+        '<Execution host="run" target="./two-turns.md" as="run">',
+        ...DECLARATION,
+        "",
+        "<Answers>",
+        `<Answer template="Approve the review?" value={{ decision: "approve" }} />`,
+        "</Answers>",
+        "",
+        '<CollectOutput as="output" />',
+        "",
+        "<AssertEquals actual={run.result.ok} expected={true} />",
+        '<AssertStringIncludes actual={output} expected="decision: approve" />',
+        '<AssertEquals actual={output.includes("the outer answer")} expected={false} />',
+        '<AssertEquals actual={output.includes("the outer scenario answered")} expected={false} />',
+        "</Execution>",
+        "</Test>",
+        "</Answers>",
+        "</TestAgent>",
+      ),
+    });
+    const result = yield* runCli(["test", "README.md"], { cwd: project, ...WORKER }).join();
+    expect(result.stdout + result.stderr).not.toContain("❌");
+    expect(result.code).toBe(0);
+  });
+
+  it("lets a repository TestAgent end the scan and configure nothing", function* () {
+    const project = yield* useProject({
+      "agents/review.md": BEHAVIOR,
+      // Chosen ahead of the package's, so this is ordinary assertion content.
+      "components/TestAgent.md": doc("a repository component"),
+      "two-turns.md": TWO_TURNS,
+      "README.md": doc(
+        '<Test name="a repository TestAgent configures nothing" timeout="120s">',
+        '<Execution host="run" target="./two-turns.md" as="run">',
+        '<TestAgent as="shadowed" />',
+        "",
+        '<AssertStringIncludes actual={shadowed} expected="a repository component" />',
+        // Nothing configured the child, so its first-party <Session> was never
+        // registered and the run refuses rather than reaching a provider.
+        "<AssertEquals actual={run.result.ok} expected={false} />",
+        '<AssertStringIncludes actual={run.result.error.message} expected="Session" />',
+        "</Execution>",
+        "</Test>",
+      ),
+    });
+    const result = yield* runCli(["test", "README.md"], { cwd: project, ...WORKER }).join();
+    expect(result.stdout + result.stderr).not.toContain("❌");
+    expect(result.code).toBe(0);
+  });
+
+  it("refuses an unreadable behavior document before the child's root is imported", function* () {
+    const project = yield* useProject({
+      "two-turns.md": doc("the child imported its root"),
+      "README.md": doc(
+        '<Test name="an unreadable behavior document">',
+        '<Execution host="run" target="./two-turns.md" as="run">',
+        "<TestAgent>",
+        '<TestAgent.Scenario src="./agents/absent.md" />',
+        "</TestAgent>",
+        "",
+        "<AssertEquals actual={run.result.ok} expected={true} />",
+        "</Execution>",
+        "</Test>",
+      ),
+    });
+    const result = yield* runCli(["test", "README.md"], { cwd: project, ...WORKER }).join();
+    expect(result.code).toBe(1);
+    const reported = result.stdout + result.stderr;
+    expect(reported).toContain("cannot read the behavior document");
+    // Reading the root would have printed this, so the child was never created.
+    expect(reported).not.toContain("the child imported its root");
+  });
+
+  it("refuses a scripted agent when this entrypoint cannot re-invoke itself", function* () {
+    // A host that installed no command adapter runs documents all the same —
+    // `<TestAgent>` makes the same allowance by asking for its relaunch at its
+    // own invocation. Only a child that declares a scripted agent has anything
+    // to say about it, and what it says is why.
+    const host = testingExecutionHost({
+      includes: [],
+      secretDetection: true,
+      // deno-lint-ignore require-yield
+      installService: function* (): Operation<void> {},
+      testAgentWorker: Err(new Error("xmd command not installed")),
+    });
+    const refusal = yield* scoped(function* () {
+      try {
+        yield* host.runChild({
+          request: {
+            host: "run",
+            source: "the child imported its root\n",
+            props: {},
+            journal: "transient",
+            collectJournal: false,
+            configuration: [{ kind: "test-agent", defaultAgent: "test", scenarios: [] }],
+          },
+          run: undefined,
+          // deno-lint-ignore require-yield
+          *chunk(): Operation<void> {},
+        });
+        return "the child ran";
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    });
+    expect(refusal).toContain("cannot re-invoke itself to run one");
+    // The reason is carried rather than discarded, so the sentence names what
+    // the host could not do instead of only that it could not.
+    expect(refusal).toContain("xmd command not installed");
+  });
+
+  it("keeps ordinary resolution and Elicit validation inside a configured child", function* () {
+    const project = yield* useProject({
+      "agents/review.md": BEHAVIOR,
+      // Repository components of two first-party names. Configuring the
+      // provider says what the defaults can reach, never that they are chosen.
+      "components/Prompt.md": repositoryComponent("text", "a repository prompt"),
+      "components/Session.md": repositoryComponent("name", "a repository session"),
+      "shadowed.md": doc('<Session name="review" />', "", '<Prompt text="Review the plan" />'),
+      "invalid-answer.md": doc(
+        "the child imported its root",
+        "",
+        `<Elicit schema='${SCHEMA}' as="verdict">Approve the review?</Elicit>`,
+      ),
+      "README.md": doc(
+        '<Test name="repository components still shadow the defaults" timeout="120s">',
+        '<Execution host="run" target="./shadowed.md" as="run">',
+        ...DECLARATION,
+        "",
+        "<DiagnosticJournal />",
+        '<CollectOutput as="output" />',
+        '<CollectJournal as="journal" />',
+        "",
+        '<AssertStringIncludes actual={run.result.ok ? "ok" : run.result.error.message} expected="ok" />',
+        '<AssertStringIncludes actual={output} expected="a repository session" />',
+        '<AssertStringIncludes actual={output} expected="a repository prompt" />',
+        "",
+        // The controlled provider was configured and never asked: no default
+        // was selected, so no turn happened.
+        '<AssertEquals actual={JSON.stringify(journal).includes("agent_prompt")} expected={false} />',
+        "</Execution>",
+        "</Test>",
+        "",
+        '<Test name="a well-formed answer still meets the Elicit schema" timeout="120s">',
+        '<Execution host="run" target="./invalid-answer.md" as="run">',
+        "<Answers>",
+        // Structurally valid configuration, and not what this Elicit accepts.
+        `<Answer template="Approve the review?" value={{ verdict: "approve" }} />`,
+        "</Answers>",
+        "",
+        '<CollectOutput as="output" />',
+        "",
+        // The root imported and rendered before the elicitation refused, so
+        // this failed at <Elicit> rather than before the child.
+        '<AssertStringIncludes actual={output} expected="the child imported its root" />',
+        "<AssertEquals actual={run.result.ok} expected={false} />",
+        '<AssertStringIncludes actual={run.result.error.message} expected="decision" />',
+        "</Execution>",
+        "</Test>",
+      ),
+    });
+    const result = yield* runCli(["test", "README.md"], { cwd: project, ...WORKER }).join();
+    expect(result.stdout + result.stderr).not.toContain("❌");
+    expect(result.code).toBe(0);
   });
 });

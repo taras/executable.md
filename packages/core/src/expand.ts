@@ -65,6 +65,7 @@ import { carriesTestActivationDecision } from "./test-activation.ts";
 import { declaredRouting, withRouting } from "./foreground.ts";
 import { issueBoundExec } from "./bound-exec.ts";
 import { elementFrame, elementSite, extendPath, publishExpansion, snapshot } from "./expansion.ts";
+import type { ExpansionFrame } from "./expansion.ts";
 import { issueInvocation } from "./invocation-identity.ts";
 import type { IdentityDomain } from "./invocation-identity.ts";
 import { withInvocation } from "./invocation.ts";
@@ -79,7 +80,12 @@ import { SchemaValidationError, validateProps, validateReturnValue } from "./val
 import { parseJson } from "./json.ts";
 import { healSegment } from "./heal.ts";
 import { scanSegments } from "./scanner.ts";
-import { expandAnswers, strayAnswerError } from "./answers.ts";
+import {
+  AnswersDeclaration,
+  declareChildAnswers,
+  expandAnswers,
+  strayAnswerError,
+} from "./answers.ts";
 import { RESERVED_STRUCTURAL } from "./structural.ts";
 import { renderSegments } from "./render.ts";
 import {
@@ -900,30 +906,42 @@ export function* expandSegmentsWithin(
         }
 
         if (segment.name === "Answers") {
-          // No raise() here, like the branches above: expandAnswers reports the
-          // errors it creates, and the selected answer settled its own (§6.9).
           // The region renders segments of its own — its body, and each
           // matcher's template children — so it is handed this expansion's
           // recursion to render them with.
-          result.push(
-            ...(yield* expandAnswers(
-              segment,
-              (inner, into, frame) =>
-                expandSegmentsWithin(
-                  inner,
-                  parentMeta,
-                  parentProps,
-                  hideSet,
-                  counter,
-                  into,
-                  frame === undefined ? elementPath : extendPath(elementPath, frame),
-                  0,
-                  checkedFailures,
-                  authority,
-                ),
-              result,
-            )),
-          );
+          const expandWithin = (inner: Segment[], into?: Segment[], frame?: ExpansionFrame) =>
+            expandSegmentsWithin(
+              inner,
+              parentMeta,
+              parentProps,
+              hideSet,
+              counter,
+              into,
+              frame === undefined ? elementPath : extendPath(elementPath, frame),
+              0,
+              checkedFailures,
+              authority,
+            );
+          // Which placement this is, answered by identity rather than by name:
+          // a trusted harness knows which expansions its own declaration scan
+          // reached, and a region it never reached is an ordinary one.
+          //
+          // The site, not the expansion path: a harness reads its children
+          // twice, and the second projection of one request derives a path of
+          // its own (§5.6), so only where the element was written is the same
+          // in both passes.
+          const declaration = yield* AnswersDeclaration.get();
+          const site = elementSite(segment.position, indexBase + index);
+          const pass = declaration?.declares(site);
+          if (declaration !== undefined && pass !== undefined) {
+            result.push(
+              ...(yield* declareChildAnswers(segment, expandWithin, declaration, site, pass)),
+            );
+            break;
+          }
+          // No raise() here, like the branches above: expandAnswers reports the
+          // errors it creates, and the selected answer settled its own (§6.9).
+          result.push(...(yield* expandAnswers(segment, expandWithin, result)));
           break;
         }
 

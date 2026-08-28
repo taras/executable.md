@@ -18,7 +18,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, until } from "effection";
-import type { Operation } from "effection";
+import type { Operation, Result } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
@@ -27,6 +27,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { collect } from "../src/collect.ts";
+import { AnswersDeclaration, installAnswerProvider } from "../src/answers.ts";
+import type { AnswerConfiguration } from "../src/answers.ts";
 import { Elicitation } from "../src/elicitation-api.ts";
 import type { ElicitationRequest } from "../src/elicitation-api.ts";
 import { execute } from "../src/execute.ts";
@@ -64,6 +66,12 @@ function run(
   source: string,
   options: {
     outer?: (request: ElicitationRequest, index: number) => Operation<unknown>;
+    /**
+     * Installed after `outer`, so it is the nearer provider at the same
+     * `{ at: "min" }` — which is where a trusted host puts a child's declared
+     * answers, in front of the run profile's own form.
+     */
+    nearer?: () => Operation<void>;
     stream?: InMemoryStream;
   } = {},
 ): Operation<Run> {
@@ -84,6 +92,9 @@ function run(
         },
         { at: "min" },
       );
+    }
+    if (options.nearer) {
+      yield* options.nearer();
     }
 
     try {
@@ -968,5 +979,221 @@ describe("Answers: durability", () => {
 
     expect(replayed.failure).toBe(undefined);
     expect(replayed.output).toContain("Got: restored");
+  });
+});
+
+/**
+ * `<Answers>` as child configuration (specs/testing-spec.md).
+ *
+ * The other placement. A direct declaration in an `<Execution host="run">`
+ * prefix holds matchers alone, produces detached data, and is installed by
+ * whoever assembled the child — so what is held here is the two halves core
+ * owns: reading one, and answering from what was read.
+ *
+ * The harness that recognizes such a declaration is `@executablemd/testing`'s,
+ * and it depends on core. So these install the recorder directly, which is what
+ * that harness does with its own bookkeeping behind it.
+ */
+describe("Answers: child configuration", () => {
+  /** What one document's declarations parsed to, and what refused them. */
+  interface Declared {
+    readonly output: string;
+    readonly configurations: AnswerConfiguration[];
+    readonly problems: string[];
+  }
+
+  /**
+   * Read every `<Answers>` in `source` as a declaration.
+   *
+   * `declares` answers `"parse"` for whatever it is asked about, which is the
+   * scan phase of a harness that reached exactly its own declaration prefix.
+   */
+  function declare(workspace: string, source: string): Operation<Declared> {
+    return scoped(function* () {
+      const path = join(workspace, "declared.md");
+      yield* writeTextFile(path, source);
+      yield* useTempFileCompiler();
+      const configurations: AnswerConfiguration[] = [];
+      const problems: string[] = [];
+      yield* AnswersDeclaration.set({
+        declares: () => "parse",
+        record(_site: string, configuration: Result<AnswerConfiguration>): void {
+          if (configuration.ok) {
+            configurations.push(configuration.value);
+            return;
+          }
+          problems.push(configuration.error.message);
+        },
+      });
+      const output = yield* collect(
+        yield* execute({ path, stream: new InMemoryStream(), includes: [workspace] }),
+      );
+      return { output: String(output), configurations, problems };
+    });
+  }
+
+  it("reads matchers into detached data and renders nothing", function* () {
+    const workspace = yield* useWorkspace();
+    const declared = yield* declare(
+      workspace,
+      [
+        "before",
+        "",
+        "<Answers>",
+        `<Answer template="Approve {?what}?" value={{ decision: "approve" }} />`,
+        `<Answer value={{ decision: "fallback" }} />`,
+        "</Answers>",
+        "",
+        "after",
+        "",
+      ].join("\n"),
+    );
+    expect(declared.problems).toEqual([]);
+    expect(declared.configurations.length).toBe(1);
+    const [configuration] = declared.configurations;
+    expect(configuration?.matchers.map((matcher) => matcher.template?.source)).toEqual([
+      "Approve {?what}?",
+      undefined,
+    ]);
+    expect(configuration?.matchers[0]?.value).toEqual({ decision: "approve" });
+    expect(configuration?.bindings).toEqual({});
+    // A declaration configures a child; the document it is written in shows
+    // nothing where it stood.
+    expect(declared.output).toContain("before");
+    expect(declared.output).toContain("after");
+    expect(declared.output).not.toContain("approve");
+  });
+
+  it("resolves a {binding} hole where the declaration is written", function* () {
+    const workspace = yield* useWorkspace();
+    const declared = yield* declare(
+      workspace,
+      [
+        "```js eval",
+        'const plan = "the rollout";',
+        "```",
+        "",
+        "<Answers>",
+        `<Answer template="Approve {plan}?" value={{ decision: "approve" }} />`,
+        "</Answers>",
+        "",
+      ].join("\n"),
+    );
+    expect(declared.problems).toEqual([]);
+    // The binding does not travel — the text it stood for does, so the matcher
+    // matches what its author meant rather than what the child happens to bind.
+    expect(declared.configurations[0]?.bindings).toEqual({ plan: "the rollout" });
+  });
+
+  const REFUSED: readonly { name: string; body: readonly string[]; says: string }[] = [
+    {
+      name: "delegating",
+      body: [
+        "<Answers delegate={true}>",
+        `<Answer template="Approve?" value={{ decision: "a" }} />`,
+        "</Answers>",
+      ],
+      says: "cannot delegate as child configuration",
+    },
+    {
+      name: "empty",
+      body: ["<Answers />"],
+      says: "requires at least one <Answer> matcher",
+    },
+    {
+      name: "carrying a body",
+      body: [
+        "<Answers>",
+        `<Answer template="Approve?" value={{ decision: "a" }} />`,
+        "",
+        "prose",
+        "</Answers>",
+      ],
+      says: "holds matchers alone",
+    },
+    {
+      name: "holding a malformed matcher",
+      body: ["<Answers>", `<Answer template="Approve?" />`, "</Answers>"],
+      says: 'requires a "value" prop',
+    },
+    {
+      name: "referencing a binding this document does not have",
+      body: [
+        "<Answers>",
+        `<Answer template="Approve {missing}?" value={{ decision: "a" }} />`,
+        "</Answers>",
+      ],
+      says: "not a bound string value here",
+    },
+  ];
+
+  for (const refused of REFUSED) {
+    it(`refuses a declaration that is ${refused.name}`, function* () {
+      const workspace = yield* useWorkspace();
+      const declared = yield* declare(workspace, `${refused.body.join("\n")}\n`);
+      expect(declared.configurations).toEqual([]);
+      expect(declared.problems.length).toBe(1);
+      expect(declared.problems[0]).toContain(refused.says);
+    });
+  }
+
+  it("answers a match from detached data, and never delegates one it misses", function* () {
+    const workspace = yield* useWorkspace();
+    const declared = yield* declare(
+      workspace,
+      [
+        "<Answers>",
+        `<Answer template="Approve the plan?" value={{ decision: "approve" }} />`,
+        "</Answers>",
+        "",
+      ].join("\n"),
+    );
+    const [configuration] = declared.configurations;
+    if (configuration === undefined) {
+      throw new Error(`the declaration was refused: ${declared.problems.join(", ")}`);
+    }
+
+    /**
+     * One document, run with a counting outer provider and this matcher set
+     * installed nearer than it — the order the run profile installs them in.
+     */
+    function installed(source: string, options: { configured: boolean }): Operation<Run> {
+      return run(workspace, source, {
+        *outer(): Operation<unknown> {
+          return { decision: "the form answered" };
+        },
+        ...(options.configured
+          ? {
+              *nearer(): Operation<void> {
+                yield* installAnswerProvider(configuration);
+              },
+            }
+          : {}),
+      });
+    }
+
+    function asks(message: string): string {
+      return [SCHEMA_BLOCK, elicits("verdict", message), "", "saw: {verdict.decision}", ""].join(
+        "\n",
+      );
+    }
+
+    const answered = yield* installed(asks("Approve the plan?"), { configured: true });
+    expect(answered.failure).toBe(undefined);
+    expect(answered.output).toContain("saw: approve");
+    expect(answered.delegated).toEqual([]);
+
+    const missed = yield* installed(asks("Approve something else?"), { configured: true });
+    expect(missed.failure).toContain("has no matcher for this elicitation");
+    // The whole of the claim: the outer provider was never asked, so an
+    // unmatched request failed here rather than reaching the form behind it.
+    expect(missed.delegated).toEqual([]);
+    expect(missed.output).not.toContain("the form answered");
+
+    // And that provider does answer when it is reached, so the case above is
+    // about delegation rather than about an inert stub.
+    const unconfigured = yield* installed(asks("Approve something else?"), { configured: false });
+    expect(unconfigured.delegated.length).toBe(1);
+    expect(unconfigured.output).toContain("saw: the form answered");
   });
 });

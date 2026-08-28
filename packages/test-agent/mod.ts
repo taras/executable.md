@@ -43,3 +43,16 @@ export function* useTestAgentController(): Operation<TestAgentController> {
 
 export { installTestAgentComponents } from "./src/components.ts";
 export { runTestAgentWorker } from "./src/worker/run.ts";
+
+/**
+ * `<TestAgent>` as configuration for one nested `host="run"` execution
+ * (specs/testing-spec.md, specs/test-agent-spec.md).
+ *
+ * Two halves for a trusted host to hold apart. `testAgentChildDeclaration()`
+ * is what a test harness recognizes the declaration by — this package's exact
+ * definitions, handed over by identity — and what reads one into frozen data.
+ * `installChildTestAgent()` is what turns that data back into a provider, and
+ * the host calls it inside the child's own isolated scope. Nothing constructed
+ * by the first crosses into the second.
+ */
+export { installChildTestAgent, testAgentChildDeclaration } from "./src/child-configuration.ts";

@@ -36,6 +36,8 @@ import type { Operation, Result } from "effection";
 import { type Api, createApi } from "@effectionx/context-api";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/core";
+import { detachChildConfiguration, detachJsonObject, frozen } from "./child-configuration.ts";
+import type { ChildConfiguration } from "./child-configuration.ts";
 
 /** The host profiles a test may select. */
 export type HostProfileName = "run" | "workflow";
@@ -67,6 +69,16 @@ export interface HostProfileRequest {
   readonly journal: JournalPolicy;
   /** Whether a completed journal snapshot is asked for after settlement. */
   readonly collectJournal: boolean;
+  /**
+   * The deterministic dependencies the declarations configured, in declared
+   * order, and absent when the test declared none.
+   *
+   * A closed union of frozen data. Nothing here is a provider, a factory, a
+   * context, an Api handler, an installation, a controller or a scope: the
+   * trusted host reads these values and constructs what they describe inside
+   * the child, which is what keeps a test from assembling one.
+   */
+  readonly configuration?: readonly ChildConfiguration[];
 }
 
 /** A protocol violation by whoever is composed around a nested execution. */
@@ -144,33 +156,18 @@ class CanonicalHostRequest implements ExecutionHostRequest {
  *
  * The chain unwinds before the terminal runs the child, so a handler that
  * delegates and then edits what it delegated would otherwise change what runs.
- * Props are the child's document inputs, so they are copied all the way down.
+ * Props are the child's document inputs, so they are copied all the way down,
+ * and so is every layer of the declared configuration.
  */
 function detachProfile(profile: HostProfileRequest): HostProfileRequest {
-  const { props, ...rest } = profile;
-  return frozen({ ...rest, props: detachProps(props) });
-}
-
-function detachProps(props: Record<string, Json>): Record<string, Json> {
-  return frozen(
-    Object.fromEntries(Object.entries(props).map(([key, value]) => [key, detachJson(value)])),
-  );
-}
-
-function detachJson(value: Json): Json {
-  if (Array.isArray(value)) {
-    return frozen(value.map((member) => detachJson(member)));
-  }
-  if (typeof value === "object" && value !== null) {
-    return detachProps(value);
-  }
-  return value;
-}
-
-/** Frozen at runtime, unchanged to the type system. */
-function frozen<T>(value: T): T {
-  Object.freeze(value);
-  return value;
+  const { props, configuration, ...rest } = profile;
+  return frozen({
+    ...rest,
+    props: detachJsonObject(props),
+    ...(configuration === undefined
+      ? {}
+      : { configuration: detachChildConfiguration(configuration) }),
+  });
 }
 
 /** One nested execution's request, and what its invocation reads back. */
