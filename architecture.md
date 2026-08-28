@@ -108,7 +108,7 @@ Existing documents and code get aligned to this section retroactively.
 | syntax catalog | the complete, versioned description of what a document may write in one directory under one host profile: every structural construct the engine reserves, and the one implementation selection chooses for every other name. It is observation — describing an environment installs no operational state, runs nothing and journals nothing — and it is produced once per request and projected, never rediscovered per format |
 | run profile declarations | the component registrations a first-party package makes, held as plain values apart from the middleware, providers, activation and launchers its installer also arranges. The installer registers exactly those values and inspection reads exactly those values, so what a run installs and what the catalog reports cannot drift |
 | origin-only | the inspectability of a component whose contract could only be learned by loading it: a repository TypeScript module, whose schemas live on its exports and whose top level would run. Such an entry carries name, category, origin and source kind, and no contract field at all — an absent contract is stated, never rendered as an empty one |
-| definition-owned return state | which value body a `<Return>` selects for: one ephemeral state per execution of one value root or Markdown value component. Structural directives keep the ambient one, a component invocation hides it from the invoked body, a nested value body installs its own, and caller-projected content restores the caller's. What travels contextually is a frozen carrier holding no facts, only an accessor that answers nothing without a token this module never exports; the state lives in that carrier's closure, so a document can read, enumerate, copy or replace the carrier and reach nothing. The first claim on it is atomic, so a second executed return fails the body rather than replacing its value, and it appends no durable event |
+| definition-owned return state | which value body a `<Return>` selects for: one ephemeral state per execution of one value root or Markdown value component. Structural directives keep the ambient one, a component invocation hides it from the invoked body, a nested value body installs its own, and caller-projected content restores the caller's. It travels down the expansion call stack as a local rather than through a context, and no exported function accepts another body's, so nothing a document can read, replace, or import acts on a live one. The first claim on it is atomic, so a second executed return fails the body rather than replacing its value, and it appends no durable event |
 
 ## Three axes
 
@@ -2377,19 +2377,28 @@ second fails the body, evaluates nothing, and the first value is not published �
 there is no first-wins or last-wins fallback. A body that executes none reports
 that instead, which is how a bounded search that found nothing reports itself.
 
-**Selection is not a decision a document makes about itself.** The context this
-travels through is named, and a named context is reachable by name from a
-document's own eval block, so nothing that decides a value may live in it. What
-it carries is a frozen carrier holding no facts, only an accessor guarded by an
-unexported `Symbol()`; who owns the body, what schema it declares, whether it is
-claimed, and which value it selected live in that carrier's own closure, whose
-lifetime is one execution of one body. A carrier the engine did not mint owns
-nothing — it cannot supply the token, and state it fabricates lacks the mark the
-engine puts on its own — so a forged one makes a `<Return>` reserved rather than
-selecting through it. Both settlement sites read the carrier their own body
-minted and has held since, never one read back from the context. Mutating
-the carrier, recreating the context, or replacing it therefore selects and
-publishes nothing, and a value still crosses its declared schema on the way out.
+**Selection is not a decision a document makes about itself.** A document's own
+eval block reaches further than it looks: a named context by name, because
+`createContext(name)` names the slot the engine would publish on, and an internal
+module by file URL, because an eval block's imports are hoisted and resolved like
+any other module's. Anything published contextually is therefore readable, and
+any exported function acting on what was published is callable — a sealed carrier
+in a context plus an exported `claim(carrier)` is forgeable however carefully the
+carrier itself is sealed, because the document calls the engine's own helper with
+the engine's own carrier.
+
+So selection uses neither. The body that owns a value is a plain object whose
+claim, selection and settlement are closures over state nothing else holds, and
+it reaches the `<Return>` that claims it as an ordinary parameter of expansion —
+down the call stack, which document code cannot read or replace. Ownership is
+explicit at every site rather than ambient: a component invocation passes none,
+so an invoked body is isolated; caller projection passes the caller's, so
+projected content still satisfies the declaration its author could see; and
+dynamically scanned markdown and generated fragments pass none. Both settlement
+sites read the body their own expansion created and held as a local. Importing
+the module that defines one gains a document nothing — it gets a body of its own,
+connected to no execution — so a value still crosses its declared schema on the
+way out.
 
 Selection is not authority and not durable state: it appends no journal event, a
 partial replay reconstructs it while completed effects replay, and a completed
