@@ -6,7 +6,8 @@
  * assembles what `xmd test <document>` assembles once the command line has
  * been read — a complete `useTesting()` activation, the host filesystem, and
  * the production `testingExecutionHost()` delivered through
- * `testHarnessInstallation()` — around one `executeInstalled()` call. A
+ * `testHarnessInstallation()`, and the deterministic Agent declarations —
+ * around one `executeInstalled()` call. A
  * launcher that calls this holds no row behavior of its own: it may assert
  * only that the one execution succeeded and that its results are non-empty
  * and all passing.
@@ -27,6 +28,7 @@ import type { Json } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { testHarnessInstallation, useTesting } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
+import { installTestAgentComponents, testAgentChildDeclaration } from "@executablemd/test-agent";
 import { cliBase, cliRuntime } from "@executablemd/test-support/launch";
 import { testingExecutionHost } from "../../src/testing-host.ts";
 import { useBunService } from "../../src/bun-service.ts";
@@ -55,6 +57,7 @@ export function runMarkdownTier(document: string): Operation<MarkdownTierRun> {
   return scoped(function* () {
     yield* useHostFiles();
     const tests = yield* useTesting();
+    yield* installTestAgentComponents();
     const installService = SERVICES[cliRuntime()];
     const testingHost = testingExecutionHost({
       includes: ["components", "."],
@@ -66,7 +69,7 @@ export function runMarkdownTier(document: string): Operation<MarkdownTierRun> {
       testAgentWorker: Ok([...cliBase(), "test-agent"]),
     });
     const execution = yield* executeInstalled({ path: document, stream: new InMemoryStream() }, [
-      testHarnessInstallation(testingHost),
+      testHarnessInstallation(testingHost, [testAgentChildDeclaration()]),
     ]);
     yield* forEach(function* () {}, execution.output);
     const completion = yield* execution;
