@@ -432,6 +432,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/301",
   },
   {
+    path: "packages/cli/tests/workflow-scheduling.test.ts",
+    reason:
+      "schedules the ordinary resume of a real run store through `runWorkflow()`, racing entry points on the advisory executor lock the Deno adapter takes and reading the node:sqlite database they settle; the workflow commands only exist on the Deno entrypoints, and workflow-host.test.ts asserts their refusal on every runtime",
+    issue: "https://github.com/taras/executable.md/issues/300",
+  },
+  {
     path: "packages/cli/tests/workflow-suspension.test.ts",
     reason:
       "suspends and resumes a real run store through `runWorkflow()`, reading the node:sqlite database it settles; the workflow commands only exist on the Deno entrypoints, and workflow-host.test.ts asserts their refusal on every runtime",
@@ -503,6 +509,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
       "opens a real node:sqlite run store through @executablemd/workflow/deno to drive runWorkflow() directly; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
     issue: "https://github.com/taras/executable.md/issues/366",
   },
+  {
+    path: "scripts/tests/adversarial-composition-workflow.test.ts",
+    reason:
+      "AC0-AC7 exercise the Deno workflow host itself: they create real retained workflow runs over its `node:sqlite` run store and take its advisory executor lock. Bun has no `node:sqlite` built-in, so the file fails on import there; Node has no Deno file-lock runtime, so every case that creates a run refuses. `SYNC1` sits in the same file and is static, and would run anywhere — but an exclusion is file-level, and the file's subject is the Deno host, so Deno owns the complete Tier AC suite",
+    issue: "https://github.com/taras/executable.md/issues/301",
+  },
 ];
 
 /**
@@ -523,6 +535,12 @@ const COMPILED_BINARY: RuntimeExclusion[] = [
     reason:
       "drives the compiled `dist/xmd`, which only `deno compile` produces and which no test shard builds — the subject is the binary's two loaded copies of core, a shape no Node or Bun run can build or exercise, and one the Deno shards saw only while an unrelated Deno-only build test happened to share a shard and leave the binary behind. The `smoke` job builds through README.md#Build and runs it there, beside the other suites whose subject is the binary",
     issue: "https://github.com/taras/executable.md/issues/567",
+  },
+  {
+    path: "scripts/tests/adversarial-workflow-certification.test.ts",
+    reason:
+      "CF1 runs the same supervised workflow through both supported entrypoints, and one of them is the compiled `dist/xmd` no test shard builds; the rest of the suite launches the Deno source entrypoint as a subprocess, which no Node or Bun run starts either. #299's own commands own this suite: they run `deno task build` and then name this file outright, which is the only place a built binary and the certification that needs one are guaranteed to meet. It is excluded from discovery so no shard runs it without that binary — not delegated to `smoke`",
+    issue: "https://github.com/taras/executable.md/issues/299",
   },
 ];
 

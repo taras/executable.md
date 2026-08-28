@@ -309,8 +309,9 @@ the request and the compiled schema as the response schema, so what is retained
 is what the person was asked, and a delivered value is judged against the schema
 the document itself compiled. An `<Answers>` region installs nearer and answers
 first, so a document that already knows the answer never suspends. `resume`
-accepts neither replacement root props nor an untyped generic answer. The host may schedule
-resumption when input arrives, or a caller may invoke `resume`. If input remains
+accepts neither replacement root props nor an untyped generic answer. A trusted
+host that has observed a successful delivery may schedule that same ordinary
+resume, or a caller may invoke `resume` directly. If input remains
 absent, replay restores the same request event, performs no earlier effect,
 publishes no duplicate request, and returns incomplete again after teardown.
 Providers remain lazy and are not contacted for replayed effects.
@@ -354,10 +355,46 @@ leaves the answer pending and publishes nothing, and replay after it commits
 restores the retained answer event without consuming or publishing again.
 
 This suspension and executor-lock-release contract folds issue #322 into #367;
-#322 is not a separate implementation prerequisite. Scheduling — automatic
-resume, watchers, unattended iteration and remote host selection — is #300's.
-Nothing above waits on it: a suspended run continues through `xmd workflow
-answer` followed by an explicit `xmd workflow resume`.
+#322 is not a separate implementation prerequisite.
+
+#### Explicit host scheduling
+
+Scheduling decides when to invoke resume, and decides nothing else. A trusted
+host that has independently observed a successful delivery calls the scheduler
+with one public run ID, and that call invokes the same ordinary resume operation
+`xmd workflow resume` invokes and answers with its ordinary outcome. The request
+carries no answer, suspension ID, definition, root props, document path, Agent
+identity, transcript, executor token, database handle or provider-private state,
+so a successful delivery receipt is trigger evidence for the host rather than
+execution authority: it never reaches `suspendFor()`, and a refused delivery
+schedules nothing. There is no new CLI action — `answer` remains delivery only
+and `resume` remains the manual entry point — and no combined deliver-and-resume
+operation, Markdown component, prop, middleware policy or public remote-host
+flag.
+
+Scheduled and manual resume compete for the one non-blocking executor lock.
+Whichever acquires it advances the run; the other receives the ordinary
+already-running outcome rather than a place in a queue, so duplicate schedules
+add no execution authority and a schedule arriving after the winner settled
+performs the ordinary completed replay. Only the resumed `suspendFor()` claims,
+publishes and consumes the retained answer, so one answer is spent once however
+many hosts asked for it.
+
+A scheduled resume lives in the scope that asked for it and no longer. A host
+that ends before the claim transaction commits leaves the answer pending — the
+transaction rolls back, no answer event exists, teardown completes and the run
+settles `interrupted` — and a later scheduled or manual resume claims it. A host
+that ends after that commit leaves one retained answer event and one consumed
+delivery, and replay restores the value without another live claim before
+performing the work that follows the wait exactly once. Both settle through the
+ordinary lifecycle, and the executor lock is released with the scope that held
+it.
+
+There is no scheduling ledger, queue, retry loop, heartbeat, generation,
+watcher, polling source or new run status, and no scheduling request survives
+host exit: the retained answer is the recovery point, so nothing here claims
+at-least-once scheduling. Configured source watching, unattended iteration
+arbitration and public remote-host selection remain outside this contract.
 
 ### 3.6 Interruption and cancellation differ
 
@@ -567,7 +604,10 @@ Status, list and history for retained runs are built (§4), and so are cancel an
 delete, and export. Artifact export and artifact status/history are built; the
 artifact-backed fork is specified in `specs/xmd-artifact-spec.md` and remains
 unbuilt.
-Repository, Worktree and Dir are built (§6); the Git operations of §7 are not.
+Repository, Worktree and Dir are built (§6), and so are the Git operations of
+§7: `Git.Switch`, `Git.Add` and `Git.Commit` publish local mutations under the
+retained checkout, `Git.Push` publishes a branch and retains its evidence, and
+`PullRequest` reconciles against the same Git-host boundary.
 The executor lock and the atomic lifecycle transitions built on it are #367's,
 and they replace the opportunistic orphan closure that preceded them: liveness
 is now an advisory lock the operating system releases when a host dies, rather
@@ -575,16 +615,18 @@ than something inferred from a status column. Durable suspension is built on the
 same stack: a run that reaches `suspendFor()` retains one request, settles
 `suspended`, releases its lock and exits 2, and every later resume reaches that
 same wait. Typed answer delivery is what ends such a wait, and `xmd workflow
-answer` is built by #300; scheduling is not, so a wait ends when somebody
-resumes the run rather than on its own. Fork is built (§11): a run's history can
+answer` and explicit host scheduling of the ordinary resume are both built by
+#300, so a wait ends when a person resumes the run or a trusted host schedules
+that same resume. Watchers, unattended iteration arbitration and remote host
+selection stay outside it. Fork is built (§11): a run's history can
 be continued under a changed definition from any committed checkpoint the
 retained events allow.
 
 The component bundle is built: a root declares one, `start` establishes it from
 the pinned commit, the definition retains it, and `resume` and completed replay
 reconstruct it. The adversarial implementation loop those five
-stage names describe is not — its scheduling and unattended continuation belong
-to the durable-suspension stack. Generated-XMD admission is built for both
+stage names describe is not — its unattended continuation belongs to the
+durable-suspension stack, on top of the explicit host scheduling built there. Generated-XMD admission is built for both
 effect classes (§8.4): a fragment observes under `read` and mutates the run's
 own Workspace under `write`.
 
@@ -3243,7 +3285,7 @@ fetch operation requires its own language and durability contract.
 | workflow-run and expansion identity | built by #289 / PR #341 |
 | retained run record and filtered journal | built by #291 |
 | caller-owned storage transaction | built by #291; Workspace mutations join it in #365 |
-| provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; document deletion (§10.1) built by #567 for both providers; process capabilities unbuilt (#218) |
+| provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; document deletion (§10.1) built by #567 for both providers; a command a workflow document runs executes under the run and its result is retained in the run's own history, so a continuation reads back what it printed rather than running it again |
 | `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; both acquire #367's executor lock |
 | `<Repository>`, `<Worktree>` and `<Dir>` composition | built by #293, Deno provider only |
 | transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | built by #294, Deno provider only |
@@ -3253,7 +3295,8 @@ fetch operation requires its own language and durability contract.
 | lifecycle cancel/delete and executor lock | built by #367 |
 | durable suspension request and executor-lock release | built by #367 |
 | `xmd workflow answer` and the `suspension_answer` effect | built by #300 |
-| workflow scheduling (watchers, unattended iteration, remote hosts) | #300 |
+| explicit host scheduling of the ordinary resume | built by #300: one public run ID, the same resume operation the foreground command runs, the one non-blocking executor lock, and no ledger, queue, retry loop, watcher or detached task |
+| workflow scheduling (watchers, unattended iteration, remote hosts) | outside #300, which built the explicit host call above |
 | history fork | built (§11); Deno provider only |
 | XMD artifact export, inspection and fork source | specified in `specs/xmd-artifact-spec.md`; `xmd workflow export` and artifact `status`/`history` are built, Deno provider only. The artifact-backed fork remains unbuilt |
 | Agent session portability evidence in an artifact | specified in `specs/xmd-artifact-spec.md` §2.5; the format and its complete verifier are built. Provider bundle capture, Agent-aware export, intrinsic Agent-aware inspection and artifact-backed fork are unbuilt |

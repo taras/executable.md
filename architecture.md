@@ -1031,10 +1031,36 @@ transaction that does not commit publishes nothing. Replay after that
 transaction commits restores the recorded answer event without reaching the live
 controller and without consuming or publishing again.
 
-Scheduling — automatic resume, watchers, unattended iteration and remote host
-selection — is #300's and is not part of this behavior. Nothing here waits on
-it: a suspended run continues through `xmd workflow answer` followed by an
-explicit `xmd workflow resume`.
+### Explicit host scheduling
+
+Scheduling decides when to invoke resume. A trusted host that has independently
+observed a successful delivery calls it with one public run ID, and that call
+invokes the same ordinary resume operation the foreground command invokes and
+answers with that operation's ordinary outcome. The request carries no answer,
+suspension ID, definition, root props, document path, Agent identity,
+transcript, executor token, database handle or provider-private state, so a
+delivery receipt is trigger evidence for the host rather than authority the
+document execution ever sees. Delivery stays ignorant of it: nothing schedules
+on delivery's behalf, and a refused delivery schedules nothing.
+
+Scheduled and manual resume compete for the one non-blocking executor lock. The
+acquirer advances the run and the other caller receives the ordinary
+already-running outcome, so duplicate scheduling creates no second executor and
+a schedule arriving after the winner settled performs the ordinary completed
+replay. Only the resumed `suspendFor()` claims the retained answer, inside the
+transaction that publishes the answer event and consumes the delivery together,
+so one answer is spent once however many hosts asked for it.
+
+A scheduled resume belongs to the scope that asked for it. Ending that scope
+before the claim transaction commits rolls the claim back and settles the run
+`interrupted` with the answer still pending, and a later scheduled or manual
+resume claims it; ending it after the commit leaves that answer event and
+consumed delivery in place, and replay restores the value without another live
+claim. There is no scheduling ledger, queue, retry loop, heartbeat, generation,
+watcher, polling source, new run status or combined deliver-and-resume
+operation, and no scheduling request survives host exit — the retained answer is
+the recovery point. Configured source watching, unattended iteration
+arbitration and public remote-host selection stay outside this boundary.
 
 This contract folds issue #322's suspension effect into #367. Issue #322 no
 longer supplies a separate implementation prerequisite; its typed correlated
@@ -1108,7 +1134,9 @@ workflow capability is absent.
 Replay rehydrates the Effection tree. A completed durable effect restores its
 recorded result without executing again. Ephemeral operations run again only to
 rebuild live structure: attach the Workspace, enter lexical working-directory
-scopes, attach providers and re-register Agent directories. A completed root
+scopes, and attach providers — including the Agent profile's own session
+arrangement, which is a provider-owned empty directory and a retained session
+mapping rather than a directory registered with an Agent. A completed root
 result returns without attaching any provider.
 
 The Workspace stores the current frontier state. The journal stores the
@@ -1751,9 +1779,12 @@ identities and the constraint travels with the pinned one, decided in the
 whole-fragment preflight rather than inside the component after earlier elements
 have run.
 
-Mutation-proposal admission and workflow-bundled Markdown component admission
-remain unbuilt. Directory registration is not among them: a workflow Agent is
-given no directory to register.
+Mutation-proposal admission is built (#369, delivered by #572): a generated
+fragment's paired `<File>`, lexical `<Dir>` and self-closing `<File.Delete>` are
+admitted by class and authored form, and each admitted element runs as the
+ordinary component it is. What remains unbuilt beside it is workflow-bundled
+Markdown component admission — a generated fragment names none. Directory
+registration is neither: a workflow Agent is given no directory to register.
 
 ## Local Workspace topology
 
@@ -3377,7 +3408,7 @@ which is a discipline inside those packages, not a requirement on anyone else.
 
 ## Construct inventory
 
-Status is measured against main.
+Status is measured against the revision containing this document.
 
 | Construct | Does | Status |
 | --- | --- | --- |
@@ -3393,7 +3424,7 @@ Status is measured against main.
 | document-aware `xmd run … --help` | describes what one document declares and every target it addresses, each as a full document reference with the description its section states, by inspection alone | built on the #463 stack |
 | targeted `xmd run` | reads a file argument as a document reference and executes the one exact target its selector resolved to, replacing the selector before execution rereads the file | built on the #412 stack |
 | targeted workflow definition | the V1 workflow definition optionally carries the exact canonical document target, which takes part in definition identity and in compatible reuse | built on the #412 stack; the workflow CLI does not supply one yet |
-| workflow component bundle | a workflow root declares a closed set of authored Markdown components; the V1 workflow definition optionally carries them as one array sorted by component name, each entry holding the name, its canonical repository-relative path inside the pinned commit and that blob's object ID, and an absent member identifies a run closed over no components — so a definition retained before the member existed reads unchanged. `start` and `resume` read every component from the definition's own pinned commit; the array takes part in definition identity and is compared as part of the same V1 descriptor in compatible reuse; and canonical core resolves those names and holds both live import and retained history to that exact bundle | built on the #301 stack; the full adversarial implementation loop and its scheduling remain unbuilt (#300), and generated XMD admits no bundled Markdown component (#369) |
+| workflow component bundle | a workflow root declares a closed set of authored Markdown components; the V1 workflow definition optionally carries them as one array sorted by component name, each entry holding the name, its canonical repository-relative path inside the pinned commit and that blob's object ID, and an absent member identifies a run closed over no components — so a definition retained before the member existed reads unchanged. `start` and `resume` read every component from the definition's own pinned commit; the array takes part in definition identity and is compared as part of the same V1 descriptor in compatible reuse; and canonical core resolves those names and holds both live import and retained history to that exact bundle | built on the #301 stack, which is also where the complete adversarial implementation loop is built; explicit host scheduling of its ordinary resume is built by #300, and generated XMD admits no bundled Markdown component (#369) |
 | `workflowInstallation()` / `getWorkflowRun()` | associates one document execution with a workflow run, through an `ExecutionInstallation` the trusted host passes to `executeInstalled()` | built on the #366 stack |
 | `retainedWorkflowInstallation()` | associates one document execution with a run storage already created, requiring exact journal agreement | built on the #366 stack |
 | `Git.revParse()` | verifies and resolves one Git revision expression contextually | built on main |
@@ -3419,7 +3450,7 @@ Status is measured against main.
 | `ephemeral eval` | reconstructs live middleware and bindings without a journal entry | built on main |
 | `useWorkflowServiceDenial()` | provides a non-delegating workflow service denial provider, installed inside every start and resume execution scope | built on the #366 stack |
 | `xmd workflow start` / `xmd workflow resume` | starts or resumes a workflow run from the CLI, under the Deno entrypoints only | built on the #366 stack; both acquire #367's executor lock before any lifecycle transition |
-| implicit workflow Workspace | retains provider-neutral filesystem, repository and attachment state by run ID | document filesystem built on the #366 stack and Repository/Worktree composition on the #293 stack; process capabilities unbuilt (#218) |
+| implicit workflow Workspace | retains provider-neutral filesystem, repository and attachment state by run ID | document filesystem built on the #366 stack and Repository/Worktree composition on the #293 stack; a command the document runs executes under the run and its result is retained with it, so a continuation reads the result back rather than running the command again |
 | `<Repository>` / `<Worktree>` / `<Dir>` composition | names a Git repository and its linked checkouts inside the run-owned Workspace, installs each as contextual working directory, and retains creation identity beside the retained Git bytes | built on the #293 stack, Deno provider only |
 | transactional Git effects (`Git.Switch` / `Git.Add` / `Git.Commit`) | publish local Git mutations with their journal result; the enclosing Repository and the contextual working directory select which retained checkout one runs in, and neither observation carries authority — the observed record is compared with the retained row and the directory with the checkouts that row holds, so a failure of authority, of retained state or of an unrecognized native condition fails the run instead of publishing a result | built on the #294 stack, Deno provider only |
 | `Git.Push` | publishes the selected checkout's exact current named branch and commit to the same branch on the retained Repository's canonical `origin`, reconciled through the shared Git-host state machine rather than through a Workspace transaction: no props and no component result, no force, no upstream mutation and no implicit staging or committing; the durable request and record carry the Repository's filtered identity without its checkout path, and the transport runs in a provider-owned isolated control repository reading the checkout's objects through an object-source attachment whose alternates chain and object tree are proven contained before the first remote observation, aimed at the exact private retained locator. A destination proven absent is published to once and one already naming this exact commit is adopted; one naming a distinct commit that same authenticated source proves is in this commit's ancestry is a performable pre-state, published over by the same exact non-force refspec and retained as the predecessor with the attested relation, while a divergent commit and one the source cannot read are both conflicts and nothing is fetched to decide either; a completed Push is reconstructed from the Workspace root its own journal event was appended against, read without publishing it or moving the run's frontier, so a branch published more than once resumes | built on the #370 stack, Deno provider only |
@@ -3441,7 +3472,8 @@ Status is measured against main.
 | `xmd workflow answer <run-id> <suspension-id> <json>` | retains one schema-validated value for one retained wait, taking no executor lock and changing no run state | built by #300 |
 | `suspension_answer` durable effect | ends a wait from retained delivery state, publishing the answer and consuming that state in one transaction | built by #300 |
 | `<PullRequest.Reviews>` · `<PullRequest.Comments>` · `<PullRequest.Checks>` | read the reviews, comments and checks a Git host already holds for one numbered pull request, completely or not at all | built by #576 |
-| workflow scheduling (watchers, unattended iteration, remote host selection) | — | #300 |
+| explicit host scheduling | a trusted host that has independently observed a successful delivery invokes the ordinary resume operation with one public run ID and receives its ordinary outcome; scheduled and manual callers compete for the one non-blocking executor lock, only the resumed `suspendFor()` claims the retained answer, and the scheduled operation stays inside the scope that asked for it | built by #300 |
+| workflow scheduling (watchers, unattended iteration, remote host selection) | — | outside #300, which built the explicit host call above |
 | `<Result as>` | binds `{ok: true, value}` or `{ok: false, error}`; a failure becomes a bound value, not a raise | defined, unbuilt |
 | error middleware (JS api) | retry · suspend · decline | defined, unbuilt |
 
