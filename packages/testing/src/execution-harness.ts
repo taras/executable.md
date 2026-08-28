@@ -84,9 +84,10 @@ import type {
   PropsSchema,
   SourcePosition,
 } from "@executablemd/core";
-import { AnswersDeclaration } from "@executablemd/core/host";
+import { DeclarationScan } from "@executablemd/core/host";
 import type {
   AnswerConfiguration,
+  AnswersPlacement,
   ExecutionInstallation,
   TestHarness,
   TestHarnessBinding,
@@ -149,7 +150,7 @@ interface HarnessState {
  * this invocation's own bookkeeping, and the configuration it produces is read
  * back from this closure when the host request is issued.
  */
-interface DeclarationScan {
+interface DeclarationState {
   readonly collect: ChildConfigurationCollector;
   /** By the exact definition each declaration must resolve to. */
   readonly open: ReadonlyMap<unknown, OpenChildDeclaration>;
@@ -163,7 +164,20 @@ interface DeclarationScan {
    */
   readonly recognized: Set<string>;
   /** The declaration currently reading its own children, while it reads them. */
-  inside: OpenChildDeclaration | undefined;
+  inside: { readonly declaration: OpenChildDeclaration; readonly depth: number } | undefined;
+  /**
+   * How many segment lists are open, counted by expansion.
+   *
+   * Recognizing a definition is not enough to recognize a declaration. A
+   * structural construct expands its descendants without resolving a component,
+   * so `<If>` around a `<TestAgent>` would otherwise give it the standing of one
+   * written beside the other declarations — and a declaration is what installs
+   * a child's providers. Depth is how a direct child is told from one a
+   * construct reached on its own.
+   */
+  depth: number;
+  /** The list the declaration prefix occupies, once the scan has opened it. */
+  prefix: number;
 }
 
 const Declarations: Context<HarnessState | undefined> = createContext<HarnessState | undefined>(
@@ -563,7 +577,7 @@ function authorizedExecution(
 function declarationScan(
   configuration: DeclaredConfiguration,
   declarations: readonly ChildDeclaration[],
-): DeclarationScan {
+): DeclarationState {
   const collect: ChildConfigurationCollector = {
     configure(declared: ChildConfiguration): void {
       if (configuration.child.some((existing) => existing.kind === declared.kind)) {
@@ -580,7 +594,16 @@ function declarationScan(
   for (const declaration of declarations) {
     open.set(declaration.definition, declaration.open(collect));
   }
-  return { collect, open, recognized: new Set<string>(), inside: undefined };
+  return {
+    collect,
+    open,
+    recognized: new Set<string>(),
+    inside: undefined,
+    depth: 0,
+    // Settled when the scan opens the prefix; until then no depth is the
+    // prefix's, so nothing is a declaration.
+    prefix: -1,
+  };
 }
 
 /** What a configuration kind is written as, for the sentence that refuses it. */
@@ -602,16 +625,22 @@ function writtenAs(kind: ChildConfiguration["kind"]): string {
  * invocation's own closure, so a recorder set further in records into nothing
  * anybody reads.
  */
-function* recordAnswers(state: HarnessState, declared: DeclarationScan): Operation<void> {
+function* followScan(state: HarnessState, declared: DeclarationState): Operation<void> {
   const parsed = new Set<string>();
-  yield* AnswersDeclaration.set({
-    declares(site: string): "parse" | "parsed" | undefined {
-      if (state.phase === "scan") {
-        return "parse";
-      }
-      return parsed.has(site) ? "parsed" : undefined;
+  yield* DeclarationScan.set({
+    enterList(): void {
+      declared.depth += 1;
     },
-    record(site: string, configuration: Result<AnswerConfiguration>): void {
+    exitList(): void {
+      declared.depth -= 1;
+    },
+    declaresAnswers(site: string): AnswersPlacement | undefined {
+      if (state.phase !== "scan") {
+        return parsed.has(site) ? "parsed" : undefined;
+      }
+      return declared.depth === declared.prefix ? "parse" : "misplaced";
+    },
+    recordAnswers(site: string, configuration: Result<AnswerConfiguration>): void {
       parsed.add(site);
       if (!configuration.ok) {
         declared.collect.refuse(configuration.error.message);
@@ -659,10 +688,14 @@ function* runNestedExecution(
   };
   const declared = declarationScan(state.configuration, declarations);
   yield* Declarations.set(state);
-  yield* recordAnswers(state, declared);
+  yield* followScan(state, declared);
   yield* installScan(state, declared);
 
   if (yield* hasContent()) {
+    // The list `tryContent()` opens is the declaration prefix, and it is the
+    // only list a declaration may be written in. Nothing has been entered
+    // inside this invocation yet, so the prefix is the next one down.
+    declared.prefix = declared.depth + 1;
     yield* scanDeclarations();
   }
   state.phase = "assert";
@@ -731,7 +764,7 @@ function message(error: unknown): string {
  * Every handler reads `state.phase`, so the second pass runs with the same
  * middleware in place and nothing intercepted.
  */
-function* installScan(state: HarnessState, declared: DeclarationScan): Operation<void> {
+function* installScan(state: HarnessState, declared: DeclarationState): Operation<void> {
   yield* Component.around(
     {
       *importComponent([name, position], next) {
@@ -754,19 +787,23 @@ function* installScan(state: HarnessState, declared: DeclarationScan): Operation
         if (nested !== undefined) {
           // Inside a recognized declaration, where ordinary content is not a
           // thing that may be written. Only the exact definitions that
-          // declaration accepts are its children, so a repository component
-          // shadowing one of those names is malformed configuration rather
-          // than a component that renders where it was written.
-          const child = isFunctionComponent(definition)
-            ? nested.children.get(definition.fn)
-            : undefined;
+          // declaration accepts are its children, and only where the
+          // declaration itself wrote them: a construct that expanded one
+          // decides for itself what it expands, and a repository component
+          // shadowing one of those names is not that declaration's child either.
+          const direct = declared.depth === nested.depth + 1;
+          const child =
+            direct && isFunctionComponent(definition)
+              ? nested.declaration.children.get(definition.fn)
+              : undefined;
           if (child !== undefined && isFunctionComponent(definition)) {
             return substituting(definition, child);
           }
           return inert(function* refuseNested(): Operation<string> {
             declared.collect.refuse(
-              `<${nested.name}> configures a child, so it accepts only its own declarations, ` +
-                `and <${name}> here resolves to something else.`,
+              `<${nested.declaration.name}> configures a child, so it accepts only its own ` +
+                `declarations, written directly inside it — and <${name}> here is ` +
+                `${direct ? "something else" : "inside a construct"}.`,
             );
             return "";
           });
@@ -774,9 +811,23 @@ function* installScan(state: HarnessState, declared: DeclarationScan): Operation
 
         const open = isFunctionComponent(definition) ? declared.open.get(definition.fn) : undefined;
         if (open !== undefined && isFunctionComponent(definition)) {
+          if (declared.depth !== declared.prefix) {
+            // The definition is the package's; where it is written is not a
+            // declaration's place. A construct decides for itself what it
+            // expands, and installing a child's providers is not a decision a
+            // condition or an iteration may make.
+            return inert(function* refuseIndirect(): Operation<string> {
+              declared.collect.refuse(
+                `<${name}> configures a child only as a direct child of <Execution>. This one ` +
+                  "is inside a construct, which decides for itself what it expands.",
+              );
+              return "";
+            });
+          }
+          const depth = declared.depth;
           declared.recognized.add(siteOf(position, name));
           return substituting(definition, function* declaring(props): Operation<unknown> {
-            declared.inside = open;
+            declared.inside = { declaration: open, depth };
             try {
               return yield* open.expand(props);
             } finally {

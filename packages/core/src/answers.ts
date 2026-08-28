@@ -44,8 +44,10 @@
  * `<Execution host="run">` prefix, an `<Answers>` holds only matchers, and what
  * it produces is detached data a trusted host installs inside the child
  * (specs/testing-spec.md). Which placement an element has is decided by the
- * harness that recognized it, keyed by where the element was written — so
- * neither placement is selected by looking a name up.
+ * harness that recognized it, from where the element was written and from
+ * whether the scan reached it directly — so neither placement is selected by
+ * looking a name up, and neither is reachable through a construct that expands
+ * descendants of its own.
  *
  * ## Selection
  *
@@ -71,8 +73,8 @@
  * differs.
  */
 
-import { createContext, Err, Ok, scoped } from "effection";
-import type { Context, Operation, Result } from "effection";
+import { Err, Ok, scoped } from "effection";
+import type { Operation, Result } from "effection";
 
 import { env, raise } from "./component-api.ts";
 import { renderSegments } from "./render.ts";
@@ -85,6 +87,7 @@ import { JsonParseError, parseJson } from "./json.ts";
 import { matchPrompt, parseTemplate, resolveBinding } from "./template.ts";
 import type { ParsedTemplate } from "./template.ts";
 import type { ComponentElement, ErrorSegment, Json, Segment } from "./types.ts";
+import type { AnswersPlacement, DeclarationScanner } from "./declaration-scan.ts";
 
 /**
  * The enclosing expansion's recursion, handed in by the arm that dispatched the
@@ -134,36 +137,6 @@ export interface AnswerConfiguration {
   readonly matchers: readonly AnswerMatcher[];
   readonly bindings: Readonly<Record<string, string>>;
 }
-
-/**
- * Where a trusted harness collects the `<Answers>` written as child
- * configuration.
- *
- * Recognition is the harness's, and identity is how it says so: it knows which
- * expansions its own declaration scan reached, and answers for those alone.
- * This carries no authority — what it records is data the harness reads back
- * from its own closure, and a second recorder set further in records into
- * nothing anybody reads.
- */
-export interface AnswersDeclarationRecorder {
-  /**
-   * Whether the `<Answers>` written at `site` is child configuration:
-   * `"parse"` the first time the declaration scan reaches it, `"parsed"` when
-   * the assertion pass re-expands one already recorded, and `undefined` for an
-   * ordinary region.
-   *
-   * A site is where the element was written, because a harness reads its
-   * children twice and the second projection of one request derives an
-   * expansion path of its own (§5.6).
-   */
-  declares(site: string): "parse" | "parsed" | undefined;
-  /** The configuration this declaration produced, or why it is malformed. */
-  record(site: string, configuration: Result<AnswerConfiguration>): void;
-}
-
-export const AnswersDeclaration: Context<AnswersDeclarationRecorder | undefined> = createContext<
-  AnswersDeclarationRecorder | undefined
->("core.answers.declaration", undefined);
 
 function positioned(message: string, element: ComponentElement): string {
   const { position } = element;
@@ -306,15 +279,31 @@ export function* expandAnswers(
 export function* declareChildAnswers(
   element: ComponentElement,
   expand: ExpandSegments,
-  recorder: AnswersDeclarationRecorder,
+  scanner: DeclarationScanner,
   site: string,
-  pass: "parse" | "parsed",
+  placement: AnswersPlacement,
 ): Operation<Segment[]> {
-  if (pass === "parsed") {
+  if (placement === "parsed") {
     // The assertion pass re-expanding a declaration the scan already read.
     return [];
   }
-  recorder.record(site, yield* readChildAnswers(element, expand));
+  if (placement === "misplaced") {
+    scanner.recordAnswers(
+      site,
+      Err(
+        new Error(
+          positioned(
+            `<${ANSWERS}> configures a child only as a direct child of the execution that runs ` +
+              "it. This one is inside a construct, which decides for itself what it expands — " +
+              "and a child's answers are not something a condition or an iteration may settle.",
+            element,
+          ),
+        ),
+      ),
+    );
+    return [];
+  }
+  scanner.recordAnswers(site, yield* readChildAnswers(element, expand));
   return [];
 }
 

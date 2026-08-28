@@ -80,12 +80,8 @@ import { SchemaValidationError, validateProps, validateReturnValue } from "./val
 import { parseJson } from "./json.ts";
 import { healSegment } from "./heal.ts";
 import { scanSegments } from "./scanner.ts";
-import {
-  AnswersDeclaration,
-  declareChildAnswers,
-  expandAnswers,
-  strayAnswerError,
-} from "./answers.ts";
+import { declareChildAnswers, expandAnswers, strayAnswerError } from "./answers.ts";
+import { DeclarationScan } from "./declaration-scan.ts";
 import { RESERVED_STRUCTURAL } from "./structural.ts";
 import { renderSegments } from "./render.ts";
 import {
@@ -660,6 +656,26 @@ export function expandSegments(
  * bodies, and projected content alike.
  */
 export function* expandSegmentsWithin(
+  ...expansion: Parameters<typeof expandListSegments>
+): Operation<Segment[]> {
+  // Placement, for a harness that reads a construct's children in two passes.
+  // A declaration written beside the others and one a construct expanded on its
+  // own are told apart by how many lists are open, and only expansion knows
+  // that. Bracketed once here rather than at each construct, so a construct
+  // that recurses cannot be the one this forgets.
+  const scanner = yield* DeclarationScan.get();
+  if (scanner === undefined) {
+    return yield* expandListSegments(...expansion);
+  }
+  scanner.enterList();
+  try {
+    return yield* expandListSegments(...expansion);
+  } finally {
+    scanner.exitList();
+  }
+}
+
+function* expandListSegments(
   segments: Segment[],
   parentMeta: Record<string, unknown>,
   parentProps: Record<string, Json>,
@@ -712,7 +728,10 @@ export function* expandSegmentsWithin(
   if ((yield* SegmentCauses.get()) === undefined) {
     return yield* scoped(function* () {
       yield* useSegmentCauses();
-      return yield* expandSegmentsWithin(
+      // The list, not the wrapper: this is the same list continuing under a
+      // table of its own, and counting it twice would make its children look
+      // one construct deeper than they are.
+      return yield* expandListSegments(
         segments,
         parentMeta,
         parentProps,
@@ -930,12 +949,12 @@ export function* expandSegmentsWithin(
           // twice, and the second projection of one request derives a path of
           // its own (§5.6), so only where the element was written is the same
           // in both passes.
-          const declaration = yield* AnswersDeclaration.get();
+          const scanner = yield* DeclarationScan.get();
           const site = elementSite(segment.position, indexBase + index);
-          const pass = declaration?.declares(site);
-          if (declaration !== undefined && pass !== undefined) {
+          const placement = scanner?.declaresAnswers(site);
+          if (scanner !== undefined && placement !== undefined) {
             result.push(
-              ...(yield* declareChildAnswers(segment, expandWithin, declaration, site, pass)),
+              ...(yield* declareChildAnswers(segment, expandWithin, scanner, site, placement)),
             );
             break;
           }

@@ -27,8 +27,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { collect } from "../src/collect.ts";
-import { AnswersDeclaration, installAnswerProvider } from "../src/answers.ts";
+import { installAnswerProvider } from "../src/answers.ts";
 import type { AnswerConfiguration } from "../src/answers.ts";
+import { DeclarationScan } from "../src/declaration-scan.ts";
+import type { AnswersPlacement } from "../src/declaration-scan.ts";
 import { Elicitation } from "../src/elicitation-api.ts";
 import type { ElicitationRequest } from "../src/elicitation-api.ts";
 import { execute } from "../src/execute.ts";
@@ -1005,19 +1007,26 @@ describe("Answers: child configuration", () => {
   /**
    * Read every `<Answers>` in `source` as a declaration.
    *
-   * `declares` answers `"parse"` for whatever it is asked about, which is the
-   * scan phase of a harness that reached exactly its own declaration prefix.
+   * The placement is supplied rather than derived: how a harness decides that
+   * an element is a direct child of the prefix it is scanning is the harness's
+   * own business, and what these hold is what core does once it has been told.
    */
-  function declare(workspace: string, source: string): Operation<Declared> {
+  function declare(
+    workspace: string,
+    source: string,
+    placement: AnswersPlacement = "parse",
+  ): Operation<Declared> {
     return scoped(function* () {
       const path = join(workspace, "declared.md");
       yield* writeTextFile(path, source);
       yield* useTempFileCompiler();
       const configurations: AnswerConfiguration[] = [];
       const problems: string[] = [];
-      yield* AnswersDeclaration.set({
-        declares: () => "parse",
-        record(_site: string, configuration: Result<AnswerConfiguration>): void {
+      yield* DeclarationScan.set({
+        enterList: () => {},
+        exitList: () => {},
+        declaresAnswers: () => placement,
+        recordAnswers(_site: string, configuration: Result<AnswerConfiguration>): void {
           if (configuration.ok) {
             configurations.push(configuration.value);
             return;
@@ -1136,6 +1145,28 @@ describe("Answers: child configuration", () => {
       expect(declared.problems[0]).toContain(refused.says);
     });
   }
+
+  it("refuses one a scan reached only because a construct expanded it", function* () {
+    const workspace = yield* useWorkspace();
+    const declared = yield* declare(
+      workspace,
+      [
+        "<Answers>",
+        `<Answer template="Approve?" value={{ decision: "approve" }} />`,
+        "</Answers>",
+        "",
+      ].join("\n"),
+      "misplaced",
+    );
+    // Well-formed as a matcher set, and configuring nothing: where it was
+    // written is a construct's decision, and a child's answers are not.
+    expect(declared.configurations).toEqual([]);
+    expect(declared.problems.length).toBe(1);
+    expect(declared.problems[0]).toContain(
+      "configures a child only as a direct child of the execution that runs it",
+    );
+    expect(declared.output).not.toContain("approve");
+  });
 
   it("answers a match from detached data, and never delegates one it misses", function* () {
     const workspace = yield* useWorkspace();

@@ -1313,6 +1313,75 @@ describe("child configuration declarations", () => {
     expect(order).toEqual(["the child's teardown", "the assertions"]);
   });
 
+  /**
+   * A construct in the declaration prefix, holding what would otherwise be a
+   * declaration.
+   *
+   * `<If>` stands for every construct that expands descendants of its own: it
+   * never resolves a component, so recognizing the definition is not enough to
+   * tell a declaration written beside the others from one a construct reached.
+   * One representative is the whole of what this needs — the rule is about the
+   * placement, not about which construct produced it.
+   */
+  const INDIRECT: readonly { name: string; body: readonly string[]; says: string }[] = [
+    {
+      name: "a <TestAgent> a construct expanded",
+      body: [
+        "<If condition={true}>",
+        "<TestAgent>",
+        '<TestAgent.Scenario src="review.md" />',
+        "</TestAgent>",
+        "</If>",
+      ],
+      says: "<TestAgent> configures a child only as a direct child of <Execution>",
+    },
+    {
+      name: "an <Answers> a construct expanded",
+      body: [
+        "<If condition={true}>",
+        "<Answers>",
+        '<Answer template="Approve?" value={{ decision: "approve" }} />',
+        "</Answers>",
+        "</If>",
+      ],
+      says: "<Answers> configures a child only as a direct child of the execution that runs it",
+    },
+    {
+      name: "a scenario a construct expanded inside a direct declaration",
+      body: [
+        "<TestAgent>",
+        "<If condition={true}>",
+        '<TestAgent.Scenario src="review.md" />',
+        "</If>",
+        "</TestAgent>",
+      ],
+      says: "written directly inside it",
+    },
+  ];
+
+  for (const indirect of INDIRECT) {
+    it(`refuses ${indirect.name}`, function* () {
+      const run = yield* runDeclaring({
+        "README.md": doc(
+          '<Test name="indirect">',
+          // No such document: reaching a root at all would fail differently,
+          // so "the host was never asked" is what the log proves.
+          '<Execution host="run" target="absent.md" as="child">',
+          ...indirect.body,
+          "",
+          "<AssertEquals actual={child.result.ok} expected={true} />",
+          "</Execution>",
+          "</Test>",
+        ),
+      });
+      expect(single(run).status).toBe("fail");
+      expect(single(run).error?.message).toContain(indirect.says);
+      expect(configurationOf(run)).toEqual([]);
+      expect(run.log.requests.length).toBe(0);
+      expect(run.log.roots.length).toBe(0);
+    });
+  }
+
   it("lets public middleware read the configuration and change none of it", function* () {
     let probed = 0;
     const mutable: string[] = [];
