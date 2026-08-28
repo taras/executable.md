@@ -1,5 +1,5 @@
 ---
-description: Write an executable Markdown document with an Agent, and return the source you approved.
+description: Write an executable Markdown document with an Agent, run it once, and return the source you approved.
 as: The approved document source, exactly as the Agent wrote it.
 required: [request, syntax, session]
 props:
@@ -29,8 +29,11 @@ catalog you passed in. That catalog is the output of `xmd syntax`, so the Agent
 is writing against the constructs and components you actually have rather than
 against a remembered dialect.
 
-Nothing is written to disk and nothing is run. The approved source comes back as
-this document's value, and what happens to it next is yours to decide.
+Nothing runs until you approve it. Approval runs that exact source once as its
+own document under `xmd run`, so its prompts, commands, and file operations are
+real. If that evaluation fails, this document fails instead of returning source
+that did not run successfully. After a successful evaluation, the approved
+source comes back as this document's value.
 
 <Let as="reviewSchema" value={{
   type: "object",
@@ -86,6 +89,8 @@ without a value. That is deliberate — a draft you did not approve is not a
 result, and returning one because the rounds ran out would be worse than
 returning nothing.
 
+<Let as="approved" value={null} />
+
 <Loop max={10}>
 
 <Elicit schema={reviewSchema} as="review">
@@ -95,12 +100,12 @@ Here is the current draft.
 {candidate}
 ````
 
-Approve it to take this source as it stands. Choose revise instead, and say what
-is wrong, to send that back and read the next draft.
+Approve it to run this source once and then take it as it stands. Choose revise
+instead, and say what is wrong, to send that back and read the next draft.
 </Elicit>
 
 <If condition={review.decision === "approve"}>
-<Return value={candidate} />
+<Let as="approved" value={candidate} />
 <Break />
 </If>
 
@@ -114,3 +119,13 @@ document source and nothing else — no commentary, no enclosing fence.
 </Prompt>
 
 </Loop>
+
+<Testing>
+<Test name="the approved document runs successfully">
+<Execution host="run" source={approved ?? ""} />
+</Test>
+</Testing>
+
+<If condition={approved !== null}>
+<Return value={approved} />
+</If>

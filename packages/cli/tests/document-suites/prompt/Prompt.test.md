@@ -99,7 +99,7 @@ value-root return behavior — and answers the elicitation it performs from an
 </Execution>
 </Test>
 
-<Test name="PR5: the run performs no inspection, no subprocess and no file operation">
+<Test name="PR5: approving evaluates the returned source once">
 <Execution
   host="run"
   target="packages/cli/src/prompt.md"
@@ -112,20 +112,10 @@ value-root return behavior — and answers the elicitation it performs from an
 <Answers>
 <Answer value={{ decision: "approve" }} />
 </Answers>
-<DiagnosticJournal />
-<CollectJournal as="journal" />
+<CollectOutput as="output" />
 
 <AssertEquals actual={child.result.ok} expected={true} />
-<!-- The approved source names a file the prototype never writes: returning
-     source is not running it. -->
-<AssertEquals
-  actual={journal.some((event) => event.type === "yield" && ["exec", "workspace_file", "generated_xmd"].includes(event.description.type))}
-  expected={false}
-/>
-<AssertEquals
-  actual={journal.some((event) => event.type === "yield" && event.description.type === "import_component" && ["File", "File.Delete", "Glob", "TempDir", "Execution"].includes(event.description.name))}
-  expected={false}
-/>
+<AssertStringIncludes actual={output} expected="EVALUATED name.txt" />
 </Execution>
 </Test>
 
