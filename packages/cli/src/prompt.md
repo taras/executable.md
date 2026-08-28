@@ -52,8 +52,6 @@ this document's value, and what happens to it next is yours to decide.
   then: { type: "object", properties: { feedback: {} }, required: ["feedback"] }
 }} />
 
-<Session name={props.session}>
-
 ## Asking for the first draft
 
 The whole exchange happens in one named session, so every revision below
@@ -61,7 +59,7 @@ continues this conversation rather than starting a new one — the Agent still
 has the request, the catalog, and everything you have already said about the
 drafts it wrote.
 
-<Prompt as="candidate">
+<Prompt session={props.session} as="candidate">
 Write an executable Markdown document that does this:
 
 {props.request}
@@ -106,7 +104,7 @@ is wrong, to send that back and read the next draft.
 <Break />
 </If>
 
-<Prompt as="candidate">
+<Prompt session={props.session} as="candidate">
 That draft is not right yet:
 
 {review.feedback}
@@ -116,5 +114,3 @@ document source and nothing else — no commentary, no enclosing fence.
 </Prompt>
 
 </Loop>
-
-</Session>
