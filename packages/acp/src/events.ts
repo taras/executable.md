@@ -7,12 +7,20 @@
  * then exactly one `terminal`, then the channel closes with the complete
  * concatenated text — including partial text on failure. Thought,
  * status, tool, usage, and raw ACP events stay private.
+ *
+ * A successfully completed turn may also name itself. When the adapter said
+ * which turn this was, that name is associated with the exact terminal event
+ * this produces, through the authority core delivered to this provider — never
+ * as a property on the event, which every holder of the event could read and
+ * every builder of one could write. A turn that was cancelled, failed, or
+ * refused by the host names nothing.
  */
 
 import { each, stream, until } from "effection";
 import type { Channel, Operation } from "effection";
-import type { AgentPromptEvent, Session } from "@executablemd/core";
+import type { AgentPromptCheckpoint, AgentPromptEvent, Session } from "@executablemd/core";
 import type { AcpRuntimeTurn, AcpRuntimeTurnResult } from "./acpx-runtime.ts";
+import { checkpointFromResult } from "./checkpoint.ts";
 
 export interface TurnIdentity {
   agent: string;
@@ -28,16 +36,27 @@ export interface TurnIdentity {
  */
 export type TurnRefusal = () => Error | undefined;
 
+/**
+ * How this turn says which provider turn it was.
+ *
+ * Supplied by the caller that holds this provider's delivered authority, and by
+ * nothing else. A turn consumed without one — an embedder driving the provider
+ * directly — names no turn, which retains nothing.
+ */
+export type TurnCheckpoint = (terminal: AgentPromptEvent, token: AgentPromptCheckpoint) => void;
+
 export function* consumeTurn(
   turn: AcpRuntimeTurn,
   identity: TurnIdentity,
   channel: Channel<AgentPromptEvent, string>,
   markCompleted: () => void,
   refused?: TurnRefusal,
+  checkpoint?: TurnCheckpoint,
 ): Operation<void> {
   yield* channel.send({ type: "started", agent: identity.agent, session: identity.session });
   let text = "";
   let terminal: AgentPromptEvent;
+  let named: AgentPromptCheckpoint | undefined;
   try {
     for (const event of yield* each(stream(turn.events))) {
       if (event.type === "text_delta" && (event.stream ?? "output") === "output") {
@@ -46,7 +65,14 @@ export function* consumeTurn(
       }
       yield* each.next();
     }
-    terminal = mapResult(yield* until(turn.result));
+    const result = yield* until(turn.result);
+    terminal = mapResult(result);
+    // Read from the result rather than from the mapped event: a turn ACP
+    // reported as completed under a stop reason this host treats as a failure
+    // is a failure here, and a failure names no turn.
+    if (terminal.type === "terminal" && terminal.status === "completed") {
+      named = checkpointFromResult(result);
+    }
   } catch (error) {
     terminal = {
       type: "terminal",
@@ -57,6 +83,12 @@ export function* consumeTurn(
   const refusal = refused?.();
   if (refusal) {
     terminal = { type: "terminal", status: "failed", error: refusal };
+    // The host already refused this turn. Whatever the adapter went on to call
+    // it, there is no completion here to continue from.
+    named = undefined;
+  }
+  if (named !== undefined) {
+    checkpoint?.(terminal, named);
   }
   yield* channel.send(terminal);
   markCompleted();

@@ -87,6 +87,19 @@ export interface RunTransaction extends SavepointTransaction {
   readonly generation: ConnectionGeneration;
   readonly identity: TransactionIdentity;
   readonly lease: RunConnectionLease | undefined;
+  /**
+   * The opaque id of every event appended through this transaction, in order.
+   *
+   * A `DurableStream` carries events and not their identities, so an append
+   * answers with nothing. A caller that has to name the event it just appended
+   * — to retain something against it in this same transaction — reads its id
+   * from here rather than asking the journal what is last, which would be
+   * position standing in for identity.
+   *
+   * Uncommitted, like everything else on a transaction. A rollback takes the
+   * rows and this list with it.
+   */
+  readonly appended: string[];
   handle: WorkflowRunTransaction | undefined;
   open: boolean;
   failure: unknown | undefined;
@@ -264,6 +277,7 @@ function createConnection(
         generation,
         identity: new TransactionIdentity(),
         lease,
+        appended: [],
         handle: undefined,
         open: true,
         failure: undefined,

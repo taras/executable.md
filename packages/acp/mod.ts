@@ -15,6 +15,11 @@
  */
 
 export { createAcpxProvider } from "./src/provider.ts";
+// The embedded ACP adapters are deliberately absent from this entrypoint. They
+// are a temporary arrangement with an exit gate (#636), and anything exported
+// here is a stable contract somebody may depend on — removing it later would be
+// a compatibility break earned by a workaround. A host reaches them through
+// `@executablemd/acp/embedded-adapters`, which goes away with them.
 export type {
   AcpMcpServer,
   AcpxProviderDependencies,

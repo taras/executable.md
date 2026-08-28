@@ -48,6 +48,18 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "scripts/tests/adapter-distribution.test.ts",
+    reason:
+      "asks each distribution for its module graph through `<execPath> info`, a subcommand only the Deno CLI has — under Node and Bun the same argument vector names a file called `info`; that each distribution *carries* the snapshots is a claim about Deno's own build outputs, and launching from them is Tier EA, which does run under all three",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "scripts/tests/adapter-npm-package.test.ts",
+    reason:
+      "builds packages/acp with dnt before driving the artifact under Node, and that build is spawned as `<execPath> run -A scripts/build-npm.ts` — an argument vector only the Deno CLI understands; the materialization it then proves is covered portably by Tier AM",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "scripts/tests/cloudflare-dofs-vendor.test.ts",
     reason:
       "runs the no-network vendored-source verifier under the Deno executable against altered temporary snapshots",
@@ -381,6 +393,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     path: "packages/cli/tests/workflow-agent-sessions.test.ts",
     reason:
       "runs a document with two same-named <Session> sites against a real node:sqlite WorkflowRun database, with the run's Workspace attached and the mapping table read back across attachments; the store and the DOFS Workspace under it are both the Deno adapter's",
+    issue: "https://github.com/taras/executable.md/issues/367",
+  },
+  {
+    path: "packages/workflow/tests/workflow-agent-checkpoints.test.ts",
+    reason:
+      "publishes real Prompts into a real node:sqlite WorkflowRun database and reads the retained association back through the Deno storage adapter, including a legacy-shape fixture it edits with node:sqlite directly; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
     issue: "https://github.com/taras/executable.md/issues/367",
   },
   {

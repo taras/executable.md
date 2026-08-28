@@ -17,7 +17,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, spawn } from "effection";
 import type { Operation } from "effection";
-import { exists, readTextFile } from "@effectionx/fs";
+import { ensureDir, exists, readTextFile } from "@effectionx/fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { collect, execute, retainedSource } from "@executablemd/core";
@@ -25,15 +25,20 @@ import type { Json } from "@executablemd/durable-streams";
 import type { RuntimeFetchResponse } from "@executablemd/runtime";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { API, useHostFiles } from "@executablemd/runtime";
+import { DatabaseSync } from "node:sqlite";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import {
   evaluationComponents,
+  transactAgentPromptCheckpoints,
   withWorkflowWorkspace,
+  workflowRunPath,
   workflowProviderSessions,
 } from "@executablemd/workflow/deno";
 import { executeInstalled } from "@executablemd/core/host";
 import { agentIdentityComponents } from "@executablemd/core";
 import { useWorkflowAgentProfile, WORKFLOW_SESSION_INSTRUCTIONS } from "../src/workflow-agent.ts";
+import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
+import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import type { WorkflowAgentProfileOptions as AgentProfileOptions } from "../src/workflow-agent.ts";
 import { createFakeAcp, makeStore, tripwireAcp } from "./support/fake-acp.ts";
 import type { FakeAcp, ScriptedTurn } from "./support/fake-acp.ts";
@@ -42,6 +47,16 @@ import { createRun, useStorageRoot, withStorage } from "./support/workflow-run.t
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "workflow-agent");
 
 const NOTE = "the release checklist is three items long\n";
+
+/**
+ * What ACPX resolves this agent to, and what the base branch retained for it.
+ *
+ * Written out rather than read back through `createAgentRegistry()`, because
+ * the claim is that this value did not move. Recomputing it from the same
+ * registry the profile now overlays would agree with whatever that registry
+ * currently says, which is not the thing being asserted.
+ */
+const GEMINI_COMMAND = "gemini --acp";
 
 function* documentSource(): Operation<string> {
   return yield* readTextFile(join(FIXTURES, "observation-loop.md"));
@@ -55,6 +70,11 @@ function* documentSource(): Operation<string> {
  * there — an earlier step wrote it — and it keeps the fixture on disk
  * authoritative rather than restated here.
  */
+/** The one-Prompt document that asks an agent this build carries no snapshot for. */
+function* baselineAgentSource(): Operation<string> {
+  return yield* readTextFile(join(FIXTURES, "baseline-agent.md"));
+}
+
 function* documentWithNote(): Operation<string> {
   return `<File path="notes.md">${NOTE.trim()}</File>\n\n${yield* documentSource()}`;
 }
@@ -66,6 +86,85 @@ function observation(source: string): ScriptedTurn {
 
 function proposal(source: string): ScriptedTurn {
   return { reply: JSON.stringify({ kind: "proposal", source }) };
+}
+
+/**
+ * Embedded adapters that install nothing.
+ *
+ * These suites substitute the ACPX runtime, so no adapter is ever spawned and a
+ * real `npm install` of one would be minutes of network for a process that
+ * never starts. What still matters is *that the profile asks* — so this records
+ * every request, and Tier AM proves what the real one does with it.
+ */
+function stubAdapters(): EmbeddedAdapters & { readonly materialized: string[] } {
+  const materialized: string[] = [];
+  /**
+   * `answer`, but only for a provider this build carries.
+   *
+   * The real one raises for anything else, and so must this: a profile that
+   * reached into the snapshots to ask about an agent ACPX resolves would
+   * otherwise go unnoticed here, which is the whole thing WAL13 is about.
+   */
+  const carried = <T>(provider: string, answer: T): T => {
+    if (provider !== "codex" && provider !== "claude") {
+      throw new Error(`no embedded snapshot for ${provider}`);
+    }
+    return answer;
+  };
+  return {
+    materialized,
+    providers: ["codex", "claude"],
+    // Stable, and deliberately carrying no path: this is what a retained
+    // session and a sealed artifact record, so it must not vary with where a
+    // host materialized anything.
+    identity(provider) {
+      return carried(provider, `xmd-embedded-adapter:${provider}:test@0.0.0+${"0".repeat(64)}`);
+    },
+    executablePath(provider) {
+      return carried(provider, `/nonexistent/${provider}-adapter.js`);
+    },
+    command(provider) {
+      return carried(provider, `node "/nonexistent/${provider}-adapter.js"`);
+    },
+    // deno-lint-ignore require-yield
+    *materialize(provider: string): Operation<void> {
+      carried(provider, provider);
+      materialized.push(provider);
+    },
+  };
+}
+
+/** Every Agent session one run retained, as its database holds it. */
+function retainedSessions(path: string): Record<string, unknown>[] {
+  const database = new DatabaseSync(path);
+  try {
+    return database.prepare("SELECT * FROM agent_sessions ORDER BY session_key").all();
+  } finally {
+    database.close();
+  }
+}
+
+/** A turn identity that exists nowhere else in this repository. */
+const TOKEN_VALUE = "wal-canary-turn-6b3f9d";
+
+/** The kind this host records that identity under. */
+const TOKEN_KIND = "app-server-turn-id";
+
+/** Which provider turn each Prompt of this run was, as the run retained it. */
+function* retained(
+  database: WorkflowRunDatabase,
+): Operation<{ eventId: string; tokenKind: string; tokenValue: string }[]> {
+  const read = yield* transactAgentPromptCheckpoints(database, function* (checkpoints) {
+    return checkpoints.readAll();
+  });
+  if (!read.ok) {
+    throw read.error;
+  }
+  return read.value.map((row) => ({
+    eventId: row.eventId,
+    tokenKind: row.tokenKind,
+    tokenValue: row.tokenValue,
+  }));
 }
 
 interface Attempt {
@@ -102,6 +201,10 @@ function runFixture(
     readonly props?: Record<string, Json>;
     /** Answers one admitted HTTP read, and counts what was asked for. */
     readonly transport?: { readonly performed: string[] };
+    /** The embedded adapters this attachment materializes from. */
+    readonly adapters?: EmbeddedAdapters;
+    /** The agent a `<Session>` gets when its document names none. */
+    readonly defaultAgent?: string;
   } = {},
 ): Operation<Attempt> {
   return scoped(function* () {
@@ -172,8 +275,9 @@ function runFixture(
             useWorkflowAgentProfile({
               root,
               attachment,
-              defaultAgent: "codex",
+              defaultAgent: options.defaultAgent ?? "codex",
               sessionStore: options.sessionStore ?? makeStore(),
+              adapters: options.adapters ?? stubAdapters(),
               ...(options.createRuntime === undefined
                 ? {}
                 : { createRuntime: options.createRuntime }),
@@ -393,6 +497,38 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
     });
   });
 
+  it("WAL10: a named turn is retained against its Prompt and rendered nowhere", function* () {
+    const root = yield* useStorageRoot();
+    const source = yield* documentWithNote();
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const fake = createFakeAcp();
+      fake.script({ ...observation(`<File path="notes.md" />`), turnId: `${TOKEN_VALUE}-1` });
+      fake.script({ ...proposal("Trim the checklist to two items."), turnId: `${TOKEN_VALUE}-2` });
+
+      const attempt = yield* runFixture(root, database, source, { createRuntime: fake.create });
+
+      expect(attempt.failure).toBe(undefined);
+      // Retained, and against the run's own Prompt events. Without this the
+      // absence below would be the absence of something that never existed.
+      const rows = yield* retained(database);
+      expect(rows.map((row) => row.tokenValue)).toEqual([`${TOKEN_VALUE}-1`, `${TOKEN_VALUE}-2`]);
+      expect(rows.every((row) => row.tokenKind === TOKEN_KIND)).toBe(true);
+      const promptEvents = typed(attempt.events, "agent_prompt").map((event) => event);
+      expect(promptEvents).toHaveLength(2);
+
+      // And present in nothing a reader sees. The rendered document is what the
+      // person running it reads, and the journal is what an inspection prints.
+      const rendered = reported(attempt);
+      expect(rendered).not.toContain(TOKEN_VALUE);
+      expect(rendered).not.toContain(TOKEN_KIND);
+      const journal = JSON.stringify(attempt.events);
+      expect(journal).not.toContain(TOKEN_VALUE);
+      expect(journal).not.toContain(TOKEN_KIND);
+    });
+  });
+
   it("WAL8: an admitted Fetch response reaches the next Prompt, values and all", function* () {
     const root = yield* useStorageRoot();
     const source = yield* documentWithNote();
@@ -607,6 +743,333 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       expect(admitted(attempt.events)).toHaveLength(0);
       expect(typed(attempt.events, "generated_xmd")).toHaveLength(0);
       expect(typed(attempt.events, "workspace_file")).toHaveLength(0);
+    });
+  });
+
+  it("WAL11: the profile materializes the adapter a placement names, and only then", function* () {
+    const root = yield* useStorageRoot();
+    const source = yield* documentWithNote();
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const fake = createFakeAcp();
+      fake.script(proposal("nothing to change"));
+      const adapters = stubAdapters();
+
+      yield* runFixture(root, database, source, { createRuntime: fake.create, adapters });
+
+      // Asked for, by name, before ACPX was contacted — which is what makes a
+      // broken snapshot a refusal rather than a Prompt sent to whatever `npx`
+      // would have resolved.
+      expect(adapters.materialized).toContain("codex");
+    });
+  });
+
+  it("WAL12: two hosts retain and serialize identical Agent identity, launching their own adapters", function* () {
+    const source = yield* documentWithNote();
+
+    /**
+     * One complete run under its own materialization root.
+     *
+     * Real embedded adapters, because the claim is about what a real
+     * materialization retains — a stub would be asserting on a value this test
+     * had chosen.
+     */
+    function* runUnder(root: string): Operation<{
+      sessions: Record<string, unknown>[];
+      launch: string;
+      identity: string;
+    }> {
+      yield* ensureDir(root);
+      const adapters = createEmbeddedAdapters(join(root, "adapters"));
+      return yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        const fake = createFakeAcp();
+        fake.script({ ...proposal("nothing to change"), turnId: "turn-shared" });
+        const attempt = yield* runFixture(root, database, source, {
+          createRuntime: fake.create,
+          adapters,
+        });
+        expect(attempt.failure).toBe(undefined);
+
+        return {
+          // Read straight out of the file, because the durable row is the claim
+          // — it is what a later attachment compares and what the artifact
+          // encoder writes `agentCommand` from.
+          sessions: retainedSessions(workflowRunPath(root, "observation-run")),
+          launch: adapters.executablePath("codex"),
+          identity: adapters.identity("codex"),
+        };
+      });
+    }
+
+    const plainRoot = join(yield* useStorageRoot(), "plain");
+    // A spaced canary, because an unquoted path would split here and a path
+    // that leaked into identity would differ between the two.
+    const spacedRoot = join(yield* useStorageRoot(), "Application Support", "xmd runs");
+
+    const here = yield* runUnder(plainRoot);
+    const there = yield* runUnder(spacedRoot);
+
+    // What the run retains, and therefore what a sealed artifact serializes:
+    // `encodeXmdArtifactInventory` writes `agentCommand` straight out of this
+    // row, so identical rows are identical artifact semantics.
+    //
+    // Everything except when it happened. `created_at` is a timestamp rather
+    // than identity, and it is named here so that the equality below is a claim
+    // about every other column rather than a comparison that quietly skips
+    // whichever ones happened to differ.
+    const semantics = (rows: Record<string, unknown>[]) =>
+      JSON.stringify(rows.map(({ created_at: _when, ...rest }) => rest));
+    expect(semantics(there.sessions)).toBe(semantics(here.sessions));
+    expect(there.identity).toBe(here.identity);
+    // The identity column specifically, since that is the one an artifact
+    // carries and the one that used to be a path.
+    expect(here.sessions[0]?.["agent_command"]).toBe(here.identity);
+    expect(there.sessions[0]?.["agent_command"]).toBe(here.identity);
+
+    // Neither host's path is anywhere in what was retained.
+    const retained = JSON.stringify(here.sessions) + JSON.stringify(there.sessions);
+    expect(retained).not.toContain(plainRoot);
+    expect(retained).not.toContain(spacedRoot);
+    expect(retained).not.toContain("adapters/");
+
+    // And each host still launches its own local executable.
+    expect(there.launch).not.toBe(here.launch);
+    expect(here.launch).toContain(plainRoot);
+    expect(there.launch).toContain(spacedRoot);
+  });
+
+  it("WAL13: an agent this build carries no snapshot for runs through ACPX unchanged", function* () {
+    const root = yield* useStorageRoot();
+    const source = yield* baselineAgentSource();
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const fake = createFakeAcp();
+      // No turn identity, because the published Gemini adapter reports none.
+      // That is the ordinary case for every agent this build does not patch.
+      fake.script({ reply: "The release is ready." });
+      fake.script({ reply: "Nothing is blocking it." });
+      const adapters = stubAdapters();
+
+      const attempt = yield* runFixture(root, database, source, {
+        createRuntime: fake.create,
+        adapters,
+      });
+
+      // It completes. Carrying a patched Codex adapter is not a reason for a
+      // run to lose an agent it could always use.
+      expect(attempt.failure).toBe(undefined);
+      expect(reported(attempt)).toContain("The release is ready.");
+
+      // Resolved through ACPX's own registry, to ACPX's own command. The
+      // provider is handed one registry; this is the command it answered with.
+      expect(fake.created[0]?.agentRegistry.resolve("gemini")).toBe(GEMINI_COMMAND);
+      expect(fake.ensured[0]?.agent).toBe("gemini");
+
+      // The embedded machinery was never asked about it — not to capture it,
+      // not to verify it, not to put anything on disk. The stub raises for a
+      // provider it does not carry, so any of those would have failed the run.
+      expect(adapters.materialized).toEqual([]);
+
+      // The ordinary Prompt events are retained exactly as they always were.
+      expect(typed(attempt.events, "agent_prompt")).toHaveLength(2);
+
+      // And nothing was associated, because nothing named a turn. An absent
+      // checkpoint is not a failed Prompt: the event above is the proof that
+      // this zero is a zero rather than a run that did not happen.
+      expect(yield* retained(database)).toEqual([]);
+    });
+  });
+
+  it("WAL14: a completed and an interrupted run both replay from the stored Prompt", function* () {
+    const source = yield* baselineAgentSource();
+
+    // A completed run, replayed whole.
+    const completedRoot = yield* useStorageRoot();
+    yield* withStorage(completedRoot, function* () {
+      const database = yield* createRun();
+      const store = makeStore();
+
+      const live = createFakeAcp();
+      live.script({ reply: "The release is ready." });
+      live.script({ reply: "Nothing is blocking it." });
+      const first = yield* runFixture(completedRoot, database, source, {
+        createRuntime: live.create,
+        sessionStore: store,
+      });
+      expect(first.failure).toBe(undefined);
+      const committed = first.events.length;
+
+      // The same document again, over the journal the first attempt wrote, with
+      // a runtime nothing may reach — not even to create one.
+      const reached: string[] = [];
+      const replay = yield* runFixture(completedRoot, database, source, {
+        createRuntime: tripwireAcp((what) => reached.push(what)),
+        sessionStore: store,
+      });
+      expect(replay.failure).toBe(undefined);
+      expect(reported(replay)).toBe(reported(first));
+      expect(reached).toEqual([]);
+      expect(replay.events.length).toBe(committed);
+      // And still nothing associated. A run that retained no checkpoint
+      // replays from the stored Prompt alone, exactly like one that did.
+      expect(yield* retained(database)).toEqual([]);
+    });
+
+    // An interrupted run, resumed. This is the partial case: one Prompt is on
+    // the journal and one never finished.
+    const partialRoot = yield* useStorageRoot();
+    yield* withStorage(partialRoot, function* () {
+      const database = yield* createRun();
+      const store = makeStore();
+
+      const interrupted = createFakeAcp();
+      interrupted.script({ reply: "The release is ready." });
+      // Never settles. Halting while it is in flight is an interruption rather
+      // than a failure, which is what leaves work for a resume to finish.
+      interrupted.script({ reply: "", manual: true });
+
+      const attempt = yield* spawn(() =>
+        runFixture(partialRoot, database, source, {
+          createRuntime: interrupted.create,
+          sessionStore: store,
+        }),
+      );
+      // The barrier, not a delay: the first turn has committed and the second is
+      // in flight.
+      yield* interrupted.startedTurns(2);
+      yield* attempt.halt();
+      expect(interrupted.prompts).toHaveLength(2);
+
+      const resumed = createFakeAcp();
+      // Scripted for the unfinished turn only. If the committed Prompt were
+      // re-sent, this fake would answer it with the wrong reply and run out.
+      resumed.script({ reply: "Nothing is blocking it." });
+      const second = yield* runFixture(partialRoot, database, source, {
+        createRuntime: resumed.create,
+        sessionStore: store,
+      });
+
+      expect(second.failure).toBe(undefined);
+      expect(reported(second)).toContain("The release is ready.");
+      expect(reported(second)).toContain("Nothing is blocking it.");
+      // The committed turn was restored rather than asked again: this attempt
+      // contacted the provider only for the turn the first one never finished.
+      expect(resumed.prompts).toHaveLength(1);
+      // Reattached under the same logical key the first attempt established.
+      expect(resumed.ensured.map((input) => input.sessionKey)).toEqual(
+        interrupted.ensured.map((input) => input.sessionKey),
+      );
+      // Two completed Prompts on the journal and no association for either.
+      expect(typed(second.events, "agent_prompt")).toHaveLength(2);
+      expect(yield* retained(database)).toEqual([]);
+    });
+  });
+
+  it("WAL15: its retained identity is the resolved command, as it was before", function* () {
+    const root = yield* useStorageRoot();
+    const source = yield* baselineAgentSource();
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const fake = createFakeAcp();
+      fake.script({ reply: "The release is ready." });
+      fake.script({ reply: "Nothing is blocking it." });
+
+      const attempt = yield* runFixture(root, database, source, { createRuntime: fake.create });
+      expect(attempt.failure).toBe(undefined);
+
+      // The compatibility attribute a reattachment compares and an artifact
+      // seals. For an agent this build does not override it is ACPX's resolved
+      // command and nothing else — the same value this profile retained before
+      // any adapter was embedded, so a session retained by an earlier run of
+      // the same workflow is still that session.
+      const rows = retainedSessions(workflowRunPath(root, "observation-run"));
+      expect(rows).toHaveLength(1);
+      // Two claims, and they are different ones. That the retained value *is*
+      // what the registry resolved, and that what the registry resolved is
+      // ACPX's own built-in — the literal the base branch retained for this
+      // agent, written out rather than recomputed through the code under test.
+      expect(rows[0]?.["agent_command"]).toBe(fake.created[0]?.agentRegistry.resolve("gemini"));
+      expect(rows[0]?.["agent_command"]).toBe(GEMINI_COMMAND);
+      // Specifically not restated as an embedded identity, which is what a
+      // registry closed to the two patched providers would have forced.
+      expect(String(rows[0]?.["agent_command"])).not.toContain("xmd-embedded-adapter");
+    });
+  });
+
+  it("WAL16: a refusing snapshot refuses its own agent and leaves the others alone", function* () {
+    // Two runs, two roots. There is one run id per store, so the second half
+    // has to be a fresh run rather than a continuation of the first one's
+    // journal — which would replay a Codex placement into a Gemini document.
+    const refusedRoot = yield* useStorageRoot();
+    const unaffectedRoot = yield* useStorageRoot();
+
+    /**
+     * Embedded adapters that carry both names and can produce neither.
+     *
+     * They refuse anything they do not carry, exactly as the real one does.
+     * Without that, the second half below would pass against a registry that
+     * routed Gemini through here too — it would simply answer with a nonsense
+     * command that the substituted runtime never tries to spawn.
+     */
+    function brokenAdapters(): EmbeddedAdapters {
+      const carried = <T>(provider: string, answer: T): T => {
+        if (provider !== "codex" && provider !== "claude") {
+          throw new Error(`no embedded snapshot for ${provider}`);
+        }
+        return answer;
+      };
+      return {
+        providers: ["codex", "claude"],
+        identity: (provider) => carried(provider, `xmd-embedded-adapter:${provider}:broken@0.0.0`),
+        executablePath: (provider) => carried(provider, `/nonexistent/${provider}.js`),
+        command: (provider) => carried(provider, `node "/nonexistent/${provider}.js"`),
+        // deno-lint-ignore require-yield
+        *materialize(provider: string): Operation<void> {
+          carried(provider, provider);
+          throw new Error(`the ${provider} snapshot cannot be verified`);
+        },
+      };
+    }
+
+    yield* withStorage(refusedRoot, function* () {
+      const database = yield* createRun();
+      const fake = createFakeAcp();
+      fake.script(proposal("nothing to change"));
+
+      const attempt = yield* runFixture(refusedRoot, database, yield* documentWithNote(), {
+        createRuntime: fake.create,
+        adapters: brokenAdapters(),
+      });
+
+      // Refused, by the snapshot's own words, and before any turn: the run
+      // never sent a Prompt and never fell through to the published Codex
+      // adapter, which would have completed everything and retained nothing.
+      expect(attempt.failure).toContain("cannot be verified");
+      expect(fake.prompts).toEqual([]);
+      expect(yield* retained(database)).toEqual([]);
+    });
+
+    // The same broken snapshots, and an agent they have nothing to do with.
+    yield* withStorage(unaffectedRoot, function* () {
+      const database = yield* createRun();
+      const fake = createFakeAcp();
+      fake.script({ reply: "The release is ready." });
+      fake.script({ reply: "Nothing is blocking it." });
+
+      const attempt = yield* runFixture(unaffectedRoot, database, yield* baselineAgentSource(), {
+        createRuntime: fake.create,
+        adapters: brokenAdapters(),
+      });
+
+      // Unaffected. The refusal belongs to the override, not to the registry:
+      // a snapshot this run never needed cannot take an unrelated agent down
+      // with it.
+      expect(attempt.failure).toBe(undefined);
+      expect(fake.prompts).toHaveLength(2);
     });
   });
 

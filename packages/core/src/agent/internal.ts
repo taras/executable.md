@@ -12,6 +12,7 @@
 import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
 import type { PermissionMode } from "./agent-api.ts";
+import type { AgentPromptPublisher } from "./publication.ts";
 import type { AgentPromptError } from "./errors.ts";
 import type { Expansion } from "../expansion.ts";
 
@@ -54,6 +55,14 @@ interface AgentInternalApi {
    * wrote no explicit `throwOnError`.
    */
   promptFailurePolicy(): Operation<boolean>;
+  /**
+   * Where a completed Prompt publishes, when a host installed a publisher.
+   *
+   * Undefined on an ordinary run, which publishes through the durable
+   * machinery's own path. A host installs one through
+   * `@executablemd/core/host`; there is no other way to name it.
+   */
+  promptPublisher: AgentPromptPublisher | undefined;
 }
 
 function noExecution(operation: string): Error {
@@ -83,6 +92,7 @@ export const AgentInternal: Api<AgentInternalApi> = createApi<AgentInternalApi>(
   defaultAgentName: undefined,
   permissionMode: "deny-all",
   promptTimeout: undefined,
+  promptPublisher: undefined,
   // deno-lint-ignore require-yield
   *promptFailurePolicy(): Operation<boolean> {
     return false;

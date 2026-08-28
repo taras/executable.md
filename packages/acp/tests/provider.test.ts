@@ -39,7 +39,7 @@ import {
   useFlatWorld,
   useGitWorld,
 } from "./helpers.ts";
-import type { AcpPermissionRequest } from "../src/acpx-runtime.ts";
+import type { AcpPermissionRequest, AcpRuntimeTurnResult } from "../src/acpx-runtime.ts";
 import type { FakeRuntimeHarness } from "./helpers.ts";
 
 const CWD = "/work";
@@ -717,12 +717,24 @@ function* usePartition(harness: FakeRuntimeHarness): Operation<Partition> {
 interface AuthorityLog extends AgentProviderAuthority {
   performed: number;
   refused: number;
+  /**
+   * Every provider turn this provider named, in the order it named them.
+   *
+   * Recorded as it arrived, unparsed. What the provider decided to associate is
+   * exactly what a suite here is asking about, so reading it back through a
+   * parser of this suite's own would be asking a different question.
+   */
+  checkpoints: unknown[];
 }
 
 function stubAuthority(): AuthorityLog {
   const log: AuthorityLog = {
     performed: 0,
     refused: 0,
+    checkpoints: [],
+    checkpoint: (_terminal, token) => {
+      log.checkpoints.push(token);
+    },
     // These suites route launches, never a `<Session>` placement. Throwing
     // rather than answering means a placement that did reach here fails
     // loudly instead of being handed an identity nobody derived.
@@ -1330,5 +1342,164 @@ describe("Tier WAP — strict workflow Agent profile", () => {
       expect(failure?.message).not.toContain("call-1");
       expect(failure?.stack ?? "").not.toContain(marker);
     });
+  });
+});
+
+/**
+ * Tier APC — which provider turn a completed Prompt was.
+ *
+ * The adapter puts that on the ACP response's own `_meta`, ACPX carries it out
+ * unchanged, and this provider decides which of its keys mean something. What
+ * these prove is that decision: the two adapter namespaces are recognized and
+ * everything else in `_meta` is discarded, and a turn that did not succeed
+ * names nothing however the adapter labelled it.
+ *
+ * The authority records what it was told, unparsed. It stands in for what core
+ * delivers to an installed factory, which is the only way this provider can
+ * state a checkpoint at all.
+ */
+describe("Tier APR — preparing an agent before it is probed", () => {
+  it("APR1: prepareAgent runs before the availability probe, and only when an agent is resolved", function* () {
+    const harness = createFakeRuntime();
+    const order: string[] = [];
+    yield* useFlatWorld(CWD);
+    const factory = createAcpxProvider({
+      createRuntime: (options) => {
+        order.push(options.probeAgent === undefined ? "runtime" : "probe");
+        return harness.create(options);
+      },
+      sessionStore: makeStore(),
+      agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+      *prepareAgent(agentName: string) {
+        order.push(`prepare:${agentName}`);
+      },
+    });
+    yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+
+    // Nothing yet: installing a provider resolves no agent.
+    expect(order).toEqual([]);
+
+    yield* Agent.operations.agent("codex");
+
+    // Preparation first. The probe spawns the agent's command, so a host that
+    // has to put that command on disk must have done so by now — otherwise the
+    // probe reports the agent unavailable for a reason that names the wrong
+    // cause, and no amount of later preparation is reached.
+    expect(order[0]).toBe("prepare:codex");
+    expect(order).toContain("probe");
+    expect(order.indexOf("prepare:codex")).toBeLessThan(order.indexOf("probe"));
+  });
+});
+
+describe("Tier APC — Prompt checkpoint metadata", () => {
+  function* run(
+    result: AcpRuntimeTurnResult,
+  ): Operation<{ checkpoints: unknown[]; events: AgentPromptEvent[] }> {
+    const harness = createFakeRuntime();
+    harness.script({ result });
+    const authority = stubAuthority();
+    yield* useFlatWorld(CWD);
+    const factory = createAcpxProvider({
+      createRuntime: harness.create,
+      sessionStore: makeStore(),
+      agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+    });
+    yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, authority);
+    const { events } = yield* collectPrompt("hello");
+    return { checkpoints: authority.checkpoints, events };
+  }
+
+  function completed(meta: Record<string, unknown>): AcpRuntimeTurnResult {
+    return { status: "completed", stopReason: "end_turn", _meta: meta };
+  }
+
+  it("APC1: the Codex namespace names an App Server turn", function* () {
+    const { checkpoints } = yield* run(completed({ codex: { turnId: "turn-9" } }));
+
+    expect(checkpoints).toEqual([
+      { provider: "codex", kind: "app-server-turn-id", value: "turn-9" },
+    ]);
+  });
+
+  it("APC2: the Claude namespace names an assistant message", function* () {
+    const { checkpoints } = yield* run(
+      completed({ claudeCode: { assistantMessageUuid: "msg-7" } }),
+    );
+
+    expect(checkpoints).toEqual([
+      { provider: "claude", kind: "assistant-message-uuid", value: "msg-7" },
+    ]);
+  });
+
+  it("APC3: metadata beside a recognized namespace is discarded", function* () {
+    const { checkpoints } = yield* run(
+      completed({
+        codex: { turnId: "turn-9", usage: { input: 12 } },
+        quota: { remaining: 4 },
+        claudeCodeExtra: { assistantMessageUuid: "not-this" },
+      }),
+    );
+
+    // Exactly the one thing this build recognizes, and nothing beside it. An
+    // adapter's `_meta` is its own space, and reading an unfamiliar key as a
+    // turn identity is how a run comes to continue from a point nobody named.
+    expect(checkpoints).toEqual([
+      { provider: "codex", kind: "app-server-turn-id", value: "turn-9" },
+    ]);
+  });
+
+  it("APC4: metadata this build recognizes nothing in names no turn", function* () {
+    const { checkpoints } = yield* run(
+      completed({ quota: { remaining: 4 }, codex: { turn: "turn-9" } }),
+    );
+
+    expect(checkpoints).toEqual([]);
+  });
+
+  it("APC5: a value that is not a non-empty string names no turn", function* () {
+    for (const turnId of ["", 7, null, { value: "turn-9" }, ["turn-9"]]) {
+      const { checkpoints } = yield* run(completed({ codex: { turnId } }));
+      expect({ turnId, checkpoints }).toEqual({ turnId, checkpoints: [] });
+    }
+  });
+
+  it("APC6: two adapters claiming one turn name none of them", function* () {
+    const { checkpoints } = yield* run(
+      completed({
+        codex: { turnId: "turn-9" },
+        claudeCode: { assistantMessageUuid: "msg-7" },
+      }),
+    );
+
+    // Two answers to which conversation this was, and no rule for choosing.
+    // Naming neither leaves the Prompt unassociated, which is recoverable;
+    // naming the wrong one is not.
+    expect(checkpoints).toEqual([]);
+  });
+
+  it("APC7: a cancelled turn names no turn", function* () {
+    const { checkpoints } = yield* run({ status: "cancelled", stopReason: "cancelled" });
+
+    expect(checkpoints).toEqual([]);
+  });
+
+  it("APC8: a failed turn names no turn", function* () {
+    const { checkpoints } = yield* run({ status: "failed", error: { message: "no" } });
+
+    expect(checkpoints).toEqual([]);
+  });
+
+  it("APC9: a stop reason this host treats as failure names no turn", function* () {
+    const { checkpoints, events } = yield* run({
+      status: "completed",
+      stopReason: "max_tokens",
+      _meta: { codex: { turnId: "turn-9" } },
+    });
+
+    // ACP calls it completed; this host calls it a failed Prompt. A checkpoint
+    // is a point a later run continues from, and there is no such point in a
+    // turn the document is about to be told failed.
+    expect(events.at(-1)).toMatchObject({ type: "terminal", status: "failed" });
+    expect(checkpoints).toEqual([]);
   });
 });

@@ -111,6 +111,27 @@ export type {
   GeneratedXmdRequest,
 } from "./src/generated-xmd.ts";
 
+/**
+ * Where a completed Prompt publishes, for a host that retains something beside
+ * it.
+ *
+ * The fourth act of infrastructure, and the same shape as the three above: a
+ * value the host holds and passes. An ordinary run installs none and publishes
+ * exactly as it always did. A host that installs one moves the `agent_prompt`
+ * append inside the transaction it opened, so what it keeps beside that event
+ * commits with the event or not at all.
+ *
+ * Kept here for the reason the rest of this module is: nothing a document, a
+ * component or a middleware package reaches by importing `@executablemd/core`
+ * can decide where a prompt is journaled.
+ */
+export { useAgentPromptPublisher } from "./src/agent/publication.ts";
+export type {
+  AgentPromptAssociation,
+  AgentPromptPublication,
+  AgentPromptPublisher,
+} from "./src/agent/publication.ts";
+
 export { TestHarnessError } from "./src/test-harness.ts";
 export type {
   TestHarness,

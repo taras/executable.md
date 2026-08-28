@@ -11,13 +11,39 @@
  * On a full replay (journal already holds the root Close), durableRun
  * returns the stored root result without re-expanding, so the failed
  * records are restored from the stream instead of re-recording.
+ *
+ * ## Where a prompt publishes
+ *
+ * The record above is the whole of what a journal holds about a prompt, on
+ * every host. What differs is where the event is appended from. An ordinary run
+ * appends it through the durable machinery's own path. A host that retains
+ * something beside it — a workflow run keeping which provider turn this was —
+ * installs a publisher, and the append happens inside the transaction that
+ * publisher opened, so the event and the association commit together or not at
+ * all.
+ *
+ * The prompt itself has already finished by then. Talking to a provider happens
+ * outside all of this, and only its outcome reaches a publisher.
+ *
+ * Replay reaches none of it. A retained entry answers before the live path
+ * exists, so a replayed prompt contacts no provider, opens no transaction and
+ * associates nothing.
  */
 
-import { createDurableOperation } from "@executablemd/durable-streams";
-import type { DurableStream, Json, Workflow } from "@executablemd/durable-streams";
+import { createDurableOperation, serializeError } from "@executablemd/durable-streams";
+import type {
+  ActivateDurabilityFailure,
+  DurableStream,
+  Json,
+  LiveDurableOperationCoordinator,
+  Result as DurableResult,
+  Workflow,
+} from "@executablemd/durable-streams";
 import type { Operation } from "effection";
 import { AgentPromptError, parsePromptFailure } from "./errors.ts";
 import type { SerializedPromptFailure } from "./errors.ts";
+import { AgentInternal } from "./internal.ts";
+import type { AgentPromptAssociation } from "./publication.ts";
 import { sourceDescription } from "../source-position.ts";
 import type { SourcePosition } from "../types.ts";
 
@@ -46,6 +72,7 @@ export interface PromptRecord {
 export function* persistPrompt(
   identity: { name: string; input: string; position?: Readonly<SourcePosition> },
   live: () => Operation<PromptRecord>,
+  association: () => AgentPromptAssociation | undefined = () => undefined,
 ): Workflow<PromptRecord> {
   const stored = yield createDurableOperation<Json>(
     {
@@ -57,12 +84,87 @@ export function* persistPrompt(
     function* (): Operation<Json> {
       return serializePromptRecord(yield* live());
     },
+    { coordinator: promptPublication(association) },
   );
   const parsed = parsePromptRecord(stored);
   if (!parsed) {
     throw new Error(`journaled agent_prompt "${identity.name}" has an unexpected shape`);
   }
   return parsed;
+}
+
+/** A publisher that returned without appending has published nothing. */
+class AgentPromptPublicationError extends Error {
+  override name = "AgentPromptPublicationError";
+}
+
+/**
+ * The live boundary between running a prompt and retaining it.
+ *
+ * With no publisher installed this is the ordinary path exactly: execute,
+ * capture, append. With one installed the append moves inside that publisher,
+ * which is what lets a host commit an association in the same transaction.
+ *
+ * The association is offered only for a prompt that succeeded. A failed,
+ * cancelled or refused turn describes a conversation nothing can be continued
+ * from, so there is nothing to retain beside it however the provider answered.
+ *
+ * A publisher that raises activates the run's durability failure rather than
+ * returning: the prompt's result is not in the journal, and a run that carried
+ * on would be continuing from a history missing the turn it just had.
+ */
+function promptPublication(
+  association: () => AgentPromptAssociation | undefined,
+): LiveDurableOperationCoordinator {
+  return {
+    *run<T extends Json>(
+      execute: () => Operation<T>,
+      publish: (result: DurableResult) => Operation<void>,
+      activateFailure: ActivateDurabilityFailure,
+    ): Operation<DurableResult> {
+      let result: DurableResult;
+      try {
+        result = { status: "ok", value: yield* execute() };
+      } catch (error) {
+        const failure = error instanceof Error ? error : new Error(String(error));
+        result = { status: "err", error: serializeError(failure) };
+      }
+
+      const publisher = yield* AgentInternal.operations.promptPublisher;
+      if (publisher === undefined) {
+        yield* publish(result);
+        return result;
+      }
+
+      const published = result;
+      let appended = false;
+      try {
+        yield* publisher.publish({
+          association: published.status === "ok" ? association() : undefined,
+          *append(): Operation<void> {
+            if (appended) {
+              throw new AgentPromptPublicationError(
+                "this prompt is already appended, and a second append would journal it twice",
+              );
+            }
+            appended = true;
+            yield* publish(published);
+          },
+        });
+      } catch (error) {
+        throw activateFailure(error);
+      }
+      if (!appended) {
+        throw activateFailure(
+          new AgentPromptPublicationError(
+            "the installed prompt publisher returned without appending this prompt, so nothing " +
+              "retains the turn it just had",
+          ),
+        );
+      }
+      return result;
+    },
+  };
 }
 
 /**

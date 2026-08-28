@@ -72,6 +72,14 @@ export interface ScriptedTurn {
    * the turns that had already committed.
    */
   readonly manual?: boolean;
+  /**
+   * The App Server turn this reply is, as an adapter that names its turns says
+   * it: on this exact response's own `_meta`.
+   *
+   * Absent for an adapter that names none, which is how most of this suite's
+   * turns answer.
+   */
+  readonly turnId?: string;
 }
 
 export interface FakeAcp {
@@ -233,7 +241,11 @@ export function createFakeAcp(): FakeAcp {
             released.resolve();
           } else {
             void asked.then(() => {
-              settled.resolve({ status: "completed", stopReason: "end_turn" });
+              settled.resolve({
+                status: "completed",
+                stopReason: "end_turn",
+                ...(turn.turnId === undefined ? {} : { _meta: { codex: { turnId: turn.turnId } } }),
+              });
             });
           }
 

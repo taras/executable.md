@@ -30,9 +30,52 @@
  * placing a second session beside it. It is emptied before use — the same path
  * can hold residue after an unstructured process death — and nothing is ever
  * copied into it or read back out of it.
+ *
+ * ## Which adapter answers
+ *
+ * For Codex and Claude, not the one `npx` would fetch. A workflow Prompt has to
+ * name the provider turn it completed, and no published release of either
+ * reports that yet, so this profile runs the snapshots this build carries
+ * (`packages/acp/vendor/adapters/PROVENANCE.md`) for those two providers.
+ *
+ * That is an override on ACPX's own agent registry, not a replacement for it.
+ * Every other agent resolves through the baseline registry, to the same command
+ * it always did, and retains the same compatibility identity it always did.
+ * Carrying a patched Codex adapter says nothing about Gemini, and a registry
+ * that refused one would be making a far larger claim than this work needs.
+ *
+ * The override is qualified: an embedded provider never falls through. A
+ * snapshot that cannot be verified, materialized or launched refuses that agent
+ * rather than quietly becoming the published adapter, which would produce a run
+ * that completed every Prompt and retained nothing, and said nothing about why —
+ * the exact silence this feature exists to remove.
+ *
+ * Materialization is lazy, and happens only for an embedded selection, just
+ * before the first operation that could spawn that adapter — the provider's
+ * availability probe, which runs earlier than any `<Session>` placement and
+ * earlier than any turn. A document that opens no `<Session>` installs nothing,
+ * extracts nothing and spawns nothing; an agent ACPX resolves prepares nothing,
+ * because its command is already on this machine. Verifying before that first
+ * spawn is what makes a broken snapshot a refusal rather than a Prompt that
+ * quietly went to the wrong binary.
+ *
+ * A Prompt whose adapter names no turn is not a failed Prompt. It is journaled,
+ * retained and replayed exactly as it always was; the only thing missing is the
+ * association.
+ *
+ * ## Where a Prompt lands in that conversation
+ *
+ * The session row says which conversation this run is having. Which turn each
+ * Prompt was is a second fact, and it is retained the same way: in the run's own
+ * database, in the transaction that appends that Prompt. This module installs
+ * the publisher that opens it, because this is the only side that holds both the
+ * run and the placement that made the session — the provider names the turn, the
+ * placement names the session, and neither is recovered from the spelling of the
+ * other.
  */
 
 import { createHash } from "node:crypto";
+import { join } from "node:path";
 import type { Operation } from "effection";
 import {
   createAcpxProvider,
@@ -45,14 +88,24 @@ import type {
   AcpxSessionPolicy,
   AcpxSessionStore,
 } from "@executablemd/acp";
+// A separate entrypoint because the embedded adapters are temporary (#636) and
+// must not become part of the package's stable surface.
+import {
+  carriesEmbeddedAdapter,
+  createEmbeddedAdapters,
+  overlaidAdapterRegistry,
+} from "@executablemd/acp/embedded-adapters";
+import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import {
   installAgentComponents,
   installPermissionMode,
   registerAgentProvider,
 } from "@executablemd/core";
 import type { AgentProviderFactory } from "@executablemd/core";
+import { useAgentPromptPublisher } from "@executablemd/core/host";
 import {
   agentSessionKey,
+  createWorkflowPromptPublisher,
   providerSessionDirectory,
   resolveAgentSession,
   transactAgentSessions,
@@ -158,6 +211,14 @@ export interface WorkflowAgentProfileOptions {
    * process on first use.
    */
   readonly createRuntime?: AcpxProviderDependencies["createRuntime"];
+  /**
+   * The embedded adapters this profile runs.
+   *
+   * The default materializes this build's own snapshots beneath `root`. A suite
+   * substitutes one to watch what a placement asked for, or to prove a refusal
+   * without a real install.
+   */
+  readonly adapters?: EmbeddedAdapters;
 }
 
 /**
@@ -196,21 +257,59 @@ function sessionPolicy(
   paths: ProviderSessionPaths,
   policy: string,
   store: AcpxSessionStore,
-): AcpxSessionPolicy {
+  adapters: EmbeddedAdapters,
+): { policy: AcpxSessionPolicy; retainedSessionKey: (placementKey: string) => string | undefined } {
   const assertions = assertionsFor(store);
   const emptied = new Set<string>();
   /** What each placement key was placed for, so the commit names the same thing. */
   const placed = new Map<string, AgentSessionIdentity>();
 
-  function identityOf(context: { agentCommand: string; sessionIdentity: string }) {
+  /**
+   * What this run retains about which agent a session belongs to.
+   *
+   * For an embedded provider: the adapter's stable identity — provider,
+   * package, version and snapshot digest — never the command that launches it.
+   * That command names a directory beneath this host's materialization root,
+   * and retaining it would make where this machine put a file part of the
+   * session's identity and of every artifact sealed from the run, so the same
+   * snapshot on another host would compare as a different agent.
+   *
+   * For every other agent: the resolved command, exactly as this profile
+   * retained it before any adapter was embedded. Its identity is not this
+   * host's to restate, and rewriting it would make sessions retained by an
+   * earlier run of the same workflow compare as a different agent — a
+   * compatibility break in return for nothing, since a Gemini session has no
+   * snapshot for the alternative to name.
+   */
+  function identityOf(context: {
+    agentName: string;
+    agentCommand: string;
+    sessionIdentity: string;
+  }) {
     return {
       provider: PROVIDER,
-      agentCommand: context.agentCommand,
+      agentCommand: carriesEmbeddedAdapter(adapters, context.agentName)
+        ? adapters.identity(context.agentName)
+        : context.agentCommand,
       sessionIdentity: context.sessionIdentity,
     };
   }
 
-  return {
+  /**
+   * What this run retains the session behind one ACPX placement key under.
+   *
+   * A lookup of what the placement recorded, never a parse of the key. The
+   * placement key namespaces the provider and command into the retained key
+   * because ACPX's store is shared; recovering one from the other by taking the
+   * spelling apart would be reading arrangement as identity, and would keep
+   * working right up until the two namespaces diverged.
+   */
+  function retainedSessionKey(placementKey: string): string | undefined {
+    const identity = placed.get(placementKey);
+    return identity === undefined ? undefined : agentSessionKey(identity);
+  }
+
+  const acpxPolicy: AcpxSessionPolicy = {
     *place(context) {
       if (context.sessionIdentity === undefined) {
         throw new WorkflowAgentSessionError(
@@ -219,11 +318,12 @@ function sessionPolicy(
         );
       }
       const identity = identityOf({
+        agentName: context.agentName,
         agentCommand: context.agentCommand,
         sessionIdentity: context.sessionIdentity,
       });
       const sessionKey = agentSessionKey(identity);
-      const placementKey = `${sessionKey}:${placementSuffix(context.agentCommand)}`;
+      const placementKey = `${sessionKey}:${placementSuffix(identity.agentCommand)}`;
       placed.set(placementKey, identity);
 
       const read = yield* transactAgentSessions(database, function* (sessions) {
@@ -279,6 +379,8 @@ function sessionPolicy(
       }
     },
   };
+
+  return { policy: acpxPolicy, retainedSessionKey };
 }
 
 /** Install the workflow Agent profile for one live or partial attachment. */
@@ -300,9 +402,33 @@ export function* useWorkflowAgentProfile(options: WorkflowAgentProfileOptions): 
   const store = options.sessionStore ?? createAcpxSessionStore(paths.store);
   const policy = workflowSessionPolicyDigest();
   const defaultAgent = options.defaultAgent ?? DEFAULT_AGENT_NAME;
+  // Content-addressed beside the run store rather than inside one run: two runs
+  // asking for the same adapter name the same directory, and a snapshot this
+  // build does not carry names a different one.
+  const adapters = options.adapters ?? createEmbeddedAdapters(join(options.root, "adapters"));
+  const sessions = sessionPolicy(options.attachment.database, paths, policy, store, adapters);
 
   const factory: AgentProviderFactory = createAcpxProvider({
     sessionStore: store,
+    // ACPX's own registry with this build's two patched snapshots over the top.
+    // Codex and Claude resolve to the adapter that names its turns; every other
+    // agent resolves to the command it always did.
+    agentRegistry: overlaidAdapterRegistry(adapters),
+    // At the first point the provider would run that command, which is its
+    // availability probe — earlier than a `<Session>` placement, and earlier
+    // than any turn. A snapshot that cannot prove itself refuses the agent here
+    // rather than surfacing later as an adapter that would not start.
+    //
+    // Asked only about an agent this build actually carries. An agent ACPX
+    // resolves is already a command on this machine, so there is nothing to put
+    // on disk for it, and reaching into the snapshots to find that out would
+    // make every run pay for a mechanism that has nothing to say about it.
+    *prepareAgent(agentName): Operation<void> {
+      if (!carriesEmbeddedAdapter(adapters, agentName)) {
+        return;
+      }
+      yield* adapters.materialize(agentName);
+    },
     ...(options.createRuntime === undefined ? {} : { createRuntime: options.createRuntime }),
     // ACP-only, stated rather than inherited. A workflow session belongs to a
     // run, not to this machine: it is named by a row in the run's own database,
@@ -325,9 +451,19 @@ export function* useWorkflowAgentProfile(options: WorkflowAgentProfileOptions): 
       systemPrompt: WORKFLOW_SESSION_INSTRUCTIONS,
     },
     permissions: "strict",
-    sessions: sessionPolicy(options.attachment.database, paths, policy, store),
+    sessions: sessions.policy,
   });
 
+  // Before the components, so every Prompt they register publishes through it.
+  // Bound to this attachment's exact run: a publisher is where a Prompt's event
+  // is appended from, and one that could be reached for another run would be a
+  // way to journal a turn into a run that never had it.
+  yield* useAgentPromptPublisher(
+    createWorkflowPromptPublisher({
+      database: options.attachment.database,
+      retainedSessionKey: sessions.retainedSessionKey,
+    }),
+  );
   yield* registerAgentProvider(PROVIDER, factory);
   yield* installAgentComponents({
     defaultAgent,

@@ -188,6 +188,18 @@ export interface AcpxProviderDependencies {
   sessionStore?: AcpSessionStore;
   agentRegistry?: AcpAgentRegistry;
   /**
+   * Make one agent's command runnable, before anything tries to run it.
+   *
+   * Called with the resolved agent name at the first point this provider would
+   * spawn that agent — the availability probe — and again is harmless. A host
+   * whose agent command names something it has to put on disk first hooks here;
+   * the default does nothing, because an ordinary command is already there.
+   *
+   * It runs only when an agent is actually resolved, so a document that never
+   * asks for one prepares nothing.
+   */
+  prepareAgent?: (agentName: string) => Operation<void>;
+  /**
    * The native adapters this host has proven and is therefore willing to hand
    * a session to. Absent means none: knowing an adapter's command shape is not
    * evidence that its native UI resumes the session ACP created.
@@ -570,7 +582,7 @@ export function createPartitionedAcpxProvider(select: AcpxPartitionSelector): Ag
           return {
             *[Symbol.iterator]() {
               const state = yield* selected();
-              return yield* state.promptStream(content, options);
+              return yield* state.promptStream(content, options, authority);
             },
           };
         },
@@ -610,6 +622,20 @@ export function createAcpxProvider(dependencies?: AcpxProviderDependencies): Age
 /** Everything the provider does, including the authoritative launch path. */
 interface AcpxProviderState extends AcpxProvider {
   launch(request: AgentLaunchRequest, authority: AgentProviderAuthority): Operation<void>;
+  /**
+   * The same turn, with the authority that can name which turn it was.
+   *
+   * Optional here and absent from {@link AcpxProvider}: an embedder holding a
+   * partition drives turns without an authority and names none, and the public
+   * handle forwards no third argument. A checkpoint is durable identity, so the
+   * ability to state one arrives the way a launch's does — delivered to the
+   * installed factory, never reachable from a handle.
+   */
+  promptStream(
+    content: string,
+    options?: PromptOptions,
+    authority?: AgentProviderAuthority,
+  ): Stream<AgentPromptEvent, string>;
   /**
    * The same resolution, with the authority that can read a placement.
    *
@@ -768,6 +794,7 @@ function* useAcpxProviderState(
   const routeStore = dependencies?.routeStore;
   const executableObserver = dependencies?.executableObserver;
   const agentCwd = dependencies?.agentCwd ?? cwd;
+  const prepareAgent = dependencies?.prepareAgent;
   const mcpServers = dependencies?.mcpServers;
   const newSessionOptions = dependencies?.newSessionOptions;
   const sessions = dependencies?.sessions;
@@ -1112,6 +1139,13 @@ function* useAcpxProviderState(
 
   function* resolveAgent(name: string | undefined): Operation<string> {
     const selected = name ?? providerOptions.defaultAgent;
+    // Before the probe, because the probe spawns this agent's command: a host
+    // that materializes its own adapter has to have done so by now, and a
+    // failure here refuses the agent rather than reporting it unavailable for a
+    // reason that names the wrong cause.
+    if (prepareAgent !== undefined) {
+      yield* prepareAgent(selected);
+    }
     // Resolution is read-only for an agent whose sessions XMD names. Probing
     // spawns an ACP child, and that is provider work on a session whose
     // construction has not been settled yet — it would run before the route is
@@ -1750,6 +1784,7 @@ function* useAcpxProviderState(
   function promptStream(
     content: string,
     options: PromptOptions | undefined,
+    authority?: AgentProviderAuthority,
   ): Stream<AgentPromptEvent, string> {
     return {
       *[Symbol.iterator]() {
@@ -1870,6 +1905,9 @@ function* useAcpxProviderState(
                 completed = true;
               },
               () => (denials.denied ? new AgentToolPermissionRefused() : undefined),
+              authority === undefined
+                ? undefined
+                : (terminal, token) => authority.checkpoint(terminal, token),
             ),
           );
           return subscription;

@@ -248,6 +248,12 @@ function traceAuthority(trace: Trace): AgentProviderAuthority {
     sessionIdentity: () => {
       throw new Error("this stub authority routes no session placement");
     },
+    // As with a placement, these suites name no provider turn. Throwing means a
+    // checkpoint that did reach here fails loudly rather than being recorded by
+    // an authority nothing is asserting against.
+    checkpoint: () => {
+      throw new Error("this stub authority names no provider turn");
+    },
     *perform(_request, phases) {
       // A replay hands back what the journal retained rather than calling the
       // provider's live preparation, exactly as the real authority does when

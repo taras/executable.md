@@ -787,8 +787,13 @@ policy has not already seen.
 A suspension request is one such filtered journal event. Its opaque suspension
 ID, request and response schema live in the event description; no pending-input
 table or executor identity is added to the run record. Single-executor
-enforcement uses only the provider-owned advisory-lock sidecar. Complete schema version 1
-therefore remains one exact shape for #367.
+enforcement uses only the provider-owned advisory-lock sidecar. Complete schema
+version 1 therefore remains one exact shape for #367, with one exception stated
+below: a run acquires the Prompt-checkpoint table of §8.6 the first time it has
+something to retain in it, so version 1 is that exact shape with or without that
+one table and every other object stays required. A table that is present is held
+to its exact declaration; a partial, altered or look-alike one is damage on the
+same terms as any other object.
 
 Document-execution records are not attempts. An attempt is one execution of a
 retried operation or region and belongs to the journal.
@@ -2074,6 +2079,91 @@ canonical assertion, reattachment, replay and the disposable session directory
 are exactly as described. Nothing in the run captures a bundle or acquires a
 capture capability, and the built exporter emits an artifact carrying no such
 evidence.
+
+### 8.6 Prompt checkpoints
+
+The mapping above says which conversation a run is having. A **checkpoint** says
+where in that conversation one Prompt landed: the identity the provider gave the
+turn it had just completed. The two together are what would let something later
+continue from an exact point rather than from whatever that session last said.
+
+**The provider names the turn, and nothing else does.** The identity arrives on
+the ACP `PromptResponse._meta` of that exact response, under the adapter's own
+namespace, and is carried through unchanged. It is opaque: it is compared, never
+interpreted, and never reconstructed from anything else. Repeated transcript
+text is repeated text, another Prompt's token is another turn, a provider's
+current head is a later point in the conversation, and Prompt sequence or
+journal order is position rather than identity. A Prompt this run cannot name is
+left unnamed, and a gap stays a gap.
+
+Only a successfully completed turn carries one. A cancelled turn, a failed turn,
+a turn whose stop reason this host treats as a failure, and a turn the host
+itself refused each describe no point to continue from, however the adapter
+labelled them. Metadata that is missing, unreadable, or claimed by two adapters
+at once supplies no checkpoint and changes nothing else about the completion.
+
+**A checkpoint commits with the Prompt it describes.** The Prompt runs first and
+outside any transaction; a transaction opens only to publish it. That
+transaction appends the ordinary `agent_prompt` event, names the exact event
+that append produced, retains the checkpoint against it and the run's own
+retained session key, and commits. Both halves survive or neither does: an
+association that outlived a Prompt that was never journaled would name a turn
+the run has no record of, and a Prompt whose association was lost would become
+one this run cannot continue from without saying so.
+
+The retained session key is the run's own, supplied by the placement that made
+the session. It is never recovered from the spelling of the provider's placement
+key: those are two namespaces that happen to share a prefix.
+
+**Order comes from the journal.** A checkpoint names an event, that event has a
+journal sequence, and joining the two orders them. There is no second positional
+field to disagree with the journal.
+
+**The table is acquired, not inherited.** Every version-1 database written before
+checkpoints existed is still exactly the run it was, so its absence means zero
+associations. Read-only status, history and replay treat an absent table as zero
+associations and leave the file exactly as they found it. The table appears the
+first time a run has something to put in it, created inside the same transaction
+that appends that Prompt and its association; if that transaction rolls back,
+the table goes with it. No migration scans a run's existing Prompts, and nothing
+synthesizes an association for one.
+
+**Codex and Claude are overridden, and nothing else is.** A checkpoint can only
+come from the adapter, and no published Codex or Claude release reports one. So
+a workflow run executes the snapshots this build carries for those two providers
+— each packed from an exact patched upstream commit by that project's own build
+— rather than the adapter `npx` would resolve. That is an override on top of the
+ordinary agent registry, not a replacement for it. Every other agent resolves to
+the same command, and retains the same compatibility identity, as it did before
+any adapter was carried: a run may use one, it completes normally, and a session
+it retained under an earlier version stays the session it was.
+
+The override is qualified rather than best-effort. For Codex and Claude the
+snapshot is verified against its recorded digest and materialized before the
+first Prompt, and every failure refuses the agent: falling back to the published
+adapter would complete every Prompt, retain nothing, and say nothing about why.
+Nothing is materialized for an agent this host carries no snapshot for, and
+nothing at all for a document that opens no `<Session>`. This is temporary and
+carried with its own exit gate; the retention contract above does not change
+when a provider returns to a published release.
+
+**An agent that names no turn is not a failed Prompt.** A run whose agent
+reports no checkpoint — because this build overrides nothing for it, or because
+the metadata was missing or unreadable — completes exactly as it always did. The
+`agent_prompt` event is journaled, the Prompt result is retained and replays
+from it, and the run simply holds zero associations. Only the association is
+absent; nothing about the completion is.
+
+**Nothing presents a checkpoint.** It is a way back into somebody's conversation,
+and neither the human nor the JSON form of `status`, `list` or `history` carries
+its kind or its value. The rendered Prompt output, the serialized `agent_prompt`
+result and the journal record are unchanged: what a run retains here is beside
+them, not in them.
+
+Replay reaches none of this. A completed or partial replay answers from the
+stored Prompt result alone — it contacts no provider, opens no publication
+transaction and associates nothing — and a Prompt replayed from a run that
+retained no checkpoint remains unassociated.
 
 ## 9. Replay and continuation
 

@@ -25,8 +25,15 @@ import { exec, useQuietProcessOutput } from "@executablemd/runtime";
 const VENDOR = "packages/acp/vendor/acpx";
 const ACP_SRC = "packages/acp/src";
 
-/** The only identifier the behavioral patch introduces. */
-const SEAM = "agentProcessEnv";
+/**
+ * The identifiers the behavioral patches introduce.
+ *
+ * Each patch names its own, and neither name occurs anywhere upstream, so the
+ * locality check below opens a window only where a patch actually is. A seam
+ * named after something upstream already says — `_meta`, for one — would open a
+ * permissive window at every unrelated mention of it.
+ */
+const SEAMS: readonly string[] = ["agentProcessEnv", "checkpointMeta"];
 
 /** How far an introduced line may sit from one that names the seam. */
 const SEAM_PROXIMITY_LINES = 8;
@@ -194,7 +201,9 @@ describe("Tier AV — vendored ACPX snapshot", () => {
           .map((line) => line.trim()),
       );
       const lines = unpackage(after).split("\n");
-      const seamAt = lines.flatMap((line, index) => (line.includes(SEAM) ? [index] : []));
+      const seamAt = lines.flatMap((line, index) =>
+        SEAMS.some((seam) => line.toLowerCase().includes(seam.toLowerCase())) ? [index] : [],
+      );
       // Locality rather than keyword matching: a patch introduces comment and
       // restructuring lines that name nothing. Exact bytes are pinned by AV1;
       // this is what stops an unrelated edit hiding in the same file.

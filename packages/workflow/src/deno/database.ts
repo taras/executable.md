@@ -369,7 +369,7 @@ function enlistedJournal(
     *append(event: DurableEvent): Operation<void> {
       connection.validateTransaction(transaction);
       try {
-        insertJournalEvent(database, event);
+        transaction.appended.push(insertJournalEvent(database, event));
       } catch (error) {
         throw translateSqliteError(error, path);
       }
