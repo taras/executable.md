@@ -79,8 +79,10 @@ import {
   claimReturn,
   createReturnFrame,
   missingReturnMessage,
+  selectReturnValue,
+  settleReturn,
 } from "./return-flow.ts";
-import type { ReturnFrame } from "./return-flow.ts";
+import type { ReturnCarrier } from "./return-flow.ts";
 import { unbox, useEvalScope } from "@effectionx/scope-eval";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { SchemaValidationError, validateProps, validateReturnValue } from "./validate.ts";
@@ -254,7 +256,7 @@ interface ProjectionState {
    * Projected content is the caller's text, so a `<Return>` in it satisfies the
    * declaration the author could see.
    */
-  callerReturn: ReturnFrame | undefined;
+  callerReturn: ReturnCarrier | undefined;
   /**
    * This invocation's own structural path (§5.6). A projection is identified by
    * the invocation that performed it, so the same authored content projected
@@ -361,7 +363,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     hideSet: Set<string>;
     inner: ProjectionHandle | undefined;
     loop: LoopFrame | undefined;
-    returnFrame: ReturnFrame | undefined;
+    returnFrame: ReturnCarrier | undefined;
     errors: Segment[];
     /**
      * The caller's region, when this projection renders into one. Structural
@@ -842,18 +844,20 @@ function* expandListSegments(
           // projected. Without one — a foreign body, dynamically scanned
           // markdown, or a text body — it stays reserved and is diagnosed
           // rather than resolving a component named Return.
-          const owner = yield* ActiveReturn.get();
-          if (owner === undefined) {
+          // Claimed before the expression is evaluated, so a second return
+          // reaching this body while the first is still resolving evaluates
+          // nothing of its own. A carrier this engine did not mint owns no
+          // body, so a forged one answers `undefined` here and takes the
+          // reserved path below rather than selecting anything.
+          const carrier = yield* ActiveReturn.get();
+          const body = claimReturn(carrier);
+          if (carrier === undefined || body === undefined) {
             result.push(yield* raise(misplacedReturnError(segment)));
             break;
           }
-          // Claimed before the expression is evaluated, so a second return
-          // reaching this body while the first is still resolving evaluates
-          // nothing of its own.
-          claimReturn(owner);
-          owner.selected = {
-            value: yield* resolveReturnValue(owner.owner, owner.returns, segment),
-          };
+          // What the value is validated against comes from the engine's own
+          // record of this body, never from the carrier the context held.
+          selectReturnValue(carrier, yield* resolveReturnValue(body.owner, body.returns, segment));
           break;
         }
 
@@ -4217,8 +4221,8 @@ function* expandValueBody(
   // per top-level segment: a `<Return>` under `<If>` or inside a `<Loop>` is
   // reached by ordinary expansion, and finds this frame because those
   // directives keep the ambient one.
-  const frame = createReturnFrame(componentName, returns);
-  yield* ActiveReturn.set(frame);
+  const carrier = createReturnFrame(componentName, returns);
+  yield* ActiveReturn.set(carrier);
 
   for (const [index, segment] of bodySegments.entries()) {
     const docSegments = substituteSegmentList([segment], slots, project, state, claim);
@@ -4236,8 +4240,10 @@ function* expandValueBody(
   }
 
   // Read after the body finished, so a return anywhere in it — including one a
-  // projection reached — has been executed by now.
-  const selected = frame.selected;
+  // projection reached — has been executed by now. Settled from the carrier
+  // this body minted and has held since, not from the context, so replacing the
+  // context selects nothing.
+  const selected = settleReturn(carrier);
   if (!selected) {
     throw new Error(missingReturnMessage(componentName));
   }

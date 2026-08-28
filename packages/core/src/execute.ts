@@ -82,7 +82,12 @@ import {
   validateBodyStructure,
   createBlockCounter,
 } from "./expand.ts";
-import { ActiveReturn, createReturnFrame, missingReturnMessage } from "./return-flow.ts";
+import {
+  ActiveReturn,
+  createReturnFrame,
+  missingReturnMessage,
+  settleReturn,
+} from "./return-flow.ts";
 import type { BlockCounter } from "./expand.ts";
 import {
   DocumentationError,
@@ -1595,7 +1600,7 @@ function* runValueRoot(
 ): Operation<DocumentResult> {
   // Created outside the scope the body runs in, so the value it selected is
   // still readable after that scope — and its teardown — has finished.
-  const frame = createReturnFrame("__root__", returns);
+  const carrier = createReturnFrame("__root__", returns);
 
   yield* scoped(function* () {
     yield* Component.around(
@@ -1610,7 +1615,7 @@ function* runValueRoot(
     // The root's own frame, published for the whole body: a `<Return>` under
     // `<If>` or inside a `<Loop>` is reached by ordinary expansion and finds it,
     // because those directives keep the ambient frame.
-    yield* ActiveReturn.set(frame);
+    yield* ActiveReturn.set(carrier);
 
     for (const segment of root.bodySegments) {
       const expanded = yield* expandSegmentsWithin(
@@ -1637,7 +1642,9 @@ function* runValueRoot(
 
   yield* refuseCheckedFailure(checkedFailures);
   // Read after the body finished, so a return anywhere in it has executed.
-  const selected = frame.selected;
+  // Settled from the carrier this root minted and has held since, not from the
+  // context, so a document that replaces the context selects nothing.
+  const selected = settleReturn(carrier);
   if (!selected) {
     throw new Error(missingReturnMessage("__root__"));
   }

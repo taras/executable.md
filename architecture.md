@@ -108,7 +108,7 @@ Existing documents and code get aligned to this section retroactively.
 | syntax catalog | the complete, versioned description of what a document may write in one directory under one host profile: every structural construct the engine reserves, and the one implementation selection chooses for every other name. It is observation — describing an environment installs no operational state, runs nothing and journals nothing — and it is produced once per request and projected, never rediscovered per format |
 | run profile declarations | the component registrations a first-party package makes, held as plain values apart from the middleware, providers, activation and launchers its installer also arranges. The installer registers exactly those values and inspection reads exactly those values, so what a run installs and what the catalog reports cannot drift |
 | origin-only | the inspectability of a component whose contract could only be learned by loading it: a repository TypeScript module, whose schemas live on its exports and whose top level would run. Such an entry carries name, category, origin and source kind, and no contract field at all — an absent contract is stated, never rendered as an empty one |
-| definition-owned return state | which value body a `<Return>` selects for: one ephemeral state per execution of one value root or Markdown value component. Structural directives keep the ambient one, a component invocation hides it from the invoked body, a nested value body installs its own, and caller-projected content restores the caller's. It is composition state — no authority, no durable event, unreachable from a document — and the first claim on it is atomic, so a second executed return fails the body rather than replacing its value |
+| definition-owned return state | which value body a `<Return>` selects for: one ephemeral state per execution of one value root or Markdown value component. Structural directives keep the ambient one, a component invocation hides it from the invoked body, a nested value body installs its own, and caller-projected content restores the caller's. What travels contextually is a frozen carrier holding no facts, only an accessor that answers nothing without a token this module never exports; the state lives in that carrier's closure, so a document can read, enumerate, copy or replace the carrier and reach nothing. The first claim on it is atomic, so a second executed return fails the body rather than replacing its value, and it appends no durable event |
 
 ## Three axes
 
@@ -2376,6 +2376,20 @@ so two returns racing through one body cannot both believe they were first. The
 second fails the body, evaluates nothing, and the first value is not published —
 there is no first-wins or last-wins fallback. A body that executes none reports
 that instead, which is how a bounded search that found nothing reports itself.
+
+**Selection is not a decision a document makes about itself.** The context this
+travels through is named, and a named context is reachable by name from a
+document's own eval block, so nothing that decides a value may live in it. What
+it carries is a frozen carrier holding no facts, only an accessor guarded by an
+unexported `Symbol()`; who owns the body, what schema it declares, whether it is
+claimed, and which value it selected live in that carrier's own closure, whose
+lifetime is one execution of one body. A carrier the engine did not mint owns
+nothing — it cannot supply the token, and state it fabricates lacks the mark the
+engine puts on its own — so a forged one makes a `<Return>` reserved rather than
+selecting through it. Both settlement sites read the carrier their own body
+minted and has held since, never one read back from the context. Mutating
+the carrier, recreating the context, or replacing it therefore selects and
+publishes nothing, and a value still crosses its declared schema on the way out.
 
 Selection is not authority and not durable state: it appends no journal event, a
 partial replay reconstructs it while completed effects replay, and a completed

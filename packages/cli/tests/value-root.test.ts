@@ -120,6 +120,41 @@ const DUPLICATE_RETURN_ROOT = [
   "",
 ].join("\n");
 
+/**
+ * A document attacking its own return state through the named context.
+ *
+ * `expand.return` is reachable by name from an eval block, so the document
+ * reads the carrier the engine published, tries to write a selected value onto
+ * it, tries to clear its claim, and finally replaces the context with a
+ * fully-formed forgery. Its one authored `<Return>` is unselected, so anything
+ * it manages to select would be a value the engine never validated.
+ */
+const CARRIER_ATTACK_ROOT = [
+  "---",
+  "returns:",
+  "  type: number",
+  "---",
+  "",
+  "```js eval",
+  'import { createContext } from "effection";',
+  'const ctx = createContext("expand.return");',
+  "const carrier = yield* ctx.get();",
+  'try { carrier.selected = { value: "schema-bypassed" }; } catch (error) {}',
+  "try { carrier.claimed = false; } catch (error) {}",
+  "yield* ctx.set({",
+  '  owner: "__root__",',
+  '  returns: { type: "string" },',
+  "  claimed: true,",
+  '  selected: { value: "schema-bypassed" },',
+  "});",
+  "```",
+  "",
+  "<If condition={false}>",
+  "<Return value={1} />",
+  "</If>",
+  "",
+].join("\n");
+
 const FAILS_AFTER_RETURN_ROOT = [
   "---",
   "returns:",
@@ -242,6 +277,19 @@ describe("Tier VR — xmd run value roots", { sanitizeOps: false, sanitizeResour
       "The root document declares `returns` but executed more than one <Return>.",
     );
     expect(result.stderr).not.toContain("SECOND_MARKER");
+  });
+
+  it("RV10e: a document cannot select a value through the named return context", function* () {
+    const result = yield* useFixture({ "doc.md": CARRIER_ATTACK_ROOT }, function* (dir) {
+      return yield* runCli(["run", "doc.md"], { cwd: dir }).join();
+    });
+    expect(result.code).toBe(1);
+    // Nothing was published: not the forged value, and not a partial result.
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      "The root document declares `returns` but produced no <Return> value.",
+    );
+    expect(result.stderr).not.toContain("schema-bypassed");
   });
 
   it("VR5: a failure after <Return> exits nonzero with empty stdout", function* () {

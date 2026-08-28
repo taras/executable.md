@@ -775,6 +775,48 @@ describe("Tier RV — component return values", () => {
       expect(descriptions).not.toContain("return");
     });
 
+    it("RV10e: a component cannot select a value through the named return context", function* () {
+      // The same attack the value root faces, run from inside a Markdown value
+      // component's own body: read the carrier the engine published, write to
+      // it, clear its claim, then replace the context with a fully-formed
+      // forgery. The component's one authored <Return> is unselected, so
+      // anything it selected would be a value nothing validated.
+      const result = yield* run({
+        "doc.md": '<Verdict as="v" />\n\nGot {v}\n',
+        "Verdict.md": [
+          "---",
+          "returns:",
+          "  type: number",
+          "---",
+          "",
+          "```js eval",
+          'import { createContext } from "effection";',
+          'const ctx = createContext("expand.return");',
+          "const carrier = yield* ctx.get();",
+          'try { carrier.selected = { value: "schema-bypassed" }; } catch (error) {}',
+          "try { carrier.claimed = false; } catch (error) {}",
+          "yield* ctx.set({",
+          '  owner: "Verdict",',
+          '  returns: { type: "string" },',
+          "  claimed: true,",
+          '  selected: { value: "schema-bypassed" },',
+          "});",
+          "```",
+          "",
+          "<If condition={false}>",
+          "<Return value={1} />",
+          "</If>",
+          "",
+        ].join("\n"),
+      });
+
+      expect(said(result)).toContain("<Verdict /> declares `returns` but produced no <Return>");
+      expect(said(result)).not.toContain("schema-bypassed");
+      // Nothing was bound: the caller's capture never resolved.
+      expect(said(result)).not.toContain("Got ");
+      expect(result.value).toBeUndefined();
+    });
+
     it("RV14: a nested value body owns a separate declaration", function* () {
       const result = yield* run({
         "doc.md": '<Outer as="o" />\n\nGot {o}\n',

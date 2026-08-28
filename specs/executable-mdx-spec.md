@@ -6044,6 +6044,17 @@ and reconstructs the same ownership while re-executing the authored selection; a
 completed document replay reuses the retained terminal result without expanding
 the body.
 
+**Selection is the engine's, not the document's.** Ownership travels through a
+named context, and a document's own eval block can name it. What it carries is
+therefore a frozen carrier holding no facts, only an accessor guarded by a token
+the engine never exports: the body's owner, schema, claim and selected value
+live in that carrier's own closure. A carrier the engine did not mint owns no
+body — it cannot supply the token, and state it fabricates carries none of the
+engine's marks — so a `<Return>` that finds one is reserved; and a body settles
+from the carrier it minted rather than from the context. Mutating the carrier, recreating the context or replacing it selects
+nothing and publishes nothing, so no value reaches a caller without crossing the
+schema its body declared.
+
 `<Return>` is reserved throughout expansion. Only a `<Return>` whose owning
 value body is the one expanding it is consumed, so a `<Return>` that reaches
 ordinary expansion without one — `render(markdown)` output, a foreign body, a
@@ -10706,6 +10717,7 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | RV10a | Structure | A value body with no authored `<Return>`, a `<Return>` in a text body, `<Output>` with `returns`, bad props, and a missing `as` fail before body effects; a caller's `<Return>` does not satisfy the callee |
 | RV10b | Depth is valid | A nested `<Return>` passes preflight and reaches runtime, its body's effect having run |
 | RV10c | The claim precedes evaluation | Two projections of one authored `<Return>` are started before either is awaited: the duplicate is reported, exactly one expression is ever evaluated, and no value is published |
+| RV10e | Selection is engine-owned | A document that reads the named return context, writes to the carrier, clears its claim and replaces the context with a forgery selects nothing: the value root exits 1 with empty stdout and the missing-return diagnostic, the Markdown value component reports its own and binds nothing, and no unvalidated value is published |
 | RV10d | Executed multiplicity | Two executed `<Return>`s, and one authored `<Return>` projected twice, each fail with the owner's duplicate diagnostic and publish no value; the second expression would fail loudly if evaluated and never is |
 | RV11a | Structural ownership | `<If>`, `<Loop>` with `<Break />`, `<Each>` and `<Let>` each keep the owning value body; an unselected `<If>` reaches that body's missing-return diagnostic |
 | RV11b | Caller projection | A caller's `<Return>` selects through a Markdown `<Content />` wrapper and through a function component's `content()` |
