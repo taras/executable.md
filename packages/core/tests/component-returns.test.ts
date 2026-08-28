@@ -397,6 +397,143 @@ describe("Tier RV — component return values", () => {
     });
   });
 
+  describe("definition-owned return flow", () => {
+    /**
+     * A value component whose declaration is satisfied from inside `directive`.
+     * Each row is the same claim — the directive keeps the body that owns it —
+     * written in the four structural forms a document has today.
+     */
+    const OWNED = [
+      { name: "If", body: ["<If condition={true}>", '<Return value="picked" />', "</If>"] },
+      {
+        name: "Loop",
+        body: ['<Loop name="tries" max={3}>', '<Return value="picked" />', "<Break />", "</Loop>"],
+      },
+      {
+        name: "Each",
+        body: ['<Each in={["picked"]} let="item">', "<Return value={item} />", "</Each>"],
+      },
+      { name: "Let", body: ['<Let as="rendered">', '<Return value="picked" />', "</Let>"] },
+    ];
+
+    for (const owned of OWNED) {
+      it(`RV11a: <${owned.name}> keeps the value body that owns it`, function* () {
+        const result = yield* run({
+          "doc.md": '<Verdict as="v" />\n\nGot {v}\n',
+          "Verdict.md": ["---", "returns:", "  type: string", "---", "", ...owned.body, ""].join(
+            "\n",
+          ),
+        });
+        expect(said(result)).toContain("Got picked");
+      });
+    }
+
+    it("RV11a: an unselected <If> reaches the component's missing-return diagnostic", function* () {
+      const result = yield* run({
+        "doc.md": '<Verdict as="v" />\n',
+        "Verdict.md": [
+          "---",
+          "returns:",
+          "  type: string",
+          "---",
+          "",
+          "<If condition={false}>",
+          '<Return value="picked" />',
+          "</If>",
+          "",
+        ].join("\n"),
+      });
+      expect(said(result)).toContain("<Verdict /> declares `returns` but produced no <Return>");
+    });
+
+    it("RV11b: a caller's <Return> selects through a Markdown <Content /> wrapper", function* () {
+      // The wrapper declares nothing. The return is the caller's text, so it
+      // satisfies the caller's declaration wherever the wrapper renders it.
+      const result = yield* run({
+        "doc.md": [
+          "---",
+          "returns:",
+          "  type: string",
+          "---",
+          "",
+          "<Wrap>",
+          '<Return value="through the wrapper" />',
+          "</Wrap>",
+          "",
+        ].join("\n"),
+        "Wrap.md": "Wrapping <Content />\n",
+      });
+      expect(result.value).toBe("through the wrapper");
+    });
+
+    it("RV11c: a <Return> an invoked body writes never satisfies its caller", function* () {
+      const result = yield* run({
+        "doc.md": [
+          "---",
+          "returns:",
+          "  type: string",
+          "---",
+          "",
+          "<Foreign />",
+          '<Return value="the caller\'s own" />',
+          "",
+        ].join("\n"),
+        "Foreign.md": '<Return value="not the caller\'s" />\n',
+      });
+      // The foreign body declares no `returns`, so its own text-body preflight
+      // refuses the element — it never reaches the caller's frame.
+      expect(said(result)).toContain("<Return> requires a document or component");
+      expect(said(result)).toContain("not the caller");
+    });
+
+    it("RV14: a nested value body owns a separate declaration", function* () {
+      const result = yield* run({
+        "doc.md": '<Outer as="o" />\n\nGot {o}\n',
+        "Outer.md": [
+          "---",
+          "returns:",
+          "  type: string",
+          "---",
+          "",
+          '<Inner as="i" />',
+          "<Return value={`outer saw ${i}`} />",
+          "",
+        ].join("\n"),
+        "Inner.md": [
+          "---",
+          "returns:",
+          "  type: string",
+          "---",
+          "",
+          '<Return value="inner" />',
+          "",
+        ].join("\n"),
+      });
+      // Two executions, neither a duplicate: each claimed its own body.
+      expect(said(result)).toContain("Got outer saw inner");
+    });
+
+    it("RV10d: projecting one authored <Return> twice is a duplicate", function* () {
+      const result = yield* run({
+        "doc.md": [
+          "---",
+          "returns:",
+          "  type: string",
+          "---",
+          "",
+          "<Twice>",
+          '<Return value="once" />',
+          "</Twice>",
+          "",
+        ].join("\n"),
+        "Twice.md": "<Content />\n\n<Content />\n",
+      });
+      expect(said(result)).toContain(
+        "The root document declares `returns` but executed more than one <Return>.",
+      );
+    });
+  });
+
   describe("structure, before body effects", () => {
     it("refuses <Return> in a text component", function* () {
       const result = yield* run({
@@ -407,39 +544,44 @@ describe("Tier RV — component return values", () => {
       expect(result.commands).toEqual([]);
     });
 
-    it("requires a top-level <Return> when returns is declared", function* () {
+    it("RV10a: requires a statically authored <Return> when returns is declared", function* () {
       const result = yield* run({
         "doc.md": '<Verdict as="v" />\n',
         "Verdict.md": `---\nreturns:\n  type: string\n---\n\n${BODY_EFFECT}\n`,
       });
-      expect(said(result)).toContain("no direct top-level <Return>");
+      expect(said(result)).toContain("no <Return>");
       expect(result.commands).toEqual([]);
     });
 
-    it("refuses a duplicate <Return>", function* () {
+    it("RV10a: a caller's <Return> does not satisfy the callee's declaration", function* () {
+      // Preflight reads the callee's own source, before <Content /> is
+      // substituted, so content the caller offers can neither introduce nor
+      // satisfy a declaration.
+      // The caller is itself a value body, so its <Return> is well placed
+      // where it is written. Offering it to the callee still declares nothing:
+      // preflight reads the callee's own source, before <Content /> is
+      // substituted.
       const result = yield* run({
-        "doc.md": '<Verdict as="v" />\n',
-        "Verdict.md": [
+        "doc.md": [
           "---",
           "returns:",
           "  type: string",
           "---",
           "",
-          BODY_EFFECT,
-          "",
-          '<Return value="one" />',
-          "",
-          '<Return value="two" />',
+          '<Verdict as="v">',
+          '<Return value="the caller\'s" />',
+          "</Verdict>",
           "",
         ].join("\n"),
+        "Verdict.md": `---\nreturns:\n  type: string\n---\n\n${BODY_EFFECT}\n<Content />\n`,
       });
-      expect(said(result)).toContain("duplicate declaration");
+      expect(said(result)).toContain("no <Return>");
       expect(result.commands).toEqual([]);
     });
 
-    it("refuses a nested <Return>", function* () {
+    it("RV10b: a nested <Return> is statically valid and reaches runtime", function* () {
       const result = yield* run({
-        "doc.md": '<Verdict as="v" />\n',
+        "doc.md": '<Verdict as="v" />\n\nGot {v}\n',
         "Verdict.md": [
           "---",
           "returns:",
@@ -454,8 +596,35 @@ describe("Tier RV — component return values", () => {
           "",
         ].join("\n"),
       });
-      expect(said(result)).toContain("not a direct top-level child");
-      expect(result.commands).toEqual([]);
+      expect(said(result)).toContain("Got one");
+      // Preflight did not reject the shape, so the body's effect ran.
+      expect(result.commands.length).toBe(1);
+    });
+
+    it("RV10d: two executed <Return>s fail the body after the first effect", function* () {
+      const result = yield* run({
+        "doc.md": '<Verdict as="v" />\n\nGot {v}\n',
+        "Verdict.md": [
+          "---",
+          "returns:",
+          "  type: string",
+          "---",
+          "",
+          BODY_EFFECT,
+          "",
+          '<Return value="one" />',
+          "",
+          '<Return value="two" />',
+          "",
+        ].join("\n"),
+      });
+      expect(said(result)).toContain("<Verdict /> declares `returns` but executed more than one");
+      // The first selected value is discarded rather than bound: the caller's
+      // `as` never resolves, so nothing renders it.
+      expect(said(result)).not.toContain("Got one");
+      // Source multiplicity is no longer a preflight violation, so the body
+      // ran up to the second execution — the accepted timing change.
+      expect(result.commands.length).toBe(1);
     });
 
     it("refuses <Output> alongside returns", function* () {
@@ -741,7 +910,7 @@ describe("Tier RV — component return values", () => {
         "doc.md": ["---", "returns:", "  type: string", "---", "", BODY_EFFECT, ""].join("\n"),
       });
       expect(result.value).toBeUndefined();
-      expect(result.error).toContain("no direct top-level <Return>");
+      expect(result.error).toContain("no <Return>");
       expect(result.commands).toEqual([]);
     });
 

@@ -77,6 +77,32 @@ const INVALID_STRUCTURE_ROOT = [
   "",
 ].join("\n");
 
+/** A conditional return the run selects — the shape #640 exists for. */
+const SELECTED_CONDITIONAL_ROOT = [
+  "---",
+  "returns:",
+  "  type: string",
+  "---",
+  "",
+  "<If condition={true}>",
+  '<Return value="chosen" />',
+  "</If>",
+  "",
+].join("\n");
+
+/** The same shape, unselected: statically valid, and it executes no return. */
+const UNSELECTED_CONDITIONAL_ROOT = [
+  "---",
+  "returns:",
+  "  type: string",
+  "---",
+  "",
+  "<If condition={false}>",
+  '<Return value="chosen" />',
+  "</If>",
+  "",
+].join("\n");
+
 const FAILS_AFTER_RETURN_ROOT = [
   "---",
   "returns:",
@@ -164,7 +190,28 @@ describe("Tier VR — xmd run value roots", { sanitizeOps: false, sanitizeResour
     });
     expect(result.code).toBe(1);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("no direct top-level <Return>");
+    expect(result.stderr).toContain("no <Return>");
+  });
+
+  it("VR4a: a selected conditional <Return> writes its result", function* () {
+    const result = yield* useFixture({ "doc.md": SELECTED_CONDITIONAL_ROOT }, function* (dir) {
+      return yield* runCli(["run", "doc.md"], { cwd: dir }).expect();
+    });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toBe("chosen");
+  });
+
+  it("VR4b: an unselected conditional <Return> reaches the missing-return failure", function* () {
+    // Statically valid, so the body runs; nothing executes the return, which is
+    // how a bounded exhaustion reaches this diagnostic at all.
+    const result = yield* useFixture({ "doc.md": UNSELECTED_CONDITIONAL_ROOT }, function* (dir) {
+      return yield* runCli(["run", "doc.md"], { cwd: dir }).join();
+    });
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      "The root document declares `returns` but produced no <Return> value.",
+    );
   });
 
   it("VR5: a failure after <Return> exits nonzero with empty stdout", function* () {
@@ -201,7 +248,7 @@ describe("Tier VR — xmd run value roots", { sanitizeOps: false, sanitizeResour
     });
     expect(result.code).toBe(1);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("no direct top-level <Return>");
+    expect(result.stderr).toContain("no <Return>");
   });
 
   /**

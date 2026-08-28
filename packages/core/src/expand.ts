@@ -74,6 +74,13 @@ import { ActiveProjection } from "./projection.ts";
 import type { ProjectionHandle, ProjectionRequest } from "./projection.ts";
 import { ActiveLoop, recordIteration, recordOutcome } from "./loop.ts";
 import type { LoopFrame, LoopIdentity, LoopOutcome } from "./loop.ts";
+import {
+  ActiveReturn,
+  claimReturn,
+  createReturnFrame,
+  missingReturnMessage,
+} from "./return-flow.ts";
+import type { ReturnFrame } from "./return-flow.ts";
 import { unbox, useEvalScope } from "@effectionx/scope-eval";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { SchemaValidationError, validateProps, validateReturnValue } from "./validate.ts";
@@ -242,6 +249,13 @@ interface ProjectionState {
    */
   callerLoop: LoopFrame | undefined;
   /**
+   * The value body active where the caller wrote the content it projects, read
+   * at the invocation site before the invocation cleared it for its own body.
+   * Projected content is the caller's text, so a `<Return>` in it satisfies the
+   * declaration the author could see.
+   */
+  callerReturn: ReturnFrame | undefined;
+  /**
    * This invocation's own structural path (§5.6). A projection is identified by
    * the invocation that performed it, so the same authored content projected
    * through two different components is two expansions. What the content is
@@ -347,6 +361,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     hideSet: Set<string>;
     inner: ProjectionHandle | undefined;
     loop: LoopFrame | undefined;
+    returnFrame: ReturnFrame | undefined;
     errors: Segment[];
     /**
      * The caller's region, when this projection renders into one. Structural
@@ -394,6 +409,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
           }
           yield* ActiveProjection.set(options.inner);
           yield* ActiveLoop.set(options.loop);
+          yield* ActiveReturn.set(options.returnFrame);
           yield* expandSegmentsWithin(
             options.segments,
             options.meta,
@@ -500,6 +516,9 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             // Dynamic markdown is the component's own text, so it is not written
             // where the caller's loop is and cannot break it.
             yield* ActiveLoop.set(request.kind === "markdown" ? undefined : state.callerLoop);
+            // Dynamic markdown is the component's own text for the same reason,
+            // so a <Return> scanned out of it satisfies no caller declaration.
+            yield* ActiveReturn.set(request.kind === "markdown" ? undefined : state.callerReturn);
             yield* expandSegmentsWithin(
               project(segments),
               frame.meta,
@@ -550,6 +569,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
         hideSet: state.caller.hideSet,
         inner: state.enclosing,
         loop: state.callerLoop,
+        returnFrame: state.callerReturn,
         errors: [],
         owner,
         path: extendPath(elementPath, { f: "proj" }),
@@ -817,11 +837,23 @@ function* expandListSegments(
         }
 
         if (segment.name === "Return") {
-          // Definition-owned <Return> is consumed by value-body expansion
-          // before it reaches here. Reaching this branch means a projected,
-          // dynamically scanned, or misplaced <Return> — diagnose it rather
-          // than resolving a component named Return.
-          result.push(yield* raise(misplacedReturnError(segment)));
+          // A <Return> is the value body's own only where that body's frame is
+          // ambient: under its structural directives, and in content its author
+          // projected. Without one — a foreign body, dynamically scanned
+          // markdown, or a text body — it stays reserved and is diagnosed
+          // rather than resolving a component named Return.
+          const owner = yield* ActiveReturn.get();
+          if (owner === undefined) {
+            result.push(yield* raise(misplacedReturnError(segment)));
+            break;
+          }
+          // Claimed before the expression is evaluated, so a second return
+          // reaching this body while the first is still resolving evaluates
+          // nothing of its own.
+          claimReturn(owner);
+          owner.selected = {
+            value: yield* resolveReturnValue(owner.owner, owner.returns, segment),
+          };
           break;
         }
 
@@ -2496,6 +2528,7 @@ function* expandComponent(
   // in, and the invocation is about to clear it for the component's own body.
   const siteEvalScope = yield* evalScope;
   const siteLoop = yield* ActiveLoop.get();
+  const siteReturn = yield* ActiveReturn.get();
 
   const expansion = snapshot(path, name, position);
 
@@ -2523,6 +2556,7 @@ function* expandComponent(
       },
       counter,
       callerLoop: siteLoop,
+      callerReturn: siteReturn,
       ownPath: path,
       printedErrors: bodyContentErrors,
       checkedFailures,
@@ -2539,6 +2573,12 @@ function* expandComponent(
     // the caller's frame for the caller's own text (createProjectionHandle),
     // and anything the body does outside a projection finds none.
     yield* ActiveLoop.set(undefined);
+
+    // And from the caller's value body for the same reason: a <Return> written
+    // here satisfies this component's own `returns`, never the caller's. A
+    // value body installs its own frame below; a rendered one owns none, so a
+    // <Return> written in it stays reserved.
+    yield* ActiveReturn.set(undefined);
 
     // Published on the body task, so the component's own body and everything it
     // owns read this expansion, and a nested one uncovers it again on the way
@@ -2919,6 +2959,7 @@ function* expandFunctionComponent(
   // here for the same reason — see expandComponent.
   const siteEvalScope = yield* evalScope;
   const siteLoop = yield* ActiveLoop.get();
+  const siteReturn = yield* ActiveReturn.get();
 
   // Resolved once, here: an operand is what the call site meant, not what the
   // component's own body later did to the environment.
@@ -3004,6 +3045,7 @@ function* expandFunctionComponent(
           },
           counter,
           callerLoop: siteLoop,
+          callerReturn: siteReturn,
           ownPath: path,
           checkedFailures,
           authority,
@@ -3011,6 +3053,7 @@ function* expandFunctionComponent(
         invocation.evalScope.scope.set(ActiveProjection, handle);
 
         yield* ActiveLoop.set(undefined);
+        yield* ActiveReturn.set(undefined);
         yield* publishExpansion(expansion);
         yield* provideEvalScope(invocation.evalScope);
         yield* provideRetain(siteEvalScope);
@@ -3783,10 +3826,6 @@ export function validateOutputPlacement(bodySegments: Segment[]): ErrorSegment |
   };
 }
 
-export function isTopLevelReturn(segment: Segment): segment is ComponentElement {
-  return segment.type === "component" && segment.name === "Return";
-}
-
 function previewReturn(segment: ComponentElement): string {
   if ("value" in segment.expressions) {
     return `<Return value={${segment.expressions.value}} />`;
@@ -3802,31 +3841,32 @@ function structureError(source: string, headline: string, violations: string[]):
   return { type: "error", message: `${headline}\n${list}`, source };
 }
 
-function collectReturns(bodySegments: Segment[]): {
-  topLevel: ComponentElement[];
-  nested: string[];
-} {
-  const topLevel: ComponentElement[] = [];
-  const nested: string[] = [];
+/**
+ * Every `<Return>` the body itself declares, at any depth.
+ *
+ * Depth is not a violation: a return under `<If>` or inside a `<Loop>` is
+ * written in the body's own flow and is reached by ordinary expansion. What
+ * this walk does not see is the only thing that still cannot declare one —
+ * another component's definition, and markdown produced at runtime — because
+ * it reads this body's source AST and nothing else.
+ */
+function collectReturns(bodySegments: Segment[]): ComponentElement[] {
+  const declared: ComponentElement[] = [];
 
-  const walk = (segments: Segment[], depth: number): void => {
+  const walk = (segments: Segment[]): void => {
     for (const segment of segments) {
       if (segment.type !== "component") {
         continue;
       }
       if (segment.name === "Return") {
-        if (depth === 0) {
-          topLevel.push(segment);
-        } else {
-          nested.push(`${previewReturn(segment)} is not a direct top-level child`);
-        }
+        declared.push(segment);
       }
-      walk(segment.children, depth + 1);
+      walk(segment.children);
     }
   };
 
-  walk(bodySegments, 0);
-  return { topLevel, nested };
+  walk(bodySegments);
+  return declared;
 }
 
 function returnElementViolations(segment: ComponentElement): string[] {
@@ -3846,11 +3886,11 @@ function returnElementViolations(segment: ComponentElement): string[] {
 }
 
 function textModeReturnError(bodySegments: Segment[]): ErrorSegment | undefined {
-  const { topLevel, nested } = collectReturns(bodySegments);
-  if (topLevel.length === 0 && nested.length === 0) {
+  const declared = collectReturns(bodySegments);
+  if (declared.length === 0) {
     return undefined;
   }
-  const found = [...topLevel.map(previewReturn), ...nested];
+  const found = declared.map(previewReturn);
   return structureError(
     "Return",
     "<Return> requires a document or component that declares `returns`. Declare a " +
@@ -3875,16 +3915,12 @@ function valueModeStructureError(bodySegments: Segment[]): ErrorSegment | undefi
   };
   walkOutput(bodySegments);
 
-  const { topLevel, nested } = collectReturns(bodySegments);
-  violations.push(...nested);
+  const declared = collectReturns(bodySegments);
 
-  if (topLevel.length === 0) {
-    violations.push("no direct top-level <Return>");
+  if (declared.length === 0) {
+    violations.push("no <Return>");
   }
-  for (const duplicate of topLevel.slice(1)) {
-    violations.push(`${previewReturn(duplicate)} is a duplicate declaration`);
-  }
-  for (const declaration of topLevel) {
+  for (const declaration of declared) {
     violations.push(...returnElementViolations(declaration));
   }
 
@@ -3894,7 +3930,7 @@ function valueModeStructureError(bodySegments: Segment[]): ErrorSegment | undefi
   return structureError(
     "Return",
     "A component that declares `returns` renders nothing and produces exactly one " +
-      "value through a direct top-level <Return>. Problems found:",
+      "value through a <Return> its own body executes. Problems found:",
     violations,
   );
 }
@@ -4175,13 +4211,15 @@ function* expandValueBody(
   const slots = partitionBySlot(children);
   const state: SubstitutionState = { errorsEmitted: false };
   const project = makeProjectFn(callerEnv);
-  let produced: { value: Json } | undefined;
+
+  // This body's own frame, published for the whole body rather than consulted
+  // per top-level segment: a `<Return>` under `<If>` or inside a `<Loop>` is
+  // reached by ordinary expansion, and finds this frame because those
+  // directives keep the ambient one.
+  const frame = createReturnFrame(componentName, returns);
+  yield* ActiveReturn.set(frame);
 
   for (const [index, segment] of bodySegments.entries()) {
-    if (isTopLevelReturn(segment)) {
-      produced = { value: yield* resolveReturnValue(componentName, returns, segment) };
-      continue;
-    }
     const docSegments = substituteSegmentList([segment], slots, project, state, claim);
     yield* runDocumentation(
       docSegments,
@@ -4196,8 +4234,11 @@ function* expandValueBody(
     );
   }
 
-  if (!produced) {
-    throw new Error(`<${componentName} /> declares \`returns\` but produced no <Return> value.`);
+  // Read after the body finished, so a return anywhere in it — including one a
+  // projection reached — has been executed by now.
+  const selected = frame.selected;
+  if (!selected) {
+    throw new Error(missingReturnMessage(componentName));
   }
-  return produced.value;
+  return selected.value;
 }

@@ -79,11 +79,10 @@ import {
   expandSegmentsWithin,
   expandBody,
   bodyHasOutput,
-  isTopLevelReturn,
-  resolveReturnValue,
   validateBodyStructure,
   createBlockCounter,
 } from "./expand.ts";
+import { ActiveReturn, createReturnFrame, missingReturnMessage } from "./return-flow.ts";
 import type { BlockCounter } from "./expand.ts";
 import {
   DocumentationError,
@@ -1594,7 +1593,9 @@ function* runValueRoot(
   checkedFailures: CheckedFailures,
   authority: ExpansionAuthority,
 ): Operation<DocumentResult> {
-  let produced: { value: Json } | undefined;
+  // Created outside the scope the body runs in, so the value it selected is
+  // still readable after that scope — and its teardown — has finished.
+  const frame = createReturnFrame("__root__", returns);
 
   yield* scoped(function* () {
     yield* Component.around(
@@ -1606,11 +1607,12 @@ function* runValueRoot(
       { at: "min" },
     );
 
+    // The root's own frame, published for the whole body: a `<Return>` under
+    // `<If>` or inside a `<Loop>` is reached by ordinary expansion and finds it,
+    // because those directives keep the ambient frame.
+    yield* ActiveReturn.set(frame);
+
     for (const segment of root.bodySegments) {
-      if (isTopLevelReturn(segment)) {
-        produced = { value: yield* resolveReturnValue("__root__", returns, segment) };
-        continue;
-      }
       const expanded = yield* expandSegmentsWithin(
         [segment],
         root.meta,
@@ -1634,10 +1636,12 @@ function* runValueRoot(
   });
 
   yield* refuseCheckedFailure(checkedFailures);
-  if (!produced) {
-    throw new Error("The root document declares `returns` but produced no <Return> value.");
+  // Read after the body finished, so a return anywhere in it has executed.
+  const selected = frame.selected;
+  if (!selected) {
+    throw new Error(missingReturnMessage("__root__"));
   }
-  return { status: "ok", output: chunks.join(""), value: produced.value };
+  return { status: "ok", output: chunks.join(""), value: selected.value };
 }
 
 /**
