@@ -74,15 +74,8 @@ import { ActiveProjection } from "./projection.ts";
 import type { ProjectionHandle, ProjectionRequest } from "./projection.ts";
 import { ActiveLoop, recordIteration, recordOutcome } from "./loop.ts";
 import type { LoopFrame, LoopIdentity, LoopOutcome } from "./loop.ts";
-import {
-  ActiveReturn,
-  claimReturn,
-  createReturnFrame,
-  missingReturnMessage,
-  selectReturnValue,
-  settleReturn,
-} from "./return-flow.ts";
-import type { ReturnCarrier } from "./return-flow.ts";
+import { createReturnBody, missingReturnMessage } from "./return-flow.ts";
+import type { ReturnBody } from "./return-flow.ts";
 import { unbox, useEvalScope } from "@effectionx/scope-eval";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { SchemaValidationError, validateProps, validateReturnValue } from "./validate.ts";
@@ -201,6 +194,7 @@ function expandChildrenScoped(
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
     const overrideEnv = override === undefined ? undefined : { values: override };
@@ -223,6 +217,7 @@ function expandChildrenScoped(
       0,
       checkedFailures,
       authority,
+      returnBody,
     );
   });
 }
@@ -256,7 +251,7 @@ interface ProjectionState {
    * Projected content is the caller's text, so a `<Return>` in it satisfies the
    * declaration the author could see.
    */
-  callerReturn: ReturnCarrier | undefined;
+  callerReturn: ReturnBody | undefined;
   /**
    * This invocation's own structural path (§5.6). A projection is identified by
    * the invocation that performed it, so the same authored content projected
@@ -363,7 +358,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     hideSet: Set<string>;
     inner: ProjectionHandle | undefined;
     loop: LoopFrame | undefined;
-    returnFrame: ReturnCarrier | undefined;
+    returnFrame: ReturnBody | undefined;
     errors: Segment[];
     /**
      * The caller's region, when this projection renders into one. Structural
@@ -411,7 +406,6 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
           }
           yield* ActiveProjection.set(options.inner);
           yield* ActiveLoop.set(options.loop);
-          yield* ActiveReturn.set(options.returnFrame);
           yield* expandSegmentsWithin(
             options.segments,
             options.meta,
@@ -423,6 +417,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             0,
             state.checkedFailures,
             state.authority,
+            options.returnFrame,
           );
           outcome.resolve({ segments: rendered });
         } catch (error) {
@@ -520,7 +515,6 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             yield* ActiveLoop.set(request.kind === "markdown" ? undefined : state.callerLoop);
             // Dynamic markdown is the component's own text for the same reason,
             // so a <Return> scanned out of it satisfies no caller declaration.
-            yield* ActiveReturn.set(request.kind === "markdown" ? undefined : state.callerReturn);
             yield* expandSegmentsWithin(
               project(segments),
               frame.meta,
@@ -532,6 +526,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
               0,
               state.checkedFailures,
               state.authority,
+              request.kind === "markdown" ? undefined : state.callerReturn,
             );
             outcome.resolve({ segments: [...errors, ...rendered] });
           } catch (error) {
@@ -664,6 +659,7 @@ export function expandSegments(
     indexBase,
     checkedFailures,
     authority,
+    undefined,
   );
 }
 
@@ -742,6 +738,7 @@ function* expandListSegments(
    */
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   // An execution opens the table its printed errors record their causes in.
   // Expansion driven directly — a test, a tool describing a document — has no
@@ -764,6 +761,7 @@ function* expandListSegments(
         indexBase,
         checkedFailures,
         authority,
+        returnBody,
       );
     });
   }
@@ -849,15 +847,17 @@ function* expandListSegments(
           // nothing of its own. A carrier this engine did not mint owns no
           // body, so a forged one answers `undefined` here and takes the
           // reserved path below rather than selecting anything.
-          const carrier = yield* ActiveReturn.get();
-          const body = claimReturn(carrier);
-          if (carrier === undefined || body === undefined) {
+          // The owning body arrives as a parameter of this expansion, so it is
+          // reachable only by the engine that passed it: nothing is published
+          // for a document to read, replace, or hand to an exported helper.
+          if (returnBody === undefined) {
             result.push(yield* raise(misplacedReturnError(segment)));
             break;
           }
+          const declared = returnBody.claim();
           // What the value is validated against comes from the engine's own
           // record of this body, never from the carrier the context held.
-          selectReturnValue(carrier, yield* resolveReturnValue(body.owner, body.returns, segment));
+          returnBody.select(yield* resolveReturnValue(declared.owner, declared.returns, segment));
           break;
         }
 
@@ -874,6 +874,7 @@ function* expandListSegments(
               elementPath,
               checkedFailures,
               authority,
+              returnBody,
             )),
           );
           break;
@@ -893,6 +894,7 @@ function* expandListSegments(
               elementPath,
               checkedFailures,
               authority,
+              returnBody,
             )),
           );
           break;
@@ -913,6 +915,7 @@ function* expandListSegments(
             elementPath,
             checkedFailures,
             authority,
+            returnBody,
           );
           break;
         }
@@ -939,6 +942,7 @@ function* expandListSegments(
             elementPath,
             checkedFailures,
             authority,
+            returnBody,
           );
           break;
         }
@@ -956,6 +960,7 @@ function* expandListSegments(
             elementPath,
             checkedFailures,
             authority,
+            returnBody,
           );
           break;
         }
@@ -976,6 +981,7 @@ function* expandListSegments(
               0,
               checkedFailures,
               authority,
+              returnBody,
             );
           // Which placement this is, answered by identity rather than by name:
           // a trusted harness knows which expansions its own declaration scan
@@ -1039,6 +1045,7 @@ function* expandListSegments(
           elementPath,
           checkedFailures,
           authority,
+          returnBody,
         );
         // A printed error the callee produced is data, and stays data here: it
         // was decided once, where it was raised, under the error mode governing
@@ -1182,6 +1189,7 @@ function* expandListSegments(
                 },
                 checkedFailures,
                 authority,
+                returnBody,
               ),
             );
           }
@@ -1243,6 +1251,7 @@ function* checkedCommandFailure(
   segment: ErrorSegment,
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<ErrorSegment> {
   // Written down before it is raised or projected, and before the error mode is
   // consulted at all: the mode decides how this is reported, never whether the
@@ -1349,6 +1358,7 @@ function* expandLet(
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<ErrorSegment[]> {
   const written = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
   if (written.some((name) => !LET_PROPS.has(name))) {
@@ -1429,6 +1439,7 @@ function* expandLet(
       0,
       checkedFailures,
       authority,
+      returnBody,
     ),
   );
 
@@ -1541,6 +1552,7 @@ function* expandEach(
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (n) => !EACH_PROPS.has(n),
@@ -1625,6 +1637,7 @@ function* expandEach(
       extendPath(path, { f: "item", i: iteration }),
       checkedFailures,
       authority,
+      returnBody,
     );
     // A `<Break>` in the body exits the enclosing `<Loop>`, so the remaining
     // items are part of the work that iteration no longer does.
@@ -1887,6 +1900,7 @@ function* expandIf(
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<void> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (name) => !IF_PROPS.has(name),
@@ -1961,6 +1975,7 @@ function* expandIf(
     0,
     checkedFailures,
     authority,
+    returnBody,
   );
 }
 
@@ -2062,6 +2077,7 @@ function* expandLoop(
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<void> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (name) => !LOOP_PROPS.has(name),
@@ -2124,6 +2140,7 @@ function* expandLoop(
           0,
           checkedFailures,
           authority,
+          returnBody,
         );
         if (frame.broken) {
           break;
@@ -2248,6 +2265,7 @@ function* expandPrintErrors(
   /** The ledger this region grants recovery on top of (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<void> {
   const names = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
   if (names.length > 0) {
@@ -2277,6 +2295,7 @@ function* expandPrintErrors(
       // recovers is not one the run suffered.
       recoveringLedger(),
       authority,
+      returnBody,
     );
   });
 }
@@ -2314,6 +2333,7 @@ function* expandComponent(
    */
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   // Cycle detection — Prosser's algorithm
   if (hideSet.has(name)) {
@@ -2411,6 +2431,7 @@ function* expandComponent(
       path,
       checkedFailures,
       authority,
+      returnBody,
       selected,
       dispatcher,
     );
@@ -2532,7 +2553,7 @@ function* expandComponent(
   // in, and the invocation is about to clear it for the component's own body.
   const siteEvalScope = yield* evalScope;
   const siteLoop = yield* ActiveLoop.get();
-  const siteReturn = yield* ActiveReturn.get();
+  const siteReturn = returnBody;
 
   const expansion = snapshot(path, name, position);
 
@@ -2582,8 +2603,6 @@ function* expandComponent(
     // here satisfies this component's own `returns`, never the caller's. A
     // value body installs its own frame below; a rendered one owns none, so a
     // <Return> written in it stays reserved.
-    yield* ActiveReturn.set(undefined);
-
     // Published on the body task, so the component's own body and everything it
     // owns read this expansion, and a nested one uncovers it again on the way
     // out (§5.6).
@@ -2641,6 +2660,7 @@ function* expandComponent(
           path,
           checkedFailures,
           authority,
+          returnBody,
         );
       });
     } catch (error) {
@@ -2685,6 +2705,7 @@ function* expandComponent(
       path,
       checkedFailures,
       authority,
+      returnBody,
     );
   });
 
@@ -2835,6 +2856,7 @@ function* expandFunctionComponent(
   /** This work's checked-failure ledger, inherited from the invoking element. */
   inherited: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
   /**
    * The identity domain canonical resolution selected for this invocation.
    *
@@ -2963,7 +2985,7 @@ function* expandFunctionComponent(
   // here for the same reason — see expandComponent.
   const siteEvalScope = yield* evalScope;
   const siteLoop = yield* ActiveLoop.get();
-  const siteReturn = yield* ActiveReturn.get();
+  const siteReturn = returnBody;
 
   // Resolved once, here: an operand is what the call site meant, not what the
   // component's own body later did to the environment.
@@ -3057,7 +3079,6 @@ function* expandFunctionComponent(
         invocation.evalScope.scope.set(ActiveProjection, handle);
 
         yield* ActiveLoop.set(undefined);
-        yield* ActiveReturn.set(undefined);
         yield* publishExpansion(expansion);
         yield* provideEvalScope(invocation.evalScope);
         yield* provideRetain(siteEvalScope);
@@ -4053,6 +4074,7 @@ export function* expandBody(
   /** Whether the invoking element sits inside a `<PrintErrors>` region. */
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   if (!bodyHasOutput(bodySegments)) {
     const substituted = substituteContent(bodySegments, children, callerEnv, claim);
@@ -4067,6 +4089,7 @@ export function* expandBody(
       0,
       checkedFailures,
       authority,
+      returnBody,
     );
   }
 
@@ -4088,6 +4111,7 @@ export function* expandBody(
         0,
         checkedFailures,
         authority,
+        returnBody,
       );
     } else if (chunk.output) {
       yield* scoped(function* () {
@@ -4103,6 +4127,7 @@ export function* expandBody(
           0,
           checkedFailures,
           authority,
+          returnBody,
         );
       });
     } else {
@@ -4120,6 +4145,7 @@ export function* expandBody(
           chunkBase,
           checkedFailures,
           authority,
+          returnBody,
         );
       });
     }
@@ -4147,6 +4173,7 @@ function runDocumentation(
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
     yield* ErrorMode.set("throw");
@@ -4161,6 +4188,7 @@ function runDocumentation(
       indexBase,
       checkedFailures,
       authority,
+      returnBody,
     );
   });
 }
@@ -4212,6 +4240,7 @@ function* expandValueBody(
   /** Whether the invoking element sits inside a `<PrintErrors>` region. */
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<Json> {
   const slots = partitionBySlot(children);
   const state: SubstitutionState = { errorsEmitted: false };
@@ -4221,8 +4250,9 @@ function* expandValueBody(
   // per top-level segment: a `<Return>` under `<If>` or inside a `<Loop>` is
   // reached by ordinary expansion, and finds this frame because those
   // directives keep the ambient one.
-  const carrier = createReturnFrame(componentName, returns);
-  yield* ActiveReturn.set(carrier);
+  // This body's own, held as a local for the whole expansion and handed to the
+  // segments it expands. Nothing else can reach it.
+  const ownBody = createReturnBody(componentName, returns);
 
   for (const [index, segment] of bodySegments.entries()) {
     const docSegments = substituteSegmentList([segment], slots, project, state, claim);
@@ -4236,14 +4266,14 @@ function* expandValueBody(
       index,
       checkedFailures,
       authority,
+      ownBody,
     );
   }
 
   // Read after the body finished, so a return anywhere in it — including one a
-  // projection reached — has been executed by now. Settled from the carrier
-  // this body minted and has held since, not from the context, so replacing the
-  // context selects nothing.
-  const selected = settleReturn(carrier);
+  // projection reached — has been executed by now. Settled from the body this
+  // expansion created and has held as a local ever since.
+  const selected = ownBody.settle();
   if (!selected) {
     throw new Error(missingReturnMessage(componentName));
   }

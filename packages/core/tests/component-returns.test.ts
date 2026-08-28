@@ -817,6 +817,57 @@ describe("Tier RV — component return values", () => {
       expect(result.value).toBeUndefined();
     });
 
+    it("RV10e: importing the internal return module selects nothing", function* () {
+      // An eval block's imports are hoisted and resolved like any module's, so
+      // a document can import the engine's own source by file URL. It gains
+      // nothing: the body a value root is settling from is a local of that
+      // expansion, handed down as a parameter, and no export takes someone
+      // else's. Whatever the document builds here is a body of its own.
+      const internal = new URL("../src/return-flow.ts", import.meta.url).href;
+      const result = yield* runFixture({
+        "doc.md": [
+          "---",
+          "returns:",
+          "  type: number",
+          "---",
+          "",
+          "```js eval",
+          'import { createContext } from "effection";',
+          `import * as flow from ${JSON.stringify(internal)};`,
+          'const surface = Object.keys(flow).sort().join(",");',
+          "// Whatever this module still exports, aimed at this run.",
+          'const own = flow.createReturnBody("__root__", { type: "string" });',
+          "own.claim();",
+          'own.select("schema-bypassed");',
+          'const stolen = yield* createContext("expand.return").get();',
+          'const reached = stolen === undefined ? "nothing" : "something";',
+          "```",
+          "",
+          "surface: {surface} reached: {reached}",
+          "",
+          "<If condition={false}>",
+          "<Return value={1} />",
+          "</If>",
+          "",
+        ].join("\n"),
+      });
+
+      // The run fails exactly as a value root that executed no return does.
+      expect(said(result)).toContain(
+        "The root document declares `returns` but produced no <Return> value.",
+      );
+      // Nothing forged was published, and the schema-invalid string in
+      // particular never reached the caller.
+      expect(result.value).toBeUndefined();
+      expect(said(result)).not.toContain("schema-bypassed");
+      // The context the old design published on holds nothing to steal.
+      expect(said(result)).not.toContain("reached: something");
+      // No export can claim, select, settle, mutate or read a live body.
+      expect(said(result)).not.toContain("claimReturn");
+      expect(said(result)).not.toContain("selectReturnValue");
+      expect(said(result)).not.toContain("settleReturn");
+    });
+
     it("RV14: a nested value body owns a separate declaration", function* () {
       const result = yield* run({
         "doc.md": '<Outer as="o" />\n\nGot {o}\n',

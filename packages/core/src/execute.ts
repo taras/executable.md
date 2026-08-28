@@ -82,12 +82,7 @@ import {
   validateBodyStructure,
   createBlockCounter,
 } from "./expand.ts";
-import {
-  ActiveReturn,
-  createReturnFrame,
-  missingReturnMessage,
-  settleReturn,
-} from "./return-flow.ts";
+import { createReturnBody, missingReturnMessage } from "./return-flow.ts";
 import type { BlockCounter } from "./expand.ts";
 import {
   DocumentationError,
@@ -1600,7 +1595,9 @@ function* runValueRoot(
 ): Operation<DocumentResult> {
   // Created outside the scope the body runs in, so the value it selected is
   // still readable after that scope — and its teardown — has finished.
-  const carrier = createReturnFrame("__root__", returns);
+  // The root's own, held as a local and handed to the segments it expands, so
+  // nothing a document can read or replace decides what this root returns.
+  const ownBody = createReturnBody("__root__", returns);
 
   yield* scoped(function* () {
     yield* Component.around(
@@ -1611,11 +1608,6 @@ function* runValueRoot(
       },
       { at: "min" },
     );
-
-    // The root's own frame, published for the whole body: a `<Return>` under
-    // `<If>` or inside a `<Loop>` is reached by ordinary expansion and finds it,
-    // because those directives keep the ambient frame.
-    yield* ActiveReturn.set(carrier);
 
     for (const segment of root.bodySegments) {
       const expanded = yield* expandSegmentsWithin(
@@ -1629,6 +1621,7 @@ function* runValueRoot(
         0,
         checkedFailures,
         authority,
+        ownBody,
       );
       for (const resolved of expanded) {
         const text = renderSegment(resolved);
@@ -1642,9 +1635,7 @@ function* runValueRoot(
 
   yield* refuseCheckedFailure(checkedFailures);
   // Read after the body finished, so a return anywhere in it has executed.
-  // Settled from the carrier this root minted and has held since, not from the
-  // context, so a document that replaces the context selects nothing.
-  const selected = settleReturn(carrier);
+  const selected = ownBody.settle();
   if (!selected) {
     throw new Error(missingReturnMessage("__root__"));
   }
@@ -1785,6 +1776,7 @@ function* documentWorkflow(
         rootPath,
         checkedFailures,
         authority,
+        undefined,
       );
       const text = selected.map(renderSegment).join("");
       // An empty buffered root emits no output event.
@@ -1811,6 +1803,7 @@ function* documentWorkflow(
         0,
         checkedFailures,
         authority,
+        undefined,
       );
 
       while (emittedThrough < produced.length) {
