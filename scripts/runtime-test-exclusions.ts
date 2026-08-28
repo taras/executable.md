@@ -48,6 +48,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "scripts/tests/adapter-distribution.test.ts",
+    reason:
+      "asks each distribution for its module graph through `<execPath> info`, a subcommand only the Deno CLI has — under Node and Bun the same argument vector names a file called `info`; that each distribution *carries* the snapshots is a claim about Deno's own build outputs, and launching from them is Tier EA, which does run under all three",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "scripts/tests/adapter-npm-package.test.ts",
     reason:
       "builds packages/acp with dnt before driving the artifact under Node, and that build is spawned as `<execPath> run -A scripts/build-npm.ts` — an argument vector only the Deno CLI understands; the materialization it then proves is covered portably by Tier AM",

@@ -14,6 +14,11 @@
  * Bun — the three runtimes these distributions are executed by. What is left to
  * prove here is that each distribution *carries* the same snapshots, which is
  * the half a source-tree test cannot see.
+ *
+ * This file itself runs under Deno only (`scripts/runtime-test-exclusions.ts`).
+ * It asks for a module graph through `deno info`, and both distributions it
+ * inspects are Deno's own build outputs; the portable half of the claim is Tier
+ * EA and Tier AM, which do run under all three.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";

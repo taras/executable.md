@@ -81,6 +81,18 @@ function* untilTicketTaken(claims: string, ticket: number): Operation<void> {
   throw new Error(`ticket ${ticket} was never taken under ${claims}`);
 }
 
+/**
+ * A process that has certainly finished, for its certainly-dead pid.
+ *
+ * `--version` because this tier runs under Deno, Node and Bun and that is the
+ * one argument vector all three accept. Inventing a pid instead could collide
+ * with something live and make every case below lie.
+ */
+function endedProcess(): { status: number | null; pid: number } {
+  const ended = spawnSync(process.execPath, ["--version"]);
+  return { status: ended.status, pid: ended.pid };
+}
+
 /** What a failed operation raised, as a value rather than a throw. */
 function* refusal(body: () => Operation<unknown>): Operation<unknown> {
   try {
@@ -327,7 +339,7 @@ describe("Tier AM — embedded adapter materialization", () => {
     // A ticket whose owner is genuinely gone: a real process, run to
     // completion, whose pid is therefore dead. Inventing a number could collide
     // with a live process and make this test lie.
-    const finished = spawnSync(process.execPath, ["eval", "0"]);
+    const finished = endedProcess();
     expect(finished.status).toBe(0);
     yield* plantTicket(claims, 0, { pid: finished.pid, host: hostname() });
 
@@ -379,7 +391,7 @@ describe("Tier AM — embedded adapter materialization", () => {
 
     // A dead pid, but on a machine this host cannot ask about. Liveness is only
     // knowable locally, so this must be left alone rather than assumed gone.
-    const finished = spawnSync(process.execPath, ["eval", "0"]);
+    const finished = endedProcess();
     yield* plantTicket(claims, 0, { pid: finished.pid, host: `not-${hostname()}` });
 
     const attempt = yield* spawn(() => adapters.materialize("codex"));
@@ -559,7 +571,7 @@ describe("Tier AM — embedded adapter materialization", () => {
     yield* ensureDir(join(target, "node_modules"));
     yield* writeTextFile(join(target, "node_modules", "stale.txt"), "half an install\n");
 
-    const dead = spawnSync(process.execPath, ["eval", "0"]);
+    const dead = endedProcess();
     yield* plantTicket(claims, 0, { pid: dead.pid, host: hostname() });
 
     // Both find the same abandoned ticket and both finish it. Only one of them
