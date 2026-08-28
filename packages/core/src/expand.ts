@@ -65,6 +65,7 @@ import { carriesTestActivationDecision } from "./test-activation.ts";
 import { declaredRouting, withRouting } from "./foreground.ts";
 import { issueBoundExec } from "./bound-exec.ts";
 import { elementFrame, elementSite, extendPath, publishExpansion, snapshot } from "./expansion.ts";
+import type { ExpansionFrame } from "./expansion.ts";
 import { issueInvocation } from "./invocation-identity.ts";
 import type { IdentityDomain } from "./invocation-identity.ts";
 import { withInvocation } from "./invocation.ts";
@@ -79,7 +80,8 @@ import { SchemaValidationError, validateProps, validateReturnValue } from "./val
 import { parseJson } from "./json.ts";
 import { healSegment } from "./heal.ts";
 import { scanSegments } from "./scanner.ts";
-import { expandAnswers, strayAnswerError } from "./answers.ts";
+import { declareChildAnswers, expandAnswers, strayAnswerError } from "./answers.ts";
+import { DeclarationScan } from "./declaration-scan.ts";
 import { RESERVED_STRUCTURAL } from "./structural.ts";
 import { renderSegments } from "./render.ts";
 import {
@@ -654,6 +656,26 @@ export function expandSegments(
  * bodies, and projected content alike.
  */
 export function* expandSegmentsWithin(
+  ...expansion: Parameters<typeof expandListSegments>
+): Operation<Segment[]> {
+  // Placement, for a harness that reads a construct's children in two passes.
+  // A declaration written beside the others and one a construct expanded on its
+  // own are told apart by how many lists are open, and only expansion knows
+  // that. Bracketed once here rather than at each construct, so a construct
+  // that recurses cannot be the one this forgets.
+  const scanner = yield* DeclarationScan.get();
+  if (scanner === undefined) {
+    return yield* expandListSegments(...expansion);
+  }
+  scanner.enterList();
+  try {
+    return yield* expandListSegments(...expansion);
+  } finally {
+    scanner.exitList();
+  }
+}
+
+function* expandListSegments(
   segments: Segment[],
   parentMeta: Record<string, unknown>,
   parentProps: Record<string, Json>,
@@ -706,7 +728,10 @@ export function* expandSegmentsWithin(
   if ((yield* SegmentCauses.get()) === undefined) {
     return yield* scoped(function* () {
       yield* useSegmentCauses();
-      return yield* expandSegmentsWithin(
+      // The list, not the wrapper: this is the same list continuing under a
+      // table of its own, and counting it twice would make its children look
+      // one construct deeper than they are.
+      return yield* expandListSegments(
         segments,
         parentMeta,
         parentProps,
@@ -900,30 +925,42 @@ export function* expandSegmentsWithin(
         }
 
         if (segment.name === "Answers") {
-          // No raise() here, like the branches above: expandAnswers reports the
-          // errors it creates, and the selected answer settled its own (§6.9).
           // The region renders segments of its own — its body, and each
           // matcher's template children — so it is handed this expansion's
           // recursion to render them with.
-          result.push(
-            ...(yield* expandAnswers(
-              segment,
-              (inner, into, frame) =>
-                expandSegmentsWithin(
-                  inner,
-                  parentMeta,
-                  parentProps,
-                  hideSet,
-                  counter,
-                  into,
-                  frame === undefined ? elementPath : extendPath(elementPath, frame),
-                  0,
-                  checkedFailures,
-                  authority,
-                ),
-              result,
-            )),
-          );
+          const expandWithin = (inner: Segment[], into?: Segment[], frame?: ExpansionFrame) =>
+            expandSegmentsWithin(
+              inner,
+              parentMeta,
+              parentProps,
+              hideSet,
+              counter,
+              into,
+              frame === undefined ? elementPath : extendPath(elementPath, frame),
+              0,
+              checkedFailures,
+              authority,
+            );
+          // Which placement this is, answered by identity rather than by name:
+          // a trusted harness knows which expansions its own declaration scan
+          // reached, and a region it never reached is an ordinary one.
+          //
+          // The site, not the expansion path: a harness reads its children
+          // twice, and the second projection of one request derives a path of
+          // its own (§5.6), so only where the element was written is the same
+          // in both passes.
+          const scanner = yield* DeclarationScan.get();
+          const site = elementSite(segment.position, indexBase + index);
+          const placement = scanner?.declaresAnswers(site);
+          if (scanner !== undefined && placement !== undefined) {
+            result.push(
+              ...(yield* declareChildAnswers(segment, expandWithin, scanner, site, placement)),
+            );
+            break;
+          }
+          // No raise() here, like the branches above: expandAnswers reports the
+          // errors it creates, and the selected answer settled its own (§6.9).
+          result.push(...(yield* expandAnswers(segment, expandWithin, result)));
           break;
         }
 

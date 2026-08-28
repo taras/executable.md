@@ -63,7 +63,7 @@
  * holds runs nothing.
  */
 
-import { createContext, createScope, ensure, Err, Ok, useScope } from "effection";
+import { createContext, createScope, ensure, Err, Ok, scoped, useScope } from "effection";
 import type { Context, Operation, Result, Scope } from "effection";
 import { createApi } from "@effectionx/context-api";
 import {
@@ -82,13 +82,23 @@ import type {
   FunctionComponentDefinition,
   Json,
   PropsSchema,
+  SourcePosition,
 } from "@executablemd/core";
+import { DeclarationScan } from "@executablemd/core/host";
 import type {
+  AnswerConfiguration,
+  AnswersPlacement,
   ExecutionInstallation,
   TestHarness,
   TestHarnessBinding,
 } from "@executablemd/core/host";
 import { issueHostRequest } from "./execution-host.ts";
+import type {
+  ChildConfiguration,
+  ChildConfigurationCollector,
+  ChildDeclaration,
+  OpenChildDeclaration,
+} from "./child-configuration.ts";
 import type {
   ChildSettlement,
   ExecutionHostApi,
@@ -114,6 +124,8 @@ interface DeclaredConfiguration {
   diagnostic: boolean;
   collectOutput: boolean;
   collectJournal: boolean;
+  /** The deterministic dependencies declared for the child, in declared order. */
+  readonly child: ChildConfiguration[];
   readonly problems: string[];
 }
 
@@ -128,6 +140,44 @@ interface HarnessState {
   phase: "scan" | "assert";
   readonly configuration: DeclaredConfiguration;
   settlement: ChildSettlement | undefined;
+}
+
+/**
+ * The child-configuration declarations one `<Execution>` recognized, and where.
+ *
+ * Held beside `HarnessState` rather than in it, because nothing authored reads
+ * any of it: the collector, the open declarations and the recognized sites are
+ * this invocation's own bookkeeping, and the configuration it produces is read
+ * back from this closure when the host request is issued.
+ */
+interface DeclarationState {
+  readonly collect: ChildConfigurationCollector;
+  /** By the exact definition each declaration must resolve to. */
+  readonly open: ReadonlyMap<unknown, OpenChildDeclaration>;
+  /**
+   * Where each recognized declaration was written.
+   *
+   * The assertion pass re-expands the same elements, so what it must not do is
+   * expand them a second time as ordinary content. A site is stable across both
+   * passes; an expansion path is not, because the second projection of one
+   * request derives a path of its own (§5.6).
+   */
+  readonly recognized: Set<string>;
+  /** The declaration currently reading its own children, while it reads them. */
+  inside: { readonly declaration: OpenChildDeclaration; readonly depth: number } | undefined;
+  /**
+   * How many segment lists are open, counted by expansion.
+   *
+   * Recognizing a definition is not enough to recognize a declaration. A
+   * structural construct expands its descendants without resolving a component,
+   * so `<If>` around a `<TestAgent>` would otherwise give it the standing of one
+   * written beside the other declarations — and a declaration is what installs
+   * a child's providers. Depth is how a direct child is told from one a
+   * construct reached on its own.
+   */
+  depth: number;
+  /** The list the declaration prefix occupies, once the scan has opened it. */
+  prefix: number;
 }
 
 const Declarations: Context<HarnessState | undefined> = createContext<HarnessState | undefined>(
@@ -269,11 +319,73 @@ const DECLARATIONS: ReadonlySet<unknown> = new Set<unknown>([
   CollectJournal,
 ]);
 
+/**
+ * Whether a resolved definition runs a function at all.
+ *
+ * A Markdown component runs a document, so it is never one of ours and never
+ * one a package contributed: identity is a function, and this is what says
+ * whether there is one to compare.
+ */
+function isFunctionComponent(
+  definition: ComponentDefinition | FunctionComponentDefinition,
+): definition is FunctionComponentDefinition {
+  return "fn" in definition;
+}
+
 /** Whether a resolved definition is one of this module's declarations. */
 function isDeclaration(definition: ComponentDefinition | FunctionComponentDefinition): boolean {
-  const candidate = (definition as { fn?: unknown }).fn;
-  return candidate !== undefined && DECLARATIONS.has(candidate);
+  return isFunctionComponent(definition) && DECLARATIONS.has(definition.fn);
 }
+
+/**
+ * Where one element was written.
+ *
+ * The two passes read the same segments, so an element's position is the same
+ * in both. A dynamically scanned element carrying no position of its own falls
+ * back to its name, which is as much identity as it has.
+ */
+function siteOf(position: Readonly<SourcePosition> | undefined, name: string): string {
+  if (position === undefined) {
+    return `!${name}`;
+  }
+  return `${position.path ?? ""}#${position.offset}`;
+}
+
+/** A declaration the assertion pass meets again: read once, and never twice. */
+// deno-lint-ignore require-yield
+function* alreadyDeclared(): Operation<string> {
+  return "";
+}
+
+/**
+ * A definition standing in for the one the author wrote, run in its place.
+ *
+ * Everything the resolved definition declares about itself stays — its props
+ * schema included — so a declaration is validated as the component it is
+ * written as. Only what it does changes.
+ */
+function substituting(
+  definition: FunctionComponentDefinition,
+  fn: (props: Record<string, Json>) => Operation<unknown>,
+): FunctionComponentDefinition {
+  return { ...definition, fn };
+}
+
+/**
+ * A definition that replaces one entirely, props schema included.
+ *
+ * What is written inside a declaration is not a component, whatever it
+ * resolved to — a Markdown file included. So this keeps nothing of what was
+ * resolved: it accepts whatever props were written and reports why they
+ * configure nothing.
+ */
+function inert(
+  fn: (props: Record<string, Json>) => Operation<unknown>,
+): FunctionComponentDefinition {
+  return { kind: "function", name: fn.name, fn, props: ANY_PROPS };
+}
+
+const ANY_PROPS: PropsSchema = { type: "object", additionalProperties: true };
 
 /**
  * What one `<Execution>` element asked for, once its props are read.
@@ -322,9 +434,21 @@ function readProfile(
       props: childProps,
       journal,
       collectJournal: configuration.collectJournal,
+      ...(configuration.child.length === 0 ? {} : { configuration: configuration.child }),
     });
   }
 
+  // Deterministic providers are the run profile's. A workflow attempt reaches
+  // its Agent and its elicitations through the run it belongs to, so a
+  // declaration here would configure something this profile does not assemble.
+  if (configuration.child.length > 0) {
+    return Err(
+      new Error(
+        `<${writtenAs(configuration.child[0]!.kind)}> configures a host="run" child, and this ` +
+          'execution is host="workflow".',
+      ),
+    );
+  }
   if (run === undefined) {
     return Err(new Error('host="workflow" is valid only inside <WorkflowRun>.'));
   }
@@ -428,12 +552,102 @@ function* runWorkflowScope(
 /**
  * `<Execution>` — one nested root execution under a production host profile.
  */
-function authorizedExecution(harness: TestHarness, provider: ExecutionHostProvider | undefined) {
+function authorizedExecution(
+  harness: TestHarness,
+  provider: ExecutionHostProvider | undefined,
+  declarations: readonly ChildDeclaration[],
+) {
   return harness.component(function* Execution(
     props: Record<string, Json>,
     binding: TestHarnessBinding,
   ): Operation<unknown> {
-    return yield* runNestedExecution(props, harness, provider, binding);
+    return yield* runNestedExecution(props, harness, provider, declarations, binding);
+  });
+}
+
+/**
+ * The bookkeeping one `<Execution>`'s child-configuration declarations run
+ * against.
+ *
+ * Ordered by declaration, at most one of each kind, and every problem a
+ * declaration found reported as this element's own. A declaration never raises:
+ * what it configures is a child no root has imported, so a mistake in it is a
+ * refusal before the child rather than a failure inside one.
+ */
+function declarationScan(
+  configuration: DeclaredConfiguration,
+  declarations: readonly ChildDeclaration[],
+): DeclarationState {
+  const collect: ChildConfigurationCollector = {
+    configure(declared: ChildConfiguration): void {
+      if (configuration.child.some((existing) => existing.kind === declared.kind)) {
+        configuration.problems.push(`<${writtenAs(declared.kind)}> is declared more than once.`);
+        return;
+      }
+      configuration.child.push(declared);
+    },
+    refuse(problem: string): void {
+      configuration.problems.push(problem);
+    },
+  };
+  const open = new Map<unknown, OpenChildDeclaration>();
+  for (const declaration of declarations) {
+    open.set(declaration.definition, declaration.open(collect));
+  }
+  return {
+    collect,
+    open,
+    recognized: new Set<string>(),
+    inside: undefined,
+    depth: 0,
+    // Settled when the scan opens the prefix; until then no depth is the
+    // prefix's, so nothing is a declaration.
+    prefix: -1,
+  };
+}
+
+/** What a configuration kind is written as, for the sentence that refuses it. */
+function writtenAs(kind: ChildConfiguration["kind"]): string {
+  switch (kind) {
+    case "test-agent":
+      return "TestAgent";
+    case "answers":
+      return "Answers";
+  }
+}
+
+/**
+ * Collect the `<Answers>` core dispatches structurally.
+ *
+ * Set in the invocation's own frame, so the content projected into it reads it
+ * and the child — which runs in a scope that does not descend from this one —
+ * does not. It carries no authority: what it records is read back from this
+ * invocation's own closure, so a recorder set further in records into nothing
+ * anybody reads.
+ */
+function* followScan(state: HarnessState, declared: DeclarationState): Operation<void> {
+  const parsed = new Set<string>();
+  yield* DeclarationScan.set({
+    enterList(): void {
+      declared.depth += 1;
+    },
+    exitList(): void {
+      declared.depth -= 1;
+    },
+    declaresAnswers(site: string): AnswersPlacement | undefined {
+      if (state.phase !== "scan") {
+        return parsed.has(site) ? "parsed" : undefined;
+      }
+      return declared.depth === declared.prefix ? "parse" : "misplaced";
+    },
+    recordAnswers(site: string, configuration: Result<AnswerConfiguration>): void {
+      parsed.add(site);
+      if (!configuration.ok) {
+        declared.collect.refuse(configuration.error.message);
+        return;
+      }
+      declared.collect.configure({ kind: "answers", ...configuration.value });
+    },
   });
 }
 
@@ -441,6 +655,7 @@ function* runNestedExecution(
   props: Record<string, Json>,
   harness: TestHarness,
   provider: ExecutionHostProvider | undefined,
+  declarations: readonly ChildDeclaration[],
   binding: TestHarnessBinding,
 ): Operation<unknown> {
   if (provider === undefined) {
@@ -462,13 +677,25 @@ function* runNestedExecution(
 
   const state: HarnessState = {
     phase: "scan",
-    configuration: { diagnostic: false, collectOutput: false, collectJournal: false, problems: [] },
+    configuration: {
+      diagnostic: false,
+      collectOutput: false,
+      collectJournal: false,
+      child: [],
+      problems: [],
+    },
     settlement: undefined,
   };
+  const declared = declarationScan(state.configuration, declarations);
   yield* Declarations.set(state);
-  yield* installScan(state);
+  yield* followScan(state, declared);
+  yield* installScan(state, declared);
 
   if (yield* hasContent()) {
+    // The list `tryContent()` opens is the declaration prefix, and it is the
+    // only list a declaration may be written in. Nothing has been entered
+    // inside this invocation yet, so the prefix is the next one down.
+    declared.prefix = declared.depth + 1;
     yield* scanDeclarations();
   }
   state.phase = "assert";
@@ -537,12 +764,78 @@ function message(error: unknown): string {
  * Every handler reads `state.phase`, so the second pass runs with the same
  * middleware in place and nothing intercepted.
  */
-function* installScan(state: HarnessState): Operation<void> {
+function* installScan(state: HarnessState, declared: DeclarationState): Operation<void> {
   yield* Component.around(
     {
       *importComponent([name, position], next) {
         const definition = yield* next(name, position);
-        if (state.phase === "scan" && !isDeclaration(definition)) {
+        if (state.phase !== "scan") {
+          // A declaration the scan already read. Expanding it again would run
+          // it as the ordinary component it is written as — which for
+          // `<TestAgent>` is a provider installed in the test that ran the
+          // child.
+          if (
+            !declared.recognized.has(siteOf(position, name)) ||
+            !isFunctionComponent(definition)
+          ) {
+            return definition;
+          }
+          return substituting(definition, alreadyDeclared);
+        }
+
+        const nested = declared.inside;
+        if (nested !== undefined) {
+          // Inside a recognized declaration, where ordinary content is not a
+          // thing that may be written. Only the exact definitions that
+          // declaration accepts are its children, and only where the
+          // declaration itself wrote them: a construct that expanded one
+          // decides for itself what it expands, and a repository component
+          // shadowing one of those names is not that declaration's child either.
+          const direct = declared.depth === nested.depth + 1;
+          const child =
+            direct && isFunctionComponent(definition)
+              ? nested.declaration.children.get(definition.fn)
+              : undefined;
+          if (child !== undefined && isFunctionComponent(definition)) {
+            return substituting(definition, child);
+          }
+          return inert(function* refuseNested(): Operation<string> {
+            declared.collect.refuse(
+              `<${nested.declaration.name}> configures a child, so it accepts only its own ` +
+                `declarations, written directly inside it — and <${name}> here is ` +
+                `${direct ? "something else" : "inside a construct"}.`,
+            );
+            return "";
+          });
+        }
+
+        const open = isFunctionComponent(definition) ? declared.open.get(definition.fn) : undefined;
+        if (open !== undefined && isFunctionComponent(definition)) {
+          if (declared.depth !== declared.prefix) {
+            // The definition is the package's; where it is written is not a
+            // declaration's place. A construct decides for itself what it
+            // expands, and installing a child's providers is not a decision a
+            // condition or an iteration may make.
+            return inert(function* refuseIndirect(): Operation<string> {
+              declared.collect.refuse(
+                `<${name}> configures a child only as a direct child of <Execution>. This one ` +
+                  "is inside a construct, which decides for itself what it expands.",
+              );
+              return "";
+            });
+          }
+          const depth = declared.depth;
+          declared.recognized.add(siteOf(position, name));
+          return substituting(definition, function* declaring(props): Operation<unknown> {
+            declared.inside = { declaration: open, depth };
+            try {
+              return yield* open.expand(props);
+            } finally {
+              declared.inside = undefined;
+            }
+          });
+        }
+        if (!isDeclaration(definition)) {
           throw new ScanBoundary(name);
         }
         return definition;
@@ -670,9 +963,16 @@ function* runChild(
  * it.
  */
 function* inIsolation<T>(body: (scope: Scope) => Operation<T>): Operation<T> {
-  const [childScope, destroy] = createScope();
-  yield* ensure(() => destroy());
-  return yield* body(childScope);
+  // Scoped, so the child's teardown completes before this returns rather than
+  // when the invocation is finally dismantled. What a declaration installed
+  // there — a controlled Agent provider, its worker, its controller — belongs
+  // to the child, and the outcome is published to the assertions that follow
+  // only once all of it has finished.
+  return yield* scoped(function* () {
+    const [childScope, destroy] = createScope();
+    yield* ensure(() => destroy());
+    return yield* body(childScope);
+  });
 }
 
 /**
@@ -801,14 +1101,26 @@ export const HARNESS_REGISTRATIONS = [
  * default for exactly this test's body and is removed with the test. Two tests
  * are two harnesses and two registrations; neither can reach the other's.
  */
-export function testHarnessInstallation(provider?: ExecutionHostProvider): ExecutionInstallation {
+export function testHarnessInstallation(
+  provider?: ExecutionHostProvider,
+  /**
+   * The packages that contribute a child-configuration declaration, each
+   * naming the exact definition ordinary resolution must have selected.
+   *
+   * Supplied by the trusted host, because recognizing a declaration is
+   * recognizing a *definition*, and only the host knows which package's copy
+   * it installed. A host that supplies none has no such declarations: the scan
+   * ends where one is written, and it expands as the ordinary component it is.
+   */
+  declarations: readonly ChildDeclaration[] = [],
+): ExecutionInstallation {
   return {
     *testHarness(harness: TestHarness): Operation<void> {
       yield* registerComponents([
         {
           name: "Execution",
           origin: "@executablemd/testing",
-          fn: authorizedExecution(harness, provider),
+          fn: authorizedExecution(harness, provider, declarations),
           props: EXECUTION_PROPS,
         },
         {

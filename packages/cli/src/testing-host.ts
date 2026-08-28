@@ -27,15 +27,24 @@ import type { DurableEvent } from "@executablemd/durable-streams";
 import { forEach } from "@effectionx/stream-helpers";
 import { useHostFiles } from "@executablemd/runtime";
 import { installWebElicitation } from "@executablemd/web";
-import type { Operation } from "effection";
-import { fileSource, inlineSource } from "@executablemd/core";
+import type { Operation, Result } from "effection";
+import {
+  agentIdentityComponents,
+  fileSource,
+  inlineSource,
+  installAgentComponents,
+} from "@executablemd/core";
 import type { RootDocumentSource } from "@executablemd/core";
-import { executeInstalled } from "@executablemd/core/host";
+import { executeInstalled, installAnswerProvider } from "@executablemd/core/host";
+import type { ExecutionInstallation } from "@executablemd/core/host";
+import { installChildTestAgent } from "@executablemd/test-agent";
 import type {
+  AnswersChildConfiguration,
   ChildInvocation,
   ChildSettlement,
   ExecutionHostProvider,
   HostProfileRequest,
+  TestAgentChildConfiguration,
 } from "@executablemd/testing";
 import { installDocumentComponents } from "./cli.ts";
 import type { HostServiceInstaller } from "./cli.ts";
@@ -48,6 +57,21 @@ export interface TestingHostSettings {
   readonly secretDetection: boolean;
   /** The native service adapter this entrypoint supplies. */
   readonly installService: HostServiceInstaller;
+  /**
+   * How this entrypoint re-invokes itself as the test-agent worker, or why it
+   * cannot.
+   *
+   * Read from the trusted entrypoint before a child's isolated scope exists,
+   * because only a runtime-named entrypoint knows it and a child inherits no
+   * `API.Env` handler. A frozen argv crosses; the Api that produced it does
+   * not.
+   *
+   * A refusal rather than an argv, because reading it is not a run's business.
+   * A host that installed no command adapter still runs documents — the same
+   * allowance `<TestAgent>` makes — and only a child that declares a scripted
+   * agent has anything to say about it.
+   */
+  readonly testAgentWorker: Result<readonly string[]>;
 }
 
 /**
@@ -80,6 +104,31 @@ function rootOf(request: HostProfileRequest): RootDocumentSource {
   return fileSource(request.target ?? "");
 }
 
+/**
+ * What the declarations configured, told apart by kind.
+ *
+ * An exhaustive switch over a closed union: an unknown member would be a
+ * request this entrypoint cannot answer, and there is no member for one to be.
+ */
+function selectConfiguration(request: HostProfileRequest): {
+  testAgent: TestAgentChildConfiguration | undefined;
+  answers: AnswersChildConfiguration | undefined;
+} {
+  let testAgent: TestAgentChildConfiguration | undefined;
+  let answers: AnswersChildConfiguration | undefined;
+  for (const configuration of request.configuration ?? []) {
+    switch (configuration.kind) {
+      case "test-agent":
+        testAgent = configuration;
+        break;
+      case "answers":
+        answers = configuration;
+        break;
+    }
+  }
+  return { testAgent, answers };
+}
+
 function* runProfileChild(
   invocation: ChildInvocation,
   settings: TestingHostSettings,
@@ -94,14 +143,41 @@ function* runProfileChild(
   // keeps anything because output was displayed.
   const diagnostic = request.journal === "diagnostic";
   const stream = new InMemoryStream();
+  const { testAgent, answers } = selectConfiguration(request);
 
   yield* installDocumentComponents({ testing: false }, false);
+  const installations: ExecutionInstallation[] = [];
+  if (testAgent !== undefined) {
+    const worker = settings.testAgentWorker;
+    if (!worker.ok) {
+      throw new Error(
+        "<TestAgent> configures this child with a scripted agent, and this entrypoint cannot " +
+          `re-invoke itself to run one: ${worker.error.message}`,
+      );
+    }
+    // The controlled provider before the Agent words, exactly as `<TestAgent>`
+    // arranges them for an ordinary test: what the six defaults reach is
+    // decided by what is installed when they run. `<Session>` travels
+    // separately because its implementation names durable work after its own
+    // invocation, so the execution is told about it rather than a registration
+    // being made for it.
+    yield* installAgentComponents(
+      yield* installChildTestAgent(testAgent, { workerCommand: worker.value }),
+    );
+    installations.push({ components: agentIdentityComponents() });
+  }
   // A child gets what `xmd run` gets, and the browser form is part of that.
   // Installed here rather than inherited: this scope is isolated from the
   // command that started it, so the run profile's provider reaches a child only
   // if the run profile composes it — and a child of `xmd test`, whose command
   // composes none, still gets one because *this* is the run profile.
   yield* installWebElicitation();
+  if (answers !== undefined) {
+    // After the form, so it is the nearer provider at the same `{ at: "min" }`
+    // and an unmatched request fails here rather than opening a browser. A test
+    // that said what the answers are does not fall through to a person.
+    yield* installAnswerProvider(answers);
+  }
   // Document filesystem access resolves in the caller's own filesystem, as it
   // does for `xmd run`. The entrypoint installs its provider process-wide, but
   // the child runs in an isolated scope, so the child's assembly must restate
@@ -121,7 +197,7 @@ function* runProfileChild(
       secretDetection: settings.secretDetection,
       retainProcessOutput: diagnostic,
     },
-    [],
+    installations,
   );
   // Forwarded as it arrives. The document that ran this child is the reader, so
   // the chunks reach its output stream in the order the child produced them.

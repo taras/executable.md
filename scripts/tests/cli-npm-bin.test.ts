@@ -96,6 +96,10 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
 
     expect(run.stdout).toContain("The review of **packages/core** at `abc123` passed.");
     expect(run.stdout).toContain("The review of **packages/core** passed.");
+    // The nested `host="run"` child's own return. It reached a scripted agent
+    // and a declared answer through a worker this package relaunched, which is
+    // the whole of what a built npm bin has to get right for one.
+    expect(run.stdout).toContain("You chose to approve the review.");
     expect(run.stdout).not.toContain("ERROR");
   });
 });

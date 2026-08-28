@@ -18,7 +18,7 @@
  * result left unread would hold the completion open.
  */
 
-import { scoped } from "effection";
+import { Ok, scoped } from "effection";
 import type { Operation, Result } from "effection";
 import { forEach } from "@effectionx/stream-helpers";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -27,7 +27,7 @@ import type { Json } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { testHarnessInstallation, useTesting } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
-import { cliRuntime } from "@executablemd/test-support/launch";
+import { cliBase, cliRuntime } from "@executablemd/test-support/launch";
 import { testingExecutionHost } from "../../src/testing-host.ts";
 import { useBunService } from "../../src/bun-service.ts";
 import { useDenoService } from "../../src/deno-service.ts";
@@ -60,6 +60,10 @@ export function runMarkdownTier(document: string): Operation<MarkdownTierRun> {
       includes: ["components", "."],
       secretDetection: true,
       installService,
+      // The same relaunch a runtime-named entrypoint installs, because this
+      // harness bypasses `runXmd()` and there is no `API.Env` handler here to
+      // ask.
+      testAgentWorker: Ok([...cliBase(), "test-agent"]),
     });
     const execution = yield* executeInstalled({ path: document, stream: new InMemoryStream() }, [
       testHarnessInstallation(testingHost),

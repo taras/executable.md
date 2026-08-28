@@ -11,11 +11,26 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation, Result } from "effection";
 import * as path from "node:path";
-import { agentIdentityComponents, execute, installAgentComponents } from "@executablemd/core";
+import {
+  agentIdentityComponents,
+  execute,
+  inlineSource,
+  installAgentComponents,
+} from "@executablemd/core";
+import { installAnswerProvider } from "@executablemd/core/host";
+import type { ExecutionInstallation } from "@executablemd/core/host";
+import { forEach } from "@effectionx/stream-helpers";
+import { useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { useTesting } from "@executablemd/testing";
-import type { TestResult } from "@executablemd/testing";
+import { testHarnessInstallation, useTesting } from "@executablemd/testing";
+import type {
+  ChildInvocation,
+  ChildSettlement,
+  ExecutionHostProvider,
+  TestResult,
+} from "@executablemd/testing";
 import { installTestAgentComponents } from "../src/components.ts";
+import { installChildTestAgent, testAgentChildDeclaration } from "../src/child-configuration.ts";
 import { useCommand } from "./command.ts";
 import { cliBase, runCli } from "@executablemd/test-support/launch";
 import type { Json } from "@executablemd/core";
@@ -25,6 +40,49 @@ const DOC = path.resolve("smoke-test/test-agent/README.md");
 // The fixture relaunches xmd as a worker, so the run keeps this process's
 // working directory and its whole environment.
 const RUN = { inheritEnv: true, timeout: 120_000 };
+
+/**
+ * The trusted `run` profile, as this package can state it.
+ *
+ * The shipped one is the CLI's, and the CLI depends on this package — so what
+ * stands in here is the same assembly the CLI performs for a declared child:
+ * this package's provider built from the frozen scenario data, the Agent
+ * defaults, `<Session>`, and core's matcher provider. TG1 covers the real one.
+ */
+function nestedRunHost(worker: string[]): ExecutionHostProvider {
+  return {
+    *runChild(invocation: ChildInvocation): Operation<ChildSettlement> {
+      const request = invocation.request;
+      const installations: ExecutionInstallation[] = [];
+      for (const configuration of request.configuration ?? []) {
+        switch (configuration.kind) {
+          case "test-agent":
+            yield* installAgentComponents(
+              yield* installChildTestAgent(configuration, { workerCommand: worker }),
+            );
+            installations.push({ components: agentIdentityComponents() });
+            break;
+          case "answers":
+            yield* installAnswerProvider(configuration);
+            break;
+        }
+      }
+      yield* useHostFiles();
+      const execution = yield* executeInstalled(
+        {
+          ...inlineSource(request.source ?? ""),
+          stream: new InMemoryStream(),
+          props: request.props,
+        },
+        installations,
+      );
+      const output = yield* forEach(function* (chunk: string) {
+        yield* invocation.chunk(chunk);
+      }, execution.output);
+      return { outcome: { kind: "settled", result: yield* execution }, output };
+    },
+  };
+}
 
 function* runSmoke(
   stream: InMemoryStream,
@@ -39,6 +97,7 @@ function* runSmoke(
     yield* installAgentComponents();
     const execution = yield* executeInstalled({ path: DOC, stream }, [
       { components: agentIdentityComponents() },
+      testHarnessInstallation(nestedRunHost([...xmd, "test-agent"]), [testAgentChildDeclaration()]),
     ]);
     const subscription = yield* execution.output;
     let next = yield* subscription.next();
@@ -57,6 +116,9 @@ describe("Tier TG — test-agent smoke", { sanitizeOps: false, sanitizeResources
     expect(cli.code).toBe(0);
     expect(cli.stdout).toContain("The review of **packages/core** at `abc123` passed.");
     expect(cli.stdout).toContain("The review of **packages/core** passed.");
+    // The nested child's own return, which only a declared TestAgent and a
+    // declared answer could have produced.
+    expect(cli.stdout).toContain("You chose to approve the review.");
     expect(cli.stdout).not.toContain("ERROR");
   });
 
@@ -64,7 +126,7 @@ describe("Tier TG — test-agent smoke", { sanitizeOps: false, sanitizeResources
     const stream = new InMemoryStream();
 
     const live = yield* runSmoke(stream, cliBase());
-    expect(live.results.map((entry) => entry.status)).toEqual(["pass"]);
+    expect(live.results.map((entry) => entry.status)).toEqual(["pass", "pass"]);
     expect(live.result.ok).toBe(true);
     expect(live.output).not.toContain("ERROR");
 
@@ -72,7 +134,7 @@ describe("Tier TG — test-agent smoke", { sanitizeOps: false, sanitizeResources
     // An unspawnable worker command proves replay never contacts ACPX
     // or a worker.
     const replay = yield* runSmoke(stream, ["/nonexistent/xmd-test-agent-must-not-spawn"]);
-    expect(replay.results.map((entry) => entry.status)).toEqual(["pass"]);
+    expect(replay.results.map((entry) => entry.status)).toEqual(["pass", "pass"]);
     expect(replay.result.ok).toBe(true);
     expect(replay.output).toBe(live.output);
     expect(stream.appendCount).toBe(appended);

@@ -86,6 +86,42 @@ The test runtime does not inject agent, session, cwd, or harness metadata into
 the behavior document. The document sees its own frontmatter and bindings,
 including values captured by prompt matchers.
 
+### Configuring one nested run
+
+Inside the declaration prefix of one canonical test's `<Execution host="run">`,
+`<TestAgent>` has a second placement:
+
+```md
+<Execution host="run" target="./document-under-test.md" as="run">
+  <TestAgent agent="reviewer">
+    <TestAgent.Scenario session="review" src="./agents/review.md" />
+  </TestAgent>
+
+  <!-- child observers and assertions follow -->
+</Execution>
+```
+
+Here it is child configuration, not a wrapper. It contains one or more direct
+`<TestAgent.Scenario>` children and nothing else, and it may appear once for that
+execution. The `agent` default, scenario props, duplicate and missing mapping
+rules, behavior-document language and source containment are exactly the ones
+above. The scenario source resolves relative to the outer test document; the
+child receives neither that host path nor a way to read outside the admitted
+behavior-document root.
+
+The declaration is recognized only when normal component resolution selected
+this package's `TestAgent` definition. A repository `TestAgent` is an ordinary
+component, ends the declaration scan and configures nothing. The declaration
+does not reserve any name inside the child: repository `Agent`, `Session` or
+`Prompt` components continue to shadow the first-party defaults.
+
+The trusted `run` profile receives detached scenario data and constructs this
+package's provider and controlled native launcher inside the isolated child. It
+also declares `<Session>` and installs the other six Agent defaults there. No
+controller, provider factory, middleware or outer TestAgent context crosses the
+boundary. Without this declaration, the child inherits no TestAgent behavior
+from the test that invoked it.
+
 ## Behavior documents
 
 A behavior document is a declarative sequence of prompt stages. Each stage
@@ -191,6 +227,12 @@ live with, and a build one test bound a session to is not a build the next test
 shares. When `<TestAgent>` is used
 without an enclosing `<Test>`, its own scope is the isolation boundary.
 
+A `<TestAgent>` used as nested-run configuration narrows that rule further:
+each exact `<Execution>` receives a fresh partition. Two sibling children under
+one test never share a runtime, route, scenario, logical session or provider
+history. Repeating a named session continues one conversation only within the
+child whose declaration created it.
+
 One ACP provider is *installed*, and it is installed once: `<TestAgent>`
 registers a partition-selecting factory and installs it in its own invocation,
 before projecting its content. Installation and state are different things, and
@@ -198,6 +240,11 @@ only one of them carries authority. Installing in the invocation is what makes
 the provider reachable from the content at all, and it is what makes that one
 factory closure the only holder of the document's launch authority. Selecting
 per test is what keeps one test's sessions, queues and records out of the next.
+
+For nested-run configuration, the trusted child host performs that one install
+inside the child rather than expanding the outer declaration as a wrapper. The
+provider remains child-owned and finishes teardown before the child outcome is
+published.
 
 The selector is a construction dependency of that factory, asked afresh for
 every dispatch, and it answers with a partition handle and nothing else — work,
@@ -432,6 +479,10 @@ The essential acceptance coverage is:
    journal bytes, observer drift, runtime partition counts, wire assertions and
    ownership races stay in TypeScript: the Markdown states what an author sees,
    which is that the session continued or that it refused.
+6. Nested-run coverage drives a real `host="run"` child through a direct
+   TestAgent declaration, proves named-session continuity inside that child,
+   proves sibling executions receive fresh partitions, and cancels an active
+   child before asserting that its provider and worker finished teardown.
 
 Unit tests use direct Context API and controller fixtures for edge cases that do
 not benefit from crossing the ACPX process boundary. CI does not start an

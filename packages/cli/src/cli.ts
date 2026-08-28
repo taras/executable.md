@@ -77,7 +77,7 @@ import type {
   PropsSchema,
   RootDocumentSource,
 } from "@executablemd/core";
-import { env as readEnv } from "@executablemd/runtime";
+import { command as hostCommand, env as readEnv } from "@executablemd/runtime";
 import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import {
@@ -86,7 +86,11 @@ import {
   testHarnessInstallation,
   useTesting,
 } from "@executablemd/testing";
-import { installTestAgentComponents, runTestAgentWorker } from "@executablemd/test-agent";
+import {
+  installTestAgentComponents,
+  runTestAgentWorker,
+  testAgentChildDeclaration,
+} from "@executablemd/test-agent";
 import { installWebComponents, installWebElicitation } from "@executablemd/web";
 import { timebox } from "@effectionx/timebox";
 import { timeout as runTimeout } from "@executablemd/runtime";
@@ -546,6 +550,23 @@ function* installAgentStack(
 }
 
 /**
+ * How this host re-invokes itself as the test-agent worker, when it can.
+ *
+ * A refusal comes back rather than ending the run, because a document that
+ * declares no scripted agent for a nested child has no worker to run and must
+ * not need one — the allowance `<TestAgent>` already makes when it asks for the
+ * relaunch at its own invocation instead of at install time. The reason is kept
+ * so a declaration written under such a host says why it has nothing to run.
+ */
+function* readWorkerCommand(): Operation<Result<readonly string[]>> {
+  try {
+    return Ok(yield* hostCommand(["test-agent"]));
+  } catch (error) {
+    return Err(error instanceof Error ? error : new Error(String(error)));
+  }
+}
+
+/**
  * Whether a document run started from the command line keeps its commands'
  * output.
  *
@@ -763,10 +784,16 @@ function* runDocument(
   // What a `<Test>` in this document runs a nested execution under. Captured
   // before document code begins, so a child is offered exactly what this
   // command assembled — and never a second description of it.
+  //
+  // The worker argv is read here for the same reason: only a runtime-named
+  // entrypoint can say how to re-invoke this host, and a child runs in a scope
+  // that inherits no `API.Env` handler. What crosses is the argv, not the Api
+  // that produced it.
   const testingHost = testingExecutionHost({
     includes: include,
     secretDetection,
     installService,
+    testAgentWorker: yield* readWorkerCommand(),
   });
 
   // One authoritative execution, and only one. What a host attaches travels as
@@ -794,7 +821,12 @@ function* runDocument(
     [
       ...(mode.installations ?? []),
       { components: agentIdentityComponents() },
-      testHarnessInstallation(testingHost),
+      // The declarations a nested execution may configure a child with, named
+      // by the exact definitions this command installed. Recognizing one is
+      // recognizing a definition, and only the host knows which package's copy
+      // it registered — a repository component of the same name is an ordinary
+      // component and configures nothing.
+      testHarnessInstallation(testingHost, [testAgentChildDeclaration()]),
     ],
   );
 

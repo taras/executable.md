@@ -15,10 +15,21 @@ import type { Operation, Result } from "effection";
 import { forEach } from "@effectionx/stream-helpers";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
-import { Component, TestBehavior } from "@executablemd/core";
+import {
+  Component,
+  hasContent,
+  registerComponents,
+  TestBehavior,
+  tryContent,
+} from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
-import type { Json } from "@executablemd/core";
+import type { Json, PropsSchema } from "@executablemd/core";
+import type {
+  ChildConfiguration,
+  ChildDeclaration,
+  ChildDeclarationChild,
+} from "../src/child-configuration.ts";
 import { useTesting } from "../src/use-testing.ts";
 import { testHarnessInstallation } from "../src/execution-harness.ts";
 import { ExecutionHost } from "../src/execution-host.ts";
@@ -814,3 +825,657 @@ describe("the authority path", () => {
     expect(arguments_[0]?.[0]).toEqual({ name: "behavior" });
   });
 });
+
+/**
+ * The declarations that configure a child's deterministic dependencies
+ * (specs/testing-spec.md).
+ *
+ * The `<TestAgent>` half of that contract belongs to `@executablemd/test-agent`,
+ * which depends on this package — so what is held here is the seam itself: that
+ * a declaration is recognized by the definition it resolved to, that what it
+ * produces is frozen data, that a malformed one refuses before a child is
+ * created, and that public middleware can read the configuration and change
+ * none of it. The stub below stands in for a contributing package exactly as
+ * `execution-host-stub.ts` stands in for the CLI.
+ */
+describe("child configuration declarations", () => {
+  const AGENT_PROPS: PropsSchema = {
+    type: "object",
+    properties: { agent: { type: "string" } },
+    additionalProperties: false,
+  };
+
+  const SCENARIO_PROPS: PropsSchema = {
+    type: "object",
+    properties: { src: { type: "string" }, agent: { type: "string" }, session: { type: "string" } },
+    required: ["src"],
+    additionalProperties: false,
+  };
+
+  /** The definition a contributing package registers for the wrapper. */
+  // deno-lint-ignore require-yield
+  function* PackageTestAgent(): Operation<string> {
+    return "the ordinary wrapper";
+  }
+
+  /** The definition it registers for the wrapper's own child. */
+  // deno-lint-ignore require-yield
+  function* PackageScenario(): Operation<string> {
+    return "an ordinary scenario";
+  }
+
+  /** A same-named definition the package did not register. */
+  // deno-lint-ignore require-yield
+  function* RepositoryScenario(): Operation<string> {
+    return "a repository scenario";
+  }
+
+  interface StubScenario {
+    agent: string;
+    session: string;
+    rootDir: string;
+    document: { path: string; source: string };
+  }
+
+  /**
+   * A contributing package's declaration, reduced to what the seam needs.
+   *
+   * The real one reads behavior documents off disk. This one only produces a
+   * `test-agent` configuration, so what the cases are about is the harness's own
+   * rules: recognition by definition, what may be nested, at-most-once,
+   * declared order, and detachment.
+   */
+  function stubDeclaration(accepts: unknown = PackageScenario): ChildDeclaration {
+    return {
+      name: "TestAgent",
+      definition: PackageTestAgent,
+      open(collect) {
+        const scenarios: StubScenario[] = [];
+        let defaultAgent = "test";
+        let malformed = false;
+        function refuse(problem: string): void {
+          malformed = true;
+          collect.refuse(problem);
+        }
+        // deno-lint-ignore require-yield
+        function* declareScenario(props: Record<string, Json>): Operation<string> {
+          const session = typeof props.session === "string" ? props.session : "";
+          const agent = typeof props.agent === "string" ? props.agent : defaultAgent;
+          if (scenarios.some((mapped) => mapped.agent === agent && mapped.session === session)) {
+            refuse(`<TestAgent.Scenario> maps agent "${agent}" more than once.`);
+            return "";
+          }
+          scenarios.push({
+            agent,
+            session,
+            rootDir: "/agents",
+            document: { path: String(props.src), source: "behavior" },
+          });
+          return "";
+        }
+        return {
+          name: "TestAgent",
+          children: new Map<unknown, ChildDeclarationChild>([[accepts, declareScenario]]),
+          *expand(props: Record<string, Json>): Operation<string> {
+            defaultAgent = typeof props.agent === "string" ? props.agent : "test";
+            if (yield* hasContent()) {
+              const projected = yield* tryContent();
+              if (projected.failure !== undefined) {
+                throw projected.failure;
+              }
+              if (projected.text.trim() !== "") {
+                refuse("<TestAgent> configures a child, so it holds declarations alone.");
+              }
+            }
+            if (scenarios.length === 0 && !malformed) {
+              refuse("<TestAgent> configures a child, so it requires at least one scenario.");
+            }
+            if (!malformed) {
+              collect.configure({ kind: "test-agent", defaultAgent, scenarios });
+            }
+            return "";
+          },
+        };
+      },
+    };
+  }
+
+  interface DeclarationRun {
+    readonly results: readonly TestResult[];
+    readonly failure: string;
+    readonly log: StubHostLog;
+    readonly output: string;
+  }
+
+  function runDeclaring(
+    files: Record<string, string>,
+    options: {
+      readonly declarations?: readonly ChildDeclaration[];
+      readonly around?: () => Operation<void>;
+    } = {},
+  ): Operation<DeclarationRun> {
+    return scoped(function* () {
+      yield* useStubFs(files);
+      // Registered where a contributing package registers them, so the scan
+      // meets these definitions through ordinary resolution.
+      yield* registerComponents([
+        { name: "TestAgent", origin: "stub", fn: PackageTestAgent, props: AGENT_PROPS },
+        { name: "TestAgent.Scenario", origin: "stub", fn: PackageScenario, props: SCENARIO_PROPS },
+      ]);
+      if (options.around) {
+        yield* options.around();
+      }
+      const tests = yield* useTesting();
+      const stub = stubExecutionHost({ files });
+      const execution = yield* executeInstalled(
+        { path: "README.md", stream: new InMemoryStream() },
+        [testHarnessInstallation(stub.provider, options.declarations ?? [stubDeclaration()])],
+      );
+      const output = yield* forEach(function* () {}, execution.output);
+      const completion = yield* execution;
+      return {
+        results: yield* tests.results,
+        failure: completion.ok ? "" : completion.error.message,
+        log: stub.log,
+        output,
+      };
+    });
+  }
+
+  function configurationOf(run: DeclarationRun): readonly ChildConfiguration[] {
+    return run.log.requests[0]?.configuration ?? [];
+  }
+
+  /** The one test in a run, or a readable failure when the run had none. */
+  function single(run: DeclarationRun): TestResult {
+    const [first] = run.results;
+    if (first === undefined) {
+      throw new Error(`no test was recorded; run ended with ${run.failure}`);
+    }
+    return first;
+  }
+
+  it("carries both declarations to the host as ordered, detached data", function* () {
+    const run = yield* runDeclaring({
+      "README.md": doc(
+        '<Test name="declared">',
+        '<Execution host="run" target="child.md" as="child">',
+        '<TestAgent agent="reviewer">',
+        '<TestAgent.Scenario session="review" src="review.md" />',
+        '<TestAgent.Scenario src="fallback.md" />',
+        "</TestAgent>",
+        "",
+        "<Answers>",
+        '<Answer template="Approve?" value={{ decision: "approve" }} />',
+        "</Answers>",
+        "",
+        "<AssertEquals actual={child.result.ok} expected={true} />",
+        "</Execution>",
+        "</Test>",
+      ),
+      "child.md": doc("child body"),
+    });
+    expect(single(run).status).toBe("pass");
+    const configuration = configurationOf(run);
+    expect(configuration.map((entry) => entry.kind)).toEqual(["test-agent", "answers"]);
+    const [testAgent, answers] = configuration;
+    expect(testAgent?.kind === "test-agent" && testAgent.defaultAgent).toBe("reviewer");
+    expect(
+      testAgent?.kind === "test-agent" &&
+        testAgent.scenarios.map((scenario) => [scenario.agent, scenario.session]),
+    ).toEqual([
+      ["reviewer", "review"],
+      ["reviewer", ""],
+    ]);
+    expect(answers?.kind === "answers" && answers.matchers.length).toBe(1);
+  });
+
+  it("reads a declaration once, and not again with the assertions", function* () {
+    const run = yield* runDeclaring({
+      "README.md": doc(
+        '<Test name="once">',
+        '<Execution host="run" target="child.md" as="child">',
+        "<TestAgent>",
+        '<TestAgent.Scenario src="review.md" />',
+        "</TestAgent>",
+        "",
+        "<AssertEquals actual={child.result.ok} expected={true} />",
+        "</Execution>",
+        "</Test>",
+      ),
+      "child.md": doc("child body"),
+    });
+    expect(single(run).status).toBe("pass");
+    const [testAgent] = configurationOf(run);
+    // Two passes over one declaration would map the same scenario twice, which
+    // this stub refuses — so one mapping is the assertion pass having skipped it.
+    expect(testAgent?.kind === "test-agent" && testAgent.scenarios.length).toBe(1);
+  });
+
+  it("gives a repository component of the declaration's name ordinary semantics", function* () {
+    const run = yield* runDeclaring({
+      "README.md": doc(
+        '<Test name="shadowed">',
+        '<Execution host="run" target="child.md" as="child">',
+        '<TestAgent as="shadowed" />',
+        "",
+        "<AssertEquals actual={child.result.ok} expected={true} />",
+        '<AssertStringIncludes actual={shadowed} expected="a repository component" />',
+        "</Execution>",
+        "</Test>",
+      ),
+      // Chosen ahead of the package's, so the scan ends where it is written and
+      // it expands with the assertions as any component would.
+      "components/TestAgent.md": doc("a repository component"),
+      "child.md": doc("child body"),
+    });
+    expect(single(run).status).toBe("pass");
+    expect(run.log.requests[0]?.configuration).toBe(undefined);
+  });
+
+  it("refuses a repository component shadowing a declaration's own child", function* () {
+    const run = yield* runDeclaring(
+      {
+        "README.md": doc(
+          '<Test name="nested shadow">',
+          '<Execution host="run" target="child.md" as="child">',
+          "<TestAgent>",
+          '<TestAgent.Scenario src="review.md" />',
+          "</TestAgent>",
+          "",
+          "<AssertEquals actual={child.result.ok} expected={true} />",
+          "</Execution>",
+          "</Test>",
+        ),
+        "child.md": doc("child body"),
+      },
+      // The package registered `PackageScenario`, and this declaration accepts
+      // a definition nothing resolves to — the shape a repository
+      // `components/TestAgent/Scenario.md` winning resolution produces.
+      { declarations: [stubDeclaration(RepositoryScenario)] },
+    );
+    expect(single(run).status).toBe("fail");
+    expect(single(run).error?.message).toContain("accepts only its own declarations");
+    expect(run.log.requests.length).toBe(0);
+  });
+
+  const MALFORMED: readonly { name: string; body: readonly string[]; says: string }[] = [
+    {
+      name: "an empty declaration",
+      body: ["<TestAgent />"],
+      says: "requires at least one scenario",
+    },
+    {
+      name: "a declaration written twice",
+      body: [
+        "<TestAgent>",
+        '<TestAgent.Scenario session="a" src="a.md" />',
+        "</TestAgent>",
+        "<TestAgent>",
+        '<TestAgent.Scenario session="b" src="b.md" />',
+        "</TestAgent>",
+      ],
+      says: "<TestAgent> is declared more than once",
+    },
+    {
+      name: "a declaration holding ordinary content",
+      body: ["<TestAgent>", "prose", '<TestAgent.Scenario src="a.md" />', "</TestAgent>"],
+      says: "holds declarations alone",
+    },
+    {
+      name: "a duplicate scenario mapping",
+      body: [
+        "<TestAgent>",
+        '<TestAgent.Scenario session="review" src="a.md" />',
+        '<TestAgent.Scenario session="review" src="b.md" />',
+        "</TestAgent>",
+      ],
+      says: "more than once",
+    },
+    {
+      name: "an <Answers> with no matchers",
+      body: ["<Answers />"],
+      says: "requires at least one <Answer>",
+    },
+    {
+      name: "an <Answers> written twice",
+      body: [
+        "<Answers>",
+        '<Answer template="a" value={{ decision: "a" }} />',
+        "</Answers>",
+        "<Answers>",
+        '<Answer template="b" value={{ decision: "b" }} />',
+        "</Answers>",
+      ],
+      says: "<Answers> is declared more than once",
+    },
+    {
+      name: "an <Answers> holding a body",
+      body: [
+        "<Answers>",
+        '<Answer template="a" value={{ decision: "a" }} />',
+        "prose",
+        "</Answers>",
+      ],
+      says: "holds matchers alone",
+    },
+    {
+      name: "a malformed matcher",
+      body: ["<Answers>", '<Answer template="a" />', "</Answers>"],
+      says: 'requires a "value" prop',
+    },
+    {
+      name: "a delegating <Answers>",
+      body: [
+        "<Answers delegate={true}>",
+        '<Answer template="a" value={{ decision: "a" }} />',
+        "</Answers>",
+      ],
+      says: "cannot delegate as child configuration",
+    },
+    {
+      name: "a template referencing a name this document does not bind",
+      body: [
+        "<Answers>",
+        '<Answer template="Approve {plan}?" value={{ decision: "a" }} />',
+        "</Answers>",
+      ],
+      says: "not a bound string value here",
+    },
+  ];
+
+  for (const malformed of MALFORMED) {
+    it(`refuses ${malformed.name} before the child's root is imported`, function* () {
+      const run = yield* runDeclaring({
+        "README.md": doc(
+          '<Test name="malformed">',
+          // No such document, so reaching a root at all would fail differently:
+          // "the host was never asked" is what the log proves.
+          '<Execution host="run" target="absent.md" as="child">',
+          ...malformed.body,
+          "",
+          "<AssertEquals actual={child.result.ok} expected={true} />",
+          "</Execution>",
+          "</Test>",
+        ),
+      });
+      expect(single(run).status).toBe("fail");
+      expect(single(run).error?.message).toContain(malformed.says);
+      expect(run.log.requests.length).toBe(0);
+      expect(run.log.roots.length).toBe(0);
+    });
+  }
+
+  it('refuses a declaration on host="workflow"', function* () {
+    const run = yield* runDeclaring({
+      "README.md": doc(
+        '<Test name="workflow">',
+        "<WorkflowRun>",
+        '<Execution host="workflow" action="start" target="flow.md" as="child">',
+        "<TestAgent>",
+        '<TestAgent.Scenario src="review.md" />',
+        "</TestAgent>",
+        "",
+        '<AssertEquals actual={child.kind} expected="settled" />',
+        "</Execution>",
+        "</WorkflowRun>",
+        "</Test>",
+      ),
+      "flow.md": doc("flow"),
+    });
+    expect(single(run).status).toBe("fail");
+    expect(single(run).error?.message).toContain('this execution is host="workflow"');
+    expect(run.log.requests.length).toBe(0);
+  });
+
+  it("leaves an <Answers> written after the prefix an ordinary region", function* () {
+    const run = yield* runDeclaring({
+      "README.md": doc(
+        '<Test name="ordinary">',
+        '<Execution host="run" target="child.md" as="child">',
+        "<TestAgent>",
+        '<TestAgent.Scenario src="review.md" />',
+        "</TestAgent>",
+        "",
+        "<AssertEquals actual={child.result.ok} expected={true} />",
+        "",
+        "<Answers>",
+        '<Answer template="Approve?" value={{ decision: "approve" }} />',
+        "",
+        "an answered region",
+        "</Answers>",
+        "</Execution>",
+        "</Test>",
+      ),
+      "child.md": doc("child body"),
+    });
+    // Recognized as a declaration it would refuse — a declaration holds
+    // matchers alone. Passing is the region having stayed an ordinary one, and
+    // one declaration crossed rather than two.
+    expect(single(run).status).toBe("pass");
+    expect(configurationOf(run).map((entry) => entry.kind)).toEqual(["test-agent"]);
+  });
+
+  it("finishes the child's teardown before the assertions expand", function* () {
+    const order: string[] = [];
+    const run = yield* scoped(function* () {
+      const files = {
+        "README.md": doc(
+          '<Test name="teardown">',
+          '<Execution host="run" target="child.md" as="child">',
+          "<TestAgent>",
+          '<TestAgent.Scenario src="review.md" />',
+          "</TestAgent>",
+          "",
+          "<Mark />",
+          "<AssertEquals actual={child.result.ok} expected={true} />",
+          "</Execution>",
+          "</Test>",
+        ),
+        "child.md": doc("child body"),
+      };
+      yield* useStubFs(files);
+      yield* registerComponents([
+        { name: "TestAgent", origin: "stub", fn: PackageTestAgent, props: AGENT_PROPS },
+        { name: "TestAgent.Scenario", origin: "stub", fn: PackageScenario, props: SCENARIO_PROPS },
+        {
+          name: "Mark",
+          origin: "stub",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          // deno-lint-ignore require-yield
+          *fn(): Operation<string> {
+            order.push("the assertions");
+            return "";
+          },
+        },
+      ]);
+      const tests = yield* useTesting();
+      const stub = stubExecutionHost({
+        files,
+        onTeardown: () => order.push("the child's teardown"),
+      });
+      const execution = yield* executeInstalled(
+        { path: "README.md", stream: new InMemoryStream() },
+        [testHarnessInstallation(stub.provider, [stubDeclaration()])],
+      );
+      const output = yield* forEach(function* () {}, execution.output);
+      const completion = yield* execution;
+      return {
+        results: yield* tests.results,
+        failure: completion.ok ? "" : completion.error.message,
+        log: stub.log,
+        output,
+      };
+    });
+    expect(single(run).status).toBe("pass");
+    // What a declaration installed in the child is torn down before the
+    // outcome is published, so an assertion never runs beside a live provider.
+    expect(order).toEqual(["the child's teardown", "the assertions"]);
+  });
+
+  /**
+   * A construct in the declaration prefix, holding what would otherwise be a
+   * declaration.
+   *
+   * `<If>` stands for every construct that expands descendants of its own: it
+   * never resolves a component, so recognizing the definition is not enough to
+   * tell a declaration written beside the others from one a construct reached.
+   * One representative is the whole of what this needs — the rule is about the
+   * placement, not about which construct produced it.
+   */
+  const INDIRECT: readonly { name: string; body: readonly string[]; says: string }[] = [
+    {
+      name: "a <TestAgent> a construct expanded",
+      body: [
+        "<If condition={true}>",
+        "<TestAgent>",
+        '<TestAgent.Scenario src="review.md" />',
+        "</TestAgent>",
+        "</If>",
+      ],
+      says: "<TestAgent> configures a child only as a direct child of <Execution>",
+    },
+    {
+      name: "an <Answers> a construct expanded",
+      body: [
+        "<If condition={true}>",
+        "<Answers>",
+        '<Answer template="Approve?" value={{ decision: "approve" }} />',
+        "</Answers>",
+        "</If>",
+      ],
+      says: "<Answers> configures a child only as a direct child of the execution that runs it",
+    },
+    {
+      name: "a scenario a construct expanded inside a direct declaration",
+      body: [
+        "<TestAgent>",
+        "<If condition={true}>",
+        '<TestAgent.Scenario src="review.md" />',
+        "</If>",
+        "</TestAgent>",
+      ],
+      says: "written directly inside it",
+    },
+  ];
+
+  for (const indirect of INDIRECT) {
+    it(`refuses ${indirect.name}`, function* () {
+      const run = yield* runDeclaring({
+        "README.md": doc(
+          '<Test name="indirect">',
+          // No such document: reaching a root at all would fail differently,
+          // so "the host was never asked" is what the log proves.
+          '<Execution host="run" target="absent.md" as="child">',
+          ...indirect.body,
+          "",
+          "<AssertEquals actual={child.result.ok} expected={true} />",
+          "</Execution>",
+          "</Test>",
+        ),
+      });
+      expect(single(run).status).toBe("fail");
+      expect(single(run).error?.message).toContain(indirect.says);
+      expect(configurationOf(run)).toEqual([]);
+      expect(run.log.requests.length).toBe(0);
+      expect(run.log.roots.length).toBe(0);
+    });
+  }
+
+  it("lets public middleware read the configuration and change none of it", function* () {
+    let probed = 0;
+    const mutable: string[] = [];
+    const run = yield* runDeclaring(
+      {
+        "README.md": doc(
+          '<Test name="frozen">',
+          '<Execution host="run" target="child.md" as="child">',
+          "<TestAgent>",
+          '<TestAgent.Scenario session="review" src="review.md" />',
+          "</TestAgent>",
+          "",
+          "<Answers>",
+          '<Answer template="Approve?" value={{ decision: "approve" }} />',
+          "</Answers>",
+          "",
+          "<AssertEquals actual={child.result.ok} expected={true} />",
+          "</Execution>",
+          "</Test>",
+        ),
+        "child.md": doc("child body"),
+      },
+      {
+        *around() {
+          yield* ExecutionHost.around({
+            *run([request]: [ExecutionHostRequest], next) {
+              const configuration = request.profile.configuration ?? [];
+              const edits: Edit[] = [
+                ["the request", request.profile, { configuration: [] }],
+                ["the configuration list", configuration, { 0: undefined, length: 0 }],
+                ...configuration.flatMap(layersOf),
+              ];
+              // Every nested layer, because a handler that could edit one of
+              // them would change what the child is assembled from after the
+              // chain has unwound.
+              for (const [label, target, edit] of edits) {
+                probed += 1;
+                try {
+                  Object.assign(Object(target), edit);
+                  mutable.push(label);
+                } catch {
+                  // Frozen, which is the whole of what this asks.
+                }
+              }
+              yield* next(request);
+            },
+          });
+        },
+      },
+    );
+    expect(single(run).status).toBe("pass");
+    expect(mutable).toEqual([]);
+    expect(probed).toBe(12);
+    const [testAgent] = configurationOf(run);
+    expect(testAgent?.kind === "test-agent" && testAgent.scenarios[0]?.session).toBe("review");
+  });
+});
+
+/** One attempted edit: what it is called, what it targets, and what it writes. */
+type Edit = [string, unknown, Record<string, unknown>];
+
+/** Every layer of one configuration entry a handler could try to edit. */
+function layersOf(entry: ChildConfiguration): Edit[] {
+  if (entry.kind === "test-agent") {
+    const scenario = entry.scenarios[0];
+    const scenarioEdits: Edit[] =
+      scenario === undefined
+        ? []
+        : [
+            ["the scenario", scenario, { session: "stolen" }],
+            ["the scenario document", scenario.document, { source: "stolen" }],
+          ];
+    return [
+      ["the test-agent entry", entry, { defaultAgent: "stolen" }],
+      ["the scenario list", entry.scenarios, { 0: undefined }],
+      ...scenarioEdits,
+    ];
+  }
+  const matcher = entry.matchers[0];
+  const template = matcher?.template;
+  const matcherEdits: Edit[] =
+    matcher === undefined ? [] : [["the matcher", matcher, { value: "stolen" }]];
+  const templateEdits: Edit[] =
+    template === undefined
+      ? []
+      : [
+          ["the template", template, { source: "stolen" }],
+          ["the token list", template.tokens, { 0: undefined }],
+        ];
+  return [
+    ["the answers entry", entry, { matchers: [] }],
+    ["the matcher list", entry.matchers, { 0: undefined }],
+    ["the bindings", entry.bindings, { stolen: "yes" }],
+    ...matcherEdits,
+    ...templateEdits,
+  ];
+}

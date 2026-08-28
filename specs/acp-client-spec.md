@@ -214,6 +214,16 @@ projection and invocation lifetime exactly as it does for any other `.ts`
 component. Props take string and boolean values, from a literal or from an
 expression that resolves to one.
 
+A canonical Markdown test may configure one nested `host="run"` execution with
+a direct `<TestAgent>` declaration (`testing-spec.md`). That declaration carries
+only detached scenario data. The trusted child host installs the controlled
+root provider and launcher in the isolated child, registers these six defaults
+and declares `<Session>` before root import. The provider and every logical
+session belong to that exact child; a sibling nested execution receives fresh
+state. Ordinary component resolution remains in force, so configuring the
+provider does not force any of these defaults to win over a repository
+component.
+
 What is not ordinary is which of their failures end the document. An unknown
 provider, a missing default agent, an unusable duration, an unavailable agent, a
 session that cannot be established, and a `<Prompt>` replaying a recorded
@@ -467,6 +477,13 @@ own session store and one empty working directory per session, both disposable.
 `xmd run` configures the agent stack; the options are exclusive to it, and
 `xmd test` rejects them, driving agents through the deterministic test-agent
 stack instead.
+
+That division also applies to a nested run profile. The outer `xmd test`
+invocation supplies no live Agent configuration to a child and no contextual
+provider crosses the child's isolation boundary. A direct `<TestAgent>`
+declaration on one `<Execution host="run">` explicitly selects the controlled
+test-agent assembly for that child alone; without one, the child receives no
+Agent provider from the outer test.
 
 | Option | Meaning |
 | --- | --- |

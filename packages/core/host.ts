@@ -151,3 +151,27 @@ export type {
  */
 export { AGENT_PROMPT, parsePromptRecord } from "./src/agent/journal.ts";
 export type { PromptRecord } from "./src/agent/journal.ts";
+
+/**
+ * `<Answers>` as detached configuration, for the host that installs it.
+ *
+ * A nested run's answers are declared in one document and answered in another,
+ * so the matcher language and the provider that reads it are separated here:
+ * `installAnswerProvider()` turns what a declaration parsed to back into this
+ * scope's elicitation provider.
+ */
+export { installAnswerProvider } from "./src/answers.ts";
+export type { AnswerConfiguration, AnswerMatcher } from "./src/answers.ts";
+
+/**
+ * Where a trusted harness follows its own declaration scan.
+ *
+ * A harness reading a construct's children in two passes decides which of them
+ * are declarations. It cannot decide that from the definition alone: a
+ * structural construct expands descendants without resolving a component, so
+ * expansion reports where each list begins and ends and the harness counts.
+ * Nothing authored reaches this — what a scanner records is data it reads back
+ * from its own closure.
+ */
+export { DeclarationScan } from "./src/declaration-scan.ts";
+export type { AnswersPlacement, DeclarationScanner } from "./src/declaration-scan.ts";
