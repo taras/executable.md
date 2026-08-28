@@ -48,8 +48,8 @@ this document's value, and what happens to it next is yours to decide.
   },
   required: ["decision"],
   additionalProperties: false,
-  if: { properties: { decision: { const: "revise" } }, required: ["decision"] },
-  then: { properties: { feedback: {} }, required: ["feedback"] }
+  if: { type: "object", properties: { decision: { const: "revise" } }, required: ["decision"] },
+  then: { type: "object", properties: { feedback: {} }, required: ["feedback"] }
 }} />
 
 <Session name={props.session}>
