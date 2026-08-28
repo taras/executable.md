@@ -76,8 +76,11 @@ location and nothing has to decide whether an existing directory is current.
 
 The command is derived from the digest, so it answers before anything is
 installed — which is what lets a session key be built from it early and never
-change underneath. Materialization itself is lazy and belongs to the placement:
-a document that opens no `<Session>` installs nothing.
+change underneath. Materialization itself is lazy: it happens only for a
+selection this build carries a snapshot for, and only just before the first
+operation that could spawn that adapter — the provider's availability probe,
+which is earlier than any `<Session>` placement and earlier than any turn. A
+document that opens no `<Session>` installs nothing.
 
 Publication is one rename out of a private staging directory, and a marker
 naming the digest is written last and read first. A concurrent run either wins
@@ -91,10 +94,18 @@ missing entry point, a marker naming another snapshot. Nothing falls back to the
 published adapter — doing so would produce exactly the silent, token-free run
 this exists to prevent.
 
-The registry the workflow profile installs is closed to these two providers. An
-agent name this build carries no snapshot for is refused rather than resolved
-through ACPX's own registry, which knows a dozen names and resolves each to
-whatever `npx` would fetch.
+The registry the workflow profile installs overlays these two providers onto
+ACPX's own, rather than replacing it. Codex and Claude resolve to their exact
+embedded snapshots and never fall through — a snapshot that cannot be verified,
+materialized or launched refuses that agent instead. Every other agent name
+delegates unchanged to the baseline registry, resolving to the same command and
+retaining the same compatibility identity as it did before any adapter was
+carried here.
+
+A missing checkpoint affects only association retention. An agent that reports
+no turn identity — because this build overrides nothing for it, or because the
+metadata was absent or unreadable — completes its Prompt exactly as it always
+did; the run simply holds no association for it.
 
 ## Licences
 

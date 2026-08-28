@@ -33,21 +33,35 @@
  *
  * ## Which adapter answers
  *
- * Not the one `npx` would fetch. A workflow Prompt has to name the provider turn
- * it completed, and no published Codex or Claude adapter reports that yet, so
- * this profile runs the snapshots this build carries
- * (`packages/acp/vendor/adapters/PROVENANCE.md`) and refuses any agent it holds
- * no snapshot for.
+ * For Codex and Claude, not the one `npx` would fetch. A workflow Prompt has to
+ * name the provider turn it completed, and no published release of either
+ * reports that yet, so this profile runs the snapshots this build carries
+ * (`packages/acp/vendor/adapters/PROVENANCE.md`) for those two providers.
  *
- * The registry is closed for that reason. Falling through to a published adapter
- * would produce a run that completed every Prompt and retained nothing, and said
- * nothing about why — the exact silence this feature exists to remove.
+ * That is an override on ACPX's own agent registry, not a replacement for it.
+ * Every other agent resolves through the baseline registry, to the same command
+ * it always did, and retains the same compatibility identity it always did.
+ * Carrying a patched Codex adapter says nothing about Gemini, and a registry
+ * that refused one would be making a far larger claim than this work needs.
  *
- * Materialization is lazy and belongs to the placement: a document that never
- * opens a `<Session>` installs nothing, extracts nothing and spawns nothing. A
- * document that does gets its adapter verified on disk before ACPX is contacted,
- * which is what makes a broken snapshot a refusal rather than a Prompt that
+ * The override is qualified: an embedded provider never falls through. A
+ * snapshot that cannot be verified, materialized or launched refuses that agent
+ * rather than quietly becoming the published adapter, which would produce a run
+ * that completed every Prompt and retained nothing, and said nothing about why —
+ * the exact silence this feature exists to remove.
+ *
+ * Materialization is lazy, and happens only for an embedded selection, just
+ * before the first operation that could spawn that adapter — the provider's
+ * availability probe, which runs earlier than any `<Session>` placement and
+ * earlier than any turn. A document that opens no `<Session>` installs nothing,
+ * extracts nothing and spawns nothing; an agent ACPX resolves prepares nothing,
+ * because its command is already on this machine. Verifying before that first
+ * spawn is what makes a broken snapshot a refusal rather than a Prompt that
  * quietly went to the wrong binary.
+ *
+ * A Prompt whose adapter names no turn is not a failed Prompt. It is journaled,
+ * retained and replayed exactly as it always was; the only thing missing is the
+ * association.
  *
  * ## Where a Prompt lands in that conversation
  *
