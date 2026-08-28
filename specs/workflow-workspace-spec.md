@@ -2128,19 +2128,31 @@ that appends that Prompt and its association; if that transaction rolls back,
 the table goes with it. No migration scans a run's existing Prompts, and nothing
 synthesizes an association for one.
 
-**The adapter is this host's own, for now.** A checkpoint can only come from
-the adapter, and no published Codex or Claude release reports one. So a workflow
-run executes the snapshots this build carries — each packed from an exact patched
-upstream commit by that project's own build — rather than the adapter `npx` would
-resolve, and the registry it installs is closed to those two providers. An agent
-this host carries no snapshot for is refused rather than resolved elsewhere.
+**Codex and Claude are overridden, and nothing else is.** A checkpoint can only
+come from the adapter, and no published Codex or Claude release reports one. So
+a workflow run executes the snapshots this build carries for those two providers
+— each packed from an exact patched upstream commit by that project's own build
+— rather than the adapter `npx` would resolve. That is an override on top of the
+ordinary agent registry, not a replacement for it. Every other agent resolves to
+the same command, and retains the same compatibility identity, as it did before
+any adapter was carried: a run may use one, it completes normally, and a session
+it retained under an earlier version stays the session it was.
 
-A snapshot is verified against its recorded digest and materialized before the
-first Prompt, and every failure refuses: falling back to a published adapter
-would complete every Prompt, retain nothing, and say nothing about why. Nothing
-is materialized for a document that opens no `<Session>`. This is temporary and
+The override is qualified rather than best-effort. For Codex and Claude the
+snapshot is verified against its recorded digest and materialized before the
+first Prompt, and every failure refuses the agent: falling back to the published
+adapter would complete every Prompt, retain nothing, and say nothing about why.
+Nothing is materialized for an agent this host carries no snapshot for, and
+nothing at all for a document that opens no `<Session>`. This is temporary and
 carried with its own exit gate; the retention contract above does not change
 when a provider returns to a published release.
+
+**An agent that names no turn is not a failed Prompt.** A run whose agent
+reports no checkpoint — because this build overrides nothing for it, or because
+the metadata was missing or unreadable — completes exactly as it always did. The
+`agent_prompt` event is journaled, the Prompt result is retained and replays
+from it, and the run simply holds zero associations. Only the association is
+absent; nothing about the completion is.
 
 **Nothing presents a checkpoint.** It is a way back into somebody's conversation,
 and neither the human nor the JSON form of `status`, `list` or `history` carries

@@ -77,8 +77,9 @@ import type {
 // A separate entrypoint because the embedded adapters are temporary (#636) and
 // must not become part of the package's stable surface.
 import {
+  carriesEmbeddedAdapter,
   createEmbeddedAdapters,
-  embeddedAdapterRegistry,
+  overlaidAdapterRegistry,
 } from "@executablemd/acp/embedded-adapters";
 import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import {
@@ -252,17 +253,30 @@ function sessionPolicy(
   /**
    * What this run retains about which agent a session belongs to.
    *
-   * The adapter's stable identity — provider, package, version and snapshot
-   * digest — never the command that launches it. That command names a directory
-   * beneath this host's materialization root, and retaining it would make where
-   * this machine put a file part of the session's identity and of every artifact
-   * sealed from the run: the same snapshot on another host would compare as a
-   * different agent.
+   * For an embedded provider: the adapter's stable identity — provider,
+   * package, version and snapshot digest — never the command that launches it.
+   * That command names a directory beneath this host's materialization root,
+   * and retaining it would make where this machine put a file part of the
+   * session's identity and of every artifact sealed from the run, so the same
+   * snapshot on another host would compare as a different agent.
+   *
+   * For every other agent: the resolved command, exactly as this profile
+   * retained it before any adapter was embedded. Its identity is not this
+   * host's to restate, and rewriting it would make sessions retained by an
+   * earlier run of the same workflow compare as a different agent — a
+   * compatibility break in return for nothing, since a Gemini session has no
+   * snapshot for the alternative to name.
    */
-  function identityOf(context: { agentName: string; sessionIdentity: string }) {
+  function identityOf(context: {
+    agentName: string;
+    agentCommand: string;
+    sessionIdentity: string;
+  }) {
     return {
       provider: PROVIDER,
-      agentCommand: adapters.identity(context.agentName),
+      agentCommand: carriesEmbeddedAdapter(adapters, context.agentName)
+        ? adapters.identity(context.agentName)
+        : context.agentCommand,
       sessionIdentity: context.sessionIdentity,
     };
   }
@@ -291,6 +305,7 @@ function sessionPolicy(
       }
       const identity = identityOf({
         agentName: context.agentName,
+        agentCommand: context.agentCommand,
         sessionIdentity: context.sessionIdentity,
       });
       const sessionKey = agentSessionKey(identity);
@@ -381,14 +396,25 @@ export function* useWorkflowAgentProfile(options: WorkflowAgentProfileOptions): 
 
   const factory: AgentProviderFactory = createAcpxProvider({
     sessionStore: store,
-    // Closed, and this host's own: an agent it carries no snapshot for is
-    // refused rather than resolved to whatever `npx` would fetch.
-    agentRegistry: embeddedAdapterRegistry(adapters),
+    // ACPX's own registry with this build's two patched snapshots over the top.
+    // Codex and Claude resolve to the adapter that names its turns; every other
+    // agent resolves to the command it always did.
+    agentRegistry: overlaidAdapterRegistry(adapters),
     // At the first point the provider would run that command, which is its
     // availability probe — earlier than a `<Session>` placement, and earlier
     // than any turn. A snapshot that cannot prove itself refuses the agent here
     // rather than surfacing later as an adapter that would not start.
-    prepareAgent: (agentName) => adapters.materialize(agentName),
+    //
+    // Asked only about an agent this build actually carries. An agent ACPX
+    // resolves is already a command on this machine, so there is nothing to put
+    // on disk for it, and reaching into the snapshots to find that out would
+    // make every run pay for a mechanism that has nothing to say about it.
+    *prepareAgent(agentName): Operation<void> {
+      if (!carriesEmbeddedAdapter(adapters, agentName)) {
+        return;
+      }
+      yield* adapters.materialize(agentName);
+    },
     ...(options.createRuntime === undefined ? {} : { createRuntime: options.createRuntime }),
     // ACP-only, stated rather than inherited. A workflow session belongs to a
     // run, not to this machine: it is named by a row in the run's own database,

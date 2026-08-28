@@ -48,6 +48,16 @@ const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "work
 
 const NOTE = "the release checklist is three items long\n";
 
+/**
+ * What ACPX resolves this agent to, and what the base branch retained for it.
+ *
+ * Written out rather than read back through `createAgentRegistry()`, because
+ * the claim is that this value did not move. Recomputing it from the same
+ * registry the profile now overlays would agree with whatever that registry
+ * currently says, which is not the thing being asserted.
+ */
+const GEMINI_COMMAND = "gemini --acp";
+
 function* documentSource(): Operation<string> {
   return yield* readTextFile(join(FIXTURES, "observation-loop.md"));
 }
@@ -60,6 +70,11 @@ function* documentSource(): Operation<string> {
  * there — an earlier step wrote it — and it keeps the fixture on disk
  * authoritative rather than restated here.
  */
+/** The one-Prompt document that asks an agent this build carries no snapshot for. */
+function* baselineAgentSource(): Operation<string> {
+  return yield* readTextFile(join(FIXTURES, "baseline-agent.md"));
+}
+
 function* documentWithNote(): Operation<string> {
   return `<File path="notes.md">${NOTE.trim()}</File>\n\n${yield* documentSource()}`;
 }
@@ -83,17 +98,37 @@ function proposal(source: string): ScriptedTurn {
  */
 function stubAdapters(): EmbeddedAdapters & { readonly materialized: string[] } {
   const materialized: string[] = [];
+  /**
+   * `answer`, but only for a provider this build carries.
+   *
+   * The real one raises for anything else, and so must this: a profile that
+   * reached into the snapshots to ask about an agent ACPX resolves would
+   * otherwise go unnoticed here, which is the whole thing WAL13 is about.
+   */
+  const carried = <T>(provider: string, answer: T): T => {
+    if (provider !== "codex" && provider !== "claude") {
+      throw new Error(`no embedded snapshot for ${provider}`);
+    }
+    return answer;
+  };
   return {
     materialized,
     providers: ["codex", "claude"],
     // Stable, and deliberately carrying no path: this is what a retained
     // session and a sealed artifact record, so it must not vary with where a
     // host materialized anything.
-    identity: (provider) => `xmd-embedded-adapter:${provider}:test@0.0.0+${"0".repeat(64)}`,
-    executablePath: (provider) => `/nonexistent/${provider}-adapter.js`,
-    command: (provider) => `node "/nonexistent/${provider}-adapter.js"`,
+    identity(provider) {
+      return carried(provider, `xmd-embedded-adapter:${provider}:test@0.0.0+${"0".repeat(64)}`);
+    },
+    executablePath(provider) {
+      return carried(provider, `/nonexistent/${provider}-adapter.js`);
+    },
+    command(provider) {
+      return carried(provider, `node "/nonexistent/${provider}-adapter.js"`);
+    },
     // deno-lint-ignore require-yield
     *materialize(provider: string): Operation<void> {
+      carried(provider, provider);
       materialized.push(provider);
     },
   };
@@ -168,6 +203,8 @@ function runFixture(
     readonly transport?: { readonly performed: string[] };
     /** The embedded adapters this attachment materializes from. */
     readonly adapters?: EmbeddedAdapters;
+    /** The agent a `<Session>` gets when its document names none. */
+    readonly defaultAgent?: string;
   } = {},
 ): Operation<Attempt> {
   return scoped(function* () {
@@ -238,7 +275,7 @@ function runFixture(
             useWorkflowAgentProfile({
               root,
               attachment,
-              defaultAgent: "codex",
+              defaultAgent: options.defaultAgent ?? "codex",
               sessionStore: options.sessionStore ?? makeStore(),
               adapters: options.adapters ?? stubAdapters(),
               ...(options.createRuntime === undefined
@@ -801,6 +838,239 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
     expect(there.launch).not.toBe(here.launch);
     expect(here.launch).toContain(plainRoot);
     expect(there.launch).toContain(spacedRoot);
+  });
+
+  it("WAL13: an agent this build carries no snapshot for runs through ACPX unchanged", function* () {
+    const root = yield* useStorageRoot();
+    const source = yield* baselineAgentSource();
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const fake = createFakeAcp();
+      // No turn identity, because the published Gemini adapter reports none.
+      // That is the ordinary case for every agent this build does not patch.
+      fake.script({ reply: "The release is ready." });
+      fake.script({ reply: "Nothing is blocking it." });
+      const adapters = stubAdapters();
+
+      const attempt = yield* runFixture(root, database, source, {
+        createRuntime: fake.create,
+        adapters,
+      });
+
+      // It completes. Carrying a patched Codex adapter is not a reason for a
+      // run to lose an agent it could always use.
+      expect(attempt.failure).toBe(undefined);
+      expect(reported(attempt)).toContain("The release is ready.");
+
+      // Resolved through ACPX's own registry, to ACPX's own command. The
+      // provider is handed one registry; this is the command it answered with.
+      expect(fake.created[0]?.agentRegistry.resolve("gemini")).toBe(GEMINI_COMMAND);
+      expect(fake.ensured[0]?.agent).toBe("gemini");
+
+      // The embedded machinery was never asked about it — not to capture it,
+      // not to verify it, not to put anything on disk. The stub raises for a
+      // provider it does not carry, so any of those would have failed the run.
+      expect(adapters.materialized).toEqual([]);
+
+      // The ordinary Prompt events are retained exactly as they always were.
+      expect(typed(attempt.events, "agent_prompt")).toHaveLength(2);
+
+      // And nothing was associated, because nothing named a turn. An absent
+      // checkpoint is not a failed Prompt: the event above is the proof that
+      // this zero is a zero rather than a run that did not happen.
+      expect(yield* retained(database)).toEqual([]);
+    });
+  });
+
+  it("WAL14: a completed and an interrupted run both replay from the stored Prompt", function* () {
+    const source = yield* baselineAgentSource();
+
+    // A completed run, replayed whole.
+    const completedRoot = yield* useStorageRoot();
+    yield* withStorage(completedRoot, function* () {
+      const database = yield* createRun();
+      const store = makeStore();
+
+      const live = createFakeAcp();
+      live.script({ reply: "The release is ready." });
+      live.script({ reply: "Nothing is blocking it." });
+      const first = yield* runFixture(completedRoot, database, source, {
+        createRuntime: live.create,
+        sessionStore: store,
+      });
+      expect(first.failure).toBe(undefined);
+      const committed = first.events.length;
+
+      // The same document again, over the journal the first attempt wrote, with
+      // a runtime nothing may reach — not even to create one.
+      const reached: string[] = [];
+      const replay = yield* runFixture(completedRoot, database, source, {
+        createRuntime: tripwireAcp((what) => reached.push(what)),
+        sessionStore: store,
+      });
+      expect(replay.failure).toBe(undefined);
+      expect(reported(replay)).toBe(reported(first));
+      expect(reached).toEqual([]);
+      expect(replay.events.length).toBe(committed);
+      // And still nothing associated. A run that retained no checkpoint
+      // replays from the stored Prompt alone, exactly like one that did.
+      expect(yield* retained(database)).toEqual([]);
+    });
+
+    // An interrupted run, resumed. This is the partial case: one Prompt is on
+    // the journal and one never finished.
+    const partialRoot = yield* useStorageRoot();
+    yield* withStorage(partialRoot, function* () {
+      const database = yield* createRun();
+      const store = makeStore();
+
+      const interrupted = createFakeAcp();
+      interrupted.script({ reply: "The release is ready." });
+      // Never settles. Halting while it is in flight is an interruption rather
+      // than a failure, which is what leaves work for a resume to finish.
+      interrupted.script({ reply: "", manual: true });
+
+      const attempt = yield* spawn(() =>
+        runFixture(partialRoot, database, source, {
+          createRuntime: interrupted.create,
+          sessionStore: store,
+        }),
+      );
+      // The barrier, not a delay: the first turn has committed and the second is
+      // in flight.
+      yield* interrupted.startedTurns(2);
+      yield* attempt.halt();
+      expect(interrupted.prompts).toHaveLength(2);
+
+      const resumed = createFakeAcp();
+      // Scripted for the unfinished turn only. If the committed Prompt were
+      // re-sent, this fake would answer it with the wrong reply and run out.
+      resumed.script({ reply: "Nothing is blocking it." });
+      const second = yield* runFixture(partialRoot, database, source, {
+        createRuntime: resumed.create,
+        sessionStore: store,
+      });
+
+      expect(second.failure).toBe(undefined);
+      expect(reported(second)).toContain("The release is ready.");
+      expect(reported(second)).toContain("Nothing is blocking it.");
+      // The committed turn was restored rather than asked again: this attempt
+      // contacted the provider only for the turn the first one never finished.
+      expect(resumed.prompts).toHaveLength(1);
+      // Reattached under the same logical key the first attempt established.
+      expect(resumed.ensured.map((input) => input.sessionKey)).toEqual(
+        interrupted.ensured.map((input) => input.sessionKey),
+      );
+      // Two completed Prompts on the journal and no association for either.
+      expect(typed(second.events, "agent_prompt")).toHaveLength(2);
+      expect(yield* retained(database)).toEqual([]);
+    });
+  });
+
+  it("WAL15: its retained identity is the resolved command, as it was before", function* () {
+    const root = yield* useStorageRoot();
+    const source = yield* baselineAgentSource();
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const fake = createFakeAcp();
+      fake.script({ reply: "The release is ready." });
+      fake.script({ reply: "Nothing is blocking it." });
+
+      const attempt = yield* runFixture(root, database, source, { createRuntime: fake.create });
+      expect(attempt.failure).toBe(undefined);
+
+      // The compatibility attribute a reattachment compares and an artifact
+      // seals. For an agent this build does not override it is ACPX's resolved
+      // command and nothing else — the same value this profile retained before
+      // any adapter was embedded, so a session retained by an earlier run of
+      // the same workflow is still that session.
+      const rows = retainedSessions(workflowRunPath(root, "observation-run"));
+      expect(rows).toHaveLength(1);
+      // Two claims, and they are different ones. That the retained value *is*
+      // what the registry resolved, and that what the registry resolved is
+      // ACPX's own built-in — the literal the base branch retained for this
+      // agent, written out rather than recomputed through the code under test.
+      expect(rows[0]?.["agent_command"]).toBe(fake.created[0]?.agentRegistry.resolve("gemini"));
+      expect(rows[0]?.["agent_command"]).toBe(GEMINI_COMMAND);
+      // Specifically not restated as an embedded identity, which is what a
+      // registry closed to the two patched providers would have forced.
+      expect(String(rows[0]?.["agent_command"])).not.toContain("xmd-embedded-adapter");
+    });
+  });
+
+  it("WAL16: a refusing snapshot refuses its own agent and leaves the others alone", function* () {
+    // Two runs, two roots. There is one run id per store, so the second half
+    // has to be a fresh run rather than a continuation of the first one's
+    // journal — which would replay a Codex placement into a Gemini document.
+    const refusedRoot = yield* useStorageRoot();
+    const unaffectedRoot = yield* useStorageRoot();
+
+    /**
+     * Embedded adapters that carry both names and can produce neither.
+     *
+     * They refuse anything they do not carry, exactly as the real one does.
+     * Without that, the second half below would pass against a registry that
+     * routed Gemini through here too — it would simply answer with a nonsense
+     * command that the substituted runtime never tries to spawn.
+     */
+    function brokenAdapters(): EmbeddedAdapters {
+      const carried = <T>(provider: string, answer: T): T => {
+        if (provider !== "codex" && provider !== "claude") {
+          throw new Error(`no embedded snapshot for ${provider}`);
+        }
+        return answer;
+      };
+      return {
+        providers: ["codex", "claude"],
+        identity: (provider) => carried(provider, `xmd-embedded-adapter:${provider}:broken@0.0.0`),
+        executablePath: (provider) => carried(provider, `/nonexistent/${provider}.js`),
+        command: (provider) => carried(provider, `node "/nonexistent/${provider}.js"`),
+        // deno-lint-ignore require-yield
+        *materialize(provider: string): Operation<void> {
+          carried(provider, provider);
+          throw new Error(`the ${provider} snapshot cannot be verified`);
+        },
+      };
+    }
+
+    yield* withStorage(refusedRoot, function* () {
+      const database = yield* createRun();
+      const fake = createFakeAcp();
+      fake.script(proposal("nothing to change"));
+
+      const attempt = yield* runFixture(refusedRoot, database, yield* documentWithNote(), {
+        createRuntime: fake.create,
+        adapters: brokenAdapters(),
+      });
+
+      // Refused, by the snapshot's own words, and before any turn: the run
+      // never sent a Prompt and never fell through to the published Codex
+      // adapter, which would have completed everything and retained nothing.
+      expect(attempt.failure).toContain("cannot be verified");
+      expect(fake.prompts).toEqual([]);
+      expect(yield* retained(database)).toEqual([]);
+    });
+
+    // The same broken snapshots, and an agent they have nothing to do with.
+    yield* withStorage(unaffectedRoot, function* () {
+      const database = yield* createRun();
+      const fake = createFakeAcp();
+      fake.script({ reply: "The release is ready." });
+      fake.script({ reply: "Nothing is blocking it." });
+
+      const attempt = yield* runFixture(unaffectedRoot, database, yield* baselineAgentSource(), {
+        createRuntime: fake.create,
+        adapters: brokenAdapters(),
+      });
+
+      // Unaffected. The refusal belongs to the override, not to the registry:
+      // a snapshot this run never needed cannot take an unrelated agent down
+      // with it.
+      expect(attempt.failure).toBe(undefined);
+      expect(fake.prompts).toHaveLength(2);
+    });
   });
 
   it("WAL7: a workflow with no Agent starts no provider and allocates no sidecar", function* () {

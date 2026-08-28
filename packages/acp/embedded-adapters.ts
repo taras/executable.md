@@ -18,8 +18,9 @@
 
 export {
   AdapterSnapshotError,
+  carriesEmbeddedAdapter,
   createEmbeddedAdapters,
   embeddedAdapterIdentities,
-  embeddedAdapterRegistry,
+  overlaidAdapterRegistry,
 } from "./src/adapter-snapshots.ts";
 export type { EmbeddedAdapters, EmbeddedAdapterSnapshot } from "./src/adapter-snapshots.ts";

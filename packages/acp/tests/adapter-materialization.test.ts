@@ -20,11 +20,13 @@ import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
+import { createAgentRegistry } from "../src/acpx-runtime.ts";
+import type { EmbeddedAdapters } from "../src/adapter-snapshots.ts";
 import {
   AdapterSnapshotError,
   createEmbeddedAdapters,
   embeddedAdapterIdentities,
-  embeddedAdapterRegistry,
+  overlaidAdapterRegistry,
 } from "../src/adapter-snapshots.ts";
 import { cp, readFile, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
@@ -119,18 +121,65 @@ describe("Tier AM — embedded adapter materialization", () => {
     expect(materialized).toBeInstanceOf(AdapterSnapshotError);
   });
 
-  it("AM3: the closed registry lists exactly the embedded providers", function* () {
+  it("AM3: the overlay resolves the two embedded providers and delegates the rest", function* () {
     const root = yield* useRoot();
-    const registry = embeddedAdapterRegistry(createEmbeddedAdapters(root));
+    const adapters = createEmbeddedAdapters(root);
+    const baseline = createAgentRegistry();
+    const registry = overlaidAdapterRegistry(adapters, baseline);
 
-    expect(registry.list().sort()).toEqual(["claude", "codex"]);
-    // Not a fall-through to ACPX's own registry, which knows a dozen names and
-    // resolves each to whatever `npx` would fetch.
-    expect(
-      yield* refusal(function* () {
-        return registry.resolve("openclaw");
-      }),
-    ).toBeInstanceOf(AdapterSnapshotError);
+    // The two this build patches resolve to the snapshot, because only it names
+    // the turn a Prompt completed.
+    for (const provider of ["codex", "claude"]) {
+      expect(registry.resolve(provider)).toBe(adapters.command(provider));
+      expect(registry.resolve(provider)).not.toBe(baseline.resolve(provider));
+    }
+
+    // Everything else is ACPX's, byte for byte. Carrying a Codex adapter is not
+    // a reason for a run to stop being able to use Gemini, and a registry that
+    // refused one would be making a far larger claim than this work needs.
+    expect(registry.resolve("gemini")).toBe(baseline.resolve("gemini"));
+    // Names, not a new namespace: every built-in is still listed, and the
+    // embedded two are among them rather than instead of them.
+    const listed = registry.list();
+    for (const name of baseline.list()) {
+      expect(listed).toContain(name);
+    }
+    expect(listed).toContain("codex");
+    expect(listed).toContain("claude");
+    expect(listed.length).toBe(new Set(listed).size);
+  });
+
+  it("AM3b: a broken embedded snapshot refuses rather than falling back", function* () {
+    const root = yield* useRoot();
+    const baseline = createAgentRegistry();
+    // Carries the two names, and cannot produce either. Exactly the state a
+    // corrupt or unverifiable snapshot leaves: the override still owns the
+    // agent, so the only honest answer is a refusal.
+    const broken: EmbeddedAdapters = {
+      providers: ["codex", "claude"],
+      identity: (provider) => `xmd-embedded-adapter:${provider}:broken@0.0.0`,
+      executablePath: () => {
+        throw new AdapterSnapshotError("this snapshot cannot be verified");
+      },
+      command: () => {
+        throw new AdapterSnapshotError("this snapshot cannot be verified");
+      },
+      // deno-lint-ignore require-yield
+      *materialize(): Operation<void> {
+        throw new AdapterSnapshotError("this snapshot cannot be verified");
+      },
+    };
+    const registry = overlaidAdapterRegistry(broken, baseline);
+
+    // Refused, and not silently answered with the published adapter — which
+    // would complete every Prompt, retain nothing, and say nothing about why.
+    const refused = yield* refusal(function* () {
+      return registry.resolve("codex");
+    });
+    expect(refused).toBeInstanceOf(AdapterSnapshotError);
+    // And the refusal is local to the override: a non-embedded agent still
+    // resolves, so one broken snapshot does not take the registry with it.
+    expect(registry.resolve("gemini")).toBe(baseline.resolve("gemini"));
   });
 
   it("AM4: an abandoned tree is replaced rather than adopted or wedged", function* () {

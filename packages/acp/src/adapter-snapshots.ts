@@ -79,6 +79,7 @@
 import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { readdir, readFile, rename as renamePath, rm as rmPath, writeFile } from "node:fs/promises";
 import { exec, useQuietProcessOutput } from "@executablemd/runtime";
+import { createAgentRegistry } from "./acpx-runtime.ts";
 import type { AcpAgentRegistry } from "./acpx-runtime.ts";
 import { ensure, type Operation, scoped, sleep } from "effection";
 import { Buffer } from "node:buffer";
@@ -662,23 +663,47 @@ export function createEmbeddedAdapters(
 }
 
 /**
- * An agent registry serving only this host's embedded adapters.
+ * ACPX's own agent registry, with this host's embedded adapters over the top.
  *
- * Deliberately closed. ACPX's own registry knows a dozen agent names and
- * resolves each to whatever `npx` would fetch; a run that fell through to one
- * of those would be talking to an adapter that names no turn, and would find
- * out by retaining nothing. An agent this host carries no snapshot for is
- * refused here instead.
+ * An overlay, not a replacement. The two providers this build carries a patched
+ * snapshot for resolve to that snapshot, because only it names the turn it just
+ * completed. Every other agent resolves exactly as it did before any of this
+ * existed — ACPX's registry, ACPX's command — because nothing about carrying a
+ * Codex adapter is a reason to stop a run from using Gemini.
  *
- * `resolve` answers without touching the disk. The command is the snapshot's
- * digest, so it is settled by the bytes this build carries — which is what lets
- * a session key be derived from it before anything has been materialized.
+ * A closed registry was the wrong shape for the same reason. It made "this
+ * build has no Codex snapshot problem to solve for Gemini" into "this build
+ * refuses Gemini", which is a much larger claim than the one being made, and it
+ * would have changed the retained identity of agents the checkpoint work has
+ * nothing to say about.
+ *
+ * The overlay is *qualified*: an embedded provider never falls through. A
+ * snapshot that cannot be verified or materialized refuses the agent, and does
+ * not quietly become the published adapter that names no turn — finding out by
+ * retaining nothing is the failure this exists to remove.
+ *
+ * `resolve` answers without touching the disk on both paths. The embedded
+ * command is the snapshot's digest beneath a known root, so it is settled by
+ * the bytes this build carries, which is what lets a session key be derived
+ * before anything has been materialized.
  */
-export function embeddedAdapterRegistry(adapters: EmbeddedAdapters): AcpAgentRegistry {
+export function overlaidAdapterRegistry(
+  adapters: EmbeddedAdapters,
+  baseline: AcpAgentRegistry = createAgentRegistry(),
+): AcpAgentRegistry {
+  const embedded = new Set(adapters.providers);
   return {
-    resolve: (agentName: string) => adapters.command(agentName),
-    list: () => [...adapters.providers],
+    resolve: (agentName: string) =>
+      embedded.has(agentName) ? adapters.command(agentName) : baseline.resolve(agentName),
+    // Both, deduplicated: the embedded providers are ACPX names this build
+    // resolves differently, not names it adds.
+    list: () => [...new Set([...baseline.list(), ...adapters.providers])],
   };
+}
+
+/** Whether this build carries an embedded adapter for `agentName`. */
+export function carriesEmbeddedAdapter(adapters: EmbeddedAdapters, agentName: string): boolean {
+  return adapters.providers.includes(agentName);
 }
 
 /** Every embedded snapshot's identity, for provenance checks and diagnostics. */
