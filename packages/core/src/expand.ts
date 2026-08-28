@@ -74,6 +74,8 @@ import { ActiveProjection } from "./projection.ts";
 import type { ProjectionHandle, ProjectionRequest } from "./projection.ts";
 import { ActiveLoop, recordIteration, recordOutcome } from "./loop.ts";
 import type { LoopFrame, LoopIdentity, LoopOutcome } from "./loop.ts";
+import { createReturnBody, missingReturnMessage } from "./return-flow.ts";
+import type { ReturnBody } from "./return-flow.ts";
 import { unbox, useEvalScope } from "@effectionx/scope-eval";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { SchemaValidationError, validateProps, validateReturnValue } from "./validate.ts";
@@ -192,6 +194,7 @@ function expandChildrenScoped(
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
     const overrideEnv = override === undefined ? undefined : { values: override };
@@ -214,6 +217,7 @@ function expandChildrenScoped(
       0,
       checkedFailures,
       authority,
+      returnBody,
     );
   });
 }
@@ -241,6 +245,13 @@ interface ProjectionState {
    * loop the author could see.
    */
   callerLoop: LoopFrame | undefined;
+  /**
+   * The value body active where the caller wrote the content it projects, read
+   * at the invocation site before the invocation cleared it for its own body.
+   * Projected content is the caller's text, so a `<Return>` in it satisfies the
+   * declaration the author could see.
+   */
+  callerReturn: ReturnBody | undefined;
   /**
    * This invocation's own structural path (§5.6). A projection is identified by
    * the invocation that performed it, so the same authored content projected
@@ -347,6 +358,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     hideSet: Set<string>;
     inner: ProjectionHandle | undefined;
     loop: LoopFrame | undefined;
+    returnFrame: ReturnBody | undefined;
     errors: Segment[];
     /**
      * The caller's region, when this projection renders into one. Structural
@@ -405,6 +417,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             0,
             state.checkedFailures,
             state.authority,
+            options.returnFrame,
           );
           outcome.resolve({ segments: rendered });
         } catch (error) {
@@ -500,6 +513,8 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             // Dynamic markdown is the component's own text, so it is not written
             // where the caller's loop is and cannot break it.
             yield* ActiveLoop.set(request.kind === "markdown" ? undefined : state.callerLoop);
+            // Dynamic markdown is the component's own text for the same reason,
+            // so a <Return> scanned out of it satisfies no caller declaration.
             yield* expandSegmentsWithin(
               project(segments),
               frame.meta,
@@ -511,6 +526,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
               0,
               state.checkedFailures,
               state.authority,
+              request.kind === "markdown" ? undefined : state.callerReturn,
             );
             outcome.resolve({ segments: [...errors, ...rendered] });
           } catch (error) {
@@ -550,6 +566,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
         hideSet: state.caller.hideSet,
         inner: state.enclosing,
         loop: state.callerLoop,
+        returnFrame: state.callerReturn,
         errors: [],
         owner,
         path: extendPath(elementPath, { f: "proj" }),
@@ -642,6 +659,7 @@ export function expandSegments(
     indexBase,
     checkedFailures,
     authority,
+    undefined,
   );
 }
 
@@ -720,6 +738,7 @@ function* expandListSegments(
    */
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   // An execution opens the table its printed errors record their causes in.
   // Expansion driven directly — a test, a tool describing a document — has no
@@ -742,6 +761,7 @@ function* expandListSegments(
         indexBase,
         checkedFailures,
         authority,
+        returnBody,
       );
     });
   }
@@ -817,11 +837,27 @@ function* expandListSegments(
         }
 
         if (segment.name === "Return") {
-          // Definition-owned <Return> is consumed by value-body expansion
-          // before it reaches here. Reaching this branch means a projected,
-          // dynamically scanned, or misplaced <Return> — diagnose it rather
-          // than resolving a component named Return.
-          result.push(yield* raise(misplacedReturnError(segment)));
+          // A <Return> is the value body's own only where that body's frame is
+          // ambient: under its structural directives, and in content its author
+          // projected. Without one — a foreign body, dynamically scanned
+          // markdown, or a text body — it stays reserved and is diagnosed
+          // rather than resolving a component named Return.
+          // Claimed before the expression is evaluated, so a second return
+          // reaching this body while the first is still resolving evaluates
+          // nothing of its own. A carrier this engine did not mint owns no
+          // body, so a forged one answers `undefined` here and takes the
+          // reserved path below rather than selecting anything.
+          // The owning body arrives as a parameter of this expansion, so it is
+          // reachable only by the engine that passed it: nothing is published
+          // for a document to read, replace, or hand to an exported helper.
+          if (returnBody === undefined) {
+            result.push(yield* raise(misplacedReturnError(segment)));
+            break;
+          }
+          const declared = returnBody.claim();
+          // What the value is validated against comes from the engine's own
+          // record of this body, never from the carrier the context held.
+          returnBody.select(yield* resolveReturnValue(declared.owner, declared.returns, segment));
           break;
         }
 
@@ -838,6 +874,7 @@ function* expandListSegments(
               elementPath,
               checkedFailures,
               authority,
+              returnBody,
             )),
           );
           break;
@@ -857,6 +894,7 @@ function* expandListSegments(
               elementPath,
               checkedFailures,
               authority,
+              returnBody,
             )),
           );
           break;
@@ -877,6 +915,7 @@ function* expandListSegments(
             elementPath,
             checkedFailures,
             authority,
+            returnBody,
           );
           break;
         }
@@ -903,6 +942,7 @@ function* expandListSegments(
             elementPath,
             checkedFailures,
             authority,
+            returnBody,
           );
           break;
         }
@@ -920,6 +960,7 @@ function* expandListSegments(
             elementPath,
             checkedFailures,
             authority,
+            returnBody,
           );
           break;
         }
@@ -940,6 +981,7 @@ function* expandListSegments(
               0,
               checkedFailures,
               authority,
+              returnBody,
             );
           // Which placement this is, answered by identity rather than by name:
           // a trusted harness knows which expansions its own declaration scan
@@ -1003,6 +1045,7 @@ function* expandListSegments(
           elementPath,
           checkedFailures,
           authority,
+          returnBody,
         );
         // A printed error the callee produced is data, and stays data here: it
         // was decided once, where it was raised, under the error mode governing
@@ -1146,6 +1189,7 @@ function* expandListSegments(
                 },
                 checkedFailures,
                 authority,
+                returnBody,
               ),
             );
           }
@@ -1207,6 +1251,7 @@ function* checkedCommandFailure(
   segment: ErrorSegment,
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<ErrorSegment> {
   // Written down before it is raised or projected, and before the error mode is
   // consulted at all: the mode decides how this is reported, never whether the
@@ -1313,6 +1358,7 @@ function* expandLet(
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<ErrorSegment[]> {
   const written = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
   if (written.some((name) => !LET_PROPS.has(name))) {
@@ -1393,6 +1439,7 @@ function* expandLet(
       0,
       checkedFailures,
       authority,
+      returnBody,
     ),
   );
 
@@ -1505,6 +1552,7 @@ function* expandEach(
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (n) => !EACH_PROPS.has(n),
@@ -1589,6 +1637,7 @@ function* expandEach(
       extendPath(path, { f: "item", i: iteration }),
       checkedFailures,
       authority,
+      returnBody,
     );
     // A `<Break>` in the body exits the enclosing `<Loop>`, so the remaining
     // items are part of the work that iteration no longer does.
@@ -1851,6 +1900,7 @@ function* expandIf(
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<void> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (name) => !IF_PROPS.has(name),
@@ -1925,6 +1975,7 @@ function* expandIf(
     0,
     checkedFailures,
     authority,
+    returnBody,
   );
 }
 
@@ -2026,6 +2077,7 @@ function* expandLoop(
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<void> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (name) => !LOOP_PROPS.has(name),
@@ -2088,6 +2140,7 @@ function* expandLoop(
           0,
           checkedFailures,
           authority,
+          returnBody,
         );
         if (frame.broken) {
           break;
@@ -2212,6 +2265,7 @@ function* expandPrintErrors(
   /** The ledger this region grants recovery on top of (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<void> {
   const names = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
   if (names.length > 0) {
@@ -2241,6 +2295,7 @@ function* expandPrintErrors(
       // recovers is not one the run suffered.
       recoveringLedger(),
       authority,
+      returnBody,
     );
   });
 }
@@ -2278,6 +2333,7 @@ function* expandComponent(
    */
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   // Cycle detection — Prosser's algorithm
   if (hideSet.has(name)) {
@@ -2375,6 +2431,7 @@ function* expandComponent(
       path,
       checkedFailures,
       authority,
+      returnBody,
       selected,
       dispatcher,
     );
@@ -2496,6 +2553,7 @@ function* expandComponent(
   // in, and the invocation is about to clear it for the component's own body.
   const siteEvalScope = yield* evalScope;
   const siteLoop = yield* ActiveLoop.get();
+  const siteReturn = returnBody;
 
   const expansion = snapshot(path, name, position);
 
@@ -2523,6 +2581,7 @@ function* expandComponent(
       },
       counter,
       callerLoop: siteLoop,
+      callerReturn: siteReturn,
       ownPath: path,
       printedErrors: bodyContentErrors,
       checkedFailures,
@@ -2540,6 +2599,10 @@ function* expandComponent(
     // and anything the body does outside a projection finds none.
     yield* ActiveLoop.set(undefined);
 
+    // And from the caller's value body for the same reason: a <Return> written
+    // here satisfies this component's own `returns`, never the caller's. A
+    // value body installs its own frame below; a rendered one owns none, so a
+    // <Return> written in it stays reserved.
     // Published on the body task, so the component's own body and everything it
     // owns read this expansion, and a nested one uncovers it again on the way
     // out (§5.6).
@@ -2597,6 +2660,7 @@ function* expandComponent(
           path,
           checkedFailures,
           authority,
+          returnBody,
         );
       });
     } catch (error) {
@@ -2641,6 +2705,7 @@ function* expandComponent(
       path,
       checkedFailures,
       authority,
+      returnBody,
     );
   });
 
@@ -2791,6 +2856,7 @@ function* expandFunctionComponent(
   /** This work's checked-failure ledger, inherited from the invoking element. */
   inherited: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
   /**
    * The identity domain canonical resolution selected for this invocation.
    *
@@ -2919,6 +2985,7 @@ function* expandFunctionComponent(
   // here for the same reason — see expandComponent.
   const siteEvalScope = yield* evalScope;
   const siteLoop = yield* ActiveLoop.get();
+  const siteReturn = returnBody;
 
   // Resolved once, here: an operand is what the call site meant, not what the
   // component's own body later did to the environment.
@@ -3004,6 +3071,7 @@ function* expandFunctionComponent(
           },
           counter,
           callerLoop: siteLoop,
+          callerReturn: siteReturn,
           ownPath: path,
           checkedFailures,
           authority,
@@ -3722,9 +3790,10 @@ function misplacedReturnError(segment: ComponentElement): ErrorSegment {
   return {
     type: "error",
     message:
-      `${previewReturn(segment)} must be a direct top-level child of the document or ` +
-      "component whose `returns` declaration it satisfies. <Return> is reserved: it " +
-      "never resolves a component, and content a caller projects cannot declare one.",
+      `${previewReturn(segment)} is not written in the flow of a body that declares ` +
+      "`returns`, so there is no declaration for it to satisfy. <Return> is reserved: " +
+      "it never resolves a component, and neither markdown produced at runtime nor " +
+      "another component's body can declare one.",
     source: "Return",
   };
 }
@@ -3783,10 +3852,6 @@ export function validateOutputPlacement(bodySegments: Segment[]): ErrorSegment |
   };
 }
 
-export function isTopLevelReturn(segment: Segment): segment is ComponentElement {
-  return segment.type === "component" && segment.name === "Return";
-}
-
 function previewReturn(segment: ComponentElement): string {
   if ("value" in segment.expressions) {
     return `<Return value={${segment.expressions.value}} />`;
@@ -3802,31 +3867,32 @@ function structureError(source: string, headline: string, violations: string[]):
   return { type: "error", message: `${headline}\n${list}`, source };
 }
 
-function collectReturns(bodySegments: Segment[]): {
-  topLevel: ComponentElement[];
-  nested: string[];
-} {
-  const topLevel: ComponentElement[] = [];
-  const nested: string[] = [];
+/**
+ * Every `<Return>` the body itself declares, at any depth.
+ *
+ * Depth is not a violation: a return under `<If>` or inside a `<Loop>` is
+ * written in the body's own flow and is reached by ordinary expansion. What
+ * this walk does not see is the only thing that still cannot declare one —
+ * another component's definition, and markdown produced at runtime — because
+ * it reads this body's source AST and nothing else.
+ */
+function collectReturns(bodySegments: Segment[]): ComponentElement[] {
+  const declared: ComponentElement[] = [];
 
-  const walk = (segments: Segment[], depth: number): void => {
+  const walk = (segments: Segment[]): void => {
     for (const segment of segments) {
       if (segment.type !== "component") {
         continue;
       }
       if (segment.name === "Return") {
-        if (depth === 0) {
-          topLevel.push(segment);
-        } else {
-          nested.push(`${previewReturn(segment)} is not a direct top-level child`);
-        }
+        declared.push(segment);
       }
-      walk(segment.children, depth + 1);
+      walk(segment.children);
     }
   };
 
-  walk(bodySegments, 0);
-  return { topLevel, nested };
+  walk(bodySegments);
+  return declared;
 }
 
 function returnElementViolations(segment: ComponentElement): string[] {
@@ -3846,11 +3912,11 @@ function returnElementViolations(segment: ComponentElement): string[] {
 }
 
 function textModeReturnError(bodySegments: Segment[]): ErrorSegment | undefined {
-  const { topLevel, nested } = collectReturns(bodySegments);
-  if (topLevel.length === 0 && nested.length === 0) {
+  const declared = collectReturns(bodySegments);
+  if (declared.length === 0) {
     return undefined;
   }
-  const found = [...topLevel.map(previewReturn), ...nested];
+  const found = declared.map(previewReturn);
   return structureError(
     "Return",
     "<Return> requires a document or component that declares `returns`. Declare a " +
@@ -3875,16 +3941,12 @@ function valueModeStructureError(bodySegments: Segment[]): ErrorSegment | undefi
   };
   walkOutput(bodySegments);
 
-  const { topLevel, nested } = collectReturns(bodySegments);
-  violations.push(...nested);
+  const declared = collectReturns(bodySegments);
 
-  if (topLevel.length === 0) {
-    violations.push("no direct top-level <Return>");
+  if (declared.length === 0) {
+    violations.push("no <Return>");
   }
-  for (const duplicate of topLevel.slice(1)) {
-    violations.push(`${previewReturn(duplicate)} is a duplicate declaration`);
-  }
-  for (const declaration of topLevel) {
+  for (const declaration of declared) {
     violations.push(...returnElementViolations(declaration));
   }
 
@@ -3894,7 +3956,7 @@ function valueModeStructureError(bodySegments: Segment[]): ErrorSegment | undefi
   return structureError(
     "Return",
     "A component that declares `returns` renders nothing and produces exactly one " +
-      "value through a direct top-level <Return>. Problems found:",
+      "value through a <Return> its own body executes. Problems found:",
     violations,
   );
 }
@@ -4012,6 +4074,7 @@ export function* expandBody(
   /** Whether the invoking element sits inside a `<PrintErrors>` region. */
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   if (!bodyHasOutput(bodySegments)) {
     const substituted = substituteContent(bodySegments, children, callerEnv, claim);
@@ -4026,6 +4089,7 @@ export function* expandBody(
       0,
       checkedFailures,
       authority,
+      returnBody,
     );
   }
 
@@ -4047,6 +4111,7 @@ export function* expandBody(
         0,
         checkedFailures,
         authority,
+        returnBody,
       );
     } else if (chunk.output) {
       yield* scoped(function* () {
@@ -4062,6 +4127,7 @@ export function* expandBody(
           0,
           checkedFailures,
           authority,
+          returnBody,
         );
       });
     } else {
@@ -4079,6 +4145,7 @@ export function* expandBody(
           chunkBase,
           checkedFailures,
           authority,
+          returnBody,
         );
       });
     }
@@ -4106,6 +4173,7 @@ function runDocumentation(
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
     yield* ErrorMode.set("throw");
@@ -4120,6 +4188,7 @@ function runDocumentation(
       indexBase,
       checkedFailures,
       authority,
+      returnBody,
     );
   });
 }
@@ -4171,17 +4240,21 @@ function* expandValueBody(
   /** Whether the invoking element sits inside a `<PrintErrors>` region. */
   checkedFailures: CheckedFailures | undefined,
   authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
 ): Operation<Json> {
   const slots = partitionBySlot(children);
   const state: SubstitutionState = { errorsEmitted: false };
   const project = makeProjectFn(callerEnv);
-  let produced: { value: Json } | undefined;
+
+  // This body's own frame, published for the whole body rather than consulted
+  // per top-level segment: a `<Return>` under `<If>` or inside a `<Loop>` is
+  // reached by ordinary expansion, and finds this frame because those
+  // directives keep the ambient one.
+  // This body's own, held as a local for the whole expansion and handed to the
+  // segments it expands. Nothing else can reach it.
+  const ownBody = createReturnBody(componentName, returns);
 
   for (const [index, segment] of bodySegments.entries()) {
-    if (isTopLevelReturn(segment)) {
-      produced = { value: yield* resolveReturnValue(componentName, returns, segment) };
-      continue;
-    }
     const docSegments = substituteSegmentList([segment], slots, project, state, claim);
     yield* runDocumentation(
       docSegments,
@@ -4193,11 +4266,16 @@ function* expandValueBody(
       index,
       checkedFailures,
       authority,
+      ownBody,
     );
   }
 
-  if (!produced) {
-    throw new Error(`<${componentName} /> declares \`returns\` but produced no <Return> value.`);
+  // Read after the body finished, so a return anywhere in it — including one a
+  // projection reached — has been executed by now. Settled from the body this
+  // expansion created and has held as a local ever since.
+  const selected = ownBody.settle();
+  if (!selected) {
+    throw new Error(missingReturnMessage(componentName));
   }
-  return produced.value;
+  return selected.value;
 }

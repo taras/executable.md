@@ -77,6 +77,84 @@ const INVALID_STRUCTURE_ROOT = [
   "",
 ].join("\n");
 
+/** A conditional return the run selects — the shape #640 exists for. */
+const SELECTED_CONDITIONAL_ROOT = [
+  "---",
+  "returns:",
+  "  type: string",
+  "---",
+  "",
+  "<If condition={true}>",
+  '<Return value="chosen" />',
+  "</If>",
+  "",
+].join("\n");
+
+/** The same shape, unselected: statically valid, and it executes no return. */
+const UNSELECTED_CONDITIONAL_ROOT = [
+  "---",
+  "returns:",
+  "  type: string",
+  "---",
+  "",
+  "<If condition={false}>",
+  '<Return value="chosen" />',
+  "</If>",
+  "",
+].join("\n");
+
+/**
+ * Two executed returns. The second expression names a binding that does not
+ * exist, so evaluating it at all would report `SECOND_MARKER` instead — which
+ * makes its absence proof that it was never evaluated.
+ */
+const DUPLICATE_RETURN_ROOT = [
+  "---",
+  "returns:",
+  "  type: string",
+  "---",
+  "",
+  '<Return value="first" />',
+  "",
+  "<Return value={SECOND_MARKER.reached} />",
+  "",
+].join("\n");
+
+/**
+ * A document attacking its own return state through the named context.
+ *
+ * `expand.return` is reachable by name from an eval block, so the document
+ * reads the carrier the engine published, tries to write a selected value onto
+ * it, tries to clear its claim, and finally replaces the context with a
+ * fully-formed forgery. Its one authored `<Return>` is unselected, so anything
+ * it manages to select would be a value the engine never validated.
+ */
+const CARRIER_ATTACK_ROOT = [
+  "---",
+  "returns:",
+  "  type: number",
+  "---",
+  "",
+  "```js eval",
+  'import { createContext } from "effection";',
+  'const ctx = createContext("expand.return");',
+  "const carrier = yield* ctx.get();",
+  'try { carrier.selected = { value: "schema-bypassed" }; } catch (error) {}',
+  "try { carrier.claimed = false; } catch (error) {}",
+  "yield* ctx.set({",
+  '  owner: "__root__",',
+  '  returns: { type: "string" },',
+  "  claimed: true,",
+  '  selected: { value: "schema-bypassed" },',
+  "});",
+  "```",
+  "",
+  "<If condition={false}>",
+  "<Return value={1} />",
+  "</If>",
+  "",
+].join("\n");
+
 const FAILS_AFTER_RETURN_ROOT = [
   "---",
   "returns:",
@@ -164,7 +242,54 @@ describe("Tier VR — xmd run value roots", { sanitizeOps: false, sanitizeResour
     });
     expect(result.code).toBe(1);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("no direct top-level <Return>");
+    expect(result.stderr).toContain("no <Return>");
+  });
+
+  it("VR4a: a selected conditional <Return> writes its result", function* () {
+    const result = yield* useFixture({ "doc.md": SELECTED_CONDITIONAL_ROOT }, function* (dir) {
+      return yield* runCli(["run", "doc.md"], { cwd: dir }).expect();
+    });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toBe("chosen");
+  });
+
+  it("VR4b: an unselected conditional <Return> reaches the missing-return failure", function* () {
+    // Statically valid, so the body runs; nothing executes the return, which is
+    // how a bounded exhaustion reaches this diagnostic at all.
+    const result = yield* useFixture({ "doc.md": UNSELECTED_CONDITIONAL_ROOT }, function* (dir) {
+      return yield* runCli(["run", "doc.md"], { cwd: dir }).join();
+    });
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      "The root document declares `returns` but produced no <Return> value.",
+    );
+  });
+
+  it("VR4c: two executed <Return>s exit nonzero with the duplicate diagnostic", function* () {
+    const result = yield* useFixture({ "doc.md": DUPLICATE_RETURN_ROOT }, function* (dir) {
+      return yield* runCli(["run", "doc.md"], { cwd: dir }).join();
+    });
+    expect(result.code).toBe(1);
+    // The first selected value is discarded rather than published.
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      "The root document declares `returns` but executed more than one <Return>.",
+    );
+    expect(result.stderr).not.toContain("SECOND_MARKER");
+  });
+
+  it("RV10e: a document cannot select a value through the named return context", function* () {
+    const result = yield* useFixture({ "doc.md": CARRIER_ATTACK_ROOT }, function* (dir) {
+      return yield* runCli(["run", "doc.md"], { cwd: dir }).join();
+    });
+    expect(result.code).toBe(1);
+    // Nothing was published: not the forged value, and not a partial result.
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      "The root document declares `returns` but produced no <Return> value.",
+    );
+    expect(result.stderr).not.toContain("schema-bypassed");
   });
 
   it("VR5: a failure after <Return> exits nonzero with empty stdout", function* () {
@@ -201,7 +326,7 @@ describe("Tier VR — xmd run value roots", { sanitizeOps: false, sanitizeResour
     });
     expect(result.code).toBe(1);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("no direct top-level <Return>");
+    expect(result.stderr).toContain("no <Return>");
   });
 
   /**

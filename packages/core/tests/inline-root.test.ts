@@ -237,9 +237,19 @@ describe("Tier IR — inline root documents", () => {
    */
   it("IR6: a failed run replays its outcome with no filesystem at all", function* () {
     const stream = new InMemoryStream();
-    const source = ["---", "returns:", "  ok: { type: boolean }", "---", "", "no return"].join(
-      "\n",
-    );
+    // Statically valid — the return is authored, just never executed — so the
+    // failure that replays is the runtime missing-return one rather than a
+    // preflight refusal.
+    const source = [
+      "---",
+      "returns:",
+      "  ok: { type: boolean }",
+      "---",
+      "",
+      "<If condition={false}>",
+      "<Return value={{ ok: true }} />",
+      "</If>",
+    ].join("\n");
 
     const golden = yield* scoped(function* () {
       yield* useStubFs({ "doc.md": source });
@@ -254,7 +264,9 @@ describe("Tier IR — inline root documents", () => {
 
     expect(replayed.ok).toBe(false);
     const message = replayed.ok ? "" : replayed.error.message;
-    expect(message).toContain("no direct top-level <Return>");
+    expect(message).toContain(
+      "The root document declares `returns` but produced no <Return> value.",
+    );
     expect(message).not.toContain("filesystem read");
   });
 

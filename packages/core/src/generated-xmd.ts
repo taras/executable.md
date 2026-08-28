@@ -1377,6 +1377,9 @@ function expand(
       // select is not the enclosing document's business and cannot be reached
       // from it.
       { imports: authority, forms: authority.forms },
+      // A generated fragment is the engine's own text, so it owns no value body
+      // and a <Return> written into it satisfies no declaration.
+      undefined,
     );
     return { observations: authority.values, output: renderSegments(expanded) };
   });

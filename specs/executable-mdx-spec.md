@@ -3223,9 +3223,14 @@ A **text root** declares no `returns` and behaves exactly as described above:
 its rendered Markdown is its return value, and `execute()` completes with that
 text.
 
-A **value root** declares `returns`. It executes its complete body, holds
-exactly one direct top-level `<Return>`, validates that value against its
-schema, and completes with the validated JSON. Its rendered body Markdown is
+A **value root** declares `returns`. It executes its complete body, declares one
+or more `<Return>` elements anywhere in that body's own flow and executes
+exactly one of them, validates that value against its schema, and completes with
+the validated JSON. A conditional return is therefore how a root selects a value
+only when a condition holds; when none executes, the root completes `Err` with
+`The root document declares \`returns\` but produced no <Return> value.`, which
+is how a bounded search that found nothing reports itself. Selection does not
+end the root: documentation after it still runs. Its rendered body Markdown is
 not its result: the output stream stays an observability channel a consumer may
 watch independently, and a printed error can never pass for a result. A value
 root's body therefore runs fail-fast — a structural violation, an invalid
@@ -5984,8 +5989,15 @@ can rely on.
 
 #### `<Return>` selects the value
 
-A value component contains exactly one direct top-level `<Return value={…} />`.
-It takes that one prop, takes no children, and renders nothing.
+A value component declares one or more `<Return value={…} />` elements in its
+body's own source flow and executes exactly one of them. Each takes that one
+prop, takes no children, and renders nothing.
+
+**Depth is not placement.** A `<Return>` under `<If>`, inside a `<Loop>` or an
+`<Each>`, or within a `<Let>` body belongs to the body those directives are
+written in, so a value can be selected conditionally. What decides ownership is
+whose flow the element was written in, not how deeply it sits — the same rule
+`<Break>` follows for the loop it exits.
 
 `<Return>` marks *which* value the body produces; it does not end the body.
 Everything else in the body is documentation: it executes in document order for
@@ -5994,11 +6006,63 @@ evaluated at its own position, so it sees bindings computed before it and not
 bindings created after it, and documentation after `<Return>` still runs. The
 value is held until the whole body completes.
 
-`<Return>` is reserved throughout expansion. Only a definition-owned direct
-top-level `<Return>` is consumed, so a `<Return>` that reaches ordinary
-expansion — projected caller content, `render(markdown)` output, any
-dynamically produced segment — is diagnosed rather than resolved as a component
-named `Return`.
+**A value body owns its returns for one execution.** A value root and a
+Markdown value component each own the body they expand:
+
+- `<If>`, `<Loop>`, `<Each>` and `<Let>` keep the owning body, because a return
+  written under them is written in that body's flow;
+- invoking a component hides the caller's body from the invoked component's own
+  body, so a `<Return>` a component writes satisfies its own declaration and
+  never its caller's;
+- a nested value body owns a separate declaration, and both executions stand;
+- content the caller projected keeps the caller's body, through a Markdown
+  `<Content />` and through a function component's `content()` alike; and
+- `render(markdown)` output and a foreign body's text own nothing, so a
+  `<Return>` there stays reserved.
+
+**Exactly one execution.** The first executed `<Return>` claims the body before
+it evaluates its expression, then evaluates at that position, crosses the JSON
+boundary and validates. A second execution fails the body — whether the first
+is still resolving or has already resolved — evaluates nothing of its own, and
+the first value is not published. Projecting one authored `<Return>` twice is
+two executions and fails the same way:
+
+```text
+The root document declares `returns` but executed more than one <Return>.
+<Name /> declares `returns` but executed more than one <Return>.
+```
+
+When no `<Return>` executes, the body reports that instead:
+
+```text
+The root document declares `returns` but produced no <Return> value.
+<Name /> declares `returns` but produced no <Return> value.
+```
+
+Selection appends no durable event. A partial replay replays completed effects
+and reconstructs the same ownership while re-executing the authored selection; a
+completed document replay reuses the retained terminal result without expanding
+the body.
+
+**Selection is the engine's, not the document's.** A document's own eval block
+reaches further than it looks: a named context by name, because
+`createContext(name)` names the slot the engine would publish on, and an
+internal module by file URL, because an eval block's imports are hoisted and
+resolved like any other module's. Anything published contextually is therefore
+readable, and any exported function acting on what was published is callable.
+
+So ownership travels through neither. The body a `<Return>` claims reaches it as
+a parameter of expansion, and no exported function accepts another body's. A
+component invocation passes none, so an invoked body is isolated; caller
+projection passes the caller's; dynamically scanned markdown passes none. A body
+settles from the object its own expansion created and held, so nothing a
+document can read or replace decides what it returns, and no value reaches a
+caller without crossing the schema its body declared.
+
+`<Return>` is reserved throughout expansion. Only a `<Return>` whose owning
+value body is the one expanding it is consumed, so a `<Return>` that reaches
+ordinary expansion without one — `render(markdown)` output, a foreign body, a
+text body — is diagnosed rather than resolved as a component named `Return`.
 
 #### Validation
 
@@ -6018,11 +6082,15 @@ declaration. All violations are reported together, and a structurally invalid
 component runs no eval, exec, `<Let>`, or nested component:
 
 - `<Return>` in a text component;
-- a missing, duplicated, nested, or otherwise misplaced `<Return>`;
+- a value body whose own source declares no `<Return>` at all;
 - `<Output>` in a component that declares `returns` — the two are mutually
   exclusive;
 - a `<Return>` with children, with any prop other than `value`, or without
   `value`.
+
+Depth and source count are not violations. Two authored declarations are valid
+structure, so a second *executed* return is a runtime failure rather than a
+preflight one — which means effects preceding it may already have run.
 
 Invoking a value component without `as` fails the same way, before its body
 runs: a component that renders nothing and is not captured produces nothing.
@@ -10650,14 +10718,21 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | RV7 | JSON boundary | `undefined`, non-finite, class instance, and cyclic values are rejected before binding |
 | RV8 | Defaults | Schema defaults fill the returned clone, not the producer's object |
 | RV9 | Text mode | No `returns` renders and captures a string; an explicit string schema is value mode |
-| RV10 | Structure | Missing, duplicate, nested, misplaced `<Return>`, `<Output>` with `returns`, bad props, and a missing `as` fail before body effects |
-| RV11 | Reservation | A projected or dynamically produced `<Return>` is diagnosed, never imported |
-| RV12 | Execution order | Documentation after `<Return>` runs; the value sees only preceding bindings |
+| RV10a | Structure | A value body with no authored `<Return>`, a `<Return>` in a text body, `<Output>` with `returns`, bad props, and a missing `as` fail before body effects; a caller's `<Return>` does not satisfy the callee |
+| RV10b | Depth is valid | A nested `<Return>` passes preflight and reaches runtime, its body's effect having run |
+| RV10c | The claim precedes evaluation | Two projections of one authored `<Return>` are started before either is awaited: the duplicate is reported, exactly one expression is ever evaluated, and no value is published |
+| RV10e | Selection is engine-owned | Neither reaching for the return context nor importing the engine's own return module by file URL selects anything: the value root exits 1 with empty stdout and the missing-return diagnostic, the Markdown value component reports its own and binds nothing, and no unvalidated value — a string against a number schema — is published |
+| RV10d | Executed multiplicity | Two executed `<Return>`s, and one authored `<Return>` projected twice, each fail with the owner's duplicate diagnostic and publish no value; the second expression would fail loudly if evaluated and never is |
+| RV11a | Structural ownership | `<If>`, `<Loop>` with `<Break />`, `<Each>` and `<Let>` each keep the owning value body; an unselected `<If>` reaches that body's missing-return diagnostic |
+| RV11b | Caller projection | A caller's `<Return>` selects through a Markdown `<Content />` wrapper and through a function component's `content()` |
+| RV11c | Reservation | A `<Return>` an invoked body writes, and one `render()` generates beneath an active value frame, are diagnosed and never resolve a component named `Return` |
+| RV12 | Execution order and precedence | Documentation after `<Return>` runs and the value sees only preceding bindings; a later failure, a teardown failure, and a halt after selection each win, teardown completing and no selected value being published |
 | RV13 | Function components | `export const returns` gives the same validation and capture; a text component returning a non-string errors |
-| RV14 | Composition | A value component invoked inside another component's body |
+| RV14 | Nested value bodies | A value component invoked inside another component's body; the outer captures the inner and then executes its own return, and neither execution is a duplicate |
 | RV15 | Value roots | Completion carries the validated value; body text stays on `.output`; every failure completes `Err` |
 | RV16 | Inspection | `returns` and `returnMode` report the effective schema without executing |
 | RV17 | Replay | Golden run and replay produce the same value and output with no re-execution |
+| RV17a | Partial replay | Interrupting after a completed effect and a selection, then resuming the same journal, replays the effect without performing it, reconstructs the selection, produces the same value, and adds no return event |
 | RV18 | Schema caches | The same schema object compiles as a return and fails as props, in either order |
 | VR1–VR6 | `xmd run` | JSON alone on stdout, `--verbose` body output on stderr, failures non-zero with empty stdout |
 | VR10 | A command inside a value root | Its stdout is shown on the stream the result leaves free, and recorded as stdout |

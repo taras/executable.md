@@ -79,11 +79,10 @@ import {
   expandSegmentsWithin,
   expandBody,
   bodyHasOutput,
-  isTopLevelReturn,
-  resolveReturnValue,
   validateBodyStructure,
   createBlockCounter,
 } from "./expand.ts";
+import { createReturnBody, missingReturnMessage } from "./return-flow.ts";
 import type { BlockCounter } from "./expand.ts";
 import {
   DocumentationError,
@@ -1594,7 +1593,11 @@ function* runValueRoot(
   checkedFailures: CheckedFailures,
   authority: ExpansionAuthority,
 ): Operation<DocumentResult> {
-  let produced: { value: Json } | undefined;
+  // Created outside the scope the body runs in, so the value it selected is
+  // still readable after that scope — and its teardown — has finished.
+  // The root's own, held as a local and handed to the segments it expands, so
+  // nothing a document can read or replace decides what this root returns.
+  const ownBody = createReturnBody("__root__", returns);
 
   yield* scoped(function* () {
     yield* Component.around(
@@ -1607,10 +1610,6 @@ function* runValueRoot(
     );
 
     for (const segment of root.bodySegments) {
-      if (isTopLevelReturn(segment)) {
-        produced = { value: yield* resolveReturnValue("__root__", returns, segment) };
-        continue;
-      }
       const expanded = yield* expandSegmentsWithin(
         [segment],
         root.meta,
@@ -1622,6 +1621,7 @@ function* runValueRoot(
         0,
         checkedFailures,
         authority,
+        ownBody,
       );
       for (const resolved of expanded) {
         const text = renderSegment(resolved);
@@ -1634,10 +1634,12 @@ function* runValueRoot(
   });
 
   yield* refuseCheckedFailure(checkedFailures);
-  if (!produced) {
-    throw new Error("The root document declares `returns` but produced no <Return> value.");
+  // Read after the body finished, so a return anywhere in it has executed.
+  const selected = ownBody.settle();
+  if (!selected) {
+    throw new Error(missingReturnMessage("__root__"));
   }
-  return { status: "ok", output: chunks.join(""), value: produced.value };
+  return { status: "ok", output: chunks.join(""), value: selected.value };
 }
 
 /**
@@ -1774,6 +1776,7 @@ function* documentWorkflow(
         rootPath,
         checkedFailures,
         authority,
+        undefined,
       );
       const text = selected.map(renderSegment).join("");
       // An empty buffered root emits no output event.
@@ -1800,6 +1803,7 @@ function* documentWorkflow(
         0,
         checkedFailures,
         authority,
+        undefined,
       );
 
       while (emittedThrough < produced.length) {
