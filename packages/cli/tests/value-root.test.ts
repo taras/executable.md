@@ -103,6 +103,23 @@ const UNSELECTED_CONDITIONAL_ROOT = [
   "",
 ].join("\n");
 
+/**
+ * Two executed returns. The second expression names a binding that does not
+ * exist, so evaluating it at all would report `SECOND_MARKER` instead — which
+ * makes its absence proof that it was never evaluated.
+ */
+const DUPLICATE_RETURN_ROOT = [
+  "---",
+  "returns:",
+  "  type: string",
+  "---",
+  "",
+  '<Return value="first" />',
+  "",
+  "<Return value={SECOND_MARKER.reached} />",
+  "",
+].join("\n");
+
 const FAILS_AFTER_RETURN_ROOT = [
   "---",
   "returns:",
@@ -212,6 +229,19 @@ describe("Tier VR — xmd run value roots", { sanitizeOps: false, sanitizeResour
     expect(result.stderr).toContain(
       "The root document declares `returns` but produced no <Return> value.",
     );
+  });
+
+  it("VR4c: two executed <Return>s exit nonzero with the duplicate diagnostic", function* () {
+    const result = yield* useFixture({ "doc.md": DUPLICATE_RETURN_ROOT }, function* (dir) {
+      return yield* runCli(["run", "doc.md"], { cwd: dir }).join();
+    });
+    expect(result.code).toBe(1);
+    // The first selected value is discarded rather than published.
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      "The root document declares `returns` but executed more than one <Return>.",
+    );
+    expect(result.stderr).not.toContain("SECOND_MARKER");
   });
 
   it("VR5: a failure after <Return> exits nonzero with empty stdout", function* () {

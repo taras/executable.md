@@ -10705,17 +10705,18 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | RV9 | Text mode | No `returns` renders and captures a string; an explicit string schema is value mode |
 | RV10a | Structure | A value body with no authored `<Return>`, a `<Return>` in a text body, `<Output>` with `returns`, bad props, and a missing `as` fail before body effects; a caller's `<Return>` does not satisfy the callee |
 | RV10b | Depth is valid | A nested `<Return>` passes preflight and reaches runtime, its body's effect having run |
-| RV10d | Executed multiplicity | Two executed `<Return>`s, and one authored `<Return>` projected twice, each fail with the owner's duplicate diagnostic and publish no value |
+| RV10c | The claim precedes evaluation | Two projections of one authored `<Return>` are started before either is awaited: the duplicate is reported, exactly one expression is ever evaluated, and no value is published |
+| RV10d | Executed multiplicity | Two executed `<Return>`s, and one authored `<Return>` projected twice, each fail with the owner's duplicate diagnostic and publish no value; the second expression would fail loudly if evaluated and never is |
 | RV11a | Structural ownership | `<If>`, `<Loop>` with `<Break />`, `<Each>` and `<Let>` each keep the owning value body; an unselected `<If>` reaches that body's missing-return diagnostic |
-| RV11b | Caller projection | A caller's `<Return>` selects through a Markdown `<Content />` wrapper |
-| RV11c | Reservation | A `<Return>` an invoked body writes, and one produced dynamically, are diagnosed and never imported |
-| RV14 | Nested value bodies | An outer value component captures an inner one and executes its own return; neither is a duplicate |
-| RV12 | Execution order | Documentation after `<Return>` runs; the value sees only preceding bindings |
+| RV11b | Caller projection | A caller's `<Return>` selects through a Markdown `<Content />` wrapper and through a function component's `content()` |
+| RV11c | Reservation | A `<Return>` an invoked body writes, and one `render()` generates beneath an active value frame, are diagnosed and never resolve a component named `Return` |
+| RV12 | Execution order and precedence | Documentation after `<Return>` runs and the value sees only preceding bindings; a later failure, a teardown failure, and a halt after selection each win, teardown completing and no selected value being published |
 | RV13 | Function components | `export const returns` gives the same validation and capture; a text component returning a non-string errors |
-| RV14 | Composition | A value component invoked inside another component's body |
+| RV14 | Nested value bodies | A value component invoked inside another component's body; the outer captures the inner and then executes its own return, and neither execution is a duplicate |
 | RV15 | Value roots | Completion carries the validated value; body text stays on `.output`; every failure completes `Err` |
 | RV16 | Inspection | `returns` and `returnMode` report the effective schema without executing |
 | RV17 | Replay | Golden run and replay produce the same value and output with no re-execution |
+| RV17a | Partial replay | Interrupting after a completed effect and a selection, then resuming the same journal, replays the effect without performing it, reconstructs the selection, produces the same value, and adds no return event |
 | RV18 | Schema caches | The same schema object compiles as a return and fails as props, in either order |
 | VR1–VR6 | `xmd run` | JSON alone on stdout, `--verbose` body output on stderr, failures non-zero with empty stdout |
 | VR10 | A command inside a value root | Its stdout is shown on the stream the result leaves free, and recorded as stdout |

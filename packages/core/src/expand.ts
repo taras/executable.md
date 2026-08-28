@@ -3765,9 +3765,10 @@ function misplacedReturnError(segment: ComponentElement): ErrorSegment {
   return {
     type: "error",
     message:
-      `${previewReturn(segment)} must be a direct top-level child of the document or ` +
-      "component whose `returns` declaration it satisfies. <Return> is reserved: it " +
-      "never resolves a component, and content a caller projects cannot declare one.",
+      `${previewReturn(segment)} is not written in the flow of a body that declares ` +
+      "`returns`, so there is no declaration for it to satisfy. <Return> is reserved: " +
+      "it never resolves a component, and neither markdown produced at runtime nor " +
+      "another component's body can declare one.",
     source: "Return",
   };
 }
