@@ -6044,16 +6044,20 @@ and reconstructs the same ownership while re-executing the authored selection; a
 completed document replay reuses the retained terminal result without expanding
 the body.
 
-**Selection is the engine's, not the document's.** Ownership travels through a
-named context, and a document's own eval block can name it. What it carries is
-therefore a frozen carrier holding no facts, only an accessor guarded by a token
-the engine never exports: the body's owner, schema, claim and selected value
-live in that carrier's own closure. A carrier the engine did not mint owns no
-body — it cannot supply the token, and state it fabricates carries none of the
-engine's marks — so a `<Return>` that finds one is reserved; and a body settles
-from the carrier it minted rather than from the context. Mutating the carrier, recreating the context or replacing it selects
-nothing and publishes nothing, so no value reaches a caller without crossing the
-schema its body declared.
+**Selection is the engine's, not the document's.** A document's own eval block
+reaches further than it looks: a named context by name, because
+`createContext(name)` names the slot the engine would publish on, and an
+internal module by file URL, because an eval block's imports are hoisted and
+resolved like any other module's. Anything published contextually is therefore
+readable, and any exported function acting on what was published is callable.
+
+So ownership travels through neither. The body a `<Return>` claims reaches it as
+a parameter of expansion, and no exported function accepts another body's. A
+component invocation passes none, so an invoked body is isolated; caller
+projection passes the caller's; dynamically scanned markdown passes none. A body
+settles from the object its own expansion created and held, so nothing a
+document can read or replace decides what it returns, and no value reaches a
+caller without crossing the schema its body declared.
 
 `<Return>` is reserved throughout expansion. Only a `<Return>` whose owning
 value body is the one expanding it is consumed, so a `<Return>` that reaches
@@ -10717,7 +10721,7 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | RV10a | Structure | A value body with no authored `<Return>`, a `<Return>` in a text body, `<Output>` with `returns`, bad props, and a missing `as` fail before body effects; a caller's `<Return>` does not satisfy the callee |
 | RV10b | Depth is valid | A nested `<Return>` passes preflight and reaches runtime, its body's effect having run |
 | RV10c | The claim precedes evaluation | Two projections of one authored `<Return>` are started before either is awaited: the duplicate is reported, exactly one expression is ever evaluated, and no value is published |
-| RV10e | Selection is engine-owned | A document that reads the named return context, writes to the carrier, clears its claim and replaces the context with a forgery selects nothing: the value root exits 1 with empty stdout and the missing-return diagnostic, the Markdown value component reports its own and binds nothing, and no unvalidated value is published |
+| RV10e | Selection is engine-owned | Neither reaching for the return context nor importing the engine's own return module by file URL selects anything: the value root exits 1 with empty stdout and the missing-return diagnostic, the Markdown value component reports its own and binds nothing, and no unvalidated value — a string against a number schema — is published |
 | RV10d | Executed multiplicity | Two executed `<Return>`s, and one authored `<Return>` projected twice, each fail with the owner's duplicate diagnostic and publish no value; the second expression would fail loudly if evaluated and never is |
 | RV11a | Structural ownership | `<If>`, `<Loop>` with `<Break />`, `<Each>` and `<Let>` each keep the owning value body; an unselected `<If>` reaches that body's missing-return diagnostic |
 | RV11b | Caller projection | A caller's `<Return>` selects through a Markdown `<Content />` wrapper and through a function component's `content()` |
