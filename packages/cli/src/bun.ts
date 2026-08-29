@@ -9,7 +9,7 @@ import { main } from "effection";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { API, useHostFiles } from "@executablemd/runtime";
-import { compileDataUri } from "@executablemd/core";
+import { compileTempFile } from "@executablemd/core";
 import { runXmd } from "./cli.ts";
 import { unassembledMachineSessions } from "./session-coordinator.ts";
 import { unsupportedWorkflowHost } from "./workflow.ts";
@@ -27,7 +27,7 @@ await main(function* (args) {
       },
 
       *compile([source, options]) {
-        return yield* compileDataUri(source, options);
+        return yield* compileTempFile(source, options);
       },
     },
     { at: "min" },
