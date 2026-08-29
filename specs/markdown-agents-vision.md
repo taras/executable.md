@@ -11,7 +11,12 @@ the authority for implemented behavior.
 ## North star
 
 Executable.md is the easiest way to write reliable, well-behaved, observable,
-and composable agents whose source code is Markdown.
+composable, and portable agents whose source code is Markdown.
+
+The playground is the primary authoring surface for that experience. A person
+can develop and understand the same Markdown project locally or entirely in the
+browser, without moving the workflow into a host-specific format or depending
+on a mandatory cloud service.
 
 An agent document makes its orchestration readable. A reader can determine which
 instructions an agent receives, which model acts, what context crosses an agent
@@ -21,6 +26,11 @@ what output reaches the caller.
 The central product idea is:
 
 > The agentic control flow is the document.
+
+The corresponding portability promise is:
+
+> Write once, understand everywhere, and run wherever the required capabilities
+> are available.
 
 Executable.md provides deterministic orchestration around nondeterministic model
 calls. It does not claim that model responses are deterministic. It makes the
@@ -83,6 +93,61 @@ Observability describes the real execution rather than an agent's self-report.
   or siblings.
 - Instructions, skills, tools, context transformations, and complete agents can
   be composed explicitly.
+
+### Portable
+
+- The Markdown project and its components remain the canonical workflow source
+  in every authoring and execution host.
+- The same project version identifies the same immutable workflow definition
+  locally and in the browser.
+- Local and browser hosts preserve the same control-flow, journaling,
+  checkpoint, replay, cancellation, and failure semantics.
+- A workflow declares the capabilities it requires. A host either supplies
+  those capabilities through explicit adapters or refuses before work begins
+  with an actionable explanation.
+- Portability does not imply identical authority. Local filesystem access,
+  browser storage, credentials, providers, and external services remain
+  explicit host capabilities.
+- Execution evidence can be exported and inspected across hosts. Continuing
+  from exported evidence creates a new, linked history rather than reviving or
+  mutating the original execution.
+
+## Playground experience
+
+The playground brings authoring, execution, and revision into one inspectable
+workspace. It is not inherently a hosted service: the same experience can be
+provided by a local host or by an entirely client-side browser host. A remote
+host may be selected explicitly when a workflow requires capabilities that
+neither one can provide, but it is never a silent fallback.
+
+The intended authoring loop is:
+
+1. A person states the outcome and constraints.
+2. An agent proposes or edits the executable Markdown project.
+3. The person inspects the source, changes, and required capabilities.
+4. A specific immutable version runs as a constrained trial.
+5. Structured execution evidence guides the next revision.
+6. A separately authorized version may run with real capabilities.
+
+The source project is the durable expression of intent and behavior.
+Conversation, approvals, revisions, executions, and evidence are linked records;
+they do not become hidden workflow state. Each accepted edit produces a new
+immutable workflow definition, so evidence always identifies the exact behavior
+that produced it.
+
+A trial is described by its actual capability boundary. The playground does not
+call an execution a simulation when it can still cause unmodelled external
+effects. Promotion to real capabilities is an explicit authorization of a
+specific workflow version, not an ambient mode switch.
+
+The browser host runs the execution engine in a worker and owns browser-local
+durable storage. The local host runs the same semantic layer with local storage
+and local capability adapters. Shared production modules do not detect which
+runtime is active; host entrypoints install the contextual implementations.
+
+Text is the canonical editing surface. Diagrams, graphs, forms, and other
+semantic views may project the Markdown project and propose source changes, but
+they do not introduce a second hidden workflow representation.
 
 ## Authoring model
 
@@ -228,7 +293,13 @@ its declared props:
 6. What happens when it fails or returns invalid output?
 7. Why did the workflow take a branch or stop?
 8. What evidence in the execution record supports those answers?
+9. Does this project version retain the same workflow meaning locally and in
+   the browser?
+10. Which required capabilities does each host provide or refuse before work
+    begins?
+11. Can another host inspect the source and evidence without a proprietary
+    project representation?
 
 If those answers depend on hidden host behavior, implicit transcript sharing, or
-an agent's own account of what it did, the design does not satisfy the product
-goal.
+an agent's own account of what it did, or an undocumented host-specific project
+format, the design does not satisfy the product goal.
