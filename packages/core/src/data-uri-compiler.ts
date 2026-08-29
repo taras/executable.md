@@ -2,8 +2,10 @@
  * data: URI eval block compiler middleware.
  *
  * Compiles eval block source into generator functions by importing a data:
- * URI, which leaves nothing on disk. Deno and Bun load one; Node's tsx loader
- * rejects it, so the Node entrypoint installs the temp-file compiler instead.
+ * URI, which leaves nothing on disk. Deno and the compiled binary load one.
+ * Node's tsx loader rejects it, and Bun does not preserve the generated
+ * module's exports when it imports a filesystem-backed dependency, so those
+ * entrypoints install the temp-file compiler instead.
  * Standard imports (Effection, executable.md APIs) are captured in the middleware
  * closure — they are not part of the `API.Env.compile` interface.
  *

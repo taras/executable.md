@@ -1456,13 +1456,14 @@ suggested:
 
 | Middleware | Mechanism | Hosts |
 | --- | --- | --- |
-| `useDataUriCompiler()` | imports a `data:` URI; touches no disk | Deno, Bun, the compiled binary |
-| `useTempFileCompiler()` | writes `.xmd-eval/<uuid>.ts` and imports `file://` | any host, and the only one Node's tsx loader accepts |
+| `useDataUriCompiler()` | imports a `data:` URI; touches no disk | Deno and the compiled binary |
+| `useTempFileCompiler()` | writes `.xmd-eval/<uuid>.ts` and imports `file://` | any host; the Bun and Node entrypoints use it |
 
 An entrypoint installs whichever its host can load, with `{ at: "min" }`, so
 it sits at the base of the middleware chain. Where the two disagree — Node's
-tsx loader rejects `data:` URI imports — that is a property of the loader, not
-of the eval block.
+tsx loader rejects `data:` URI imports, while Bun loses the generated module's
+exports when it imports a filesystem-backed dependency — that is a property of
+the loader, not of the eval block.
 
 Because the entrypoint's compiler is a base provider, ordinary middleware
 wraps it rather than racing it. The behavior-document policy in
@@ -8427,7 +8428,7 @@ Argument placement belongs to the adapter, because it differs per host:
 | --- | --- | --- |
 | `deno.ts` | `[execPath, "run", "--allow-all", entry, ...args]` | `compileDataUri` |
 | `node.ts` | `[execPath, ...execArgv-minus-inspect, entry, ...args]` | `compileTempFile` |
-| `bun.ts` | `[execPath, entry, ...args]` | `compileDataUri` |
+| `bun.ts` | `[execPath, entry, ...args]` | `compileTempFile` |
 | `compiled.ts` | `[execPath, ...args]` | `compileDataUri` |
 
 **There is no inferred default.** With no adapter installed the operation

@@ -7,13 +7,17 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped } from "effection";
+import { ensure, scoped, until } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
+import { symlink } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { runCli } from "@executablemd/test-support/launch";
+
+const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 function* useFixture<T>(
   files: Record<string, string>,
@@ -23,6 +27,10 @@ function* useFixture<T>(
   yield* ensureDir(dir);
   return yield* scoped(function* () {
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
+    yield* writeTextFile(path.join(dir, "package.json"), JSON.stringify({ type: "module" }));
+    // The child compiles beside the document, so its authored imports resolve
+    // through the fixture's explicit project dependencies.
+    yield* until(symlink(path.join(ROOT, "node_modules"), path.join(dir, "node_modules"), "dir"));
     for (const [name, content] of Object.entries(files)) {
       yield* writeTextFile(path.join(dir, name), content);
     }
