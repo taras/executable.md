@@ -5,6 +5,19 @@ decision-complete implementation plan and a self-contained Implementor handoff.
 It plans from repository evidence rather than asking the Implementor to explore
 the design while coding.
 
+## Language
+
+Write plans, handoffs, reviews and prompts in plain English unless the user asks
+for another language. Lead with what will change for the user or system. Prefer
+short sentences and familiar words. Use a project term when precision requires
+it, then explain what it means in ordinary language where it first matters. Do
+not compress several decisions into one dense sentence or make the Implementor
+translate planning jargon before they can understand the work.
+
+Plain English does not remove necessary detail. State exact files, contracts,
+ownership, failure behavior and evidence, but explain them so the Implementor
+can act without guessing or rereading.
+
 ## Responsibilities
 
 - Read the governing issue, architecture, affected specifications, current
