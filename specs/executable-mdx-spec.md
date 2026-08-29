@@ -2923,6 +2923,147 @@ and `--json`. It takes no document and no run option, because it runs nothing.
 An inspection failure is reported on stderr with exit status 1 and no partial
 catalog on stdout.
 
+#### Validating a supplied document: `validateDocument()`
+
+Inspection answers about a name and about a directory. `validateDocument()`
+answers about one **document**: is the supplied root, and the Markdown source
+closure its authored invocations reach, a program at all — as far as anything
+decidable without running it can say? A host that generated a document, or
+received one, asks this before it asks a person to approve it.
+
+```typescript
+type ValidateDocumentOptions = RootDocumentSource & {
+  readonly props?: Record<string, Json>;
+  readonly includes?: readonly string[];
+  readonly components?: readonly IdentityComponent[];
+};
+
+function* validateDocument(
+  options: ValidateDocumentOptions,
+): Operation<DocumentValidation>;
+```
+
+The environment is the declarative one `inspectSyntax()` reads and no more:
+supplied text or a path with its optional target, root props as plain JSON, the
+ordered includes, the contextual component registry, and the identity
+declarations a host would make. There is no working-directory option — a
+relative root or include resolves against the contextual runtime's, as execution
+resolves it. A declaration set an execution would refuse is refused here too,
+and it is the caller's configuration error rather than a diagnostic about the
+document.
+
+**Validation follows source, not execution reachability.** The selected root
+projection is scanned first; every Markdown definition ordinary selection
+discovers enters one FIFO queue in the order its first invocation was
+encountered, and a source identity is read and parsed exactly once. Every
+authored invocation in each source is reported in source order, including one
+written inside `<If>`, `<Loop>` or `<Each>`, and including children written
+beneath an origin-only TypeScript component. No branch is evaluated and no
+projection is predicted. A definition that invokes itself, directly or through
+others, terminates the walk when the source identity comes back around, and that
+cycle is not itself a failure. An invalid invocation still discovers and queues
+the definition it selected.
+
+**A static answer never stands in for a runtime value.** Resolution, authored
+form, engine-owned body shape and every other structural rule run whenever their
+answer does not depend on evaluating document code. A required property is
+reported missing when its authored key appears in neither the static props nor
+the expression props, because presence needs no value. Full props-schema
+validation runs only when every schema-visible prop is static; a declared
+capture keeps the same schema bypass it has during execution and makes nothing
+opaque. A dynamic schema-visible expression, or a repository `.ts` contract that
+lives on the module's exports, makes an otherwise acceptable invocation not
+statically checkable — validation solves no JSON Schema partially around the
+value it does not have. A definite independent failure still wins, so an invalid
+form does not become opaque because another prop is dynamic.
+
+**Parsing stays one language rule.** The scanner and the definition parsers are
+execution's. Component-like text the scanner treats as text remains text, and a
+spread attribute keeps its execution meaning: validation turns neither into a
+stricter parse error nor into an unknown-value marker. Selection, declaration
+admission, schemas, forms, body rules, targets and source positions come from
+their execution definitions; where a rule had to be extracted from expansion,
+both callers read the extracted rule rather than a second catalog.
+
+**The answer is versioned data.**
+
+```typescript
+interface DocumentValidation {
+  readonly version: 1;
+  readonly outcome: "valid" | "invalid";
+  readonly diagnostics: readonly DocumentValidationDiagnostic[];
+  readonly invocations: readonly InvocationValidation[];
+}
+
+type InvocationValidation = { readonly name: string; readonly position?: SourcePosition } & (
+  | { readonly outcome: "valid"; readonly origin: ComponentOrigin }
+  | {
+      readonly outcome: "invalid";
+      readonly origin?: ComponentOrigin;
+      readonly diagnosticIndexes: readonly number[];
+    }
+  | {
+      readonly outcome: "not-statically-checkable";
+      readonly origin: ComponentOrigin;
+      readonly reasons: readonly ("dynamic-props" | "origin-only-contract")[];
+    }
+);
+
+interface DocumentValidationDiagnostic {
+  readonly code: DocumentValidationCode;
+  readonly message: string;
+  readonly position?: SourcePosition;
+  readonly component?: string;
+  readonly issues?: readonly NormalizedIssue[];
+}
+```
+
+The version-1 codes are closed, and their order in the union is part of the
+contract:
+
+`source-unreadable`, `source-invalid`, `target-invalid`, `frontmatter-invalid`,
+`props-declaration-invalid`, `returns-declaration-invalid`,
+`component-unresolved`, `component-ambiguous`, `invocation-form-invalid`,
+`body-shape-invalid`, `props-invalid`, `binding-invalid`, `capture-invalid`,
+`return-usage-invalid`, `structural-usage-invalid`.
+
+A schema diagnostic carries the same normalized issues ordinary validation
+produces, so nothing parses `message` to recover a property or a keyword.
+`component-ambiguous` is dormant: the shared selector always answers with
+exactly one component, and the code and its rank exist so that a selector which
+one day answers otherwise has somewhere to say so. Neither multiple precedence
+tiers, include order, nor a refused host declaration manufactures one.
+
+**Ordering is part of the answer.** The root is source ordinal zero and every
+definition follows in FIFO discovery order. Within one source an unpositioned
+source-level diagnostic precedes every positioned one; positioned diagnostics
+sort by authored offset; two at one offset sort by the closed code order above.
+An invocation's `diagnosticIndexes` are sorted, unique indexes into that one
+array. Invocation records are in the same source order, at their opening
+positions. Validating one document twice returns deep-equal results.
+
+**Ownership.** A root read or parse failure produces one diagnostic and no
+invocation record at all. Root-props and root body-shape failures make the
+document invalid without inventing a root invocation, and they do not stop the
+root's body from being traversed; those diagnostics name no `component`. A
+selected Markdown source that could not be read or parsed reports one diagnostic
+for that source, every invocation selecting it is invalid pointing at that same
+index, and no body sites are invented for it. A defect in a definition that
+*did* parse belongs to that definition source, carries its path and authored
+position, and does not stop the rest of that definition from being traversed.
+
+**The document outcome is `invalid` exactly when a diagnostic exists.** An
+opaque invocation on its own leaves the document valid.
+
+**Observation performs no document effect.** Validation may read the supplied
+root and the Markdown definition files selection identified. It evaluates no
+expression, compiles no code block, invokes no component, imports no repository
+`.ts` module, renders or projects no content, calls no identity factory,
+installs no operational provider, mints no invocation, creates or reads no
+journal, runs no command, prompts, elicits or starts no agent, and performs no
+filesystem operation the document authored. That is one boundary rather than a
+list of components: adding a component cannot make validation effectful.
+
 
 Which implementation a name resolves to is an observation of the environment —
 which files exist, and what is registered — so it is made **inside** the durable
@@ -9599,6 +9740,30 @@ so the include-boundary rows are the same on every host. Defined in §5.3.
 | SY26–SY27 | Declared components | One is described without its factory being called and a repository file still overrides it; two declarations of one name are refused before either factory; and a declaration inspection refuses is refused identically by registration |
 | SY28 | First-party documentation | Every complete built-in in the core and Agent profile states a description |
 | SY29 | Determinism | Two inspections of one environment are equal, and entries are sorted within each category |
+
+### Tier DV — Document validation
+
+Provider-neutral: the contextual filesystem is stubbed at `API.Fs`, and every
+other boundary a document could reach is installed as a refusal that records
+itself, so an execution starting anywhere fails the row. Defined in §5.3.
+
+| # | Test | Verify |
+|---|------|--------|
+| DV1 | Unresolved name | Version 1, document `invalid`, one originless invalid invocation carrying `component-unresolved`, and nothing executed |
+| DV2 | Missing required prop | `<File />` reports `props-invalid` with the normalized required-property issue, keeps its registered origin, and never runs |
+| DV3 | A valid document | Structural, core registered, declaration-only registered and included Markdown components together are `valid`, and the identity factory is never called |
+| DV4 | A defect beneath control flow | A definition reached through an invocation reports its own path and authored position; the branch is never evaluated |
+| DV5 | Traversal order | Root first, then FIFO discovery, one read per source identity, a cycle terminating; reversing the root's invocation order reverses only the FIFO portion |
+| DV6 | Source, target and declarations | Unreadable and invalid root, no-match and ambiguous target, malformed frontmatter, props and returns declarations map to their exact codes and invent no invocation; a failed definition is one diagnostic every caller shares |
+| DV7 | Static and dynamic props | A dynamic schema-visible prop is `not-statically-checkable`; a capture is not; a definitely missing required key still invalidates; a mixed object yields no partial schema conclusion |
+| DV8 | Definite wins | A refused authored form, and an independent body-shape defect, each keep an invocation `invalid` beside a dynamic prop, with indexes in code order |
+| DV9 | Origin-only TypeScript | Never imported, opaque with `origin-only-contract`, both reasons in canonical order with a dynamic prop, invalid on an engine-owned defect, and its authored children still validated |
+| DV10 | Root and definition ownership | Root props validate fully without stopping traversal; root and definition body-shape and return diagnostics keep their source, position and component ownership |
+| DV11 | Order and determinism | Every record including structural sites is in source order; two validations are deep-equal; the closed code order is a direct unit, `component-ambiguous` included |
+| DV12 | One parser | Component-like text stays text, an executable block is neither a record nor run, and a spread keeps exactly the meaning execution's scanner gives it |
+| DV13 | The no-execution seam | Identity factories, registered bodies, eval and exec, providers, agents, elicitation, journal and document-authored filesystem effects all stay at zero while only root and selected Markdown sources are read |
+| DV14 | One rule catalog | Expansion's aggregate printed error and validation's per-violation diagnostics are two renderings of one extracted body-contract walk |
+| DV15 | The package boundary | The operation and every version-1 type are `@executablemd/core` exports; no consumer reaches a private module |
 
 ### Tier SX — The `xmd syntax` command
 

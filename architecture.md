@@ -3429,6 +3429,80 @@ nothing. First-party declarations hold themselves to a stricter rule — every o
 states a description and decides explicitly whether `as` and `context` apply —
 which is a discipline inside those packages, not a requirement on anyone else.
 
+## The document validation boundary
+
+Validate a supplied document as authored program structure before any part of it
+runs. The operation receives one `RootDocumentSource`, root props, contextual
+working directory and includes, the current component registry, and the same
+plain identity-component declarations syntax inspection receives. Those values
+are the declarative execution environment: validation never runs an
+`ExecutionInstallation`, calls an identity factory, installs an operational
+provider or reconstructs a CLI host to learn what names mean.
+
+**Validation follows source, not execution reachability.** It applies ordinary
+target selection to the root, scans that selected projection, and follows normal
+component selection through every resolved Markdown definition the authored
+invocations discover. The root is first; newly discovered definitions enter one
+FIFO queue in their first-invocation order, and a source identity is scanned only
+once. Every invocation in each source is checked in source order, including one
+inside authored control flow and children beneath an origin-only TypeScript
+component. The validator neither evaluates a branch nor predicts whether a
+component will project its children. A definition cycle therefore terminates
+the source walk and is not itself a validation failure unless a shared authored
+rule already makes it one.
+
+**A static answer never stands in for a runtime value.** Resolution, authored
+form, engine-owned body shape and other structural rules run whenever their
+answer does not depend on evaluating document code. Full props-schema validation
+runs only when every schema-visible prop is static. A declared capture keeps the
+same schema bypass it has during execution. A dynamic schema-visible expression
+or an origin-only TypeScript contract makes an otherwise acceptable invocation
+not statically checkable; validation does not partially solve JSON Schema around
+the unknown value. A definite independent failure still wins, so an invalid form
+does not become opaque because another prop is dynamic. An invocation is valid
+only when every applicable check is statically proven, invalid when any such
+check proves a failure, and otherwise not statically checkable. Opacity alone
+does not make the document invalid.
+
+**Parsing stays one language rule.** Validation uses the scanner and definition
+parsers execution uses. Component-like text that scanner treats as text remains
+text, and spread attributes retain their execution meaning. A stricter MDX
+grammar is a change to execution and validation together, never an extra parser
+used only to approve generated source. Component selection, declaration
+admission, schemas, forms, body rules, targets and source positions likewise
+come from their execution definitions. If a check needs extraction from
+expansion, both callers use the extracted rule; validation does not copy it into
+a second catalog.
+
+**The answer is versioned data.** Version 1 returns the document outcome, one
+ordered invocation record per authored site, and one ordered diagnostic array.
+An invocation records its name and position, the selected origin when one was
+resolved, and exactly one of `valid`, `invalid` or
+`not-statically-checkable`. An invalid record points into the diagnostic array;
+an opaque record names `dynamic-props`, `origin-only-contract`, or both as its
+reason. Diagnostics carry one closed code, a message, the source position and
+component when applicable, and the existing normalized schema issues when a
+schema failed. The closed version-1 codes distinguish unreadable and invalid
+source, invalid target, frontmatter, props and returns declarations, unresolved
+and ambiguous components, invalid invocation form and body shape, props,
+binding, capture, return usage and structural usage.
+
+Ordering is part of that answer: the root precedes definitions from the FIFO
+source walk, positions order records within one source, and the closed diagnostic
+code order breaks a tie at one position. A source failure ends only the checks
+that require the source or definition it prevented; the validator emits no
+speculative follow-on error. The document outcome is invalid exactly when a
+definite diagnostic exists. The stable codes and normalized schema issues are
+what an ACP generator or another host consumes; neither parses the message.
+
+**Observation performs no document effect.** Validation may read the supplied
+root and selected Markdown definition files. It does not evaluate an expression,
+render or project component content, invoke a component, create or read a
+journal, run a command, prompt, elicit, start an agent, or perform a filesystem
+operation the document authored. Those prohibitions are one boundary rather
+than a test fixture's list of components: adding a component cannot make
+validation effectful.
+
 ## Construct inventory
 
 Status is measured against main.
@@ -3436,6 +3510,7 @@ Status is measured against main.
 | Construct | Does | Status |
 | --- | --- | --- |
 | `xmd syntax` | describes every structural construct and every selected component the production `run` profile would let a document write in the contextual working directory, as deterministic Markdown or as version-1 JSON, from one catalog. Inspection only: it registers the run profile's declarations in a bounded scope and reads the filesystem for which files exist and, for a selected Markdown component, that file's frontmatter. It runs no body, imports no repository TypeScript module, installs no provider, mints no authority and writes no journal. An include it cannot enumerate — a selection-relevant symbolic link to a directory beneath it included — fails the whole request rather than printing a healthy subset | built on the #632 stack |
+| document validation | validates one supplied root projection and the recursive Markdown source closure normal component selection discovers, returning deterministic version-1 document diagnostics and `valid`, `invalid` or `not-statically-checkable` invocation outcomes without evaluating document code or installing operational host behavior | built on the #653 stack |
 | `<PrintErrors>` / `printErrors(fn)` | prints failures | built on main |
 | `<Let as="name">` | binds one name in the current environment from exactly one source: the content it renders, or the exact value `value` names, bound by reference and never through the JSON boundary component props cross — the scanner resolves no JSON for that one prop, and expansion projects none. Which source it has is read from what the author wrote, before either one runs, so a construct naming both expands no child and evaluates no expression. It opens no scope, owns no resource, adds no middleware boundary and writes no journal record — replay reconstructs both sources through ordinary expansion | built on the #527 stack |
 | `<Json value={…} />` | renders one supplied value as JSON text where the element was written, from one native two-space `JSON.stringify` call. An ordinary overridable core default whose operand is a capture: the exact evaluation result arrives by reference and is never mutated, cloned, replaced or frozen. It binds nothing, and `as`, content and a missing `value` are all refused before the operand evaluates. A value with no JSON text and a serialization that threw are distinct failures, each positioned at the invocation, emitting no partial output and preserving the original error as its cause. No scope, resource, authority or JSON-specific durable effect: replay reaches it through ordinary expansion, and a surrounding `<Prompt>` or `<File>` keeps its own record of the text it consumed | built on the #452 stack |

@@ -13,12 +13,11 @@
  * middleware installation) execute before children's code blocks.
  */
 
-import { ensure, Err, Ok, scoped, useScope, withResolvers } from "effection";
+import { ensure, Err, scoped, useScope, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import type {
   FunctionComponent,
   Segment,
-  TextSegment,
   ErrorSegment,
   ComponentElement,
   ComponentDefinition,
@@ -31,6 +30,34 @@ import type {
   ReturnsSchema,
   SourcePosition,
 } from "./types.ts";
+import {
+  bodyHasOutput,
+  misplacedOutputMessage,
+  misplacedReturnMessage,
+  outputPropsViolation,
+  validateBodyStructure,
+  validateOutputPlacement,
+} from "./body-structure.ts";
+import {
+  breakElementViolations,
+  eachCaptureBinding,
+  eachItemBinding,
+  eachItemsViolation,
+  eachViolations,
+  ifConditionViolation,
+  ifPropsViolation,
+  ifStructure,
+  letBindingName,
+  letViolations,
+  loopBound,
+  loopMissingBoundMessage,
+  loopPropsViolation,
+  printErrorsViolations,
+  strayBreakMessage,
+  strayElseMessage,
+  strayStructuralMessage,
+} from "./structural-rules.ts";
+import type { StructuralViolation } from "./structural-rules.ts";
 import { interpolate } from "./interpolate.ts";
 import { interpolateEvalBindings } from "./eval-interpolate.ts";
 import {
@@ -832,7 +859,9 @@ function* expandListSegments(
           // reaches here. Reaching this branch means a misplaced or
           // dynamically scanned <Output> (e.g. render(markdown) content) —
           // diagnose it defensively per the ambient error mode.
-          result.push(yield* raise(misplacedOutputError()));
+          result.push(
+            yield* raise({ type: "error", message: misplacedOutputMessage(), source: "Output" }),
+          );
           break;
         }
 
@@ -851,7 +880,13 @@ function* expandListSegments(
           // reachable only by the engine that passed it: nothing is published
           // for a document to read, replace, or hand to an exported helper.
           if (returnBody === undefined) {
-            result.push(yield* raise(misplacedReturnError(segment)));
+            result.push(
+              yield* raise({
+                type: "error",
+                message: misplacedReturnMessage(segment),
+                source: "Return",
+              }),
+            );
             break;
           }
           const declared = returnBody.claim();
@@ -925,7 +960,13 @@ function* expandListSegments(
           // its own. Reaching this branch means the element sits outside any
           // <If>, so it names no component and is diagnosed rather than
           // resolved from the filesystem.
-          result.push(yield* raise(strayElseError(segment)));
+          result.push(
+            yield* raise({
+              type: "error",
+              message: positioned(strayElseMessage(), segment),
+              source: "Else",
+            }),
+          );
           break;
         }
 
@@ -1024,7 +1065,13 @@ function* expandListSegments(
           // one was written where the construct that gives it meaning is not.
           // It is reserved, so resolution stops rather than looking for a file
           // that could stand in for the syntax.
-          result.push(yield* raise(strayStructuralError(segment)));
+          result.push(
+            yield* raise({
+              type: "error",
+              message: positioned(strayStructuralMessage(segment.name), segment),
+              source: segment.name,
+            }),
+          );
           break;
         }
 
@@ -1328,8 +1375,6 @@ function letError(message: string): ErrorSegment {
   return { type: "error", message, source: "Let" };
 }
 
-const LET_PROPS = new Set(["as", "value", "select"]);
-
 /**
  * Bind rendered content or a direct value into `as` (spec §6.5 `<Let>`).
  *
@@ -1360,66 +1405,17 @@ function* expandLet(
   authority: ExpansionAuthority | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<ErrorSegment[]> {
-  const written = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
-  if (written.some((name) => !LET_PROPS.has(name))) {
-    return [yield* raise(letError('<Let> only accepts "as", "value" and "select" props.'))];
+  // Every one of these is decided from what the author wrote, so the whole
+  // catalog lives in `structural-rules.ts` where validation reads it too. The
+  // first is reported and the rest of the construct does not run, which is what
+  // a `<Let>` whose declaration is wrong has always done.
+  const violations = letViolations(segment);
+  const refusal = violations[0];
+  if (refusal !== undefined) {
+    return [yield* raise(letError(refusal.message))];
   }
-
-  if ("as" in segment.expressions) {
-    return [yield* raise(letError('<Let as={...}> is invalid: "as" must be a string literal.'))];
-  }
-
-  if (segment.props.as === undefined) {
-    return [yield* raise(letError('<Let> requires an "as" prop (non-empty string).'))];
-  }
-
-  const asBinding = validateBindingName(segment.props.as);
-  if (!asBinding.ok) {
-    return [yield* raise(letError(asBinding.error.message))];
-  }
-  const bindingName = asBinding.value;
-  if (bindingName === undefined) {
-    return [yield* raise(letError('<Let> requires an "as" prop (non-empty string).'))];
-  }
-
-  // Presence, not the resolved value: `value={undefined}` names the direct
-  // source exactly as `value={42}` does, and a whitespace child is a body.
+  const bindingName = letBindingName(segment)!;
   const hasValue = "value" in segment.props || "value" in segment.expressions;
-  const hasSelect = "select" in segment.props || "select" in segment.expressions;
-  const hasChildren = segment.children.length > 0;
-
-  if (hasValue && hasChildren) {
-    return [
-      yield* raise(
-        letError(
-          '<Let> has one source. Remove the children or the "value" prop: ' +
-            '<Let as="x">...</Let> binds what its body renders, and ' +
-            '<Let as="x" value={...} /> binds the value itself.',
-        ),
-      ),
-    ];
-  }
-
-  if (hasValue && hasSelect) {
-    return [
-      yield* raise(
-        letError(
-          '<Let> "select" extracts from rendered content, so it cannot be written with "value".',
-        ),
-      ),
-    ];
-  }
-
-  if (!hasValue && !hasChildren) {
-    return [
-      yield* raise(
-        letError(
-          '<Let> must have content or a "value" prop. Use <Let as="x">...</Let> or ' +
-            '<Let as="x" value={...} />.',
-        ),
-      ),
-    ];
-  }
 
   if (hasValue) {
     return yield* letValue(segment, bindingName);
@@ -1527,8 +1523,6 @@ function eachError(message: string): ErrorSegment {
   return { type: "error", message, source: "Each" };
 }
 
-const EACH_PROPS = new Set(["in", "let", "as"]);
-
 /**
  * Expand the body once per item, binding `let` to the item (spec §6.5 `<Each>`).
  *
@@ -1554,40 +1548,16 @@ function* expandEach(
   authority: ExpansionAuthority | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
-  const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
-    (n) => !EACH_PROPS.has(n),
-  );
-  if (unknownProp !== undefined) {
-    return [
-      yield* raise(
-        eachError(`<Each> only accepts "in", "let", and "as" props. Got: "${unknownProp}".`),
-      ),
-    ];
+  // Decided from source alone, so the catalog is shared with validation. A
+  // literal `in` is checked here too; an expression is a value the document
+  // computes, and its answer is checked below where it arrives.
+  const violations = eachViolations(segment);
+  const refusal = violations[0];
+  if (refusal !== undefined) {
+    return [yield* raise(eachError(refusal.message))];
   }
-
-  if ("let" in segment.expressions) {
-    return [yield* raise(eachError('Prop "let" on <Each /> must be a string literal.'))];
-  }
-  if (segment.props.let === undefined) {
-    return [yield* raise(eachError('<Each> requires a "let" prop (the item binding name).'))];
-  }
-  const letBinding = validateBindingName(segment.props.let);
-  if (!letBinding.ok) {
-    return [yield* raise(eachError(`Prop "let" on <Each /> ${letBinding.error.message}`))];
-  }
-  const name = letBinding.value;
-  if (name === undefined) {
-    return [yield* raise(eachError('<Each> requires a "let" prop (the item binding name).'))];
-  }
-
-  if ("as" in segment.expressions) {
-    return [yield* raise(eachError('Prop "as" on <Each /> must be a string literal.'))];
-  }
-  const asResult = validateBindingName(segment.props.as);
-  if (!asResult.ok) {
-    return [yield* raise(eachError(`Prop "as" on <Each /> ${asResult.error.message}`))];
-  }
-  const asBinding = asResult.value;
+  const name = eachItemBinding(segment)!;
+  const asBinding = eachCaptureBinding(segment);
 
   let items: Json | undefined;
   if ("in" in segment.props) {
@@ -1604,11 +1574,9 @@ function* expandEach(
     } catch (error) {
       return [yield* raise(eachError(error instanceof Error ? error.message : String(error)))];
     }
-  } else {
-    return [yield* raise(eachError('<Each> requires an "in" prop (the array to iterate).'))];
   }
   if (!Array.isArray(items)) {
-    return [yield* raise(eachError('Prop "in" on <Each /> must resolve to an array.'))];
+    return [yield* raise(eachError(eachItemsViolation(items)!.message))];
   }
 
   // Effective caller env honors projection through <Content />, mirroring
@@ -1682,195 +1650,27 @@ function positioned(message: string, segment: ComponentElement): string {
   return `${message} (${file}${position.line}:${position.column})`;
 }
 
+/**
+ * One shared structural violation as the printed error expansion produces.
+ *
+ * The violation says which construct it belongs to and, when the check walked
+ * past the element it was given, which element it is about — so an `<Else>`
+ * mistake inside an `<If>` is still positioned where it was written.
+ */
+function structuralErrorSegment(
+  violation: StructuralViolation,
+  fallback: ComponentElement,
+): ErrorSegment {
+  return {
+    type: "error",
+    message: positioned(violation.message, violation.element ?? fallback),
+    source: violation.source,
+  };
+}
+
 function ifError(segment: ComponentElement, message: string): ErrorSegment {
   return { type: "error", message: positioned(message, segment), source: "If" };
 }
-
-function elseError(segment: ComponentElement, message: string): ErrorSegment {
-  return { type: "error", message: positioned(message, segment), source: "Else" };
-}
-
-/**
- * A structural name written where its construct gives it no meaning.
- *
- * `<Content />` is the one that reaches here in practice: outside an invocation
- * there is nothing to project. Naming it reserved is the point — a repository
- * file called `Content.md` does not stand in for the syntax.
- */
-function strayStructuralError(segment: ComponentElement): ErrorSegment {
-  const name = segment.name;
-  const detail =
-    name === "Content"
-      ? `<${name} /> renders the content its invocation was given, so it means something ` +
-        "only inside a component's body."
-      : `<${name} /> is part of a construct that is not open here.`;
-  return {
-    type: "error",
-    message: positioned(
-      `${detail} <${name}> is reserved: it never resolves a component, so a repository ` +
-        `file named ${name} cannot supply it.`,
-      segment,
-    ),
-    source: name,
-  };
-}
-
-function strayElseError(segment: ComponentElement): ErrorSegment {
-  return elseError(
-    segment,
-    "<Else> must be a direct child of <If>. <Else> is reserved: it never resolves a " +
-      "component, and only the <If> it belongs to can select it.",
-  );
-}
-
-function isElse(segment: Segment): segment is ComponentElement {
-  return segment.type === "component" && segment.name === "Else";
-}
-
-/** Markdown puts newlines between block elements; they are not a third branch. */
-function isBlankText(segment: Segment): boolean {
-  return segment.type === "text" && segment.content.trim() === "";
-}
-
-function describeSegment(segment: Segment): string {
-  if (segment.type === "component") {
-    return `<${segment.name}>`;
-  }
-  if (segment.type === "codeBlock") {
-    return `a \`${segment.language}\` code block`;
-  }
-  if (segment.type === "execOutput") {
-    return "command output";
-  }
-  if (segment.type === "error") {
-    return "an error";
-  }
-  const text = segment.content.trim().replace(/\s+/g, " ");
-  return `text "${text.length > 30 ? `${text.slice(0, 30)}…` : text}"`;
-}
-
-function trailingContentError(segment: Segment, elseElement: ComponentElement): ErrorSegment {
-  // A component carries its own position; anything else is anchored to the
-  // `<Else>` it follows, which is the boundary the author crossed.
-  const anchor = segment.type === "component" ? segment : elseElement;
-  return elseError(
-    anchor,
-    `<Else> must be the final substantive child of <If>. Found ${describeSegment(segment)} ` +
-      "after </Else>.",
-  );
-}
-
-function jsonKind(value: Json): string {
-  if (value === null) {
-    return "null";
-  }
-  if (Array.isArray(value)) {
-    return "an array";
-  }
-  if (typeof value === "object") {
-    return "an object";
-  }
-  return `a ${typeof value}`;
-}
-
-function elseElementViolations(segment: ComponentElement): ErrorSegment[] {
-  const violations: ErrorSegment[] = [];
-  const names = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
-  if (names.length > 0) {
-    violations.push(elseError(segment, `<Else> accepts no props. Got: "${names[0]}".`));
-  }
-  if (segment.selfClosing || segment.children.length === 0) {
-    violations.push(elseError(segment, "<Else> must have content. Use <Else>...</Else>."));
-  }
-  return violations;
-}
-
-/**
- * Every `<Else>` below an `<If>` that is not one of its direct children. The
- * walk stops at a nested `<If>`, which owns the `<Else>` elements beneath it.
- */
-function misplacedElseViolations(children: Segment[]): ErrorSegment[] {
-  const violations: ErrorSegment[] = [];
-
-  const walk = (segments: Segment[], depth: number): void => {
-    for (const segment of segments) {
-      if (segment.type !== "component" || segment.name === "If") {
-        continue;
-      }
-      if (segment.name === "Else" && depth > 0) {
-        violations.push(strayElseError(segment));
-      }
-      walk(segment.children, depth + 1);
-    }
-  };
-
-  walk(children, 0);
-  return violations;
-}
-
-interface IfStructure {
-  violations: ErrorSegment[];
-  whenTrue: Segment[];
-  whenFalse: Segment[];
-  /**
-   * The `<Else>` element, and where it sat among the `<If>`'s children.
-   *
-   * `<Else>` is consumed here and never reaches expansion's dispatch, so it
-   * would contribute no frame of its own — and the two arms of one `<If>` would
-   * expand under the same path (§5.6).
-   */
-  elseElement?: ComponentElement;
-  elseIndex?: number;
-}
-
-/**
- * Split an `<If>` body at its `<Else>` and validate the split. Structure is
- * read from source, before either branch expands, so a malformed `<Else>` is
- * diagnosed even when it sits in the branch the condition does not select.
- *
- * `<If>` has exactly two branches, so `<Else>` is the final substantive child:
- * content after `</Else>` belongs to neither branch and is rejected rather than
- * silently folded into the true one.
- */
-function ifStructure(segment: ComponentElement): IfStructure {
-  const violations: ErrorSegment[] = [];
-  const whenTrue: Segment[] = [];
-  let whenFalse: Segment[] | undefined;
-  let elseElement: ComponentElement | undefined;
-
-  let elseIndex: number | undefined;
-
-  for (const [index, child] of segment.children.entries()) {
-    if (isElse(child)) {
-      if (elseElement) {
-        violations.push(elseError(child, "<If> accepts at most one <Else> branch."));
-        continue;
-      }
-      violations.push(...elseElementViolations(child));
-      elseElement = child;
-      elseIndex = index;
-      whenFalse = child.children;
-      continue;
-    }
-    if (!elseElement) {
-      whenTrue.push(child);
-      continue;
-    }
-    if (!isBlankText(child)) {
-      violations.push(trailingContentError(child, elseElement));
-    }
-  }
-
-  violations.push(...misplacedElseViolations(segment.children));
-  return {
-    violations,
-    whenTrue,
-    whenFalse: whenFalse ?? [],
-    ...(elseElement === undefined ? {} : { elseElement, elseIndex }),
-  };
-}
-
-const IF_PROPS = new Set(["condition"]);
 
 /**
  * Expand the one branch the condition selects (spec §6.5 `<If>`). The other
@@ -1902,22 +1702,18 @@ function* expandIf(
   authority: ExpansionAuthority | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
-  const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
-    (name) => !IF_PROPS.has(name),
-  );
+  // Decided from source alone and shared with validation: which props were
+  // written, and how the body splits at its `<Else>`.
+  const unknownProp = ifPropsViolation(segment);
   if (unknownProp !== undefined) {
-    owner.push(
-      yield* raise(
-        ifError(segment, `<If> only accepts a "condition" prop. Got: "${unknownProp}".`),
-      ),
-    );
+    owner.push(yield* raise(ifError(segment, unknownProp.message)));
     return;
   }
 
   const structure = ifStructure(segment);
   if (structure.violations.length > 0) {
     for (const violation of structure.violations) {
-      owner.push(yield* raise(violation));
+      owner.push(yield* raise(structuralErrorSegment(violation, segment)));
     }
     return;
   }
@@ -1945,7 +1741,7 @@ function* expandIf(
       return;
     }
   } else {
-    owner.push(yield* raise(ifError(segment, '<If> requires a "condition" prop.')));
+    owner.push(yield* raise(ifError(segment, ifConditionViolation(segment)!.message)));
     return;
   }
 
@@ -1979,12 +1775,6 @@ function* expandIf(
   );
 }
 
-/** How a `<Loop>` names itself in its own printed errors. */
-function loopTag(segment: ComponentElement): string {
-  const name = segment.props.name;
-  return typeof name === "string" && name.length > 0 ? `<Loop name="${name}">` : "<Loop>";
-}
-
 function loopError(segment: ComponentElement, message: string): ErrorSegment {
   return { type: "error", message: positioned(message, segment), source: "Loop" };
 }
@@ -1993,13 +1783,11 @@ function breakError(segment: ComponentElement, message: string): ErrorSegment {
   return { type: "error", message: positioned(message, segment), source: "Break" };
 }
 
-const LOOP_PROPS = new Set(["max", "name"]);
-
 /**
  * The bound a `<Loop>` runs to, or why the prop rejects it. The caller turns
  * the failure into a positioned printed error, because it is the one that raises.
  */
-function* loopBound(segment: ComponentElement): Operation<Result<number>> {
+function* resolveLoopBound(segment: ComponentElement): Operation<Result<number>> {
   let max: Json;
   if ("max" in segment.props) {
     max = segment.props.max;
@@ -2016,29 +1804,10 @@ function* loopBound(segment: ComponentElement): Operation<Result<number>> {
       return Err(error);
     }
   } else {
-    return Err(
-      new Error(
-        `${loopTag(segment)} requires a "max" prop (a positive integer). Repetition is ` +
-          "always bounded — there is no unbounded loop.",
-      ),
-    );
+    return Err(new Error(loopMissingBoundMessage(segment)));
   }
 
-  if (typeof max !== "number") {
-    return Err(
-      new Error(
-        `Prop "max" on ${loopTag(segment)} must be a positive integer, not ${jsonKind(max)}.`,
-      ),
-    );
-  }
-  if (!Number.isInteger(max) || max < 1) {
-    return Err(
-      new Error(
-        `Prop "max" on ${loopTag(segment)} must be a positive integer. Got: ${JSON.stringify(max)}.`,
-      ),
-    );
-  }
-  return Ok(max);
+  return loopBound(segment, max);
 }
 
 /**
@@ -2079,15 +1848,9 @@ function* expandLoop(
   authority: ExpansionAuthority | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
-  const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
-    (name) => !LOOP_PROPS.has(name),
-  );
+  const unknownProp = loopPropsViolation(segment);
   if (unknownProp !== undefined) {
-    owner.push(
-      yield* raise(
-        loopError(segment, `<Loop> only accepts "max" and "name" props. Got: "${unknownProp}".`),
-      ),
-    );
+    owner.push(yield* raise(loopError(segment, unknownProp.message)));
     return;
   }
 
@@ -2105,7 +1868,7 @@ function* expandLoop(
     return;
   }
 
-  const bound = yield* loopBound(segment);
+  const bound = yield* resolveLoopBound(segment);
   if (!bound.ok) {
     owner.push(yield* raise(loopError(segment, bound.error.message)));
     return;
@@ -2183,18 +1946,6 @@ function* expandLoop(
   yield* recordOutcome(identity, { iterations: started, outcome });
 }
 
-function breakElementViolations(segment: ComponentElement): string[] {
-  const violations: string[] = [];
-  const names = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
-  if (names.length > 0) {
-    violations.push(`<Break> accepts no props. Got: "${names[0]}".`);
-  }
-  if (!segment.selfClosing || segment.children.length > 0) {
-    violations.push("<Break> takes no content. Write it self-closing: <Break />.");
-  }
-  return violations;
-}
-
 /**
  * Exit the nearest enclosing `<Loop>` (spec §6.5 `<Break>`).
  *
@@ -2221,11 +1972,7 @@ function* expandBreak(
   }
 
   if (!loop) {
-    violations.unshift(
-      "<Break> must be written inside a <Loop>. <Break> is reserved: it never resolves a " +
-        "component, and a <Break> a component writes in its own body cannot break the loop " +
-        "that invoked it.",
-    );
+    violations.unshift(strayBreakMessage());
   }
 
   const reported: Segment[] = [];
@@ -2267,13 +2014,9 @@ function* expandPrintErrors(
   authority: ExpansionAuthority | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
-  const names = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
-  if (names.length > 0) {
-    owner.push(
-      yield* raise(
-        printErrorsPropError(segment, `<PrintErrors> accepts no props. Got: "${names[0]}".`),
-      ),
-    );
+  const refusal = printErrorsViolations(segment)[0];
+  if (refusal !== undefined) {
+    owner.push(yield* raise(printErrorsPropError(segment, refusal.message)));
     return;
   }
 
@@ -3768,234 +3511,14 @@ interface BodyChunk {
   declaration?: boolean;
 }
 
-function isTopLevelOutput(segment: Segment): boolean {
-  return segment.type === "component" && segment.name === "Output";
-}
-
-export function bodyHasOutput(bodySegments: Segment[]): boolean {
-  return bodySegments.some(isTopLevelOutput);
-}
-
-function misplacedOutputError(): ErrorSegment {
-  return {
-    type: "error",
-    message:
-      "<Output> must be a direct top-level child of the component or document " +
-      "that declares it. For conditional rendering, use <If> inside <Output>.",
-    source: "Output",
-  };
-}
-
-function misplacedReturnError(segment: ComponentElement): ErrorSegment {
-  return {
-    type: "error",
-    message:
-      `${previewReturn(segment)} is not written in the flow of a body that declares ` +
-      "`returns`, so there is no declaration for it to satisfy. <Return> is reserved: " +
-      "it never resolves a component, and neither markdown produced at runtime nor " +
-      "another component's body can declare one.",
-    source: "Return",
-  };
-}
-
-function previewOutput(segment: ComponentElement): string {
-  const text = segment.children
-    .filter((child): child is TextSegment => child.type === "text")
-    .map((child) => child.content)
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (text.length === 0) {
-    return "<Output> (empty)";
-  }
-  const clipped = text.slice(0, 40);
-  return `<Output> containing "${clipped}${text.length > 40 ? "…" : ""}"`;
-}
-
 /**
- * Structural preflight (spec §6.9). Validates `<Output>` placement against the
- * body's own source AST. Only a direct top-level `<Output>` is a valid
- * declaration; any `<Output>` at depth > 0 — including inside unreachable or
- * discarded children — is a placement violation. All violations are combined
- * into a single aggregate ErrorSegment. Returns undefined when placement is
- * valid.
- */
-export function validateOutputPlacement(bodySegments: Segment[]): ErrorSegment | undefined {
-  const violations: string[] = [];
-
-  const walk = (segments: Segment[], depth: number): void => {
-    for (const segment of segments) {
-      if (segment.type !== "component") {
-        continue;
-      }
-      if (segment.name === "Output" && depth > 0) {
-        violations.push(previewOutput(segment));
-      }
-      walk(segment.children, depth + 1);
-    }
-  };
-
-  walk(bodySegments, 0);
-
-  if (violations.length === 0) {
-    return undefined;
-  }
-
-  const list = violations.map((entry) => `  - ${entry}`).join("\n");
-  return {
-    type: "error",
-    message:
-      "<Output> must be a direct top-level child of the component or document " +
-      "that declares it. For conditional rendering, use <If> inside " +
-      `<Output>. Misplaced <Output> found:\n${list}`,
-    source: "Output",
-  };
-}
-
-function previewReturn(segment: ComponentElement): string {
-  if ("value" in segment.expressions) {
-    return `<Return value={${segment.expressions.value}} />`;
-  }
-  if ("value" in segment.props) {
-    return `<Return value=${JSON.stringify(segment.props.value)} />`;
-  }
-  return "<Return />";
-}
-
-function structureError(source: string, headline: string, violations: string[]): ErrorSegment {
-  const list = violations.map((entry) => `  - ${entry}`).join("\n");
-  return { type: "error", message: `${headline}\n${list}`, source };
-}
-
-/**
- * Every `<Return>` the body itself declares, at any depth.
+ * The body output/return contract, read once in `body-structure.ts`.
  *
- * Depth is not a violation: a return under `<If>` or inside a `<Loop>` is
- * written in the body's own flow and is reached by ordinary expansion. What
- * this walk does not see is the only thing that still cannot declare one —
- * another component's definition, and markdown produced at runtime — because
- * it reads this body's source AST and nothing else.
+ * Re-exported here because expansion is where these have always been reached
+ * from; the walk and the catalog now live beside the facts validation reads, so
+ * the two callers cannot drift.
  */
-function collectReturns(bodySegments: Segment[]): ComponentElement[] {
-  const declared: ComponentElement[] = [];
-
-  const walk = (segments: Segment[]): void => {
-    for (const segment of segments) {
-      if (segment.type !== "component") {
-        continue;
-      }
-      if (segment.name === "Return") {
-        declared.push(segment);
-      }
-      walk(segment.children);
-    }
-  };
-
-  walk(bodySegments);
-  return declared;
-}
-
-function returnElementViolations(segment: ComponentElement): string[] {
-  const violations: string[] = [];
-  const names = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
-  const extra = names.filter((name) => name !== "value");
-  if (extra.length > 0) {
-    violations.push(`${previewReturn(segment)} accepts only a "value" prop, got "${extra[0]}"`);
-  }
-  if (!names.includes("value")) {
-    violations.push(`${previewReturn(segment)} requires a "value" prop`);
-  }
-  if (segment.children.length > 0) {
-    violations.push(`${previewReturn(segment)} takes no children`);
-  }
-  return violations;
-}
-
-function textModeReturnError(bodySegments: Segment[]): ErrorSegment | undefined {
-  const declared = collectReturns(bodySegments);
-  if (declared.length === 0) {
-    return undefined;
-  }
-  const found = declared.map(previewReturn);
-  return structureError(
-    "Return",
-    "<Return> requires a document or component that declares `returns`. Declare a " +
-      "return schema, or remove <Return>. Found:",
-    found,
-  );
-}
-
-function valueModeStructureError(bodySegments: Segment[]): ErrorSegment | undefined {
-  const violations: string[] = [];
-
-  const walkOutput = (segments: Segment[]): void => {
-    for (const segment of segments) {
-      if (segment.type !== "component") {
-        continue;
-      }
-      if (segment.name === "Output") {
-        violations.push(`${previewOutput(segment)} — <Output> and \`returns\` are exclusive`);
-      }
-      walkOutput(segment.children);
-    }
-  };
-  walkOutput(bodySegments);
-
-  const declared = collectReturns(bodySegments);
-
-  if (declared.length === 0) {
-    violations.push("no <Return>");
-  }
-  for (const declaration of declared) {
-    violations.push(...returnElementViolations(declaration));
-  }
-
-  if (violations.length === 0) {
-    return undefined;
-  }
-  return structureError(
-    "Return",
-    "A component that declares `returns` renders nothing and produces exactly one " +
-      "value through a <Return> its own body executes. Problems found:",
-    violations,
-  );
-}
-
-/**
- * Structural preflight for a body's output and return contract (spec §6.9,
- * §6.10). Runs against the body's own source AST, before `<Content />`
- * substitution, so projected content can neither introduce nor satisfy a
- * declaration. Every violation is combined into a single ErrorSegment, and a
- * body whose structure is invalid runs no eval, exec, `<Let>`, or nested
- * component.
- */
-export function validateBodyStructure(
-  bodySegments: Segment[],
-  returns: ReturnsSchema | undefined,
-): ErrorSegment | undefined {
-  if (returns !== undefined) {
-    return valueModeStructureError(bodySegments);
-  }
-  const outputError = validateOutputPlacement(bodySegments);
-  const returnError = textModeReturnError(bodySegments);
-  if (outputError && returnError) {
-    return {
-      type: "error",
-      message: `${outputError.message}\n\n${returnError.message}`,
-      source: "Return",
-    };
-  }
-  return outputError ?? returnError;
-}
-
-function validateOutputProps(segment: ComponentElement): ErrorSegment | undefined {
-  const hasProps = Object.keys(segment.props).length > 0;
-  const hasExpressions = Object.keys(segment.expressions).length > 0;
-  if (hasProps || hasExpressions) {
-    return { type: "error", message: "<Output> accepts no props.", source: "Output" };
-  }
-  return undefined;
-}
+export { bodyHasOutput, validateBodyStructure, validateOutputPlacement };
 
 /**
  * Partition a definition body into ordered chunks (spec §6.9). Output error mode
@@ -4019,9 +3542,13 @@ function buildBody(
 
   for (const [index, segment] of bodySegments.entries()) {
     if (segment.type === "component" && segment.name === "Output") {
-      const propsError = validateOutputProps(segment);
-      if (propsError) {
-        chunks.push({ output: true, segments: [propsError], declaration: true });
+      const propsViolation = outputPropsViolation(segment);
+      if (propsViolation !== undefined) {
+        chunks.push({
+          output: true,
+          segments: [{ type: "error", message: propsViolation, source: "Output" }],
+          declaration: true,
+        });
         continue;
       }
       const outputSegments = substituteSegmentList(segment.children, slots, project, state, claim);
