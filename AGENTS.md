@@ -467,6 +467,18 @@ the corpus or enabling in-shard concurrency is not an answer to a miss.
    alternatives, defensive qualifications, and exhaustive detail that does not
    help a reader understand or use the design.
 
+### Component descriptions
+
+Write a component description for an author deciding what to type. Lead with an
+imperative statement of purpose and show a representative invocation. Describe
+observable behavior rather than engine machinery, and do not repeat the Forms,
+Props, Captures, `as`, Returns or Origin fields rendered beside it. Keep a
+constraint or surprising consequence only when it changes how the component is
+used; cut inferable details, defended absences and answers to questions the
+reader has no reason to ask. Before adding or changing a description, read
+[the component description guide](.agents/component-descriptions.md). Use its
+refinement interview when reviewing a set of descriptions.
+
 ## Executable.md Style Guide
 
 An executable document is read twice: as source, by someone deciding whether to
