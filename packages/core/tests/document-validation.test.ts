@@ -32,6 +32,7 @@ import {
   documentValidationCodeRank,
   inlineSource,
   registerComponents,
+  retainedSource,
   validateDocument,
 } from "../mod.ts";
 import type {
@@ -377,6 +378,86 @@ describe("Tier DV: recursive Markdown sources", () => {
 
     const reversed = yield* validateText("<Beta />\n\n<Alpha />\n", { tree });
     expect(names(reversed.result)).toEqual(["Beta", "Alpha", "Shared", "Shared", "Alpha"]);
+  });
+
+  it("DV5: a root sharing a source identity with a component is scanned once", function* () {
+    const body = "<Foo />\n";
+
+    // The root's text is retained rather than read, so a second scan of the
+    // same identity would show up as a second `Foo` record with nothing read.
+    const retained = yield* validating(retainedSource("components/Foo.md", body), {
+      tree: { "components/Foo.md": body },
+      includes: ["components"],
+    });
+
+    expect(names(retained.result)).toEqual(["Foo"]);
+    expect(retained.result.outcome).toBe("valid");
+    expect(named(retained.result, "Foo").origin).toEqual({
+      kind: "repository",
+      path: "components/Foo.md",
+    });
+    expect(retained.seen.reads).toEqual([]);
+
+    // Read from a path, the same identity is read exactly once: the invocation
+    // finds the root already in the source cache.
+    const fromFile = yield* validating(
+      { path: "components/Foo.md" },
+      { tree: { "components/Foo.md": body }, includes: ["components"] },
+    );
+
+    expect(names(fromFile.result)).toEqual(["Foo"]);
+    expect(fromFile.seen.reads).toEqual(["components/Foo.md"]);
+  });
+});
+
+describe("Tier DV: structural facts and the records that own them", () => {
+  it("DV4: a fact a parent discovered reaches the invocation it names", function* () {
+    const { result } = yield* validateText(
+      '<If condition={true}><Let as="x"><Else>no</Else></Let></If>\n',
+    );
+
+    expect(codes(result)).toEqual(["structural-usage-invalid"]);
+    const [diagnostic] = result.diagnostics;
+    expect(diagnostic!.component).toBe("Else");
+    expect(diagnostic!.message).toContain("<Else> must be a direct child of <If>");
+    // Positioned at the `<Else>`, not at the `<If>` that read the body.
+    expect(diagnostic!.position?.offset).toBe(named(result, "Else").position?.offset);
+
+    // The element that is wrong points at it, and so does the construct whose
+    // structure is malformed. The `<Let>` in between owns neither.
+    expect(named(result, "Else").outcome === "invalid" && named(result, "Else").outcome).toBe(
+      "invalid",
+    );
+    expect(diagnosticsOf(result, named(result, "Else"))).toEqual([diagnostic]);
+    expect(diagnosticsOf(result, named(result, "If"))).toEqual([diagnostic]);
+    expect(named(result, "Let").outcome).toBe("valid");
+  });
+
+  it("DV8: every independent static structural failure is reported", function* () {
+    const { result } = yield* validateText('<If bogus="x"><Else /></If>\n');
+
+    expect(codes(result)).toEqual([
+      "structural-usage-invalid",
+      "structural-usage-invalid",
+      "structural-usage-invalid",
+    ]);
+    expect(result.diagnostics.map((diagnostic) => diagnostic.component)).toEqual([
+      "If",
+      "If",
+      "Else",
+    ]);
+    expect(result.diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
+      '<If> only accepts a "condition" prop. Got: "bogus".',
+      '<If> requires a "condition" prop.',
+      "<Else> must have content. Use <Else>...</Else>.",
+    ]);
+
+    // The unknown prop does not hide the two failures beside it, and the
+    // `<Else>` failure belongs to the `<Else>` as well as to its `<If>`.
+    expect(diagnosticsOf(result, named(result, "If"))).toHaveLength(3);
+    expect(diagnosticsOf(result, named(result, "Else")).map((found) => found.component)).toEqual([
+      "Else",
+    ]);
   });
 });
 

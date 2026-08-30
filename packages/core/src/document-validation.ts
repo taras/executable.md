@@ -350,6 +350,17 @@ class ValidationState {
   readonly #sources = new Map<string, SourceEntry>();
   /** Parsed sources still waiting to have their own body walked. */
   readonly #queue: ParsedSourceEntry[] = [];
+  /**
+   * Diagnostics a parent construct found about one of its descendants, waiting
+   * for the walk to reach that descendant.
+   *
+   * `<If>` reads its own body to split it, so a misplaced `<Else>` beneath it
+   * is discovered before the walk arrives at the `<Else>` itself. The finding
+   * belongs to both — the `<If>`'s structure is malformed, and the `<Else>` is
+   * the element that is wrong — and preorder guarantees the parent is visited
+   * first, so the child's record picks it up here rather than losing it.
+   */
+  readonly #deferred = new Map<ComponentElement, number[]>();
   #nextOrdinal = 0;
   #nextToken = 0;
   #sequence = 0;
@@ -419,7 +430,12 @@ class ValidationState {
       });
       return undefined;
     }
-    return this.#admitParsed(ordinal, parsed.value.definition);
+    // Under its own identity, like every other source: a root that lives where
+    // a component name resolves is one source, not two. A selection that finds
+    // it here terminates the walk the way any other cycle does, and reads
+    // nothing. A targeted root caches the projection it was asked about, which
+    // is the source validation is answering for.
+    return this.#admitParsed(ordinal, parsed.value.definition, path);
   }
 
   /**
@@ -634,7 +650,10 @@ class ValidationState {
     const draft: DraftInvocation = {
       name: segment.name,
       ...(segment.position === undefined ? {} : { position: segment.position }),
-      tokens: [...(context.entry.elementTokens.get(segment) ?? [])],
+      tokens: [
+        ...(context.entry.elementTokens.get(segment) ?? []),
+        ...(this.#deferred.get(segment) ?? []),
+      ],
       reasons: [],
     };
     this.#invocations.push(draft);
@@ -647,13 +666,19 @@ class ValidationState {
     if (selected.kind === "structural") {
       draft.origin = { kind: "structural", construct: selected.construct };
       for (const violation of this.#structuralViolations(segment, context)) {
-        draft.tokens.push(
-          this.#draft(context.entry.ordinal, violation.code, {
-            message: violation.message,
-            component: segment.name,
-            ...positionOf(violation.element ?? segment),
-          }),
-        );
+        // A violation names the construct it is about and, when the check
+        // walked past the element it was given, the element it is about. Both
+        // the diagnostic and the record that points at it follow that element.
+        const anchor = violation.element ?? segment;
+        const token = this.#draft(context.entry.ordinal, violation.code, {
+          message: violation.message,
+          component: violation.source,
+          ...positionOf(anchor),
+        });
+        draft.tokens.push(token);
+        if (anchor !== segment) {
+          this.#defer(anchor, token);
+        }
       }
       return;
     }
@@ -835,12 +860,14 @@ class ValidationState {
       case "Each":
         return eachViolations(segment);
       case "If": {
+        // Every one of these is decided from source alone, so every one of them
+        // is reported. Expansion stops at the first and expands neither branch,
+        // which is its own established behavior over the same shared facts —
+        // an author reading a validation result is owed all of them.
         const found: StructuralViolation[] = [];
         const unknownProp = ifPropsViolation(segment);
         if (unknownProp !== undefined) {
-          // Expansion stops here too: an `<If>` whose props are wrong expands
-          // neither branch, and reads no structure it would then complain about.
-          return [unknownProp];
+          found.push(unknownProp);
         }
         found.push(...ifStructure(segment).violations);
         const condition = ifConditionViolation(segment);
@@ -898,6 +925,16 @@ class ValidationState {
         // source's own facts already stated.
         return [];
     }
+  }
+
+  /** Hold a parent's finding for the descendant record it belongs to. */
+  #defer(element: ComponentElement, token: number): void {
+    const existing = this.#deferred.get(element);
+    if (existing === undefined) {
+      this.#deferred.set(element, [token]);
+      return;
+    }
+    existing.push(token);
   }
 
   #draft(

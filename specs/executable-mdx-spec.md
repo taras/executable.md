@@ -2962,7 +2962,10 @@ beneath an origin-only TypeScript component. No branch is evaluated and no
 projection is predicted. A definition that invokes itself, directly or through
 others, terminates the walk when the source identity comes back around, and that
 cycle is not itself a failure. An invalid invocation still discovers and queues
-the definition it selected.
+the definition it selected. The root is a source like any other and carries its
+own path as its identity, so a root that lives where a component name resolves
+is one source rather than two: an invocation selecting it finds it already
+scanned, and reads nothing.
 
 **A static answer never stands in for a runtime value.** Resolution, authored
 form, engine-owned body shape and every other structural rule run whenever their
@@ -2975,7 +2978,11 @@ opaque. A dynamic schema-visible expression, or a repository `.ts` contract that
 lives on the module's exports, makes an otherwise acceptable invocation not
 statically checkable — validation solves no JSON Schema partially around the
 value it does not have. A definite independent failure still wins, so an invalid
-form does not become opaque because another prop is dynamic.
+form does not become opaque because another prop is dynamic. Every check whose
+answer is independent runs, and every one that fails is reported: where
+expansion refuses a construct at its first violation and expands nothing
+further, validation reads the whole of that construct's shared facts, because an
+author reading a result is owed all of them at once.
 
 **Parsing stays one language rule.** The scanner and the definition parsers are
 execution's. Component-like text the scanner treats as text remains text, and a
@@ -3051,6 +3058,12 @@ for that source, every invocation selecting it is invalid pointing at that same
 index, and no body sites are invented for it. A defect in a definition that
 *did* parse belongs to that definition source, carries its path and authored
 position, and does not stop the rest of that definition from being traversed.
+
+A fact one construct discovered about a descendant belongs to both. `<If>` reads
+its own body to split it at `<Else>`, so a misplaced `<Else>` beneath it is
+found before the walk arrives there: the diagnostic names and is positioned at
+the `<Else>`, the `<Else>`'s own record points at it, and the `<If>` — whose
+structure is what is malformed — points at it too.
 
 **The document outcome is `invalid` exactly when a diagnostic exists.** An
 opaque invocation on its own leaves the document valid.
@@ -9752,11 +9765,11 @@ itself, so an execution starting anywhere fails the row. Defined in §5.3.
 | DV1 | Unresolved name | Version 1, document `invalid`, one originless invalid invocation carrying `component-unresolved`, and nothing executed |
 | DV2 | Missing required prop | `<File />` reports `props-invalid` with the normalized required-property issue, keeps its registered origin, and never runs |
 | DV3 | A valid document | Structural, core registered, declaration-only registered and included Markdown components together are `valid`, and the identity factory is never called |
-| DV4 | A defect beneath control flow | A definition reached through an invocation reports its own path and authored position; the branch is never evaluated |
-| DV5 | Traversal order | Root first, then FIFO discovery, one read per source identity, a cycle terminating; reversing the root's invocation order reverses only the FIFO portion |
+| DV4 | A defect beneath control flow | A definition reached through an invocation reports its own path and authored position; the branch is never evaluated; a fact a parent construct discovered names, positions at, and reaches the descendant it is about |
+| DV5 | Traversal order | Root first, then FIFO discovery, one read per source identity, a cycle terminating; reversing the root's invocation order reverses only the FIFO portion; a root sharing an identity with a selected component is scanned once |
 | DV6 | Source, target and declarations | Unreadable and invalid root, no-match and ambiguous target, malformed frontmatter, props and returns declarations map to their exact codes and invent no invocation; a failed definition is one diagnostic every caller shares |
 | DV7 | Static and dynamic props | A dynamic schema-visible prop is `not-statically-checkable`; a capture is not; a definitely missing required key still invalidates; a mixed object yields no partial schema conclusion |
-| DV8 | Definite wins | A refused authored form, and an independent body-shape defect, each keep an invocation `invalid` beside a dynamic prop, with indexes in code order |
+| DV8 | Definite wins | A refused authored form, and an independent body-shape defect, each keep an invocation `invalid` beside a dynamic prop, with indexes in code order; every independent static structural failure is reported rather than only the first |
 | DV9 | Origin-only TypeScript | Never imported, opaque with `origin-only-contract`, both reasons in canonical order with a dynamic prop, invalid on an engine-owned defect, and its authored children still validated |
 | DV10 | Root and definition ownership | Root props validate fully without stopping traversal; root and definition body-shape and return diagnostics keep their source, position and component ownership |
 | DV11 | Order and determinism | Every record including structural sites is in source order; two validations are deep-equal; the closed code order is a direct unit, `component-ambiguous` included |
