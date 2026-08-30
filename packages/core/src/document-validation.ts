@@ -1003,7 +1003,7 @@ class ValidationState {
    * the stable tie breaker and is never public.
    */
   finish(): DocumentValidation {
-    const sorted = this.#diagnostics.toSorted(compareDrafts);
+    const sorted = [...this.#diagnostics].sort(compareDrafts);
     const indexes = new Map<number, number>();
     sorted.forEach((draft, index) => indexes.set(draft.token, index));
 
@@ -1023,7 +1023,7 @@ class ValidationState {
       if (draft.tokens.length > 0) {
         const diagnosticIndexes = [
           ...new Set(draft.tokens.map((token) => indexes.get(token)!)),
-        ].toSorted((left, right) => left - right);
+        ].sort((left, right) => left - right);
         return {
           ...site,
           outcome: "invalid",
