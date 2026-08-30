@@ -6555,14 +6555,36 @@ Return JSON matching this schema:
 `<Json>` is self-closing and contentless, and takes exactly one public prop.
 `value` is required, and its presence is syntactic — `value={undefined}` supplies
 the prop and then fails serialization. There is no `indent`, `pretty`, compact,
-replacer, key-order, schema or newline option, and `as` is not accepted: this
-renders text and binds nothing.
+replacer, key-order, schema or newline option.
 
-**The invocation's shape is decided before its operand runs.** A literal `as`,
-any paired invocation — including one whose content is only whitespace — and a
-missing `value` are each refused before `value` is evaluated, so a malformed
-invocation cannot trigger a getter, a function call, or any other work the
-operand expression would do.
+**`as` is optional, and it is the engine's, not this component's.** A document
+that wants the text rather than its placement writes the binding on the
+invocation:
+
+```md
+<Json value={assessment.diagnostics} as="findings" />
+<CodeBlock value={findings} language="json" />
+```
+
+The exact string `<Json>` produced is bound, and nothing is written where the
+element stands. That first line is the ordinary text capture every text
+component has, so it does for one run in the same environment exactly what the
+single-child wrapper does:
+
+```md
+<Let as="findings"><Json value={assessment.diagnostics} /></Let>
+```
+
+The equivalence is to that exact wrapper alone. Whitespace, additional content
+or `select` inside `<Let>` describes a different operation.
+
+**The invocation's shape is decided before its operand runs.** `as={expression}`
+and a literal `as` that names no binding are refused on the authored text, with
+neither the `as` expression nor the operand expression evaluated. After that,
+any paired invocation — including one whose content is only whitespace — a
+missing `value`, and an unknown ordinary prop are each refused before `value` is
+evaluated, so a malformed invocation cannot trigger a getter, a function call,
+or any other work the operand expression would do.
 
 **The operand arrives by reference.** `value` is a capture (§5.3, §6.5): the
 engine does not resolve it, so it meets neither the prop JSON round trip nor the
@@ -6589,7 +6611,9 @@ of course change its own state, because running them is what `JSON.stringify`
 does.
 
 **The output lands where the element was written**, as one function-component
-result, so nothing is added around it and no partial prefix can escape.
+result, so nothing is added around it and no partial prefix can escape. With
+`as`, that same one result becomes the binding instead, and the invocation site
+emits nothing at all.
 
 **Two failures, and they are different facts.** A result that is not a string
 means the value has no JSON text at all — root `undefined`, a function, a symbol
@@ -6599,15 +6623,17 @@ means the value has no JSON text at all — root `undefined`, a function, a symb
 which of the two happened. The original thrown value is preserved as the cause
 through the normal component failure chain (§6.8.1); neither the error nor the
 rejected value is interpolated into the message, because doing so could invoke a
-hostile accessor a second time.
+hostile accessor a second time. Either failure is atomic under `as`: the
+destination stays absent, and no partial JSON reaches the document.
 
-`<Json>` creates no binding, owns no scope or resource, and has no durable
-effect or journal record of its own — resolving the component is the ordinary
-`import_component` every component resolution produces. A live run or a partial
-replay reaches it through normal expansion and serializes the value that
-execution reconstructed; completed-root terminal reuse is unchanged. A
-surrounding `<Prompt>` or `<File>` keeps its own request or write record,
-including the JSON text it consumed; `<Json>` neither duplicates nor redacts it.
+`<Json>` owns no scope or resource, and has no durable effect or journal record
+of its own — resolving the component is the ordinary `import_component` every
+component resolution produces, and an optional `as` is the engine's own capture
+rather than a record of this component's. A live run or a partial replay reaches
+it through normal expansion and serializes the value that execution
+reconstructed; completed-root terminal reuse is unchanged. A surrounding
+`<Prompt>` or `<File>` keeps its own request or write record, including the JSON
+text it consumed; `<Json>` neither duplicates nor redacts it.
 
 #### Parsing text: `<Parse>` and `<SafeParse>`
 
@@ -9582,12 +9608,14 @@ visible warning blocks, gather into a separate error report).
 | J2 | Native container rules | One representative object and array show nested `undefined`, function, symbol and non-finite handling as `JSON.stringify` defines it |
 | J3 | Position | Adjacent authored bytes survive on both sides, and no newline is added |
 | J4 | Raw operand | The captured expression's exact result arrives by identity; the source object and array keep their contents, extensibility and frozen state; ordinary interpolation is unchanged |
-| J5 | Shape first | `as`, paired content including whitespace, and a missing `value` each refuse before the operand evaluates, and no binding is created |
-| J6 | Once | One expression evaluation and one `JSON.stringify` call; a `toJSON` hook runs exactly once |
+| J5 | Shape first | An expression-valued `as`, a literal `as` naming no binding, paired content including whitespace, a missing `value` and an unknown prop each refuse before the operand evaluates, and none creates a binding |
+| J5b | Capture | A valid `as` binds the exact JSON string and emits nothing between the authored bytes around it; an object, array, scalar and `null` bind identically through the direct spelling and through the single-child `<Let>` wrapper, run separately |
+| J6 | Once | One expression evaluation and one `JSON.stringify` call, captured or not; a `toJSON` hook runs exactly once, and building the binding takes no second read |
 | J7 | Two failures | Root `undefined`/function/symbol fail as no JSON text; `bigint` and a cycle fail as serialization that threw; a throwing getter or `toJSON` preserves the exact cause, records the invocation position, and emits no partial JSON |
 | J7b | The authored `value={undefined}` | Fails as no JSON text and renders no `null`, while an authored `value={null}` still renders `null` |
-| J8 | Resolution | `Json.md` overrides core's default; otherwise the name inspects as an ordinary `@executablemd/core` registration with a closed empty schema and the capture list `["value"]` |
-| J9 | Durability | No JSON-specific effect is journaled, component resolution stays an ordinary import, partial replay re-serializes the reconstructed value, and completed replay runs neither the component nor its hooks |
+| J7c | Captured failures | Both failures stay distinct under `as`, keep the original cause reachable, leave the destination absent, and leak no partial JSON |
+| J8 | Resolution | `Json.md` overrides core's default and its own rendered text is what `as` captures; otherwise the name inspects as an ordinary `@executablemd/core` registration with a closed empty schema, the capture list `["value"]`, a text return and the documented optional `as`, in structured inspection and in rendered `xmd syntax` alike |
+| J9 | Durability | Capturing adds no JSON-specific effect to the journal, component resolution stays an ordinary import, partial replay re-serializes the reconstructed value into the binding a later position reads, and completed replay runs neither the component nor its hooks |
 | J10 | Composition | `<Prompt>` sends and retains exactly the rendered JSON, with only the authored bytes around it |
 | J11 | Bootstrap migration | `components/BootstrapNpmPackage.md` builds its manifest with `<Let value>` and renders it through `<Json>`; the complete written manifest is compared byte for byte, including its trailing newline, which the document authors rather than the component |
 | J12 | One taught contract | The construct inventory, §6.12, this plan, decision 100, the site component documentation and the reference all state the same `<Let>` → `<Json>` → `<Parse>` direction and the same exclusions |

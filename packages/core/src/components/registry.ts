@@ -195,7 +195,7 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
       description:
         "Render a value as JSON text. `<Json value={config} />` writes the JSON where you " +
         "put it.",
-      as: null,
+      as: "Optional. Captures the JSON text instead of emitting it.",
       context: null,
     },
     { captures: ["value"], forms: ["self-closing"] },

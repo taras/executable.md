@@ -768,9 +768,10 @@ export default define.page(function Components() {
       <p>
         The formatting is fixed: two spaces per level, keys in the order the
         object has them, and nothing else to choose. There is no{" "}
-        <code>indent</code>, <code>pretty</code>{" "}
-        or replacer option, and it binds nothing — <code>as</code>{" "}
-        is refused, because this renders text.
+        <code>indent</code>, <code>pretty</code> or replacer option. Writing
+        {" "}
+        <code>as</code>{" "}
+        captures that text for a later element instead of placing it here.
       </p>
       <p>
         It also adds{" "}

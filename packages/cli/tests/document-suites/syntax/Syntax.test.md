@@ -42,7 +42,9 @@ rows read.
 
 <Let as="catalog" value={JSON.parse(json.stdout)} />
 <Let as="categoryKinds" value={catalog.categories.map((category) => category.kind)} />
-<Let as="builtInNames" value={catalog.categories[1].entries.map((entry) => entry.name)} />
+<Let as="builtInEntries" value={catalog.categories[1].entries} />
+<Let as="builtInNames" value={builtInEntries.map((entry) => entry.name)} />
+<Let as="jsonEntry" value={builtInEntries.find((entry) => entry.name === "Json")} />
 <Let as="userEntries" value={catalog.categories[2].entries} />
 <Let as="userNames" value={userEntries.map((entry) => entry.name)} />
 <Let as="documented" value={userEntries.find((entry) => entry.name === "Documented")} />
@@ -125,6 +127,13 @@ rows read.
 <AssertEquals actual={orderedDocumented.origin.path} expected="packages/cli/tests/document-suites/syntax/alternate/Documented.md" />
 <AssertEquals actual={orderedNames.includes("BootstrapNpmPackage")} expected={false} />
 <AssertEquals actual={orderedNames.includes("Opaque")} expected={true} />
+</Test>
+
+<Test name="SM12: the built-in <Json> entry publishes its prose in both formats">
+<AssertEquals actual={jsonEntry.description} expected="Render a value as JSON text. `<Json value={config} />` writes the JSON where you put it." />
+<AssertEquals actual={jsonEntry.as} expected="Optional. Captures the JSON text instead of emitting it." />
+<AssertStringIncludes actual={markdown.stdout} expected="Render a value as JSON text. `<Json value={config} />` writes the JSON where you put it." />
+<AssertStringIncludes actual={markdown.stdout} expected="**`as`:** Optional. Captures the JSON text instead of emitting it." />
 </Test>
 
 <Test name="SM11: the built-in category holds the run profile, including <Session>">

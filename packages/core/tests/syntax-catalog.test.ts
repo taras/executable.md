@@ -909,6 +909,37 @@ describe("Tier SY: complete component contracts", () => {
     expect(entry.context).toBe(undefined);
   });
 
+  it("SY24b2: reports <Json>'s whole contract, optional `as` and all", function* () {
+    const catalog = yield* catalogFor({}, []);
+    const entry = find(builtIn(catalog), "Json");
+
+    // The whole row: what an author reads about `<Json>` and what a repository
+    // override is measured against are the same fields, so a drift in either
+    // is a failure here.
+    expect(entry).toEqual({
+      kind: "component",
+      name: "Json",
+      origin: { kind: "registered", origin: "@executablemd/core", reserved: false },
+      sourceKind: "registered",
+      inspectability: "complete",
+      forms: ["self-closing"],
+      // Closed and empty: `value` is a capture, and a schema cannot describe a
+      // value it never sees.
+      props: { type: "object", properties: {}, additionalProperties: false },
+      captures: ["value"],
+      // Text, and no declared value return: `as` captures what the component
+      // rendered rather than a value it validated.
+      returnMode: "text",
+      returns: { type: "string" },
+      description:
+        "Render a value as JSON text. `<Json value={config} />` writes the JSON where you " +
+        "put it.",
+      as: "Optional. Captures the JSON text instead of emitting it.",
+    });
+    // Contentless, so there is no body to document.
+    expect(entry.context).toBe(undefined);
+  });
+
   it("SY24c: describes <Fail> completely enough to copy the invocation", function* () {
     const catalog = yield* catalogFor({}, []);
 
