@@ -27,6 +27,7 @@ import { build } from "jsr:@deno/dnt@0.42.3";
 import {
   copyFile,
   emptyDir,
+  ensureDir,
   exists,
   fromFileUrl,
   readTextFile,
@@ -34,11 +35,28 @@ import {
   writeTextFile,
 } from "@effectionx/fs";
 import { listWorkspacePaths } from "./lib/workspace.ts";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 // Recursive directory copy and temp-dir creation are not part of @effectionx/fs.
-import { cp, mkdtemp } from "node:fs/promises";
+import { cp, mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { z } from "npm:zod@^4";
+
+/**
+ * The documents a package ships, as package-relative paths.
+ *
+ * `src/documents/` and nothing else. Packages keep test documents and scenario
+ * fixtures under `src/` as well, so publishing every Markdown found there would
+ * ship a package full of fixtures; being in this one directory is what declares
+ * a document part of the product.
+ */
+function* packagedDocuments(pkgDir: URL): Operation<string[]> {
+  const documents = new URL("src/documents/", pkgDir);
+  if (!(yield* exists(documents))) {
+    return [];
+  }
+  const names = yield* until(readdir(fromFileUrl(documents), { recursive: true }));
+  return names.map((name) => `src/documents/${name.split(sep).join("/")}`);
+}
 
 const ExportsSchema = z.union([z.string(), z.record(z.string(), z.string())]);
 
@@ -310,6 +328,17 @@ function* buildPackage(pkgArg: string, version: string, ctx: BuildContext): Oper
   const license = new URL("LICENSE", repoRoot);
   if (yield* exists(license)) {
     yield* copyFile(license, new URL("LICENSE", outDir));
+  }
+
+  // A package that executes its own Markdown ships that Markdown beside its
+  // emitted module. dnt emits the module graph and nothing else, so an asset no
+  // TypeScript imports would be absent from the published package while the
+  // source checkout kept working — the command would find nothing at runtime,
+  // on Node and Bun only.
+  for (const asset of yield* packagedDocuments(pkgDir)) {
+    const target = new URL(`esm/${asset}`, outDir);
+    yield* ensureDir(fromFileUrl(new URL(".", target)));
+    yield* copyFile(new URL(asset, pkgDir), target);
   }
 
   ctx.built.add(denoJson.name);
