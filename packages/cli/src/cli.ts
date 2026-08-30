@@ -80,7 +80,6 @@ import { command as hostCommand } from "@executablemd/runtime";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import {
   installTestingComponents,
-  TestFailureError,
   testHarnessInstallation,
   useTesting,
 } from "@executablemd/testing";
@@ -93,6 +92,8 @@ import { installWebComponents, installWebElicitation } from "@executablemd/web";
 import { timebox } from "@effectionx/timebox";
 import { timeout as runTimeout } from "@executablemd/runtime";
 import { installRunAgentStack, resolveAgentStack } from "./agent-stack.ts";
+import type { AgentStack } from "./agent-stack.ts";
+import { reportFailure } from "./report.ts";
 import { TIMEOUT_FLAGS, resolveRunTimeouts } from "./timeouts.ts";
 import type { RunTimeouts } from "./timeouts.ts";
 import type { AgentFlags } from "./agent-config.ts";
@@ -517,22 +518,25 @@ function* underRunDeadline(timeouts: RunTimeouts, body: () => Operation<void>): 
 }
 
 /**
- * Install the agent stack for `xmd run`: permission mode, the ACPX
- * registration, and the components with the resolved root provider. Invalid flags and an unknown --agent-provider fail here
- * — before any document executes. Nothing starts an agent: the provider
- * validates availability on first use.
+ * Settle the Agent configuration for one invocation, or report why it cannot
+ * be settled.
+ *
+ * Called once per command, before anything a document or an agent could
+ * observe: incompatible permission flags and an unknown `--agent-provider` are
+ * command-line failures, and a command line is wrong before any of it runs.
+ * `undefined` means the caller has already reported and should stop.
  */
-function* installAgentStack(
+function* settleAgentStack(
   flags: AgentFlags,
   sessions: MachineSessionAssembly | undefined,
-): Operation<void> {
+): Operation<AgentStack | undefined> {
   const stack = yield* resolveAgentStack(flags, sessions);
   if (!stack.ok) {
     console.error(stack.error.message);
     yield* exit(1);
-    return;
+    return undefined;
   }
-  yield* installRunAgentStack(stack.value);
+  return stack.value;
 }
 
 /**
@@ -601,7 +605,16 @@ interface DocumentConfig {
 
 export interface DocumentMode {
   testing: boolean;
-  agent?: AgentFlags;
+  /**
+   * The Agent configuration this invocation already settled.
+   *
+   * Resolved, not the flags that produced it: an invocation reads
+   * `DEFAULT_AGENT_NAME` and decides its permission mode once, and a command
+   * that generates a document before running one has two consumers for that one
+   * answer. Passing the flags instead would let the second consumer reach a
+   * different conclusion than the first from the same command line.
+   */
+  agent?: AgentStack;
   /**
    * What this host states about machine-wide agent sessions: who owns one,
    * how it was constructed, which build it belongs to, and which adapters this
@@ -673,7 +686,7 @@ export function* installDocumentComponents(mode: DocumentMode, verbose: boolean)
   // Agent flags belong to the two commands that end in a document execution —
   // `xmd test` drives agents through the deterministic TestAgent stack instead.
   if (mode.agent) {
-    yield* installAgentStack(mode.agent, mode.machineSessions);
+    yield* installRunAgentStack(mode.agent);
   }
 }
 
@@ -888,11 +901,6 @@ export interface PromptExecutionConfig {
   journal: string | undefined;
   raw: boolean;
   secretDetection: boolean;
-  agentProvider: string;
-  defaultAgent: string | undefined;
-  approveAll: boolean;
-  approveReads: boolean;
-  denyAll: boolean;
 }
 
 /**
@@ -907,6 +915,7 @@ export interface PromptExecutionConfig {
  */
 export function promptExecutor(
   config: PromptExecutionConfig,
+  stack: AgentStack,
   sessions: MachineSessionAssembly | undefined,
   installService: HostServiceInstaller,
 ): (approved: PromptExecution) => Operation<Result<void>> {
@@ -928,13 +937,11 @@ export function promptExecutor(
           testing: false,
           props: approved.props,
           ...(sessions === undefined ? {} : { machineSessions: sessions }),
-          agent: {
-            agentProvider: config.agentProvider,
-            defaultAgent: config.defaultAgent,
-            approveAll: config.approveAll,
-            approveReads: config.approveReads,
-            denyAll: config.denyAll,
-          },
+          // The same object generation was configured from. The provider it
+          // installs is a fresh ordinary one — the generator's scope is already
+          // gone — but which agent it defaults to and what it may do were
+          // decided once, for the whole invocation.
+          agent: stack,
         },
         installService,
       );
@@ -968,16 +975,6 @@ function targetFailureReport(root: RootDocumentSource, error: unknown): string |
   const heading = ambiguous ? "Matched targets:" : "Available targets:";
   const references = listed.map((target) => `  ${formatDocumentReference(root.path, target)}`);
   return [outcome, heading, ...references].join("\n");
-}
-
-/** Print a completed document's failure the way `xmd` has always printed it. */
-function reportFailure(error: Error, prefix?: string): void {
-  const label = prefix === undefined ? "" : `${prefix}: `;
-  if (error instanceof TestFailureError) {
-    console.error(`\n${label}tests failed: ${error.message}`);
-    return;
-  }
-  console.error(`${label}${error.message}`);
 }
 
 interface TestConfig extends Omit<DocumentConfig, "root"> {
@@ -1261,6 +1258,19 @@ function* preparePropsPhase(args: string[], evalFlags: EvalFlags): Operation<Pro
   // been asked anything yet. Everything below that reads a document, and every
   // refusal that assumes one, is therefore skipped.
   if (namesPrompt(args)) {
+    // Refused here rather than with the other commands' inline refusal below,
+    // because that one is reached through the parse this branch exists to skip.
+    // An inline document is what `xmd prompt` sets out to write, so a caller who
+    // supplied one would otherwise watch it generate a different one instead.
+    if (evalFlags.values[0] !== undefined) {
+      return {
+        args,
+        bindings: [],
+        error:
+          `unrecognized option for xmd prompt: ${EVAL_OPTION} — inline documents are ` +
+          "exclusive to xmd run",
+      };
+    }
     const scan = scanPromptArgs(args);
     return { args: scan.fixed, bindings: [], prompt: scan };
   }
@@ -1831,6 +1841,19 @@ function* dispatch(
         break;
       }
       const root = propsPhase.root;
+      const runStack = yield* settleAgentStack(
+        {
+          agentProvider: config.agentProvider,
+          defaultAgent: config.defaultAgent,
+          approveAll: config.approveAll,
+          approveReads: config.approveReads,
+          denyAll: config.denyAll,
+        },
+        sessions,
+      );
+      if (runStack === undefined) {
+        break;
+      }
       announceSecretDetection(config.secretDetection);
       const result = yield* scoped(function* (): Operation<Result<void>> {
         // `<Elicit>` reaches a person through the browser form, and `xmd run`
@@ -1849,13 +1872,7 @@ function* dispatch(
             // it, which is what keeps a machine session from being acted on by
             // a command that never said it could own one.
             ...(sessions === undefined ? {} : { machineSessions: sessions }),
-            agent: {
-              agentProvider: config.agentProvider,
-              defaultAgent: config.defaultAgent,
-              approveAll: config.approveAll,
-              approveReads: config.approveReads,
-              denyAll: config.denyAll,
-            },
+            agent: runStack,
           },
           installService,
         );
@@ -1883,19 +1900,29 @@ function* dispatch(
         yield* exit(1);
         break;
       }
+      // Once, here, and handed to both consumers below. Generation and the
+      // execution that follows it are one invocation, so they answer to one
+      // `--default-agent`, one `DEFAULT_AGENT_NAME` and one permission mode.
+      const promptStack = yield* settleAgentStack(
+        {
+          agentProvider: config.agentProvider,
+          defaultAgent: config.defaultAgent,
+          approveAll: config.approveAll,
+          approveReads: config.approveReads,
+          denyAll: config.denyAll,
+        },
+        sessions,
+      );
+      if (promptStack === undefined) {
+        break;
+      }
       const exitCode = yield* runPrompt(
         {
           argv: helpRequest.args,
           scan,
           include: config.include,
           ...(config.save === undefined ? {} : { save: config.save }),
-          agent: {
-            agentProvider: config.agentProvider,
-            defaultAgent: config.defaultAgent,
-            approveAll: config.approveAll,
-            approveReads: config.approveReads,
-            denyAll: config.denyAll,
-          },
+          stack: promptStack,
         },
         {
           ...(sessions === undefined ? {} : { sessions }),
@@ -1905,7 +1932,7 @@ function* dispatch(
           // A host that answers installs a provider; one that does not installs
           // none, and nothing downstream reads a profile to find out which.
           installElicitation: installWebElicitation,
-          execute: promptExecutor(config, sessions, installService),
+          execute: promptExecutor(config, promptStack, sessions, installService),
         },
       );
       if (exitCode !== 0) {

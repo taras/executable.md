@@ -66,7 +66,18 @@ requests and the executed document's, and the same includes describe the
 vocabulary and resolve the run's components.
 
 `-e`/`--eval` stays exclusive to `xmd run`. A prompt supplies a request, not a
-document.
+document. Supplying one anyway is refused in the command's own preflight, with
+`unrecognized option for xmd prompt: --eval — inline documents are exclusive to
+xmd run`, before the catalog, the generator provider, the review, the save, the
+journal or any execution exists. A generated document is what this command
+writes, so a second one on the command line is a contradiction rather than an
+option the command is missing.
+
+Those options are resolved into one Agent configuration once per invocation —
+one `--agent-provider`, one `--default-agent` or `DEFAULT_AGENT_NAME`, one
+permission mode — and that settled answer is what both the generator and the
+approved document's installation are configured from. Incompatible permission
+flags and an unknown provider fail there, before the catalog is built.
 
 ### `--save <path>`
 
@@ -283,7 +294,8 @@ inherits neither the generator session nor its system prompt.
 `--journal` is created when execution starts, and only then. Generation,
 repairs, review and abort never enter it. Rendered output, a value root's JSON
 result, runtime failure reporting and exit codes are byte-for-byte ordinary
-`xmd run` behavior. A runtime failure does not return the command to generation
+`xmd run` behavior — including a failing `<Testing>` boundary, which is reported
+under its own `tests failed:` heading rather than as a bare message. A runtime failure does not return the command to generation
 or review; `--save` has already completed, and the source is there to hand-edit.
 
 ## Timeouts

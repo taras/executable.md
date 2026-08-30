@@ -149,12 +149,32 @@ export function* useWorkingDirectory<T>(body: (dir: string) => Operation<T>): Op
  * `XMD_PROPS` quietly also be a case about the default agent.
  */
 export function* useEnvironment(values: Record<string, string>): Operation<void> {
+  yield* useRecordedEnvironment([], values);
+}
+
+/**
+ * The same environment, with every name it was asked recorded in order.
+ *
+ * What a resolution costs is visible only as the reads it performs: a value
+ * settled once and handed to both consumers reads its name once, while two
+ * consumers each settling their own read it twice and agree only by accident.
+ */
+export function* useRecordedEnvironment(
+  reads: string[],
+  values: Record<string, string>,
+): Operation<void> {
   yield* API.Env.around({
     *env([name], next) {
+      reads.push(name);
       if (Object.hasOwn(values, name)) {
         return values[name];
       }
       return yield* next(name);
     },
   });
+}
+
+/** How many times one name was read. */
+export function timesRead(reads: readonly string[], name: string): number {
+  return reads.filter((read) => read === name).length;
 }

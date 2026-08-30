@@ -16,20 +16,24 @@ import { expect } from "@executablemd/test-support/expect";
 import { runCli } from "@executablemd/test-support/launch";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
 import { stat } from "@executablemd/runtime";
-import { Ok, scoped, spawn } from "effection";
+import { ensure, Ok, scoped, spawn } from "effection";
 import type { Operation, Result } from "effection";
 import { join } from "node:path";
 import { readdir } from "node:fs/promises";
 import { until } from "effection";
 
 import { promptExecutor } from "../src/cli.ts";
+import { resolveAgentStack } from "../src/agent-stack.ts";
+import type { AgentStack } from "../src/agent-stack.ts";
 import { runPrompt } from "../src/prompt.ts";
 import type { PromptCommand, PromptExecution } from "../src/prompt.ts";
 import { scanPromptArgs } from "../src/prompt-args.ts";
 import {
   AGENT,
   createPromptHarness,
+  timesRead,
   useEnvironment,
+  useRecordedEnvironment,
   useWorkingDirectory,
 } from "./support/prompt-harness.ts";
 import type { PromptHarness } from "./support/prompt-harness.ts";
@@ -64,6 +68,29 @@ const FAILS_AT_RUN = ["```bash exec", "exit 3", "```", ""].join("\n");
 
 const PLAIN = "Nothing but prose.\n";
 
+/**
+ * A document that validates, runs, and fails its own tests.
+ *
+ * A `<Testing>` boundary is what makes an assertion decide the outcome of an
+ * ordinary run, so this is the approved document that ends in the one failure
+ * `xmd run` reports differently from every other: with a heading of its own.
+ */
+const FAILING_TEST = [
+  "<Testing>",
+  '<Test name="the approved document disagrees with itself">',
+  "<AssertEquals actual={1} expected={2} />",
+  "</Test>",
+  "</Testing>",
+  "",
+].join("\n");
+
+/** The Agent configuration a dispatch settles once and hands to both consumers. */
+const STACK: AgentStack = {
+  provider: "acpx",
+  defaultAgent: AGENT,
+  permissionMode: "deny-all",
+};
+
 function command(dir: string, args: string[], save?: string): PromptCommand {
   const argv = ["prompt", ...args];
   return {
@@ -71,13 +98,7 @@ function command(dir: string, args: string[], save?: string): PromptCommand {
     scan: scanPromptArgs(argv),
     include: [dir],
     ...(save === undefined ? {} : { save }),
-    agent: {
-      agentProvider: "acpx",
-      defaultAgent: AGENT,
-      approveAll: false,
-      approveReads: false,
-      denyAll: true,
-    },
+    stack: STACK,
   };
 }
 
@@ -85,6 +106,7 @@ function command(dir: string, args: string[], save?: string): PromptCommand {
 function executor(
   dir: string,
   journal?: string,
+  stack?: AgentStack,
 ): (approved: PromptExecution) => Operation<Result<void>> {
   return promptExecutor(
     {
@@ -93,12 +115,8 @@ function executor(
       journal,
       raw: true,
       secretDetection: true,
-      agentProvider: "acpx",
-      defaultAgent: AGENT,
-      approveAll: false,
-      approveReads: false,
-      denyAll: true,
     },
+    stack ?? STACK,
     undefined,
     function* () {},
   );
@@ -146,20 +164,52 @@ describe(
         expect(yield* exists(join(dir, "out.md"))).toBe(false);
       });
 
-      // The agent configuration is settled before the catalog is built, so an
-      // incompatible pair of permission flags costs no inspection at all.
+      // The agent configuration is settled before the command begins, so an
+      // incompatible pair of permission flags costs no inspection at all. Read
+      // at the boundary an operator uses, because that is where the resolution
+      // the whole invocation shares now happens.
       yield* useWorkingDirectory(function* (dir) {
-        const harness = createPromptHarness();
-        const request = command(dir, [REQUEST], "out.md");
-        const code = yield* runPrompt(
-          { ...request, agent: { ...request.agent, approveAll: true, denyAll: true } },
-          harness.deps,
-        );
+        const { code, stderr } = yield* runCli(
+          ["prompt", REQUEST, "--approve-all", "--deny-all", "--save", "out.md"],
+          { cwd: dir },
+        ).join();
 
         expect(code).toBe(1);
-        expect(untouched(harness)).toEqual(NOTHING);
+        expect(stderr).toContain(
+          "--approve-all, --approve-reads, and --deny-all are mutually exclusive",
+        );
+        // No provider was built: reaching one is what reports an agent as
+        // unavailable, and this command line never got that far.
+        expect(stderr).not.toContain("unavailable");
         expect(yield* exists(join(dir, "out.md"))).toBe(false);
       });
+    });
+
+    it("P2: inline source is refused before any phase begins", function* () {
+      // `-e` belongs to `xmd run`. `xmd prompt` is the command that *writes* a
+      // document, so a second one supplied on the command line is a
+      // contradiction — and one the parser used to drop in silence, leaving the
+      // caller watching a different document get generated.
+      for (const flag of ["-e", "--eval"]) {
+        yield* useWorkingDirectory(function* (dir) {
+          const { code, stdout, stderr } = yield* runCli(
+            ["prompt", REQUEST, flag, "# supplied", "--save", "out.md", "--journal", "trace.jsonl"],
+            { cwd: dir },
+          ).join();
+
+          expect(code).toBe(1);
+          expect(stderr).toContain(
+            "unrecognized option for xmd prompt: --eval — inline documents are exclusive to xmd run",
+          );
+          // Every later phase, unreached: no catalog was rendered, no provider
+          // was built, no review was asked, and neither named file was made.
+          expect(stdout).not.toContain("## Built-in components");
+          expect(stderr).not.toContain("unavailable");
+          expect(stdout).toBe("");
+          expect(yield* exists(join(dir, "out.md"))).toBe(false);
+          expect(yield* exists(join(dir, "trace.jsonl"))).toBe(false);
+        });
+      }
     });
 
     it("P2: help needs no request and touches nothing", function* () {
@@ -379,6 +429,80 @@ describe(
         // The failure did not send the run back to generation or review.
         expect(harness.fake.prompts).toHaveLength(1);
         expect(harness.reviews).toHaveLength(1);
+      });
+    });
+
+    it("P15: a failing test in the approved document reports as a run reports it", function* () {
+      yield* useWorkingDirectory(function* (dir) {
+        const harness = createPromptHarness();
+        harness.deps.execute = executor(dir);
+        harness.fake.script({ reply: FAILING_TEST });
+        harness.script({ decision: "approve" });
+
+        const written = console.error;
+        const lines: string[] = [];
+        const code = yield* scoped(function* (): Operation<number> {
+          yield* ensure(() => {
+            console.error = written;
+          });
+          console.error = (...parts: unknown[]) => {
+            lines.push(parts.map((part) => String(part)).join(" "));
+          };
+          return yield* runPrompt(command(dir, [REQUEST], "out.md"), harness.deps);
+        });
+
+        expect(code).toBe(1);
+        // Byte for byte what `xmd run` prints for this failure: the heading and
+        // the blank line above it are how a failed suite is told apart from an
+        // ordinary error, and printing only the message would lose both.
+        expect(lines.at(-1)).toBe("\ntests failed: 1 test(s) failed in <Testing>");
+
+        // A runtime failure is not a candidate defect: the agent was asked once
+        // and the person was asked once, and neither was asked again.
+        expect(harness.fake.prompts).toHaveLength(1);
+        expect(harness.reviews).toHaveLength(1);
+        // The save already happened, and a failing run leaves it to hand-edit.
+        expect(yield* readTextFile(join(dir, "out.md"))).toBe(FAILING_TEST);
+      });
+    });
+
+    it("P15: one Agent resolution serves generation and the execution after it", function* () {
+      yield* useWorkingDirectory(function* (dir) {
+        const reads: string[] = [];
+        yield* useRecordedEnvironment(reads, { DEFAULT_AGENT_NAME: "settled-agent" });
+
+        // What a dispatch settles, once, for the whole invocation.
+        const settled = yield* resolveAgentStack(
+          {
+            agentProvider: "acpx",
+            defaultAgent: undefined,
+            approveAll: false,
+            approveReads: false,
+            denyAll: true,
+          },
+          undefined,
+        );
+        if (!settled.ok) {
+          throw settled.error;
+        }
+        const stack = settled.value;
+        expect(stack.defaultAgent).toBe("settled-agent");
+        expect(timesRead(reads, "DEFAULT_AGENT_NAME")).toBe(1);
+
+        const harness = createPromptHarness();
+        harness.deps.execute = executor(dir, undefined, stack);
+        harness.fake.script({ reply: PLAIN });
+        harness.script({ decision: "approve" });
+
+        const code = yield* runPrompt({ ...command(dir, [REQUEST]), stack }, harness.deps);
+
+        expect(code).toBe(0);
+        // Generation resolved the settled agent rather than a name of its own.
+        expect(harness.fake.ensured.map((input) => input.agent)).toEqual(["settled-agent"]);
+        // And nothing after it read the name again: authorship and the document
+        // installation that followed were both configured from the one answer,
+        // so they cannot disagree about which agent this invocation meant.
+        expect(timesRead(reads, "DEFAULT_AGENT_NAME")).toBe(1);
       });
     });
 

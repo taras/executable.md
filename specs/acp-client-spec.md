@@ -538,7 +538,10 @@ that writes the document, and for the document that runs. The provider name, the
 default agent with its `DEFAULT_AGENT_NAME` precedence, the permission mode and
 the host's own machine-session assembly are settled before any catalog is built
 or any document executes, so an unknown provider or an incompatible pair of
-permission flags fails first.
+permission flags fails first. It is the settled value that reaches both
+consumers, not the flags that produced it: `DEFAULT_AGENT_NAME` is read once per
+invocation, and generation and the executed document cannot reach different
+conclusions from one command line.
 
 Generation takes the provider's operations directly — `useAcpxProvider`, without
 the Agent install. It needs turns, not authority: no document is installed

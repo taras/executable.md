@@ -55,9 +55,8 @@ import type {
 import type { AcpxProvider, AcpxProviderDependencies } from "@executablemd/acp";
 import { cwd } from "@executablemd/runtime";
 
-import { resolveAgentStack, useGeneratorAgent } from "./agent-stack.ts";
+import { useGeneratorAgent } from "./agent-stack.ts";
 import type { AgentStack } from "./agent-stack.ts";
-import type { AgentFlags } from "./agent-config.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import {
   buildBindings,
@@ -66,6 +65,7 @@ import {
   resolvePropsFromSources,
 } from "./props.ts";
 import type { Binding, Extraction } from "./props.ts";
+import { reportFailure } from "./report.ts";
 import { renderSyntaxMarkdown, useRunProfileRegistry } from "./syntax.ts";
 import {
   isReservedOption,
@@ -110,7 +110,14 @@ export interface PromptCommand {
   include: string[];
   /** Where the approved source is written before it runs, when asked for. */
   save?: string;
-  agent: AgentFlags;
+  /**
+   * The Agent configuration this invocation settled, before the command ran.
+   *
+   * Settled by the caller rather than here, because the execution that follows
+   * approval is configured from the same answer: two resolutions of one command
+   * line is two chances to read `DEFAULT_AGENT_NAME` differently.
+   */
+  stack: AgentStack;
 }
 
 /** What the host supplies. Every entry is a decision only a host can make. */
@@ -182,12 +189,6 @@ export function* runPrompt(command: PromptCommand, deps: PromptDependencies): Op
   }
   const request = scan.request;
 
-  const stack = yield* resolveAgentStack(command.agent, deps.sessions);
-  if (!stack.ok) {
-    console.error(stack.error.message);
-    return 1;
-  }
-
   let instructions: string;
   try {
     instructions = generatorInstructions(yield* deps.catalog(command.include));
@@ -207,7 +208,7 @@ export function* runPrompt(command: PromptCommand, deps: PromptDependencies): Op
       // catalog read one registry, so a component the generator was told about
       // is one validation resolves.
       yield* useRunProfileRegistry();
-      const provider = yield* useGeneratorAgent(stack.value, instructions, deps.acp);
+      const provider = yield* useGeneratorAgent(command.stack, instructions, deps.acp);
       const session = yield* provider.session(generatorSessionName());
       return yield* author(command, provider, session, request);
     });
@@ -235,7 +236,11 @@ export function* runPrompt(command: PromptCommand, deps: PromptDependencies): Op
     props,
   });
   if (!executed.ok) {
-    console.error(executed.error.message);
+    // Reported exactly as `xmd run` reports the same failure: what ran is one
+    // ordinary document, and how it failed is not this command's news to
+    // rephrase. A runtime failure ends the command here — there is nothing for
+    // generation or review to reconsider about source a person already approved.
+    reportFailure(executed.error);
     return 1;
   }
   return 0;

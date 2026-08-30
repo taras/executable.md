@@ -22,6 +22,7 @@ import { runPrompt } from "../src/prompt.ts";
 import type { PromptCommand } from "../src/prompt.ts";
 import { scanPromptArgs } from "../src/prompt-args.ts";
 import { useGeneratorAgent } from "../src/agent-stack.ts";
+import type { AgentStack } from "../src/agent-stack.ts";
 import { AGENT, createPromptHarness, useWorkingDirectory } from "./support/prompt-harness.ts";
 import type { PromptHarness } from "./support/prompt-harness.ts";
 import { createFakeAcp, makeRegistry, makeStore } from "./support/fake-acp.ts";
@@ -80,6 +81,13 @@ const NAME_IS_BOOLEAN = [
   "",
 ].join("\n");
 
+/** The Agent configuration a dispatch settles once and hands to both consumers. */
+const STACK: AgentStack = {
+  provider: "acpx",
+  defaultAgent: AGENT,
+  permissionMode: "deny-all",
+};
+
 function command(dir: string, args: string[], save?: string): PromptCommand {
   const argv = ["prompt", ...args];
   return {
@@ -87,13 +95,7 @@ function command(dir: string, args: string[], save?: string): PromptCommand {
     scan: scanPromptArgs(argv),
     include: [dir],
     ...(save === undefined ? {} : { save }),
-    agent: {
-      agentProvider: "acpx",
-      defaultAgent: AGENT,
-      approveAll: false,
-      approveReads: false,
-      denyAll: true,
-    },
+    stack: STACK,
   };
 }
 
