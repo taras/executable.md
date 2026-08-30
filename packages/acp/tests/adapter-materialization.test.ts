@@ -597,6 +597,56 @@ describe("Tier AM — embedded adapter materialization", () => {
     expect(yield* exists(join(target, "node_modules", "stale.txt"))).toBe(false);
   });
 
+  it("AM20: an attempt elected behind a finished holder answers from its publication", function* () {
+    const root = yield* useRoot();
+    const target = join(root, digestOf("codex"));
+    const claims = `${target}.claims`;
+
+    // A valid published tree, built elsewhere, ready to drop in.
+    const donorRoot = yield* useRoot();
+    const donor = createEmbeddedAdapters(donorRoot);
+    yield* donor.materialize("codex");
+    const donorTree = join(donorRoot, digestOf("codex"));
+
+    // Abandoned work at the target, so the attempt takes the recovery path.
+    yield* ensureDir(join(target, "node_modules"));
+    yield* writeTextFile(join(target, "node_modules", "stale.txt"), "half an install\n");
+
+    // A live ticket ahead, so the attempt has to wait at least one pass.
+    yield* plantTicket(claims, 0, { pid: process.pid, host: hostname() });
+
+    // The window AM19 can only reach by scheduling luck, produced exactly: the
+    // holder ahead publishes and finishes its ticket after this attempt last
+    // read the target and before its next election pass. The next election
+    // elects this attempt — and being elected must mean reading what the
+    // finished holder published, never a second recovery over it.
+    let cleanups = 0;
+    let elections = 0;
+    const adapters = createEmbeddedAdapters(root, {
+      *beforeRecoveryCleanup(): Operation<void> {
+        cleanups += 1;
+      },
+      *beforeRecoveryElection(): Operation<void> {
+        elections += 1;
+        if (elections === 2) {
+          yield* rm(target, { recursive: true, force: true });
+          yield* until(cp(donorTree, target, { recursive: true }));
+          yield* until(writeFile(join(claims, "0", "done"), ""));
+        }
+      },
+    });
+
+    const entry = adapters.executablePath("codex");
+    yield* adapters.materialize("codex");
+
+    expect(elections).toBeGreaterThanOrEqual(2);
+    expect(cleanups).toBe(0);
+    expect(yield* exists(entry)).toBe(true);
+    expect(yield* until(readFile(entry))).toEqual(
+      yield* until(readFile(join(donorTree, "node_modules", CODEX_PACKAGE, "dist", "index.js"))),
+    );
+  });
+
   it("AM9: edited adapter bytes are refused rather than executed", function* () {
     const root = yield* useRoot();
     const adapters = createEmbeddedAdapters(root);

@@ -349,6 +349,8 @@ function* install(
 export interface EmbeddedAdapterObservers {
   /** Runs after a recovery takes its lock and before it removes anything. */
   readonly beforeRecoveryCleanup?: () => Operation<void>;
+  /** Runs before each pass of the recovery election. */
+  readonly beforeRecoveryElection?: () => Operation<void>;
 }
 
 /**
@@ -524,7 +526,9 @@ export function createEmbeddedAdapters(
    * resolved and might already be running.
    *
    * An attempt that does not hold the claim never removes anything. It waits
-   * and answers from what the holder published.
+   * and answers from what the holder published — including when the wait ends
+   * with this attempt elected, because a holder finishes its ticket only after
+   * publishing.
    */
   function* recover(
     snapshot: EmbeddedAdapterSnapshot,
@@ -544,6 +548,10 @@ export function createEmbeddedAdapters(
       yield* ensure(() => releaseTicket(claims, mine));
 
       for (let attempt = 0; attempt < RECOVERY_ATTEMPTS; attempt += 1) {
+        const observe = observers.beforeRecoveryElection;
+        if (observe !== undefined) {
+          yield* observe();
+        }
         const status = yield* electTicket(claims, mine);
         if (status === "unreadable") {
           throw new AdapterSnapshotError(
@@ -552,6 +560,14 @@ export function createEmbeddedAdapters(
           );
         }
         if (status === "held") {
+          // A ticket is marked finished only after its holder's publication is
+          // on disk, so an election won behind a finished holder can mean the
+          // work is already done. Answer from it rather than entering a
+          // cleanup with nothing left to recover.
+          if (yield* published(snapshot)) {
+            settled = true;
+            return;
+          }
           held = true;
           break;
         }
