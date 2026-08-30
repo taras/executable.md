@@ -299,6 +299,23 @@ describe("Tier EA — the embedded adapters' prompt-response metadata", () => {
     expect(first).not.toBe(second);
   });
 
+  it("EA8: Codex reports acceptance for a turn a command started", function* () {
+    // `/review` reaches the App Server by its own request rather than through
+    // `turn/start`, and the turn it answers with is a turn the backend
+    // accepted. A client that waits for acceptance before it retains anything
+    // must not be left waiting because the turn was asked for by a command.
+    const adapter = yield* useAdapter("codex", CODEX_ENV);
+    yield* initialize(adapter);
+    const sessionId = yield* openSession(adapter);
+
+    yield* adapter.request("session/prompt", {
+      sessionId,
+      prompt: [{ type: "text", text: "/review" }],
+    });
+
+    expect(acceptances(adapter)).toEqual([sessionId]);
+  });
+
   it("EA5: a second Codex turn on one session names the second turn", function* () {
     const adapter = yield* useAdapter("codex", CODEX_ENV);
     yield* initialize(adapter);

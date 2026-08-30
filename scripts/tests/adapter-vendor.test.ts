@@ -29,7 +29,7 @@ const VENDOR = "packages/acp/vendor/adapters";
 const REVIEWED = {
   codex: {
     upstreamBase: "50f69e57ca761ccafd2ca29de7fb591068277516",
-    patchedCommit: "377d2b0b7f5f99f8e58b6a5927bf67e9805aa94f",
+    patchedCommit: "fadc0a690e96c276629be8a34be980d35e821637",
   },
   claude: {
     upstreamBase: "8710ce1cbccf562cb04b4bcc30e053e960aee05f",

@@ -2033,6 +2033,22 @@ function* useAcpxProviderState(
           prepare(agentName, options?.session, callerCwd),
         );
 
+        // The session's FIFO first, and before ownership. Two prompts on one
+        // session in one provider are not competing for it — they are two turns
+        // in one conversation, and the queue is what makes them sequential. The
+        // coordinator refuses contention rather than queueing, so asking it
+        // first would turn the second subscription into a refusal instead of
+        // the turn that follows the first.
+        //
+        // What still refuses is what genuinely competes: another provider
+        // state, another process, and another kind of operation on this
+        // session. None of them shares this queue, so all of them still meet
+        // the coordinator while this one holds the session.
+        //
+        // The global route slot is deliberately not held across the wait:
+        // waiting for one session's turn is not a reason to stop every other
+        // session resolving.
+        yield* turns.slot(placed.sessionKey);
         // Ownership before the turn, and before ensure: a prompt for an agent
         // whose sessions can be handed to a native UI is talking to a session
         // that UI may be in right now.
@@ -2044,18 +2060,12 @@ function* useAcpxProviderState(
           "prompt",
         );
         if (ownable(agentName)) {
-          // Registered before the turn, so it runs after the turn's own
-          // finalizers and before ownership ends. No usable handle for an
-          // advertised session outlives the release that frees it: the next
-          // operation — here or in another process — reattaches under its own
-          // acquisition.
+          // Registered after acquisition, so it runs before ownership ends: no
+          // usable handle for an advertised session outlives the release that
+          // frees it, and the next operation — here or in another process —
+          // reattaches under its own acquisition.
           yield* ensure(() => releaseHandle(placed.sessionKey));
         }
-        // The session's FIFO before any route, ensure or runtime for this
-        // placement. The global route slot is deliberately not held across it:
-        // waiting for one session's turn is not a reason to stop every other
-        // session resolving.
-        yield* turns.slot(placed.sessionKey);
 
         return yield* withSessionRoute(context, function* () {
           // Read again now the queue has granted, so a concurrent first prompt
@@ -2738,10 +2748,14 @@ function* useAcpxProviderState(
           placement.sessionKey,
           "native-launch",
           function* (ownership) {
-            // Provider-local FIFO stays, and stays what it is: ordering inside
-            // one provider. It is not ownership, and it never was.
-            yield* turns.slot(placement.sessionKey);
-
+            // No provider-local queue here. A launch is only ever performed for
+            // an advertised agent, so the acquisition above is already this
+            // session's exclusion — inside this provider and outside it. Taking
+            // the queue as well would put a prompt behind a native UI that may
+            // hold the session for hours, and a prompt that queued would hold
+            // the reader's terminal while offering no way to reach the owner it
+            // was waiting for. It refuses instead, and the coordinator is what
+            // refuses it.
             yield* authority.perform(request, {
               prepare: () =>
                 withSessionRoute(context, () =>

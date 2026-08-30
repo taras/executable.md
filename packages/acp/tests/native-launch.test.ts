@@ -1088,6 +1088,85 @@ describe("Tier NO — session ownership", () => {
     });
   });
 
+  it("NO12: two prompts on one advertised session are two turns, not contention", function* () {
+    // The coordinator refuses contention rather than queueing it, which is
+    // right for a native UI and wrong for the next turn of a conversation this
+    // provider is already having. Two subscriptions on one session are not
+    // competing for it — so the session's own queue orders them, and each takes
+    // and gives back ownership in its turn.
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    // Manual, so the first turn is still open when the second subscribes. The
+    // fake reports acceptance at start, which is what a backend does: it takes
+    // the turn before it says anything.
+    harness.script({ manual: true });
+    const store = makeStore();
+    yield* scoped(function* () {
+      yield* installLaunchStack(harness, trace, { store });
+
+      const first = yield* spawn(function* () {
+        yield* scoped(function* () {
+          const stream = yield* Agent.operations.prompt("first", {});
+          const subscription = yield* stream;
+          let next = yield* subscription.next();
+          while (!next.done) {
+            next = yield* subscription.next();
+          }
+        });
+      });
+      while (harness.turns.length === 0) {
+        yield* sleep(1);
+      }
+
+      const second = yield* spawn(function* (): Operation<Error | undefined> {
+        try {
+          yield* scoped(function* () {
+            const stream = yield* Agent.operations.prompt("second", {});
+            const subscription = yield* stream;
+            let next = yield* subscription.next();
+            while (!next.done) {
+              next = yield* subscription.next();
+            }
+          });
+          return undefined;
+        } catch (error) {
+          return error instanceof Error ? error : new Error(String(error));
+        }
+      });
+
+      // Waiting on the session's queue rather than being refused: no second
+      // acquisition has been asked for, and no second turn exists.
+      yield* sleep(5);
+      expect(trace.ownership.acquisitions).toHaveLength(1);
+      expect(harness.turns).toHaveLength(1);
+
+      harness.turns[0]!.finish([], { status: "completed", stopReason: "end_turn" });
+      yield* first;
+      const raised = yield* second;
+
+      expect(raised).toBe(undefined);
+      // Two grants, one after the other, both granted — never busy.
+      expect(trace.ownership.acquisitions.map((entry) => [entry.kind, entry.outcome])).toEqual([
+        ["prompt", "granted"],
+        ["prompt", "granted"],
+      ]);
+      // One conversation: the session was constructed once, under deferred
+      // materialization, and the second prompt continued what the first
+      // established rather than creating a second one beside it.
+      expect(harness.ensureCalls.filter((call) => call.materialization !== undefined)).toHaveLength(
+        1,
+      );
+      expect(harness.turns).toHaveLength(2);
+      expect(harness.turns.map((turn) => turn.input.text)).toEqual(["first", "second"]);
+      // One retained identity, in the provider's own store: one record, no
+      // longer awaiting materialization, asserting the conversation both turns
+      // were spent in.
+      expect([...store.records.keys()]).toEqual([SESSION_KEY]);
+      expect(store.records.get(SESSION_KEY)?.sessionMaterialization).toBe(undefined);
+      expect(store.records.get(SESSION_KEY)?.agentSessionId).toBe(`agent-session:${SESSION_KEY}`);
+    });
+  });
+
   it("NO8: a cancelled prompt releases only after its turn and handle are done", function* () {
     const harness = createFakeRuntime();
     const trace = newTrace();

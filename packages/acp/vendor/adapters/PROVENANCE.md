@@ -48,9 +48,12 @@ Both adapters now report it the same way, on the same versioned key: a standard
 ACP `session_info_update` whose update `_meta` carries
 `{"executablemd.session-materialization/v1": {"state": "accepted"}}`, published
 once per accepted turn, at the provider-specific boundary where acceptance
-becomes true — Codex when `turn/start` returns a turn, Claude when the SDK
-reports that exact queued command dispatched. It carries no session information
-of its own, so a client not waiting for it reads nothing.
+becomes true — Codex wherever the App Server answers with a turn, whether the
+prompt reached it through `turn/start` or through a turn-starting command
+(`/review`, `/goal <objective>`, `/goal resume`); Claude when the SDK reports
+that exact queued command dispatched. A command that starts no turn reports
+nothing, because nothing was accepted. It carries no session information of its
+own, so a client not waiting for it reads nothing.
 
 `materializationContract` in `MANIFEST.json` records it separately from
 `contract` above: which turn completed and whether a backend accepted one are
