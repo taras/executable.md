@@ -24,6 +24,7 @@ turn belongs to. Nothing here runs the document being written. A candidate is
 text until a person approves it and the command runs it separately.
 
 <Let as="round" value={0} />
+<Let as="approvedCandidate" value={null} />
 
 <Session name={props.session}>
 
@@ -62,7 +63,8 @@ found. A revision the person asked for is a new draft, so it gets its own three.
 <Prompt as="candidate">
 That document does not validate. These are the exact findings:
 
-<CodeBlock value={JSON.stringify(assessment.diagnostics, null, 2)} language="json" />
+<Let as="findings"><Json value={assessment.diagnostics} /></Let>
+<CodeBlock value={findings} language="json" />
 
 Return one complete replacement root document that resolves every finding above.
 Source only, no enclosing fence, no explanation. Keep the narrative that explains
@@ -93,7 +95,7 @@ into, so revision is not offered.
     required: ["decision"],
     additionalProperties: false,
     if: { properties: { decision: { const: "revise" } }, required: ["decision"] },
-    then: { required: ["feedback"], properties: { feedback: { minLength: 1 } } },
+    then: { required: ["feedback"], properties: { feedback: { type: "string", minLength: 1 } } },
   }}
 >
 This document was written for: {props.request}
@@ -104,12 +106,13 @@ This document was written for: {props.request}
 It still does not validate after three attempts to repair it. These are the
 remaining findings:
 
-<CodeBlock value={JSON.stringify(assessment.diagnostics, null, 2)} language="json" />
+<Let as="findings"><Json value={assessment.diagnostics} /></Let>
+<CodeBlock value={findings} language="json" />
 </If>
 </Elicit>
 
 <If condition={review.decision === "approve"}>
-<Return value={candidate} />
+<Let as="approvedCandidate" value={candidate} />
 <Break />
 </If>
 
@@ -129,4 +132,14 @@ no explanation. Keep the narrative that explains what the document is for.
 
 </Session>
 
+A `<Return>` selects the value this document publishes; it does not end the
+document. So approval and exhaustion are written as the two arms of one branch,
+and only the arm taken runs — an approved candidate is returned with no later
+failure to overtake it, and a review that approved nothing fails instead.
+
+<If condition={approvedCandidate !== null}>
+<Return value={approvedCandidate} />
+<Else>
 <Fail message="xmd prompt: ten drafts were reviewed and none was approved, so nothing was saved and nothing ran. Try again with a more specific request." />
+</Else>
+</If>
