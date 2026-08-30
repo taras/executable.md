@@ -389,8 +389,8 @@ function* establishDirectory(directory: string): Operation<Result<string>> {
  * empty and is handing back empty is removed; anything else is reported and
  * nothing is deleted, because a leaf that changed underneath a conversation
  * nobody authorized to write there is interference, not a tidying job. The
- * failure raises out of the profile's scope, so no final validation, save or
- * execution follows it.
+ * failure raises out of the profile's scope, so no final admission follows it,
+ * and the approved Plan reaches no stdout, no file and no run.
  *
  * A directory the conversation never got — establishment refused it, or never
  * made it — is a different question, and one already answered: whatever
@@ -410,14 +410,14 @@ function* releaseSessionDirectory(directory: string, claim: DirectoryClaim): Ope
       throw new Error(
         `${directory} was made for this conversation and is already gone. Something removed ` +
           "it while the conversation was still running, which nothing here is allowed to do; " +
-          "nothing was saved or run",
+          "nothing was output or run",
       );
     }
     if (code === "ENOTEMPTY" || code === "EEXIST") {
       throw new Error(
         `${directory} was empty when this conversation started and is not now. It belongs to ` +
           "one invocation, so nothing should have written there; its contents were left alone " +
-          "and nothing was saved or run",
+          "and nothing was output or run",
       );
     }
     throw error instanceof Error ? error : new Error(String(error));

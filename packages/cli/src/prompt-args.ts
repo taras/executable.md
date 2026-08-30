@@ -208,6 +208,25 @@ export function scanPromptArgs(args: readonly string[]): PromptScan {
         continue;
       }
 
+      if (!KNOWN.has(name)) {
+        // The parser stops at the first option it does not define and drops the
+        // rest, so an option nobody defines would otherwise be accepted in
+        // silence — and a caller who asked for something the command never did
+        // has not been answered. `--save` is named because it is the one
+        // spelling somebody may remember; it was replaced before release, so
+        // there is no alias to keep.
+        return {
+          ...(request === undefined ? {} : { request }),
+          fixed,
+          occurrences,
+          error:
+            name === "--save"
+              ? `unrecognized option for xmd prompt: --save — the approved Plan goes to stdout, ` +
+                `and ${OUTPUT_OPTION} writes it to a file`
+              : `unrecognized option for xmd prompt: ${name}`,
+        };
+      }
+
       if (name === RUN_OPTION) {
         runs = true;
       }

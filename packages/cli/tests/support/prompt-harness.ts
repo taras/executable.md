@@ -143,7 +143,8 @@ export function createPromptHarness(options: {
  * A temporary directory that is also the contextual working directory.
  *
  * Both, because the two answer different questions: session placement and
- * `--save` resolve the contextual one, while a real file has to live somewhere.
+ * `--output` resolve the contextual one, while a real file has to live
+ * somewhere.
  */
 export function* useWorkingDirectory<T>(
   body: (dir: string, profileRoot: string) => Operation<T>,

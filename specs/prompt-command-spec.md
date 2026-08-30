@@ -39,15 +39,15 @@ That command prints the approved Plan and runs nothing. `--output` writes it to 
 file instead, `--run` executes it, and the two together write it and then run
 it.
 
-The command writes no policy of its own. It executes two root documents with a
-complete scope boundary between them: first the **prompt command document**, a
-checked-in first-party Markdown value root that implements this conversion and
-its review workflow — what the assistant is asked, how many drafts may be
-repaired, what you are shown, and what happens when you approve nothing — and
-then, when `--run` asks for it, the Plan that document returned, through the same
-path `xmd run` uses for a supplied one. The prompt command document is not itself
-a Plan. There is no second execution model, no second props model and no second
-journal.
+The command writes no policy of its own. It always executes one root document:
+the **prompt command document**, a checked-in first-party Markdown value root
+that implements this conversion and its review workflow — what the coding agent
+is asked, how many drafts may be repaired, what you are shown, and what happens
+when you approve nothing. It executes a second root only under `--run`: the Plan
+that document returned, through the same path `xmd run` uses for a supplied one,
+with a complete scope boundary between the two. The prompt command document is
+not itself a Plan. There is no second execution model, no second props model and
+no second journal.
 
 ## The flow
 
@@ -119,6 +119,12 @@ Plan instead of running it — add --run, or drop --journal
 The permission flags configure only the approved Plan; authorship does not
 inherit the final run's permission mode, and no permission flag widens the
 prompt profile's ceiling below.
+
+An option this command does not define is refused by name in the same preflight,
+because the ordinary parser stops at the first option it does not recognize and
+drops the rest — accepting a command line nobody honoured. `--save` is named in
+particular: it was replaced by `--output` before release, so there is no alias,
+and the refusal says where an approved Plan goes now.
 
 `-e`/`--eval` stays exclusive to `xmd run`. A prompt supplies a request, not a
 document. Supplying one anyway is refused in the command's own preflight, with
@@ -568,7 +574,7 @@ Every failure below exits non-zero, and each one stops the phases after it:
 
 | Failure | Reaches |
 | --- | --- |
-| a malformed command line | nothing |
+| a malformed command line, an unknown option, or `--save` | nothing |
 | incompatible permission flags or an unknown `--agent-provider` | nothing |
 | a catalog an include makes unreadable | no command document |
 | a provider that cannot establish the prompt profile's ceiling | no session, no turn |

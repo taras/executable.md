@@ -2176,7 +2176,7 @@ export function* runXmd(
   const selected = provisional.ok ? provisional.value.config : undefined;
   // The two commands that end in a document execution. `xmd prompt`'s deadline
   // encloses more than a run's — the catalog, the assistant session, every
-  // repair, the human review, provider teardown, the save and the execution —
+  // repair, the human review, provider teardown, the output file and the run —
   // because all of it is what the caller asked to be bounded.
   const executes =
     !helpRequest.requested &&

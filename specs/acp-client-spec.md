@@ -601,8 +601,9 @@ the command places a name unique to the invocation, so each invocation is a fres
 conversation created under those instructions; `--session <name>` selects an
 existing one under ordinary continuation semantics.
 
-That document's scope closes before the final validation, the save and the
-execution. A teardown failure fails the command and no later phase happens. The
+That document's scope closes before the final admission and before whichever
+result the caller asked for: the source on stdout, the `--output` file, the run,
+or the file followed by the run. A teardown failure fails the command and no later phase happens. The
 executed program is an ordinary `xmd run` document with its own root provider and
 its own lifetime: it inherits neither the assistant session nor its instruction
 layer. It exists only under `--run`.

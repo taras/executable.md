@@ -192,7 +192,7 @@ describe(
       // the whole invocation shares now happens.
       yield* useWorkingDirectory(function* (dir) {
         const { code, stderr } = yield* runCli(
-          ["prompt", REQUEST, "--approve-all", "--deny-all", "--save", "out.md"],
+          ["prompt", REQUEST, "--approve-all", "--deny-all", "--run"],
           { cwd: dir },
         ).join();
 
@@ -203,7 +203,30 @@ describe(
         // No provider was built: reaching one is what reports an agent as
         // unavailable, and this command line never got that far.
         expect(stderr).not.toContain("unavailable");
+      });
+    });
+
+    it("C1: --save is gone, and is refused as the unknown option it is", function* () {
+      // Nothing was released under the old spelling, so there is no alias and
+      // nothing to keep compatible with. Proven on a command line that is
+      // otherwise entirely valid: a case that also carried a second, earlier
+      // failure would pass whether or not `--save` still worked.
+      yield* useWorkingDirectory(function* (dir) {
+        const { code, stdout, stderr } = yield* runCli(["prompt", REQUEST, "--save", "out.md"], {
+          cwd: dir,
+        }).join();
+
+        expect(code).toBe(1);
+        expect(stderr).toContain("--save");
+        // Not accepted, not silently dropped, and not mistaken for `--output`.
         expect(yield* exists(join(dir, "out.md"))).toBe(false);
+        // And nothing downstream of the refusal ran: no catalog was rendered, no
+        // provider was reached, nobody was asked anything, no approved source
+        // was printed, and no journal exists.
+        expect(stdout).toBe("");
+        expect(stderr).not.toContain("## Built-in components");
+        expect(stderr).not.toContain("unavailable");
+        expect(yield* until(readdir(dir))).toEqual([]);
       });
     });
 
@@ -333,10 +356,10 @@ describe(
       });
     });
 
-    it("C12: every refusal is nonzero and leaves no save, journal or run", function* () {
+    it("C12: every refusal is nonzero and leaves no output file, journal or run", function* () {
       const journalName = "trace.jsonl";
 
-      // Abort at review, through the command document's authored failure.
+      // Stop at review, through the command document's authored failure.
       yield* useWorkingDirectory(function* (dir, profileRoot) {
         const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir, join(dir, journalName));
@@ -517,7 +540,7 @@ describe(
         );
 
         expect(code).toBe(0);
-        // The saved file already existed when the document started.
+        // The output file already existed when the document started.
         expect(seen).toEqual([true]);
         // Source only: no diagnostics, no decision, no wrapper.
         expect(yield* readTextFile(join(dir, "out.md"))).toBe(GREETER);
@@ -570,12 +593,12 @@ describe(
         // The identity the run reports is the deliberate one.
         expect(yield* readTextFile(journal)).toContain("<prompt>");
         // Relative filesystem operations resolved the contextual cwd, not the
-        // identity, so the document's own write landed beside the save.
+        // identity, so the document's own write landed beside the output file.
         expect(yield* exists(join(dir, "greeting.txt"))).toBe(true);
         expect(yield* exists(join(dir, "out.md"))).toBe(true);
       });
 
-      // A runtime failure is an ordinary run failure: nonzero, with the save the
+      // A runtime failure is an ordinary run failure: nonzero, with the file the
       // caller asked for still on disk to hand-edit.
       yield* useWorkingDirectory(function* (dir, profileRoot) {
         const harness = createPromptHarness({ profileRoot });
@@ -622,7 +645,7 @@ describe(
         // and the person was asked once, and neither was asked again.
         expect(harness.fake.prompts).toHaveLength(1);
         expect(harness.reviews).toHaveLength(1);
-        // The save already happened, and a failing run leaves it to hand-edit.
+        // The file was already written, and a failing run leaves it to hand-edit.
         expect(yield* readTextFile(join(dir, "out.md"))).toBe(FAILING_TEST);
       });
     });
@@ -692,7 +715,7 @@ describe(
         expect(yield* exists(join(dir, "out.md"))).toBe(false);
       });
 
-      // A teardown failure prevents the final validation, the save and the run,
+      // A teardown failure prevents the final admission, the output file and the run,
       // whatever the command document selected.
       yield* useWorkingDirectory(function* (dir, profileRoot) {
         const harness = createPromptHarness({ profileRoot });

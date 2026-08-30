@@ -11,7 +11,7 @@
  *   -> execute the exact packaged prompt command document
  *   -> await that execution and provider teardown
  *   -> validate the returned source again
- *   -> optionally save the exact bytes
+ *   -> deliver the exact bytes: stdout, an --output file, a --run, or both
  *   -> execute retainedSource("<prompt>", source) through the ordinary run path
  * ```
  *
@@ -199,8 +199,8 @@ export function* runPrompt(command: PromptCommand, deps: PromptDependencies): Op
 
   // The command document lives and dies inside that call's scope. Leaving it
   // closes the Prompt tasks, the provider and the Elicitation provider, so a
-  // teardown failure raises out here — before the validation, the save and the
-  // execution that would otherwise already have happened.
+  // teardown failure raises out here — before the admission, the output file
+  // and the run that would otherwise already have happened.
   let authored: Result<string>;
   try {
     authored = yield* runPromptCommandDocument({

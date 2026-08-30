@@ -27,8 +27,10 @@ import { useWorkingDirectory } from "./support/prompt-harness.ts";
  * The approved introduction, exactly.
  *
  * Pinned rather than sampled: this is the passage the product contract settled,
- * down to "coding agent's plan", and a paraphrase that still contained the
- * chosen sentences would pass a looser check while saying something else.
+ * down to the typographic apostrophe in "coding agent’s plan". A paraphrase that
+ * still contained the chosen sentences would pass a looser check while saying
+ * something else, and an ASCII apostrophe here would quietly redefine the
+ * approved wording around whatever the file happens to hold.
  */
 const INTRODUCTION = [
   "# `xmd prompt` turns steps into a program",
@@ -38,7 +40,7 @@ const INTRODUCTION = [
   "components available to carry them out. A coding agent turns both into one",
   "document that explains and executes the sequence.",
   "",
-  "The result is the XMD version of a coding agent's plan. A conventional Markdown",
+  "The result is the XMD version of a coding agent’s plan. A conventional Markdown",
   "plan must be interpreted again before its steps can happen. An XMD Plan already",
   "contains those executable steps, so running it simply executes them.",
   "",

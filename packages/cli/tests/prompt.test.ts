@@ -446,7 +446,7 @@ describe(
         expect(harness.executions).toHaveLength(1);
       });
 
-      // Abort, a turn that failed, and a cancelled command each hand the
+      // Stopping, a turn that failed, and a cancelled command each hand the
       // directory back the same way a success does.
       for (const ending of [
         { name: "stop", drive: (harness: PromptHarness) => harness.script({ decision: "Stop" }) },
@@ -558,7 +558,7 @@ describe(
         expect(lines[0]).toContain("was made for this conversation and is already gone");
         expect(lines[0]).not.toContain("does not validate");
         // The Plan was approved and still reached nothing: no admission that
-        // could have saved it, no save, no execution and so no journal.
+        // could have delivered it, no output file, no execution and so no journal.
         expect(harness.reviews).toHaveLength(1);
         expect(yield* exists(join(dir, "out.md"))).toBe(false);
         expect(yield* until(readdir(dir))).toEqual([]);
@@ -569,7 +569,7 @@ describe(
       // given empty and did not leave empty is preserved and the command fails:
       // something wrote there while the conversation ran, and this host
       // authorized nothing to. The draft was approved first, so what is being
-      // observed is a Plan that would otherwise have been saved and run.
+      // observed is a Plan that would otherwise have been written and run.
       yield* useWorkingDirectory(function* (dir, profileRoot) {
         const harness = createPromptHarness({ profileRoot });
         harness.fake.script({ reply: VALID });
@@ -602,7 +602,7 @@ describe(
         expect(yield* exists(String(workdir))).toBe(true);
         expect(yield* readTextFile(String(planted))).toBe("not this command's doing\n");
 
-        // And nothing after the failure began: no save, and no execution — so no
+        // And nothing after the failure began: no output file, and no execution — so no
         // journal, which only an execution creates.
         expect(yield* exists(join(dir, "out.md"))).toBe(false);
         expect(yield* until(readdir(dir))).toEqual([]);
@@ -993,7 +993,7 @@ describe(
       });
     });
 
-    it("C9: arbitrary source cannot close the presentation, and abort is authored", function* () {
+    it("C9: arbitrary source cannot close the presentation, and stopping is authored", function* () {
       yield* useWorkingDirectory(function* (dir, profileRoot) {
         // A document that holds a fence of its own, and a run of five backticks.
         const fenced = [
@@ -1021,7 +1021,7 @@ describe(
         expect(message).toContain(`\n${fenced}\n\`\`\`\`\`\``);
       });
 
-      // Abort reaches the command document's own `<Fail>`, with the message the
+      // Stop reaches the command document's own `<Fail>`, with the message the
       // shipped Markdown wrote. Nothing about it is host policy.
       yield* useWorkingDirectory(function* (dir, profileRoot) {
         const harness = createPromptHarness({ profileRoot });
@@ -1040,7 +1040,7 @@ describe(
       });
 
       // Exhaustion is reachable, and it is a different ending. Ten presentations
-      // that never validated, the last offering nothing but `abort`, and the
+      // that never validated, the last offering nothing but a way out, and the
       // sentence says there was never a Plan to approve rather than that
       // somebody decided to stop.
       yield* useWorkingDirectory(function* (dir, profileRoot) {

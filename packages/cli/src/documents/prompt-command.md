@@ -18,7 +18,7 @@ steps. It combines the original Prompt, which describes those steps, with the XM
 components available to carry them out. A coding agent turns both into one
 document that explains and executes the sequence.
 
-The result is the XMD version of a coding agent's plan. A conventional Markdown
+The result is the XMD version of a coding agent’s plan. A conventional Markdown
 plan must be interpreted again before its steps can happen. An XMD Plan already
 contains those executable steps, so running it simply executes them.
 

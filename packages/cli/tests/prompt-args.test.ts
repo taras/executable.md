@@ -269,6 +269,23 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
     }
   });
 
+  it("C1: an option this command does not define is refused, not dropped", function* () {
+    // The parser stops at the first option it does not define and drops the
+    // rest, so silence here would mean accepting a command line nobody honoured.
+    const unknown = scanPromptArgs(["prompt", REQUEST, "--not-a-thing", "value"]);
+    expect(unknown.error).toBe("unrecognized option for xmd prompt: --not-a-thing");
+
+    // `--save` was replaced before release, so there is no alias — and the
+    // refusal says where the Plan goes now rather than only that the option is
+    // unknown.
+    const retired = scanPromptArgs(["prompt", REQUEST, "--save", "out.md"]);
+    expect(retired.error).toContain("unrecognized option for xmd prompt: --save");
+    expect(retired.error).toContain("goes to stdout");
+    expect(retired.error).toContain("--output writes it to a file");
+    // It is not quietly read as the option that replaced it.
+    expect(retired.occurrences).toEqual([]);
+  });
+
   it("C7: a frozen option's shape is what a later candidate may not change", function* () {
     const scalar = bindingsFor({ name: { type: "string" } });
     const boolean = bindingsFor({ name: { type: "boolean" } });
