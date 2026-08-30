@@ -11,42 +11,46 @@ returns:
   type: string
 ---
 
-# What `xmd prompt` does
+# `xmd prompt` turns steps into a program
 
-`xmd prompt` turns your request into a Plan: an Executable Markdown document
-that states what you asked for in ordinary language and places the components
-that perform the work alongside those words.
+This document is a workflow that generates an executable Plan from a sequence of
+steps. It combines the original Prompt, which describes those steps, with the XMD
+components available to carry them out. A coding agent turns both into one
+document that explains and executes the sequence.
 
-This document is how that happens. It is a program rather than a setting: what
-the assistant is asked for, how many times a draft may be fixed, what you are
-shown, and what happens when you approve nothing are all written here, in the
-open, where you can read them and argue with them.
+The result is the XMD version of a coding agent's plan. A conventional Markdown
+plan must be interpreted again before its steps can happen. An XMD Plan already
+contains those executable steps, so running it simply executes them.
 
-The command gives it three things — your request as you typed it, the components
-available in this directory, and the name of the assistant session every turn
-belongs to. Nothing here runs the document being written. A draft is text until
-you approve it, and the command runs it separately afterwards.
+A draft remains text while this workflow reviews it. Nothing in it runs before
+you approve it. After approval, `xmd prompt` validates the exact source again. By
+default it prints the approved XMD source. `--output` writes that source to a
+file instead, and `--run` executes the Plan. With both options, the command
+writes the source before running it.
 
 <Let as="round" value={0} />
 <Let as="approved" value={null} />
 
 <Session name={props.session}>
 
+## Create the first draft
+
 <Prompt as="draft">
-Write one complete Executable Markdown document that does this:
+Create one complete XMD Plan from this Prompt:
 
 {props.request}
 
-The document you write is a Plan. A Plan is not a script with comments: it says
-what is being done in ordinary reader-facing prose, and places each component
-immediately after the sentences describing the action that component performs.
-The prose is part of the program and part of what the document prints when it
-runs, so somebody watching it run follows the same words somebody reading the
-source did.
+Begin the Plan with one level-one Markdown title that describes it.
 
-For the request "ask me for my age and write it to a file", the shape is:
+Write the Plan as a sequence of readable steps. Follow each step with the XMD
+component that carries it out. The prose is part of the program and appears when
+the Plan runs, so its source and its execution tell the same story.
+
+For the Prompt "ask me for my age and write it to a file", the shape is:
 
 ```markdown
+# Ask for and save your age
+
 Ask me for my age.
 
 <Elicit as="answer" schema={{ type: "object", properties: { age: { type: "number" } } }} />
@@ -56,27 +60,30 @@ Write it to a file.
 <File path="age.txt">{answer.age}</File>
 ```
 
-You do not have to repeat the request word for word. Divide it, clarify it and
+You do not have to repeat the Prompt word for word. Divide it, clarify it and
 rewrite it into natural prose — but keep every outcome it asked for, keep them in
-an order that makes sense, and keep each one next to the component that carries
-it out. Somebody should be able to audit the source and follow the execution by
-the same narrative.
+an order that makes sense, and keep each one beside the component that carries it
+out.
 
 Everything you may use is described below. Use nothing that is not here.
 
 {props.syntax}
 
-Reply with the document source and nothing else. No enclosing code fence, no
-explanation before or after it, no commentary about what you did.
+Reply with the Plan source and nothing else. No enclosing code fence, no
+explanation before or after it.
 </Prompt>
 
 <Loop max={10}>
 <Let as="round" value={round + 1} />
 
-Each draft is checked once, and gets up to three chances to fix what the check
-found. A change you ask for produces a new draft, so it gets its own three.
+## Check and repair the draft
 
-<ValidateCandidate source={draft} as="check" />
+Each new draft is checked before it is shown to you. If the check finds problems,
+the coding agent gets up to three repair attempts to replace it with a corrected
+Plan. A revision you request later is a new draft and receives three repair
+attempts of its own.
+
+<CheckDraft source={draft} as="check" />
 
 <Loop max={3}>
 <If condition={check.valid}>
@@ -84,24 +91,34 @@ found. A change you ask for produces a new draft, so it gets its own three.
 </If>
 
 <Prompt as="draft">
-That document has problems. These are the exact ones:
+That Plan has problems. These are the exact ones:
 
 <Json value={check.diagnostics} as="problems" />
 <CodeBlock value={problems} language="json" />
 
-Send one complete replacement document that resolves every problem above. Keep
-the reader-facing prose that says what the document is for, and keep each
-component immediately after the sentences describing what it does. Source only,
-no enclosing fence, no explanation.
+Send one complete replacement Plan that resolves every problem above. Keep its
+level-one title, keep the Prompt's sequence of readable steps in a meaningful
+order, and keep each XMD component beside the step it performs.
+
+Reply with the Plan source and nothing else. No enclosing code fence, no
+explanation before or after it.
 </Prompt>
 
-<ValidateCandidate source={draft} as="check" />
+<CheckDraft source={draft} as="check" />
 </Loop>
 
-You decide what happens next. A draft that passed its check can be approved; one
-that still has problems after three attempts is shown with them, and can only be
-sent back or abandoned. On the tenth and last time you are asked there is
-nothing left to change it into, so asking for a change is not offered.
+## Review the draft
+
+The workflow shows you the complete draft after its repair attempts.
+
+- Choose **Approve** to accept a draft that passed its check.
+- Choose **Request changes** to send feedback to the coding agent and create a
+  new draft.
+- Choose **Stop** to end without outputting or running anything.
+
+A draft with remaining problems cannot be approved. You may review at most ten
+drafts, and the tenth cannot be revised. If the tenth draft still has problems,
+you may ask the coding agent to explain what went wrong or stop.
 
 <Elicit
   as="review"
@@ -111,70 +128,102 @@ nothing left to change it into, so asking for a change is not offered.
       decision: {
         type: "string",
         enum: check.valid
-          ? (round === 10 ? ["approve", "abort"] : ["approve", "revise", "abort"])
-          : (round === 10 ? ["abort"] : ["revise", "abort"]),
+          ? (round === 10 ? ["Approve", "Stop"] : ["Approve", "Request changes", "Stop"])
+          : (round === 10
+            ? ["Explain what went wrong", "Stop"]
+            : ["Request changes", "Stop"]),
       },
       feedback: { type: "string" },
     },
     required: ["decision"],
     additionalProperties: false,
-    if: { properties: { decision: { const: "revise" } }, required: ["decision"] },
+    if: {
+      properties: { decision: { const: "Request changes" } },
+      required: ["decision"],
+    },
     then: { required: ["feedback"], properties: { feedback: { type: "string", minLength: 1 } } },
   }}
 >
-This document was written for: {props.request}
+### Original Prompt
+
+{props.request}
+
+### Draft Plan
 
 <CodeBlock value={draft} language="markdown" />
 
 <If condition={!check.valid}>
-Three attempts to fix it did not clear everything. These problems remain:
+### Problems that remain
+
+The coding agent used all three repair attempts, but the draft still has these
+problems:
 
 <Json value={check.diagnostics} as="problems" />
 <CodeBlock value={problems} language="json" />
 </If>
 </Elicit>
 
-<If condition={review.decision === "approve"}>
+## Continue from your decision
+
+Approve keeps this exact draft and leaves the review. Request changes sends your
+feedback to the coding agent and starts a new draft. Stop ends here. On a tenth
+draft that still has problems there is nothing left to revise into, so the
+remaining choice is to ask the coding agent what went wrong.
+
+<If condition={review.decision === "Approve"}>
 <Let as="approved" value={draft} />
 <Break />
 </If>
 
-Stopping says two different things depending on where you are. On the tenth
-draft, when it still has problems, `abort` is the only choice left and there was
-never a Plan to approve — so that ending says so. Everywhere else, including a
-tenth draft you could have approved, stopping is your decision and is reported
-as one.
-
-<If condition={review.decision === "abort"}>
+<If condition={review.decision === "Stop"}>
 <If condition={round === 10 && !check.valid}>
-<Fail message="xmd prompt: ten drafts were reviewed and none was approved, so nothing was saved and nothing ran. Try again with a more specific request." />
+<Fail message="xmd prompt reviewed ten drafts without an approved Plan. Nothing was output or run." />
 <Else>
-<Fail message="xmd prompt: you ended the review, so nothing was saved and nothing ran." />
+<Fail message="xmd prompt stopped at your request. Nothing was output or run." />
 </Else>
 </If>
 </If>
 
+<If condition={review.decision === "Explain what went wrong"}>
+<Prompt as="explanation">
+The final Plan still has these problems:
+
+<Json value={check.diagnostics} as="problems" />
+<CodeBlock value={problems} language="json" />
+
+Explain briefly why the attempts did not resolve them and what the person should
+clarify in their next Prompt. Do not create another Plan.
+</Prompt>
+
+<Fail
+  message={`xmd prompt reviewed ten drafts without an approved Plan. The coding agent explained why:\n\n${explanation}\n\nNothing was output or run.`}
+/>
+</If>
+
 <Prompt as="draft">
-The person who asked for this document read it and wants this changed:
+You read that Plan and asked for this to change:
 
 {review.feedback}
 
-Send one complete replacement document. Keep the reader-facing prose that says
-what the document is for, and keep each component immediately after the
-sentences describing what it does. Source only, no enclosing fence, no
-explanation.
+Send one complete replacement Plan. Keep its level-one title, keep the Prompt's
+sequence of readable steps in a meaningful order, and keep each XMD component
+beside the step it performs.
+
+Reply with the Plan source and nothing else. No enclosing code fence, no
+explanation before or after it.
 </Prompt>
 </Loop>
 
 </Session>
 
-If you approved a document, return its source unchanged. Nothing should reach
-this point without approving or stopping first, so the other branch says what it
-would mean if anything did.
+## Return the approved Plan
+
+Only an approved Plan can leave this workflow. Its source is returned exactly as
+the coding agent wrote it.
 
 <If condition={approved !== null}>
 <Return value={approved} />
 <Else>
-<Fail message="xmd prompt: ten drafts were reviewed and none was approved, so nothing was saved and nothing ran. Try again with a more specific request." />
+<Fail message="xmd prompt ended without an approved Plan. Nothing was output or run." />
 </Else>
 </If>

@@ -109,7 +109,13 @@ import {
   resolvePropsFromSources,
 } from "./props.ts";
 import type { Binding, Extraction } from "./props.ts";
-import { namesPrompt, scanPromptArgs, SAVE_OPTION, SESSION_OPTION } from "./prompt-args.ts";
+import {
+  namesPrompt,
+  OUTPUT_OPTION,
+  RUN_OPTION,
+  scanPromptArgs,
+  SESSION_OPTION,
+} from "./prompt-args.ts";
 import type { PromptScan } from "./prompt-args.ts";
 import { runPrompt } from "./prompt.ts";
 import type { PromptExecution } from "./prompt.ts";
@@ -239,8 +245,7 @@ const runConfig = object({
 });
 
 /**
- * `xmd prompt` — the request, where to keep the source, and the execution the
- * approved document runs under.
+ * `xmd prompt` — the Prompt, where the approved Plan goes, and whether it runs.
  *
  * The individual `--props-*` options a candidate declares are deliberately
  * absent: they exist only once a document does, and the props phase binds them
@@ -249,12 +254,16 @@ const runConfig = object({
  */
 const promptConfig = object({
   request: {
-    description: "what the agent should write a document to do",
+    description: "the steps the coding agent should turn into a Plan",
     ...field(z.string().optional(), cli.argument()),
   },
-  save: {
-    description: "write the approved document here before running it (path must not exist)",
+  output: {
+    description: "write the approved Plan here instead of to stdout (path must not exist)",
     ...field(z.string().optional()),
+  },
+  run: {
+    description: "run the approved Plan instead of writing it",
+    ...field(z.boolean(), field.default(false)),
   },
   session: {
     description: "logical name for the assistant session (default: unique to this invocation)",
@@ -1659,34 +1668,47 @@ const RUN_SOURCE_HELP = [
  * are. Answering otherwise would mean generating a document to describe one.
  */
 const PROMPT_REQUEST_HELP = [
-  "Exactly one request is required, and it is text for the agent rather than a",
-  "path. Quote it so the shell passes it as a single argument:",
+  "Exactly one Prompt is required, and it is the steps you want carried out",
+  "rather than a path. Quote it so the shell passes it as a single argument:",
   '  xmd prompt "ask me for my age and write the result to a file"',
   "",
-  "A first-party command document turns your request into a Plan: an executable",
-  "Markdown document that states what you asked for in ordinary language and",
-  "places the components that do the work alongside those words. xmd checks each",
-  "draft and repairs definite defects; you approve, revise or abort before",
-  "anything runs.",
+  "A first-party command document turns your Prompt into a Plan: an executable",
+  "Markdown document that states each step in ordinary language and places the",
+  "component that carries it out beside those words. xmd checks each draft and",
+  "repairs definite defects; you approve, request changes or stop before anything",
+  "leaves the command.",
   "",
-  "Document properties follow the request. The individual options a document",
-  "declares are the generated document's, so they are not listed here:",
-  '  xmd prompt "<request>" --props-name Ada',
+  "The approved Plan is the result. By default it is written to stdout and nothing",
+  "runs, so it can be piped, diffed or read before you commit to it.",
+  "",
+  "Document properties follow the Prompt. The individual options a Plan declares",
+  "are the generated document's, so they are not listed here:",
+  '  xmd prompt "<prompt>" --props-name Ada',
   "",
   `  ${AGGREGATE_OPTION} <json>`,
   "      Set document properties as a JSON object",
   `      Environment: ${AGGREGATE_ENV}`,
   "",
-  `  ${SAVE_OPTION} <path>`,
-  "      Write the approved document there before running it. The path must not",
-  "      exist; an existing one is left alone and the run stops.",
+  `  ${OUTPUT_OPTION} <path>`,
+  "      Write the approved Plan there instead of to stdout. The path must not",
+  "      exist; an existing one is left alone and the command stops.",
+  "",
+  `  ${RUN_OPTION}`,
+  "      Run the approved Plan instead of writing it. With --output the file is",
+  "      written first, and only a successful write is followed by the run.",
   "",
   `  ${SESSION_OPTION} <name>`,
   "      Use this logical assistant session instead of one unique to this run.",
   "",
-  "Permission flags configure the approved document. Writing the Plan is a",
-  "conversation about text and gives the assistant nothing: an empty directory of",
-  "its own, no tools, no MCP servers, and every native permission request denied.",
+  `Options that only configure running a Plan — --journal, --raw, --verbose, the`,
+  "exec and fetch timeouts, the permission flags and secret detection — are",
+  `refused without ${RUN_OPTION}, because without it nothing runs for them to`,
+  "configure.",
+  "",
+  "Permission flags configure the approved Plan. Writing the Plan is a",
+  "conversation about text and gives the coding agent nothing: an empty directory",
+  "of its own, no tools, no MCP servers, and every native permission request",
+  "denied.",
 ].join("\n");
 
 /**
@@ -1935,7 +1957,8 @@ function* dispatch(
           argv: helpRequest.args,
           scan,
           include: config.include,
-          ...(config.save === undefined ? {} : { save: config.save }),
+          ...(config.output === undefined ? {} : { output: config.output }),
+          run: config.run,
           ...(config.session === undefined ? {} : { session: config.session }),
           stack: promptStack,
         },

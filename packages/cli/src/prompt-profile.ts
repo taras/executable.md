@@ -189,7 +189,7 @@ export function* runPromptCommandDocument(profile: PromptProfile): Operation<Res
             stream: new InMemoryStream(),
             // No repository component search. What the document may name is
             // what this profile declares, so a file in the caller's tree cannot
-            // answer for `<ValidateCandidate>`, `<Prompt>` or anything else.
+            // answer for `<CheckDraft>`, `<Prompt>` or anything else.
             includes: [],
             props: {
               request: profile.request,
@@ -211,16 +211,16 @@ export function* runPromptCommandDocument(profile: PromptProfile): Operation<Res
 }
 
 /**
- * The host-declared candidate validator, as an internal value component.
+ * The host-declared draft checker, as an internal value component.
  *
  * Declared to the execution, so canonical execution supplies its invocation
  * identity and repository resolution cannot replace it. It executes nothing it
- * is given: a candidate is a string here, and stays one until a person has
- * approved it and the host has validated it again.
+ * is given: a draft is a string here, and stays one until a person has approved
+ * it and the host has validated it again.
  */
 function validator(profile: PromptProfile): IdentityComponent {
   return {
-    name: "ValidateCandidate",
+    name: "CheckDraft",
     origin: "xmd prompt",
     forms: ["self-closing"] as const,
     props: {
@@ -236,7 +236,7 @@ function validator(profile: PromptProfile): IdentityComponent {
       additionalProperties: false,
     },
     factory: () =>
-      function* validateCandidate(props: Record<string, Json>) {
+      function* checkDraft(props: Record<string, Json>) {
         const assessment = yield* profile.assess(String(props.source));
         return { valid: assessment.valid, diagnostics: assessment.diagnostics };
       },
@@ -274,19 +274,21 @@ function profileCeiling(profile: PromptProfile, workdir: string): AcpxProviderDe
 /**
  * What the assistant session is told once, before it is asked anything.
  *
- * The host owns this layer, and it owns only this: the shape of every answer,
- * which is the one thing a policy cannot state about itself convincingly. What
- * to write, which vocabulary is available, how to repair a draft and what a
- * person asked to change are the prompt command document's text, and they arrive
- * in the turns it sends.
+ * The host owns this layer, and it owns only this: that an answer belongs to the
+ * message that asked for it. Which shape any particular message wants — a Plan,
+ * or an explanation of why there is not one — is that message's own business, and
+ * every message is the prompt command document's text. Hiding a shape here would
+ * be hiding a policy decision in a place nobody reviewing the workflow can read.
  */
 export const PROMPT_INSTRUCTIONS = [
-  "You write complete executable Markdown root documents. Each user message is a",
-  "request about one document.",
+  "You are the coding agent behind `xmd prompt`. A workflow asks you for one thing",
+  "at a time, on behalf of one person, and every message states what its answer has",
+  "to be.",
   "",
-  "Every answer is replacement document source and nothing else: no enclosing code",
-  "fence, no explanation, and no prose around it. What you return is validated and",
-  "executed exactly as you wrote it.",
+  "Answer the message you were sent, in the shape it asked for, and nothing else. A",
+  "message asking for a Plan is answered with Plan source; a message asking for an",
+  "explanation is answered with an explanation. Never answer one in the shape the",
+  "other asked for.",
 ].join("\n");
 
 /**

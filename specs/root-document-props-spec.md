@@ -384,8 +384,8 @@ any catalog, agent, elicitation, save, journal or document operation. The
 aggregate `--props` may be written before it, because its meaning never depends
 on a document.
 
-`xmd prompt --help` describes the request, `--save`, `--session`, the aggregate
-sources and where individual options go. It names no individual option and no
+`xmd prompt --help` describes the Prompt, `--output`, `--run`, `--session`, the
+aggregate sources and where individual options go. It names no individual option and no
 default: the document that would declare them does not exist yet, and generating
 one in order to describe it is not what help does.
 
@@ -414,8 +414,9 @@ cannot decode, an extra positional a draft's arity exposes, or a signature chang
 repair, no review, no save and no run. That document cannot catch it and cannot
 recategorize it as feedback for an agent that could not have caused it.
 
-The props the approved Plan runs with are resolved once more, after the command
-document has completely torn down, from those exact returned bytes and the
+The props the approved Plan is admitted with are resolved once more, after the
+command document has completely torn down, from those exact returned bytes and
+the
 original unchanged sources. No props object any draft produced is reused, so a
 revision that changed a property's declared type changes what the run receives.
 

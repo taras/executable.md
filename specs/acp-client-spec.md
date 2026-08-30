@@ -587,9 +587,11 @@ terminally. Which applies is a trusted host value —
 whether `--session` was written — and where the directories live is a host
 dependency no caller or document can select.
 
-Only the profile's provider receives `newSessionOptions.systemPrompt`. It carries the
-fixed statement of what the session writes, and nothing else — the catalog and
-the request are the command document's to send in its own turns
+Only the profile's provider receives `newSessionOptions.systemPrompt`. It carries
+one fixed statement — that an answer belongs to the message that asked for it —
+and nothing else. Which shape any particular message wants, a Plan or an
+explanation of why there is not one, is that message's own business, and every
+message is the command document's to send in its own turns
 ([`xmd prompt`](./prompt-command-spec.md)). ACPX applies those options when it
 creates a session and ignores them when it reuses a record. Without `--session`
 the command places a name unique to the invocation, so each invocation is a fresh

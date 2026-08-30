@@ -37,6 +37,7 @@ import { open } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
+import process from "node:process";
 
 import {
   agentIdentityComponents,
@@ -100,8 +101,10 @@ export interface PromptCommand {
   /** What fixed grammar established about that argv. */
   scan: PromptScan;
   include: string[];
-  /** Where the approved source is written before it runs, when asked for. */
-  save?: string;
+  /** Where the approved Plan is written, when the caller asked for a file. */
+  output?: string;
+  /** Whether the caller asked for the approved Plan to be run. */
+  run: boolean;
   /** The logical assistant-session name, when the caller chose one. */
   session?: string;
   /**
@@ -240,12 +243,25 @@ export function* runPrompt(command: PromptCommand, deps: PromptDependencies): Op
   }
 
   const source = authored.value;
-  if (command.save !== undefined) {
-    const saved = yield* saveSource(command.save, source);
-    if (!saved.ok) {
-      console.error(saved.error.message);
+  if (command.output !== undefined) {
+    // Before the run, so a Plan that fails at run time is still on disk to read
+    // and hand-edit. An existing path is refused and nothing after it happens.
+    const written = yield* writeOutput(command.output, source);
+    if (!written.ok) {
+      console.error(written.error.message);
       return 1;
     }
+  }
+
+  if (!command.run) {
+    // The approved Plan is the result. It goes to stdout exactly as the agent
+    // wrote it — no fence, no heading, no trailing newline of this command's —
+    // so a caller can pipe it into a file, a diff or another program. A caller
+    // who named `--output` already has it, and gets a quiet command instead.
+    if (command.output === undefined) {
+      process.stdout.write(source);
+    }
+    return 0;
   }
 
   const executed = yield* deps.execute({
@@ -380,13 +396,13 @@ function* assessCandidate(
 }
 
 /**
- * Create the destination and write the approved bytes, or refuse.
+ * Create the destination and write the approved Plan, or refuse.
  *
- * Exclusive creation, so an existing path is left exactly as it is and the run
- * stops rather than replacing work somebody kept. There is no check-then-write:
- * the open is the check.
+ * Exclusive creation, so an existing path is left exactly as it is and the
+ * command stops rather than replacing work somebody kept. There is no
+ * check-then-write: the open is the check.
  */
-function* saveSource(path: string, source: string): Operation<Result<void>> {
+function* writeOutput(path: string, source: string): Operation<Result<void>> {
   const target = resolve(yield* cwd(), path);
   let handle: FileHandle;
   try {
@@ -398,7 +414,7 @@ function* saveSource(path: string, source: string): Operation<Result<void>> {
     if (existing) {
       return Err(
         new Error(
-          `${target} already exists — choose another --save path; the approved document was ` +
+          `${target} already exists — choose another --output path; the approved Plan was ` +
             "not written and nothing ran",
         ),
       );
@@ -419,7 +435,7 @@ function* writeAll(handle: FileHandle, source: string): Operation<Result<void>> 
     yield* until(handle.writeFile(source, "utf8"));
     return Ok(undefined);
   } catch (error) {
-    return Err(new Error(`could not write the approved document: ${describeError(error)}`));
+    return Err(new Error(`could not write the approved Plan: ${describeError(error)}`));
   }
 }
 

@@ -16,11 +16,11 @@ import { expect } from "@executablemd/test-support/expect";
 import { runCli } from "@executablemd/test-support/launch";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
 import { stat } from "@executablemd/runtime";
-import { ensure, Ok, scoped, spawn } from "effection";
+import { ensure, Ok, scoped, spawn, until } from "effection";
 import type { Operation, Result } from "effection";
 import { join } from "node:path";
 import { readdir } from "node:fs/promises";
-import { until } from "effection";
+import process from "node:process";
 
 import { promptExecutor } from "../src/cli.ts";
 import { resolveAgentStack } from "../src/agent-stack.ts";
@@ -91,13 +91,35 @@ const STACK: AgentStack = {
   permissionMode: "deny-all",
 };
 
-function command(dir: string, args: string[], save?: string): PromptCommand {
+/**
+ * One invocation, asking for the approved Plan to be run.
+ *
+ * `--run` is the default here because these cases are about the run: what the
+ * journal holds, what the document writes, how a runtime failure reports. The
+ * modes that write the Plan instead are exercised by their own cases below,
+ * which pass `run: false` and say which destination they mean.
+ */
+function command(dir: string, args: string[], output?: string): PromptCommand {
+  const argv = ["prompt", ...args, "--run"];
+  return {
+    argv,
+    scan: scanPromptArgs(argv),
+    include: [dir],
+    ...(output === undefined ? {} : { output }),
+    run: true,
+    stack: STACK,
+  };
+}
+
+/** The same invocation, writing the Plan rather than running it. */
+function writing(dir: string, args: string[], output?: string): PromptCommand {
   const argv = ["prompt", ...args];
   return {
     argv,
     scan: scanPromptArgs(argv),
     include: [dir],
-    ...(save === undefined ? {} : { save }),
+    ...(output === undefined ? {} : { output }),
+    run: false,
     stack: STACK,
   };
 }
@@ -193,7 +215,17 @@ describe(
       for (const flag of ["-e", "--eval"]) {
         yield* useWorkingDirectory(function* (dir) {
           const { code, stdout, stderr } = yield* runCli(
-            ["prompt", REQUEST, flag, "# supplied", "--save", "out.md", "--journal", "trace.jsonl"],
+            [
+              "prompt",
+              REQUEST,
+              flag,
+              "# supplied",
+              "--output",
+              "out.md",
+              "--run",
+              "--journal",
+              "trace.jsonl",
+            ],
             { cwd: dir },
           ).join();
 
@@ -218,7 +250,7 @@ describe(
           [
             "prompt",
             "--help",
-            "--save",
+            "--output",
             "out.md",
             "--journal",
             "trace.jsonl",
@@ -230,15 +262,22 @@ describe(
 
         expect(code).toBe(0);
         expect(stdout).toContain("Usage: xmd prompt [OPTIONS] [request]");
-        expect(stdout).toContain("Exactly one request is required");
+        expect(stdout).toContain("Exactly one Prompt is required");
         expect(stdout).toContain("--props <json>");
         expect(stdout).toContain("XMD_PROPS");
-        expect(stdout).toContain("--save <path>");
+        // Where an approved Plan goes, and what changes that.
+        expect(stdout).toContain("The approved Plan is the result. By default it is written to");
+        expect(stdout).toContain("--output <path>");
+        expect(stdout).toContain("Write the approved Plan there instead of to stdout");
+        expect(stdout).toContain("--run");
+        expect(stdout).toContain("Run the approved Plan instead of writing it");
         expect(stdout).toContain("--session <name>");
-        // The permission flags are the approved document's, and help says so
-        // rather than letting a caller believe they configure how the Plan is
-        // written.
-        expect(stdout).toContain("Permission flags configure the approved document");
+        // The run-only flags are named as such rather than left to be
+        // discovered by a refusal.
+        expect(stdout).toContain("are\nrefused without --run");
+        // The permission flags are the approved Plan's, and help says so rather
+        // than letting a caller believe they configure how the Plan is written.
+        expect(stdout).toContain("Permission flags configure the approved Plan");
         expect(stderr).not.toContain("unavailable");
         // No catalog was rendered, and neither file the options named was made.
         expect(stdout).not.toContain("## Built-in components");
@@ -257,6 +296,20 @@ describe(
         expect(empty.code).toBe(1);
         expect(empty.stderr).toContain("--session needs a name");
         expect(empty.stdout).not.toContain("## Built-in components");
+
+        // A flag that only configures running a Plan, without --run: refused
+        // before authorship and before anything reaches the filesystem.
+        for (const flag of [["--journal", "trace.jsonl"], ["--raw"], ["--deny-all"]]) {
+          const stray = yield* runCli(["prompt", REQUEST, ...flag], { cwd: dir }).join();
+          expect(stray.code).toBe(1);
+          expect(stray.stderr).toContain(`${flag[0]} configures running the Plan`);
+          expect(stray.stderr).toContain("add --run");
+          expect(stray.stdout).toBe("");
+          expect(yield* exists(join(dir, "trace.jsonl"))).toBe(false);
+        }
+        // That the same flag is ordinary again once `--run` is present is fixed
+        // grammar, and is proven there rather than by an invocation that would
+        // have to reach a real agent to say so.
       });
     });
 
@@ -265,7 +318,7 @@ describe(
         const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir);
         harness.fake.script({ reply: GREETER });
-        harness.script({ decision: "approve" });
+        harness.script({ decision: "Approve" });
 
         yield* useEnvironment({ XMD_PROPS: '{"name":"FromEnv","count":7}' });
         const code = yield* runPrompt(
@@ -288,7 +341,7 @@ describe(
         const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir, join(dir, journalName));
         harness.fake.script({ reply: PLAIN });
-        harness.script({ decision: "abort" });
+        harness.script({ decision: "Stop" });
 
         const code = yield* runPrompt(command(dir, [REQUEST], "out.md"), harness.deps);
 
@@ -336,7 +389,7 @@ describe(
         const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir, journal);
         harness.fake.script({ reply: PLAIN });
-        harness.script({ decision: "approve" });
+        harness.script({ decision: "Approve" });
 
         const code = yield* runPrompt(command(dir, [REQUEST]), harness.deps);
         expect(code).toBe(0);
@@ -352,6 +405,99 @@ describe(
       });
     });
 
+    it("C11: the approved Plan is the result, and where it goes is the caller's", function* () {
+      // Default: the exact source on stdout, and nothing runs. Written with
+      // `process.stdout.write`, so what a pipe receives is the bytes and not a
+      // line the command added.
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
+        const harness = createPromptHarness({ profileRoot });
+        harness.deps.execute = executor(dir);
+        harness.fake.script({ reply: PLAIN });
+        harness.script({ decision: "Approve" });
+
+        const written: string[] = [];
+        const original = process.stdout.write.bind(process.stdout);
+        const code = yield* scoped(function* (): Operation<number> {
+          yield* ensure(() => {
+            process.stdout.write = original;
+          });
+          process.stdout.write = ((chunk: string | Uint8Array) => {
+            written.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
+            return true;
+          }) as typeof process.stdout.write;
+          return yield* runPrompt(writing(dir, [REQUEST]), harness.deps);
+        });
+
+        expect(code).toBe(0);
+        // Byte for byte, once, with nothing around it.
+        expect(written.join("")).toBe(PLAIN);
+        // And nothing ran: no execution, so no journal and no document effects.
+        expect(harness.executions).toHaveLength(0);
+        expect(yield* until(readdir(dir))).toEqual([]);
+      });
+
+      // `--output`: the same bytes in the file, a quiet stdout, and still no run.
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
+        const harness = createPromptHarness({ profileRoot });
+        harness.deps.execute = executor(dir);
+        harness.fake.script({ reply: GREETER });
+        harness.script({ decision: "Approve" });
+
+        const written: string[] = [];
+        const original = process.stdout.write.bind(process.stdout);
+        const code = yield* scoped(function* (): Operation<number> {
+          yield* ensure(() => {
+            process.stdout.write = original;
+          });
+          process.stdout.write = ((chunk: string | Uint8Array) => {
+            written.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
+            return true;
+          }) as typeof process.stdout.write;
+          return yield* runPrompt(
+            {
+              ...writing(dir, [REQUEST, "--props-name", "Ada"], "plan.md"),
+              argv: ["prompt", REQUEST, "--props-name", "Ada", "--output", "plan.md"],
+            },
+            harness.deps,
+          );
+        });
+
+        expect(code).toBe(0);
+        expect(written.join("")).toBe("");
+        expect(yield* readTextFile(join(dir, "plan.md"))).toBe(GREETER);
+        // The Plan was not run, so what it would have written is not there.
+        expect(harness.executions).toHaveLength(0);
+        expect((yield* until(readdir(dir))).sort()).toEqual(["plan.md"]);
+      });
+
+      // `--run`: the Plan runs, and stdout is the Plan's own to use.
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
+        const harness = createPromptHarness({ profileRoot });
+        harness.deps.execute = executor(dir);
+        harness.fake.script({ reply: GREETER });
+        harness.script({ decision: "Approve" });
+
+        const written: string[] = [];
+        const original = process.stdout.write.bind(process.stdout);
+        const code = yield* scoped(function* (): Operation<number> {
+          yield* ensure(() => {
+            process.stdout.write = original;
+          });
+          process.stdout.write = ((chunk: string | Uint8Array) => {
+            written.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
+            return true;
+          }) as typeof process.stdout.write;
+          return yield* runPrompt(command(dir, [REQUEST, "--props-name", "Ada"]), harness.deps);
+        });
+
+        expect(code).toBe(0);
+        // The source itself was never printed.
+        expect(written.join("")).not.toContain("props:");
+        // The document ran, and did what it says.
+        expect(yield* readTextFile(join(dir, "greeting.txt"))).toBe("name=Ada loud=false count=");
+      });
+    });
+
     it("C11: the approved bytes are created exclusively, before the run", function* () {
       // Created before execution, and byte for byte.
       yield* useWorkingDirectory(function* (dir, profileRoot) {
@@ -363,7 +509,7 @@ describe(
           return yield* run(approved);
         };
         harness.fake.script({ reply: GREETER });
-        harness.script({ decision: "approve" });
+        harness.script({ decision: "Approve" });
 
         const code = yield* runPrompt(
           command(dir, [REQUEST, "--props-name", "Ada"], "out.md"),
@@ -383,7 +529,7 @@ describe(
         const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir);
         harness.fake.script({ reply: PLAIN });
-        harness.script({ decision: "approve" });
+        harness.script({ decision: "Approve" });
 
         const code = yield* runPrompt(command(dir, [REQUEST], "out.md"), harness.deps);
 
@@ -397,7 +543,7 @@ describe(
         const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir);
         harness.fake.script({ reply: GREETER });
-        harness.script({ decision: "approve" });
+        harness.script({ decision: "Approve" });
 
         const code = yield* runPrompt(command(dir, [REQUEST, "--props-name", "Ada"]), harness.deps);
 
@@ -413,7 +559,7 @@ describe(
         const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir, journal);
         harness.fake.script({ reply: GREETER });
-        harness.script({ decision: "approve" });
+        harness.script({ decision: "Approve" });
 
         const code = yield* runPrompt(
           command(dir, [REQUEST, "--props-name", "Ada"], "out.md"),
@@ -435,7 +581,7 @@ describe(
         const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir);
         harness.fake.script({ reply: FAILS_AT_RUN });
-        harness.script({ decision: "approve" });
+        harness.script({ decision: "Approve" });
 
         const code = yield* runPrompt(command(dir, [REQUEST], "out.md"), harness.deps);
 
@@ -452,7 +598,7 @@ describe(
         const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir);
         harness.fake.script({ reply: FAILING_TEST });
-        harness.script({ decision: "approve" });
+        harness.script({ decision: "Approve" });
 
         const written = console.error;
         const lines: string[] = [];
@@ -507,7 +653,7 @@ describe(
         const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir, undefined, stack);
         harness.fake.script({ reply: PLAIN });
-        harness.script({ decision: "approve" });
+        harness.script({ decision: "Approve" });
 
         const code = yield* runPrompt({ ...command(dir, [REQUEST]), stack }, harness.deps);
 
@@ -553,7 +699,7 @@ describe(
         harness.deps.execute = executor(dir);
         harness.fake.closeFailure = new Error("the profile provider would not close");
         harness.fake.script({ reply: PLAIN });
-        harness.script({ decision: "approve" });
+        harness.script({ decision: "Approve" });
 
         const code = yield* runPrompt(command(dir, [REQUEST], "out.md"), harness.deps);
 
@@ -571,7 +717,7 @@ describe(
           return Ok(undefined);
         };
         harness.fake.script({ reply: PLAIN });
-        harness.script({ decision: "approve" });
+        harness.script({ decision: "Approve" });
 
         const code = yield* runPrompt(command(dir, [REQUEST]), harness.deps);
         expect(code).toBe(0);

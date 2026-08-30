@@ -73,12 +73,19 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
     expect(early.request).toBe(undefined);
     expect(early.occurrences).toEqual([]);
 
-    const aggregate = scanPromptArgs(["prompt", "--props", '{"name":"Ada"}', REQUEST, "--raw"]);
+    const aggregate = scanPromptArgs([
+      "prompt",
+      "--props",
+      '{"name":"Ada"}',
+      REQUEST,
+      "--raw",
+      "--run",
+    ]);
     expect(aggregate.error).toBe(undefined);
     expect(aggregate.request).toBe(REQUEST);
     // The aggregate never reaches the parser: it coerces a separated value
     // through Number() before any schema could judge it.
-    expect(aggregate.fixed).toEqual(["prompt", REQUEST, "--raw"]);
+    expect(aggregate.fixed).toEqual(["prompt", REQUEST, "--raw", "--run"]);
 
     const inline = scanPromptArgs(["prompt", '--props={"name":"Ada"}', REQUEST]);
     expect(inline.error).toBe(undefined);
@@ -97,10 +104,11 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
       "--props-loud",
       "--journal",
       "trace.jsonl",
-      "--save",
+      "--output",
       "out.md",
       "--session",
       "ada",
+      "--run",
     ]);
     expect(scan.error).toBe(undefined);
     expect(scan.request).toBe(REQUEST);
@@ -112,10 +120,11 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
       "lib",
       "--journal",
       "trace.jsonl",
-      "--save",
+      "--output",
       "out.md",
       "--session",
       "ada",
+      "--run",
     ]);
     // `--props-loud` did not swallow `--journal`: a known option is never read
     // as a generated property's value.
@@ -212,6 +221,47 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
     const stray = strayPropertyValue(scan.occurrences, bindingsFor({ loud: { type: "boolean" } }));
     expect(stray).toContain("unrecognized argument for xmd prompt: true");
     expect(stray).toContain("--props-loud=true");
+  });
+
+  it("C1: options that only configure a run need --run to mean anything", function* () {
+    // Each of them describes work that a command writing a Plan never does. A
+    // caller who asked for a journal, a permission mode or an exec deadline and
+    // got a command that creates none of them was not answered.
+    for (const flag of [
+      ["--journal", "trace.jsonl"],
+      ["-j", "trace.jsonl"],
+      ["--raw"],
+      ["--verbose"],
+      ["--timeout-exec", "5s"],
+      ["--timeout-fetch", "5s"],
+      ["--approve-all"],
+      ["--approve-reads"],
+      ["--deny-all"],
+      ["--no-secret-detection"],
+    ]) {
+      const refused = scanPromptArgs(["prompt", REQUEST, ...flag]);
+      expect(refused.error).toContain(`${flag[0]} configures running the Plan`);
+      expect(refused.error).toContain("add --run");
+
+      // With `--run` the same command line is ordinary, wherever the two are
+      // written relative to each other.
+      expect(scanPromptArgs(["prompt", REQUEST, ...flag, "--run"]).error).toBe(undefined);
+      expect(scanPromptArgs(["prompt", REQUEST, "--run", ...flag]).error).toBe(undefined);
+    }
+
+    // The options the command always uses are never refused: they build the
+    // catalog, settle the agent, name the session, bound the command and say
+    // where the Plan goes.
+    for (const flag of [
+      ["--include", "lib"],
+      ["--agent-provider", "acpx"],
+      ["--default-agent", "codex"],
+      ["--session", "ada"],
+      ["--timeout", "5s"],
+      ["--output", "plan.md"],
+    ]) {
+      expect(scanPromptArgs(["prompt", REQUEST, ...flag]).error).toBe(undefined);
+    }
   });
 
   it("C7: a frozen option's shape is what a later candidate may not change", function* () {

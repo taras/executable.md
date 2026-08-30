@@ -95,7 +95,7 @@ function* runDocument(): Operation<CommandRun> {
         // deno-lint-ignore require-yield
         *elicit([request], _next) {
           reviews.push(request);
-          return { decision: "approve" };
+          return { decision: "Approve" };
         },
       },
       { at: "min" },
@@ -119,7 +119,7 @@ function* runDocument(): Operation<CommandRun> {
               components: [
                 ...agentIdentityComponents(),
                 {
-                  name: "ValidateCandidate",
+                  name: "CheckDraft",
                   origin: "test",
                   forms: ["self-closing"] as const,
                   props: {

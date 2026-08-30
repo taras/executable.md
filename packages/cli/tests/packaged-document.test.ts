@@ -39,19 +39,44 @@ describe("packaged documents", () => {
     expect(source).toBe(committed);
     // It is the prompt command document, not merely some file that exists.
     expect(source).toContain("returns:");
-    expect(source).toContain("<ValidateCandidate");
+    expect(source).toContain("<CheckDraft");
     expect(source).toContain("<Fail");
-    // And it holds the authorship rule that makes what the assistant returns a
-    // Plan rather than a script: prose the reader was written for, with each
-    // component beside the sentences describing what it does.
-    expect(source).toContain(
-      "places each component\nimmediately after the sentences describing the action",
-    );
-    expect(source).toContain("ordinary reader-facing prose");
+    // And it holds the authorship rule that makes what the coding agent returns
+    // a Plan rather than a script: a title, readable steps, and the component
+    // that carries each one out beside it.
+    expect(source).toContain("Begin the Plan with one level-one Markdown title that describes it.");
+    expect(source).toContain("Write the Plan as a sequence of readable steps.");
+    expect(source).toContain("Follow each step with the XMD\ncomponent that carries it out.");
+    // The worked example is itself a titled Plan.
+    expect(source).toContain("# Ask for and save your age");
+    // Every visible stage of the workflow is a heading somebody can audit.
+    for (const heading of [
+      "# `xmd prompt` turns steps into a program",
+      "## Create the first draft",
+      "## Check and repair the draft",
+      "## Review the draft",
+      "## Continue from your decision",
+      "## Return the approved Plan",
+    ]) {
+      expect(source).toContain(`${heading}\n`);
+    }
     // It captures the serialized problems with `<Json as>` directly. The
     // single-child `<Let>` wrapper existed only because the component refused a
     // literal `as`, and main supplies that now.
     expect(source).toContain('<Json value={check.diagnostics} as="problems" />');
+    // The closing branch is an unexpected-no-decision fallback, not a second
+    // copy of exhaustion: exhaustion is decided inside review, and saying it
+    // twice would make the two endings indistinguishable to a reader.
+    expect(source).toContain(
+      '<Fail message="xmd prompt ended without an approved Plan. Nothing was output or run." />',
+    );
+    expect(source.split("reviewed ten drafts without an approved Plan").length - 1).toBe(2);
+    // The choices are the words a person reads, with no internal spelling
+    // behind them.
+    expect(source).toContain('["Approve", "Request changes", "Stop"]');
+    expect(source).toContain('["Explain what went wrong", "Stop"]');
+    expect(source).not.toContain('"revise"');
+    expect(source).not.toContain('"abort"');
     expect(source).not.toContain('<Let as="problems">');
   });
 

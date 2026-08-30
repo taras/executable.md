@@ -20,8 +20,9 @@ import { AGGREGATE_OPTION } from "./props.ts";
 import type { Binding } from "./props.ts";
 
 export const PROMPT_COMMAND = "prompt";
-export const SAVE_OPTION = "--save";
+export const OUTPUT_OPTION = "--output";
 export const SESSION_OPTION = "--session";
+export const RUN_OPTION = "--run";
 
 /** The built-in options that take a separated value. */
 const VALUE_OPTIONS: readonly string[] = [
@@ -33,7 +34,7 @@ const VALUE_OPTIONS: readonly string[] = [
   "--timeout",
   "--timeout-exec",
   "--timeout-fetch",
-  SAVE_OPTION,
+  OUTPUT_OPTION,
   SESSION_OPTION,
 ];
 
@@ -47,10 +48,42 @@ const SWITCH_OPTIONS: readonly string[] = [
   "--deny-all",
   "--secret-detection",
   "--no-secret-detection",
+  RUN_OPTION,
   "--help",
   "-h",
   "--version",
 ];
+
+/**
+ * The options that configure the Plan's execution and nothing else.
+ *
+ * `xmd prompt` prints an approved Plan unless `--run` asks for it to be run, so
+ * each of these describes work that would not happen. Accepting one silently
+ * would mean answering a caller who asked for a journal, a permission mode or an
+ * exec deadline with a command that creates none of them.
+ *
+ * Everything absent from this list is here for a reason the command always has:
+ * `--include` builds the catalog and admits properties, `--agent-provider` and
+ * `--default-agent` settle who writes the Plan, `--session` names the
+ * conversation, `--timeout` bounds the whole command, and `--output` is where an
+ * approved Plan goes.
+ */
+const RUN_ONLY_OPTIONS: readonly string[] = [
+  "--journal",
+  "-j",
+  "--raw",
+  "--verbose",
+  "-V",
+  "--timeout-exec",
+  "--timeout-fetch",
+  "--approve-all",
+  "--approve-reads",
+  "--deny-all",
+  "--secret-detection",
+  "--no-secret-detection",
+];
+
+const RUN_ONLY = new Set(RUN_ONLY_OPTIONS);
 
 const VALUE = new Set(VALUE_OPTIONS);
 const KNOWN = new Set([...VALUE_OPTIONS, ...SWITCH_OPTIONS, AGGREGATE_OPTION]);
@@ -128,6 +161,8 @@ export function scanPromptArgs(args: readonly string[]): PromptScan {
   const occurrences: PropertyOccurrence[] = [];
   let request: string | undefined;
   let extra: string | undefined;
+  let runs = false;
+  let runOnly: string | undefined;
   let parsingOptions = true;
   let index = 1;
 
@@ -173,6 +208,12 @@ export function scanPromptArgs(args: readonly string[]): PromptScan {
         continue;
       }
 
+      if (name === RUN_OPTION) {
+        runs = true;
+      }
+      if (runOnly === undefined && RUN_ONLY.has(name)) {
+        runOnly = name;
+      }
       const separated =
         equals === -1 && VALUE.has(name) && args[index + 1] !== undefined
           ? args[index + 1]
@@ -244,6 +285,17 @@ export function scanPromptArgs(args: readonly string[]): PromptScan {
       fixed,
       occurrences,
       error: "xmd prompt requires a request with at least one non-whitespace character",
+    };
+  }
+
+  if (runOnly !== undefined && !runs) {
+    return {
+      request,
+      fixed,
+      occurrences,
+      error:
+        `${runOnly} configures running the Plan, and without ${RUN_OPTION} this command ` +
+        `writes the Plan instead of running it — add ${RUN_OPTION}, or drop ${runOnly}`,
     };
   }
 

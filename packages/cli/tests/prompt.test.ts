@@ -125,9 +125,16 @@ const STACK: AgentStack = {
   permissionMode: "deny-all",
 };
 
+/**
+ * One invocation, asking for the approved Plan to be run.
+ *
+ * `--run` is the default here because these cases are about what reaches the
+ * execution: the modes that write the Plan instead have their own cases, and
+ * name the mode they mean.
+ */
 function command(dir: string, args: string[], stack: AgentStack = STACK): PromptCommand {
-  const argv = ["prompt", ...args];
-  return { argv, scan: scanPromptArgs(argv), include: [dir], stack };
+  const argv = ["prompt", ...args, "--run"];
+  return { argv, scan: scanPromptArgs(argv), include: [dir], run: true, stack };
 }
 
 /** Every session key the fake was asked to establish, deduplicated in order. */
@@ -164,7 +171,7 @@ function watching(
         *elicit([request], _next) {
           harness.reviews.push(request);
           yield* observe(String(harness.fake.created[0]?.cwd));
-          return { decision: "approve" };
+          return { decision: "Approve" };
         },
       },
       { at: "min" },
@@ -234,7 +241,7 @@ describe(
 
         const harness = createPromptHarness({ profileRoot });
         harness.fake.script({ reply: VALID });
-        harness.script({ decision: "approve" });
+        harness.script({ decision: "Approve" });
 
         const code = yield* runPrompt(command(dir, [REQUEST]), harness.deps);
         expect(code).toBe(0);
@@ -246,16 +253,19 @@ describe(
         // exist nowhere in TypeScript, so a host that chose its own policy could
         // not produce them.
         const turn = harness.fake.prompts[0];
-        expect(turn).toContain("Write one complete Executable Markdown document that does this");
+        expect(turn).toContain("Create one complete XMD Plan from this Prompt");
         // C14: the shipped instruction is the narrative-plus-components rule.
-        expect(turn).toContain("The document you write is a Plan");
-        expect(turn).toContain("ordinary reader-facing prose");
         expect(turn).toContain(
-          "places each component\nimmediately after the sentences describing the action",
+          "Begin the Plan with one level-one Markdown title that describes it",
         );
+        expect(turn).toContain("Write the Plan as a sequence of readable steps");
+        expect(turn).toContain("Follow each step with the XMD\ncomponent that carries it out");
         // The worked example travels with it, unparsed.
         expect(turn).toContain('<File path="age.txt">{answer.age}</File>');
         expect(turn).toContain("keep every outcome it asked for");
+        // The worked example is a titled Plan, so the shape being asked for is
+        // the shape being shown.
+        expect(turn).toContain("# Ask for and save your age");
         // The request travels inside it, byte for byte.
         expect(turn).toContain(REQUEST);
         // So does the host's catalog, including the renderer's honest statement
@@ -289,9 +299,9 @@ describe(
           harness.fake.script({ reply: UNRESOLVED });
           harness.fake.script({ reply: UNRESOLVED });
           harness.fake.script({ reply: UNRESOLVED });
-          harness.script({ decision: "revise", feedback: "try plain text" });
+          harness.script({ decision: "Request changes", feedback: "try plain text" });
           harness.fake.script({ reply: VALID });
-          harness.script({ decision: "approve" });
+          harness.script({ decision: "Approve" });
 
           const code = yield* runPrompt(command(dir, [REQUEST]), harness.deps);
           expect(code).toBe(0);
@@ -325,7 +335,7 @@ describe(
           yield* useWorkingDirectory(function* (dir) {
             const harness = createPromptHarness({ profileRoot, store });
             harness.fake.script({ reply: VALID });
-            harness.script({ decision: "approve" });
+            harness.script({ decision: "Approve" });
 
             const code = yield* runPrompt(
               { ...command(dir, [REQUEST]), session: "ada" },
@@ -385,7 +395,7 @@ describe(
       // Abort, a turn that failed, and a cancelled command each hand the
       // directory back the same way a success does.
       for (const ending of [
-        { name: "abort", drive: (harness: PromptHarness) => harness.script({ decision: "abort" }) },
+        { name: "stop", drive: (harness: PromptHarness) => harness.script({ decision: "Stop" }) },
         {
           name: "a failed turn",
           drive: (harness: PromptHarness) => {
@@ -395,7 +405,7 @@ describe(
       ]) {
         yield* useWorkingDirectory(function* (dir, profileRoot) {
           const harness = createPromptHarness({ profileRoot });
-          if (ending.name === "abort") {
+          if (ending.name === "stop") {
             harness.fake.script({ reply: VALID });
           }
           ending.drive(harness);
@@ -486,7 +496,7 @@ describe(
         });
 
         const { value, lines } = yield* reported(() =>
-          runPrompt({ ...command(dir, [REQUEST]), save: "out.md" }, harness.deps),
+          runPrompt({ ...command(dir, [REQUEST]), output: "out.md" }, harness.deps),
         );
 
         expect(value).toBe(1);
@@ -518,7 +528,7 @@ describe(
         });
 
         const { value, lines } = yield* reported(() =>
-          runPrompt({ ...command(dir, [REQUEST]), save: "out.md" }, harness.deps),
+          runPrompt({ ...command(dir, [REQUEST]), output: "out.md" }, harness.deps),
         );
 
         // Terminal, and said once: the attempt happens once and either settles
@@ -617,7 +627,7 @@ describe(
                     seen.refusals.push(error instanceof Error ? error.message : String(error));
                   }
                 }
-                return { decision: "approve" };
+                return { decision: "Approve" };
               },
             },
             { at: "min" },
@@ -713,7 +723,7 @@ describe(
 
           const harness = createPromptHarness({ profileRoot });
           harness.fake.script({ reply: VALID });
-          harness.script({ decision: "approve" });
+          harness.script({ decision: "Approve" });
 
           const code = yield* runPrompt(command(dir, [REQUEST]), harness.deps);
           expect(code).toBe(0);
@@ -730,7 +740,7 @@ describe(
       yield* useWorkingDirectory(function* (dir, profileRoot) {
         const harness = createPromptHarness({ profileRoot });
         harness.fake.script({ reply: WRITES_A_FILE });
-        harness.script({ decision: "abort" });
+        harness.script({ decision: "Stop" });
 
         const code = yield* runPrompt(command(dir, [REQUEST]), harness.deps);
 
@@ -749,13 +759,13 @@ describe(
         const harness = createPromptHarness({ profileRoot });
         harness.fake.script({ reply: BROKEN_SOURCE });
         harness.fake.script({ reply: VALID });
-        harness.script({ decision: "approve" });
+        harness.script({ decision: "Approve" });
 
         const code = yield* runPrompt(command(dir, [REQUEST]), harness.deps);
 
         expect(code).toBe(0);
         expect(harness.fake.prompts).toHaveLength(2);
-        expect(harness.fake.prompts[1]).toContain("That document has problems");
+        expect(harness.fake.prompts[1]).toContain("That Plan has problems");
         // `<Json as>` captured the whole serialized value, and the fence it went
         // into holds every byte of it: the wrapper's removal changed where the
         // text is bound, not what it says. Parsed back rather than matched, so
@@ -777,7 +787,7 @@ describe(
         const harness = createPromptHarness({ profileRoot });
         harness.fake.script({ reply: COLLIDING });
         harness.fake.script({ reply: VALID });
-        harness.script({ decision: "approve" });
+        harness.script({ decision: "Approve" });
 
         const code = yield* runPrompt(command(dir, [REQUEST]), harness.deps);
 
@@ -841,7 +851,7 @@ describe(
       yield* useWorkingDirectory(function* (dir, profileRoot) {
         const harness = createPromptHarness({ profileRoot });
         harness.fake.script({ reply: REQUIRES_NAME });
-        harness.script({ decision: "revise", feedback: "make it shout" });
+        harness.script({ decision: "Request changes", feedback: "make it shout" });
         harness.fake.script({ reply: NAME_IS_BOOLEAN });
 
         const code = yield* runPrompt(command(dir, [REQUEST, "--props-name", "Ada"]), harness.deps);
@@ -861,14 +871,14 @@ describe(
         harness.fake.script({ reply: UNRESOLVED });
         harness.fake.script({ reply: UNRESOLVED });
         harness.fake.script({ reply: VALID });
-        harness.script({ decision: "approve" });
+        harness.script({ decision: "Approve" });
 
         const code = yield* runPrompt(command(dir, [REQUEST]), harness.deps);
 
         expect(code).toBe(0);
         expect(harness.fake.prompts).toHaveLength(4);
         expect(harness.reviews).toHaveLength(1);
-        expect(decisions(harness.reviews[0])).toEqual(["approve", "revise", "abort"]);
+        expect(decisions(harness.reviews[0])).toEqual(["Approve", "Request changes", "Stop"]);
       });
 
       // A fourth invalid candidate is repair-exhausted: it reaches review with
@@ -878,16 +888,16 @@ describe(
         for (const _draft of [0, 1, 2, 3]) {
           harness.fake.script({ reply: UNRESOLVED });
         }
-        harness.script({ decision: "abort" });
+        harness.script({ decision: "Stop" });
 
         const code = yield* runPrompt(command(dir, [REQUEST]), harness.deps);
 
         expect(code).toBe(1);
         expect(harness.fake.prompts).toHaveLength(4);
         expect(harness.reviews).toHaveLength(1);
-        expect(decisions(harness.reviews[0])).toEqual(["revise", "abort"]);
+        expect(decisions(harness.reviews[0])).toEqual(["Request changes", "Stop"]);
         expect(harness.reviews[0].message).toContain(
-          "Three attempts to fix it did not clear everything",
+          "The coding agent used all three repair attempts",
         );
         // The presentation carries the same complete captured JSON the repair
         // turns did, through the same `<Json as>` binding.
@@ -906,10 +916,10 @@ describe(
         for (const round of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
           harness.fake.script({ reply: VALID });
           if (round < 10) {
-            harness.script({ decision: "revise", feedback: `round ${round}` });
+            harness.script({ decision: "Request changes", feedback: `round ${round}` });
           }
         }
-        harness.script({ decision: "abort" });
+        harness.script({ decision: "Stop" });
 
         const code = yield* runPrompt(command(dir, [REQUEST]), harness.deps);
 
@@ -919,11 +929,11 @@ describe(
         expect(harness.fake.prompts).toHaveLength(10);
         expect(harness.fake.prompts[1]).toContain("round 1");
         for (const round of [0, 1, 2, 3, 4, 5, 6, 7, 8]) {
-          expect(decisions(harness.reviews[round])).toEqual(["approve", "revise", "abort"]);
+          expect(decisions(harness.reviews[round])).toEqual(["Approve", "Request changes", "Stop"]);
         }
         // The last presentation offers no revision, because there is no eleventh
         // round to revise into.
-        expect(decisions(harness.reviews[9])).toEqual(["approve", "abort"]);
+        expect(decisions(harness.reviews[9])).toEqual(["Approve", "Stop"]);
         // One conversation held all ten.
         expect(sessions(harness)).toHaveLength(1);
       });
@@ -945,7 +955,7 @@ describe(
 
         const harness = createPromptHarness({ profileRoot });
         harness.fake.script({ reply: fenced });
-        harness.script({ decision: "approve" });
+        harness.script({ decision: "Approve" });
 
         const code = yield* runPrompt(command(dir, [REQUEST]), harness.deps);
         expect(code).toBe(0);
@@ -962,7 +972,7 @@ describe(
       yield* useWorkingDirectory(function* (dir, profileRoot) {
         const harness = createPromptHarness({ profileRoot });
         harness.fake.script({ reply: VALID });
-        harness.script({ decision: "abort" });
+        harness.script({ decision: "Stop" });
 
         const { value, lines } = yield* reported(() =>
           runPrompt(command(dir, [REQUEST]), harness.deps),
@@ -970,7 +980,7 @@ describe(
 
         expect(value).toBe(1);
         expect(lines.join("\n")).toContain(
-          "xmd prompt: you ended the review, so nothing was saved and nothing ran.",
+          "xmd prompt stopped at your request. Nothing was output or run.",
         );
         expect(harness.executions).toHaveLength(0);
       });
@@ -987,7 +997,9 @@ describe(
             harness.fake.script({ reply: UNRESOLVED });
           }
           harness.script(
-            round < 10 ? { decision: "revise", feedback: `round ${round}` } : { decision: "abort" },
+            round < 10
+              ? { decision: "Request changes", feedback: `round ${round}` }
+              : { decision: "Stop" },
           );
         }
 
@@ -999,13 +1011,74 @@ describe(
         expect(harness.reviews).toHaveLength(10);
         // Rounds one to nine could be sent back; the tenth had one choice, and
         // taking it is what reaches the exhaustion ending.
-        expect(decisions(harness.reviews[8])).toEqual(["revise", "abort"]);
-        expect(decisions(harness.reviews[9])).toEqual(["abort"]);
+        expect(decisions(harness.reviews[8])).toEqual(["Request changes", "Stop"]);
+        expect(decisions(harness.reviews[9])).toEqual(["Explain what went wrong", "Stop"]);
         expect(lines).toHaveLength(1);
         expect(lines[0]).toBe(
-          "xmd prompt: ten drafts were reviewed and none was approved, so nothing was saved " +
-            "and nothing ran. Try again with a more specific request.",
+          "xmd prompt reviewed ten drafts without an approved Plan. Nothing was output or run.",
         );
+        // Stopping asks the coding agent nothing: forty drafting turns and no
+        // forty-first.
+        expect(harness.fake.prompts).toHaveLength(40);
+        expect(harness.executions).toHaveLength(0);
+      });
+    });
+
+    it("C3, C9: the last invalid draft can be explained rather than only stopped", function* () {
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
+        const harness = createPromptHarness({ profileRoot });
+        for (const round of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+          for (const _draft of [0, 1, 2, 3]) {
+            harness.fake.script({ reply: UNRESOLVED });
+          }
+          harness.script(
+            round < 10
+              ? { decision: "Request changes", feedback: `round ${round}` }
+              : { decision: "Explain what went wrong" },
+          );
+        }
+        // The explanation the coding agent gives is prose, and stays prose.
+        const explanation = [
+          "Every draft used <NoSuchComponent />, which this profile does not offer.",
+          "",
+          "Say which of the available components should do the work, or describe the",
+          "outcome without naming a component: <Return value={1} />",
+        ].join("\n");
+        harness.fake.script({ reply: explanation });
+
+        const { value, lines } = yield* reported(() =>
+          runPrompt(command(dir, [REQUEST]), harness.deps),
+        );
+
+        expect(value).toBe(1);
+        // Exactly one turn more than the forty drafting turns, in the same
+        // conversation. It is not another draft: no eleventh review, and the
+        // ten-draft limit is not reopened.
+        expect(harness.fake.prompts).toHaveLength(41);
+        expect(harness.reviews).toHaveLength(10);
+        expect(sessions(harness)).toHaveLength(1);
+
+        // It carries the final problems, which were produced after the agent's
+        // last draft and have not appeared in the conversation — and nothing
+        // else. The Session already holds the Prompt, the catalog and every
+        // draft, so none of them is resent.
+        const asked = harness.fake.prompts[40];
+        expect(
+          fencedJson(asked).validation?.diagnostics?.some(
+            (entry) => entry.code === "component-unresolved",
+          ),
+        ).toBe(true);
+        expect(asked).toContain("Do not create another Plan");
+        expect(asked).not.toContain(REQUEST);
+        expect(asked).not.toContain("## Built-in components");
+        expect(asked).not.toContain(UNRESOLVED.trim());
+
+        // What it said is reported as the coding agent's words, and the command
+        // ends. Nothing about the explanation is treated as a Plan.
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toContain("reviewed ten drafts without an approved Plan");
+        expect(lines[0]).toContain(explanation);
+        expect(lines[0]).toContain("Nothing was output or run.");
         expect(harness.executions).toHaveLength(0);
       });
     });
@@ -1016,9 +1089,9 @@ describe(
       yield* useWorkingDirectory(function* (dir, profileRoot) {
         const harness = createPromptHarness({ profileRoot });
         harness.fake.script({ reply: counting("number") });
-        harness.script({ decision: "revise", feedback: "count in words" });
+        harness.script({ decision: "Request changes", feedback: "count in words" });
         harness.fake.script({ reply: counting("string") });
-        harness.script({ decision: "approve" });
+        harness.script({ decision: "Approve" });
 
         const code = yield* runPrompt(command(dir, [REQUEST, "--props-count", "7"]), harness.deps);
 
@@ -1038,7 +1111,7 @@ describe(
         for (const _draft of [0, 1, 2, 3]) {
           harness.fake.script({ reply: wrapped });
         }
-        harness.script({ decision: "abort" });
+        harness.script({ decision: "Stop" });
 
         yield* runPrompt(command(dir, [REQUEST]), harness.deps);
         expect(harness.reviews[0].message).toContain(wrapped);
@@ -1049,7 +1122,7 @@ describe(
       yield* useWorkingDirectory(function* (dir, profileRoot) {
         // A repository component the draft uses. It exists while the command
         // document runs, so the same production validator that answers
-        // <ValidateCandidate> finds the draft sound.
+        // <CheckDraft> finds the draft sound.
         const widget = join(dir, "Widget.md");
         yield* writeTextFile(widget, "A widget.\n");
         const draft = ["# Uses a widget", "", "<Widget />", ""].join("\n");
@@ -1070,7 +1143,7 @@ describe(
               // deno-lint-ignore require-yield
               *elicit([request], _next) {
                 harness.reviews.push(request);
-                return { decision: "approve" };
+                return { decision: "Approve" };
               },
             },
             { at: "min" },
@@ -1136,7 +1209,7 @@ describe(
 
         const harness = createPromptHarness({ profileRoot });
         harness.fake.script({ reply: plan });
-        harness.script({ decision: "approve" });
+        harness.script({ decision: "Approve" });
 
         const code = yield* runPrompt(
           command(dir, ["ask me for my age and write it to a file"]),
@@ -1160,10 +1233,10 @@ describe(
         for (const _draft of [0, 1, 2, 3]) {
           harness.fake.script({ reply: UNRESOLVED });
         }
-        harness.script({ decision: "revise", feedback: "use plain text" });
+        harness.script({ decision: "Request changes", feedback: "use plain text" });
         // Round two: a draft that passes, and is approved.
         harness.fake.script({ reply: VALID });
-        harness.script({ decision: "approve" });
+        harness.script({ decision: "Approve" });
 
         const code = yield* runPrompt(command(dir, [REQUEST]), harness.deps);
         expect(code).toBe(0);
@@ -1173,24 +1246,25 @@ describe(
         // second presentation carries neither the first draft nor its problems:
         // a loop that accumulated its explanation would show both.
         for (const message of [exhausted, approvable]) {
-          expect(occurrences(message, "This document was written for:")).toBe(1);
+          expect(occurrences(message, "### Original Prompt")).toBe(1);
+          expect(occurrences(message, "### Draft Plan")).toBe(1);
         }
-        expect(occurrences(exhausted, "Three attempts to fix it did not clear everything")).toBe(1);
-        expect(approvable).not.toContain("Three attempts to fix it");
+        expect(occurrences(exhausted, "### Problems that remain")).toBe(1);
+        expect(approvable).not.toContain("Problems that remain");
         expect(approvable).not.toContain("NoSuchComponent");
         expect(exhausted).not.toContain(VALID.trim());
 
         // The repair turns say what they need once each, and carry only the
         // problems of the draft they are repairing.
         for (const repair of harness.fake.prompts.slice(1, 4)) {
-          expect(occurrences(repair, "That document has problems")).toBe(1);
-          expect(occurrences(repair, "Send one complete replacement document")).toBe(1);
+          expect(occurrences(repair, "That Plan has problems")).toBe(1);
+          expect(occurrences(repair, "Send one complete replacement Plan")).toBe(1);
         }
         // The revision turn says what changed, once, and asks for a whole
         // document rather than repeating the original brief.
         const revision = harness.fake.prompts[4];
         expect(occurrences(revision, "use plain text")).toBe(1);
-        expect(revision).not.toContain("The document you write is a Plan");
+        expect(revision).not.toContain("Create one complete XMD Plan from this Prompt");
       });
 
       // Stopping prints one sentence, once, whether it happened on the first
@@ -1202,10 +1276,10 @@ describe(
           for (const round of Array.from({ length: rounds }, (_, i) => i + 1)) {
             harness.fake.script({ reply: VALID });
             if (round < rounds) {
-              harness.script({ decision: "revise", feedback: `round ${round}` });
+              harness.script({ decision: "Request changes", feedback: `round ${round}` });
             }
           }
-          harness.script({ decision: "abort" });
+          harness.script({ decision: "Stop" });
 
           const { value, lines } = yield* reported(() =>
             runPrompt(command(dir, [REQUEST]), harness.deps),
@@ -1215,8 +1289,8 @@ describe(
           // One line, from the document's own <Fail>, and no accumulated
           // repetition of it however many rounds preceded it.
           expect(lines).toHaveLength(1);
-          expect(occurrences(lines[0], "xmd prompt:")).toBe(1);
-          expect(lines[0]).toContain("you ended the review");
+          expect(occurrences(lines[0], "xmd prompt ")).toBe(1);
+          expect(lines[0]).toContain("stopped at your request");
         });
       }
     });

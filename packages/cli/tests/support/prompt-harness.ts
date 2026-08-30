@@ -30,9 +30,14 @@ import type { FakeAcp, FakeStore } from "./fake-acp.ts";
 /** The agent every prompt case drives, and the command it resolves to. */
 export const AGENT = "scripted-agent";
 
-/** One review answer, scripted. */
+/**
+ * One review answer, scripted.
+ *
+ * The values are the words a person reads and the words the provider answers
+ * with: the workflow keeps no internal spelling behind them.
+ */
 export interface ScriptedReview {
-  decision: "approve" | "revise" | "abort";
+  decision: "Approve" | "Request changes" | "Stop" | "Explain what went wrong";
   feedback?: string;
   /** Answer with this instead, to drive a response the schema rejects. */
   raw?: unknown;

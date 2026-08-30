@@ -86,13 +86,27 @@ xmd prompt -- "--this is the request"
 `xmd prompt` takes the complete `xmd run -e` execution flag set — `--include`,
 `--verbose`, `--journal`/`-j`, `--raw`, `--agent-provider`, `--default-agent`,
 `--approve-all`, `--approve-reads`, `--deny-all`, `--no-secret-detection`, and
-the three timeout options — plus `--save` and `--session`.
+the three timeout options — plus `--output`, `--run` and `--session`.
 
-Agent provider selection, default agent selection and `--timeout` configure how
-the Plan is written. The permission flags and the exec and fetch timeouts
-configure only the approved Plan; authorship does not inherit the final run's
-permission mode, and no permission flag widens the prompt profile's ceiling
-below.
+`--include`, `--agent-provider`, `--default-agent`, `--session` and `--timeout`
+are always in use: they build the catalog, settle who writes the Plan, name the
+conversation, admit properties and bound the whole command.
+
+Every other execution flag configures **running** a Plan and nothing else —
+`--journal`/`-j`, `--raw`, `--verbose`/`-V`, `--timeout-exec`, `--timeout-fetch`,
+the three permission flags, and `--secret-detection`/`--no-secret-detection`.
+Without `--run` nothing runs for them to configure, so writing one is refused in
+fixed preflight rather than accepted and ignored:
+
+```console
+$ xmd prompt "…" --journal trace.jsonl
+--journal configures running the Plan, and without --run this command writes the
+Plan instead of running it — add --run, or drop --journal
+```
+
+The permission flags configure only the approved Plan; authorship does not
+inherit the final run's permission mode, and no permission flag widens the
+prompt profile's ceiling below.
 
 `-e`/`--eval` stays exclusive to `xmd run`. A prompt supplies a request, not a
 document. Supplying one anyway is refused in the command's own preflight, with
@@ -106,16 +120,26 @@ permission mode — and that settled answer is what both the prompt profile and
 the approved Plan's installation are configured from. Incompatible permission
 flags and an unknown provider fail there, before the catalog is built.
 
-### `--save <path>`
+### The approved Plan is the result
 
-Write the approved source to `path` before executing it. The path is resolved
-against the contextual working directory and **created exclusively**: an
-existing path is left exactly as it is, the command fails, and nothing runs.
-There is no check-then-write — the exclusive create *is* the check.
+The Plan is what the command produces, and where it goes is the caller's choice:
 
-The file holds the approved Plan and nothing else: no problems, no decision, no
-wrapper. Without `--save`, no file is created anywhere; the approved Plan runs
-from memory.
+| Invocation | Result |
+| --- | --- |
+| `xmd prompt "<prompt>"` | the exact approved source on **stdout**; nothing runs |
+| `xmd prompt "<prompt>" --output <path>` | the exact bytes in `<path>`; no source on stdout; nothing runs |
+| `xmd prompt "<prompt>" --run` | the Plan runs; no source is printed, and stdout belongs to the Plan's own output |
+| `xmd prompt "<prompt>" --output <path> --run` | the file is created first, and only a successful write is followed by the run |
+
+Stdout carries the approved source and nothing else: no fence, no label, no
+delimiter and no newline this command added. What a caller reads is what the
+coding agent wrote, so it can be piped into a file, a diff or another program.
+
+`--output <path>` is resolved against the contextual working directory and
+**created exclusively**: an existing path is left exactly as it is, the command
+fails, and nothing runs. There is no check-then-write — the exclusive create *is*
+the check. The file holds the approved Plan and nothing else: no problems, no
+decision, no wrapper. Without `--output`, no file is created anywhere.
 
 ### `--session <name>`
 
@@ -134,10 +158,11 @@ request and the current catalog in this invocation's initial turn.
 xmd prompt --help
 ```
 
-Help needs no request. It describes the request, `--save`, `--session`, the
-aggregate `--props`/`XMD_PROPS` sources, that candidate-declared individual
-options follow the request, that the permission flags configure the approved
-document, and every shared execution flag. It describes no individual property,
+Help needs no request. It describes the Prompt, `--output`, `--run`,
+`--session`, the aggregate `--props`/`XMD_PROPS` sources, that Plan-declared
+individual options follow the Prompt, that stdout is where an approved Plan goes
+by default, that the run-only flags are refused without `--run`, and that the
+permission flags configure the approved Plan. It describes no individual property,
 because the document that would declare one does not exist yet — answering
 otherwise would mean generating a document in order to describe one.
 
@@ -304,7 +329,7 @@ may those exact bytes enter ordinary execution.
 The prompt profile declares one internal value component to the execution:
 
 ```md
-<ValidateCandidate source={candidate} as="assessment" />
+<CheckDraft source={draft} as="check" />
 ```
 
 Canonical execution supplies its invocation identity, so repository resolution
@@ -402,23 +427,53 @@ The following is the shipped program's behaviour, not the host's. It is stated
 here because it is what a caller sees; it is changed by editing
 `prompt-command.md`, and nothing in TypeScript decides it. Prose quality is that
 document's instructions and your review, never a hidden TypeScript validation
-rule: `<ValidateCandidate>` reports structural facts and executes nothing.
+rule: `<CheckDraft>` reports structural facts and executes nothing.
+
+**A complete titled Plan.** Every Plan begins with one descriptive level-one
+Markdown heading, as the first body content after optional frontmatter, naming
+what the Plan produces. The generation, repair and revision instructions each
+require it, together with the Prompt's sequence of readable steps in a
+meaningful order and each component beside the step it performs, so the
+structure survives every replacement. It is an authorship and human-review
+requirement: `<CheckDraft>` does not enforce it, and a titleless Plan is
+something you send back rather than something the checker refuses.
 
 **Automatic repair.** The initial draft and every human-requested revision each
-start a fresh repair budget: the base candidate is attempt one, at most three
-repair turns may replace it, every repair prompt carries the complete structured
-diagnostics, and every answer must be another complete replacement root. The
-fourth invalid candidate is repair-exhausted and goes to human review with its
+start a fresh repair budget: the base draft is attempt one, at most three repair
+turns may replace it, every repair prompt carries the complete structured
+diagnostics, and every answer must be another complete replacement Plan. The
+fourth draft with problems is repair-exhausted and goes to human review with its
 diagnostics. No fence is stripped, no Markdown substring is extracted and no
 patch is applied.
 
-**Human review.** At most ten candidate presentations: the initial review plus at
-most nine human revisions. Rounds one through nine offer `approve`, `revise` or
-`abort` for a valid candidate, and `revise` or `abort` for an invalid
-repair-exhausted one. `revise` requires non-empty feedback, sends one
-complete-replacement request through the same enclosing Session, and resets the
-three-turn repair budget. Round ten offers no further revision: a valid
-candidate offers `approve` or `abort`, and an invalid one offers only `abort`.
+**Human review.** At most ten draft presentations: the initial review plus at
+most nine revisions. The choices are the words shown, and they are the values the
+provider answers with — there is no internal spelling behind them:
+
+| Round | Draft | Choices |
+| --- | --- | --- |
+| 1–9 | passed its check | **Approve**, **Request changes**, **Stop** |
+| 1–9 | problems remain | **Request changes**, **Stop** |
+| 10 | passed its check | **Approve**, **Stop** |
+| 10 | problems remain | **Explain what went wrong**, **Stop** |
+
+**Request changes** requires non-empty feedback, sends one complete-replacement
+request through the same enclosing Session, and resets the three-turn repair
+budget.
+
+**The explanation turn.** **Explain what went wrong** is offered only on a tenth
+draft that still has problems, and makes exactly one more `<Prompt>` in the same
+enclosing Session. The Session already holds the original Prompt, the catalog,
+every draft, every earlier diagnostic and every revision request, so nothing is
+resent: the turn carries only the final diagnostics, which were produced after
+the agent's last draft and have not appeared in the conversation. It asks for a
+brief explanation and explicitly not another Plan.
+
+That turn is not a draft, a repair, a revision or a review round; it cannot
+reopen the ten-draft limit; its answer is inert text that is never interpreted as
+XMD; and it is reported to you and then ends the command with no approved
+source, file, journal or execution. It is subject to the host's failed-turn
+policy like every other turn, so a turn that fails ends the command immediately.
 
 **Presentation.** The review message presents the exact draft with `<CodeBlock>`,
 whose fence is longer than every backtick run the draft holds, so draft text
@@ -426,44 +481,46 @@ cannot close it and is never interpreted. An invalid draft is followed by its
 complete JSON problems, serialized and captured by `<Json … as>`. Prose outside
 `<Prompt>` addresses you; text inside `<Prompt>` instructs the assistant.
 
-**Failure.** `approve` selects the draft, and one exhaustive branch after the
-Session returns its source unchanged. Stopping reaches `<Fail>` with one of two
+**Failure.** **Approve** selects the draft, and the branch after the Session
+returns its source unchanged. Stopping reaches `<Fail>` with one of two
 authored messages, and which one depends on whether an approvable Plan ever
 existed:
 
-- the tenth presentation of a draft that still has problems offers only `abort`,
-  and taking that sole choice is **exhaustion** — ten drafts were reviewed and
-  none was approved;
-- every other `abort`, including one on a tenth draft that could have been
+- **Stop** on a tenth draft that still has problems is **exhaustion** — ten
+  drafts were reviewed and none was approved;
+- **Explain what went wrong**, offered only there, makes one more turn (below)
+  and then ends the same way;
+- every other **Stop**, including one on a tenth draft that could have been
   approved, is the ordinary ending: you decided to stop.
 
-The branch after the Session stays as an exhaustive fallback for a body that
-somehow reached it having approved nothing. Failure is authored in Markdown
+The branch after the Session is only an unexpected-no-decision fallback and says
+so; exhaustion is decided inside review, not duplicated there. Failure is authored in Markdown
 rather than hidden in the host or represented by a missing-`<Return>` accident.
 
 The command document's rendered output is not command output. Everything you see
 while a Plan is written reaches you through Elicitation, and that document's
 successful public result is the approved Plan source and nothing else.
 
-## Final admission, save and execution
+## Final admission and the result
 
 After the command document has completely torn down, the host treats the
-returned string as untrusted again. It repeats candidate validation and property resolution using the exact
-returned source, the original raw CLI and invocation-environment property
-sources, the individual-option signatures frozen while it was written, the
-caller's
-ordered includes and the ordinary run profile declarations.
+returned string as untrusted again. It repeats the draft check and property resolution using the exact returned
+source, the original raw CLI and invocation-environment property sources, the
+individual-option signatures frozen while it was written, the caller's ordered
+includes and the ordinary run profile declarations.
 
 A final caller-source failure or document validation failure exits non-zero
-before save or execution. It does not re-enter the command document or ask for a
-repair. The final resolved props belong to those exact source bytes; no props
-object from an earlier candidate is reused.
+before any result at all: no stdout, no file and no execution. It does not
+re-enter the command document or ask for a repair. The final resolved props
+belong to those exact source bytes; no props object from an earlier draft is
+reused.
 
-`--save` then exclusively creates the target with those exact bytes. The host
-then executes `retainedSource("<prompt>", source)` through the ordinary
-supplied-source run path, with the same includes, output, value result, secret
-detection, Agent configuration, permission mode and timeouts `xmd run -e` uses.
-No temporary Markdown file is created.
+`--output` then exclusively creates the target with those exact bytes. With
+`--run`, and only then, the host executes `retainedSource("<prompt>", source)`
+through the ordinary supplied-source run path, with the same includes, output,
+value result, secret detection, Agent configuration, permission mode and
+timeouts `xmd run -e` uses. No temporary Markdown file is created. Without
+`--run` and without `--output`, the exact bytes go to stdout.
 
 The `<prompt>` identity affects positions and diagnostics only. The contextual
 working directory still resolves relative filesystem operations, repository
@@ -471,21 +528,21 @@ components and includes. The executed program receives a fresh ordinary document
 Agent provider and inherits neither the assistant Session nor its instruction
 layer.
 
-`--journal` is created when the final execution starts, and only then. That
-journal contains no command document, assistant Session, Agent turn, draft
-validation, repair or human-review event. Rendered output, a value root's JSON
+`--journal` is created when the final execution starts, and only then — so
+source-only and `--output` invocations create no journal at all, and neither does
+any ending before admission. That journal contains no command document, assistant
+Session, Agent turn, draft check, repair or human-review event. Rendered output, a value root's JSON
 result, runtime failure reporting and exit codes are byte-for-byte ordinary
 `xmd run` behaviour — including a failing `<Testing>` boundary, which is reported
 under its own `tests failed:` heading rather than as a bare message. A runtime
-failure does not send the command back to authorship; `--save` has already
-completed,
-and the source is there to hand-edit.
+failure does not send the command back to authorship; `--output` has already
+completed, and the Plan is there to hand-edit.
 
 ## Timeouts
 
 `--timeout` bounds the whole command: preflight, catalog construction, the
 command document's execution, Elicitation, its teardown, final validation, the
-save and the execution. Expiry is Effection cancellation, so structured teardown completes
+file and the execution. Expiry is Effection cancellation, so structured teardown completes
 before the failure is reported. A teardown failure prevents every later phase.
 
 `--timeout-exec` and `--timeout-fetch` configure the final document's effects
@@ -507,7 +564,7 @@ Every failure below exits non-zero, and each one stops the phases after it:
 | the command document's authored `<Fail>` | no save or run |
 | command document teardown | no final validation, save or run |
 | final validation of the approved bytes | no save or run |
-| a `--save` path that exists, or a write that fails | no run |
+| an `--output` path that exists, or a write that fails | no stdout, no run |
 | the document's own runtime failure | nothing after it; the save stands |
 
 ## Acceptance
@@ -527,18 +584,18 @@ produced.
 
 | # | Criterion | Required observation |
 | --- | --- | --- |
-| C1 | Fixed grammar and help | Request cardinality, individual-property ordering, aggregate props before the request, `--session` including its empty-value refusal, and effect-free generic help |
+| C1 | Fixed grammar and help | Prompt cardinality, individual-property ordering, aggregate props before the Prompt, `--session` including its empty-value refusal, run-only flags refused without `--run` before any authorship or filesystem effect, and effect-free generic help that explains `--output` and `--run` |
 | C2 | Exact packaged root | The command executes the checked-in Markdown value root under `<prompt-command>`; the turn text is that document's own words, and no TypeScript authorship loop or custom root chooses policy |
-| C3 | Visible policy | Generation, three-turn repair, ten-round review, revision, approval, abort and exhaustion are present in Markdown; `<Prompt>` remains one turn |
+| C3 | Visible policy | Generation, three-turn repair, ten-round review, revision, approval, stopping, exhaustion and the explanation turn are present in Markdown under visible headings; the generation, repair and revision instructions each require the descriptive title and the steps-beside-components structure; `<Prompt>` remains one turn |
 | C4 | One Session | One enclosing Session expansion carries every turn; two default invocations get different profile directories and session keys, two `--session` invocations get the same directory and key with the raw name absent from the path, and two named invocations sharing one ACPX store continue the established record rather than placing a second |
 | C5 | Prompt profile ceiling | This session's own host-owned directory, empty while the command document runs, no MCP servers, no native tools, strict private denial, no Files/command/network capability for the command document, and final-run permission flags that cannot widen any of it; pre-existing content in that directory refuses before any provider, session, turn, review, save or execution and is left untouched |
 | C6 | Draft inertness | A draft is only data while the Plan is written, and no draft effect occurs before the final execution |
 | C7 | Validation classification | Candidate failures return structured facts; caller-source failures escape immediately; frozen signatures are checked before token extraction |
 | C8 | Bounds | One base plus three automatic repairs per draft, and no more than ten human presentations, with no revision offered on the last |
-| C9 | Safe presentation and authored failure | Arbitrary source cannot close `<CodeBlock>`; an ordinary abort and a tenth invalid presentation's sole `abort` reach their two distinct authored `<Fail>` messages, not host policy and not a missing `<Return>` |
+| C9 | Safe presentation and authored failure | Arbitrary source cannot close `<CodeBlock>`; the review schemas expose exactly the friendly choices for each round-and-state; an ordinary **Stop**, a tenth-round exhaustion and the explanation ending reach their distinct authored `<Fail>` messages, and the closing fallback says no approval was reached rather than repeating exhaustion |
 | C10 | Final gate | The host revalidates after the command document has completely torn down — a component removed during that teardown makes the unchanged approved bytes fail admission, with no save, journal or execution — and resolves props for the exact returned bytes |
-| C11 | Exact bytes | Approval, exclusive save and `<prompt>` execution receive the Agent close value without rewriting or fence removal |
-| C12 | Journal separation | Authorship uses only disposable in-memory history; the final journal begins with the approved Plan |
-| C13 | Lifetime | Cancellation and every teardown failure settle before final validation, save or execution; a default session's directory is empty while its turn runs and gone after teardown on success, abort, a failed turn and cancellation alike; and one that gained content or vanished under the conversation is preserved as found while the command fails terminally, with no admission, save, journal or execution after it |
+| C11 | Exact bytes | Approval, stdout, the exclusive `--output` create and `<prompt>` execution each receive the Agent close value without rewriting or fence removal; `--output --run` writes before it runs, and an existing destination prevents the run |
+| C12 | Journal separation | Authorship uses only disposable in-memory history; a journal exists only when `--run` begins the final execution, and it begins with the approved Plan |
+| C13 | Lifetime | Cancellation and every teardown failure settle before final validation, stdout, the file or execution; a default session's directory is empty while its turn runs and gone after teardown on success, abort, a failed turn and cancellation alike; and one that gained content or vanished under the conversation is preserved as found while the command fails terminally, with no admission, result, journal or execution after it |
 | C14 | Narrative preservation | The shipped generation, repair and revision instructions carry the narrative-plus-components rule, the assistant receives it with the request and the catalog, and a scripted Plan of prose interleaved with components returns byte for byte after approval |
 | C15 | Ordinary run | The approved source keeps normal cwd, includes, props, output/value, permission, timeout, failure and save behaviour |
