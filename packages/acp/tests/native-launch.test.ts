@@ -30,6 +30,7 @@ import type {
 import { flushOutput, installControlledLauncher, reserveTerminal } from "@executablemd/runtime";
 import type { AgentSessionCoordinator, NativeLaunchRequest } from "@executablemd/runtime";
 import { createAcpxProvider } from "../src/provider.ts";
+import type { AcpxProviderDependencies } from "../src/provider.ts";
 import {
   ADVERTISED_NATIVE_LAUNCH,
   allocatesIdentity,
@@ -195,6 +196,14 @@ interface ProviderOptions {
    * keeps no routes has to serve it exactly as it did before #519.
    */
   routeStore?: AgentSessionRouteStore;
+  /**
+   * Pin this scope's route for the registry-dependent work of one operation.
+   *
+   * The provider's own dependency, supplied as a host supplies it. A case that
+   * needs to know where an operation has reached wraps it here rather than
+   * reaching into the provider.
+   */
+  withSessionRoute?: AcpxProviderDependencies["withSessionRoute"];
   /** Blocks the native child until this resolves. */
   hold?: Operation<void>;
   onLaunch?: () => void;
@@ -330,6 +339,7 @@ function* installLaunchStack(
       : { executableObserver: options.observer ?? createFakeObserver().observer }),
     coordinator: options.coordinator ?? trace.ownership.coordinator,
     ...(options.routeStore ? { routeStore: options.routeStore } : {}),
+    ...(options.withSessionRoute ? { withSessionRoute: options.withSessionRoute } : {}),
     ...(options.sessions ? { sessions: options.sessions } : {}),
     ...(options.agentCwd ? { agentCwd: options.agentCwd } : {}),
     nativeAdapters: options.adapters ?? { claude: PROVIDER_RETURNED_CLAUDE },
@@ -1097,9 +1107,9 @@ describe("Tier NO — session ownership", () => {
     //
     // Every ordering claim here rests on a barrier rather than a duration. The
     // fake says when a turn has actually started; the second task says when it
-    // is about to subscribe; and the provider's own agent resolution says when
-    // that subscription is running, which is the point after which the only
-    // thing ahead of it is the session's queue.
+    // is about to subscribe; and the provider's own route hook says when that
+    // subscription's placement is finished — the step immediately before it
+    // enters the session's queue.
     const harness = createFakeRuntime();
     const trace = newTrace();
     // Manual, so the first turn is still open when the second subscribes. The
@@ -1107,19 +1117,33 @@ describe("Tier NO — session ownership", () => {
     // the turn before it says anything.
     harness.script({ manual: true });
     const store = makeStore();
+    const subscribing = withResolvers<void>();
+    const placed = withResolvers<void>();
+    // The provider's own route hook, supplied the way a host supplies it. It
+    // wraps two things per subscription — the placement, and the
+    // registry-dependent work inside the session's queue — and only the
+    // placement *completes* while the first turn is still held, because the
+    // first subscription's second call encloses its whole turn. So the second
+    // completion is the second subscription's placement, and the provider's
+    // next step after it is `turns.slot`.
+    //
+    // A suspension before it returns, so nothing here rests on placement being
+    // synchronous: a scheduler that hands control back at a yield has already
+    // done so once by the time this signals.
+    let placements = 0;
     yield* scoped(function* () {
-      yield* installLaunchStack(harness, trace, { store });
-
-      const subscribing = withResolvers<void>();
-      const resolving = withResolvers<void>();
-      let resolutions = 0;
-      yield* Agent.around({
-        *agent([name], next) {
-          resolutions += 1;
-          if (resolutions === 2) {
-            resolving.resolve();
+      yield* installLaunchStack(harness, trace, {
+        store,
+        withSessionRoute: function* (_context, op) {
+          const value = yield* op();
+          const settled = withResolvers<void>();
+          settled.resolve();
+          yield* settled.operation;
+          placements += 1;
+          if (placements === 2) {
+            placed.resolve();
           }
-          return yield* next(name);
+          return value;
         },
       });
 
@@ -1141,7 +1165,8 @@ describe("Tier NO — session ownership", () => {
           yield* scoped(function* () {
             const stream = yield* Agent.operations.prompt("second", {});
             // Constructing the stream chose nothing and started nothing. The
-            // next step is the subscription, and the queue is what it meets.
+            // next step is the subscription, whose placement is what the
+            // barrier below waits for.
             subscribing.resolve();
             const subscription = yield* stream;
             let next = yield* subscription.next();
@@ -1155,11 +1180,17 @@ describe("Tier NO — session ownership", () => {
         }
       });
       yield* subscribing.operation;
-      yield* resolving.operation;
+      // Its placement is done, so the only thing ahead of it is the session's
+      // queue — and it reaches that queue before this task runs again.
+      yield* placed.operation;
 
       // Waiting on the session's queue, not refused and not running: the
       // coordinator has been asked once, one turn exists, and the second
       // subscription has reached nothing that would establish a session.
+      // The two completions are the two placements, not the first
+      // subscription's construction: that call encloses its whole turn, and the
+      // turn is still open.
+      expect(placements).toBe(2);
       expect(trace.ownership.acquisitions).toHaveLength(1);
       expect(harness.turns).toHaveLength(1);
       expect(harness.ensureCalls).toHaveLength(1);
