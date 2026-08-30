@@ -346,7 +346,25 @@ class ValidationState {
   readonly #registry: ComponentRegistry;
   readonly #diagnostics: DraftDiagnostic[] = [];
   readonly #invocations: DraftInvocation[] = [];
-  /** Source identity to what reading it produced. Read once, reused always. */
+  /**
+   * One read per physical path, whatever is parsed from it.
+   *
+   * A path is bytes; what those bytes *mean* depends on who asked. Reading is
+   * shared here so that a file reaches the walk once however many views of it
+   * the document needs, and so that a retained root's supplied text is what a
+   * component selecting its path sees rather than whatever is on disk now.
+   */
+  readonly #contents = new Map<string, string>();
+  /**
+   * One parsed view per path: the full Markdown definition an ordinary
+   * component selection of that path produces.
+   *
+   * A targeted root is deliberately absent from this map. Its body is a
+   * projection of one section, which is the view *it* was asked about and
+   * stands in for nothing else — a component selecting the same path is asking
+   * for the whole definition, and would be answered wrongly by a projection
+   * that omits the sections it never selected.
+   */
   readonly #sources = new Map<string, SourceEntry>();
   /** Parsed sources still waiting to have their own body walked. */
   readonly #queue: ParsedSourceEntry[] = [];
@@ -415,6 +433,8 @@ class ValidationState {
       this.#draft(ordinal, "source-unreadable", { message: unreadable(path), cause: error });
       return undefined;
     }
+    // Supplied or read, these are this path's bytes for the rest of the walk.
+    this.#contents.set(path, content);
 
     const parsed = yield* parseRootMarkdownDefinitionPhased(
       ROOT_NAME,
@@ -430,22 +450,28 @@ class ValidationState {
       });
       return undefined;
     }
-    // Under its own identity, like every other source: a root that lives where
-    // a component name resolves is one source, not two. A selection that finds
-    // it here terminates the walk the way any other cycle does, and reads
-    // nothing. A targeted root caches the projection it was asked about, which
-    // is the source validation is answering for.
-    return this.#admitParsed(ordinal, parsed.value.definition, path);
+    // An untargeted root's body *is* the whole file, which is exactly the
+    // definition an ordinary component selection of this path parses — so it
+    // registers as that view, and a name resolving here finds it already
+    // scanned. A targeted root registers no view: it was asked about one
+    // section, and a component selecting this path is asking about the whole
+    // definition. Either way the bytes above are read once.
+    const view = options.target === undefined ? path : undefined;
+    return this.#admitParsed(ordinal, parsed.value.definition, view);
   }
 
   /**
    * The cache entry for a selected Markdown definition, reading and parsing it
    * on its first invocation and reusing that one answer afterwards.
    *
-   * The canonical selected path is the identity, so two names selecting one
-   * file share the entry, a definition that invokes itself finds itself here
-   * rather than recursing, and a file that could not be read carries one
-   * failure however many invocations selected it.
+   * The canonical selected path is the identity of this view, so two names
+   * selecting one file share the entry, a definition that invokes itself finds
+   * itself here rather than recursing, and a file that could not be read
+   * carries one failure however many invocations selected it.
+   *
+   * The bytes come from the shared content cache when something has already
+   * read them — a targeted root at this same path, most of all — so producing a
+   * second view of one file costs a parse and never a second read.
    */
   *#loadSource(name: string, path: string): Operation<SourceEntry> {
     const cached = this.#sources.get(path);
@@ -454,11 +480,14 @@ class ValidationState {
     }
     const ordinal = this.#nextOrdinal++;
 
-    let content: string;
-    try {
-      content = yield* readTextFile(path);
-    } catch (error) {
-      return this.#failSource(path, ordinal, "source-unreadable", unreadable(path), name, error);
+    let content = this.#contents.get(path);
+    if (content === undefined) {
+      try {
+        content = yield* readTextFile(path);
+      } catch (error) {
+        return this.#failSource(path, ordinal, "source-unreadable", unreadable(path), name, error);
+      }
+      this.#contents.set(path, content);
     }
 
     const parsed = yield* parseMarkdownDefinitionPhased(name, path, content);
@@ -506,7 +535,8 @@ class ValidationState {
   #admitParsed(
     ordinal: number,
     definition: ComponentDefinition,
-    identity?: string,
+    /** The path this parse is the full-definition view of, when it is one. */
+    view?: string,
   ): ParsedSourceEntry {
     const facts = bodyStructureFacts(definition.bodySegments, definition.returns);
     const elementTokens = new Map<ComponentElement, number[]>();
@@ -531,8 +561,8 @@ class ValidationState {
       bodyTokens,
       elementTokens,
     };
-    if (identity !== undefined) {
-      this.#sources.set(identity, entry);
+    if (view !== undefined) {
+      this.#sources.set(view, entry);
     }
     return entry;
   }

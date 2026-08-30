@@ -380,6 +380,50 @@ describe("Tier DV: recursive Markdown sources", () => {
     expect(names(reversed.result)).toEqual(["Beta", "Alpha", "Shared", "Shared", "Alpha"]);
   });
 
+  it("DV5: a targeted root and a component selecting its path are two views of one read", function* () {
+    const shared = [
+      "# Chosen",
+      "",
+      "<Foo />",
+      "",
+      "# Other",
+      "",
+      "<If condition={true}>",
+      "<Output>bad</Output>",
+      "</If>",
+      "",
+    ].join("\n");
+
+    const { result, seen } = yield* validating(
+      retainedSource("components/Foo.md", shared, { target: "Chosen" }),
+      { tree: { "components/Foo.md": shared }, includes: ["components"] },
+    );
+
+    // The root was asked about one section, and its projection is clean. The
+    // `<Foo />` written there selects the *whole* definition, whose body puts
+    // an `<Output>` where the contract does not allow one.
+    expect(codes(result)).toEqual(["body-shape-invalid"]);
+    const [diagnostic] = result.diagnostics;
+    expect(diagnostic!.component).toBe("Output");
+    expect(diagnostic!.position?.path).toBe("components/Foo.md");
+    expect(result.outcome).toBe("invalid");
+
+    // Both `<Foo />` sites — the one in the projection and the one in the full
+    // definition — are invalid against that one diagnostic.
+    for (const invocation of result.invocations.filter((found) => found.name === "Foo")) {
+      expect(diagnosticsOf(result, invocation)).toEqual([diagnostic]);
+    }
+    // The projection is source zero and the full definition follows it in FIFO
+    // order; selecting the path a second time reuses that view rather than
+    // scanning it again.
+    expect(names(result)).toEqual(["Foo", "Foo", "If", "Output"]);
+
+    // One read, two views: the retained bytes answered both parses, and nothing
+    // the document wrote was executed to find any of this out.
+    expect(seen.reads).toEqual([]);
+    expect(seen.effects).toEqual([]);
+  });
+
   it("DV5: a root sharing a source identity with a component is scanned once", function* () {
     const body = "<Foo />\n";
 

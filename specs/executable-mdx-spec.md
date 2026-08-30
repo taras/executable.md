@@ -2962,10 +2962,20 @@ beneath an origin-only TypeScript component. No branch is evaluated and no
 projection is predicted. A definition that invokes itself, directly or through
 others, terminates the walk when the source identity comes back around, and that
 cycle is not itself a failure. An invalid invocation still discovers and queues
-the definition it selected. The root is a source like any other and carries its
-own path as its identity, so a root that lives where a component name resolves
-is one source rather than two: an invocation selecting it finds it already
-scanned, and reads nothing.
+the definition it selected.
+
+**One read per path, one view per role.** Bytes and meaning are separate: a path
+is read once however many times the walk needs it, while what is *parsed* from
+those bytes depends on who asked. An ordinary component selection carries no
+target and asks for the whole Markdown definition. A root asks for the
+projection its own selector named. An untargeted root's body is the whole file,
+so the two questions have one answer and a component resolving to that path
+finds it already scanned — which is how a root that invokes itself terminates.
+A **targeted** root's body is one section, and it stands in for nothing: a
+component selecting the same path gets its own full-definition view, parsed from
+the bytes already read, entering the FIFO queue in discovery order like any
+other source. Substituting the projection there would hide every failure in the
+sections the root never selected.
 
 **A static answer never stands in for a runtime value.** Resolution, authored
 form, engine-owned body shape and every other structural rule run whenever their
@@ -9766,12 +9776,12 @@ itself, so an execution starting anywhere fails the row. Defined in §5.3.
 | DV2 | Missing required prop | `<File />` reports `props-invalid` with the normalized required-property issue, keeps its registered origin, and never runs |
 | DV3 | A valid document | Structural, core registered, declaration-only registered and included Markdown components together are `valid`, and the identity factory is never called |
 | DV4 | A defect beneath control flow | A definition reached through an invocation reports its own path and authored position; the branch is never evaluated; a fact a parent construct discovered names, positions at, and reaches the descendant it is about |
-| DV5 | Traversal order | Root first, then FIFO discovery, one read per source identity, a cycle terminating; reversing the root's invocation order reverses only the FIFO portion; a root sharing an identity with a selected component is scanned once |
+| DV5 | Traversal order | Root first, then FIFO discovery, one read per path, a cycle terminating; reversing the root's invocation order reverses only the FIFO portion; an untargeted root sharing a path with a selected component is scanned once, while a targeted root's projection and that path's full definition are two views of one read |
 | DV6 | Source, target and declarations | Unreadable and invalid root, no-match and ambiguous target, malformed frontmatter, props and returns declarations map to their exact codes and invent no invocation; a failed definition is one diagnostic every caller shares |
 | DV7 | Static and dynamic props | A dynamic schema-visible prop is `not-statically-checkable`; a capture is not; a definitely missing required key still invalidates; a mixed object yields no partial schema conclusion |
 | DV8 | Definite wins | A refused authored form, and an independent body-shape defect, each keep an invocation `invalid` beside a dynamic prop, with indexes in code order; every independent static structural failure is reported rather than only the first |
 | DV9 | Origin-only TypeScript | Never imported, opaque with `origin-only-contract`, both reasons in canonical order with a dynamic prop, invalid on an engine-owned defect, and its authored children still validated |
-| DV10 | Root and definition ownership | Root props validate fully without stopping traversal; root and definition body-shape and return diagnostics keep their source, position and component ownership |
+| DV10 | Root and definition ownership | Root props validate fully without stopping traversal; root and definition body-shape and return diagnostics keep their source, position and component ownership; a projection's clean body never answers for the full definition a component selected |
 | DV11 | Order and determinism | Every record including structural sites is in source order; two validations are deep-equal; the closed code order is a direct unit, `component-ambiguous` included |
 | DV12 | One parser | Component-like text stays text, an executable block is neither a record nor run, and a spread keeps exactly the meaning execution's scanner gives it |
 | DV13 | The no-execution seam | Identity factories, registered bodies, eval and exec, providers, agents, elicitation, journal and document-authored filesystem effects all stay at zero while only root and selected Markdown sources are read |
