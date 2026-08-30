@@ -19,6 +19,7 @@ import type { ComponentRegistry, RegistryEntry } from "../types.ts";
 import { form as codeBlockForm, props as codeBlockProps } from "./CodeBlock.ts";
 import Elicit, { props as elicitProps, returns as elicitReturns } from "./Elicit.ts";
 import TempDir, { props as tempDirProps } from "./TempDir.ts";
+import { form as failForm, props as failProps } from "./Fail.ts";
 import Fetch, { props as fetchProps } from "./Fetch.ts";
 import { form as fileForm, props as fileProps } from "./File.ts";
 import { form as fileDeleteForm, props as fileDeleteProps } from "./FileDelete.ts";
@@ -130,6 +131,14 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
       "write there rather than in the current one. `<TempDir />` renders the path instead.",
     as: "Optional. Captures the rendered directory path instead of emitting it.",
     context: "Markdown expanded with the temporary directory as its working directory.",
+  }),
+  core("Fail", failForm, parseJsonObject(failProps), {
+    description:
+      "Stop authored work with an actionable failure. " +
+      '`<Fail message="No acceptable candidate was approved." />` raises the message where it ' +
+      "is written.",
+    as: null,
+    context: null,
   }),
   core("Fetch", Fetch, parseJsonObject(fetchProps), {
     description:

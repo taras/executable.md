@@ -2723,12 +2723,12 @@ nothing. A non-string is not an error — it is a value with no destination.
 
 #### The components core supplies
 
-Some components are core's own: `<TempDir>` (§6.11), `<Json>`, `<Parse>` and
-`<SafeParse>` (§6.12), `<File>` (§6.13), `<File.Delete>` (§6.13.1), `<Glob>`
-(§6.14), `<Fetch>` (§6.18), and `<CodeBlock>` (§6.19). Each is already
-in the module graph, so it ships in the compiled binary and every published
-package without a search path or a bundling step, and a document invokes it with
-no `--include`.
+Some components are core's own: `<Fail>` (§6.8.2), `<TempDir>` (§6.11),
+`<Json>`, `<Parse>` and `<SafeParse>` (§6.12), `<File>` (§6.13), `<File.Delete>`
+(§6.13.1), `<Glob>` (§6.14), `<Fetch>` (§6.18), and `<CodeBlock>` (§6.19). Each
+is already in the module graph, so it ships in the compiled binary and every
+published package without a search path or a bundling step, and a document
+invokes it with no `--include`.
 
 They are ordinary **defaults**, not reserved names: a repository component
 called `Parse.md` is chosen ahead of core's `<Parse>`, exactly as it would be
@@ -3401,8 +3401,11 @@ or more `<Return>` elements anywhere in that body's own flow and executes
 exactly one of them, validates that value against its schema, and completes with
 the validated JSON. A conditional return is therefore how a root selects a value
 only when a condition holds; when none executes, the root completes `Err` with
-`The root document declares \`returns\` but produced no <Return> value.`, which
-is how a bounded search that found nothing reports itself. Selection does not
+`The root document declares \`returns\` but produced no <Return> value.`. That is
+the structural settlement error for a body whose executed flow selected no
+value, not the way to express a decision: a document that deliberately aborts,
+or that exhausted a bounded search, says so with `<Fail>` and the sentence its
+author wrote (§6.8.2). Selection does not
 end the root: documentation after it still runs. Its rendered body Markdown is
 not its result: the output stream stays an observability channel a consumer may
 watch independently, and a printed error can never pass for a result. A value
@@ -5877,6 +5880,48 @@ that boundary's own author gated. Printing it at a component's own declaration,
 in a region that does not print, would resume what the *region's* author gated —
 so that one passes outward instead.
 
+### 6.8.2 Stopping deliberately: `<Fail>`
+
+A document that has decided it cannot go on has something to say about why:
+
+```md
+<Fail message="Review aborted; nothing was saved or run." />
+```
+
+`<Fail>` raises that sentence where it is written. It is an ordinary component
+core supplies (§5.3), not a structural construct and not a reserved name: a
+repository `Fail.md` is chosen ahead of it exactly as it would be ahead of any
+other registration.
+
+**One form, one prop.** The only authored spelling is self-closing, declared by
+the component and entered through canonical invocation-form dispatch (§5.6), so
+a paired invocation is refused without its children expanding. The props schema
+is closed and takes one required `message` of at least one character, so a
+missing, empty, non-string or unknown prop is refused by ordinary prop
+validation (§6.5). `as` is refused too, by the component itself: there is no
+value to capture. Each of those refusals happens before the authored message is
+raised and reports the invocation rather than the author's sentence, so a
+document that never reached its decision is never reported as having made one.
+
+**A valid invocation is an ordinary function-component failure** (§6.8.1). It
+throws an `Error` whose message is the exact authored string — nothing is
+prefixed, rewritten, classified or interpolated into it — and the invocation
+boundary supplies the component name and the source position of the opening tag.
+It renders nothing, binds nothing, declares no `returns` and performs no durable
+operation of its own; the only records around it are the ones ordinary execution
+already writes, the component import and the root outcome, so a completed root
+replays its failure without re-expanding the body.
+
+**Recovery is the region's, never the component's.** The implementation carries
+no `printErrors()` declaration, so a text root stops at it by default and an
+author asks for continuation explicitly by writing `<PrintErrors>` around the
+region — which prints the ordinary function-component diagnostic once and lets
+later siblings run. A value body installs `throw`, the one mode a printing
+boundary does not replace, so an enclosing `<PrintErrors>` there cannot turn a
+deliberate abort into a successful result: the authored failure settles the
+body, a later `<Return>` is not selected, and the outcome is the authored
+sentence rather than the missing-`<Return>` message (§6.10).
+
 ### 6.9 Component-declared output: `<Output>`
 
 A component (or root document) declares which region of its body renders using
@@ -6211,6 +6256,12 @@ When no `<Return>` executes, the body reports that instead:
 The root document declares `returns` but produced no <Return> value.
 <Name /> declares `returns` but produced no <Return> value.
 ```
+
+Both report a structural outcome: the body ran, and its flow reached no
+`<Return>`. Neither carries what the author concluded, because the author wrote
+nothing for them to carry. A body that decided it cannot produce a value raises
+that decision instead, with `<Fail>` (§6.8.2), and the authored failure settles
+the body before this message can be produced for it.
 
 Selection appends no durable event. A partial replay replays completed effects
 and reconstructs the same ownership while re-executing the authored selection; a
@@ -9760,6 +9811,29 @@ platform's.
 | RF4 | A bound nonzero status, then a classifier | The status is data the document renders; the classifier that throws after it fails the root, and the next block never starts |
 | RF5 | `printErrors(fn)` | A component's own failure is still printed and the root continues |
 | RF6 | Replay | The determined failure and partial output replay from the record, with nothing appended and no command run again |
+
+### Tier FAIL — `<Fail>` (§6.8.2)
+
+Driven through `execute()` against real files, ordinary core selection and real
+expansion. A sibling that must not run records its own mark, so a stopped
+document is proved by what did not happen rather than by absent output. The
+recovery boundaries themselves are Tier OM's and Tier RF's, the catalog row is
+Tier SY's, the loop's own bound is Tier LOOP's, and missing-`<Return>`
+settlement is Tier RV's; these rows cross-reference them rather than restating
+them.
+
+| # | Test | Verify |
+|---|------|--------|
+| FAIL1 | A plain root | The run fails with the exact authored message, the prefix already streamed survives, the component renders nothing, the sibling after it never runs, and nothing printed it |
+| FAIL2 | A value root | The authored `Error` reaches the completion by identity; the missing-`<Return>` message appears nowhere, though a `<Return>` is written later in the body |
+| FAIL3 | An unselected `<If>` | Nothing is imported, nothing is raised, the sibling after it runs, and the root selects its ordinary return |
+| FAIL4 | Loop exhaustion | A `<Loop>` reaches its own `max`, then the sibling `<Fail>` names exhaustion; the failure is the one the author chose, and the work after it never begins |
+| FAIL5 | Authored recovery | Inside `<PrintErrors>` in a text root, the failure is reported once as an ordinary function-component diagnostic and the later sibling runs |
+| FAIL6 | Value-root non-recovery | The same element inside `<PrintErrors>` in a value root still fails the root with the authored error, and the later `<Return>` is not selected |
+| FAIL7a–FAIL7g | Refused invocations | Paired content, an empty paired spelling, `as`, a missing, empty or non-string `message`, and an unknown prop are each refused; the message a valid invocation would have raised appears nowhere, and paired children never expand |
+| FAIL8 | The position | The offered failure names `Fail`, the exact authored message, and the path, offset, line and column of the opening tag |
+| FAIL9 | Durability | A failed root's journal holds the root import, each authored component import and the root outcome, and nothing else; the same stream replays the same failure with no event appended and no re-expansion |
+| FAIL10 | Ordinary shadowing | A repository `Fail.md` is selected ahead of core's and renders its own content |
 
 ### Tier IM — Expansion metadata
 
