@@ -13,6 +13,13 @@ import process from "node:process";
 import * as acp from "@agentclientprotocol/sdk";
 import type { ContentBlock, PromptResponse } from "@agentclientprotocol/sdk";
 
+/**
+ * The one versioned key an adapter reports its backend's acceptance of a turn
+ * on. A session placed for a first turn is occupancy until this arrives, so an
+ * agent that never sent it would leave every session it serves unestablished.
+ */
+const SESSION_MATERIALIZATION_META = "executablemd.session-materialization/v1";
+
 export type TurnResult = { cancelled: true } | { cancelled: false; text: string };
 
 export interface WorkerAgent {
@@ -140,6 +147,19 @@ function useAcpConnection(
       .onRequest("session/close", () => ({}))
       .onRequest("session/prompt", (ctx) =>
         handle(function* (): Operation<PromptResponse> {
+          // This agent takes the turn the moment it is asked, so acceptance is
+          // reported here — before the turn runs and before anything it
+          // produces. A client that defers a session's durable state until a
+          // conversation really exists waits for exactly this and nothing else.
+          yield* until(
+            ctx.client.notify(acp.methods.client.session.update, {
+              sessionId: ctx.params.sessionId,
+              update: {
+                sessionUpdate: "session_info_update",
+                _meta: { [SESSION_MATERIALIZATION_META]: { state: "accepted" } },
+              },
+            }),
+          );
           const result = yield* worker.runTurn(extractText(ctx.params.prompt));
           if (result.cancelled) {
             return { stopReason: "cancelled" };

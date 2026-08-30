@@ -2039,11 +2039,22 @@ all. What stays beside the run on disk is the provider's own session store and
 one empty working directory per session; both are disposable, and neither is
 retained state.
 
-**A canonical assertion comes before the mapping.** The order is provider
-creation, then the provider's canonical, tagged assertion of a durable identity,
-then the mapping commit, then the first Prompt. Occupancy of a key in the
-provider's own store is not an assertion — it says something is there, not what
-conversation it is.
+**A canonical assertion comes before the mapping.** The order is placement, then
+the backend's acceptance of the session's first turn, then the provider's
+canonical, tagged assertion of a durable identity, then the mapping commit — and
+only then whatever that first turn produced.
+
+Placement is inert. A `<Session>` says where a session will live and which agent
+it is compatible with; it creates no provider session, contacts no backend and
+commits no row. The session comes into existence when the first subscribed
+`<Prompt>` starts a turn the backend accepts, and acceptance is reported by the
+adapter rather than inferred from anything the turn then produced.
+
+Occupancy of a key in the provider's own store is not an assertion — it says
+something is there, not what conversation it is — and a record the provider
+holds for a first turn nobody accepted asserts nothing at all. Nothing is
+retained for it, and the next attempt on that placement creates rather than
+resumes.
 
 Partial replay attaches lazily. Completed Prompts restore without contacting the
 provider, and full replay never attaches one. Before a later live Prompt, the
@@ -3258,7 +3269,7 @@ fetch operation requires its own language and durability contract.
 | XMD artifact export, inspection and fork source | specified in `specs/xmd-artifact-spec.md`; `xmd workflow export` and artifact `status`/`history` are built, Deno provider only. The artifact-backed fork remains unbuilt |
 | Agent session portability evidence in an artifact | specified in `specs/xmd-artifact-spec.md` §2.5; the format and its complete verifier are built. Provider bundle capture, Agent-aware export, intrinsic Agent-aware inspection and artifact-backed fork are unbuilt |
 | workflow Agent isolation | built by #302: no directory attachment, an empty host-owned working directory, no MCP servers, an empty requested tool set and deny-all with a failing permission path; the portable no-tool proof is tracked by #496 |
-| workflow Agent session retention | built by #302: a row in the run's own database, keyed by the engine-derived Session expansion identity alone — the authored name is descriptive — with provider, agent command and policy fingerprint beside it as compatibility attributes. The mapping commits after the provider's canonical tagged assertion and before the first Prompt; occupancy of a provider key is never identity, and missing, mismatched, replaced or ambiguous assertions each refuse instead of starting a replacement session |
+| workflow Agent session retention | built by #302: a row in the run's own database, keyed by the engine-derived Session expansion identity alone — the authored name is descriptive — with provider, agent command and policy fingerprint beside it as compatibility attributes. A `<Session>` places one and creates nothing; the first subscribed Prompt constructs it, and the mapping commits after the backend accepted that turn and the provider made its canonical tagged assertion, before anything the turn produced is exposed. Occupancy of a provider key is never identity — including a record held for a first turn nobody accepted — and missing, mismatched, replaced or ambiguous assertions each refuse instead of starting a replacement session |
 | generated-XMD admission | built by #369, through `@executablemd/core/host`; the workflow policy wrapper is internal. Host policy is a read table and a write table of exact pinned identities, each entry carrying the authored forms it is admitted for, and an authored `allow` selects a canonical subset of the closed classes `read` and `write` — omitted means `read`. The complete fragment is preflighted inside one `generated_xmd` effect before its first generated effect |
 | `<Evaluate source allow>` and the authored loop | built by #302 and #369: a workflow-host component with a closed schema of one required `source` and one optional `allow`, declared to the execution rather than registered by the attachment — canonical execution calls the host's factory with the claimant it minted and registers what comes back, which provides availability only. Its ceilings come from the run's own storage, core's pinned `<File>` read and write identities and this package's lexical `<Dir>`; iteration, branching, approval and exhaustion are ordinary Markdown |
 | generated-XMD mutation-proposal admission | built by #369 and #567: the standard Deno profile's write table is core's paired `File:write`, this package's lexical `Dir` and core's self-closing `File.Delete`, in that retained order and followed by any host extension; admitted mutations run as the ordinary components they are through the run's effect transactions, a generated deletion publishing the same `workspace_file` effect an authored one does; the evaluator adds no receipt or result entry, so a write-only fragment still binds `{ observations: [], output: "" }`; and approval is authored control flow before the element. Local Git, Git-host, issue, process, execution, credential and external-write effects are outside the class |

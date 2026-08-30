@@ -28,12 +28,12 @@ const ACP_SRC = "packages/acp/src";
 /**
  * The identifiers the behavioral patches introduce.
  *
- * Each patch names its own, and neither name occurs anywhere upstream, so the
+ * Each patch names its own, and no name occurs anywhere upstream, so the
  * locality check below opens a window only where a patch actually is. A seam
  * named after something upstream already says — `_meta`, for one — would open a
  * permissive window at every unrelated mention of it.
  */
-const SEAMS: readonly string[] = ["agentProcessEnv", "checkpointMeta"];
+const SEAMS: readonly string[] = ["agentProcessEnv", "checkpointMeta", "materialization"];
 
 /** How far an introduced line may sit from one that names the seam. */
 const SEAM_PROXIMITY_LINES = 8;

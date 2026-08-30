@@ -2,7 +2,7 @@
 
 `generated/` is the ACP runtime `@executablemd/acp` executes. It is a source
 snapshot of npm `acpx@0.12.0`, carried in this package rather than resolved as a
-dependency, with two behavioral patches.
+dependency, with three behavioral patches.
 
 - Package: `acpx@0.12.0` from npm
 - Repository: `https://github.com/openclaw/acpx`
@@ -98,6 +98,48 @@ something is `@executablemd/acp`'s decision, not this runtime's.
 The patch writes nothing to a session record, an event, a status, a diagnostic
 or a serialized store; adds no key of its own; and changes no other behavior.
 
+## Why the third patch exists
+
+A fresh `<Session>` places a session; it does not create one. The conversation
+comes into existence when a backend accepts the first turn, and until then a
+record naming an `agentSessionId` is a claim nothing stands behind — a workflow
+that committed it would map a run to a conversation the provider never made.
+
+ACPX 0.12.0 has no way to say so. `ensureSession()` creates the backend session
+and saves an asserting record in one step, and the turn that follows can fail
+without that assertion ever being retracted. There is also nothing to wait on:
+a consumer that wants to know the backend accepted a turn can read only the
+turn's own events, and an event says the adapter is talking, not that the
+session now exists.
+
+Recovering the fact from anywhere else is what this exists to avoid. A returning
+`ensureSession()`, a first text chunk, a synthesized `started` event, a terminal
+result, a checkpoint token, an error code and a diagnostic substring each say
+something adjacent and none says acceptance. Only the adapter knows, so only the
+adapter is asked.
+
+## Behavioral patch: `materialization`
+
+Deferred first-turn materialization, driven by one exact acceptance signal.
+
+| File | Change |
+| --- | --- |
+| `generated/live-checkpoint-ClPCSdrW.js` | declares `SESSION_MATERIALIZATION_CONTRACT`, the one versioned identifier; `serializeSessionRecordForDisk()` and `parseSessionRecord()` carry the record's `sessionMaterialization` marker as snake-cased `session_materialization`; `LiveSessionCheckpoint.runExclusive()` runs one operation with interval flushes held off. |
+| `generated/runtime.js` | `ensureSession({ materialization: "first-turn-acceptance" })` saves a provisional record — marker present, `agentSessionId` absent — and holds the identity `session/new` returned in a manager-private map; a record still carrying the marker is never reused, so the next ensure creates fresh backend state; a turn carries `materialized`, satisfied at once for a record that already asserts; a `session_info_update` whose update `_meta` carries `{"executablemd.session-materialization/v1":{"state":"accepted"}}` is consumed rather than recorded or emitted, and promotes a copy of the record through the store's own atomic save before the in-memory record adopts it; a turn that fails, is cancelled, or ends without the marker rejects `materialized`. |
+| `generated/runtime.d.ts` | declares `AcpRuntimeEnsureInput.materialization`, `AcpRuntimeMaterialization`, and `AcpRuntimeTurn.materialized`. |
+| `generated/session-options-jkYbBxGE.d.ts` | declares `SessionRecord.sessionMaterialization`. |
+
+The order is the contract: the asserting record is saved before anything reads
+the promoted identity, and the in-memory record adopts it only after that save
+returns. A promotion that fails leaves the record pending, and finalization
+writes it that way rather than over it — which is what keeps a failed first turn
+from leaving a session that looks established.
+
+Nothing infers acceptance. No stop reason, status, event, error code or
+diagnostic promotes a record, and the marker is never appended to a
+conversation, emitted as an event, exposed as prompt text, or retained as a
+checkpoint token.
+
 ## Packaging adaptations
 
 These change no runtime behavior and exist because the snapshot is five files
@@ -128,15 +170,20 @@ Issue #622 carries `checkpointMeta`, and issue #629 owns its exit gate:
 that carries the completing turn's own `PromptResponse._meta` out to its
 consumer replaces it.
 
-The two patches are removed independently. This snapshot goes when both have
-been, not when either has.
+Issue #648 carries `materialization`. A released ACPX version that defers a
+session's assertion to an explicit backend acceptance, and offers a barrier a
+consumer can wait on, replaces it.
 
-## Both patches, one snapshot
+The three patches are removed independently. This snapshot goes when all of them
+have been, not when any one has.
+
+## Three patches, one snapshot
 
 They are independent and share no code. Each introduces one identifier that
-occurs nowhere upstream — `agentProcessEnv` and `checkpointMeta` — which is what
-lets the vendor regression hold every introduced line to the neighbourhood of a
-patch instead of to a keyword upstream already uses.
+occurs nowhere upstream — `agentProcessEnv`, `checkpointMeta` and
+`materialization` — which is what lets the vendor regression hold every
+introduced line to the neighbourhood of a patch instead of to a keyword upstream
+already uses.
 
 ## Upgrading
 
@@ -148,4 +195,6 @@ it, and the two are not done together.
 Each patch is a workaround for a capability upstream does not have, and each is
 dropped rather than maintained once upstream has it: `agentProcessEnv` when
 ACPX gains a transient agent-environment input of its own, `checkpointMeta` when
-it carries the completing turn's response metadata out on its own.
+it carries the completing turn's response metadata out on its own, and
+`materialization` when it defers a session's assertion to backend acceptance on
+its own.

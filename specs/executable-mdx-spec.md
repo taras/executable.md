@@ -9717,6 +9717,8 @@ Each row names the derivation it kills.
 | AF21 | `<Session.Launch>` is a caller, not a second implementation | It renders its body and calls `launchAgentSession()` with what it rendered; the phase sequencing, retention and result belong to that one canonical operation, and the component holds none of them |
 | AF22 | A refused launch is an observation | The failure is raised as an error segment whose cause carries `phase` and `failureClass`, so `<AssertThrows as="…">` binds a value an author can assert which refusal it was on, rather than the wording of a message |
 | AF23 | A `<Session>` joins what a launch constructed | The same named `<Session>` after a client-native `<Session.Launch>` attaches to the conversation the native process made, and a `<Prompt>` in it answers from that conversation's history rather than from a new one. The route is unchanged: not republished, not converted, and no second identity allocated. Authored whole in `packages/test-agent/src/NativeSessionLaunch.test.md`; a provider that reported another conversation fails it |
+| AF24 | A Session pins the exact value it was issued | A fresh `<Session>` calls `session()` once and hands the same object — by identity, not by key — to every `<Prompt>` nested inside it. A provider decides whether a session may be acted on by that identity, so a rebuilt look-alike is a value nobody issued |
+| AF25 | A fresh Session performs no provider effect | A self-closing `<Session />` places one and renders nothing: no prompt is started, and nothing about the placement appears in the document where the element stood |
 
 ### Tier CR — Component registration and resolution
 
@@ -10401,6 +10403,8 @@ Defined in [ACP client](./acp-client-spec.md) §The workflow Agent profile.
 | WAP5 | Refusal precedes ACPX | A placement the host refuses establishes no session and starts no turn |
 | WAP6 | Nothing echoed | No tool title, raw input, path or command reaches the failure message or its stack |
 | WAP7 | Sibling Sessions | Two `<Session name="review">` sites in one document place two engine identities the middleware cannot touch while its rename reaches the provider; a placement kept from the first site and routed for the second refuses before the provider places anything |
+| WAP8 | Placement only | A fresh `<Session>` under this profile ensures nothing, opens no handle, writes no provider record and retains nothing; the host is asked to place and is not asked to retain |
+| WAP9 | Retention follows acceptance | Nothing is retained until the backend accepts the session's first turn, and the ordered log is ensure, turn start, adapter acceptance, the provider's asserting save, then the host's retention — with the mapping absent at every earlier point |
 
 ### Tier WSL — Retained workflow Agent sessions
 
@@ -10409,8 +10413,10 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.5.
 | # | Test | Verify |
 |---|------|--------|
 | WSL1 | The key | The mapping key is the engine-derived Session expansion identity alone; provider and agent command change it not at all |
-| WSL2 | Creation | A session is created only when neither the mapping nor the provider holds anything |
-| WSL3 | The pre-commit window | Exactly one canonical assertion reconciles an interrupted creation; two are ambiguity and refuse |
+| WSL2 | Creation | A session is created only when neither the mapping nor the provider holds anything. A provider record held for a first turn nobody accepted holds nothing: it is occupancy, so this still answers "create" |
+| WSL3 | The pre-commit window | Exactly one canonical assertion reconciles an interrupted creation; two are ambiguity and refuse. The window opens where the provider's asserting save succeeded and the mapping did not, which is after the backend accepted the first turn rather than after the session was created |
+| WSL9 | An unaccepted first turn | A first turn the backend never accepted leaves the construction route standing, the provider record non-asserting, no mapping, and no identity on the `Session` the document holds; the same value retried creates fresh backend state and establishes once |
+| WSL10 | Promotion order | The provider's asserting record is saved before the host is asked to retain anything, so an interruption between them leaves exactly one canonical assertion for the next attachment to reconcile and commit |
 | WSL4 | Refusals | A missing assertion, a different value, a different kind, a changed agent, a changed provider, a changed policy and more than one assertion each refuse |
 | WSL5 | Reattachment | A matching assertion reattaches the retained mapping unchanged |
 | WSL6 | The run's transaction | The mapping commits in the run's own transaction and reads back per Session site; a transaction that fails commits none |
@@ -10424,9 +10430,9 @@ document against a real run database.
 
 | # | Test | Verify |
 |---|------|--------|
-| WSR1 | Restart | After an interruption, two same-named `<Session>` sites hold two committed rows carrying the tagged identities the provider store actually asserted; a new attachment establishes exactly those two sites and leaves both rows unchanged. Removing the mapping commit fails it |
+| WSR1 | Restart | After an interruption, two same-named `<Session>` sites hold two committed rows carrying the tagged identities the provider store actually asserted; a new attachment establishes exactly those two sites and leaves both rows unchanged. A row is known committed only once that site's first turn was accepted — a turn being requested proves nothing — so the interruption is taken after each site's events began. Removing the mapping commit fails it |
 | WSR2 | Recorded run | A fully recorded run restores both sites without entering the provider at all |
-| WSR3 | Claude belongs to the run | A `<Session>` naming `claude` — the agent `xmd run` owns machine-wide — runs under this profile, commits its `acpx.agentSessionId` mapping, and a restart reattaches the same assertion and leaves the row unchanged. Removing the profile's explicit empty capability sets fails it before the agent is contacted |
+| WSR3 | Claude belongs to the run | A `<Session>` naming `claude` — the agent `xmd run` owns machine-wide — runs under this profile, commits its `acpx.agentSessionId` mapping once its first turn was accepted, and a restart reattaches the same assertion and leaves the row unchanged. Removing the profile's explicit empty capability sets fails it before the agent is contacted |
 
 ### Tier GXC — The effect classes a generated fragment draws on
 

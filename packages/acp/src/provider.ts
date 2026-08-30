@@ -67,6 +67,7 @@ import type {
   AcpRuntimeDoctorReport,
   AcpRuntimeEnsureInput,
   AcpRuntimeHandle,
+  AcpRuntimeMaterialization,
   AcpRuntimeOptions,
   AcpRuntimeTurn,
   AcpSessionRecord,
@@ -138,6 +139,15 @@ export interface AcpxSessionContext {
 export interface AcpxSessionPlacement {
   readonly sessionKey: string;
   readonly cwd: string;
+  /**
+   * Whether a session already stands behind this placement.
+   *
+   * `pending` names where a session will live and says nothing has constructed
+   * one: no construction route, no provider handle, no resumable identity.
+   * `established` says the immutable route and the durable identity both exist,
+   * which is what makes eager validation meaningful.
+   */
+  readonly state: "pending" | "established";
 }
 
 /** What ACPX asserted about a session it established. */
@@ -161,11 +171,14 @@ export interface AcpxSessionIdentity {
 export interface AcpxSessionPolicy {
   place(context: AcpxSessionContext): Operation<AcpxSessionPlacement>;
   /**
-   * Retain what ACPX asserted, once it has established the session.
+   * Retain what ACPX asserted, once the session is established.
    *
-   * Called after every `ensureSession()` this provider performs for a placed
-   * session, so a host retaining provider-native identity records it the first
-   * time the adapter asserts one.
+   * Called where an assertion exists and not before: for a session this
+   * provider reattaches to, after the ensure that validated it; for one being
+   * constructed through ACP, after the backend accepted its first turn and the
+   * provider's own record was promoted to assert an identity. A placement whose
+   * first turn failed reaches this on no path, because there is nothing to
+   * retain.
    */
   established?(placement: AcpxSessionPlacement, identity: AcpxSessionIdentity): Operation<void>;
 }
@@ -358,7 +371,15 @@ interface RuntimeEntry {
 interface DetachedSession {
   agentCommand: string;
   cwd: string;
+  /**
+   * The exact value `session()` issued for this placement.
+   *
+   * Retained rather than rebuilt, and compared by identity rather than by
+   * `sessionKey`: provider provenance is what this value carries, and a
+   * structural copy carrying the same key was issued by nobody.
+   */
   session: Session;
+  state: "pending" | "established";
 }
 
 interface ManagedSession extends DetachedSession {
@@ -389,7 +410,9 @@ type Prepared =
       kind: "placement";
       sessionKey: string;
       agentCommand: string;
-      placement: { sessionKey: string; cwd: string };
+      placement: AcpxSessionPlacement;
+      /** The exact value already issued for this placement, when there is one. */
+      issued?: Session;
     };
 
 function toError(value: unknown): Error {
@@ -961,6 +984,7 @@ function* useAcpxProviderState(
       agentCommand: entry.agentCommand,
       cwd: entry.cwd,
       session: entry.session,
+      state: entry.state,
     });
   }
 
@@ -1179,7 +1203,11 @@ function* useAcpxProviderState(
   ): Operation<Prepared> {
     if (typeof option === "object") {
       const entry = managed.get(option.sessionKey);
-      if (!entry) {
+      // Identity, never the key: this provider issued exactly one value for this
+      // placement and kept it. A structural copy, a value from another provider
+      // copy or a torn-down scope, and a look-alike built around a key somebody
+      // read are none of them that value.
+      if (!entry || entry.session !== option) {
         throw new Error(
           `unknown or stale agent session "${option.sessionKey}" — a Session value must ` +
             `come from this provider's session()`,
@@ -1201,7 +1229,12 @@ function* useAcpxProviderState(
           kind: "placement",
           sessionKey: entry.session.sessionKey,
           agentCommand: entry.agentCommand,
-          placement: { sessionKey: entry.session.sessionKey, cwd: entry.cwd },
+          placement: {
+            sessionKey: entry.session.sessionKey,
+            cwd: entry.cwd,
+            state: entry.state,
+          },
+          issued: entry.session,
         };
       }
       return { kind: "existing", sessionKey: option.sessionKey, entry };
@@ -1214,20 +1247,141 @@ function* useAcpxProviderState(
         session: option,
         ...(sessionIdentity === undefined ? {} : { sessionIdentity }),
       });
-      return { kind: "placement", sessionKey: placed.sessionKey, agentCommand, placement: placed };
+      return placedPrepared(agentCommand, placed);
     }
     const placement = yield* resolveSessionPlacement(store, agentCommand, callerCwd, option);
-    return { kind: "placement", sessionKey: placement.sessionKey, agentCommand, placement };
+    return placedPrepared(agentCommand, placement);
+  }
+
+  /**
+   * One placement, with whatever this provider has already issued for it.
+   *
+   * A second `<Session>` naming the same placement gets the same value back:
+   * the exact object is what provenance is, and minting a replacement would
+   * leave the first one unusable.
+   */
+  function placedPrepared(agentCommand: string, placement: AcpxSessionPlacement): Prepared {
+    const held = managed.get(placement.sessionKey);
+    const prepared: Prepared = {
+      kind: "placement",
+      sessionKey: placement.sessionKey,
+      agentCommand,
+      placement,
+    };
+    return held === undefined ? prepared : { ...prepared, issued: held.session };
+  }
+
+  /**
+   * Whether this placement's construction route and durable identity exist.
+   *
+   * The host's own answer, plus the one thing it cannot see: a session a native
+   * process constructed is established from the moment its route exists, even
+   * though ACPX has attached to it and holds no record yet. An `acp-first`
+   * route is not establishment — it is what a first turn publishes before it
+   * runs, and a first turn that failed leaves exactly that behind.
+   */
+  function* placementState(
+    agentName: string,
+    agentCommand: string,
+    placement: AcpxSessionPlacement,
+  ): Operation<"pending" | "established"> {
+    if (placement.state === "established") {
+      return "established";
+    }
+    if (!namesOwnSessions(agentName) || !routeStore) {
+      return "pending";
+    }
+    const route = yield* routeStore.read(sessionKeyOf(agentCommand, placement.sessionKey));
+    return route?.route === "client-native" ? "established" : "pending";
+  }
+
+  /**
+   * What this placement is now, read again after its queue granted.
+   *
+   * The predecessor in that queue may have established the very session this
+   * caller is about to construct, and acting on what was read before waiting is
+   * how one placement ends up with two conversations.
+   */
+  function* requeried(prepared: Prepared): Operation<Prepared> {
+    const sessionKey = prepared.sessionKey;
+    const held = managed.get(sessionKey);
+    if (held && isLive(held)) {
+      return { kind: "existing", sessionKey, entry: held };
+    }
+    const agentCommand = agentCommandOf(prepared);
+    const cwd =
+      held?.cwd ?? (prepared.kind === "existing" ? prepared.entry.cwd : prepared.placement.cwd);
+    const record = yield* until(store.load(sessionKey));
+    const established =
+      held?.state === "established" ||
+      (record !== undefined && record.sessionMaterialization?.state !== "pending");
+    const placement: AcpxSessionPlacement = {
+      sessionKey,
+      cwd,
+      state: established ? "established" : "pending",
+    };
+    return placedPrepared(agentCommand, placement);
+  }
+
+  /**
+   * Remember the exact pending value this placement was issued.
+   *
+   * Nothing else happens: no ownership is taken, no route is published, no
+   * runtime is built, no record is written and no backend is contacted. What
+   * this provider keeps is the value itself, because that object — not the key
+   * inside it — is what a later operation has to present.
+   */
+  function placePending(prepared: Extract<Prepared, { kind: "placement" }>): Session {
+    if (prepared.issued !== undefined) {
+      return prepared.issued;
+    }
+    const session: Session = {
+      sessionKey: prepared.placement.sessionKey,
+      cwd: prepared.placement.cwd,
+    };
+    managed.set(prepared.sessionKey, {
+      agentCommand: prepared.agentCommand,
+      cwd: prepared.placement.cwd,
+      session,
+      state: "pending",
+    });
+    return session;
+  }
+
+  /** This placement now has a route and an identity of its own. */
+  function markEstablished(sessionKey: string): void {
+    const held = managed.get(sessionKey);
+    if (held) {
+      held.state = "established";
+    }
+  }
+
+  /** What one ensure is for, beyond the placement it is for. */
+  interface EnsureIntent {
+    attachment?: { build: BoundBuild; resumeSessionId: string };
+    /** The placement's state, as the caller resolved it. */
+    state: "pending" | "established";
+    /**
+     * Let ACPX hold this record as occupancy until the backend accepts the
+     * first turn, rather than asserting an identity the moment it is created.
+     */
+    materialization?: boolean;
+    /**
+     * Leave the host mapping to the caller, which commits it after that
+     * acceptance rather than after this ensure.
+     */
+    deferEstablished?: boolean;
   }
 
   function* ensureFromPrepared(
     agentName: string,
     prepared: Prepared,
-    attachment?: { build: BoundBuild; resumeSessionId: string },
+    intent: EnsureIntent,
   ): Operation<ManagedSession> {
     if (prepared.kind === "existing") {
       return prepared.entry;
     }
+    const attachment = intent.attachment;
     // A client-native session was created by a native process under an identity
     // XMD chose, so ACP attaches to it by name and never creates under it. That
     // is what `resumeSessionId` says, and it is the whole reason the identity
@@ -1248,9 +1402,15 @@ function* useAcpxProviderState(
           cwd: prepared.placement.cwd,
           ...(attachment === undefined ? {} : { resumeSessionId: attachment.resumeSessionId }),
           ...(newSessionOptions === undefined ? {} : { sessionOptions: newSessionOptions }),
+          ...(intent.materialization === true
+            ? { materialization: "first-turn-acceptance" as const }
+            : {}),
         },
         (handle, entry) => {
-          const session: Session = {
+          // The exact value this provider already issued, when it issued one.
+          // A fresh <Session> pinned that object, and handing back a second one
+          // here would leave the pinned one naming a session nothing admits.
+          const session: Session = prepared.issued ?? {
             sessionKey: prepared.placement.sessionKey,
             cwd: prepared.placement.cwd,
           };
@@ -1263,6 +1423,7 @@ function* useAcpxProviderState(
             agentCommand: prepared.agentCommand,
             cwd: prepared.placement.cwd,
             session,
+            state: intent.state,
           };
         },
       );
@@ -1297,7 +1458,7 @@ function* useAcpxProviderState(
           `did not report, so a turn taken here would not belong to it`,
       });
     }
-    if (sessions?.established) {
+    if (sessions?.established && intent.deferEstablished !== true) {
       const identity: AcpxSessionIdentity = {
         ...(handle.agentSessionId === undefined ? {} : { agentSessionId: handle.agentSessionId }),
         ...(handle.acpxRecordId === undefined ? {} : { acpxRecordId: handle.acpxRecordId }),
@@ -1781,6 +1942,76 @@ function* useAcpxProviderState(
     return ownership;
   }
 
+  /**
+   * Wait for the backend to accept this turn, then commit what it created.
+   *
+   * The durable order is the contract: the provider's own record asserts an
+   * identity first, the host's mapping commits second, and the session becomes
+   * established last. A crash between the first two leaves exactly one
+   * canonical assertion, which the next established-session validation
+   * reconciles and commits — the same pre-commit window a reattachment has
+   * always had.
+   *
+   * Nothing infers acceptance. A turn that fails, is cancelled, or simply ends
+   * without the adapter saying so leaves this placement pending: no identity is
+   * published, no mapping is called, and the exact Session value a retry would
+   * use is still the one the document is holding.
+   */
+  function* materialize(
+    entry: ManagedSession,
+    placement: AcpxSessionPlacement,
+    turn: AcpRuntimeTurn,
+  ): Operation<void> {
+    const accepted: Result<AcpRuntimeMaterialization> = yield* until(
+      turn.materialized.then(
+        (value): Result<AcpRuntimeMaterialization> => Ok(value),
+        (error: unknown): Result<AcpRuntimeMaterialization> => Err(toError(error)),
+      ),
+    );
+    if (!accepted.ok) {
+      // Give up the arrangement no backend accepted, through the runtime that
+      // made it. Keeping it would let a retry continue the zero-turn session
+      // this attempt left behind instead of creating one — and the record it
+      // stands on is still marked pending, so ACPX would not have resumed it
+      // either.
+      yield* releaseHandle(entry.session.sessionKey);
+      // The turn's own outcome is the useful thing to say when it has one: the
+      // barrier only knows that this session is still awaiting its first
+      // accepted turn.
+      const settled = yield* until(turn.result);
+      if (settled.status === "failed") {
+        throw new Error(settled.error.message);
+      }
+      throw accepted.error;
+    }
+    const identity: AcpxSessionIdentity = {
+      acpxRecordId: accepted.value.acpxRecordId,
+      ...(accepted.value.agentSessionId === undefined
+        ? {}
+        : { agentSessionId: accepted.value.agentSessionId }),
+    };
+    if (sessions?.established) {
+      try {
+        yield* sessions.established(placement, identity);
+      } catch (error) {
+        // The host could not retain what this session is, so it is not one
+        // anyone may prompt through. The provider's assertion stands, and the
+        // next attachment reconciles and commits that same identity — which it
+        // can only do by reattaching, so the placement gives up its handle here
+        // rather than staying live with one nobody may use.
+        yield* abandonHandle(entry, "session retention refused");
+        if (!holding(entry.session.sessionKey)) {
+          detachPlacement(entry.session.sessionKey, entry);
+        }
+        throw error;
+      }
+    }
+    if (accepted.value.agentSessionId !== undefined) {
+      entry.session.agentSessionId = accepted.value.agentSessionId;
+    }
+    entry.state = "established";
+  }
+
   function promptStream(
     content: string,
     options: PromptOptions | undefined,
@@ -1796,37 +2027,71 @@ function* useAcpxProviderState(
           cwd: callerCwd,
         };
 
-        const prepared = yield* withSessionRoute(context, () =>
+        // Where this prompt lands. Resolving it constructs nothing, which is
+        // what lets the queue below be entered before any provider effect.
+        const placed = yield* withSessionRoute(context, () =>
           prepare(agentName, options?.session, callerCwd),
         );
 
+        // The session's FIFO first, and before ownership. Two prompts on one
+        // session in one provider are not competing for it — they are two turns
+        // in one conversation, and the queue is what makes them sequential. The
+        // coordinator refuses contention rather than queueing, so asking it
+        // first would turn the second subscription into a refusal instead of
+        // the turn that follows the first.
+        //
+        // What still refuses is what genuinely competes: another provider
+        // state, another process, and another kind of operation on this
+        // session. None of them shares this queue, so all of them still meet
+        // the coordinator while this one holds the session.
+        //
+        // The global route slot is deliberately not held across the wait:
+        // waiting for one session's turn is not a reason to stop every other
+        // session resolving.
+        yield* turns.slot(placed.sessionKey);
         // Ownership before the turn, and before ensure: a prompt for an agent
         // whose sessions can be handed to a native UI is talking to a session
         // that UI may be in right now.
         yield* ownWithin(
           yield* useScope(),
           agentName,
-          agentCommandOf(prepared),
-          prepared.sessionKey,
+          agentCommandOf(placed),
+          placed.sessionKey,
           "prompt",
         );
-        // Inside ownership, before the runtime exists and before a turn: a
-        // first Prompt establishes this session through ACP, so that is what
-        // its construction route says — and a session a native process
-        // constructed is attached to under the identity it already has.
-        const attachment = yield* constructRoute(agentName, prepared);
         if (ownable(agentName)) {
-          // Registered before the turn, so it runs after the turn's own
-          // finalizers and before ownership ends. No usable handle for an
-          // advertised session outlives the release that frees it: the next
-          // operation — here or in another process — reattaches under its own
-          // acquisition.
-          yield* ensure(() => releaseHandle(prepared.sessionKey));
+          // Registered after acquisition, so it runs before ownership ends: no
+          // usable handle for an advertised session outlives the release that
+          // frees it, and the next operation — here or in another process —
+          // reattaches under its own acquisition.
+          yield* ensure(() => releaseHandle(placed.sessionKey));
         }
-        yield* turns.slot(prepared.sessionKey);
 
         return yield* withSessionRoute(context, function* () {
-          const entry = yield* ensureFromPrepared(agentName, prepared, attachment);
+          // Read again now the queue has granted, so a concurrent first prompt
+          // continues what its predecessor established instead of constructing
+          // a second conversation beside it.
+          const prepared = yield* requeried(placed);
+          const state =
+            prepared.kind === "existing"
+              ? prepared.entry.state
+              : yield* placementState(agentName, prepared.agentCommand, prepared.placement);
+          // Inside ownership, before the runtime exists and before a turn: a
+          // first Prompt constructs this session through ACP, so that is what
+          // its construction route says — and a session a native process
+          // constructed is attached to under the identity it already has.
+          const attachment = yield* constructRoute(agentName, prepared);
+          // The pending ACP-first branch, and the only one that defers: an
+          // attachment resumes an identity that already exists, and an
+          // established placement has one of its own.
+          const constructing =
+            state === "pending" && attachment === undefined && prepared.kind === "placement";
+          const entry = yield* ensureFromPrepared(agentName, prepared, {
+            ...(attachment === undefined ? {} : { attachment }),
+            state,
+            materialization: constructing,
+            deferEstablished: constructing,
+          });
           // From here this session has been spoken to, whatever the cache
           // later says, so nothing may discard it to install a new layer.
 
@@ -1892,6 +2157,13 @@ function* useAcpxProviderState(
                 inFlight.delete(sessionKey);
               }
             });
+          }
+
+          if (constructing && prepared.kind === "placement") {
+            // Before any of this turn's events are exposed. Until the backend
+            // has accepted it there is no conversation to be reporting on, and
+            // an event published first would be describing one.
+            yield* materialize(entry, prepared.placement, turn);
           }
 
           const channel = createChannel<AgentPromptEvent, string>();
@@ -2212,7 +2484,7 @@ function* useAcpxProviderState(
     // An adapter that names its own sessions never goes through ACP session
     // creation at all: the native process is what materializes the session.
     if (allocatesIdentity(adapter)) {
-      return yield* prepareClientNative(
+      const clientNative = yield* prepareClientNative(
         invocation,
         agentName,
         agentCommand,
@@ -2222,6 +2494,13 @@ function* useAcpxProviderState(
         instructions,
         prepared,
       );
+      if (clientNative.failure === undefined) {
+        // A client-native route now exists for this placement, so a <Session>
+        // nested after this launch attaches to it eagerly instead of taking it
+        // for one nothing has constructed.
+        markEstablished(sessionKey);
+      }
+      return clientNative;
     }
 
     // No runtime is claimed yet. Everything between here and the ensure can
@@ -2271,7 +2550,16 @@ function* useAcpxProviderState(
         if (handle.agentSessionId !== undefined) {
           session.agentSessionId = handle.agentSessionId;
         }
-        return { handle, runtime: entry, agentCommand, cwd: sessionCwd, session };
+        // Established by construction: this adapter's provider returns the
+        // identity, so the session exists the moment the ensure answers.
+        return {
+          handle,
+          runtime: entry,
+          agentCommand,
+          cwd: sessionCwd,
+          session,
+          state: "established" as const,
+        };
       },
     );
     managed.set(sessionKey, managedEntry);
@@ -2460,10 +2748,14 @@ function* useAcpxProviderState(
           placement.sessionKey,
           "native-launch",
           function* (ownership) {
-            // Provider-local FIFO stays, and stays what it is: ordering inside
-            // one provider. It is not ownership, and it never was.
-            yield* turns.slot(placement.sessionKey);
-
+            // No provider-local queue here. A launch is only ever performed for
+            // an advertised agent, so the acquisition above is already this
+            // session's exclusion — inside this provider and outside it. Taking
+            // the queue as well would put a prompt behind a native UI that may
+            // hold the session for hours, and a prompt that queued would hold
+            // the reader's terminal while offering no way to reach the owner it
+            // was waiting for. It refuses instead, and the coordinator is what
+            // refuses it.
             yield* authority.perform(request, {
               prepare: () =>
                 withSessionRoute(context, () =>
@@ -2763,23 +3055,39 @@ function* useAcpxProviderState(
     const prepared = yield* withSessionRoute(context, () =>
       prepare(agentName, named, callerCwd, sessionIdentity),
     );
+    const state =
+      prepared.kind === "existing"
+        ? prepared.entry.state
+        : yield* placementState(agentName, prepared.agentCommand, prepared.placement);
+    if (prepared.kind === "placement" && state === "pending") {
+      // A fresh <Session> places a session; it does not create one. It has
+      // validated the agent and where the session will live, and that is all it
+      // may do — the first consuming operation chooses how the session is
+      // constructed, and choosing here would take that choice away from a
+      // <Session.Launch> nested inside this very element.
+      requireAssembly(agentName, prepared.sessionKey);
+      return placePending(prepared);
+    }
     return yield* owning(
       agentName,
       agentCommandOf(prepared),
       prepared.sessionKey,
       "session",
       function* (ownership) {
-        // Inside ownership, before any provider construction effect.
-        // `<Session>` is eager, so establishing one publishes `acp-first` and a
-        // launch that would name it again refuses rather than converting. A
-        // failed ensure leaves the route standing: it may have created provider
-        // state before the caller saw the failure, and preserving the route is
-        // what stops that uncertainty from later being reclassified as
+        // An established session, reattached eagerly: its route and its durable
+        // identity both exist, so validating them here is what makes a
+        // mismatched or missing history refusable before any turn. A failed
+        // ensure leaves the route standing — it may have created provider state
+        // before the caller saw the failure, and preserving the route is what
+        // stops that uncertainty from later being reclassified as
         // client-native.
         const attachment = yield* constructRoute(agentName, prepared);
         const session = yield* turns.withSlot(prepared.sessionKey, () =>
           withSessionRoute(context, function* () {
-            const entry = yield* ensureFromPrepared(agentName, prepared, attachment);
+            const entry = yield* ensureFromPrepared(agentName, prepared, {
+              ...(attachment === undefined ? {} : { attachment }),
+              state,
+            });
             return entry.session;
           }),
         );

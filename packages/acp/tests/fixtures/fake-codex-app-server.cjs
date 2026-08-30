@@ -144,6 +144,34 @@ function handle(message) {
       }, 60);
       return;
     }
+    case "review/start": {
+      // A review is a turn the App Server accepted, reached by its own request
+      // rather than by `turn/start`. It answers with a turn on a review thread
+      // of its own, which is what makes it a separate acceptance path.
+      const threadId = message.params?.threadId ?? "thread-1";
+      const reviewThreadId = `${threadId}-review`;
+      const turnId = nextTurn(reviewThreadId);
+      send({
+        jsonrpc: "2.0",
+        method: "turn/started",
+        params: { threadId: reviewThreadId, turn: { id: turnId, status: "inProgress" } },
+      });
+      reply(message.id, {
+        reviewThreadId,
+        turn: { id: turnId, items: [], status: "inProgress", error: null },
+      });
+      setTimeout(() => {
+        send({
+          jsonrpc: "2.0",
+          method: "turn/completed",
+          params: {
+            threadId: reviewThreadId,
+            turn: { id: turnId, items: [], status: "completed", error: null },
+          },
+        });
+      }, 60);
+      return;
+    }
     default:
       reply(message.id, {});
       return;

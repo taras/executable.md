@@ -333,15 +333,26 @@ function sessionPolicy(
         throw read.error;
       }
       // Decided before ACPX is contacted, and from one canonical assertion
-      // rather than from the fact that a key is occupied.
-      resolveAgentSession(read.value, policy, yield* assertions(placementKey), identity);
+      // rather than from the fact that a key is occupied. A pending ACPX record
+      // occupies its key and asserts nothing, so this answers `create` for it —
+      // which is what makes the placement pending rather than established.
+      const resolution = resolveAgentSession(
+        read.value,
+        policy,
+        yield* assertions(placementKey),
+        identity,
+      );
 
       const cwd = providerSessionDirectory(paths, placementKey);
       if (!emptied.has(cwd)) {
         emptied.add(cwd);
         yield* useEmptyDirectory(cwd);
       }
-      return { sessionKey: placementKey, cwd };
+      return {
+        sessionKey: placementKey,
+        cwd,
+        state: resolution.kind === "create" ? "pending" : "established",
+      };
     },
 
     *established(placement, providerIdentity) {

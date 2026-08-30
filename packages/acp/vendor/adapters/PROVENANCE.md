@@ -3,16 +3,20 @@
 This directory carries one npm tarball per provider, and a workflow run executes
 those instead of the adapter `npx` would resolve.
 
-| Provider | Package | Version | Contract |
+| Provider | Package | Version | Contracts |
 | --- | --- | --- | --- |
-| `codex` | `@agentclientprotocol/codex-acp` | 1.6.2 | `_meta.codex.turnId` |
-| `claude` | `@agentclientprotocol/claude-agent-acp` | 0.70.0 | `_meta.claudeCode.assistantMessageUuid` |
+| `codex` | `@agentclientprotocol/codex-acp` | 1.6.2 | `_meta.codex.turnId`, `executablemd.session-materialization/v1` |
+| `claude` | `@agentclientprotocol/claude-agent-acp` | 0.70.0 | `_meta.claudeCode.assistantMessageUuid`, `executablemd.session-materialization/v1` |
 
 `MANIFEST.json` records, for each: the exact upstream base and patched commit,
 the build command, the tarball's byte length and SHA-256, and its complete file
 list. `generated/snapshots.ts` carries the same bytes as a module.
 
 ## Why this exists
+
+Two facts XMD needs, neither of which a published adapter reports.
+
+### Which turn a Prompt completed
 
 A workflow Prompt retains which provider turn it completed
 (`specs/workflow-workspace-spec.md` §8.6). The identity can only come from the
@@ -29,7 +33,33 @@ upstream and unmerged:
 
 Until those release, a run using a published adapter completes every Prompt and
 retains nothing — silently, after being told it was continuing an exact
-conversation. These snapshots are what stands in until then.
+conversation.
+
+### Whether the backend accepted a turn
+
+A fresh `<Session>` places a session; it does not create one. The conversation
+begins when a backend accepts the first turn, and only the adapter is in a
+position to say when that happened (`specs/acp-client-spec.md`). Everything else
+a turn produces — text, a stop reason, a terminal response, a checkpoint token —
+says the adapter is talking, and a client that read one of those as acceptance
+would retain a conversation the backend may never have made.
+
+Both adapters now report it the same way, on the same versioned key: a standard
+ACP `session_info_update` whose update `_meta` carries
+`{"executablemd.session-materialization/v1": {"state": "accepted"}}`, published
+once per accepted turn, at the provider-specific boundary where acceptance
+becomes true — Codex wherever the App Server answers with a turn, whether the
+prompt reached it through `turn/start` or through a turn-starting command
+(`/review`, `/goal <objective>`, `/goal resume`); Claude when the SDK reports
+that exact queued command dispatched. A command that starts no turn reports
+nothing, because nothing was accepted. It carries no session information of its
+own, so a client not waiting for it reads nothing.
+
+`materializationContract` in `MANIFEST.json` records it separately from
+`contract` above: which turn completed and whether a backend accepted one are
+different claims, and an adapter could carry either without the other.
+
+These snapshots are what stands in until both land upstream.
 
 ## What is carried, and what is not
 
@@ -101,6 +131,10 @@ materialized or launched refuses that agent instead. Every other agent name
 delegates unchanged to the baseline registry, resolving to the same command and
 retaining the same compatibility identity as it did before any adapter was
 carried here.
+
+A missing acceptance marker is a different matter, and deliberately so: no
+fallback promotes a session in its place, so a first turn that never reports
+acceptance leaves the session unestablished rather than silently retained.
 
 A missing checkpoint affects only association retention. An agent that reports
 no turn identity — because this build overrides nothing for it, or because the
