@@ -18,26 +18,36 @@ import { fileURLToPath } from "node:url";
 
 import {
   packagedDocumentUrl,
-  PROMPT_PLAN,
+  PROMPT_COMMAND_DOCUMENT,
   readPackagedDocument,
 } from "../src/packaged-document.ts";
 import { useWorkingDirectory } from "./support/prompt-harness.ts";
 
 describe("packaged documents", () => {
-  it("reads the plan program from beside its module, whatever the cwd is", function* () {
+  it("reads the prompt command document from beside its module, whatever the cwd is", function* () {
     // A temporary contextual cwd with no document in it. A lookup that reached
     // for the working directory would find nothing here, and one that reached
     // through the component search path would be answerable by a repository
     // file — neither may decide which program this command runs.
     const source = yield* useWorkingDirectory(function* () {
-      return yield* readPackagedDocument(PROMPT_PLAN);
+      return yield* readPackagedDocument(PROMPT_COMMAND_DOCUMENT);
     });
 
-    expect(source).toBe(yield* readTextFile(fileURLToPath(packagedDocumentUrl(PROMPT_PLAN))));
-    // It is the plan program, not merely some file that exists.
+    const committed = yield* readTextFile(
+      fileURLToPath(packagedDocumentUrl(PROMPT_COMMAND_DOCUMENT)),
+    );
+    expect(source).toBe(committed);
+    // It is the prompt command document, not merely some file that exists.
     expect(source).toContain("returns:");
     expect(source).toContain("<ValidateCandidate");
     expect(source).toContain("<Fail");
+    // And it holds the authorship rule that makes what the assistant returns a
+    // Plan rather than a script: prose the reader was written for, with each
+    // component beside the sentences describing what it does.
+    expect(source).toContain(
+      "places each component\nimmediately after the sentences describing the action",
+    );
+    expect(source).toContain("ordinary reader-facing prose");
   });
 
   it("says which build is missing a document rather than behaving differently", function* () {

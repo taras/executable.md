@@ -6,9 +6,9 @@
  * options, so they resolve them once, here, rather than each reading the flags
  * again. What they do with the result differs, and deliberately: a run installs
  * the registered provider into the Agent Api so a document may reach it, while
- * prompt generation holds a provider handle of its own and installs no document
- * components, no root provider and no foreground launcher — it needs turns, not
- * authority.
+ * `xmd prompt` hands the same answer to two consumers — the prompt profile, which
+ * takes the provider name and the default agent and nothing else, and the
+ * approved document, which runs the ordinary run stack.
  *
  * `agent-config.ts` stays the pure flag-to-permission mapping. This module is
  * where the environment, the provider registry and the host's own machine
@@ -16,15 +16,14 @@
  */
 
 import {
-  Agent,
   installAgentComponents,
   installPermissionMode,
   registerAgentProvider,
 } from "@executablemd/core";
 import type { AgentProviderFactory, PermissionMode } from "@executablemd/core";
 import { installForegroundLauncher, env as readEnv } from "@executablemd/runtime";
-import { createAcpxProvider, DEFAULT_AGENT_NAME, useAcpxProvider } from "@executablemd/acp";
-import type { AcpxProvider, AcpxProviderDependencies } from "@executablemd/acp";
+import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
+import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
 
@@ -122,53 +121,4 @@ export function* installRunAgentStack(stack: AgentStack): Operation<void> {
   // document inspection and `xmd test` install no launcher, so a document that
   // reaches <Session.Launch> under any of them refuses instead of spawning.
   yield* installForegroundLauncher();
-}
-
-/**
- * A provider that can run turns, and nothing else.
- *
- * `xmd prompt` writes a document before one exists, so there is nothing to
- * install components into and no launch for anyone to authorize. It takes the
- * provider's operations directly and answers only the one Agent operation the
- * provider itself performs — resolving the agent a session and a turn belong
- * to. Everything else on the Agent Api stays at its base behavior, so a launch
- * or a document prompt reaching this scope is refused rather than served.
- *
- * The permission policy is installed first, so it encloses the provider state's
- * own scope and answers the native permission requests generation raises with
- * the same `--approve-all`, `--approve-reads` or `--deny-all` choice a run uses.
- *
- * `instructions` become the fresh session's system prompt. They reach ACPX
- * through `newSessionOptions`, which it applies when it creates a session and
- * ignores when it reuses a record.
- */
-export function* useGeneratorAgent(
-  stack: AgentStack,
-  instructions: string,
-  dependencies?: AcpxProviderDependencies,
-): Operation<AcpxProvider> {
-  yield* installPermissionMode(stack.permissionMode);
-
-  let provider: AcpxProvider | undefined;
-  yield* Agent.around(
-    {
-      *agent([name], _next) {
-        if (provider === undefined) {
-          throw new Error("the generator agent provider is not established yet");
-        }
-        return yield* provider.agent(name);
-      },
-    },
-    { at: "min" },
-  );
-
-  provider = yield* useAcpxProvider(
-    { defaultAgent: stack.defaultAgent, permissionMode: stack.permissionMode },
-    {
-      ...hostAcpDependencies(stack.sessions),
-      ...dependencies,
-      newSessionOptions: { systemPrompt: instructions },
-    },
-  );
-  return provider;
 }

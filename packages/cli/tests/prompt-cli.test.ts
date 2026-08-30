@@ -2,10 +2,10 @@
  * Tier PR — the `xmd prompt` command lifecycle
  * (specs/prompt-command-spec.md).
  *
- * Rows P2, P4 and P13–P16: what the command does to the filesystem, the
- * journal, the process status and the document it ends in. The approved
- * document runs through the production executor, so what these prove about
- * execution is what `xmd run` does with a supplied root.
+ * The command's grammar, filesystem, journal, lifetime and execution rows: what
+ * `xmd prompt` does to the disk, to the process status and to the document it
+ * ends in. The approved document runs through the production executor, so what
+ * these prove about execution is what `xmd run` does with a supplied root.
  *
  * The grammar rows shell out, because exit status and help text are what an
  * operator sees. Everything with a phase to observe runs in process, where a
@@ -151,7 +151,7 @@ describe(
   "Tier PR — the xmd prompt command",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
-    it("P2: a misplaced individual option refuses before any phase begins", function* () {
+    it("C1: a misplaced individual option refuses before any phase begins", function* () {
       yield* useWorkingDirectory(function* (dir) {
         const harness = createPromptHarness();
         const code = yield* runPrompt(
@@ -185,7 +185,7 @@ describe(
       });
     });
 
-    it("P2: inline source is refused before any phase begins", function* () {
+    it("C1: inline source is refused before any phase begins", function* () {
       // `-e` belongs to `xmd run`. `xmd prompt` is the command that *writes* a
       // document, so a second one supplied on the command line is a
       // contradiction — and one the parser used to drop in silence, leaving the
@@ -212,7 +212,7 @@ describe(
       }
     });
 
-    it("P2: help needs no request and touches nothing", function* () {
+    it("C1: help needs no request and touches nothing", function* () {
       yield* useWorkingDirectory(function* (dir) {
         const { code, stdout, stderr } = yield* runCli(
           [
@@ -234,6 +234,11 @@ describe(
         expect(stdout).toContain("--props <json>");
         expect(stdout).toContain("XMD_PROPS");
         expect(stdout).toContain("--save <path>");
+        expect(stdout).toContain("--session <name>");
+        // The permission flags are the approved document's, and help says so
+        // rather than letting a caller believe they configure how the Plan is
+        // written.
+        expect(stdout).toContain("Permission flags configure the approved document");
         expect(stderr).not.toContain("unavailable");
         // No catalog was rendered, and neither file the options named was made.
         expect(stdout).not.toContain("## Built-in components");
@@ -243,9 +248,19 @@ describe(
 
       const program = yield* runCli(["--help"]).expect();
       expect(program.stdout).toMatch(/^\s+prompt\s/m);
+
+      // A session is named or it is not selected, and the refusal happens in
+      // preflight, beside the request's own — a parser that read the empty value
+      // as absent would have used the generated name instead.
+      yield* useWorkingDirectory(function* (dir) {
+        const empty = yield* runCli(["prompt", REQUEST, "--session", ""], { cwd: dir }).join();
+        expect(empty.code).toBe(1);
+        expect(empty.stderr).toContain("--session needs a name");
+        expect(empty.stdout).not.toContain("## Built-in components");
+      });
     });
 
-    it("P4: individual, aggregate and environment sources resolve and reach the run", function* () {
+    it("C15: individual, aggregate and environment sources resolve and reach the run", function* () {
       yield* useWorkingDirectory(function* (dir) {
         const harness = createPromptHarness();
         harness.deps.execute = executor(dir);
@@ -265,10 +280,10 @@ describe(
       });
     });
 
-    it("P13: every refusal is nonzero and leaves no save, journal or run", function* () {
+    it("C12: every refusal is nonzero and leaves no save, journal or run", function* () {
       const journalName = "trace.jsonl";
 
-      // Abort at review.
+      // Abort at review, through the command document's authored failure.
       yield* useWorkingDirectory(function* (dir) {
         const harness = createPromptHarness();
         harness.deps.execute = executor(dir, join(dir, journalName));
@@ -283,7 +298,7 @@ describe(
         expect(yield* exists(join(dir, journalName))).toBe(false);
       });
 
-      // A generation failure.
+      // A turn that produced text and then failed.
       yield* useWorkingDirectory(function* (dir) {
         const harness = createPromptHarness();
         harness.deps.execute = executor(dir, join(dir, journalName));
@@ -337,7 +352,7 @@ describe(
       });
     });
 
-    it("P14: the approved bytes are created exclusively, before the run", function* () {
+    it("C11: the approved bytes are created exclusively, before the run", function* () {
       // Created before execution, and byte for byte.
       yield* useWorkingDirectory(function* (dir) {
         const harness = createPromptHarness();
@@ -392,7 +407,7 @@ describe(
       });
     });
 
-    it("P15: the approved source runs as an ordinary document under <prompt>", function* () {
+    it("C15: the approved source runs as an ordinary document under <prompt>", function* () {
       yield* useWorkingDirectory(function* (dir) {
         const journal = join(dir, "trace.jsonl");
         const harness = createPromptHarness();
@@ -432,7 +447,7 @@ describe(
       });
     });
 
-    it("P15: a failing test in the approved document reports as a run reports it", function* () {
+    it("C15: a failing test in the approved document reports as a run reports it", function* () {
       yield* useWorkingDirectory(function* (dir) {
         const harness = createPromptHarness();
         harness.deps.execute = executor(dir);
@@ -466,7 +481,7 @@ describe(
       });
     });
 
-    it("P15: one Agent resolution serves generation and the execution after it", function* () {
+    it("C15: one Agent resolution serves generation and the execution after it", function* () {
       yield* useWorkingDirectory(function* (dir) {
         const reads: string[] = [];
         yield* useRecordedEnvironment(reads, { DEFAULT_AGENT_NAME: "settled-agent" });
@@ -497,7 +512,8 @@ describe(
         const code = yield* runPrompt({ ...command(dir, [REQUEST]), stack }, harness.deps);
 
         expect(code).toBe(0);
-        // Generation resolved the settled agent rather than a name of its own.
+        // The command document resolved the settled agent rather than a name of
+        // its own.
         expect(harness.fake.ensured.map((input) => input.agent)).toEqual(["settled-agent"]);
         // And nothing after it read the name again: authorship and the document
         // installation that followed were both configured from the one answer,
@@ -506,7 +522,7 @@ describe(
       });
     });
 
-    it("P16: the deadline encloses every phase, and teardown gates what follows", function* () {
+    it("C13: the deadline encloses every phase, and teardown gates what follows", function* () {
       // Expiry is cancellation, so the proof is what cancelling the command does:
       // the turn in flight is cancelled, the provider is dismantled, and no later
       // phase begins. The barrier is what makes this a gate rather than a race —
@@ -530,11 +546,12 @@ describe(
         expect(yield* exists(join(dir, "out.md"))).toBe(false);
       });
 
-      // A generator teardown failure prevents the save and the run.
+      // A teardown failure prevents the final validation, the save and the run,
+      // whatever the command document selected.
       yield* useWorkingDirectory(function* (dir) {
         const harness = createPromptHarness();
         harness.deps.execute = executor(dir);
-        harness.fake.closeFailure = new Error("the generator would not close");
+        harness.fake.closeFailure = new Error("the profile provider would not close");
         harness.fake.script({ reply: PLAIN });
         harness.script({ decision: "approve" });
 
@@ -545,7 +562,7 @@ describe(
         expect(yield* exists(join(dir, "out.md"))).toBe(false);
       });
 
-      // Nothing bounds a generation turn: the exec and fetch defaults belong to
+      // Nothing bounds an authoring turn: the exec and fetch defaults belong to
       // the document, and the run deadline is the enclosing timebox above.
       yield* useWorkingDirectory(function* (dir) {
         const harness = createPromptHarness();
@@ -562,7 +579,7 @@ describe(
       });
     });
 
-    it("P16: the deadline is the whole prompt command's, as it is a run's", function* () {
+    it("C13: the deadline is the whole prompt command's, as it is a run's", function* () {
       // Read for prompt exactly as for run: a value that is not a duration fails
       // the invocation before it prepares anything.
       for (const flag of ["--timeout", "--timeout-exec", "--timeout-fetch"]) {

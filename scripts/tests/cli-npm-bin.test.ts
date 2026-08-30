@@ -107,8 +107,8 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     // absent from the package unless the build copies it — and the command
     // would then find no program to run, on Node and Bun while Deno stayed
     // green.
-    expect(yield* readTextFile(path.join(OUT_DIR, "esm/src/documents/prompt-plan.md"))).toBe(
-      yield* readTextFile(path.join(ROOT, PKG_DIR, "src/documents/prompt-plan.md")),
+    expect(yield* readTextFile(path.join(OUT_DIR, "esm/src/documents/prompt-command.md"))).toBe(
+      yield* readTextFile(path.join(ROOT, PKG_DIR, "src/documents/prompt-command.md")),
     );
   });
 });

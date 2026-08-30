@@ -20,8 +20,8 @@ import { readFile } from "node:fs/promises";
 import { until } from "effection";
 import type { Operation } from "effection";
 
-/** The plan program `xmd prompt` executes. */
-export const PROMPT_PLAN = "prompt-plan.md";
+/** The document `xmd prompt` executes to turn a request into a Plan. */
+export const PROMPT_COMMAND_DOCUMENT = "prompt-command.md";
 
 /**
  * Where a packaged document lives, as a URL beside this module.

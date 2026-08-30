@@ -21,6 +21,7 @@ import type { Binding } from "./props.ts";
 
 export const PROMPT_COMMAND = "prompt";
 export const SAVE_OPTION = "--save";
+export const SESSION_OPTION = "--session";
 
 /** The built-in options that take a separated value. */
 const VALUE_OPTIONS: readonly string[] = [
@@ -33,6 +34,7 @@ const VALUE_OPTIONS: readonly string[] = [
   "--timeout-exec",
   "--timeout-fetch",
   SAVE_OPTION,
+  SESSION_OPTION,
 ];
 
 /** The built-in options that take none. */
@@ -171,9 +173,30 @@ export function scanPromptArgs(args: readonly string[]): PromptScan {
         continue;
       }
 
+      const separated =
+        equals === -1 && VALUE.has(name) && args[index + 1] !== undefined
+          ? args[index + 1]
+          : undefined;
+      // Read here rather than after parsing, because an empty value is exactly
+      // what the parser cannot report: an option it reads as absent falls back
+      // to the default, so a caller who asked for a session and named none would
+      // silently get the generated one instead.
+      if (name === SESSION_OPTION) {
+        const value = equals === -1 ? separated : token.slice(equals + 1);
+        if (value === undefined || value.length === 0) {
+          return {
+            ...(request === undefined ? {} : { request }),
+            fixed,
+            occurrences,
+            error:
+              `${SESSION_OPTION} needs a name — write \`${SESSION_OPTION} <name>\` or leave ` +
+              "it out for a session unique to this invocation",
+          };
+        }
+      }
       fixed.push(token);
-      if (equals === -1 && VALUE.has(name) && args[index + 1] !== undefined) {
-        fixed.push(args[index + 1]);
+      if (separated !== undefined) {
+        fixed.push(separated);
         index += 2;
         continue;
       }

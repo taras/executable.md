@@ -8237,17 +8237,24 @@ identity, and no temporary file is created: the text is captured inside the
 durable root import, so the journal holds it and a replay restores it without
 reading anything.
 
-Text a host generated reports `<prompt>` on the same terms. `xmd prompt` asks an
-agent for a complete root, validates it, has a person approve it, and executes
-`retainedSource("<prompt>", source)` — so the identity says where the bytes came
-from, and a source position reads `(<prompt>:5:1)`. It is a deliberate identity
-rather than a path nobody could read back, and it is the only thing that
-differs: the approved document runs through the ordinary supplied-source path,
-renders and returns exactly as any other root, resolves the contextual working
-directory for every relative operation, and creates its journal only when
-execution starts. Generation, repair and approval happen before that execution
-exists, so nothing about them is journaled or replayed. The command's complete
-contract is [`xmd prompt`](./prompt-command-spec.md).
+Text a host generated reports `<prompt>` on the same terms. `xmd prompt` runs a
+packaged first-party command document that turns a request into a Plan — asking
+an agent for a complete root, having the host check it, and having a person
+approve it; the host then validates the returned bytes again and executes
+`retainedSource("<prompt>", source)` — so the
+identity says where the bytes came from, and a source position reads
+`(<prompt>:5:1)`. It is a deliberate identity rather than a path nobody could
+read back, and it is the only thing that differs: the approved document runs
+through the ordinary supplied-source path, renders and returns exactly as any
+other root, resolves the contextual working directory for every relative
+operation, and creates its journal only when execution starts.
+
+That command document is the other root the command executes, under its own
+stable internal identity `<prompt-command>`, on an invocation-owned in-memory
+durable stream that is discarded when authorship is over. So nothing about
+generation, repair or approval is journaled or replayed, and the two executions
+share no scope. The command's complete contract is
+[`xmd prompt`](./prompt-command-spec.md).
 
 `inspectDocument(root)` loads and validates the root definition and returns
 what it declares — without executing the document or creating a journal:
@@ -10033,21 +10040,23 @@ One checked-in Markdown suite runs the real command against a fixture directory.
 
 ### Tier PR — The `xmd prompt` command
 
-Authorship around one ordinary document: generation, validation, repair, live
-review, saving and execution. Defined in [`xmd prompt`](./prompt-command-spec.md),
-whose acceptance table this points at rather than restating. The ACPX runtime is
-a scriptable fake, the review provider is a scripted `Elicitation` handler, and
-the contextual working directory is a temporary one — no live agent, browser or
-network appears in this evidence, and every refusal is proven by the phase
-tripwires that stayed at zero.
+Two root executions with a scope boundary between them: the packaged prompt
+command document, which owns the visible generation, repair, review and failure
+policy, and the Plan it returned, which runs as any supplied root does. Defined in
+[`xmd prompt`](./prompt-command-spec.md), whose acceptance table this points at
+rather than restating. The ACPX runtime is a scriptable fake, the review provider
+is a scripted `Elicitation` handler, and the contextual working directory is a
+temporary one — no live agent, browser or network appears in this evidence, and
+every refusal is proven by the phase tripwires that stayed at zero.
 
 | # | Test | Verify |
 |---|------|--------|
-| P1–P3 | Fixed grammar | One request preserved byte for byte; missing, repeated, empty and whitespace-only requests refused; individual options after the request and aggregate props before it; a built-in option never read as a generated property's value |
-| P4–P6 | Generated props | Scalar, switch, repeated and aggregate sources resolve with ordinary precedence and reach validation and execution; a draft's defect is repaired while a caller's terminates; a frozen option's shape is what no later draft may change |
-| P7–P9 | Generation | One run-profile catalog, origin-only TypeScript truth included, becomes the fresh session's system prompt; one exact session carries every turn and a second invocation places another; only a completed terminal produces a candidate |
-| P10–P12 | Repair and review | The base candidate plus exactly three repairs; an exhausted candidate is shown with its diagnostics and cannot be approved; revise needs non-empty feedback and resets the budget; the exact bytes are shown inside a fence they cannot close and executed unchanged |
-| P13–P16 | Lifecycle | Every refusal is non-zero with no save, journal or run; an approval's journal holds only the document's events; the approved bytes are created exclusively before execution; the run reports `<prompt>` and behaves as `xmd run` does; the deadline encloses every phase and teardown gates what follows |
+| C1 | Fixed grammar and help | One request preserved byte for byte; missing, repeated, empty and whitespace-only requests refused; individual options after the request and aggregate props before it; a built-in option never read as a generated property's value; `--session` named or refused; generic help with no effects |
+| C2–C3 | The packaged document is the policy | The command executes the checked-in Markdown value root under `<prompt-command>`, and the turn text is that document's own words; generation, repair, review, revision, approval, abort and exhaustion are Markdown, `<Prompt>` stays one turn, and what a person reads says each thing once however many rounds it took |
+| C4–C6 | Session and ceiling | One enclosing Session carries every turn, defaults differ per invocation and `--session` supplies the exact override; the prompt profile gives the assistant an empty host-owned directory, no MCP servers, no native tools and a private strict denial no permission flag widens; a draft is data until the approved Plan runs |
+| C7–C9 | Classification, bounds and presentation | Draft defects return structured facts and caller defects escape the validator; one base draft plus three repairs, and ten presentations with no revision on the last; arbitrary source cannot close `<CodeBlock>`, and abort reaches the document's own `<Fail>` |
+| C10–C13 | Admission and lifetime | The host revalidates after the command document has completely torn down and resolves props for the exact returned bytes; those bytes are created exclusively before execution; the final journal holds only the document's events; cancellation and teardown failure settle before anything later begins |
+| C14–C15 | Result | The shipped generation, repair and revision instructions carry the narrative-plus-components rule, and a Plan of prose interleaved with components survives approval and execution byte for byte; the run reports `<prompt>` and behaves as `xmd run` does |
 
 ### Tier WB — The workflow component bundle in core
 

@@ -35,7 +35,7 @@ function frozen(entries: Record<string, OptionSignature>): Map<string, OptionSig
 }
 
 describe("Tier PR — xmd prompt fixed grammar", () => {
-  it("P1: exactly one request, kept byte for byte", function* () {
+  it("C1: exactly one request, kept byte for byte", function* () {
     expect(namesPrompt(["prompt", REQUEST])).toBe(true);
     expect(namesPrompt(["run", "doc.md"])).toBe(false);
 
@@ -64,7 +64,7 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
     expect(separated.fixed).toEqual(["prompt"]);
   });
 
-  it("P2: individual options follow the request, aggregate props may precede it", function* () {
+  it("C1: individual options follow the request, aggregate props may precede it", function* () {
     const early = scanPromptArgs(["prompt", "--props-name", "Ada", REQUEST]);
     expect(early.error).toContain("unrecognized option: --props-name");
     expect(early.error).toContain("follow the request");
@@ -85,7 +85,7 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
     expect(inline.fixed).toEqual(["prompt", REQUEST]);
   });
 
-  it("P3: built-in options after generated props stay with the invocation", function* () {
+  it("C1: built-in options after generated props stay with the invocation", function* () {
     const scan = scanPromptArgs([
       "prompt",
       REQUEST,
@@ -99,6 +99,8 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
       "trace.jsonl",
       "--save",
       "out.md",
+      "--session",
+      "ada",
     ]);
     expect(scan.error).toBe(undefined);
     expect(scan.request).toBe(REQUEST);
@@ -112,6 +114,8 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
       "trace.jsonl",
       "--save",
       "out.md",
+      "--session",
+      "ada",
     ]);
     // `--props-loud` did not swallow `--journal`: a known option is never read
     // as a generated property's value.
@@ -145,7 +149,7 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
     expect(isReservedOption("-5")).toBe(false);
   });
 
-  it("P4: scalar, boolean and aggregate sources are all recorded", function* () {
+  it("C1: scalar, boolean and aggregate sources are all recorded", function* () {
     const scan = scanPromptArgs([
       "prompt",
       REQUEST,
@@ -194,7 +198,7 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
     ]);
   });
 
-  it("P5: a boolean binding turns its provisional value into a second request", function* () {
+  it("C1: a boolean binding turns its provisional value into a second request", function* () {
     const scan = scanPromptArgs(["prompt", REQUEST, "--props-loud", "true"]);
     expect(scan.error).toBe(undefined);
     expect(scan.occurrences).toEqual([{ option: "--props-loud", provisional: "true" }]);
@@ -210,7 +214,7 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
     expect(stray).toContain("--props-loud=true");
   });
 
-  it("P6: a frozen option's shape is what a later candidate may not change", function* () {
+  it("C7: a frozen option's shape is what a later candidate may not change", function* () {
     const scalar = bindingsFor({ name: { type: "string" } });
     const boolean = bindingsFor({ name: { type: "boolean" } });
     const array = bindingsFor({ name: { type: "array", items: { type: "string" } } });

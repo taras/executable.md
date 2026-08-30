@@ -109,7 +109,7 @@ import {
   resolvePropsFromSources,
 } from "./props.ts";
 import type { Binding, Extraction } from "./props.ts";
-import { namesPrompt, scanPromptArgs, SAVE_OPTION } from "./prompt-args.ts";
+import { namesPrompt, scanPromptArgs, SAVE_OPTION, SESSION_OPTION } from "./prompt-args.ts";
 import type { PromptScan } from "./prompt-args.ts";
 import { runPrompt } from "./prompt.ts";
 import type { PromptExecution } from "./prompt.ts";
@@ -254,6 +254,10 @@ const promptConfig = object({
   },
   save: {
     description: "write the approved document here before running it (path must not exist)",
+    ...field(z.string().optional()),
+  },
+  session: {
+    description: "logical name for the assistant session (default: unique to this invocation)",
     ...field(z.string().optional()),
   },
   ...executionFields,
@@ -907,9 +911,9 @@ export interface PromptExecutionConfig {
  * How `xmd prompt` runs the document a person approved: exactly as `xmd run`
  * runs a supplied one.
  *
- * The generator's scope is already gone by the time this is called, so the
+ * The prompt profile's scope is already gone by the time this is called, so the
  * executed program gets a fresh ordinary Agent provider and inherits neither
- * the generator session nor its system prompt. The browser form is composed
+ * the assistant session nor its instruction layer. The browser form is composed
  * around the document for the same reason a run composes one: `xmd prompt` is a
  * command a person is sitting in front of.
  */
@@ -938,7 +942,7 @@ export function promptExecutor(
           props: approved.props,
           ...(sessions === undefined ? {} : { machineSessions: sessions }),
           // The same object generation was configured from. The provider it
-          // installs is a fresh ordinary one — the generator's scope is already
+          // installs is a fresh ordinary one — the profile's scope is already
           // gone — but which agent it defaults to and what it may do were
           // decided once, for the whole invocation.
           agent: stack,
@@ -1659,8 +1663,11 @@ const PROMPT_REQUEST_HELP = [
   "path. Quote it so the shell passes it as a single argument:",
   '  xmd prompt "ask me for my age and write the result to a file"',
   "",
-  "The agent writes a complete document, xmd validates it and repairs definite",
-  "defects, and you approve, revise or abort before anything runs.",
+  "A first-party command document turns your request into a Plan: an executable",
+  "Markdown document that states what you asked for in ordinary language and",
+  "places the components that do the work alongside those words. xmd checks each",
+  "draft and repairs definite defects; you approve, revise or abort before",
+  "anything runs.",
   "",
   "Document properties follow the request. The individual options a document",
   "declares are the generated document's, so they are not listed here:",
@@ -1673,6 +1680,13 @@ const PROMPT_REQUEST_HELP = [
   `  ${SAVE_OPTION} <path>`,
   "      Write the approved document there before running it. The path must not",
   "      exist; an existing one is left alone and the run stops.",
+  "",
+  `  ${SESSION_OPTION} <name>`,
+  "      Use this logical assistant session instead of one unique to this run.",
+  "",
+  "Permission flags configure the approved document. Writing the Plan is a",
+  "conversation about text and gives the assistant nothing: an empty directory of",
+  "its own, no tools, no MCP servers, and every native permission request denied.",
 ].join("\n");
 
 /**
@@ -1900,7 +1914,7 @@ function* dispatch(
         yield* exit(1);
         break;
       }
-      // Once, here, and handed to both consumers below. Generation and the
+      // Once, here, and handed to both consumers below. Authorship and the
       // execution that follows it are one invocation, so they answer to one
       // `--default-agent`, one `DEFAULT_AGENT_NAME` and one permission mode.
       const promptStack = yield* settleAgentStack(
@@ -1922,6 +1936,7 @@ function* dispatch(
           scan,
           include: config.include,
           ...(config.save === undefined ? {} : { save: config.save }),
+          ...(config.session === undefined ? {} : { session: config.session }),
           stack: promptStack,
         },
         {
@@ -2137,7 +2152,7 @@ export function* runXmd(
   const provisional = xmd.parse({ args: helpRequest.args });
   const selected = provisional.ok ? provisional.value.config : undefined;
   // The two commands that end in a document execution. `xmd prompt`'s deadline
-  // encloses more than a run's — the catalog, the generator session, every
+  // encloses more than a run's — the catalog, the assistant session, every
   // repair, the human review, provider teardown, the save and the execution —
   // because all of it is what the caller asked to be bounded.
   const executes =

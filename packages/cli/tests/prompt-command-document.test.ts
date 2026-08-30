@@ -1,11 +1,11 @@
 /**
- * The packaged plan program, executed as itself.
+ * The packaged prompt command document, executed as itself.
  *
  * This runs the exact Markdown the CLI ships — read through the packaged
  * loader, not copied into a fixture — so what it proves is what a release does.
  * The seams around it are deterministic: a scriptable ACP runtime for the one
  * Agent turn, a scripted Elicitation answer for the review, and a test-only
- * validator standing in for the host capability that does not exist yet.
+ * validator in the place the prompt profile declares the production one.
  *
  * The include list is empty on purpose. Repository component search must not be
  * able to supply `Loop`, `If`, `Return`, `Fail`, `CodeBlock` or the validator:
@@ -29,7 +29,7 @@ import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { createAcpxProvider } from "@executablemd/acp";
 
-import { PROMPT_PLAN, readPackagedDocument } from "../src/packaged-document.ts";
+import { PROMPT_COMMAND_DOCUMENT, readPackagedDocument } from "../src/packaged-document.ts";
 import { AGENT, useWorkingDirectory } from "./support/prompt-harness.ts";
 import { createFakeAcp, makeRegistry, makeStore } from "./support/fake-acp.ts";
 
@@ -58,8 +58,8 @@ const CANDIDATE = [
   "",
 ].join("\n");
 
-/** What the plan asked the validator about, in order. */
-interface PlanRun {
+/** What the command document asked the validator about, in order. */
+interface CommandRun {
   validated: string[];
   reviews: ElicitationRequest[];
   prompts: string[];
@@ -67,8 +67,8 @@ interface PlanRun {
   failure: string | undefined;
 }
 
-function* runPlan(): Operation<PlanRun> {
-  const source = yield* readPackagedDocument(PROMPT_PLAN);
+function* runDocument(): Operation<CommandRun> {
+  const source = yield* readPackagedDocument(PROMPT_COMMAND_DOCUMENT);
   const fake = createFakeAcp();
   fake.script({ reply: CANDIDATE });
 
@@ -105,13 +105,13 @@ function* runPlan(): Operation<PlanRun> {
       value = yield* collect(
         yield* executeInstalled(
           {
-            ...retainedSource("<prompt-plan>", source),
+            ...retainedSource("<prompt-command>", source),
             stream: new InMemoryStream(),
             includes: [],
             props: {
               request: "ask me for my age and write the result to a file",
               syntax: "## Built-in components\n\n### `<File>`\n",
-              session: "plan-regression",
+              session: "prompt-command-regression",
             },
           },
           [
@@ -137,8 +137,10 @@ function* runPlan(): Operation<PlanRun> {
                     required: ["valid", "diagnostics"],
                     additionalProperties: false,
                   },
-                  // The deterministic seam only. It records what it was asked
-                  // about and says yes; the production validator is later work.
+                  // The deterministic seam only, standing where the command
+                  // declares its own validator. It records what it was asked
+                  // about and says yes, so what this case observes is the
+                  // program's control flow rather than validation's answers.
                   factory: () =>
                     // deno-lint-ignore require-yield
                     function* validateCandidate(props: Record<string, Json>) {
@@ -159,10 +161,10 @@ function* runPlan(): Operation<PlanRun> {
   return { validated, reviews, prompts: fake.prompts, value, failure };
 }
 
-describe("the packaged plan program", () => {
-  it("returns the approved candidate's exact bytes and never reaches exhaustion", function* () {
+describe("the packaged prompt command document", () => {
+  it("C2: returns the approved candidate's exact bytes and never reaches exhaustion", function* () {
     const run = yield* useWorkingDirectory(function* () {
-      return yield* runPlan();
+      return yield* runDocument();
     });
 
     // Approving the first valid candidate is one turn and one question. A
@@ -174,8 +176,8 @@ describe("the packaged plan program", () => {
     // The validator saw the Agent's complete close value, once, unaltered.
     expect(run.validated).toEqual([CANDIDATE]);
 
-    // The plan settled with a value rather than an authored failure. Before the
-    // control-flow correction this was the ten-draft exhaustion message: a
+    // The document settled with a value rather than an authored failure. Before
+    // the control-flow correction this was the ten-draft exhaustion message: a
     // `<Return>` selects a value but does not end the body, so the unconditional
     // `<Fail>` after the Session ran and won over every approval.
     expect(run.failure).toBe(undefined);

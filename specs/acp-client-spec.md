@@ -531,41 +531,60 @@ The default agent resolves in order, each entry overriding the ones above it:
 The installed provider belongs to the run's `DocumentExecution` scope and closes
 during its teardown.
 
-### The `xmd prompt` generator
+### The `xmd prompt` prompt profile
 
-`xmd prompt` resolves that configuration once and uses it twice: for the session
-that writes the document, and for the document that runs. The provider name, the
-default agent with its `DEFAULT_AGENT_NAME` precedence, the permission mode and
-the host's own machine-session assembly are settled before any catalog is built
-or any document executes, so an unknown provider or an incompatible pair of
-permission flags fails first. It is the settled value that reaches both
+`xmd prompt` resolves that configuration once and uses it twice: for the prompt
+command document that writes the Plan, and for the Plan that runs. The provider
+name, the default agent with its `DEFAULT_AGENT_NAME` precedence, the permission
+mode and the host's own machine-session assembly are settled before any catalog
+is built or any document executes, so an unknown provider or an incompatible
+pair of permission flags fails first. It is the settled value that reaches both
 consumers, not the flags that produced it: `DEFAULT_AGENT_NAME` is read once per
-invocation, and generation and the executed document cannot reach different
+invocation, and authorship and the executed Plan cannot reach different
 conclusions from one command line.
 
-Generation takes the provider's operations directly — `useAcpxProvider`, without
-the Agent install. It needs turns, not authority: no document is installed
-around it, no root provider is registered, and no foreground launcher exists for
-a `<Session.Launch>` to reach. The one Agent operation the provider performs for
-itself, resolving the agent a session and a turn belong to, is answered by the
-generator handle; every other Agent operation keeps its base behavior and
-refuses. The selected permission policy is installed around those turns, so a
-native permission request during generation is answered by the same
-`--approve-all`, `--approve-reads` or `--deny-all` choice a run uses.
+The prompt profile takes the provider name and the default agent from that
+answer, and nothing else. Its ceiling is the host's, assembled for that one
+document and not readable from the command line:
 
-Only the generator provider receives `newSessionOptions.systemPrompt`. It
-carries the invocation's structured syntax catalog and the fixed statement of
-what the session writes ([`xmd prompt`](./prompt-command-spec.md)). ACPX applies
-those options when it creates a session and ignores them when it reuses a
-record, and the command places a session name unique to the invocation, so each
-invocation is a fresh conversation and the instructions are the ones it was
-created under.
+| The profile's provider gets | Stated as |
+| --- | --- |
+| a host-owned working directory that is not the caller's | `agentCwd`, one fixed empty path |
+| no MCP servers | `mcpServers: []`, an empty set rather than an omission |
+| no native tools on a fresh session | `newSessionOptions.allowedTools: []` |
+| a private refusal of every native permission request | `permissions: "strict"` |
 
-The generator's scope closes after approval and before the save and the
-execution. A teardown failure fails the command and neither later phase happens.
-The executed program is an ordinary `xmd run` document with its own root
-provider and its own lifetime: it inherits neither the generator session nor its
-system prompt.
+`"strict"` answers the request inside the provider: the request is denied, the
+turn it belongs to fails, and no public Agent handler is consulted or can
+intervene. So `--approve-all`, `--approve-reads` and `--deny-all` cannot widen a
+ceiling that has nothing in it; they configure the approved document later. A
+provider that cannot establish this ceiling refuses before session
+materialization or a turn.
+
+The command document itself is given no Files, command, service or XMD-mediated
+network capability, and the host decides for that whole execution that a failing
+`<Prompt>` ends it — so a turn that streamed text and then failed presents
+nothing.
+
+The profile's working directory is one fixed host-owned path rather than a new one each
+invocation, because a session's key includes the directory it lives in: a
+location that changed every time would leave `--session` unable to name a
+conversation that already exists. Nothing this profile grants can write there.
+
+Only the profile's provider receives `newSessionOptions.systemPrompt`. It carries the
+fixed statement of what the session writes, and nothing else — the catalog and
+the request are the command document's to send in its own turns
+([`xmd prompt`](./prompt-command-spec.md)). ACPX applies those options when it
+creates a session and ignores them when it reuses a record. Without `--session`
+the command places a name unique to the invocation, so each invocation is a fresh
+conversation created under those instructions; `--session <name>` selects an
+existing one under ordinary continuation semantics.
+
+That document's scope closes before the final validation, the save and the
+execution. A teardown failure fails the command and no later phase happens. The
+executed program is an ordinary `xmd run` document with its own root provider and
+its own lifetime: it inherits neither the assistant session nor its instruction
+layer.
 
 ### Availability
 
