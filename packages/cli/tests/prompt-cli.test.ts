@@ -244,10 +244,14 @@ describe(
             "or leave it out to write the Plan",
         ]);
         // Every phase after preflight stayed at zero: no catalog, no provider,
-        // no session, no turn, no review, no execution.
+        // no turn, no review, no execution.
         expect(untouched(harness)).toEqual(NOTHING);
-        // And nothing durable exists — neither the journal it named nor
-        // anything else.
+        // No prompt-profile session was opened either — neither established
+        // with the provider nor given a directory to run in.
+        expect(harness.fake.ensured).toEqual([]);
+        expect(yield* until(readdir(profileRoot))).toEqual([]);
+        // And nothing durable exists — neither the journal it named, nor an
+        // output file, nor anything else.
         expect(yield* exists(journal)).toBe(false);
         expect(yield* until(readdir(dir))).toEqual([]);
       });
