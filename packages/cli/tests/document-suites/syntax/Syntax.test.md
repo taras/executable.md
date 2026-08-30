@@ -133,4 +133,5 @@ rows read.
 <AssertEquals actual={builtInNames.includes("AssertEquals")} expected={true} />
 <AssertEquals actual={builtInNames.includes("WebForm")} expected={true} />
 <AssertEquals actual={builtInNames.includes("TempDir")} expected={true} />
+<AssertEquals actual={builtInNames.includes("CodeBlock")} expected={true} />
 </Test>

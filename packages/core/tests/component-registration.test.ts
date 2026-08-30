@@ -368,7 +368,16 @@ describe("Tier CR — resolution order", () => {
 
   it("CR16b: a repository file overrides every component core supplies", function* () {
     const dir = yield* useFixture();
-    for (const name of ["Fetch", "File", "Glob", "Json", "Parse", "SafeParse", "TempDir"]) {
+    for (const name of [
+      "CodeBlock",
+      "Fetch",
+      "File",
+      "Glob",
+      "Json",
+      "Parse",
+      "SafeParse",
+      "TempDir",
+    ]) {
       yield* writeTextFile(join(dir, `${name}.md`), "mine\n");
       const selection = yield* select(name, [dir]);
       expect(selection.kind).toBe("repository");
@@ -377,7 +386,16 @@ describe("Tier CR — resolution order", () => {
 
   it("CR17: core's components resolve when nothing is on disk", function* () {
     const dir = yield* useFixture();
-    for (const name of ["Fetch", "File", "Glob", "Json", "Parse", "SafeParse", "TempDir"]) {
+    for (const name of [
+      "CodeBlock",
+      "Fetch",
+      "File",
+      "Glob",
+      "Json",
+      "Parse",
+      "SafeParse",
+      "TempDir",
+    ]) {
       const selection = yield* select(name, [dir]);
       expect(selection.kind).toBe("registered");
       expect(originOf(selection)).toBe(CORE_ORIGIN);
@@ -531,6 +549,26 @@ describe("Tier CR — what a document gets", () => {
     expect(rendered).toContain("required");
     expect(rendered).not.toContain("no JSON text");
     expect(rendered).not.toContain("override saw the projection");
+  });
+
+  it("CR22d: a repository CodeBlock.md replaces core's fence, end to end", function* () {
+    const dir = yield* useFixture();
+    yield* writeTextFile(join(dir, "doc.md"), '<CodeBlock value="fenced" />\n');
+    // `value` is an ordinary prop on both sides, so the override receives the
+    // same string core's registration would have been handed. Nothing about
+    // core's registration travels with the name.
+    yield* writeTextFile(
+      join(dir, "CodeBlock.md"),
+      ["---", "props:", "  value: { type: string }", "---", "", "OVERRIDE:{props.value}"].join(
+        "\n",
+      ),
+    );
+
+    // Core's own would have wrapped the string in a fence; the override writes
+    // it bare, so the output says which one ran and what it was given.
+    const rendered = String(yield* run(dir));
+    expect(rendered).toContain("OVERRIDE:fenced");
+    expect(rendered).not.toContain("```");
   });
 
   it("CR23: a broken local component fails instead of falling back to core's", function* () {
