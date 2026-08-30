@@ -227,16 +227,21 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
     // Each of them describes work that a command writing a Plan never does. A
     // caller who asked for a journal, a permission mode or an exec deadline and
     // got a command that creates none of them was not answered.
+    // Every spelling, including the short forms and both secret-detection
+    // switches: a table that covered only the long names would leave `-V` and
+    // `--secret-detection` accepted and ignored.
     for (const flag of [
       ["--journal", "trace.jsonl"],
       ["-j", "trace.jsonl"],
       ["--raw"],
       ["--verbose"],
+      ["-V"],
       ["--timeout-exec", "5s"],
       ["--timeout-fetch", "5s"],
       ["--approve-all"],
       ["--approve-reads"],
       ["--deny-all"],
+      ["--secret-detection"],
       ["--no-secret-detection"],
     ]) {
       const refused = scanPromptArgs(["prompt", REQUEST, ...flag]);

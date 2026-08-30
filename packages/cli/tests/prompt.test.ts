@@ -137,6 +137,25 @@ function command(dir: string, args: string[], stack: AgentStack = STACK): Prompt
   return { argv, scan: scanPromptArgs(argv), include: [dir], run: true, stack };
 }
 
+/**
+ * What every turn that asks for a Plan has to say, on its own.
+ *
+ * Pinned as one block rather than as sentences found anywhere in the document: a
+ * repair or a revision that quietly dropped a clause would still satisfy a
+ * search for the words somewhere, and a replacement Plan is only complete if the
+ * message asking for it said so.
+ */
+const PLAN_REQUIREMENTS = [
+  "Every Plan is complete on its own:",
+  "",
+  "- optional frontmatter, and then one descriptive level-one Markdown heading as",
+  "  the first body content;",
+  "- the Prompt's complete sequence, written as readable steps;",
+  "- every outcome the Prompt asked for;",
+  "- those steps in an order that makes sense; and",
+  "- each XMD component beside the prose describing the action it performs.",
+].join("\n");
+
 /** Every session key the fake was asked to establish, deduplicated in order. */
 function sessions(harness: PromptHarness): string[] {
   return [...new Set(harness.fake.ensured.map((input) => input.sessionKey))];
@@ -254,18 +273,14 @@ describe(
         // not produce them.
         const turn = harness.fake.prompts[0];
         expect(turn).toContain("Create one complete XMD Plan from this Prompt");
-        // C14: the shipped instruction is the narrative-plus-components rule.
-        expect(turn).toContain(
-          "Begin the Plan with one level-one Markdown title that describes it",
-        );
-        expect(turn).toContain("Write the Plan as a sequence of readable steps");
-        expect(turn).toContain("Follow each step with the XMD\ncomponent that carries it out");
-        // The worked example travels with it, unparsed.
+        // C14: the complete Plan requirement, stated in this turn rather than
+        // referred to from somewhere else in the document.
+        expect(turn).toContain(PLAN_REQUIREMENTS);
+        // The worked example travels with it, unparsed, and is a titled Plan —
+        // the shape being asked for is the shape being shown.
         expect(turn).toContain('<File path="age.txt">{answer.age}</File>');
-        expect(turn).toContain("keep every outcome it asked for");
-        // The worked example is a titled Plan, so the shape being asked for is
-        // the shape being shown.
         expect(turn).toContain("# Ask for and save your age");
+        expect(turn).toContain("keep every outcome it asked for");
         // The request travels inside it, byte for byte.
         expect(turn).toContain(REQUEST);
         // So does the host's catalog, including the renderer's honest statement
@@ -284,6 +299,45 @@ describe(
         expect(harness.fake.prompts).toHaveLength(1);
         expect(harness.fake.turns).toHaveLength(1);
         expect(harness.reviews).toHaveLength(1);
+      });
+    });
+
+    it("C3, C14: every turn that asks for a Plan states the whole requirement", function* () {
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
+        const harness = createPromptHarness({ profileRoot });
+        // A draft that fails its check, then one that passes, then a revision.
+        // Three turns, one of each kind that produces a Plan.
+        harness.fake.script({ reply: UNRESOLVED });
+        harness.fake.script({ reply: VALID });
+        harness.script({ decision: "Request changes", feedback: "say it differently" });
+        harness.fake.script({ reply: VALID });
+        harness.script({ decision: "Approve" });
+
+        const code = yield* runPrompt(command(dir, [REQUEST]), harness.deps);
+        expect(code).toBe(0);
+
+        const [initial, repair, revision] = harness.fake.prompts;
+        expect(harness.fake.prompts).toHaveLength(3);
+        expect(initial).toContain("Create one complete XMD Plan from this Prompt");
+        expect(repair).toContain("Send one complete replacement Plan that resolves every problem");
+        expect(revision).toContain("say it differently");
+
+        // Each of them carries the requirement itself. A turn that only said
+        // "keep what the last draft had" would leave a missing or wrong title
+        // missing or wrong, and none of these do.
+        for (const turn of [initial, repair, revision]) {
+          expect(turn).toContain(PLAN_REQUIREMENTS);
+        }
+
+        // And a replacement is told to write the title the Plan needs rather
+        // than to carry the previous one forward.
+        for (const turn of [repair, revision]) {
+          expect(turn).toContain(
+            "Write the title the Plan needs rather than the one the last draft had",
+          );
+          expect(turn).toContain("add it if\nit was missing");
+          expect(turn).not.toContain("Keep its\nlevel-one title");
+        }
       });
     });
 

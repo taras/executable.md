@@ -143,7 +143,7 @@ function* runDocument(): Operation<CommandRun> {
                   // program's control flow rather than validation's answers.
                   factory: () =>
                     // deno-lint-ignore require-yield
-                    function* validateCandidate(props: Record<string, Json>) {
+                    function* checkDraft(props: Record<string, Json>) {
                       validated.push(String(props.source));
                       return { valid: true, diagnostics: {} };
                     },

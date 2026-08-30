@@ -533,14 +533,17 @@ during its teardown.
 
 ### The `xmd prompt` prompt profile
 
-`xmd prompt` resolves that configuration once and uses it twice: for the prompt
-command document that writes the Plan, and for the Plan that runs. The provider
+`xmd prompt` resolves that configuration once and uses it for the prompt command
+document that writes the Plan, and — when `--run` asks for one — for the run that
+follows. Without `--run` the approved Plan is written rather than executed, so
+the second consumer never appears and the resolved configuration is used once.
+The provider
 name, the default agent with its `DEFAULT_AGENT_NAME` precedence, the permission
 mode and the host's own machine-session assembly are settled before any catalog
 is built or any document executes, so an unknown provider or an incompatible
 pair of permission flags fails first. It is the settled value that reaches both
 consumers, not the flags that produced it: `DEFAULT_AGENT_NAME` is read once per
-invocation, and authorship and the executed Plan cannot reach different
+invocation, and authorship and a run of the Plan cannot reach different
 conclusions from one command line.
 
 The prompt profile takes the provider name and the default agent from that
@@ -602,7 +605,7 @@ That document's scope closes before the final validation, the save and the
 execution. A teardown failure fails the command and no later phase happens. The
 executed program is an ordinary `xmd run` document with its own root provider and
 its own lifetime: it inherits neither the assistant session nor its instruction
-layer.
+layer. It exists only under `--run`.
 
 ### Availability
 

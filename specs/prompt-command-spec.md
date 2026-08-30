@@ -10,10 +10,13 @@ $ xmd prompt "ask me for my age and write the result to a file"
 ```
 
 A Plan is not merely executable code. It preserves the Prompt's intent as
-reader-facing prose interleaved with the components that fulfil it, so the
-request above should produce a document shaped like this:
+reader-facing prose interleaved with the components that fulfil it, beginning
+with one descriptive level-one heading, so the request above should produce a
+document shaped like this:
 
 ```markdown
+# Ask for and save your age
+
 Ask me for my age.
 
 <Elicit as="answer" schema={{ type: "object", properties: { age: { type: "number" } } }} />
@@ -23,20 +26,28 @@ Write it to a file.
 <File path="age.txt">{answer.age}</File>
 ```
 
-and an execution organized by the same narrative: the first sentence, the
-interaction, the second sentence, the file. The Prompt need not be copied
+and an execution organized by the same narrative: the title, the first sentence,
+the interaction, the second sentence, the file. The Prompt need not be copied
 literally — it may be divided, clarified and rewritten into natural prose — but
-every requested outcome, their meaningful ordering, and their relationship to the
-components performing them are preserved.
+the descriptive title, every requested outcome, their meaningful ordering, and
+their relationship to the components performing them are preserved. Every
+Plan-producing turn — the first draft, each repair and each revision — states
+that whole requirement for itself, so a replacement can add or correct a title
+rather than only carry one forward.
+
+That command prints the approved Plan and runs nothing. `--output` writes it to a
+file instead, `--run` executes it, and the two together write it and then run
+it.
 
 The command writes no policy of its own. It executes two root documents with a
 complete scope boundary between them: first the **prompt command document**, a
 checked-in first-party Markdown value root that implements this conversion and
 its review workflow — what the assistant is asked, how many drafts may be
 repaired, what you are shown, and what happens when you approve nothing — and
-then the Plan that document returned, through the same path `xmd run` uses for a
-supplied one. The prompt command document is not itself a Plan. There is no
-second execution model, no second props model and no second journal.
+then, when `--run` asks for it, the Plan that document returned, through the same
+path `xmd run` uses for a supplied one. The prompt command document is not itself
+a Plan. There is no second execution model, no second props model and no second
+journal.
 
 ## The flow
 
@@ -45,17 +56,18 @@ fixed command preflight
   -> build the run-profile syntax catalog
   -> execute the exact packaged prompt command document
        -> one Session
-       -> generate, check, repair, review, revise, approve or fail
+       -> generate, check, repair, review, revise, approve, explain or fail
        -> Return the exact approved Plan source
   -> await that execution and provider teardown
   -> validate the returned source again
-  -> optionally save the exact bytes
-  -> execute retainedSource("<prompt>", source) through the ordinary run path
+  -> --output: exclusively create the file with the exact bytes
+  -> --run: execute retainedSource("<prompt>", source) through the ordinary run
+       path; otherwise, with no --output, write the exact bytes to stdout
 ```
 
 Each phase hands the next one a value. No phase after the first failure begins,
 so a refused command line reaches no catalog, a failed turn reaches no review,
-and an aborted review reaches no file and no run.
+and a review that stopped reaches no stdout, no file and no run.
 
 Writing a Plan is a conversation, and a conversation is not a run: the prompt
 command document runs on an invocation-owned in-memory durable stream that is
@@ -111,7 +123,7 @@ prompt profile's ceiling below.
 `-e`/`--eval` stays exclusive to `xmd run`. A prompt supplies a request, not a
 document. Supplying one anyway is refused in the command's own preflight, with
 `unrecognized option for xmd prompt: --eval — inline documents are exclusive to
-xmd run`, before the catalog, the command document, the review, the save, the
+xmd run`, before the catalog, the command document, the review, the file, the
 journal or any execution exists.
 
 Those options are resolved into one Agent configuration once per invocation —
@@ -265,15 +277,15 @@ one of them has an identity worth keeping:
   call that could create it, so a leaf this invocation made and then failed on is
   still a leaf this invocation hands back. Exactly one cleanup is attempted, after
   the command document and every provider, Prompt task and Elicitation resource
-  inside it has torn down, and it settles before final validation, the save or
-  the execution begins. Success, abort, a failed turn and cancellation all reach
+  inside it has torn down, and it settles before final validation and every way a
+  Plan could leave the command. Success, stopping, a failed turn and cancellation all reach
   it. Once the directory has been established, it has exactly two outcomes:
   - **still empty** — that exact leaf is removed, non-recursively;
   - **anything else** — the directory and whatever is in it are preserved and the
     command fails terminally. A leaf that has gained content, and one that has
     disappeared, are both interference: something acted on a directory this host
     authorized nothing to touch. Neither is a warning and neither is a silent
-    skip, and no final admission, save or execution follows.
+    skip, and no final admission, stdout, file or execution follows.
 
   A directory establishment never handed over — refused as non-empty, or never
   created at all — is a different question, already answered by what
@@ -308,13 +320,13 @@ within this invocation uses that one Session.
 A turn produces a draft only from its complete successful close value. The host
 decides, for the whole command document execution, that a failing `<Prompt>` ends
 it: a failed, cancelled, unavailable or protocol-invalid turn discards its
-partial text and reaches no human review, save or final execution, and the
+partial text and reaches no human review, result or final execution, and the
 document cannot opt out of that.
 
 That execution closes after approval or failure. The host observes its result
 only after every Prompt task, Agent provider resource, Elicitation resource and
 other child has completed teardown. A teardown failure wins over a selected Plan
-and prevents final validation, save and execution.
+and prevents final validation and every way a Plan could leave the command.
 
 ### A draft is data
 
@@ -363,7 +375,7 @@ xmd prompt "greet someone" --props-name Ada --props-loud
 
 The aggregate `--props` may be written before the request, because its meaning
 never depends on a document. An individual `--props-*` option before the request
-fails in preflight, before any catalog, Agent, elicitation, save, journal or
+fails in preflight, before any catalog, Agent, elicitation, file, journal or
 document operation.
 
 The original argv is the command line source for every candidate. `XMD_PROPS`
@@ -404,8 +416,8 @@ assessment answers `valid: false` and the command document may ask again:
 
 These are **terminal caller-source failures**. The caller wrote them, so they
 raise out of the validator and end the command document immediately, with no
-repair turn, no presentation, no approval, no save, no final journal and no final
-execution:
+repair turn, no presentation, no approval, no stdout, no file, no final journal
+and no final execution:
 
 - a supplied individual option the usable candidate schema does not declare;
 - malformed aggregate CLI or environment JSON;
@@ -541,9 +553,10 @@ completed, and the Plan is there to hand-edit.
 ## Timeouts
 
 `--timeout` bounds the whole command: preflight, catalog construction, the
-command document's execution, Elicitation, its teardown, final validation, the
-file and the execution. Expiry is Effection cancellation, so structured teardown completes
-before the failure is reported. A teardown failure prevents every later phase.
+command document's execution, Elicitation, its teardown, final validation, and
+whichever result the caller asked for — stdout, the file, the run, or the file
+and then the run. Expiry is Effection cancellation, so structured teardown
+completes before the failure is reported. A teardown failure prevents every later phase.
 
 `--timeout-exec` and `--timeout-fetch` configure the final document's effects
 only, exactly as under `xmd run`. Nothing bounds an authoring turn but the
@@ -559,13 +572,13 @@ Every failure below exits non-zero, and each one stops the phases after it:
 | incompatible permission flags or an unknown `--agent-provider` | nothing |
 | a catalog an include makes unreadable | no command document |
 | a provider that cannot establish the prompt profile's ceiling | no session, no turn |
-| a turn that did not complete | no review, save or run |
-| a terminal caller-source failure | no repair, review, save or run |
-| the command document's authored `<Fail>` | no save or run |
-| command document teardown | no final validation, save or run |
-| final validation of the approved bytes | no save or run |
+| a turn that did not complete | no review, stdout, file or run |
+| a terminal caller-source failure | no repair, review, stdout, file or run |
+| the command document's authored `<Fail>` — stopping, exhaustion, or the ending after an explanation | no stdout, file or run |
+| command document teardown | no final validation, stdout, file or run |
+| final validation of the approved bytes | no stdout, file or run |
 | an `--output` path that exists, or a write that fails | no stdout, no run |
-| the document's own runtime failure | nothing after it; the save stands |
+| the Plan's own runtime failure under `--run` | nothing after it; the `--output` file stands |
 
 ## Acceptance
 
@@ -588,14 +601,14 @@ produced.
 | C2 | Exact packaged root | The command executes the checked-in Markdown value root under `<prompt-command>`; the turn text is that document's own words, and no TypeScript authorship loop or custom root chooses policy |
 | C3 | Visible policy | Generation, three-turn repair, ten-round review, revision, approval, stopping, exhaustion and the explanation turn are present in Markdown under visible headings; the generation, repair and revision instructions each require the descriptive title and the steps-beside-components structure; `<Prompt>` remains one turn |
 | C4 | One Session | One enclosing Session expansion carries every turn; two default invocations get different profile directories and session keys, two `--session` invocations get the same directory and key with the raw name absent from the path, and two named invocations sharing one ACPX store continue the established record rather than placing a second |
-| C5 | Prompt profile ceiling | This session's own host-owned directory, empty while the command document runs, no MCP servers, no native tools, strict private denial, no Files/command/network capability for the command document, and final-run permission flags that cannot widen any of it; pre-existing content in that directory refuses before any provider, session, turn, review, save or execution and is left untouched |
+| C5 | Prompt profile ceiling | This session's own host-owned directory, empty while the command document runs, no MCP servers, no native tools, strict private denial, no Files/command/network capability for the command document, and final-run permission flags that cannot widen any of it; pre-existing content in that directory refuses before any provider, session, turn, review, result or execution and is left untouched |
 | C6 | Draft inertness | A draft is only data while the Plan is written, and no draft effect occurs before the final execution |
 | C7 | Validation classification | Candidate failures return structured facts; caller-source failures escape immediately; frozen signatures are checked before token extraction |
 | C8 | Bounds | One base plus three automatic repairs per draft, and no more than ten human presentations, with no revision offered on the last |
 | C9 | Safe presentation and authored failure | Arbitrary source cannot close `<CodeBlock>`; the review schemas expose exactly the friendly choices for each round-and-state; an ordinary **Stop**, a tenth-round exhaustion and the explanation ending reach their distinct authored `<Fail>` messages, and the closing fallback says no approval was reached rather than repeating exhaustion |
-| C10 | Final gate | The host revalidates after the command document has completely torn down — a component removed during that teardown makes the unchanged approved bytes fail admission, with no save, journal or execution — and resolves props for the exact returned bytes |
+| C10 | Final gate | The host revalidates after the command document has completely torn down — a component removed during that teardown makes the unchanged approved bytes fail admission, with no stdout, file, journal or execution — and resolves props for the exact returned bytes |
 | C11 | Exact bytes | Approval, stdout, the exclusive `--output` create and `<prompt>` execution each receive the Agent close value without rewriting or fence removal; `--output --run` writes before it runs, and an existing destination prevents the run |
 | C12 | Journal separation | Authorship uses only disposable in-memory history; a journal exists only when `--run` begins the final execution, and it begins with the approved Plan |
-| C13 | Lifetime | Cancellation and every teardown failure settle before final validation, stdout, the file or execution; a default session's directory is empty while its turn runs and gone after teardown on success, abort, a failed turn and cancellation alike; and one that gained content or vanished under the conversation is preserved as found while the command fails terminally, with no admission, result, journal or execution after it |
+| C13 | Lifetime | Cancellation and every teardown failure settle before final validation, stdout, the file or execution; a default session's directory is empty while its turn runs and gone after teardown on success, stopping, a failed turn and cancellation alike; and one that gained content or vanished under the conversation is preserved as found while the command fails terminally, with no admission, result, journal or execution after it |
 | C14 | Narrative preservation | The shipped generation, repair and revision instructions carry the narrative-plus-components rule, the assistant receives it with the request and the catalog, and a scripted Plan of prose interleaved with components returns byte for byte after approval |
-| C15 | Ordinary run | The approved source keeps normal cwd, includes, props, output/value, permission, timeout, failure and save behaviour |
+| C15 | Ordinary run | Under `--run` the approved source keeps normal cwd, includes, props, output/value, permission, timeout and failure behaviour, and an `--output` file written before it stands |

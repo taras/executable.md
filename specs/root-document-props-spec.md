@@ -411,14 +411,16 @@ findings, and the command document may ask for a replacement. A defect the calle
 wrote — an option no draft declares, malformed aggregate JSON, a value the schema
 cannot decode, an extra positional a draft's arity exposes, or a signature change
 — raises out of that assessment instead, ending the command document with no
-repair, no review, no save and no run. That document cannot catch it and cannot
-recategorize it as feedback for an agent that could not have caused it.
+repair, no review, and no approved Plan on stdout, in a file or in a run. That
+document cannot catch it and cannot recategorize it as feedback for an agent that
+could not have caused it.
 
 The props the approved Plan is admitted with are resolved once more, after the
 command document has completely torn down, from those exact returned bytes and
-the
-original unchanged sources. No props object any draft produced is reused, so a
-revision that changed a property's declared type changes what the run receives.
+the original unchanged sources. Admission happens in every mode — before stdout,
+before an `--output` file and before a run alike — and a failure there produces
+none of them. No props object any draft produced is reused, so a revision that
+changed a property's declared type changes what a run receives.
 
 ## Targeted roots
 

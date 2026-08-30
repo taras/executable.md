@@ -40,11 +40,17 @@ Create one complete XMD Plan from this Prompt:
 
 {props.request}
 
-Begin the Plan with one level-one Markdown title that describes it.
+Every Plan is complete on its own:
 
-Write the Plan as a sequence of readable steps. Follow each step with the XMD
-component that carries it out. The prose is part of the program and appears when
-the Plan runs, so its source and its execution tell the same story.
+- optional frontmatter, and then one descriptive level-one Markdown heading as
+  the first body content;
+- the Prompt's complete sequence, written as readable steps;
+- every outcome the Prompt asked for;
+- those steps in an order that makes sense; and
+- each XMD component beside the prose describing the action it performs.
+
+The prose is part of the program and appears when the Plan runs, so its source
+and its execution tell the same story.
 
 For the Prompt "ask me for my age and write it to a file", the shape is:
 
@@ -96,9 +102,20 @@ That Plan has problems. These are the exact ones:
 <Json value={check.diagnostics} as="problems" />
 <CodeBlock value={problems} language="json" />
 
-Send one complete replacement Plan that resolves every problem above. Keep its
-level-one title, keep the Prompt's sequence of readable steps in a meaningful
-order, and keep each XMD component beside the step it performs.
+Send one complete replacement Plan that resolves every problem above.
+
+Every Plan is complete on its own:
+
+- optional frontmatter, and then one descriptive level-one Markdown heading as
+  the first body content;
+- the Prompt's complete sequence, written as readable steps;
+- every outcome the Prompt asked for;
+- those steps in an order that makes sense; and
+- each XMD component beside the prose describing the action it performs.
+
+Write the title the Plan needs rather than the one the last draft had: add it if
+it was missing, move it if it was not the first body content, and replace it if
+it did not describe the Plan.
 
 Reply with the Plan source and nothing else. No enclosing code fence, no
 explanation before or after it.
@@ -167,8 +184,8 @@ problems:
 
 Approve keeps this exact draft and leaves the review. Request changes sends your
 feedback to the coding agent and starts a new draft. Stop ends here. On a tenth
-draft that still has problems there is nothing left to revise into, so the
-remaining choice is to ask the coding agent what went wrong.
+draft that still has problems there is nothing left to revise into, so the two
+remaining choices are to ask the coding agent what went wrong, or to stop.
 
 <If condition={review.decision === "Approve"}>
 <Let as="approved" value={draft} />
@@ -205,9 +222,20 @@ You read that Plan and asked for this to change:
 
 {review.feedback}
 
-Send one complete replacement Plan. Keep its level-one title, keep the Prompt's
-sequence of readable steps in a meaningful order, and keep each XMD component
-beside the step it performs.
+Send one complete replacement Plan.
+
+Every Plan is complete on its own:
+
+- optional frontmatter, and then one descriptive level-one Markdown heading as
+  the first body content;
+- the Prompt's complete sequence, written as readable steps;
+- every outcome the Prompt asked for;
+- those steps in an order that makes sense; and
+- each XMD component beside the prose describing the action it performs.
+
+Write the title the Plan needs rather than the one the last draft had: add it if
+it was missing, move it if it was not the first body content, and replace it if
+it did not describe the Plan.
 
 Reply with the Plan source and nothing else. No enclosing code fence, no
 explanation before or after it.
