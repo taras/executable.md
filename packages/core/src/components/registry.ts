@@ -16,6 +16,7 @@
  */
 
 import type { ComponentRegistry, RegistryEntry } from "../types.ts";
+import { form as codeBlockForm, props as codeBlockProps } from "./CodeBlock.ts";
 import Elicit, { props as elicitProps, returns as elicitReturns } from "./Elicit.ts";
 import TempDir, { props as tempDirProps } from "./TempDir.ts";
 import Fetch, { props as fetchProps } from "./Fetch.ts";
@@ -169,6 +170,14 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
     },
     { returns: parseJsonObject(globReturns) },
   ),
+  core("CodeBlock", codeBlockForm, parseJsonObject(codeBlockProps), {
+    description:
+      "Show arbitrary text as a fenced Markdown code block. " +
+      '`<CodeBlock value={source} language="markdown" />` chooses a fence the value cannot ' +
+      "close.",
+    as: "Optional. Captures the exact fenced Markdown instead of emitting it.",
+    context: null,
+  }),
   core(
     "Json",
     Json,

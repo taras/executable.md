@@ -2725,7 +2725,7 @@ nothing. A non-string is not an error — it is a value with no destination.
 
 Some components are core's own: `<TempDir>` (§6.11), `<Json>`, `<Parse>` and
 `<SafeParse>` (§6.12), `<File>` (§6.13), `<File.Delete>` (§6.13.1), `<Glob>`
-(§6.14), and `<Fetch>` (§6.18). Each is already
+(§6.14), `<Fetch>` (§6.18), and `<CodeBlock>` (§6.19). Each is already
 in the module graph, so it ships in the compiled binary and every published
 package without a search path or a bundling step, and a document invokes it with
 no `--include`.
@@ -7926,6 +7926,102 @@ normalized headers and effective timeout alike — or it is refused before
 `API.Fetch` is reached, with no request performed. Nothing in the authored
 component grants that admission, and a repository component that takes the name
 `Fetch` is not the pinned identity.
+
+
+### 6.19 Showing text as a code block: `<CodeBlock>`
+
+A document that renders text it did not write — generated source, a validator's
+diagnostics, a command's transcript — needs that text to arrive as text.
+`<CodeBlock>` is core's own component (§5.3) for exactly that:
+
+```md
+<CodeBlock value={source} language="markdown" />
+```
+
+The hazard it removes is the fence. A value holding three backticks closes a
+three-backtick block early, and everything after it lands in the document as
+Markdown — as headings, as element invocations, as another fence. Writing that
+arithmetic in an eval block puts the safety of the surrounding document in the
+hands of every author who has something to quote.
+
+#### Props and form
+
+`value` is required and must be a string. `language` is optional and is one
+token matching `^[A-Za-z0-9][A-Za-z0-9._+#-]*$` — `markdown`, `json`,
+`shell-session`, `c++` and `c#` are all accepted, and an empty token, a token
+holding whitespace or a backtick, and a token opening with a punctuation
+character are all refused. The schema is closed: no other prop exists, and there
+is no way to choose the fence character, the fence length, an indentation, an
+escaping rule or a trailing newline.
+
+The component is **self-closing only**, and that is declared to canonical
+dispatch rather than decided in its body (§5.6), so what runs, what the syntax
+catalog advertises and what a refusal says all come from one value. Any paired
+spelling — including one whose content is empty — is refused as a printed
+component failure naming the `<CodeBlock value={…} />` spelling, and the content
+written between the tags never expands.
+
+Props are validated before the body, so a missing or non-string `value`, a
+refused `language`, and any unknown prop are the engine's ordinary structured
+prop-validation failure, with no fence emitted and no body entered.
+
+Unlike `<Json>` (§6.12), whose operand must arrive by reference or lose the very
+failures it exists to report, `value` is an **ordinary prop**: a string crosses
+the component JSON boundary as itself. That is what lets a repository
+`CodeBlock.md` receive it the way it receives every other prop, instead of
+inheriting a capture from core's registration that it never declared.
+
+#### The fence, and the exact result
+
+A **backtick run** is a contiguous sequence of U+0060 characters. The whole
+value is scanned for the longest one, and the fence is
+
+```text
+max(3, longest run + 1)
+```
+
+backticks — a fence the value cannot close, whatever it holds. The component
+returns exactly
+
+```text
+fence + (language ?? "") + "\n" + value + "\n" + fence
+```
+
+Both framing characters are U+000A and belong to the envelope rather than to
+`value`. There is no line feed after the closing fence: a document that wants
+one writes it.
+
+Nothing else about the value is read. It is not trimmed, line-ending-normalized,
+escaped, re-encoded, or searched for an apparent closing fence. Text that
+resembles a fence, an element invocation, an interpolation, HTML or an
+executable code block stays exactly as it arrived, because a function
+component's returned text is rendered rather than rescanned as document source
+(§6.8).
+
+#### `as`, and where exactness ends
+
+Without `as`, the returned string renders at the invocation site. With
+`as="name"`, the ordinary component-capture boundary binds that exact string and
+the invocation emits nothing.
+
+Exactness is a promise about the function-component return and that capture
+boundary. The `DocumentOutput` contract (§9) still governs what happens to
+emitted output afterwards: whitespace normalization and terminal formatting may
+transform it, and `xmd run --raw` installs neither.
+
+#### Resolution and replay
+
+The registration is an ordinary overridable default, not a reserved name: a
+repository `CodeBlock.md` is chosen ahead of it and receives ordinary props,
+and a repository definition that is broken fails rather than falling through to
+core. Inspection reports the self-closing form, the props schema above, no
+captures, and text return mode with the effective `{ type: "string" }` schema.
+
+`<CodeBlock>` opens no scope, acquires no resource, holds no authority and has
+no durable effect of its own — resolving it is the ordinary `import_component`
+every component resolution produces. A live run and a partial replay both reach
+it through normal expansion and fence the string that execution reconstructed;
+completed-root terminal reuse is unchanged.
 
 
 ## 7. Entry point

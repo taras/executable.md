@@ -880,6 +880,35 @@ describe("Tier SY: complete component contracts", () => {
     expect(find(entries, "Glob").returns).toEqual({ type: "array", items: { type: "string" } });
   });
 
+  it("SY24b: reports <CodeBlock>'s whole contract, without running it", function* () {
+    const catalog = yield* catalogFor({}, []);
+    const entry = find(builtIn(catalog), "CodeBlock");
+
+    expect(entry.origin).toEqual({
+      kind: "registered",
+      origin: "@executablemd/core",
+      reserved: false,
+    });
+    expect(entry.sourceKind).toBe("registered");
+    expect(entry.forms).toEqual(["self-closing"]);
+    expect(entry.props).toEqual({
+      type: "object",
+      properties: {
+        value: { type: "string" },
+        language: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._+#-]*$" },
+      },
+      required: ["value"],
+      additionalProperties: false,
+    });
+    // `value` crosses the ordinary prop boundary, so it is in the schema above
+    // rather than in this list — which is what a repository override receives.
+    expect(entry.captures).toEqual([]);
+    expect(entry.returnMode).toBe("text");
+    expect(entry.returns).toEqual({ type: "string" });
+    expect(entry.as).toContain("Optional");
+    expect(entry.context).toBe(undefined);
+  });
+
   it("SY25: preserves the declaration order of captures and forms", function* () {
     const catalog = yield* scoped(function* () {
       yield* useTree({});
