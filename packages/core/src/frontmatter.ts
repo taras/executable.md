@@ -1,3 +1,6 @@
+import { Err, Ok } from "effection";
+import type { Result } from "effection";
+
 import { parseJsonObject } from "./json.ts";
 import type { Json, JsonObject, PropsSchema, ReturnsSchema } from "./types.ts";
 
@@ -11,14 +14,103 @@ const DRAFT_07 = "http://json-schema.org/draft-07/schema#";
 
 const RESERVED_KEYS = ["props", "required", "returns"];
 
-export function parseFrontmatter(raw: unknown): ParsedFrontmatter {
-  const root: JsonObject = raw === null || raw === undefined ? {} : parseJsonObject(raw);
-  const declaredReturns = root["returns"];
-  const parsed: ParsedFrontmatter = { meta: parseMeta(root), props: parsePropsSchema(root) };
-  if (declaredReturns !== undefined) {
-    parsed.returns = parseReturnsDeclaration(declaredReturns);
+/**
+ * Which declaration a frontmatter failure came from.
+ *
+ * Reading frontmatter is three decisions in a fixed order — the envelope, the
+ * props declaration, then the returns declaration — and each has its own
+ * remedy. A caller that reports the failure rather than throwing it needs to
+ * know which one it was, and the only honest place to answer that is where the
+ * decision is made. Nothing here classifies a failure by reading its message.
+ */
+export type FrontmatterPhase = "frontmatter" | "props-declaration" | "returns-declaration";
+
+/**
+ * One frontmatter failure, carrying the decision that produced it.
+ *
+ * The original failure travels under `original` so that a caller which raises
+ * rather than reports raises exactly what it always raised: this wrapper is how
+ * the phase reaches a reporting caller, not a new error for anyone to see.
+ */
+export class FrontmatterPhaseError extends Error {
+  readonly phase: FrontmatterPhase;
+  readonly original: unknown;
+
+  constructor(phase: FrontmatterPhase, original: unknown) {
+    super(original instanceof Error ? original.message : String(original), { cause: original });
+    this.name = "FrontmatterPhaseError";
+    this.phase = phase;
+    this.original = original;
   }
-  return parsed;
+}
+
+function fail(phase: FrontmatterPhase, original: unknown): Result<ParsedFrontmatter> {
+  return Err(new FrontmatterPhaseError(phase, original));
+}
+
+/**
+ * Read frontmatter, reporting the phase a failure belongs to rather than
+ * throwing it.
+ *
+ * The order is the same one `parseFrontmatter()` has always had, because
+ * `parseFrontmatter()` is this: an author who wrote both a broken props
+ * declaration and a broken returns declaration hears about the props one
+ * whether their document runs or is only validated.
+ */
+export function parseFrontmatterPhased(raw: unknown): Result<ParsedFrontmatter> {
+  let root: JsonObject;
+  try {
+    root = raw === null || raw === undefined ? {} : parseJsonObject(raw);
+  } catch (error) {
+    return fail("frontmatter", error);
+  }
+  const declaredReturns = root["returns"];
+
+  let meta: Record<string, unknown>;
+  try {
+    meta = parseMeta(root);
+  } catch (error) {
+    return fail("frontmatter", error);
+  }
+
+  let props: PropsSchema;
+  try {
+    props = parsePropsSchema(root);
+  } catch (error) {
+    return fail("props-declaration", error);
+  }
+
+  const parsed: ParsedFrontmatter = { meta, props };
+  if (declaredReturns !== undefined) {
+    try {
+      parsed.returns = parseReturnsDeclaration(declaredReturns);
+    } catch (error) {
+      return fail("returns-declaration", error);
+    }
+  }
+  return Ok(parsed);
+}
+
+export function parseFrontmatter(raw: unknown): ParsedFrontmatter {
+  const outcome = parseFrontmatterPhased(raw);
+  if (!outcome.ok) {
+    throw frontmatterFailure(outcome.error).original;
+  }
+  return outcome.value;
+}
+
+/**
+ * The phase failure this error is, or the error itself if it is not one.
+ *
+ * Nothing but `parseFrontmatterPhased()` produces the `Err` side above, so
+ * anything else reaching here is a failure this module did not classify and is
+ * raised rather than described.
+ */
+export function frontmatterFailure(error: Error): FrontmatterPhaseError {
+  if (error instanceof FrontmatterPhaseError) {
+    return error;
+  }
+  throw error;
 }
 
 /**

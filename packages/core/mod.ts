@@ -213,6 +213,19 @@ export type {
   SyntaxCatalog,
 } from "./src/inspect.ts";
 export { ComponentIncludeError } from "./src/components/candidates.ts";
+// Document validation — one supplied document read as authored program
+// structure, with nothing in it executed.
+export { documentValidationCodeRank, validateDocument } from "./src/document-validation.ts";
+export type {
+  DocumentValidation,
+  DocumentValidationCode,
+  DocumentValidationDiagnostic,
+  InvocationOpacityReason,
+  InvocationSite,
+  InvocationValidation,
+  ValidateDocumentOptions,
+  ValidateDocumentSettings,
+} from "./src/document-validation.ts";
 
 // Component registration — scope-local names resolved ahead of package defaults.
 export {

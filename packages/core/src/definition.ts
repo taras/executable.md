@@ -1,7 +1,8 @@
-import { Ok } from "effection";
+import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
 import type { ComponentDefinition, Segment } from "./types.ts";
-import { parseFrontmatter } from "./frontmatter.ts";
+import { frontmatterFailure, parseFrontmatterPhased } from "./frontmatter.ts";
+import type { FrontmatterPhase } from "./frontmatter.ts";
 import { compilePropsSchema, compileReturnsSchema } from "./validate.ts";
 import { scanComponentSpans, scanSegments } from "./scanner.ts";
 import { findTarget, outlineDocument, retainedRanges, selectTarget } from "./document-targets.ts";
@@ -81,13 +82,83 @@ interface CompiledFrontmatter {
   returns: ComponentDefinition["returns"];
 }
 
-function* compileFrontmatter(data: Record<string, unknown>): Operation<CompiledFrontmatter> {
-  const { meta, props, returns } = parseFrontmatter(data);
-  yield* compilePropsSchema(props);
-  if (returns !== undefined) {
-    yield* compileReturnsSchema(returns);
+/**
+ * Which decision a definition failure came from.
+ *
+ * Parsing a definition is a fixed sequence — source structure, then the target
+ * a selector names, then each frontmatter declaration — and every step has its
+ * own remedy. A caller that reports failures as data rather than raising them
+ * reads the phase from the step that failed, never from the wording of the
+ * error the step produced.
+ */
+export type DefinitionPhase = FrontmatterPhase | "source" | "target";
+
+/**
+ * One definition failure, carrying the decision that produced it.
+ *
+ * The original failure travels under `original`, so a caller that raises rather
+ * than reports raises exactly what it always raised.
+ */
+export class DefinitionPhaseError extends Error {
+  readonly phase: DefinitionPhase;
+  readonly original: unknown;
+
+  constructor(phase: DefinitionPhase, original: unknown) {
+    super(original instanceof Error ? original.message : String(original), { cause: original });
+    this.name = "DefinitionPhaseError";
+    this.phase = phase;
+    this.original = original;
   }
-  return { meta, props, returns };
+}
+
+function failed<T>(phase: DefinitionPhase, original: unknown): Result<T> {
+  return Err(new DefinitionPhaseError(phase, original));
+}
+
+/**
+ * The phase failure this error is, or the error itself if it is not one.
+ *
+ * Only the phased parsers below produce the `Err` side, so anything else
+ * reaching here is a failure this module did not classify and is raised rather
+ * than described.
+ */
+export function definitionFailure(error: Error): DefinitionPhaseError {
+  if (error instanceof DefinitionPhaseError) {
+    return error;
+  }
+  throw error;
+}
+
+/** Unwrap a phased outcome the way every raising caller always has. */
+function unwrap<T>(outcome: Result<T>): T {
+  if (!outcome.ok) {
+    throw definitionFailure(outcome.error).original;
+  }
+  return outcome.value;
+}
+
+function* compileFrontmatter(
+  data: Record<string, unknown>,
+): Operation<Result<CompiledFrontmatter>> {
+  const parsed = parseFrontmatterPhased(data);
+  if (!parsed.ok) {
+    const failure = frontmatterFailure(parsed.error);
+    return failed(failure.phase, failure.original);
+  }
+  const { meta, props, returns } = parsed.value;
+  try {
+    yield* compilePropsSchema(props);
+  } catch (error) {
+    return failed("props-declaration", error);
+  }
+  if (returns !== undefined) {
+    try {
+      yield* compileReturnsSchema(returns);
+    } catch (error) {
+      return failed("returns-declaration", error);
+    }
+  }
+  return Ok({ meta, props, returns });
 }
 
 function buildDefinition(
@@ -123,14 +194,44 @@ export function* parseMarkdownDefinition(
   path: string,
   content: string,
 ): Operation<ComponentDefinition> {
-  const body = parseSource(path, content);
+  return unwrap(yield* parseMarkdownDefinitionPhased(name, path, content));
+}
+
+/**
+ * Parse a markdown component definition, reporting a failure as the phase it
+ * belongs to rather than raising it.
+ *
+ * `parseMarkdownDefinition()` is this operation with the failure thrown, so
+ * there is one parser and one order: a caller reporting failures as data and a
+ * caller that raises them cannot disagree about what a definition declares or
+ * about which decision rejected it.
+ */
+export function* parseMarkdownDefinitionPhased(
+  name: string,
+  path: string,
+  content: string,
+): Operation<Result<ComponentDefinition>> {
+  let body: ParsedSource;
+  try {
+    body = parseSource(path, content);
+  } catch (error) {
+    return failed("source", error);
+  }
   const frontmatter = yield* compileFrontmatter(body.data);
-  return buildDefinition(
-    name,
-    path,
-    frontmatter,
-    scanSegments(body.content, { path, baseOffset: body.baseOffset, baseLine: body.baseLine }),
-  );
+  if (!frontmatter.ok) {
+    return frontmatter;
+  }
+  let bodySegments: Segment[];
+  try {
+    bodySegments = scanSegments(body.content, {
+      path,
+      baseOffset: body.baseOffset,
+      baseLine: body.baseLine,
+    });
+  } catch (error) {
+    return failed("source", error);
+  }
+  return Ok(buildDefinition(name, path, frontmatter.value, bodySegments));
 }
 
 /** A root document as parsed: what it declares, and what it addresses. */
@@ -164,47 +265,90 @@ export function* parseRootMarkdownDefinition(
   content: string,
   selector?: string,
 ): Operation<ParsedRootDocument> {
+  return unwrap(yield* parseRootMarkdownDefinitionPhased(name, path, content, selector));
+}
+
+/**
+ * Parse a root document, reporting a failure as the phase it belongs to rather
+ * than raising it.
+ *
+ * `parseRootMarkdownDefinition()` is this operation with the failure thrown, so
+ * the order below — syntax, target, schemas, projected definition — is the one
+ * order every public path has.
+ */
+export function* parseRootMarkdownDefinitionPhased(
+  name: string,
+  path: string,
+  content: string,
+  selector?: string,
+): Operation<Result<ParsedRootDocument>> {
   // The order is the contract, and it is the same on every public path.
   // Syntax first, because the outline comes from it; then the target, because a
   // caller who named nothing the document offers asked the wrong question and
   // should hear that rather than a complaint about a schema they did not reach;
   // then the schemas; then the projected definition.
-  const body = parseSource(path, content);
-  const outline = outlineDocument(body.content, scanComponentSpans(body.content));
+  let body: ParsedSource;
+  let outline: DocumentOutline;
+  try {
+    body = parseSource(path, content);
+    outline = outlineDocument(body.content, scanComponentSpans(body.content));
+  } catch (error) {
+    return failed("source", error);
+  }
 
   if (selector === undefined) {
     const frontmatter = yield* compileFrontmatter(body.data);
-    const bodySegments = scanSegments(body.content, {
-      path,
-      baseOffset: body.baseOffset,
-      baseLine: body.baseLine,
-    });
-    return {
-      definition: buildDefinition(name, path, frontmatter, bodySegments),
+    if (!frontmatter.ok) {
+      return frontmatter;
+    }
+    let bodySegments: Segment[];
+    try {
+      bodySegments = scanSegments(body.content, {
+        path,
+        baseOffset: body.baseOffset,
+        baseLine: body.baseLine,
+      });
+    } catch (error) {
+      return failed("source", error);
+    }
+    return Ok({
+      definition: buildDefinition(name, path, frontmatter.value, bodySegments),
       targets: outline.targets,
       targetInfo: outline.targetInfo,
-    };
+    });
   }
 
-  const entry = selectTarget(outline, selector);
-  const frontmatter = yield* compileFrontmatter(body.data);
-  const newlines = newlineCounts(body.content);
-  const bodySegments: Segment[] = [];
-  for (const range of retainedRanges(outline, entry)) {
-    bodySegments.push(
-      ...scanSegments(body.content.slice(range.start, range.end), {
-        path,
-        baseOffset: body.baseOffset + range.start,
-        baseLine: body.baseLine + newlines[range.start]!,
-      }),
-    );
+  let entry: ReturnType<typeof selectTarget>;
+  try {
+    entry = selectTarget(outline, selector);
+  } catch (error) {
+    return failed("target", error);
   }
-  return {
-    definition: buildDefinition(name, path, frontmatter, bodySegments),
+  const frontmatter = yield* compileFrontmatter(body.data);
+  if (!frontmatter.ok) {
+    return frontmatter;
+  }
+  const bodySegments: Segment[] = [];
+  try {
+    const newlines = newlineCounts(body.content);
+    for (const range of retainedRanges(outline, entry)) {
+      bodySegments.push(
+        ...scanSegments(body.content.slice(range.start, range.end), {
+          path,
+          baseOffset: body.baseOffset + range.start,
+          baseLine: body.baseLine + newlines[range.start]!,
+        }),
+      );
+    }
+  } catch (error) {
+    return failed("source", error);
+  }
+  return Ok({
+    definition: buildDefinition(name, path, frontmatter.value, bodySegments),
     targets: outline.targets,
     targetInfo: outline.targetInfo,
     target: entry.target,
-  };
+  });
 }
 
 /** How many newlines precede each offset, so a retained range knows its line. */

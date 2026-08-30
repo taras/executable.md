@@ -3,12 +3,9 @@ import { readTextFile } from "@executablemd/runtime";
 
 import type {
   ComponentOrigin,
-  ComponentRegistry,
   ComponentSelection,
-  FunctionComponentDefinition,
   InvocationForm,
   PropsSchema,
-  RegistryEntry,
   ReturnsSchema,
 } from "./types.ts";
 import {
@@ -20,6 +17,7 @@ import type { DocumentTargetInfo } from "./document-targets.ts";
 import { Component } from "./component-api.ts";
 import { DEFAULT_INCLUDES, effectiveRegistry, selectComponent } from "./components/select.ts";
 import { admitDeclaration, mergeRegistry } from "./components/registration.ts";
+import { declaredRegistry } from "./components/declared-registry.ts";
 import { repositoryCandidateNames } from "./components/candidates.ts";
 import { documentationOf } from "./components/documentation.ts";
 import type { ComponentDocumentation } from "./components/documentation.ts";
@@ -441,42 +439,6 @@ function byCodePoint(left: string, right: string): number {
     }
   }
   return a.length - b.length;
-}
-
-/**
- * The identity declarations a host would make, as registry entries selection
- * can decide against.
- *
- * The implementation slot holds a refusal rather than what the factory would
- * build, because building it is the authority this has none of: the factory
- * takes an execution's claimant, and there is no execution here. Nothing in
- * inspection reaches an implementation, so the refusal is unreachable — it is
- * there so that anything which ever did would fail loudly rather than run a
- * component with no execution behind it.
- */
-function declaredRegistry(components: readonly IdentityComponent[]): ComponentRegistry {
-  const entries = new Map<string, RegistryEntry>();
-  for (const component of components) {
-    const definition: FunctionComponentDefinition = {
-      kind: "function",
-      name: component.name,
-      props: component.props,
-      ...(component.returns === undefined ? {} : { returns: component.returns }),
-      ...(component.captures === undefined ? {} : { captures: component.captures }),
-      ...(component.forms === undefined ? {} : { forms: component.forms }),
-      ...documentationOf(component),
-      fn: uninvocable,
-    };
-    entries.set(component.name, { default: { definition, origin: component.origin } });
-  }
-  return entries;
-}
-
-// deno-lint-ignore require-yield
-function* uninvocable(): Operation<never> {
-  throw new Error(
-    "this component was described rather than executed, so it has no implementation to run",
-  );
 }
 
 function structuralEntry(construct: string): StructuralSyntaxEntry {
