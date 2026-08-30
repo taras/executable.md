@@ -16,14 +16,12 @@ import { Elicitation } from "@executablemd/core";
 import type { ElicitationRequest, SyntaxCatalog } from "@executablemd/core";
 import { Ok } from "effection";
 import type { Operation, Result } from "effection";
-import { ensure, scoped, until } from "effection";
+import { ensure, scoped } from "effection";
 import { ensureDir, rm } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
-import { readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { API, useHostFiles } from "@executablemd/runtime";
-import { PROMPT_PROFILE_SESSIONS } from "../../src/prompt-profile.ts";
 import { syntaxCatalog } from "../../src/syntax.ts";
 import type { PromptDependencies, PromptExecution } from "../../src/prompt.ts";
 import { createFakeAcp, makeRegistry, makeStore } from "./fake-acp.ts";
@@ -56,7 +54,16 @@ export interface PromptHarness {
   deps: PromptDependencies;
 }
 
-export function createPromptHarness(options?: {
+export function createPromptHarness(options: {
+  /**
+   * Where this harness keeps its profile session directories.
+   *
+   * Required, and always a tree the case itself created: a suite that fell back
+   * to the host default would be reading and removing directories under the
+   * developer's own home, and two cases running close together could not tell
+   * whose was whose.
+   */
+  profileRoot: string;
   /** Replace the catalog entirely, for a case about catalog failure. */
   catalog?: (includes: readonly string[]) => Operation<SyntaxCatalog>;
   /**
@@ -87,13 +94,14 @@ export function createPromptHarness(options?: {
     deps: {
       acp: {
         createRuntime: fake.create,
-        sessionStore: options?.store ?? makeStore(),
+        sessionStore: options.store ?? makeStore(),
         agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
       },
       *catalog(includes) {
         catalogCalls.push([...includes]);
-        return yield* (options?.catalog ?? syntaxCatalog)(includes);
+        return yield* (options.catalog ?? syntaxCatalog)(includes);
       },
+      profileRoot: options.profileRoot,
       *installElicitation() {
         yield* Elicitation.around(
           {
@@ -132,12 +140,22 @@ export function createPromptHarness(options?: {
  * Both, because the two answer different questions: session placement and
  * `--save` resolve the contextual one, while a real file has to live somewhere.
  */
-export function* useWorkingDirectory<T>(body: (dir: string) => Operation<T>): Operation<T> {
+export function* useWorkingDirectory<T>(
+  body: (dir: string, profileRoot: string) => Operation<T>,
+): Operation<T> {
   const dir = join(tmpdir(), `xmd-prompt-${randomUUID()}`);
+  // A sibling rather than a child: the working directory is what the approved
+  // document writes into and what several cases read back, and a profile root
+  // inside it would show up in those listings.
+  const profileRoot = `${dir}-profile`;
   yield* ensureDir(dir);
+  yield* ensureDir(profileRoot);
   return yield* scoped(function* () {
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
-    yield* useProfileDirectories();
+    // Recursive, and safe because it is: everything under this root was created
+    // by this scope, so nothing here can reach a directory another case or a
+    // real invocation owns.
+    yield* ensure(() => rm(profileRoot, { recursive: true, force: true }));
     yield* API.Env.around({
       // deno-lint-ignore require-yield
       *cwd() {
@@ -148,7 +166,7 @@ export function* useWorkingDirectory<T>(body: (dir: string) => Operation<T>): Op
     // the runtime entrypoint installs it: a document that reaches the
     // filesystem must reach the caller's, or fail.
     yield* useHostFiles();
-    return yield* body(dir);
+    return yield* body(dir, profileRoot);
   });
 }
 
@@ -191,29 +209,17 @@ export function timesRead(reads: readonly string[], name: string): number {
 }
 
 /**
- * Leave the host's profile session directories as this case found them.
+ * A profile-session root this scope creates, owns and removes whole.
  *
- * A profile directory is deliberately durable — its stable identity is what
- * `--session` continues — so a suite that made a few dozen of them under the
- * developer's own home directory would be leaving litter behind. Only entries
- * that appeared while the case ran are removed, so a directory somebody else
- * owns is never touched.
+ * Owning it is what makes recursive removal safe: everything under it was made
+ * by this scope, so nothing here can reach a directory another case — or a real
+ * invocation — is using.
  */
-function* useProfileDirectories(): Operation<void> {
-  const before = new Set(yield* listSessionDirectories());
-  yield* ensure(function* () {
-    for (const name of yield* listSessionDirectories()) {
-      if (!before.has(name)) {
-        yield* rm(join(PROMPT_PROFILE_SESSIONS, name), { recursive: true, force: true });
-      }
-    }
+export function* useProfileRoot<T>(body: (root: string) => Operation<T>): Operation<T> {
+  const root = join(tmpdir(), `xmd-prompt-profile-${randomUUID()}`);
+  yield* ensureDir(root);
+  return yield* scoped(function* () {
+    yield* ensure(() => rm(root, { recursive: true, force: true }));
+    return yield* body(root);
   });
-}
-
-function* listSessionDirectories(): Operation<string[]> {
-  try {
-    return yield* until(readdir(PROMPT_PROFILE_SESSIONS));
-  } catch {
-    return [];
-  }
 }

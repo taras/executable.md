@@ -576,6 +576,15 @@ provider is constructed or a session is materialized; a non-empty one is a
 terminal refusal rather than something to clean. Nothing this profile grants can
 write there.
 
+An explicitly named session keeps its directory afterwards, because that is what
+the next invocation derives the same session identity from, and no cleanup
+applies to it. An invocation-unique default keeps nothing: once the profile has
+torn down, on every ending, exactly one cleanup is attempted — the leaf is
+removed non-recursively if it is still empty, and if it is not, it is preserved
+whole and the command fails terminally. Which applies is a trusted host value —
+whether `--session` was written — and where the directories live is a host
+dependency no caller or document can select.
+
 Only the profile's provider receives `newSessionOptions.systemPrompt`. It carries the
 fixed statement of what the session writes, and nothing else — the catalog and
 the request are the command document's to send in its own turns

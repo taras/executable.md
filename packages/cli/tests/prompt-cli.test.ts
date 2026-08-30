@@ -152,8 +152,8 @@ describe(
   { sanitizeOps: false, sanitizeResources: false },
   () => {
     it("C1: a misplaced individual option refuses before any phase begins", function* () {
-      yield* useWorkingDirectory(function* (dir) {
-        const harness = createPromptHarness();
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
+        const harness = createPromptHarness({ profileRoot });
         const code = yield* runPrompt(
           command(dir, ["--props-name", "Ada", REQUEST], "out.md"),
           harness.deps,
@@ -261,8 +261,8 @@ describe(
     });
 
     it("C15: individual, aggregate and environment sources resolve and reach the run", function* () {
-      yield* useWorkingDirectory(function* (dir) {
-        const harness = createPromptHarness();
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
+        const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir);
         harness.fake.script({ reply: GREETER });
         harness.script({ decision: "approve" });
@@ -284,8 +284,8 @@ describe(
       const journalName = "trace.jsonl";
 
       // Abort at review, through the command document's authored failure.
-      yield* useWorkingDirectory(function* (dir) {
-        const harness = createPromptHarness();
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
+        const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir, join(dir, journalName));
         harness.fake.script({ reply: PLAIN });
         harness.script({ decision: "abort" });
@@ -299,8 +299,8 @@ describe(
       });
 
       // A turn that produced text and then failed.
-      yield* useWorkingDirectory(function* (dir) {
-        const harness = createPromptHarness();
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
+        const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir, join(dir, journalName));
         harness.fake.script({ reply: PLAIN, stopReason: "refusal" });
 
@@ -313,8 +313,8 @@ describe(
       });
 
       // A terminal property-source failure.
-      yield* useWorkingDirectory(function* (dir) {
-        const harness = createPromptHarness();
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
+        const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir, join(dir, journalName));
         harness.fake.script({ reply: PLAIN });
 
@@ -331,9 +331,9 @@ describe(
       });
 
       // An approved run's journal holds the document's events and no authorship.
-      yield* useWorkingDirectory(function* (dir) {
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
         const journal = join(dir, journalName);
-        const harness = createPromptHarness();
+        const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir, journal);
         harness.fake.script({ reply: PLAIN });
         harness.script({ decision: "approve" });
@@ -354,8 +354,8 @@ describe(
 
     it("C11: the approved bytes are created exclusively, before the run", function* () {
       // Created before execution, and byte for byte.
-      yield* useWorkingDirectory(function* (dir) {
-        const harness = createPromptHarness();
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
+        const harness = createPromptHarness({ profileRoot });
         const run = executor(dir);
         const seen: boolean[] = [];
         harness.deps.execute = function* (approved) {
@@ -378,9 +378,9 @@ describe(
       });
 
       // An existing path is left exactly as it is, and stops the run.
-      yield* useWorkingDirectory(function* (dir) {
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
         yield* writeTextFile(join(dir, "out.md"), "keep me\n");
-        const harness = createPromptHarness();
+        const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir);
         harness.fake.script({ reply: PLAIN });
         harness.script({ decision: "approve" });
@@ -393,8 +393,8 @@ describe(
       });
 
       // Without the option, no generated source file is created at all.
-      yield* useWorkingDirectory(function* (dir) {
-        const harness = createPromptHarness();
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
+        const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir);
         harness.fake.script({ reply: GREETER });
         harness.script({ decision: "approve" });
@@ -408,9 +408,9 @@ describe(
     });
 
     it("C15: the approved source runs as an ordinary document under <prompt>", function* () {
-      yield* useWorkingDirectory(function* (dir) {
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
         const journal = join(dir, "trace.jsonl");
-        const harness = createPromptHarness();
+        const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir, journal);
         harness.fake.script({ reply: GREETER });
         harness.script({ decision: "approve" });
@@ -431,8 +431,8 @@ describe(
 
       // A runtime failure is an ordinary run failure: nonzero, with the save the
       // caller asked for still on disk to hand-edit.
-      yield* useWorkingDirectory(function* (dir) {
-        const harness = createPromptHarness();
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
+        const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir);
         harness.fake.script({ reply: FAILS_AT_RUN });
         harness.script({ decision: "approve" });
@@ -448,8 +448,8 @@ describe(
     });
 
     it("C15: a failing test in the approved document reports as a run reports it", function* () {
-      yield* useWorkingDirectory(function* (dir) {
-        const harness = createPromptHarness();
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
+        const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir);
         harness.fake.script({ reply: FAILING_TEST });
         harness.script({ decision: "approve" });
@@ -482,7 +482,7 @@ describe(
     });
 
     it("C15: one Agent resolution serves generation and the execution after it", function* () {
-      yield* useWorkingDirectory(function* (dir) {
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
         const reads: string[] = [];
         yield* useRecordedEnvironment(reads, { DEFAULT_AGENT_NAME: "settled-agent" });
 
@@ -504,7 +504,7 @@ describe(
         expect(stack.defaultAgent).toBe("settled-agent");
         expect(timesRead(reads, "DEFAULT_AGENT_NAME")).toBe(1);
 
-        const harness = createPromptHarness();
+        const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir, undefined, stack);
         harness.fake.script({ reply: PLAIN });
         harness.script({ decision: "approve" });
@@ -527,8 +527,8 @@ describe(
       // the turn in flight is cancelled, the provider is dismantled, and no later
       // phase begins. The barrier is what makes this a gate rather than a race —
       // the turn it interrupts is known to be running.
-      yield* useWorkingDirectory(function* (dir) {
-        const harness = createPromptHarness();
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
+        const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir);
         harness.fake.script({ reply: PLAIN, manual: true });
 
@@ -548,8 +548,8 @@ describe(
 
       // A teardown failure prevents the final validation, the save and the run,
       // whatever the command document selected.
-      yield* useWorkingDirectory(function* (dir) {
-        const harness = createPromptHarness();
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
+        const harness = createPromptHarness({ profileRoot });
         harness.deps.execute = executor(dir);
         harness.fake.closeFailure = new Error("the profile provider would not close");
         harness.fake.script({ reply: PLAIN });
@@ -564,8 +564,8 @@ describe(
 
       // Nothing bounds an authoring turn: the exec and fetch defaults belong to
       // the document, and the run deadline is the enclosing timebox above.
-      yield* useWorkingDirectory(function* (dir) {
-        const harness = createPromptHarness();
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
+        const harness = createPromptHarness({ profileRoot });
         // deno-lint-ignore require-yield
         harness.deps.execute = function* () {
           return Ok(undefined);

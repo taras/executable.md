@@ -56,7 +56,7 @@ import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { cwd } from "@executablemd/runtime";
 
 import type { AgentStack } from "./agent-stack.ts";
-import { runPromptCommandDocument } from "./prompt-profile.ts";
+import { DEFAULT_PROFILE_ROOT, runPromptCommandDocument } from "./prompt-profile.ts";
 import type { CandidateAssessment } from "./prompt-profile.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import {
@@ -124,6 +124,15 @@ export interface PromptDependencies {
   catalog(includes: readonly string[]): Operation<SyntaxCatalog>;
   /** Who answers the review question. */
   installElicitation(): Operation<void>;
+  /**
+   * Where this host keeps its profile session directories.
+   *
+   * Absent is the ordinary host default. A harness that owns a temporary tree
+   * names that tree here, which is the only way anything but production selects
+   * one — there is no flag, no environment variable and no contextual Api to
+   * reach, so a document cannot move where the ceiling lives.
+   */
+  profileRoot?: string;
   /** Run the approved document the way this host runs any supplied one. */
   execute(approved: PromptExecution): Operation<Result<void>>;
 }
@@ -195,6 +204,11 @@ export function* runPrompt(command: PromptCommand, deps: PromptDependencies): Op
       request,
       syntax,
       session: command.session ?? invocationSessionName(),
+      // Read from what the caller wrote, not from the shape of the name. Only a
+      // session somebody can ask for again needs its directory to outlive the
+      // invocation, and only the host knows whether somebody named one.
+      explicitSession: command.session !== undefined,
+      root: deps.profileRoot ?? DEFAULT_PROFILE_ROOT,
       stack: command.stack,
       ...(deps.acp === undefined ? {} : { acp: deps.acp }),
       installElicitation: deps.installElicitation,

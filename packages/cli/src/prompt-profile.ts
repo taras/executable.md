@@ -26,10 +26,10 @@
  * network capability either. It decides what to write; it writes nothing.
  */
 
-import { Err, Ok, scoped, until } from "effection";
+import { ensure, Err, Ok, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
 import { createHash } from "node:crypto";
-import { mkdir, readdir } from "node:fs/promises";
+import { mkdir, readdir, rmdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -87,6 +87,24 @@ export interface PromptProfile {
   syntax: string;
   /** The logical name every turn in this invocation belongs to. */
   session: string;
+  /**
+   * Whether the caller named that session.
+   *
+   * A trusted host value rather than something read back out of the name: only
+   * the host knows whether `--session` was written, and the difference decides
+   * whether this conversation's directory outlives the invocation. It reaches
+   * the command document nowhere.
+   */
+  explicitSession: boolean;
+  /**
+   * Where this host keeps its profile session directories.
+   *
+   * A host dependency, not a caller's: no flag, environment variable, document
+   * prop or replaceable context reaches it. Production leaves it at the default
+   * below; a harness that owns a temporary tree supplies that tree instead, so a
+   * test never reads, creates or removes anything under a real one.
+   */
+  root: string;
   /** The one Agent configuration this invocation settled. */
   stack: AgentStack;
   /** What the constrained provider is built on, beyond the host's assembly. */
@@ -125,16 +143,24 @@ export function* runPromptCommandDocument(profile: PromptProfile): Operation<Res
     );
   }
 
-  // Before the provider exists, and therefore before a session could be placed
-  // or a turn started: this session's directory is established and proven empty,
-  // or the command stops here.
-  const established = yield* useProfileDirectory(profile.session);
-  if (!established.ok) {
-    return established;
-  }
-  const workdir = established.value;
-
   return yield* scoped(function* (): Operation<Result<string>> {
+    // First, and before anything is built: this session's directory is
+    // established and proven empty, or the command stops here. Nothing has been
+    // installed yet, so a refusal reaches no provider, no session and no turn.
+    const established = yield* establishDirectory(profile.root, profile.session);
+    if (!established.ok) {
+      return established;
+    }
+    const workdir = established.value;
+    if (!profile.explicitSession) {
+      // Registered before every other resource, so it runs after all of them:
+      // the provider, the Prompt tasks and the Elicitation provider are already
+      // gone when this hands the directory back. Being an `ensure` is what makes
+      // an abort, a failed turn and a cancellation clean up the same way a
+      // success does.
+      yield* ensure(() => removeEmptyDirectory(workdir));
+    }
+
     yield* refuseDocumentCapabilities();
     yield* profile.installElicitation();
 
@@ -270,13 +296,13 @@ export const PROMPT_INSTRUCTIONS = [
 ].join("\n");
 
 /**
- * Where every profile directory lives.
+ * Where this host keeps its profile session directories by default.
  *
- * Under this host's own state directory rather than the caller's tree: an agent
- * writing a document has no reason to read the checkout it will run in, and a
- * ceiling that starts there is not a ceiling.
+ * Under its own state directory rather than the caller's tree: an agent writing
+ * a document has no reason to read the checkout it will run in, and a ceiling
+ * that starts there is not a ceiling.
  */
-export const PROMPT_PROFILE_SESSIONS: string = join(homedir(), ".xmd", "prompt", "sessions");
+export const DEFAULT_PROFILE_ROOT: string = join(homedir(), ".xmd", "prompt", "sessions");
 
 /**
  * The directory one logical session's conversation runs in.
@@ -293,20 +319,20 @@ export const PROMPT_PROFILE_SESSIONS: string = join(homedir(), ".xmd", "prompt",
  * session record it established last time, since a session's key includes the
  * directory it lives in.
  */
-export function profileDirectoryFor(session: string): string {
-  return join(PROMPT_PROFILE_SESSIONS, createHash("sha256").update(session).digest("hex"));
+export function profileDirectoryFor(root: string, session: string): string {
+  return join(root, createHash("sha256").update(session).digest("hex"));
 }
 
 /**
- * Establish that directory, or refuse.
+ * Establish this session's directory, or refuse.
  *
  * Created empty, and required to be empty every time — not cleaned. Whatever is
  * in there was put there by something this host did not authorize, and deleting
  * a stranger's files to get on with the work is the opposite of what a ceiling
  * is for. So the command says what it found and where, and stops.
  */
-function* useProfileDirectory(session: string): Operation<Result<string>> {
-  const directory = profileDirectoryFor(session);
+function* establishDirectory(root: string, session: string): Operation<Result<string>> {
+  const directory = profileDirectoryFor(root, session);
   try {
     yield* until(mkdir(directory, { recursive: true }));
     const entries = yield* until(readdir(directory));
@@ -327,6 +353,37 @@ function* useProfileDirectory(session: string): Operation<Result<string>> {
           (error instanceof Error ? error.message : String(error)),
       ),
     );
+  }
+}
+
+/**
+ * Give an invocation-unique conversation's directory back when it is over.
+ *
+ * Only an explicitly named session needs its directory afterwards: its identity
+ * is what a later `--session` derives the same ACPX session from. A generated
+ * name names nothing anybody can ask for again, so its directory is this scope's
+ * and goes away with it — before the approved Plan is validated, saved or run.
+ *
+ * Non-recursive, always. If something is in there, this host did not authorize
+ * whatever put it there, and the honest answer is to say so rather than to
+ * delete it: the same refusal an occupied directory earns on the way in.
+ */
+function* removeEmptyDirectory(directory: string): Operation<void> {
+  try {
+    yield* until(rmdir(directory));
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? error.code : undefined;
+    if (code === "ENOENT") {
+      return;
+    }
+    if (code === "ENOTEMPTY" || code === "EEXIST") {
+      throw new Error(
+        `${directory} was empty when this conversation started and is not now. It belongs to ` +
+          "one invocation, so nothing should have written there; its contents were left alone " +
+          "and nothing was saved or run",
+      );
+    }
+    throw error instanceof Error ? error : new Error(String(error));
   }
 }
 
