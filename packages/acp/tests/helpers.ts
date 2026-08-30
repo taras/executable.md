@@ -156,6 +156,14 @@ export interface FakeRuntimeHarness {
    * opened in between.
    */
   handleIds: string[];
+  /**
+   * Settles once `count` turns have been started.
+   *
+   * A barrier rather than a delay: a case that acts while a turn is in flight
+   * has to know the turn it means is actually running, and a duration long
+   * enough on one machine is a flake on another.
+   */
+  startedTurns(count: number): Operation<void>;
   /** Fail every attempt to establish a session, as an unreachable agent does. */
   ensureFailure?: Error;
   /**
@@ -262,6 +270,7 @@ const DEFAULT_EVENTS: AcpRuntimeEvent[] = [
 
 export function createFakeRuntime(): FakeRuntimeHarness {
   const scripted: ScriptedTurn[] = [];
+  const waitingForTurns: Array<{ count: number; settle: () => void }> = [];
   /** The identity a pending record is not yet asserting, by record id. */
   const withheld = new Map<string, string | undefined>();
   /** The record this fake wrote for each record id, so promotion can move it. */
@@ -273,6 +282,18 @@ export function createFakeRuntime(): FakeRuntimeHarness {
     ensureCalls: [],
     turns: [],
     handleIds: [],
+    startedTurns(count) {
+      return {
+        *[Symbol.iterator]() {
+          if (harness.turns.length >= count) {
+            return;
+          }
+          const reached = withResolvers<void>();
+          waitingForTurns.push({ count, settle: reached.resolve });
+          yield* reached.operation;
+        },
+      };
+    },
     closeCalls: [],
     closeInputs: [],
     closeRuntimes: [],
@@ -473,6 +494,12 @@ export function createFakeRuntime(): FakeRuntimeHarness {
             fake.finish(events, result);
           }
           harness.turns.push(fake);
+          for (const barrier of [...waitingForTurns]) {
+            if (harness.turns.length >= barrier.count) {
+              waitingForTurns.splice(waitingForTurns.indexOf(barrier), 1);
+              barrier.settle();
+            }
+          }
           return fake.turn;
         },
         runTurn(input) {

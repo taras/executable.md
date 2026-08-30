@@ -1094,6 +1094,12 @@ describe("Tier NO — session ownership", () => {
     // provider is already having. Two subscriptions on one session are not
     // competing for it — so the session's own queue orders them, and each takes
     // and gives back ownership in its turn.
+    //
+    // Every ordering claim here rests on a barrier rather than a duration. The
+    // fake says when a turn has actually started; the second task says when it
+    // is about to subscribe; and the provider's own agent resolution says when
+    // that subscription is running, which is the point after which the only
+    // thing ahead of it is the session's queue.
     const harness = createFakeRuntime();
     const trace = newTrace();
     // Manual, so the first turn is still open when the second subscribes. The
@@ -1103,6 +1109,19 @@ describe("Tier NO — session ownership", () => {
     const store = makeStore();
     yield* scoped(function* () {
       yield* installLaunchStack(harness, trace, { store });
+
+      const subscribing = withResolvers<void>();
+      const resolving = withResolvers<void>();
+      let resolutions = 0;
+      yield* Agent.around({
+        *agent([name], next) {
+          resolutions += 1;
+          if (resolutions === 2) {
+            resolving.resolve();
+          }
+          return yield* next(name);
+        },
+      });
 
       const first = yield* spawn(function* () {
         yield* scoped(function* () {
@@ -1114,14 +1133,16 @@ describe("Tier NO — session ownership", () => {
           }
         });
       });
-      while (harness.turns.length === 0) {
-        yield* sleep(1);
-      }
+      // The first turn is in flight, so the session is held.
+      yield* harness.startedTurns(1);
 
       const second = yield* spawn(function* (): Operation<Error | undefined> {
         try {
           yield* scoped(function* () {
             const stream = yield* Agent.operations.prompt("second", {});
+            // Constructing the stream chose nothing and started nothing. The
+            // next step is the subscription, and the queue is what it meets.
+            subscribing.resolve();
             const subscription = yield* stream;
             let next = yield* subscription.next();
             while (!next.done) {
@@ -1133,12 +1154,15 @@ describe("Tier NO — session ownership", () => {
           return error instanceof Error ? error : new Error(String(error));
         }
       });
+      yield* subscribing.operation;
+      yield* resolving.operation;
 
-      // Waiting on the session's queue rather than being refused: no second
-      // acquisition has been asked for, and no second turn exists.
-      yield* sleep(5);
+      // Waiting on the session's queue, not refused and not running: the
+      // coordinator has been asked once, one turn exists, and the second
+      // subscription has reached nothing that would establish a session.
       expect(trace.ownership.acquisitions).toHaveLength(1);
       expect(harness.turns).toHaveLength(1);
+      expect(harness.ensureCalls).toHaveLength(1);
 
       harness.turns[0]!.finish([], { status: "completed", stopReason: "end_turn" });
       yield* first;
