@@ -269,6 +269,36 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
     }
   });
 
+  it("C1: --run is a switch, and every valued spelling of it is refused", function* () {
+    // An option name is read up to its first `=`, so `--run=false` arrives under
+    // the name of the switch. Taken as the switch it would establish the
+    // opposite of what was written, and satisfy the run-only gate on the way.
+    const REFUSAL =
+      "--run does not take a value — write --run to execute the Plan " +
+      "or leave it out to write the Plan";
+
+    for (const spelling of ["--run=false", "--run=true", "--run="]) {
+      const scan = scanPromptArgs(["prompt", REQUEST, spelling]);
+      expect(scan.error).toBe(REFUSAL);
+      // It established nothing: the token reached neither the parser's argv nor
+      // the record of what this invocation asked for.
+      expect(scan.fixed).toEqual(["prompt", REQUEST]);
+
+      // And it does not answer for `--run` where a run is what makes an option
+      // meaningful. Without the fix this command line is accepted, and then
+      // nothing runs — so the journal the caller asked for is never created.
+      const gated = scanPromptArgs(["prompt", REQUEST, spelling, "--journal", "trace.jsonl"]);
+      expect(gated.error).toBe(REFUSAL);
+      expect(gated.fixed).toEqual(["prompt", REQUEST]);
+    }
+
+    // The switch itself is unaffected, wherever it is written.
+    expect(scanPromptArgs(["prompt", REQUEST, "--run"]).error).toBe(undefined);
+    expect(scanPromptArgs(["prompt", REQUEST, "--run", "--journal", "t.jsonl"]).error).toBe(
+      undefined,
+    );
+  });
+
   it("C1: an option this command does not define is refused, not dropped", function* () {
     // The parser stops at the first option it does not define and drops the
     // rest, so silence here would mean accepting a command line nobody honoured.

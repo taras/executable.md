@@ -206,6 +206,53 @@ describe(
       });
     });
 
+    it("C1: --run=false reaches no authorship and no durable effect", function* () {
+      // `--run=false` used to be read as the switch, which satisfied the gate
+      // that only exists because a run is what makes `--journal` mean anything.
+      // The command line was then accepted, nothing ran, and the journal the
+      // caller asked for was never created — so the gate answered a request it
+      // had not honoured. Nonzero alone would not catch that: the invocation
+      // below would have failed anyway, on the agent it cannot reach.
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
+        const journal = join(dir, "trace.jsonl");
+        const harness = createPromptHarness({ profileRoot });
+        harness.deps.execute = executor(dir, journal);
+        harness.fake.script({ reply: PLAIN });
+        harness.script({ decision: "Approve" });
+
+        const argv = ["prompt", REQUEST, "--run=false", "--journal", journal];
+        const written = console.error;
+        const lines: string[] = [];
+        const value = yield* scoped(function* (): Operation<number> {
+          yield* ensure(() => {
+            console.error = written;
+          });
+          console.error = (...parts: unknown[]) => {
+            lines.push(parts.map((part) => String(part)).join(" "));
+          };
+          return yield* runPrompt(
+            { argv, scan: scanPromptArgs(argv), include: [dir], run: false, stack: STACK },
+            harness.deps,
+          );
+        });
+
+        expect(value).toBe(1);
+        // The refusal is the one the fixed grammar owes this command line, not
+        // an incidental failure further along.
+        expect(lines).toEqual([
+          "--run does not take a value — write --run to execute the Plan " +
+            "or leave it out to write the Plan",
+        ]);
+        // Every phase after preflight stayed at zero: no catalog, no provider,
+        // no session, no turn, no review, no execution.
+        expect(untouched(harness)).toEqual(NOTHING);
+        // And nothing durable exists — neither the journal it named nor
+        // anything else.
+        expect(yield* exists(journal)).toBe(false);
+        expect(yield* until(readdir(dir))).toEqual([]);
+      });
+    });
+
     it("C1: --save is gone, and is refused as the unknown option it is", function* () {
       // Nothing was released under the old spelling, so there is no alias and
       // nothing to keep compatible with. Proven on a command line that is

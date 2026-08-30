@@ -126,6 +126,21 @@ drops the rest — accepting a command line nobody honoured. `--save` is named i
 particular: it was replaced by `--output` before release, so there is no alias,
 and the refusal says where an approved Plan goes now.
 
+`--run` is a switch, and every valued spelling of it — `--run=false`,
+`--run=true`, `--run=` — is refused there too:
+
+```console
+$ xmd prompt "…" --run=false
+--run does not take a value — write --run to execute the Plan or leave it out to
+write the Plan
+```
+
+An option's name is read up to its first `=`, so such a token arrives under the
+name of the switch. Taken as the switch it would establish the opposite of what
+was written and satisfy the run-only gate on the way, which is how
+`--run=false --journal <path>` came to be accepted by a command that then created
+no journal. It establishes nothing and reaches no later phase.
+
 `-e`/`--eval` stays exclusive to `xmd run`. A prompt supplies a request, not a
 document. Supplying one anyway is refused in the command's own preflight, with
 `unrecognized option for xmd prompt: --eval — inline documents are exclusive to
@@ -574,7 +589,7 @@ Every failure below exits non-zero, and each one stops the phases after it:
 
 | Failure | Reaches |
 | --- | --- |
-| a malformed command line, an unknown option, or `--save` | nothing |
+| a malformed command line, an unknown option, `--save`, or a valued `--run=…` | nothing |
 | incompatible permission flags or an unknown `--agent-provider` | nothing |
 | a catalog an include makes unreadable | no command document |
 | a provider that cannot establish the prompt profile's ceiling | no session, no turn |

@@ -228,6 +228,22 @@ export function scanPromptArgs(args: readonly string[]): PromptScan {
       }
 
       if (name === RUN_OPTION) {
+        // `optionName` stops at the first `=`, so every `--run=…` spelling
+        // arrives here under the name of the switch. Reading one as the switch
+        // would let a token satisfy the gate below while meaning the opposite,
+        // and the ordinary parser reads `--run=true` as the default rather than
+        // as true — so a caller who spelled it that way is answered by neither
+        // half of this command. Refused instead, before it establishes anything.
+        if (equals !== -1) {
+          return {
+            ...(request === undefined ? {} : { request }),
+            fixed,
+            occurrences,
+            error:
+              `${RUN_OPTION} does not take a value — write ${RUN_OPTION} to execute the Plan ` +
+              "or leave it out to write the Plan",
+          };
+        }
         runs = true;
       }
       if (runOnly === undefined && RUN_ONLY.has(name)) {
