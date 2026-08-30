@@ -10043,11 +10043,12 @@ One checked-in Markdown suite runs the real command against a fixture directory.
 
 ### Tier PR — The `xmd prompt` command
 
-Two root executions with a scope boundary between them: the packaged prompt
-command document, which owns the visible generation, repair, review and failure
-policy, and — only under `--run` — the Plan it returned, which runs as any
-supplied root does. Without `--run` the approved Plan is the result: stdout by
-default, or an exclusively created `--output` file. Defined in
+One root execution on every invocation — the packaged prompt command document,
+which owns the visible generation, repair, review and failure policy — and a
+second only under `--run`: the Plan it returned, which runs as any supplied root
+does, behind a complete scope boundary. Without `--run` the approved Plan is the
+result rather than a second execution: stdout by default, or an exclusively
+created `--output` file. Defined in
 [`xmd prompt`](./prompt-command-spec.md), whose acceptance table this points at
 rather than restating. The ACPX runtime is a scriptable fake, the review provider
 is a scripted `Elicitation` handler, and the contextual working directory is a

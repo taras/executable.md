@@ -1936,8 +1936,8 @@ function* dispatch(
         yield* exit(1);
         break;
       }
-      // Once, here, and handed to both consumers below. Authorship and the
-      // execution that follows it are one invocation, so they answer to one
+      // Once, here, and handed to both consumers below. Authorship and the run
+      // that may follow it are one invocation, so they answer to one
       // `--default-agent`, one `DEFAULT_AGENT_NAME` and one permission mode.
       const promptStack = yield* settleAgentStack(
         {

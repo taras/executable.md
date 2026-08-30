@@ -3,12 +3,12 @@
  * runs under, and the only thing that ever runs under it
  * (specs/prompt-command-spec.md).
  *
- * `xmd prompt` owns two root document executions with a complete scope boundary
- * between them. This module is the first one. It supplies that document's
- * inputs, a constrained Agent provider, Elicitation, the fixed first-party
- * components and the host-declared draft validator, and it exposes no custom
- * root and no repository component search: the document it runs is the one the
- * CLI ships.
+ * `xmd prompt` executes this root on every invocation, and a second one — the
+ * Plan it returns — only under `--run`, behind a complete scope boundary. This
+ * module is the one that always happens. It supplies that document's inputs, a
+ * constrained Agent provider, Elicitation, the fixed first-party components and
+ * the host-declared draft checker, and it exposes no custom root and no
+ * repository component search: the document it runs is the one the CLI ships.
  *
  * The Agent ceiling is assembled here rather than read from the command line,
  * because it is not the caller's to choose. Writing a Plan is a conversation

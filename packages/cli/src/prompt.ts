@@ -2,8 +2,8 @@
  * `xmd prompt` — the trusted host around the prompt command document
  * (specs/prompt-command-spec.md).
  *
- * The command owns two root document executions with a complete scope boundary
- * between them:
+ * Every invocation executes one root document — the packaged prompt command
+ * document — and a second one only when `--run` asks for it:
  *
  * ```text
  * fixed command preflight
@@ -11,9 +11,18 @@
  *   -> execute the exact packaged prompt command document
  *   -> await that execution and provider teardown
  *   -> validate the returned source again
- *   -> deliver the exact bytes: stdout, an --output file, a --run, or both
- *   -> execute retainedSource("<prompt>", source) through the ordinary run path
+ *   -> deliver those exact bytes, in exactly one of four ways:
+ *        (default)          write the source to stdout
+ *        --output           exclusively create the file
+ *        --run              execute retainedSource("<prompt>", source)
+ *                             through the ordinary run path
+ *        --output --run     create the file, then execute it
  * ```
+ *
+ * The complete scope boundary sits before that optional second execution: the
+ * command document and everything it built are gone before a Plan is admitted,
+ * so whichever result follows, it follows an invocation that has already let go
+ * of the conversation that wrote it.
  *
  * What a person is asked, how many drafts may be repaired, how many may be
  * reviewed and what happens when nobody approves anything are not here. They are
@@ -21,7 +30,7 @@
  * read and argued with. This module is what a policy cannot be trusted to do for
  * itself: settle the command line, build the ceiling the assistant runs under,
  * answer honestly about a draft, and hold the boundary between text an agent
- * wrote and a program this host runs.
+ * wrote and a Plan this host will hand over or run.
  *
  * Two kinds of failure are told apart throughout, because they have different
  * remedies. A *draft* failure is something the agent wrote, so the prompt
@@ -110,7 +119,7 @@ export interface PromptCommand {
   /**
    * The Agent configuration this invocation settled, before the command ran.
    *
-   * Settled by the caller rather than here, because the execution that follows
+   * Settled by the caller rather than here, because the run that may follow
    * approval is configured from the same answer: two resolutions of one command
    * line is two chances to read `DEFAULT_AGENT_NAME` differently.
    */
@@ -193,8 +202,9 @@ export function* runPrompt(command: PromptCommand, deps: PromptDependencies): Op
 
   // Every supplied individual option's shape, as the first draft that bound it
   // declared it. Frozen while the Plan is being written and carried into the
-  // final gate, so the bytes that run are checked against the command line that
-  // was written rather than against whichever draft happened to be last.
+  // final gate, so the bytes that are delivered are checked against the command
+  // line that was written rather than against whichever draft happened to be
+  // last.
   const frozen = new Map<string, OptionSignature>();
 
   // The command document lives and dies inside that call's scope. Leaving it
