@@ -16,16 +16,18 @@ import { Elicitation } from "@executablemd/core";
 import type { ElicitationRequest, SyntaxCatalog } from "@executablemd/core";
 import { Ok } from "effection";
 import type { Operation, Result } from "effection";
-import { ensure, scoped } from "effection";
+import { ensure, scoped, until } from "effection";
 import { ensureDir, rm } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
+import { readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { API, useHostFiles } from "@executablemd/runtime";
+import { PROMPT_PROFILE_SESSIONS } from "../../src/prompt-profile.ts";
 import { syntaxCatalog } from "../../src/syntax.ts";
 import type { PromptDependencies, PromptExecution } from "../../src/prompt.ts";
 import { createFakeAcp, makeRegistry, makeStore } from "./fake-acp.ts";
-import type { FakeAcp } from "./fake-acp.ts";
+import type { FakeAcp, FakeStore } from "./fake-acp.ts";
 
 /** The agent every prompt case drives, and the command it resolves to. */
 export const AGENT = "scripted-agent";
@@ -57,6 +59,14 @@ export interface PromptHarness {
 export function createPromptHarness(options?: {
   /** Replace the catalog entirely, for a case about catalog failure. */
   catalog?: (includes: readonly string[]) => Operation<SyntaxCatalog>;
+  /**
+   * The ACPX session store this invocation reads and writes.
+   *
+   * One store shared by two harnesses is two invocations of the command against
+   * one provider's memory, which is the only way to observe whether a named
+   * session is continued or created a second time.
+   */
+  store?: FakeStore;
 }): PromptHarness {
   const fake = createFakeAcp();
   const catalogCalls: string[][] = [];
@@ -77,7 +87,7 @@ export function createPromptHarness(options?: {
     deps: {
       acp: {
         createRuntime: fake.create,
-        sessionStore: makeStore(),
+        sessionStore: options?.store ?? makeStore(),
         agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
       },
       *catalog(includes) {
@@ -127,6 +137,7 @@ export function* useWorkingDirectory<T>(body: (dir: string) => Operation<T>): Op
   yield* ensureDir(dir);
   return yield* scoped(function* () {
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
+    yield* useProfileDirectories();
     yield* API.Env.around({
       // deno-lint-ignore require-yield
       *cwd() {
@@ -177,4 +188,32 @@ export function* useRecordedEnvironment(
 /** How many times one name was read. */
 export function timesRead(reads: readonly string[], name: string): number {
   return reads.filter((read) => read === name).length;
+}
+
+/**
+ * Leave the host's profile session directories as this case found them.
+ *
+ * A profile directory is deliberately durable — its stable identity is what
+ * `--session` continues — so a suite that made a few dozen of them under the
+ * developer's own home directory would be leaving litter behind. Only entries
+ * that appeared while the case ran are removed, so a directory somebody else
+ * owns is never touched.
+ */
+function* useProfileDirectories(): Operation<void> {
+  const before = new Set(yield* listSessionDirectories());
+  yield* ensure(function* () {
+    for (const name of yield* listSessionDirectories()) {
+      if (!before.has(name)) {
+        yield* rm(join(PROMPT_PROFILE_SESSIONS, name), { recursive: true, force: true });
+      }
+    }
+  });
+}
+
+function* listSessionDirectories(): Operation<string[]> {
+  try {
+    return yield* until(readdir(PROMPT_PROFILE_SESSIONS));
+  } catch {
+    return [];
+  }
 }

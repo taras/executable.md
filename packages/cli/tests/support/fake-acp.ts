@@ -29,7 +29,10 @@ import type {
   ProbeCapableRuntime,
 } from "@executablemd/acp";
 
-export function makeStore(): AcpxSessionStore & { records: Map<string, AcpSessionRecord> } {
+/** A session store whose records a case can read back. */
+export type FakeStore = AcpxSessionStore & { records: Map<string, AcpSessionRecord> };
+
+export function makeStore(): FakeStore {
   const records = new Map<string, AcpSessionRecord>();
   return {
     records,

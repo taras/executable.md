@@ -549,7 +549,7 @@ document and not readable from the command line:
 
 | The profile's provider gets | Stated as |
 | --- | --- |
-| a host-owned working directory that is not the caller's | `agentCwd`, one fixed empty path |
+| one host-owned directory per logical session | `agentCwd`, `~/.xmd/prompt/sessions/<sha256(name)>`, required empty |
 | no MCP servers | `mcpServers: []`, an empty set rather than an omission |
 | no native tools on a fresh session | `newSessionOptions.allowedTools: []` |
 | a private refusal of every native permission request | `permissions: "strict"` |
@@ -566,10 +566,15 @@ network capability, and the host decides for that whole execution that a failing
 `<Prompt>` ends it — so a turn that streamed text and then failed presents
 nothing.
 
-The profile's working directory is one fixed host-owned path rather than a new one each
-invocation, because a session's key includes the directory it lives in: a
-location that changed every time would leave `--session` unable to name a
-conversation that already exists. Nothing this profile grants can write there.
+The profile's working directory is derived from the logical session name rather
+than shared or freshly made: `~/.xmd/prompt/sessions/<sha256(name)>`, with the
+digest in the path and never the name. A session's key includes the directory it
+lives in, so a shared location would put two conversations in one ambient
+directory while a fresh one would leave `--session` unable to name a conversation
+that already exists. It is created empty and required to be empty before the
+provider is constructed or a session is materialized; a non-empty one is a
+terminal refusal rather than something to clean. Nothing this profile grants can
+write there.
 
 Only the profile's provider receives `newSessionOptions.systemPrompt`. It carries the
 fixed statement of what the session writes, and nothing else — the catalog and

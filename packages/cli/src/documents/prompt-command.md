@@ -139,8 +139,19 @@ Three attempts to fix it did not clear everything. These problems remain:
 <Break />
 </If>
 
+Stopping says two different things depending on where you are. On the tenth
+draft, when it still has problems, `abort` is the only choice left and there was
+never a Plan to approve — so that ending says so. Everywhere else, including a
+tenth draft you could have approved, stopping is your decision and is reported
+as one.
+
 <If condition={review.decision === "abort"}>
+<If condition={round === 10 && !check.valid}>
+<Fail message="xmd prompt: ten drafts were reviewed and none was approved, so nothing was saved and nothing ran. Try again with a more specific request." />
+<Else>
 <Fail message="xmd prompt: you ended the review, so nothing was saved and nothing ran." />
+</Else>
+</If>
 </If>
 
 <Prompt as="draft">
@@ -157,8 +168,9 @@ explanation.
 
 </Session>
 
-If you approved a document, return its source unchanged. Otherwise, stop without
-saving or running anything.
+If you approved a document, return its source unchanged. Nothing should reach
+this point without approving or stopping first, so the other branch says what it
+would mean if anything did.
 
 <If condition={approved !== null}>
 <Return value={approved} />

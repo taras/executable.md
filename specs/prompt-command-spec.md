@@ -194,7 +194,8 @@ exposes no custom root.
 The assistant that writes a Plan is assembled separately from the final run
 provider:
 
-- a host-owned working directory that is not the caller's and is created empty;
+- one host-owned directory dedicated to the logical prompt session, created
+  empty and required to remain empty;
 - no additional directories;
 - no MCP servers — stated as an empty set, not omitted;
 - an empty requested native-tool allowlist on a fresh session;
@@ -211,11 +212,25 @@ They apply to the approved Plan later. A provider that cannot establish this
 ceiling refuses before session materialization or a turn; there is no silent
 downgrade.
 
-The profile's working directory is one fixed host-owned path rather than a new
-directory each invocation, because a session's identity includes the directory it
-lives in: a location that changed every time would mean `--session` could never
-name a conversation that already exists. Nothing this profile grants can write
-there, so what is created empty stays empty.
+The profile's working directory is
+`~/.xmd/prompt/sessions/<sha256(logical-session-name)>`. It is dedicated to that
+one logical session rather than shared by every invocation, so two conversations
+never see one ambient directory. The leaf is the digest and never the name
+itself: a logical session name is a caller's string, and a caller's string that
+becomes a path is one that can escape a path.
+
+The digest also carries the identity `--session` needs. A generated
+invocation-unique name reaches a location nothing else does; the same explicit
+name reaches the same one, and because a session's key includes the directory it
+lives in, that is what lets the provider continue the session it established.
+
+The directory is created empty on first use and **required to be empty** before
+the provider is constructed or a session is materialized. A non-empty directory
+is a terminal, actionable refusal naming the path: nothing is deleted or cleaned,
+because whatever is in there was put there by something this host did not
+authorize. It may remain after execution — its stable identity is part of
+named-session continuation — and nothing this profile grants can write there, so
+what is created empty stays empty.
 
 The approved Plan later receives the caller-selected ordinary run Agent and
 permission configuration. It inherits neither the assistant Session nor its
@@ -375,10 +390,19 @@ complete JSON problems, serialized by `<Json>`. Prose outside `<Prompt>`
 addresses you; text inside `<Prompt>` instructs the assistant.
 
 **Failure.** `approve` selects the draft, and one exhaustive branch after the
-Session either returns its source unchanged or stops without saving or running
-anything. `abort` and a review that approved nothing
-reach `<Fail>` with an actionable message. Failure is authored in Markdown rather
-than hidden in the host or represented by a missing-`<Return>` accident.
+Session returns its source unchanged. Stopping reaches `<Fail>` with one of two
+authored messages, and which one depends on whether an approvable Plan ever
+existed:
+
+- the tenth presentation of a draft that still has problems offers only `abort`,
+  and taking that sole choice is **exhaustion** — ten drafts were reviewed and
+  none was approved;
+- every other `abort`, including one on a tenth draft that could have been
+  approved, is the ordinary ending: you decided to stop.
+
+The branch after the Session stays as an exhaustive fallback for a body that
+somehow reached it having approved nothing. Failure is authored in Markdown
+rather than hidden in the host or represented by a missing-`<Return>` accident.
 
 The command document's rendered output is not command output. Everything you see
 while a Plan is written reaches you through Elicitation, and that document's
@@ -469,13 +493,13 @@ produced.
 | C1 | Fixed grammar and help | Request cardinality, individual-property ordering, aggregate props before the request, `--session` including its empty-value refusal, and effect-free generic help |
 | C2 | Exact packaged root | The command executes the checked-in Markdown value root under `<prompt-command>`; the turn text is that document's own words, and no TypeScript authorship loop or custom root chooses policy |
 | C3 | Visible policy | Generation, three-turn repair, ten-round review, revision, approval, abort and exhaustion are present in Markdown; `<Prompt>` remains one turn |
-| C4 | One Session | One enclosing Session expansion carries every turn; default names differ across invocations and `--session` supplies the exact override |
-| C5 | Prompt profile ceiling | An empty host-owned working directory, no MCP servers, no native tools, strict private denial, no Files/command/network capability for the command document, and final-run permission flags that cannot widen any of it |
+| C4 | One Session | One enclosing Session expansion carries every turn; two default invocations get different profile directories and session keys, two `--session` invocations get the same directory and key with the raw name absent from the path, and two named invocations sharing one ACPX store continue the established record rather than placing a second |
+| C5 | Prompt profile ceiling | This session's own host-owned directory, empty while the command document runs, no MCP servers, no native tools, strict private denial, no Files/command/network capability for the command document, and final-run permission flags that cannot widen any of it; pre-existing content in that directory refuses before any provider, session, turn, review, save or execution and is left untouched |
 | C6 | Draft inertness | A draft is only data while the Plan is written, and no draft effect occurs before the final execution |
 | C7 | Validation classification | Candidate failures return structured facts; caller-source failures escape immediately; frozen signatures are checked before token extraction |
 | C8 | Bounds | One base plus three automatic repairs per draft, and no more than ten human presentations, with no revision offered on the last |
-| C9 | Safe presentation and authored failure | Arbitrary source cannot close `<CodeBlock>`; abort and exhaustion reach `<Fail>`, not host policy and not a missing `<Return>` |
-| C10 | Final gate | The host revalidates after the command document has completely torn down, and resolves props for the exact returned bytes |
+| C9 | Safe presentation and authored failure | Arbitrary source cannot close `<CodeBlock>`; an ordinary abort and a tenth invalid presentation's sole `abort` reach their two distinct authored `<Fail>` messages, not host policy and not a missing `<Return>` |
+| C10 | Final gate | The host revalidates after the command document has completely torn down — a component removed during that teardown makes the unchanged approved bytes fail admission, with no save, journal or execution — and resolves props for the exact returned bytes |
 | C11 | Exact bytes | Approval, exclusive save and `<prompt>` execution receive the Agent close value without rewriting or fence removal |
 | C12 | Journal separation | Authorship uses only disposable in-memory history; the final journal begins with the approved Plan |
 | C13 | Lifetime | Cancellation and every teardown failure settle before final validation, save or execution |

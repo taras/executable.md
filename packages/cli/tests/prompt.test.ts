@@ -20,19 +20,24 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, until } from "effection";
 import type { Operation } from "effection";
-import { writeTextFile } from "@effectionx/fs";
+import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { API } from "@executablemd/runtime";
 import { Elicitation } from "@executablemd/core";
 import type { ElicitationRequest } from "@executablemd/core";
 
 import { runPrompt } from "../src/prompt.ts";
 import type { PromptCommand } from "../src/prompt.ts";
-import { PROMPT_INSTRUCTIONS, PROMPT_PROFILE_DIRECTORY } from "../src/prompt-profile.ts";
+import {
+  profileDirectoryFor,
+  PROMPT_INSTRUCTIONS,
+  PROMPT_PROFILE_SESSIONS,
+} from "../src/prompt-profile.ts";
 import { scanPromptArgs } from "../src/prompt-args.ts";
 import type { AgentStack } from "../src/agent-stack.ts";
 import { AGENT, createPromptHarness, useWorkingDirectory } from "./support/prompt-harness.ts";
+import { makeStore } from "./support/fake-acp.ts";
 import type { PromptHarness } from "./support/prompt-harness.ts";
 
 const REQUEST = "write a greeting";
@@ -216,8 +221,9 @@ describe(
 
     it("C4: one Session carries every turn, and --session names it", function* () {
       // Initial, repair and revision turns all land in one conversation, and a
-      // second invocation places a different one.
+      // second invocation places a different one in a directory of its own.
       const keys: string[] = [];
+      const directories: string[] = [];
       for (const _invocation of [0, 1]) {
         yield* useWorkingDirectory(function* (dir) {
           const harness = createPromptHarness();
@@ -235,16 +241,24 @@ describe(
           expect(harness.fake.prompts).toHaveLength(5);
           expect(sessions(harness)).toHaveLength(1);
           keys.push(sessions(harness)[0]);
+          directories.push(String(harness.fake.created[0]?.cwd));
         });
       }
       expect(keys[0]).not.toBe(keys[1]);
+      // Different conversations, so different directories: a generated name
+      // reaches a location nothing else does.
+      expect(directories[0]).not.toBe(directories[1]);
 
       // `--session` replaces the generated name, so two invocations name one
-      // conversation and the provider's ordinary continuation applies.
+      // conversation in one directory — and one ACPX store is what turns that
+      // from equal keys into an actually continued session.
+      const store = makeStore();
       const named: string[] = [];
+      const namedDirectories: string[] = [];
+      const materializations: (string | undefined)[] = [];
       for (const _invocation of [0, 1]) {
         yield* useWorkingDirectory(function* (dir) {
-          const harness = createPromptHarness();
+          const harness = createPromptHarness({ store });
           harness.fake.script({ reply: VALID });
           harness.script({ decision: "approve" });
 
@@ -254,17 +268,30 @@ describe(
           );
           expect(code).toBe(0);
           named.push(sessions(harness)[0]);
+          namedDirectories.push(String(harness.fake.created[0]?.cwd));
+          materializations.push(harness.fake.ensured[0]?.materialization);
         });
       }
       expect(named[0]).toBe(named[1]);
       expect(named[0]).not.toBe(keys[0]);
+      expect(namedDirectories[0]).toBe(namedDirectories[1]);
+      // The name never reaches the path, and the digest is what the host derived
+      // from it.
+      expect(namedDirectories[0]).toBe(profileDirectoryFor("ada"));
+      expect(namedDirectories[0]).not.toContain("ada");
+      expect(namedDirectories[0].startsWith(`${PROMPT_PROFILE_SESSIONS}${sep}`)).toBe(true);
+
+      // The second invocation continued the record the first established rather
+      // than placing a second one: the store holds one, and only the first
+      // ensure asked for a session to be materialized by its first turn.
+      expect([...store.records.keys()]).toEqual([named[0]]);
+      expect(materializations).toEqual(["first-turn-acceptance", undefined]);
     });
 
     it("C5: the prompt profile's ceiling is the host's, and no flag widens it", function* () {
-      // An empty directory of the host's own, no MCP servers, no native tools —
-      // observed while the command document is still running, because the
-      // directory is gone
-      // by the time the command returns.
+      // This session's own directory, empty, no MCP servers and no native tools
+      // — observed while the command document is still running, because that is
+      // the only moment the claim is about.
       yield* useWorkingDirectory(function* (dir) {
         yield* writeTextFile(join(dir, "secret.txt"), "the caller's tree\n");
 
@@ -300,12 +327,16 @@ describe(
           );
         };
 
-        const code = yield* runPrompt(command(dir, [REQUEST]), harness.deps);
+        const code = yield* runPrompt(
+          { ...command(dir, [REQUEST]), session: "ceiling" },
+          harness.deps,
+        );
         expect(code).toBe(0);
 
-        // Not the caller's working directory, and empty.
+        // Not the caller's working directory: this session's, and empty while
+        // the conversation ran.
         expect(seen.cwd).not.toBe(dir);
-        expect(seen.cwd).toBe(PROMPT_PROFILE_DIRECTORY);
+        expect(seen.cwd).toBe(profileDirectoryFor("ceiling"));
         expect(seen.entries).toEqual([]);
         // Stated rather than omitted: this host configures no MCP server and
         // allows no native tool on a fresh session.
@@ -319,10 +350,41 @@ describe(
         ]);
       });
 
+      // Something already in that directory is a refusal, not a cleanup. It
+      // happens before the provider exists, so no session is placed and no turn
+      // is started — and what was there is still there afterwards.
+      yield* useWorkingDirectory(function* (dir) {
+        const occupied = profileDirectoryFor("occupied");
+        yield* ensureDir(occupied);
+        yield* writeTextFile(join(occupied, "someone-elses.txt"), "not mine to delete\n");
+
+        const harness = createPromptHarness();
+        harness.fake.script({ reply: VALID });
+
+        const { value, lines } = yield* reported(() =>
+          runPrompt({ ...command(dir, [REQUEST]), session: "occupied" }, harness.deps),
+        );
+
+        expect(value).toBe(1);
+        expect(lines.join("\n")).toContain("is not empty");
+        expect(lines.join("\n")).toContain("name a different --session");
+        expect(lines.join("\n")).toContain(occupied);
+        // Nothing downstream of the refusal happened.
+        expect(harness.fake.created).toHaveLength(0);
+        expect(harness.fake.ensured).toHaveLength(0);
+        expect(harness.fake.started).toBe(false);
+        expect(harness.fake.prompts).toHaveLength(0);
+        expect(harness.reviews).toHaveLength(0);
+        expect(harness.executions).toHaveLength(0);
+        // The contents were left exactly as they were found.
+        expect(yield* readTextFile(join(occupied, "someone-elses.txt"))).toBe(
+          "not mine to delete\n",
+        );
+      });
+
       // `--approve-all` configures the approved document. A native permission
       // request while the Plan is being written is still denied, privately, and
-      // the turn it
-      // belongs to fails.
+      // the turn it belongs to fails.
       yield* useWorkingDirectory(function* (dir) {
         const harness = createPromptHarness();
         harness.fake.script({ reply: VALID, requestsTool: "Bash" });
@@ -572,6 +634,40 @@ describe(
         );
         expect(harness.executions).toHaveLength(0);
       });
+
+      // Exhaustion is reachable, and it is a different ending. Ten presentations
+      // that never validated, the last offering nothing but `abort`, and the
+      // sentence says there was never a Plan to approve rather than that
+      // somebody decided to stop.
+      yield* useWorkingDirectory(function* (dir) {
+        const harness = createPromptHarness();
+        for (const round of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+          // A base draft and its three repairs, none of which validates.
+          for (const _draft of [0, 1, 2, 3]) {
+            harness.fake.script({ reply: UNRESOLVED });
+          }
+          harness.script(
+            round < 10 ? { decision: "revise", feedback: `round ${round}` } : { decision: "abort" },
+          );
+        }
+
+        const { value, lines } = yield* reported(() =>
+          runPrompt(command(dir, [REQUEST], STACK), harness.deps),
+        );
+
+        expect(value).toBe(1);
+        expect(harness.reviews).toHaveLength(10);
+        // Rounds one to nine could be sent back; the tenth had one choice, and
+        // taking it is what reaches the exhaustion ending.
+        expect(decisions(harness.reviews[8])).toEqual(["revise", "abort"]);
+        expect(decisions(harness.reviews[9])).toEqual(["abort"]);
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toBe(
+          "xmd prompt: ten drafts were reviewed and none was approved, so nothing was saved " +
+            "and nothing ran. Try again with a more specific request.",
+        );
+        expect(harness.executions).toHaveLength(0);
+      });
     });
 
     it("C10, C11: the approved bytes are what runs, and props are theirs", function* () {
@@ -606,6 +702,74 @@ describe(
 
         yield* runPrompt(command(dir, [REQUEST]), harness.deps);
         expect(harness.reviews[0].message).toContain(wrapped);
+      });
+    });
+
+    it("C10: final admission vetoes after the profile has torn down", function* () {
+      yield* useWorkingDirectory(function* (dir) {
+        // A repository component the draft uses. It exists while the command
+        // document runs, so the same production validator that answers
+        // <ValidateCandidate> finds the draft sound.
+        const widget = join(dir, "Widget.md");
+        yield* writeTextFile(widget, "A widget.\n");
+        const draft = ["# Uses a widget", "", "<Widget />", ""].join("\n");
+
+        const harness = createPromptHarness();
+        harness.fake.script({ reply: draft });
+        const events: string[] = [];
+        harness.deps.installElicitation = function* () {
+          // Registered inside the profile's scope, so it runs while that scope
+          // is being torn down — after the provider is gone and before the host
+          // looks at what was approved.
+          yield* ensure(function* () {
+            events.push("teardown");
+            yield* rm(widget, { force: true });
+          });
+          yield* Elicitation.around(
+            {
+              // deno-lint-ignore require-yield
+              *elicit([request], _next) {
+                harness.reviews.push(request);
+                return { decision: "approve" };
+              },
+            },
+            { at: "min" },
+          );
+        };
+
+        const written = console.error;
+        const lines: string[] = [];
+        const code = yield* scoped(function* (): Operation<number> {
+          yield* ensure(() => {
+            console.error = written;
+          });
+          console.error = (...parts: unknown[]) => {
+            events.push("reported");
+            lines.push(parts.map((part) => String(part)).join(" "));
+          };
+          return yield* runPrompt(command(dir, [REQUEST]), harness.deps);
+        });
+
+        // The draft was sound enough to approve, and the approved bytes are
+        // unchanged — only the tree they resolve against moved.
+        expect(harness.reviews).toHaveLength(1);
+        expect(harness.reviews[0].message).toContain("<Widget />");
+
+        // The gate is effective on its own: the same bytes now fail, because the
+        // host validates them again rather than trusting what the document
+        // concluded while its own scope was still standing.
+        expect(code).toBe(1);
+        expect(lines.join("\n")).toContain("the approved document does not validate");
+        expect(lines.join("\n")).toContain("component-unresolved");
+        expect(lines.join("\n")).toContain("Widget");
+
+        // And it is ordered: teardown finished first, which is the only reason
+        // the component was missing when the second validation ran.
+        expect(events).toEqual(["teardown", "reported"]);
+
+        // Nothing after the veto happened.
+        expect(harness.executions).toHaveLength(0);
+        expect((yield* until(readdir(dir))).sort()).toEqual([]);
       });
     });
 
@@ -689,16 +853,15 @@ describe(
         expect(revision).not.toContain("The document you write is a Plan");
       });
 
-      // Abort and the tenth-round exhaustion each print one sentence, once.
-      for (const scripted of [
-        { rounds: 1, ending: "you ended the review" },
-        { rounds: 10, ending: "ten drafts were reviewed and none was approved" },
-      ]) {
+      // Stopping prints one sentence, once, whether it happened on the first
+      // presentation or the tenth: an approvable Plan existed and you chose to
+      // stop, and ten rounds of it do not accumulate into a different sentence.
+      for (const rounds of [1, 10]) {
         yield* useWorkingDirectory(function* (dir) {
           const harness = createPromptHarness();
-          for (const round of Array.from({ length: scripted.rounds }, (_, i) => i + 1)) {
+          for (const round of Array.from({ length: rounds }, (_, i) => i + 1)) {
             harness.fake.script({ reply: VALID });
-            if (round < scripted.rounds) {
+            if (round < rounds) {
               harness.script({ decision: "revise", feedback: `round ${round}` });
             }
           }
@@ -713,7 +876,7 @@ describe(
           // repetition of it however many rounds preceded it.
           expect(lines).toHaveLength(1);
           expect(occurrences(lines[0], "xmd prompt:")).toBe(1);
-          expect(lines[0]).toContain("nothing was saved and nothing ran");
+          expect(lines[0]).toContain("you ended the review");
         });
       }
     });

@@ -5,16 +5,18 @@
  *
  * `xmd prompt` owns two root document executions with a complete scope boundary
  * between them. This module is the first one. It supplies that document's
- * inputs, a
- * constrained Agent provider, Elicitation, the fixed first-party components and
- * the host-declared candidate validator, and it exposes no custom root and no
- * repository component search: the program it runs is the one the CLI ships.
+ * inputs, a constrained Agent provider, Elicitation, the fixed first-party
+ * components and the host-declared draft validator, and it exposes no custom
+ * root and no repository component search: the document it runs is the one the
+ * CLI ships.
  *
  * The Agent ceiling is assembled here rather than read from the command line,
  * because it is not the caller's to choose. Writing a Plan is a conversation
- * about text; it never lets an agent touch anything. So the provider gets a fresh empty
- * directory of this host's own, no additional directories, no MCP servers, an
- * empty native-tool allowlist and a private strict denial of every native
+ * about text; it never lets an agent touch anything. So the provider gets a
+ * host-owned directory dedicated to this logical session — created empty, and
+ * required to be empty before anything is built — no additional directories, no
+ * MCP servers, an empty native-tool allowlist and a private strict denial of
+ * every native
  * permission request — one that answers inside the provider and consults no
  * authored approval scope, so nothing composed around it can widen a ceiling
  * with nothing in it. `--approve-all`, `--approve-reads` and `--deny-all`
@@ -26,7 +28,8 @@
 
 import { Err, Ok, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
-import { mkdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -122,8 +125,16 @@ export function* runPromptCommandDocument(profile: PromptProfile): Operation<Res
     );
   }
 
+  // Before the provider exists, and therefore before a session could be placed
+  // or a turn started: this session's directory is established and proven empty,
+  // or the command stops here.
+  const established = yield* useProfileDirectory(profile.session);
+  if (!established.ok) {
+    return established;
+  }
+  const workdir = established.value;
+
   return yield* scoped(function* (): Operation<Result<string>> {
-    const workdir = yield* useProfileDirectory();
     yield* refuseDocumentCapabilities();
     yield* profile.installElicitation();
 
@@ -215,8 +226,9 @@ function validator(profile: PromptProfile): IdentityComponent {
 /**
  * The Agent ceiling, stated as the dependencies the provider is built from.
  *
- * Each entry is the whole of one clause: the working directory the agent runs
- * in, the MCP servers it configures, the native tools a fresh session may use,
+ * Each entry is the whole of one clause: the directory the agent runs in — this
+ * session's own, proven empty above — the MCP servers it configures, the native
+ * tools a fresh session may use,
  * and who answers a native permission request. `mcpServers: []` and
  * `allowedTools: []` are statements rather than omissions — leaving either off
  * is the backend's default, which is not this host's.
@@ -258,24 +270,64 @@ export const PROMPT_INSTRUCTIONS = [
 ].join("\n");
 
 /**
- * Where the assistant runs while it writes a Plan: this host's own directory,
- * and an empty one.
+ * Where every profile directory lives.
  *
- * The caller's working directory is deliberately not offered — an agent writing
- * a document has no reason to read the tree it will run in, and a ceiling that
- * starts at the caller's checkout is not a ceiling. Nothing this profile grants
- * can write here either, so what is created empty stays empty.
- *
- * One fixed path rather than a new directory each time, because a session's
- * identity includes the directory it lives in: a location that changed every
- * invocation would mean `--session` could never name a conversation that
- * already exists, which is the whole of what that option is for.
+ * Under this host's own state directory rather than the caller's tree: an agent
+ * writing a document has no reason to read the checkout it will run in, and a
+ * ceiling that starts there is not a ceiling.
  */
-export const PROMPT_PROFILE_DIRECTORY: string = join(homedir(), ".xmd", "prompt");
+export const PROMPT_PROFILE_SESSIONS: string = join(homedir(), ".xmd", "prompt", "sessions");
 
-function* useProfileDirectory(): Operation<string> {
-  yield* until(mkdir(PROMPT_PROFILE_DIRECTORY, { recursive: true }));
-  return PROMPT_PROFILE_DIRECTORY;
+/**
+ * The directory one logical session's conversation runs in.
+ *
+ * Dedicated to that session rather than shared by every invocation, so two
+ * conversations never see one ambient directory. The leaf is the digest of the
+ * name and never the name itself: a logical session name is a caller's string,
+ * and a caller's string that becomes a path is a caller's string that can escape
+ * one.
+ *
+ * A digest also gives the identity `--session` needs. The generated
+ * invocation-unique name digests to a location nothing else reaches, while the
+ * same explicit name digests to the same one — which is what lets ACPX find the
+ * session record it established last time, since a session's key includes the
+ * directory it lives in.
+ */
+export function profileDirectoryFor(session: string): string {
+  return join(PROMPT_PROFILE_SESSIONS, createHash("sha256").update(session).digest("hex"));
+}
+
+/**
+ * Establish that directory, or refuse.
+ *
+ * Created empty, and required to be empty every time — not cleaned. Whatever is
+ * in there was put there by something this host did not authorize, and deleting
+ * a stranger's files to get on with the work is the opposite of what a ceiling
+ * is for. So the command says what it found and where, and stops.
+ */
+function* useProfileDirectory(session: string): Operation<Result<string>> {
+  const directory = profileDirectoryFor(session);
+  try {
+    yield* until(mkdir(directory, { recursive: true }));
+    const entries = yield* until(readdir(directory));
+    if (entries.length > 0) {
+      return Err(
+        new Error(
+          `${directory} is not empty, and xmd prompt writes a Plan in a directory of its own ` +
+            "with nothing in it. Move or remove what is in there, or name a different " +
+            "--session; nothing was written or run",
+        ),
+      );
+    }
+    return Ok(directory);
+  } catch (error) {
+    return Err(
+      new Error(
+        `could not establish ${directory}: ` +
+          (error instanceof Error ? error.message : String(error)),
+      ),
+    );
+  }
 }
 
 /**
