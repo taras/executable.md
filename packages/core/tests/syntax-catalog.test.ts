@@ -909,6 +909,34 @@ describe("Tier SY: complete component contracts", () => {
     expect(entry.context).toBe(undefined);
   });
 
+  it("SY24c: describes <Fail> completely enough to copy the invocation", function* () {
+    const catalog = yield* catalogFor({}, []);
+
+    // The whole row, so a drift in origin, form, schema, return mode or prose
+    // is a failure here rather than a surprise for an author reading it.
+    expect(find(builtIn(catalog), "Fail")).toEqual({
+      kind: "component",
+      name: "Fail",
+      origin: { kind: "registered", origin: "@executablemd/core", reserved: false },
+      sourceKind: "registered",
+      inspectability: "complete",
+      forms: ["self-closing"],
+      props: {
+        type: "object",
+        properties: { message: { type: "string", minLength: 1 } },
+        required: ["message"],
+        additionalProperties: false,
+      },
+      captures: [],
+      returnMode: "text",
+      returns: { type: "string" },
+      description:
+        "Stop authored work with an actionable failure. " +
+        '`<Fail message="No acceptable candidate was approved." />` raises the message where ' +
+        "it is written.",
+    });
+  });
+
   it("SY25: preserves the declaration order of captures and forms", function* () {
     const catalog = yield* scoped(function* () {
       yield* useTree({});

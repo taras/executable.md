@@ -370,6 +370,7 @@ describe("Tier CR — resolution order", () => {
     const dir = yield* useFixture();
     for (const name of [
       "CodeBlock",
+      "Fail",
       "Fetch",
       "File",
       "Glob",
@@ -388,6 +389,7 @@ describe("Tier CR — resolution order", () => {
     const dir = yield* useFixture();
     for (const name of [
       "CodeBlock",
+      "Fail",
       "Fetch",
       "File",
       "Glob",
