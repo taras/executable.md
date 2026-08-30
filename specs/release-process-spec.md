@@ -92,7 +92,8 @@ documents at the revision it checks.
   prerelease marker — so a forgotten bump is visible where the release was
   made, then refuses to build. On a valid tag it compiles
   `packages/cli/src/compiled.ts` per target with
-  `--include packages/code-review-agent` and attaches the binaries and
+  `--include packages/code-review-agent --include packages/cli/src/documents/prompt-command.md`
+  and attaches the binaries and
   sha256 checksums to the tag's GitHub Release. That module is the
   compiled-binary entrypoint: it installs the `API.Env.command` adapter that
   relaunches the binary as itself, which a source entrypoint cannot do. Between
@@ -543,3 +544,50 @@ A publishable `@executablemd/web` is an atomic configuration state: public
 inclusion of `generated/client-bundle.ts` in both published artifacts. The
 configuration elements change atomically; the package is never published
 without its browser asset and never published while private.
+
+## 9. Packaged documents (`@executablemd/cli`)
+
+A document-backed command executes first-party Markdown through the ordinary XMD
+engine rather than a TypeScript policy. A package declares which Markdown it
+ships by putting it in `src/documents/`; every other Markdown under `src/` —
+test documents, scenario fixtures — stays out of the product. `xmd prompt` is
+the first such command, and `packages/cli/src/documents/prompt-command.md` is
+the document that implements it: the checked-in Markdown is the deployed
+artifact and the single source of truth, not a generated string mirror of one.
+
+The command locates it from its own module URL — never from the contextual
+working directory, and never through the component search path. Both are
+answerable by whatever directory a person is standing in, and which policy the
+command runs is not a thing a repository file may decide.
+
+Every build therefore keeps the asset beside its module, at the same relative
+path:
+
+- **source checkout** — the file as committed;
+- **`deno compile`** — embedded by `--include packages/cli/src/documents/prompt-command.md`,
+  in `deno task build` and in `release.yml`'s matrix compile;
+- **npm (dnt)** — copied by `scripts/build-npm.ts`, which copies each package's
+  `src/documents/` into `esm/src/documents/`, preserving relative location. dnt
+  emits the module graph and nothing else, so an asset no TypeScript imports is
+  absent from the published package unless the build copies it. That failure is
+  invisible under Deno and reaches only Node and Bun.
+
+A missing asset fails loudly, naming the path it looked at, rather than
+selecting different behavior.
+
+The checks that hold this together, each proving a different build:
+
+- `packages/cli/tests/packaged-document.test.ts` reads the document from a
+  temporary working directory and compares it to the committed bytes. It runs
+  under Deno, Node and Bun, which is what makes it evidence rather than one
+  runtime's opinion.
+- `scripts/tests/cli-npm-bin.test.ts` builds the real package and asserts
+  `esm/src/documents/prompt-command.md` is byte-identical to the source.
+- `scripts/tests/packaged-document.test.ts` holds the two `deno compile` sites
+  to the documents that exist, because that list is the one thing no build
+  discovers for itself.
+
+Adding another packaged document needs no npm-build change — `build-npm.ts`
+copies the directory. Only `deno compile` names files individually, so a new
+document must be added to `deno task build` and to `release.yml`, which
+`scripts/tests/packaged-document.test.ts` enforces.

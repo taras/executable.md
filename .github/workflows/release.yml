@@ -98,6 +98,7 @@ jobs:
             --exclude-unused-npm \
             --allow-all \
             --include packages/code-review-agent \
+            --include packages/cli/src/documents/prompt-command.md \
             --target ${{ matrix.target }} \
             --output dist/${{ matrix.artifact }} \
             packages/cli/src/compiled.ts

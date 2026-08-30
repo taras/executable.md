@@ -477,9 +477,9 @@ own session store and one empty working directory per session, both disposable.
 
 ## Command-line configuration
 
-`xmd run` configures the agent stack; the options are exclusive to it, and
-`xmd test` rejects them, driving agents through the deterministic test-agent
-stack instead.
+`xmd run` and `xmd prompt` configure the agent stack; the options belong to
+those two commands, and `xmd test` rejects them, driving agents through the
+deterministic test-agent stack instead.
 
 That division also applies to a nested run profile. The outer `xmd test`
 invocation supplies no live Agent configuration to a child and no contextual
@@ -498,7 +498,7 @@ Agent provider from the outer test.
 
 The permission options are mutually exclusive.
 
-`xmd run` also takes the three timeout options, which are exclusive to it in the
+Both commands also take the three timeout options, which belong to them in the
 same way:
 
 | Option | Establishes |
@@ -530,6 +530,83 @@ The default agent resolves in order, each entry overriding the ones above it:
 
 The installed provider belongs to the run's `DocumentExecution` scope and closes
 during its teardown.
+
+### The `xmd prompt` prompt profile
+
+`xmd prompt` resolves that configuration once and uses it for the prompt command
+document that writes the Plan, and — when `--run` asks for one — for the run that
+follows. Without `--run` the approved Plan is written rather than executed, so
+the second consumer never appears and the resolved configuration is used once.
+The provider
+name, the default agent with its `DEFAULT_AGENT_NAME` precedence, the permission
+mode and the host's own machine-session assembly are settled before any catalog
+is built or any document executes, so an unknown provider or an incompatible
+pair of permission flags fails first. It is the settled value that reaches both
+consumers, not the flags that produced it: `DEFAULT_AGENT_NAME` is read once per
+invocation, and authorship and a run of the Plan cannot reach different
+conclusions from one command line.
+
+The prompt profile takes the provider name and the default agent from that
+answer, and nothing else. Its ceiling is the host's, assembled for that one
+document and not readable from the command line:
+
+| The profile's provider gets | Stated as |
+| --- | --- |
+| one host-owned directory per logical session | `agentCwd`, `~/.xmd/prompt/sessions/<sha256(name)>`, required empty |
+| no MCP servers | `mcpServers: []`, an empty set rather than an omission |
+| no native tools on a fresh session | `newSessionOptions.allowedTools: []` |
+| a private refusal of every native permission request | `permissions: "strict"` |
+
+`"strict"` answers the request inside the provider: the request is denied, the
+turn it belongs to fails, and no public Agent handler is consulted or can
+intervene. So `--approve-all`, `--approve-reads` and `--deny-all` cannot widen a
+ceiling that has nothing in it; they configure the approved document later. A
+provider that cannot establish this ceiling refuses before session
+materialization or a turn.
+
+The command document itself is given no Files, command, service or XMD-mediated
+network capability, and the host decides for that whole execution that a failing
+`<Prompt>` ends it — so a turn that streamed text and then failed presents
+nothing.
+
+The profile's working directory is derived from the logical session name rather
+than shared or freshly made: `~/.xmd/prompt/sessions/<sha256(name)>`, with the
+digest in the path and never the name. A session's key includes the directory it
+lives in, so a shared location would put two conversations in one ambient
+directory while a fresh one would leave `--session` unable to name a conversation
+that already exists. It is created empty and required to be empty before the
+provider is constructed or a session is materialized; a non-empty one is a
+terminal refusal rather than something to clean. Nothing this profile grants can
+write there.
+
+An explicitly named session keeps its directory afterwards, because that is what
+the next invocation derives the same session identity from, and no cleanup
+applies to it. An invocation-unique default keeps nothing: its release is
+registered before the directory is created, and once the profile has torn down,
+on every ending, exactly one cleanup is attempted — the leaf is removed
+non-recursively if it is still the empty directory that was handed over, and if
+it has gained content or disappeared it is left as found and the command fails
+terminally. Which applies is a trusted host value —
+whether `--session` was written — and where the directories live is a host
+dependency no caller or document can select.
+
+Only the profile's provider receives `newSessionOptions.systemPrompt`. It carries
+one fixed statement — that an answer belongs to the message that asked for it —
+and nothing else. Which shape any particular message wants, a Plan or an
+explanation of why there is not one, is that message's own business, and every
+message is the command document's to send in its own turns
+([`xmd prompt`](./prompt-command-spec.md)). ACPX applies those options when it
+creates a session and ignores them when it reuses a record. Without `--session`
+the command places a name unique to the invocation, so each invocation is a fresh
+conversation created under those instructions; `--session <name>` selects an
+existing one under ordinary continuation semantics.
+
+That document's scope closes before the final admission and before whichever
+result the caller asked for: the source on stdout, the `--output` file, the run,
+or the file followed by the run. A teardown failure fails the command and no later phase happens. The
+executed program is an ordinary `xmd run` document with its own root provider and
+its own lifetime: it inherits neither the assistant session nor its instruction
+layer. It exists only under `--run`.
 
 ### Availability
 

@@ -354,9 +354,73 @@ than another spelling of the same one.
 
 ## Command Scope
 
-Root document props belong to `xmd run`, and so does the inline root document.
-`xmd test` accepts neither `--props`, `--props-*`, `XMD_PROPS`, `XMD_PROPS_*`,
-nor `--eval`/`-e`.
+Root document props belong to `xmd run` and `xmd prompt`. The inline root
+document belongs to `xmd run` alone. `xmd test` accepts neither `--props`,
+`--props-*`, `XMD_PROPS`, `XMD_PROPS_*`, nor `--eval`/`-e`.
+
+## Generated documents
+
+`xmd prompt` resolves root props from the same sources, in the same order, with
+the same decoding ([`xmd prompt`](./prompt-command-spec.md)). What differs is
+where the schema comes from: the document is written by an agent while the
+command runs, and one invocation may see several drafts of it.
+
+That command executes two roots. The first is the packaged prompt command
+document, whose own props — the request, the rendered syntax catalog and the
+assistant-session name — are host-supplied internal inputs. They are not draft
+props, they are declared by no command-line option, and they consume none of the
+sources below.
+
+Individual options follow the **request** rather than a document path, for the
+same reason they follow the path under `xmd run` — the schema that gives them
+meaning arrives after them:
+
+```console
+xmd prompt "greet someone" --props-name Ada --props-loud
+```
+
+An individual `--props-*` written before the request fails in preflight, before
+any catalog, agent, elicitation, save, journal or document operation. The
+aggregate `--props` may be written before it, because its meaning never depends
+on a document.
+
+`xmd prompt --help` describes the Prompt, `--output`, `--run`, `--session`, the
+aggregate sources and where individual options go. It names no individual option and no
+default: the document that would declare them does not exist yet, and generating
+one in order to describe it is not what help does.
+
+Every draft is bound afresh. The original argv is the command-line source for
+all of them, the environment is read for each candidate's own bindings, and no
+resolved props object is carried from one draft to the next.
+
+An individual option's **signature** is its generated option name, its token
+arity — a bare switch or one value — and its accumulation behavior — scalar
+last-wins or repeated array. The first draft that successfully binds a supplied
+option freezes that option's signature, and every later draft is compared with
+it before a single token is extracted. A removed option, a changed arity or a
+changed accumulation fails the command. Checking before extraction is what stops
+a switch that became a value option from reading the `--raw` or `--include`
+written after it; a built-in option is never a generated property's value, and a
+value that really begins with `-` is written `--props-name=-value`.
+
+Failures divide by who authored them. A draft's own defect — an unreadable
+declaration, a collision between two properties generating one option or one
+variable, a missing required property, any other document diagnostic — is
+repairable: the host's assessment answers `valid: false` with the structured
+findings, and the command document may ask for a replacement. A defect the caller
+wrote — an option no draft declares, malformed aggregate JSON, a value the schema
+cannot decode, an extra positional a draft's arity exposes, or a signature change
+— raises out of that assessment instead, ending the command document with no
+repair, no review, and no approved Plan on stdout, in a file or in a run. That
+document cannot catch it and cannot recategorize it as feedback for an agent that
+could not have caused it.
+
+The props the approved Plan is admitted with are resolved once more, after the
+command document has completely torn down, from those exact returned bytes and
+the original unchanged sources. Admission happens in every mode — before stdout,
+before an `--output` file and before a run alike — and a failure there produces
+none of them. No props object any draft produced is reused, so a revision that
+changed a property's declared type changes what a run receives.
 
 ## Targeted roots
 

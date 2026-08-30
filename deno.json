@@ -57,7 +57,7 @@
     "verify:clean": "deno run --allow-all --node-modules-dir=none --cached-only --frozen scripts/verify-clean.ts",
     "deps": "deno run --allow-all scripts/deps.ts",
     "deps:target": "deno run --allow-all scripts/deps-target.ts",
-    "build": "deno task build:web && deno compile --node-modules-dir=none --cached-only --frozen --exclude-unused-npm --allow-all --include packages/code-review-agent --output dist/xmd packages/cli/src/compiled.ts",
+    "build": "deno task build:web && deno compile --node-modules-dir=none --cached-only --frozen --exclude-unused-npm --allow-all --include packages/code-review-agent --include packages/cli/src/documents/prompt-command.md --output dist/xmd packages/cli/src/compiled.ts",
     "build:web": "deno run --allow-all --node-modules-dir=none --cached-only --frozen scripts/preflight.ts scripts/build-web-client.ts",
     "gen:publish-workflow": "deno run --allow-all packages/cli/src/deno.ts run scripts/gen-publish-workflow.md",
     "bump": "deno run -A scripts/bump-version.ts",

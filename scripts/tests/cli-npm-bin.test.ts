@@ -101,5 +101,14 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     // the whole of what a built npm bin has to get right for one.
     expect(run.stdout).toContain("You chose to approve the review.");
     expect(run.stdout).not.toContain("ERROR");
+
+    // The Markdown this package executes itself ships beside the module that
+    // reads it. dnt emits the module graph only, so an asset nothing imports is
+    // absent from the package unless the build copies it — and the command
+    // would then find no program to run, on Node and Bun while Deno stayed
+    // green.
+    expect(yield* readTextFile(path.join(OUT_DIR, "esm/src/documents/prompt-command.md"))).toBe(
+      yield* readTextFile(path.join(ROOT, PKG_DIR, "src/documents/prompt-command.md")),
+    );
   });
 });
