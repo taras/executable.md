@@ -4,6 +4,7 @@
  * Usage:
  *   xmd run <document-reference> [options]
  *   xmd <document-reference> [options]   (run is the default command)
+ *   xmd prompt "<request>" [options]
  *   xmd workflow start <document.md> [options]
  *   xmd workflow resume <run-id>
  *   xmd workflow status|history <run-id> [--json]
@@ -16,6 +17,7 @@
  *
  * Examples:
  *   xmd run packages/core/examples/hello-world.md
+ *   xmd prompt "ask me for my age and write the result to a file"
  *   xmd packages/core/examples/hello-world.md --verbose
  *   xmd run packages/core/examples/hello-world.md --journal events.jsonl
  *   xmd run README.md#Release/Publish
@@ -61,8 +63,6 @@ import {
   inspectDocument,
   agentIdentityComponents,
   installAgentComponents,
-  installPermissionMode,
-  registerAgentProvider,
   retainedSource,
   rootSourcePath,
   useNormalizedOutput,
@@ -71,14 +71,12 @@ import {
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import type {
-  AgentProviderFactory,
   DocumentTargetInfo,
   FileRootDocument,
   PropsSchema,
   RootDocumentSource,
 } from "@executablemd/core";
-import { command as hostCommand, env as readEnv } from "@executablemd/runtime";
-import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
+import { command as hostCommand } from "@executablemd/runtime";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import {
   installTestingComponents,
@@ -94,8 +92,7 @@ import {
 import { installWebComponents, installWebElicitation } from "@executablemd/web";
 import { timebox } from "@effectionx/timebox";
 import { timeout as runTimeout } from "@executablemd/runtime";
-import { installForegroundLauncher } from "@executablemd/runtime";
-import { resolveAgentConfig } from "./agent-config.ts";
+import { installRunAgentStack, resolveAgentStack } from "./agent-stack.ts";
 import { TIMEOUT_FLAGS, resolveRunTimeouts } from "./timeouts.ts";
 import type { RunTimeouts } from "./timeouts.ts";
 import type { AgentFlags } from "./agent-config.ts";
@@ -108,9 +105,13 @@ import {
   describeError,
   extractPropsArgs,
   formatProperties,
-  resolveProps,
+  resolvePropsFromSources,
 } from "./props.ts";
 import type { Binding, Extraction } from "./props.ts";
+import { namesPrompt, scanPromptArgs, SAVE_OPTION } from "./prompt-args.ts";
+import type { PromptScan } from "./prompt-args.ts";
+import { runPrompt } from "./prompt.ts";
+import type { PromptExecution } from "./prompt.ts";
 import { componentSearchPath, resolveTestTarget } from "./test-target.ts";
 import { renderSyntaxJson, renderSyntaxMarkdown, syntaxCatalog } from "./syntax.ts";
 import { testingExecutionHost } from "./testing-host.ts";
@@ -156,19 +157,17 @@ const SECRET_DETECTION_FIELD = {
   ...field(z.boolean(), field.default(true)),
 };
 
-const runConfig = object({
-  path: {
-    description: "markdown document to execute, optionally `#` and one target selector",
-    ...field(z.string().optional(), cli.argument()),
-  },
-  // Declared so `xmd run --help` lists it with every other option. The value is
-  // lifted out of argv by readEvalFlags before parsing — see eval-source.ts —
-  // so this field is never the source of the document.
-  eval: {
-    description: "inline markdown document to execute, in place of a path",
-    aliases: ["-e"],
-    ...field(z.string().optional()),
-  },
+/**
+ * Everything a command that ends in a document execution configures.
+ *
+ * Declared once because `xmd run` and `xmd prompt` configure the same
+ * execution: the includes it resolves components through, what it writes and
+ * where, the agent stack it runs under, and the three deadlines. `run` adds the
+ * document, `prompt` adds the request and where to keep the source; nothing
+ * else differs, and a second copy of this list would be the two commands
+ * drifting apart one option at a time.
+ */
+const executionFields = {
   include: {
     description: "component search directory",
     ...field(z.array(z.string()), field.default(["components", "."]), field.array()),
@@ -220,6 +219,43 @@ const runConfig = object({
     ...field(z.boolean(), field.default(false)),
   },
   secretDetection: SECRET_DETECTION_FIELD,
+};
+
+const runConfig = object({
+  path: {
+    description: "markdown document to execute, optionally `#` and one target selector",
+    ...field(z.string().optional(), cli.argument()),
+  },
+  // Declared so `xmd run --help` lists it with every other option. The value is
+  // lifted out of argv by readEvalFlags before parsing — see eval-source.ts —
+  // so this field is never the source of the document.
+  eval: {
+    description: "inline markdown document to execute, in place of a path",
+    aliases: ["-e"],
+    ...field(z.string().optional()),
+  },
+  ...executionFields,
+});
+
+/**
+ * `xmd prompt` — the request, where to keep the source, and the execution the
+ * approved document runs under.
+ *
+ * The individual `--props-*` options a candidate declares are deliberately
+ * absent: they exist only once a document does, and the props phase binds them
+ * per candidate. The aggregate `--props` is absent for the reason `run`'s is —
+ * the parser coerces a separated value before any schema could judge it.
+ */
+const promptConfig = object({
+  request: {
+    description: "what the agent should write a document to do",
+    ...field(z.string().optional(), cli.argument()),
+  },
+  save: {
+    description: "write the approved document here before running it (path must not exist)",
+    ...field(z.string().optional()),
+  },
+  ...executionFields,
 });
 
 const testConfig = object({
@@ -284,6 +320,7 @@ const xmd = program({
   config: commands(
     {
       run: runConfig,
+      prompt: promptConfig,
       test: testConfig,
       syntax: syntaxConfig,
       "test-agent": testAgentConfig,
@@ -489,64 +526,13 @@ function* installAgentStack(
   flags: AgentFlags,
   sessions: MachineSessionAssembly | undefined,
 ): Operation<void> {
-  const config = resolveAgentConfig(flags);
-  if ("error" in config) {
-    console.error(config.error);
+  const stack = yield* resolveAgentStack(flags, sessions);
+  if (!stack.ok) {
+    console.error(stack.error.message);
     yield* exit(1);
     return;
   }
-
-  // What this host built, if it built anything. Each piece reaches the provider
-  // directly rather than through a context: who owns a session and which build
-  // it belongs to are security decisions, and ones a document could replace are
-  // not ones. A host that answers who owns a session also answers how it was
-  // constructed and which build accepted its identity, all from the same
-  // trusted root — an agent that names its own sessions needs all three, and
-  // refuses unless it has all three.
-  //
-  // The two advertised sets are stated by the host, not inherited: this is the
-  // ordinary `xmd run` profile saying what it has proven.
-  const acpx = createAcpxProvider(
-    sessions === undefined
-      ? undefined
-      : {
-          ...(sessions.coordinator ? { coordinator: sessions.coordinator } : {}),
-          ...(sessions.routeStore ? { routeStore: sessions.routeStore } : {}),
-          ...(sessions.executableObserver
-            ? { executableObserver: sessions.executableObserver }
-            : {}),
-          advertiseNativeLaunch: sessions.advertiseNativeLaunch,
-          advertiseClientNativeAttachment: sessions.advertiseClientNativeAttachment,
-        },
-  );
-  yield* registerAgentProvider("acpx", acpx);
-  const defaultAgent =
-    config.defaultAgent ?? (yield* readEnv("DEFAULT_AGENT_NAME")) ?? DEFAULT_AGENT_NAME;
-
-  // The trusted host selects its own root provider by name. Document-level
-  // selection goes through the installation protocol; this is the host saying
-  // what it configured, which no document is composing around.
-  const providers: Record<string, AgentProviderFactory> = { acpx };
-  const factory = Object.hasOwn(providers, flags.agentProvider)
-    ? providers[flags.agentProvider]
-    : undefined;
-  if (!factory) {
-    console.error(`Unknown agent provider "${flags.agentProvider}"`);
-    yield* exit(1);
-    return;
-  }
-
-  const permissionMode = config.permissionMode;
-  yield* installAgentComponents({
-    defaultAgent,
-    permissionMode,
-    rootProvider: { factory, options: { defaultAgent, permissionMode } },
-  });
-  yield* installPermissionMode(permissionMode);
-  // `xmd run` is the one command that has a terminal to give away. Help,
-  // document inspection and `xmd test` install no launcher, so a document that
-  // reaches <Session.Launch> under any of them refuses instead of spawning.
-  yield* installForegroundLauncher();
+  yield* installRunAgentStack(stack.value);
 }
 
 /**
@@ -684,8 +670,8 @@ export function* installDocumentComponents(mode: DocumentMode, verbose: boolean)
   // run — and where the workflow's provider, installed further out, would lose
   // to it at the same `{ at: "min" }`.
 
-  // Agent flags are exclusive to `xmd run` — `xmd test` drives agents
-  // through the deterministic TestAgent stack instead.
+  // Agent flags belong to the two commands that end in a document execution —
+  // `xmd test` drives agents through the deterministic TestAgent stack instead.
   if (mode.agent) {
     yield* installAgentStack(mode.agent, mode.machineSessions);
   }
@@ -893,6 +879,66 @@ function* runScopedDocument(
   } catch (error) {
     return Err(error instanceof Error ? error : new Error(String(error)));
   }
+}
+
+/** What an approved prompt document runs with, beyond the source and its props. */
+export interface PromptExecutionConfig {
+  include: string[];
+  verbose: boolean;
+  journal: string | undefined;
+  raw: boolean;
+  secretDetection: boolean;
+  agentProvider: string;
+  defaultAgent: string | undefined;
+  approveAll: boolean;
+  approveReads: boolean;
+  denyAll: boolean;
+}
+
+/**
+ * How `xmd prompt` runs the document a person approved: exactly as `xmd run`
+ * runs a supplied one.
+ *
+ * The generator's scope is already gone by the time this is called, so the
+ * executed program gets a fresh ordinary Agent provider and inherits neither
+ * the generator session nor its system prompt. The browser form is composed
+ * around the document for the same reason a run composes one: `xmd prompt` is a
+ * command a person is sitting in front of.
+ */
+export function promptExecutor(
+  config: PromptExecutionConfig,
+  sessions: MachineSessionAssembly | undefined,
+  installService: HostServiceInstaller,
+): (approved: PromptExecution) => Operation<Result<void>> {
+  return (approved) =>
+    scoped(function* (): Operation<Result<void>> {
+      announceSecretDetection(config.secretDetection);
+      yield* installWebElicitation();
+      return yield* runScopedDocument(
+        {
+          root: approved.root,
+          include: config.include,
+          verbose: config.verbose,
+          journal: config.journal,
+          raw: config.raw,
+          secretDetection: config.secretDetection,
+          retainProcessOutput: keepsProcessOutput(config.journal),
+        },
+        {
+          testing: false,
+          props: approved.props,
+          ...(sessions === undefined ? {} : { machineSessions: sessions }),
+          agent: {
+            agentProvider: config.agentProvider,
+            defaultAgent: config.defaultAgent,
+            approveAll: config.approveAll,
+            approveReads: config.approveReads,
+            denyAll: config.denyAll,
+          },
+        },
+        installService,
+      );
+    });
 }
 
 /**
@@ -1167,6 +1213,15 @@ interface PropsPhase {
    * would lose exactly the token the separator was there to protect.
    */
   workflow?: { action?: string; target?: string; argument?: string; value?: string };
+  /**
+   * What fixed grammar established about an `xmd prompt` command line.
+   *
+   * Carried rather than re-derived downstream, for the same reason the workflow
+   * positionals are: the request may have been written after `--`, where the
+   * parser never sees it, and the generated property occurrences are the ones
+   * this scan classified.
+   */
+  prompt?: PromptScan;
   root?: RootDocumentSource;
   bindings: Binding[];
   extraction?: Extraction;
@@ -1201,6 +1256,15 @@ interface PropsPhase {
  * of argv, so it needs no parse at all.
  */
 function* preparePropsPhase(args: string[], evalFlags: EvalFlags): Operation<PropsPhase> {
+  // `xmd prompt` declares its own grammar and has no document to inspect: the
+  // schema its generated options come from is written by an agent that has not
+  // been asked anything yet. Everything below that reads a document, and every
+  // refusal that assumes one, is therefore skipped.
+  if (namesPrompt(args)) {
+    const scan = scanPromptArgs(args);
+    return { args: scan.fixed, bindings: [], prompt: scan };
+  }
+
   // `xmd workflow` reads its options from the head and its remaining positionals
   // from the tail. The parser only ever sees the head, so a dash-leading token
   // after `--` is never offered to it as an option; the grammar check below
@@ -1264,7 +1328,9 @@ function* preparePropsPhase(args: string[], evalFlags: EvalFlags): Operation<Pro
       return {
         args,
         bindings: [],
-        error: `unrecognized option for xmd ${command}: ${stray} — document properties are exclusive to xmd run`,
+        error:
+          `unrecognized option for xmd ${command}: ${stray} — document properties are ` +
+          "exclusive to xmd run and xmd prompt",
       };
     }
     if (stray) {
@@ -1541,7 +1607,7 @@ function workflowPositionals(
   return { action, target, argument, value };
 }
 
-const COMMAND_NAMES = ["run", "test", "syntax", "test-agent", "workflow"];
+const COMMAND_NAMES = ["run", "prompt", "test", "syntax", "test-agent", "workflow"];
 
 /**
  * What a caller has to know to write a filename that contains reference
@@ -1571,6 +1637,35 @@ const RUN_SOURCE_HELP = [
 ].join("\n");
 
 /**
+ * What `xmd prompt --help` says beyond its option list.
+ *
+ * Generic on purpose. The individual options a run accepts come from the
+ * document it names; the ones a prompt accepts come from a document the agent
+ * has not written yet, so help describes where they go rather than what they
+ * are. Answering otherwise would mean generating a document to describe one.
+ */
+const PROMPT_REQUEST_HELP = [
+  "Exactly one request is required, and it is text for the agent rather than a",
+  "path. Quote it so the shell passes it as a single argument:",
+  '  xmd prompt "ask me for my age and write the result to a file"',
+  "",
+  "The agent writes a complete document, xmd validates it and repairs definite",
+  "defects, and you approve, revise or abort before anything runs.",
+  "",
+  "Document properties follow the request. The individual options a document",
+  "declares are the generated document's, so they are not listed here:",
+  '  xmd prompt "<request>" --props-name Ada',
+  "",
+  `  ${AGGREGATE_OPTION} <json>`,
+  "      Set document properties as a JSON object",
+  `      Environment: ${AGGREGATE_ENV}`,
+  "",
+  `  ${SAVE_OPTION} <path>`,
+  "      Write the approved document there before running it. The path must not",
+  "      exist; an existing one is left alone and the run stops.",
+].join("\n");
+
+/**
  * Help for whichever command the arguments name. A command renders its
  * own help when `--help` is its first argument, so the flag removed
  * during the props phase is reinstated there rather than falling back to
@@ -1586,7 +1681,8 @@ function renderHelp(phase: PropsPhase): string {
 
   const help = xmd.parse({ args: [command, "--help"] });
   const base = help.ok && help.value.config.help ? help.value.config.text : xmd.help({ args: [] });
-  const epilogue = command === "run" ? RUN_SOURCE_HELP : "";
+  const epilogue =
+    command === "run" ? RUN_SOURCE_HELP : command === "prompt" ? PROMPT_REQUEST_HELP : "";
   const withSource = epilogue === "" ? base : `${base}\n\n${epilogue}`;
 
   if (!phase.root) {
@@ -1628,23 +1724,11 @@ function* resolveRunProps(
   }
 
   try {
-    const individualEnv: { binding: Binding; value: string }[] = [];
-    for (const binding of phase.bindings) {
-      const value = yield* readEnv(binding.env);
-      if (value !== undefined) {
-        individualEnv.push({ binding, value });
-      }
-    }
-    const aggregateEnv = yield* readEnv(AGGREGATE_ENV);
-
     return {
-      value: resolveProps({
+      value: yield* resolvePropsFromSources({
         propsSchema: phase.propsSchema,
         bindings: phase.bindings,
-        individual: phase.extraction.individual,
-        aggregateCli: phase.extraction.aggregate,
-        aggregateEnv,
-        individualEnv,
+        extraction: phase.extraction,
       }),
     };
   } catch (error) {
@@ -1789,11 +1873,52 @@ function* dispatch(
       }
       break;
     }
+    case "prompt": {
+      const config = command.config;
+      const scan = propsPhase.prompt;
+      if (scan === undefined) {
+        console.error(
+          'xmd prompt names the command first — write `xmd prompt "<request>" [options]`',
+        );
+        yield* exit(1);
+        break;
+      }
+      const exitCode = yield* runPrompt(
+        {
+          argv: helpRequest.args,
+          scan,
+          include: config.include,
+          ...(config.save === undefined ? {} : { save: config.save }),
+          agent: {
+            agentProvider: config.agentProvider,
+            defaultAgent: config.defaultAgent,
+            approveAll: config.approveAll,
+            approveReads: config.approveReads,
+            denyAll: config.denyAll,
+          },
+        },
+        {
+          ...(sessions === undefined ? {} : { sessions }),
+          catalog: syntaxCatalog,
+          // `<Elicit>` reaches a person through the browser form, and the
+          // review question is asked by the command rather than by a document.
+          // A host that answers installs a provider; one that does not installs
+          // none, and nothing downstream reads a profile to find out which.
+          installElicitation: installWebElicitation,
+          execute: promptExecutor(config, sessions, installService),
+        },
+      );
+      if (exitCode !== 0) {
+        yield* exit(exitCode);
+      }
+      break;
+    }
     case "test": {
       const strayTimeout = findTimeoutFlag(evalFlags.rest);
       if (strayTimeout) {
         console.error(
-          `unrecognized option for xmd test: ${strayTimeout} — timeout options are exclusive to xmd run`,
+          `unrecognized option for xmd test: ${strayTimeout} — timeout options are exclusive to ` +
+            "xmd run and xmd prompt",
         );
         yield* exit(1);
         break;
@@ -1801,7 +1926,8 @@ function* dispatch(
       const agentFlag = findAgentOnlyFlag(evalFlags.rest);
       if (agentFlag) {
         console.error(
-          `unrecognized option for xmd test: ${agentFlag} — agent options are exclusive to xmd run`,
+          `unrecognized option for xmd test: ${agentFlag} — agent options are exclusive to ` +
+            "xmd run and xmd prompt",
         );
         yield* exit(1);
         break;
@@ -1809,7 +1935,8 @@ function* dispatch(
       const propsFlag = findPropsFlag(evalFlags.rest);
       if (propsFlag) {
         console.error(
-          `unrecognized option for xmd test: ${propsFlag} — document properties are exclusive to xmd run`,
+          `unrecognized option for xmd test: ${propsFlag} — document properties are exclusive to ` +
+            "xmd run and xmd prompt",
         );
         yield* exit(1);
         break;
@@ -1848,7 +1975,8 @@ function* dispatch(
       const agentFlag = findAgentOnlyFlag(evalFlags.rest);
       if (agentFlag) {
         console.error(
-          `unrecognized option for xmd workflow: ${agentFlag} — agent options are exclusive to xmd run`,
+          `unrecognized option for xmd workflow: ${agentFlag} — agent options are exclusive to ` +
+            "xmd run and xmd prompt",
         );
         yield* exit(1);
         break;
@@ -1976,14 +2104,22 @@ export function* runXmd(
   }
   // Recognized before anything reads a document: a malformed duration is a
   // grammar failure, and a grammar failure never depends on what is on disk.
-  // Help, `--version`, and the other commands stay outside a run lifecycle,
-  // which is why the timeout options are read only for a run.
+  // Help, `--version`, and the commands that execute nothing stay outside a run
+  // lifecycle, which is why the timeout options are read only for the two that
+  // end in one.
   const provisional = xmd.parse({ args: helpRequest.args });
   const selected = provisional.ok ? provisional.value.config : undefined;
-  const isRun =
-    !helpRequest.requested && selected !== undefined && !selected.help && selected.name === "run";
+  // The two commands that end in a document execution. `xmd prompt`'s deadline
+  // encloses more than a run's — the catalog, the generator session, every
+  // repair, the human review, provider teardown, the save and the execution —
+  // because all of it is what the caller asked to be bounded.
+  const executes =
+    !helpRequest.requested &&
+    selected !== undefined &&
+    !selected.help &&
+    (selected.name === "run" || selected.name === "prompt");
 
-  if (!isRun) {
+  if (!executes) {
     return yield* dispatch(evalFlags, helpRequest, installService, workflowHost, sessions);
   }
 

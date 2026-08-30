@@ -52,13 +52,26 @@ import { WEB_REGISTRATIONS } from "@executablemd/web";
  */
 export function* syntaxCatalog(includes: readonly string[]): Operation<SyntaxCatalog> {
   return yield* scoped(function* () {
-    yield* registerComponents([
-      ...AGENT_REGISTRATIONS,
-      ...TESTING_REGISTRATIONS,
-      ...WEB_REGISTRATIONS,
-    ]);
+    yield* useRunProfileRegistry();
     return yield* inspectSyntax({ includes, components: agentIdentityComponents() });
   });
+}
+
+/**
+ * The registrations the `run` profile installs, as registry state and nothing
+ * else.
+ *
+ * Shared with `xmd prompt`, which both describes this vocabulary to a generator
+ * and validates what comes back. Registering only here would make the catalog
+ * advertise `<Agent>` while validation reported it unresolved — a document told
+ * to use a component nobody would accept.
+ */
+export function* useRunProfileRegistry(): Operation<void> {
+  yield* registerComponents([
+    ...AGENT_REGISTRATIONS,
+    ...TESTING_REGISTRATIONS,
+    ...WEB_REGISTRATIONS,
+  ]);
 }
 
 /**

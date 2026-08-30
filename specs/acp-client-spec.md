@@ -477,9 +477,9 @@ own session store and one empty working directory per session, both disposable.
 
 ## Command-line configuration
 
-`xmd run` configures the agent stack; the options are exclusive to it, and
-`xmd test` rejects them, driving agents through the deterministic test-agent
-stack instead.
+`xmd run` and `xmd prompt` configure the agent stack; the options belong to
+those two commands, and `xmd test` rejects them, driving agents through the
+deterministic test-agent stack instead.
 
 That division also applies to a nested run profile. The outer `xmd test`
 invocation supplies no live Agent configuration to a child and no contextual
@@ -498,7 +498,7 @@ Agent provider from the outer test.
 
 The permission options are mutually exclusive.
 
-`xmd run` also takes the three timeout options, which are exclusive to it in the
+Both commands also take the three timeout options, which belong to them in the
 same way:
 
 | Option | Establishes |
@@ -530,6 +530,39 @@ The default agent resolves in order, each entry overriding the ones above it:
 
 The installed provider belongs to the run's `DocumentExecution` scope and closes
 during its teardown.
+
+### The `xmd prompt` generator
+
+`xmd prompt` resolves that configuration once and uses it twice: for the session
+that writes the document, and for the document that runs. The provider name, the
+default agent with its `DEFAULT_AGENT_NAME` precedence, the permission mode and
+the host's own machine-session assembly are settled before any catalog is built
+or any document executes, so an unknown provider or an incompatible pair of
+permission flags fails first.
+
+Generation takes the provider's operations directly — `useAcpxProvider`, without
+the Agent install. It needs turns, not authority: no document is installed
+around it, no root provider is registered, and no foreground launcher exists for
+a `<Session.Launch>` to reach. The one Agent operation the provider performs for
+itself, resolving the agent a session and a turn belong to, is answered by the
+generator handle; every other Agent operation keeps its base behavior and
+refuses. The selected permission policy is installed around those turns, so a
+native permission request during generation is answered by the same
+`--approve-all`, `--approve-reads` or `--deny-all` choice a run uses.
+
+Only the generator provider receives `newSessionOptions.systemPrompt`. It
+carries the invocation's structured syntax catalog and the fixed statement of
+what the session writes ([`xmd prompt`](./prompt-command-spec.md)). ACPX applies
+those options when it creates a session and ignores them when it reuses a
+record, and the command places a session name unique to the invocation, so each
+invocation is a fresh conversation and the instructions are the ones it was
+created under.
+
+The generator's scope closes after approval and before the save and the
+execution. A teardown failure fails the command and neither later phase happens.
+The executed program is an ordinary `xmd run` document with its own root
+provider and its own lifetime: it inherits neither the generator session nor its
+system prompt.
 
 ### Availability
 

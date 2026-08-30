@@ -10,6 +10,8 @@ import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { createContext, field, object } from "configliere";
 import type { Parser } from "configliere";
 import type { Json } from "@executablemd/durable-streams";
+import { env as readEnv } from "@executablemd/runtime";
+import type { Operation } from "effection";
 import { z } from "zod";
 
 export interface Binding {
@@ -523,6 +525,21 @@ export interface Extraction {
   rest: string[];
 }
 
+export interface ExtractOptions {
+  /**
+   * Whether a token is an option the invocation itself owns, and therefore one
+   * a separated property value may never be.
+   *
+   * `xmd run` supplies none: the document is already named, so the schema that
+   * decides a property's arity cannot change under the same command line.
+   * `xmd prompt` re-binds the same argv against every candidate, so a value
+   * option that swallowed `--raw` in one draft would take the flag away from
+   * the invocation itself. A value that really begins with `-` is written
+   * `--props-name=-value`.
+   */
+  reserved?: (token: string) => boolean;
+}
+
 /**
  * Remove `--props` and `--props-*` tokens from argv, keeping their
  * original text. Configliere's own option matching coerces every value
@@ -530,7 +547,12 @@ export interface Extraction {
  * Only the generated bindings are recognized, so this stays a source
  * adapter rather than a second argument parser.
  */
-export function extractPropsArgs(args: string[], bindings: Binding[]): Extraction {
+export function extractPropsArgs(
+  args: string[],
+  bindings: Binding[],
+  options?: ExtractOptions,
+): Extraction {
+  const reserved = options?.reserved ?? (() => false);
   const byOption = new Map(bindings.map((binding) => [binding.option, binding]));
   const collected = new Map<string, string[]>();
   const individual: { binding: Binding; value: string | string[] }[] = [];
@@ -607,6 +629,12 @@ export function extractPropsArgs(args: string[], bindings: Binding[]): Extractio
     const next = args[index + 1];
     if (next === undefined) {
       throw new PropsError(`${binding.option} requires a value`);
+    }
+    if (reserved(next)) {
+      throw new PropsError(
+        `${binding.option} requires a value — \`${next}\` is an xmd option, so write ` +
+          `\`${binding.option}=${next}\` for a value that begins with "-"`,
+      );
     }
     record(binding, next);
     index += 2;
@@ -817,6 +845,39 @@ export function resolveProps(options: ResolveOptions): Record<string, Json> {
   }
 
   return props;
+}
+
+/**
+ * Resolve one document's properties from every source this host offers.
+ *
+ * The command line arrives already extracted; the environment is read here, one
+ * lookup per declared binding plus the aggregate. Both commands that supply root
+ * props go through this, so precedence and decoding exist once — a second copy
+ * would be a second set of rules the specification does not describe.
+ */
+export function* resolvePropsFromSources(options: {
+  propsSchema: unknown;
+  bindings: Binding[];
+  extraction: Extraction;
+}): Operation<Record<string, Json>> {
+  const { propsSchema, bindings, extraction } = options;
+  const individualEnv: { binding: Binding; value: string }[] = [];
+  for (const binding of bindings) {
+    const value = yield* readEnv(binding.env);
+    if (value !== undefined) {
+      individualEnv.push({ binding, value });
+    }
+  }
+  const aggregateEnv = yield* readEnv(AGGREGATE_ENV);
+
+  return resolveProps({
+    propsSchema,
+    bindings,
+    individual: extraction.individual,
+    ...(extraction.aggregate === undefined ? {} : { aggregateCli: extraction.aggregate }),
+    ...(aggregateEnv === undefined ? {} : { aggregateEnv }),
+    individualEnv,
+  });
 }
 
 /**

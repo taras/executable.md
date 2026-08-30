@@ -83,6 +83,14 @@ export interface ScriptedTurn {
    */
   readonly manual?: boolean;
   /**
+   * The stop reason this turn settles with.
+   *
+   * `end_turn` unless a case says otherwise. Anything else is a turn the
+   * provider reports as failed while keeping whatever text it streamed, which is
+   * how a partial reply is driven without an adapter that misbehaves on purpose.
+   */
+  readonly stopReason?: string;
+  /**
    * The App Server turn this reply is, as an adapter that names its turns says
    * it: on this exact response's own `_meta`.
    *
@@ -100,10 +108,24 @@ export interface FakeAcp {
   readonly ensured: AcpRuntimeEnsureInput[];
   /** Every prompt text this provider sent, in order. */
   readonly prompts: string[];
+  /** Every turn this provider started, whole, in order. */
+  readonly turns: AcpRuntimeTurnInput[];
   /** Every permission decision this fake was answered with. */
   readonly decisions: string[];
   /** Whether an agent process would have been started at all. */
   readonly started: boolean;
+  /** Every handle this runtime was told to close, by the reason it was given. */
+  readonly closes: string[];
+  /** How many turns were cancelled rather than allowed to settle. */
+  readonly cancels: number;
+  /**
+   * Fail every close.
+   *
+   * A provider whose teardown fails is the case a host has to survive without
+   * acting on what the failed scope produced, and only a close that rejects
+   * makes the provider report one.
+   */
+  closeFailure?: Error;
   script(turn: ScriptedTurn): void;
   /**
    * Settles once `count` turns have been started.
@@ -170,11 +192,14 @@ export function createFakeAcp(): FakeAcp {
   const created: AcpRuntimeOptions[] = [];
   const ensured: AcpRuntimeEnsureInput[] = [];
   const prompts: string[] = [];
+  const turns: AcpRuntimeTurnInput[] = [];
   const decisions: string[] = [];
+  const closes: string[] = [];
   const waiting: Array<{ count: number; settle: () => void }> = [];
   const reading: Array<{ count: number; settle: () => void }> = [];
   let consumed = 0;
   let started = false;
+  let cancels = 0;
 
   function announceTurn(): void {
     for (const barrier of [...waiting]) {
@@ -199,9 +224,14 @@ export function createFakeAcp(): FakeAcp {
     created,
     ensured,
     prompts,
+    turns,
     decisions,
+    closes,
     get started(): boolean {
       return started;
+    },
+    get cancels(): number {
+      return cancels;
     },
     script(turn) {
       scripted.push(turn);
@@ -285,6 +315,7 @@ export function createFakeAcp(): FakeAcp {
         },
         startTurn(input: AcpRuntimeTurnInput): AcpRuntimeTurn {
           prompts.push(input.text);
+          turns.push(input);
           announceTurn();
           const turn = scripted.shift() ?? { reply: "" };
           const settled = withResolvers<AcpRuntimeTurnResult>();
@@ -348,7 +379,7 @@ export function createFakeAcp(): FakeAcp {
             void asked.then(() => {
               settled.resolve({
                 status: "completed",
-                stopReason: "end_turn",
+                stopReason: turn.stopReason ?? "end_turn",
                 ...(turn.turnId === undefined ? {} : { _meta: { codex: { turnId: turn.turnId } } }),
               });
             });
@@ -387,6 +418,7 @@ export function createFakeAcp(): FakeAcp {
             },
             result: run(() => settled.operation),
             cancel(): Promise<void> {
+              cancels += 1;
               settled.resolve({ status: "cancelled" });
               released.resolve();
               return Promise.resolve();
@@ -402,8 +434,9 @@ export function createFakeAcp(): FakeAcp {
         cancel(): Promise<void> {
           return Promise.resolve();
         },
-        close(): Promise<void> {
-          return Promise.resolve();
+        close(input?: { reason?: string }): Promise<void> {
+          closes.push(input?.reason ?? "");
+          return fake.closeFailure ? Promise.reject(fake.closeFailure) : Promise.resolve();
         },
       };
     },

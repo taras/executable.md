@@ -8237,6 +8237,18 @@ identity, and no temporary file is created: the text is captured inside the
 durable root import, so the journal holds it and a replay restores it without
 reading anything.
 
+Text a host generated reports `<prompt>` on the same terms. `xmd prompt` asks an
+agent for a complete root, validates it, has a person approve it, and executes
+`retainedSource("<prompt>", source)` — so the identity says where the bytes came
+from, and a source position reads `(<prompt>:5:1)`. It is a deliberate identity
+rather than a path nobody could read back, and it is the only thing that
+differs: the approved document runs through the ordinary supplied-source path,
+renders and returns exactly as any other root, resolves the contextual working
+directory for every relative operation, and creates its journal only when
+execution starts. Generation, repair and approval happen before that execution
+exists, so nothing about them is journaled or replayed. The command's complete
+contract is [`xmd prompt`](./prompt-command-spec.md).
+
 `inspectDocument(root)` loads and validates the root definition and returns
 what it declares — without executing the document or creating a journal:
 
@@ -10005,7 +10017,7 @@ itself, so an execution starting anywhere fails the row. Defined in §5.3.
 | SX4–SX6 | Renderers take a value | Both formats render from a supplied catalog with the filesystem refusing every call, twice with identical bytes, under the fixed category headings; every table cell is escaped, a prop name holding a pipe included |
 | SX7/SX8 | Includes | Repeated values select in caller order and replace the defaults; absent, the defaults apply |
 | SX9 | Failure | An unusable include exits 1, reports on stderr and prints no catalog |
-| SX10/SX11 | Formats | Markdown by default, version-1 JSON with `--json`, and no `prompt` command |
+| SX10/SX11 | Formats | Markdown by default, version-1 JSON with `--json`; the catalog is inspection, and `xmd prompt` is the command that writes with the same structured value |
 | SX12 | A package tree | Bare `xmd syntax` succeeds with the default includes in a repository whose `node_modules` holds directory links |
 
 ### Tier SM — `xmd syntax` end to end
@@ -10018,6 +10030,24 @@ One checked-in Markdown suite runs the real command against a fixture directory.
 | SM3–SM5 | Documentation | A documented component renders prose and a props table; an undocumented one stays complete; a non-string value documents nothing |
 | SM6/SM7 | Nothing runs | A `.ts` fixture that throws at top level is origin-only and the command still succeeds; a fixture whose body writes a file leaves no file |
 | SM8–SM11 | Discovery | Direct, dotted and index paths; the two formats agree; repeated includes replace the defaults in caller order; the built-in category holds the run profile including `<Session>` |
+
+### Tier PR — The `xmd prompt` command
+
+Authorship around one ordinary document: generation, validation, repair, live
+review, saving and execution. Defined in [`xmd prompt`](./prompt-command-spec.md),
+whose acceptance table this points at rather than restating. The ACPX runtime is
+a scriptable fake, the review provider is a scripted `Elicitation` handler, and
+the contextual working directory is a temporary one — no live agent, browser or
+network appears in this evidence, and every refusal is proven by the phase
+tripwires that stayed at zero.
+
+| # | Test | Verify |
+|---|------|--------|
+| P1–P3 | Fixed grammar | One request preserved byte for byte; missing, repeated, empty and whitespace-only requests refused; individual options after the request and aggregate props before it; a built-in option never read as a generated property's value |
+| P4–P6 | Generated props | Scalar, switch, repeated and aggregate sources resolve with ordinary precedence and reach validation and execution; a draft's defect is repaired while a caller's terminates; a frozen option's shape is what no later draft may change |
+| P7–P9 | Generation | One run-profile catalog, origin-only TypeScript truth included, becomes the fresh session's system prompt; one exact session carries every turn and a second invocation places another; only a completed terminal produces a candidate |
+| P10–P12 | Repair and review | The base candidate plus exactly three repairs; an exhausted candidate is shown with its diagnostics and cannot be approved; revise needs non-empty feedback and resets the budget; the exact bytes are shown inside a fence they cannot close and executed unchanged |
+| P13–P16 | Lifecycle | Every refusal is non-zero with no save, journal or run; an approval's journal holds only the document's events; the approved bytes are created exclusively before execution; the run reports `<prompt>` and behaves as `xmd run` does; the deadline encloses every phase and teardown gates what follows |
 
 ### Tier WB — The workflow component bundle in core
 
