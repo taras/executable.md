@@ -578,10 +578,12 @@ write there.
 
 An explicitly named session keeps its directory afterwards, because that is what
 the next invocation derives the same session identity from, and no cleanup
-applies to it. An invocation-unique default keeps nothing: once the profile has
-torn down, on every ending, exactly one cleanup is attempted — the leaf is
-removed non-recursively if it is still empty, and if it is not, it is preserved
-whole and the command fails terminally. Which applies is a trusted host value —
+applies to it. An invocation-unique default keeps nothing: its release is
+registered before the directory is created, and once the profile has torn down,
+on every ending, exactly one cleanup is attempted — the leaf is removed
+non-recursively if it is still the empty directory that was handed over, and if
+it has gained content or disappeared it is left as found and the command fails
+terminally. Which applies is a trusted host value —
 whether `--session` was written — and where the directories live is a host
 dependency no caller or document can select.
 

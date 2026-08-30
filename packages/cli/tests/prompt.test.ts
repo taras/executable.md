@@ -177,6 +177,30 @@ function* exists(path: string): Operation<boolean> {
   return (yield* stat(path)).exists;
 }
 
+/** What one message's `json` fence holds, parsed back. */
+interface FencedDiagnostics {
+  validation?: {
+    version?: number;
+    outcome?: string;
+    diagnostics?: { code?: string }[];
+  };
+}
+
+/**
+ * The complete JSON a message carried, read out of its fence.
+ *
+ * Parsed rather than string-matched: what matters is that `<Json>`'s serialized
+ * text reached `<CodeBlock>` whole, and a structure that parses back to the same
+ * shape is what says so.
+ */
+function fencedJson(message: string): FencedDiagnostics {
+  const fence = /```json\n([\s\S]*?)\n```/.exec(message);
+  if (fence === null) {
+    throw new Error(`no json fence in: ${message}`);
+  }
+  return JSON.parse(fence[1]);
+}
+
 /** How many times one exact string appears. */
 function occurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
@@ -402,6 +426,79 @@ describe(
 
         expect(yield* exists(String(harness.fake.created[0]?.cwd))).toBe(false);
         expect(yield* until(readdir(profileRoot))).toEqual([]);
+      });
+
+      // A failure between making the leaf and using it still hands it back. The
+      // claim is taken before the `mkdir`, so there is no window in which a
+      // directory exists that nothing is responsible for.
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
+        const harness = createPromptHarness({ profileRoot });
+        harness.fake.script({ reply: VALID });
+        // deno-lint-ignore require-yield
+        harness.deps.installElicitation = function* () {
+          throw new Error("this host could not install a review provider");
+        };
+
+        const { value, lines } = yield* reported(() =>
+          runPrompt(command(dir, [REQUEST]), harness.deps),
+        );
+
+        expect(value).toBe(1);
+        expect(lines.join("\n")).toContain("could not install a review provider");
+        // Nothing was built after it, and no empty leaf was left behind.
+        expect(harness.fake.created).toHaveLength(0);
+        expect(harness.executions).toHaveLength(0);
+        expect(yield* until(readdir(profileRoot))).toEqual([]);
+      });
+
+      // Establishment failing for a reason of its own leaves nothing behind and
+      // says what it found. The claim is already taken here, so the release runs
+      // and finds no directory it was ever given — which is the one case where
+      // an absent directory is the ordinary answer rather than interference.
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
+        const blocked = join(profileRoot, "not-a-directory");
+        yield* writeTextFile(blocked, "in the way\n");
+
+        const harness = createPromptHarness({ profileRoot: blocked });
+        harness.fake.script({ reply: VALID });
+
+        const { value, lines } = yield* reported(() =>
+          runPrompt(command(dir, [REQUEST]), harness.deps),
+        );
+
+        expect(value).toBe(1);
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toContain("could not establish");
+        // What was in the way is untouched, and no phase after it began.
+        expect(yield* readTextFile(blocked)).toBe("in the way\n");
+        expect(harness.fake.created).toHaveLength(0);
+        expect(harness.executions).toHaveLength(0);
+      });
+
+      // A leaf that disappears under a live conversation is interference, not a
+      // tidy exit. The command fails terminally rather than shrugging at an
+      // absent directory, and nothing it would have done next happens.
+      yield* useWorkingDirectory(function* (dir, profileRoot) {
+        const harness = createPromptHarness({ profileRoot });
+        harness.fake.script({ reply: VALID });
+        harness.deps.installElicitation = watching(harness, function* (workdir) {
+          yield* rm(workdir, { recursive: true, force: true });
+        });
+
+        const { value, lines } = yield* reported(() =>
+          runPrompt({ ...command(dir, [REQUEST]), save: "out.md" }, harness.deps),
+        );
+
+        expect(value).toBe(1);
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toContain("was made for this conversation and is already gone");
+        expect(lines[0]).not.toContain("does not validate");
+        // The Plan was approved and still reached nothing: no admission that
+        // could have saved it, no save, no execution and so no journal.
+        expect(harness.reviews).toHaveLength(1);
+        expect(yield* exists(join(dir, "out.md"))).toBe(false);
+        expect(yield* until(readdir(dir))).toEqual([]);
+        expect(harness.executions).toHaveLength(0);
       });
 
       // The other outcome of the one attempt. A directory this invocation was
@@ -659,6 +756,16 @@ describe(
         expect(code).toBe(0);
         expect(harness.fake.prompts).toHaveLength(2);
         expect(harness.fake.prompts[1]).toContain("That document has problems");
+        // `<Json as>` captured the whole serialized value, and the fence it went
+        // into holds every byte of it: the wrapper's removal changed where the
+        // text is bound, not what it says. Parsed back rather than matched, so
+        // what is proven is that the complete structure survived the trip.
+        const repaired = fencedJson(harness.fake.prompts[1]);
+        expect(repaired.validation?.version).toBe(1);
+        expect(repaired.validation?.outcome).toBe("invalid");
+        expect(
+          repaired.validation?.diagnostics?.some((entry) => entry.code === "source-invalid"),
+        ).toBe(true);
         expect(harness.fake.prompts[1]).toContain("source-invalid");
         // The whole versioned value, as data the program serialized.
         expect(harness.fake.prompts[1]).toContain('"version": 1');
@@ -782,7 +889,13 @@ describe(
         expect(harness.reviews[0].message).toContain(
           "Three attempts to fix it did not clear everything",
         );
-        expect(harness.reviews[0].message).toContain("component-unresolved");
+        // The presentation carries the same complete captured JSON the repair
+        // turns did, through the same `<Json as>` binding.
+        const shown = fencedJson(harness.reviews[0].message);
+        expect(shown.validation?.version).toBe(1);
+        expect(
+          shown.validation?.diagnostics?.some((entry) => entry.code === "component-unresolved"),
+        ).toBe(true);
         expect(harness.executions).toHaveLength(0);
       });
 

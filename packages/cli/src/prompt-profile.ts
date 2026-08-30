@@ -144,22 +144,16 @@ export function* runPromptCommandDocument(profile: PromptProfile): Operation<Res
   }
 
   return yield* scoped(function* (): Operation<Result<string>> {
-    // First, and before anything is built: this session's directory is
+    // First, and before anything is built: this session's directory is claimed,
     // established and proven empty, or the command stops here. Nothing has been
-    // installed yet, so a refusal reaches no provider, no session and no turn.
-    const established = yield* establishDirectory(profile.root, profile.session);
+    // installed yet, so a refusal reaches no provider, no session and no turn —
+    // and because the claim is taken before the directory is made, an ending of
+    // any kind, including a cancellation, still hands it back.
+    const established = yield* useSessionDirectory(profile);
     if (!established.ok) {
       return established;
     }
     const workdir = established.value;
-    if (!profile.explicitSession) {
-      // Registered before every other resource, so it runs after all of them:
-      // the provider, the Prompt tasks and the Elicitation provider are already
-      // gone when this hands the directory back. Being an `ensure` is what makes
-      // an abort, a failed turn and a cancellation clean up the same way a
-      // success does.
-      yield* ensure(() => removeEmptyDirectory(workdir));
-    }
 
     yield* refuseDocumentCapabilities();
     yield* profile.installElicitation();
@@ -324,6 +318,37 @@ export function profileDirectoryFor(root: string, session: string): string {
 }
 
 /**
+ * This conversation's directory, for as long as the conversation lasts.
+ *
+ * An explicitly named session's directory is durable — a later `--session` finds
+ * the same location and therefore the same ACPX session — so nothing is
+ * registered against it and nothing removes it.
+ *
+ * An invocation-unique one belongs to this scope, and the release is registered
+ * *before* the first filesystem call that could create it. A leaf this call
+ * made and then failed on is still a leaf this call made; registering after the
+ * `mkdir` would leave one behind exactly in the case nobody is watching. Being
+ * the first thing registered in the scope is also what puts it last in teardown,
+ * after every provider, Prompt task and Elicitation resource has gone.
+ */
+function* useSessionDirectory(profile: PromptProfile): Operation<Result<string>> {
+  const directory = profileDirectoryFor(profile.root, profile.session);
+  if (profile.explicitSession) {
+    return yield* establishDirectory(directory);
+  }
+  const claim: DirectoryClaim = { established: false };
+  yield* ensure(() => releaseSessionDirectory(directory, claim));
+  const established = yield* establishDirectory(directory);
+  claim.established = established.ok;
+  return established;
+}
+
+/** Whether the directory was ever handed to this conversation to use. */
+interface DirectoryClaim {
+  established: boolean;
+}
+
+/**
  * Establish this session's directory, or refuse.
  *
  * Created empty, and required to be empty every time — not cleaned. Whatever is
@@ -331,8 +356,7 @@ export function profileDirectoryFor(root: string, session: string): string {
  * a stranger's files to get on with the work is the opposite of what a ceiling
  * is for. So the command says what it found and where, and stops.
  */
-function* establishDirectory(root: string, session: string): Operation<Result<string>> {
-  const directory = profileDirectoryFor(root, session);
+function* establishDirectory(directory: string): Operation<Result<string>> {
   try {
     yield* until(mkdir(directory, { recursive: true }));
     const entries = yield* until(readdir(directory));
@@ -359,22 +383,33 @@ function* establishDirectory(root: string, session: string): Operation<Result<st
 /**
  * Give an invocation-unique conversation's directory back when it is over.
  *
- * Only an explicitly named session needs its directory afterwards: its identity
- * is what a later `--session` derives the same ACPX session from. A generated
- * name names nothing anybody can ask for again, so its directory is this scope's
- * and goes away with it — before the approved Plan is validated, saved or run.
+ * One attempt, non-recursive, always. A directory this conversation was given
+ * empty and is handing back empty is removed; anything else is reported and
+ * nothing is deleted, because a leaf that changed underneath a conversation
+ * nobody authorized to write there is interference, not a tidying job. The
+ * failure raises out of the profile's scope, so no final validation, save or
+ * execution follows it.
  *
- * Non-recursive, always. If something is in there, this host did not authorize
- * whatever put it there, and the honest answer is to say so rather than to
- * delete it: the same refusal an occupied directory earns on the way in.
+ * A directory the conversation never got — establishment refused it, or never
+ * made it — is a different question, and one already answered: whatever
+ * establishment reported is the honest account, and this leaves both it and the
+ * directory's contents alone. An empty leaf this call did create is still handed
+ * back, which is the whole reason the release is registered before the `mkdir`.
  */
-function* removeEmptyDirectory(directory: string): Operation<void> {
+function* releaseSessionDirectory(directory: string, claim: DirectoryClaim): Operation<void> {
   try {
     yield* until(rmdir(directory));
   } catch (error) {
     const code = error instanceof Error && "code" in error ? error.code : undefined;
-    if (code === "ENOENT") {
+    if (!claim.established) {
       return;
+    }
+    if (code === "ENOENT") {
+      throw new Error(
+        `${directory} was made for this conversation and is already gone. Something removed ` +
+          "it while the conversation was still running, which nothing here is allowed to do; " +
+          "nothing was saved or run",
+      );
     }
     if (code === "ENOTEMPTY" || code === "EEXIST") {
       throw new Error(

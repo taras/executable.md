@@ -86,7 +86,7 @@ found. A change you ask for produces a new draft, so it gets its own three.
 <Prompt as="draft">
 That document has problems. These are the exact ones:
 
-<Let as="problems"><Json value={check.diagnostics} /></Let>
+<Json value={check.diagnostics} as="problems" />
 <CodeBlock value={problems} language="json" />
 
 Send one complete replacement document that resolves every problem above. Keep
@@ -129,7 +129,7 @@ This document was written for: {props.request}
 <If condition={!check.valid}>
 Three attempts to fix it did not clear everything. These problems remain:
 
-<Let as="problems"><Json value={check.diagnostics} /></Let>
+<Json value={check.diagnostics} as="problems" />
 <CodeBlock value={problems} language="json" />
 </If>
 </Elicit>

@@ -235,15 +235,25 @@ empty.
 The two kinds of session then have different directory lifetimes, because only
 one of them has an identity worth keeping:
 
-- an **invocation-unique default** directory is the command's own. Exactly one
-  cleanup is attempted, after the command document and every provider, Prompt
-  task and Elicitation resource inside it has torn down, and it settles before
-  final validation, the save or the execution begins. Success, abort, a failed
-  turn and cancellation all reach it. It has exactly two outcomes:
+- an **invocation-unique default** directory is the command's own, held as a
+  scope-owned resource: the release is registered *before* the first filesystem
+  call that could create it, so a leaf this invocation made and then failed on is
+  still a leaf this invocation hands back. Exactly one cleanup is attempted, after
+  the command document and every provider, Prompt task and Elicitation resource
+  inside it has torn down, and it settles before final validation, the save or
+  the execution begins. Success, abort, a failed turn and cancellation all reach
+  it. Once the directory has been established, it has exactly two outcomes:
   - **still empty** — that exact leaf is removed, non-recursively;
-  - **no longer empty** — the directory and everything in it are preserved and
-    the command fails terminally. It is not a warning and not a silent skip, and
-    no final admission, save or execution follows.
+  - **anything else** — the directory and whatever is in it are preserved and the
+    command fails terminally. A leaf that has gained content, and one that has
+    disappeared, are both interference: something acted on a directory this host
+    authorized nothing to touch. Neither is a warning and neither is a silent
+    skip, and no final admission, save or execution follows.
+
+  A directory establishment never handed over — refused as non-empty, or never
+  created at all — is a different question, already answered by what
+  establishment reported. The release then removes an empty leaf it did create
+  and otherwise leaves both the report and the directory's contents alone.
 - an **explicitly named** directory survives the invocation and is not subject to
   that cleanup at all, because a later `--session <name>` derives the same
   location and therefore the same ACPX session identity from it. It is required
@@ -413,8 +423,8 @@ candidate offers `approve` or `abort`, and an invalid one offers only `abort`.
 **Presentation.** The review message presents the exact draft with `<CodeBlock>`,
 whose fence is longer than every backtick run the draft holds, so draft text
 cannot close it and is never interpreted. An invalid draft is followed by its
-complete JSON problems, serialized by `<Json>`. Prose outside `<Prompt>`
-addresses you; text inside `<Prompt>` instructs the assistant.
+complete JSON problems, serialized and captured by `<Json … as>`. Prose outside
+`<Prompt>` addresses you; text inside `<Prompt>` instructs the assistant.
 
 **Failure.** `approve` selects the draft, and one exhaustive branch after the
 Session returns its source unchanged. Stopping reaches `<Fail>` with one of two
@@ -529,6 +539,6 @@ produced.
 | C10 | Final gate | The host revalidates after the command document has completely torn down — a component removed during that teardown makes the unchanged approved bytes fail admission, with no save, journal or execution — and resolves props for the exact returned bytes |
 | C11 | Exact bytes | Approval, exclusive save and `<prompt>` execution receive the Agent close value without rewriting or fence removal |
 | C12 | Journal separation | Authorship uses only disposable in-memory history; the final journal begins with the approved Plan |
-| C13 | Lifetime | Cancellation and every teardown failure settle before final validation, save or execution; a default session's directory is empty while its turn runs and gone after teardown on success, abort, a failed turn and cancellation alike; and one that gained content is preserved whole while the command fails terminally, with no admission, save, journal or execution after it |
+| C13 | Lifetime | Cancellation and every teardown failure settle before final validation, save or execution; a default session's directory is empty while its turn runs and gone after teardown on success, abort, a failed turn and cancellation alike; and one that gained content or vanished under the conversation is preserved as found while the command fails terminally, with no admission, save, journal or execution after it |
 | C14 | Narrative preservation | The shipped generation, repair and revision instructions carry the narrative-plus-components rule, the assistant receives it with the request and the catalog, and a scripted Plan of prose interleaved with components returns byte for byte after approval |
 | C15 | Ordinary run | The approved source keeps normal cwd, includes, props, output/value, permission, timeout, failure and save behaviour |

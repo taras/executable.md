@@ -48,6 +48,11 @@ describe("packaged documents", () => {
       "places each component\nimmediately after the sentences describing the action",
     );
     expect(source).toContain("ordinary reader-facing prose");
+    // It captures the serialized problems with `<Json as>` directly. The
+    // single-child `<Let>` wrapper existed only because the component refused a
+    // literal `as`, and main supplies that now.
+    expect(source).toContain('<Json value={check.diagnostics} as="problems" />');
+    expect(source).not.toContain('<Let as="problems">');
   });
 
   it("says which build is missing a document rather than behaving differently", function* () {
