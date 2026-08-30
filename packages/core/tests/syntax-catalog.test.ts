@@ -932,8 +932,8 @@ describe("Tier SY: complete component contracts", () => {
       returnMode: "text",
       returns: { type: "string" },
       description:
-        "Render a value as JSON text for a prompt, file, or code block. " +
-        "`<Json value={diagnostics} />` places that text where you put it.",
+        "Render a value as JSON text. `<Json value={config} />` writes the JSON where you " +
+        "put it.",
       as: "Optional. Captures the JSON text instead of emitting it.",
     });
     // Contentless, so there is no body to document.

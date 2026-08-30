@@ -193,8 +193,8 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
     parseJsonObject(jsonProps),
     {
       description:
-        "Render a value as JSON text for a prompt, file, or code block. " +
-        "`<Json value={diagnostics} />` places that text where you put it.",
+        "Render a value as JSON text. `<Json value={config} />` writes the JSON where you " +
+        "put it.",
       as: "Optional. Captures the JSON text instead of emitting it.",
       context: null,
     },

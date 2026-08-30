@@ -130,9 +130,9 @@ rows read.
 </Test>
 
 <Test name="SM12: the built-in <Json> entry publishes its prose in both formats">
-<AssertEquals actual={jsonEntry.description} expected="Render a value as JSON text for a prompt, file, or code block. `<Json value={diagnostics} />` places that text where you put it." />
+<AssertEquals actual={jsonEntry.description} expected="Render a value as JSON text. `<Json value={config} />` writes the JSON where you put it." />
 <AssertEquals actual={jsonEntry.as} expected="Optional. Captures the JSON text instead of emitting it." />
-<AssertStringIncludes actual={markdown.stdout} expected="Render a value as JSON text for a prompt, file, or code block." />
+<AssertStringIncludes actual={markdown.stdout} expected="Render a value as JSON text. `<Json value={config} />` writes the JSON where you put it." />
 <AssertStringIncludes actual={markdown.stdout} expected="**`as`:** Optional. Captures the JSON text instead of emitting it." />
 </Test>
 
