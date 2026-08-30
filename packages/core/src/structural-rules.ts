@@ -637,11 +637,6 @@ export function answersDelegateMessage(described: string): string {
   return `<Answers> delegate must be a boolean — ${described}`;
 }
 
-/** What a literal `delegate` that is not a boolean says. */
-export function answersLiteralDelegateMessage(raw: Json): string {
-  return answersDelegateMessage(`write delegate={true}, not delegate=${JSON.stringify(raw)}.`);
-}
-
 /** What an `<Answers>` with nothing to answer for says. */
 export function answersNoBodyMessage(): string {
   return (
@@ -651,33 +646,76 @@ export function answersNoBodyMessage(): string {
 }
 
 /**
- * Everything `<Answers>` decides from what the author wrote (spec §6.16.2).
+ * The props `<Answers>` accepts, decided from what was written.
  *
- * A `delegate` written as an expression is a value the document computes;
- * whether it came back a boolean is expansion's to find out. The body check is
- * static: matchers are `<Answer>` children, and what is left over is the region
- * the element answers for.
+ * `delegate` alone, and it is checked for its *name* here. Whether its value is
+ * a boolean is decided by `literalDelegate()` below when it is a literal, and by
+ * expansion when it is an expression the document computes.
  */
-export function answersViolations(segment: ComponentElement): StructuralViolation[] {
+export function answersPropNameViolations(segment: ComponentElement): StructuralViolation[] {
   const found: StructuralViolation[] = [];
   for (const name of authoredPropNames(segment)) {
     if (name !== "delegate") {
       found.push(violation("structural-usage-invalid", "Answers", answersPropMessage(name)));
     }
   }
-  if (!("delegate" in segment.expressions) && "delegate" in segment.props) {
-    const raw = segment.props.delegate;
-    if (typeof raw !== "boolean") {
-      found.push(
-        violation("structural-usage-invalid", "Answers", answersLiteralDelegateMessage(raw)),
-      );
-    }
+  return found;
+}
+
+/**
+ * Whether this `<Answers>` delegates, read from the literal the author wrote.
+ *
+ * Absent is `false`. A `delegate` written as an expression is a value the
+ * document computes and is not answered here — expansion evaluates it and holds
+ * the result to this same contract.
+ */
+export function literalDelegate(segment: ComponentElement): Result<boolean> {
+  if ("delegate" in segment.expressions || !("delegate" in segment.props)) {
+    return Ok(false);
   }
+  const raw = segment.props.delegate;
+  if (typeof raw !== "boolean") {
+    return Err(
+      new Error(
+        answersDelegateMessage(`write delegate={true}, not delegate=${JSON.stringify(raw)}.`),
+      ),
+    );
+  }
+  return Ok(raw);
+}
+
+/**
+ * Whether this `<Answers>` has a region to answer for.
+ *
+ * Matchers are its `<Answer>` children; whatever is left is the body. An
+ * element holding only matchers can never answer anything, which is a fact
+ * about its source rather than about what its body turned out to render.
+ */
+export function answersBodyViolation(segment: ComponentElement): StructuralViolation | undefined {
   const body = segment.children.filter(
     (child) => !(child.type === "component" && child.name === "Answer"),
   );
-  if (segment.selfClosing || body.every(isBlankText)) {
-    found.push(violation("structural-usage-invalid", "Answers", answersNoBodyMessage()));
+  return segment.selfClosing || body.every(isBlankText)
+    ? violation("structural-usage-invalid", "Answers", answersNoBodyMessage())
+    : undefined;
+}
+
+/**
+ * Everything `<Answers>` decides from what the author wrote (spec §6.16.2).
+ *
+ * The aggregate a caller reporting every independent fact reads. Expansion
+ * reads the same three decisions one at a time, in the places its own order
+ * puts them.
+ */
+export function answersViolations(segment: ComponentElement): StructuralViolation[] {
+  const found = answersPropNameViolations(segment);
+  const delegate = literalDelegate(segment);
+  if (!delegate.ok) {
+    found.push(violation("structural-usage-invalid", "Answers", delegate.error.message));
+  }
+  const body = answersBodyViolation(segment);
+  if (body !== undefined) {
+    found.push(body);
   }
   return found;
 }
@@ -706,14 +744,13 @@ export function answerMissingValueMessage(): string {
 }
 
 /**
- * Everything one `<Answer>` matcher decides from what the author wrote.
+ * The shape of one `<Answer>` matcher, decided from what was written.
  *
- * The template itself is not parsed here when it is written as children: those
- * children render, and rendering is expansion's. A literal `template` prop is a
- * string the author wrote, so the rest of the matcher's shape is decided from
- * presence alone.
+ * Which props it carries, and how its template was written — never what the
+ * template *says*, because template children render, and rendering is
+ * expansion's.
  */
-export function answerViolations(segment: ComponentElement): StructuralViolation[] {
+export function answerFormViolations(segment: ComponentElement): StructuralViolation[] {
   const found: StructuralViolation[] = [];
   for (const name of authoredPropNames(segment)) {
     if (name !== "template" && name !== "value") {
@@ -727,8 +764,28 @@ export function answerViolations(segment: ComponentElement): StructuralViolation
   if (typeof segment.props.template === "string" && hasChildren) {
     found.push(violation("structural-usage-invalid", "Answer", answerTemplateBothMessage()));
   }
-  if (!("value" in segment.props) && !("value" in segment.expressions)) {
-    found.push(violation("structural-usage-invalid", "Answer", answerMissingValueMessage()));
+  return found;
+}
+
+/** An `<Answer>` that supplies no value answers nothing. */
+export function answerValueViolation(segment: ComponentElement): StructuralViolation | undefined {
+  return "value" in segment.props || "value" in segment.expressions
+    ? undefined
+    : violation("structural-usage-invalid", "Answer", answerMissingValueMessage());
+}
+
+/**
+ * Everything one `<Answer>` matcher decides from what the author wrote.
+ *
+ * The aggregate a caller reporting every independent fact reads. Expansion
+ * reads the form decisions before it renders a template and the value decision
+ * after, which is the order its own phases put them in.
+ */
+export function answerViolations(segment: ComponentElement): StructuralViolation[] {
+  const found = answerFormViolations(segment);
+  const value = answerValueViolation(segment);
+  if (value !== undefined) {
+    found.push(value);
   }
   return found;
 }

@@ -3443,13 +3443,24 @@ provider or reconstructs a CLI host to learn what names mean.
 target selection to the root, scans that selected projection, and follows normal
 component selection through every resolved Markdown definition the authored
 invocations discover. The root is first; newly discovered definitions enter one
-FIFO queue in their first-invocation order, and a source identity is scanned only
-once. Every invocation in each source is checked in source order, including one
-inside authored control flow and children beneath an origin-only TypeScript
-component. The validator neither evaluates a branch nor predicts whether a
-component will project its children. A definition cycle therefore terminates
-the source walk and is not itself a validation failure unless a shared authored
-rule already makes it one.
+FIFO queue in their first-invocation order. Every invocation in each source is
+checked in source order, including one inside authored control flow and children
+beneath an origin-only TypeScript component. The validator neither evaluates a
+branch nor predicts whether a component will project its children. A definition
+cycle therefore terminates the source walk and is not itself a validation
+failure unless a shared authored rule already makes it one.
+
+**A path's bytes are read once; each view of them is parsed and scanned once.**
+Reading and interpreting are separate, because one file can owe the walk more
+than one answer. An ordinary component selection carries no target and asks for
+the whole Markdown definition. A root asks for the projection its own selector
+named. An untargeted root's body *is* the whole file, so it is that path's
+full-definition view as well, and a name resolving there finds it already
+scanned — which is what makes a root invoking itself terminate. A targeted root
+projection and the full definition a component selected are two distinct views
+of one path, each parsed and scanned once, from bytes read once. Letting a
+projection stand in for the definition would answer for sections the root never
+selected.
 
 **A static answer never stands in for a runtime value.** Resolution, authored
 form, engine-owned body shape and other structural rules run whenever their

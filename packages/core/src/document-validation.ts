@@ -45,8 +45,13 @@ import {
 } from "./definition.ts";
 import type { DefinitionPhase } from "./definition.ts";
 import { assertDistinctIdentityNames } from "./invocation-identity.ts";
+import {
+  asBindingViolation,
+  asExpressionViolation,
+  capturedBinding,
+  returnCaptureViolation,
+} from "./invocation-rules.ts";
 import type { IdentityComponent } from "./invocation-identity.ts";
-import { validateBindingName } from "./live-env.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
 import type { RootDocumentSource } from "./root-source.ts";
 import {
@@ -292,6 +297,18 @@ interface LexicalContext {
   readonly underAnswers: boolean;
 }
 
+/**
+ * What one invocation site captures, as far as its own `as` decided.
+ *
+ * `refused` is not the same as capturing nothing: a site that wrote an `as` the
+ * engine rejected has already been told so, and asking the return contract
+ * about it again would report one mistake as two.
+ */
+interface AuthoredCapture {
+  readonly refused: boolean;
+  readonly binding?: string;
+}
+
 /** What a complete contract states about one invocation. */
 interface CompleteContract {
   readonly props: PropsSchema;
@@ -306,11 +323,13 @@ interface CompleteContract {
  *
  * Traversal follows source rather than execution: the selected root projection
  * first, then each discovered definition in the order its first invocation was
- * encountered, each source scanned exactly once. An invocation written inside
- * `<If>`, `<Loop>` or `<Each>` is authored program structure and is checked
- * like any other; no branch is evaluated to decide whether it would run. A
- * definition that invokes itself, directly or through others, terminates the
- * walk when the source identity comes back around, and that is not a failure.
+ * encountered. A path's bytes are read once and each view of them — the
+ * projection a targeted root asked about, the full definition a component
+ * selection asks about — is parsed and scanned once. An invocation written
+ * inside `<If>`, `<Loop>` or `<Each>` is authored program structure and is
+ * checked like any other; no branch is evaluated to decide whether it would
+ * run. A definition that invokes itself, directly or through others, terminates
+ * the walk when that view comes back around, and that is not a failure.
  *
  * The result is deterministic: the same document and environment produce
  * deep-equal diagnostics and invocation records every time.
@@ -735,27 +754,50 @@ class ValidationState {
       );
     }
 
-    // Engine-owned and independent of any contract: `as` names a binding, and
-    // whether the author wrote a name at all is decided from the syntax.
-    const captureViolation = componentCaptureViolation(segment);
-    if (captureViolation !== undefined) {
+    // Engine-owned and independent of any contract, so the same two rules
+    // expansion applies decide it here: how `as` was written, and what it may
+    // name. Expansion asks the second about the value it resolved; this asks it
+    // about the literal the author wrote, which is the value this phase has.
+    const captureViolations: StructuralViolation[] = [];
+    const asExpression = asExpressionViolation(segment.name, segment.expressions);
+    if (asExpression !== undefined) {
+      captureViolations.push(asExpression);
+    }
+    const asRefused = asBindingViolation(segment.name, segment.props.as);
+    if (asRefused !== undefined) {
+      captureViolations.push(asRefused);
+    }
+    for (const violation of captureViolations) {
       draft.tokens.push(
-        this.#draft(context.entry.ordinal, "capture-invalid", {
-          message: captureViolation,
-          component: segment.name,
+        this.#draft(context.entry.ordinal, violation.code, {
+          message: violation.message,
+          component: violation.source,
           ...positionOf(segment),
         }),
       );
     }
+    // What this site captures, for the contract checks below. An `as` already
+    // refused names nothing, and saying so a second time would report one
+    // mistake twice.
+    const capture: AuthoredCapture =
+      captureViolations.length > 0
+        ? { refused: true }
+        : { refused: false, binding: capturedBinding(segment.props.as) };
 
     if (selected.kind === "registered") {
       draft.origin = selected.origin;
-      yield* this.#checkContract(segment, context, draft, {
-        props: selected.definition.props,
-        captures: selected.definition.captures ?? [],
-        forms: selected.definition.forms ?? BOTH_FORMS,
-        hasReturns: selected.definition.returns !== undefined,
-      });
+      yield* this.#checkContract(
+        segment,
+        context,
+        draft,
+        {
+          props: selected.definition.props,
+          captures: selected.definition.captures ?? [],
+          forms: selected.definition.forms ?? BOTH_FORMS,
+          hasReturns: selected.definition.returns !== undefined,
+        },
+        capture,
+      );
       return;
     }
 
@@ -786,12 +828,18 @@ class ValidationState {
     // A definition whose own body contract is broken is broken for every
     // caller, at the position its own source states.
     draft.tokens.push(...source.bodyTokens);
-    yield* this.#checkContract(segment, context, draft, {
-      props: source.definition.props,
-      captures: [],
-      forms: BOTH_FORMS,
-      hasReturns: source.definition.returns !== undefined,
-    });
+    yield* this.#checkContract(
+      segment,
+      context,
+      draft,
+      {
+        props: source.definition.props,
+        captures: [],
+        forms: BOTH_FORMS,
+        hasReturns: source.definition.returns !== undefined,
+      },
+      capture,
+    );
   }
 
   /**
@@ -803,6 +851,7 @@ class ValidationState {
     context: LexicalContext,
     draft: DraftInvocation,
     contract: CompleteContract,
+    capture: AuthoredCapture,
   ): Operation<void> {
     const ordinal = context.entry.ordinal;
     const form: InvocationForm = segment.selfClosing ? "self-closing" : "paired";
@@ -818,13 +867,16 @@ class ValidationState {
       );
     }
 
-    if (contract.hasReturns && !("as" in segment.props) && !("as" in segment.expressions)) {
+    // The same rule expansion applies, asked about the capture this site names.
+    // A site whose `as` was already refused is not asked again.
+    const missingCapture = capture.refused
+      ? undefined
+      : returnCaptureViolation(segment.name, contract.hasReturns, capture.binding);
+    if (missingCapture !== undefined) {
       draft.tokens.push(
-        this.#draft(ordinal, "return-usage-invalid", {
-          message:
-            `<${segment.name} /> declares \`returns\`, so it renders nothing and must be ` +
-            `invoked with \`as\`: <${segment.name} as="binding" />.`,
-          component: segment.name,
+        this.#draft(ordinal, missingCapture.code, {
+          message: missingCapture.message,
+          component: missingCapture.source,
           ...positionOf(segment),
         }),
       );
@@ -1142,22 +1194,6 @@ function missingRequired(
     });
   }
   return issues;
-}
-
-/**
- * What an `as` that cannot name a binding says, or `undefined` when it can.
- *
- * Decided on the authored text rather than a resolved value, exactly as
- * expansion decides it: evaluating it first would make the outcome depend on
- * the host, because a bare identifier that happens to name a global resolves on
- * one runtime and throws on another.
- */
-function componentCaptureViolation(segment: ComponentElement): string | undefined {
-  if ("as" in segment.expressions) {
-    return `Prop "as" on <${segment.name} /> must be a string literal.`;
-  }
-  const binding = validateBindingName(segment.props.as);
-  return binding.ok ? undefined : `Prop "as" on <${segment.name} /> ${binding.error.message}`;
 }
 
 /** The code one parsing phase's failure is reported under. */

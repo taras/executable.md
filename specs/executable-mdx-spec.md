@@ -2955,27 +2955,27 @@ document.
 **Validation follows source, not execution reachability.** The selected root
 projection is scanned first; every Markdown definition ordinary selection
 discovers enters one FIFO queue in the order its first invocation was
-encountered, and a source identity is read and parsed exactly once. Every
+encountered. Every
 authored invocation in each source is reported in source order, including one
 written inside `<If>`, `<Loop>` or `<Each>`, and including children written
 beneath an origin-only TypeScript component. No branch is evaluated and no
 projection is predicted. A definition that invokes itself, directly or through
-others, terminates the walk when the source identity comes back around, and that
-cycle is not itself a failure. An invalid invocation still discovers and queues
-the definition it selected.
+others, terminates the walk when that view comes back around, and that cycle is
+not itself a failure. An invalid invocation still discovers and queues the
+definition it selected.
 
-**One read per path, one view per role.** Bytes and meaning are separate: a path
-is read once however many times the walk needs it, while what is *parsed* from
-those bytes depends on who asked. An ordinary component selection carries no
-target and asks for the whole Markdown definition. A root asks for the
-projection its own selector named. An untargeted root's body is the whole file,
-so the two questions have one answer and a component resolving to that path
-finds it already scanned — which is how a root that invokes itself terminates.
-A **targeted** root's body is one section, and it stands in for nothing: a
-component selecting the same path gets its own full-definition view, parsed from
-the bytes already read, entering the FIFO queue in discovery order like any
-other source. Substituting the projection there would hide every failure in the
-sections the root never selected.
+**A path's bytes are read once; each view of them is parsed and scanned once.**
+Reading and interpreting are separate, because one file can owe the walk more
+than one answer. An ordinary component selection carries no target and asks for
+the **full definition**. A root asks for the **projection** its own selector
+named. An untargeted root's body *is* the whole file, so it is that path's
+full-definition view as well: a component resolving there finds it already
+scanned, which is how a root that invokes itself terminates. A targeted root's
+body is one section and stands in for nothing — the projection and the full
+definition are two distinct views of one path, each parsed and scanned once,
+from bytes read once, and the definition enters the FIFO queue in discovery
+order like any other source. Substituting the projection for it would answer for
+sections the root never selected, hiding every failure in them.
 
 **A static answer never stands in for a runtime value.** Resolution, authored
 form, engine-owned body shape and every other structural rule run whenever their
@@ -3000,7 +3000,15 @@ spread attribute keeps its execution meaning: validation turns neither into a
 stricter parse error nor into an unknown-value marker. Selection, declaration
 admission, schemas, forms, body rules, targets and source positions come from
 their execution definitions; where a rule had to be extracted from expansion,
-both callers read the extracted rule rather than a second catalog.
+both callers read the extracted rule rather than a second catalog. That covers
+the authored decisions as well as the body contract: how `as` may be written and
+what it may name, what a component declaring `returns` requires of its
+invocation site, and every `<Answers>` and `<Answer>` prop, delegate, body shape
+and template rule. Extraction is phase-appropriate rather than phase-bound —
+whether `as` was written as an expression is answered from the scanned element,
+while what a binding name may be is answered from whatever value each caller
+has. Expansion refuses at the first of them, in the phase it always did and with
+byte-identical prose; validation reports each independent one it finds.
 
 **The answer is versioned data.**
 

@@ -58,6 +58,12 @@ import {
   strayStructuralMessage,
 } from "./structural-rules.ts";
 import type { StructuralViolation } from "./structural-rules.ts";
+import {
+  asBindingViolation,
+  asExpressionViolation,
+  capturedBinding,
+  returnCaptureViolation,
+} from "./invocation-rules.ts";
 import { interpolate } from "./interpolate.ts";
 import { interpolateEvalBindings } from "./eval-interpolate.ts";
 import {
@@ -121,7 +127,7 @@ import {
 import { remark } from "remark";
 import { select as cssSelect } from "unist-util-select";
 import { toString as mdastToString } from "mdast-util-to-string";
-import { liveEnvironment, validateBindingName } from "./live-env.ts";
+import { liveEnvironment } from "./live-env.ts";
 import { TestHarnessComponentDefinition } from "./test-harness.ts";
 import type { TestHarnessBinding } from "./test-harness.ts";
 
@@ -2187,18 +2193,9 @@ function* expandComponent(
     return [yield* raise(placementError)];
   }
 
-  // `as` names a binding, so it is rejected on the expression itself rather
-  // than on a resolved value. Evaluating it first would make the outcome
-  // depend on the host: a bare identifier that happens to name a global
-  // resolves on one runtime and throws ReferenceError on another.
-  if ("as" in expressions) {
-    return [
-      yield* raise({
-        type: "error",
-        message: `Prop "as" on <${name} /> must be a string literal.`,
-        source: name,
-      }),
-    ];
+  const asExpression = asExpressionViolation(name, expressions);
+  if (asExpression !== undefined) {
+    return [yield* raise({ type: "error", message: asExpression.message, source: name })];
   }
 
   // Resolve eval expression props against env.values using the shared
@@ -2223,11 +2220,11 @@ function* expandComponent(
   let validatedProps: Record<string, Json>;
   let asBinding: string | undefined;
   try {
-    const binding = validateBindingName(resolvedProps.as);
-    if (!binding.ok) {
-      throw new Error(`Prop "as" on <${name} /> ${binding.error.message}`);
+    const refused = asBindingViolation(name, resolvedProps.as);
+    if (refused !== undefined) {
+      throw new Error(refused.message);
     }
-    asBinding = binding.value;
+    asBinding = capturedBinding(resolvedProps.as);
 
     const { slot: _slot, as: _as, ...propsForValidation } = resolvedProps;
     validatedProps = yield* validateProps(name, propsForValidation, definition.props);
@@ -2235,16 +2232,9 @@ function* expandComponent(
     return [yield* raise(schemaValidationErrorSegment(error, name))];
   }
 
-  if (definition.returns !== undefined && asBinding === undefined) {
-    return [
-      yield* raise({
-        type: "error",
-        message:
-          `<${name} /> declares \`returns\`, so it renders nothing and must be invoked ` +
-          `with \`as\`: <${name} as="binding" />.`,
-        source: name,
-      }),
-    ];
+  const missingCapture = returnCaptureViolation(name, definition.returns !== undefined, asBinding);
+  if (missingCapture !== undefined) {
+    return [yield* raise({ type: "error", message: missingCapture.message, source: name })];
   }
 
   // Capture the caller's eval environment before creating the component's
@@ -2628,14 +2618,9 @@ function* expandFunctionComponent(
   // name, is selected ahead of core's default: a different definition runs and
   // inherits the ordinary disposition.
   const checkedFailures = definition.fn === CoreTest ? containedLedger(inherited) : inherited;
-  if ("as" in expressions) {
-    return [
-      yield* raise({
-        type: "error",
-        message: `Prop "as" on <${name} /> must be a string literal.`,
-        source: name,
-      }),
-    ];
+  const asExpression = asExpressionViolation(name, expressions);
+  if (asExpression !== undefined) {
+    return [yield* raise({ type: "error", message: asExpression.message, source: name })];
   }
 
   // Captures are the engine's to hand over unresolved, like `slot` and `as` are
@@ -2688,17 +2673,11 @@ function* expandFunctionComponent(
   }
 
   // Strip slot prop before validation
-  const asBindingResult = validateBindingName(resolvedProps.as);
-  if (!asBindingResult.ok) {
-    return [
-      yield* raise({
-        type: "error",
-        message: `Prop "as" on <${name} /> ${asBindingResult.error.message}`,
-        source: name,
-      }),
-    ];
+  const asRefused = asBindingViolation(name, resolvedProps.as);
+  if (asRefused !== undefined) {
+    return [yield* raise({ type: "error", message: asRefused.message, source: name })];
   }
-  const asBinding = asBindingResult.value;
+  const asBinding = capturedBinding(resolvedProps.as);
   const owner = asBinding === undefined ? callerOwner : undefined;
   const { slot: _slot, as: _as, ...propsForValidation } = resolvedProps;
 
@@ -2711,16 +2690,9 @@ function* expandFunctionComponent(
   }
 
   const returns = definition.returns;
-  if (returns !== undefined && asBinding === undefined) {
-    return [
-      yield* raise({
-        type: "error",
-        message:
-          `<${name} /> declares \`returns\`, so it renders nothing and must be invoked ` +
-          `with \`as\`: <${name} as="binding" />.`,
-        source: name,
-      }),
-    ];
+  const missingCapture = returnCaptureViolation(name, returns !== undefined, asBinding);
+  if (missingCapture !== undefined) {
+    return [yield* raise({ type: "error", message: missingCapture.message, source: name })];
   }
 
   // Read before the invocation exists: the eval scope ambient here is the

@@ -19,6 +19,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
+import { InMemoryStream } from "@executablemd/durable-streams";
 import { API } from "@executablemd/runtime";
 import type { DirectoryEntry, LinkStatResult, StatResult } from "@executablemd/runtime";
 
@@ -28,6 +29,7 @@ import {
   validateBodyStructure,
 } from "../src/body-structure.ts";
 import { parseMarkdownDefinition } from "../src/definition.ts";
+import { asText, completion, failureMessage } from "./helpers.ts";
 import {
   documentValidationCodeRank,
   inlineSource,
@@ -55,8 +57,8 @@ const MISSING: StatResult = { exists: false, isFile: false, isDirectory: false }
 /**
  * What the run was allowed to do, and what it actually did.
  *
- * `reads` is appended in read order, so "once per source identity" and "never
- * imported" are both read off the same list. `effects` records any refused
+ * `reads` is appended in read order, so "once per path" and "never imported"
+ * are both read off the same list. `effects` records any refused
  * boundary that fired at all — it stays empty, and a row that finds anything in
  * it has found an execution.
  */
@@ -360,7 +362,7 @@ describe("Tier DV: recursive Markdown sources", () => {
     expect(seen.effects).toEqual([]);
   });
 
-  it("DV5: sources are root-first, then FIFO, read once, and a cycle terminates", function* () {
+  it("DV5: views are root-first, then FIFO, each path read once, and a cycle terminates", function* () {
     const tree = {
       "components/Alpha.md": "<Shared />\n\n<Alpha />\n",
       "components/Beta.md": "<Shared />\n",
@@ -424,11 +426,12 @@ describe("Tier DV: recursive Markdown sources", () => {
     expect(seen.effects).toEqual([]);
   });
 
-  it("DV5: a root sharing a source identity with a component is scanned once", function* () {
+  it("DV5: an untargeted root is the full-definition view of its own path", function* () {
     const body = "<Foo />\n";
 
-    // The root's text is retained rather than read, so a second scan of the
-    // same identity would show up as a second `Foo` record with nothing read.
+    // The root is untargeted, so its body is the whole file and it *is* this
+    // path's full-definition view. A second scan of that view would show up as
+    // a second `Foo` record.
     const retained = yield* validating(retainedSource("components/Foo.md", body), {
       tree: { "components/Foo.md": body },
       includes: ["components"],
@@ -871,6 +874,133 @@ describe("Tier DV: one parser, one rule catalog", () => {
       tree: { "components/Shape.md": body },
     });
     expect(codes(result)).toEqual(["body-shape-invalid", "return-usage-invalid"]);
+  });
+});
+
+/**
+ * What expansion prints for one document, so a shared rule can be measured from
+ * both sides.
+ *
+ * The document really runs here — in its own scope, with the same stubbed tree
+ * — because the point is that the *other* consumer of the extracted rule says
+ * the same thing. Under the ordinary printing mode a refused invocation renders
+ * its error into the output; a root that fails outright reports it instead, so
+ * both are folded into one string.
+ */
+function expansionPrints(source: string, scenario: Scenario = {}): Operation<string> {
+  return scoped(function* () {
+    const seen = probe();
+    yield* useEnvironment(scenario.tree ?? {}, seen);
+    if (scenario.registrations !== undefined) {
+      yield* registerComponents(scenario.registrations);
+    }
+    const result = yield* completion({
+      ...inlineSource(source),
+      stream: new InMemoryStream(),
+      ...(scenario.includes === undefined ? {} : { includes: [...scenario.includes] }),
+    });
+    return result.ok ? asText(result.value) : failureMessage(result);
+  });
+}
+
+/**
+ * One authored mistake, as both consumers of the rule that decides it report it.
+ *
+ * Expansion positions its sentence and validation carries the position as a
+ * field, so the diagnostic's message is the substring: what is being measured is
+ * that there is one sentence, from one decision, rather than two that happen to
+ * agree today.
+ */
+function* bothCallersAgree(
+  source: string,
+  code: DocumentValidationCode,
+  scenario: Scenario = {},
+): Operation<string> {
+  const { result } = yield* validateText(source, scenario);
+  const found = result.diagnostics.find((diagnostic) => diagnostic.code === code);
+  if (found === undefined) {
+    throw new Error(`validation reported no ${code} in [${codes(result).join(", ")}]`);
+  }
+  const printed = yield* expansionPrints(source, scenario);
+  expect(printed).toContain(found.message);
+  return found.message;
+}
+
+describe("Tier DV: one decision, both callers", () => {
+  it("DV14: an ordinary component's `as` binding name is decided once", function* () {
+    // A registration reaches expansion through the function-component path...
+    const registered = yield* bothCallersAgree('<TempDir as="1bad" />\n', "capture-invalid");
+    expect(registered).toBe(
+      'Prop "as" on <TempDir /> must be a valid JavaScript identifier. Got: "1bad"',
+    );
+
+    // ...and a Markdown component through the other one. Both ask this module.
+    const markdown = yield* bothCallersAgree(
+      '<Widget as="1bad" title="x" />\n',
+      "capture-invalid",
+      {
+        tree: { "components/Widget.md": WIDGET },
+      },
+    );
+    expect(markdown).toContain('Prop "as" on <Widget />');
+  });
+
+  it("DV14: `as` written as an expression is refused by one rule", function* () {
+    const message = yield* bothCallersAgree("<TempDir as={name} />\n", "capture-invalid");
+    expect(message).toBe('Prop "as" on <TempDir /> must be a string literal.');
+  });
+
+  it("DV14: a value component invoked without `as` is refused by one rule", function* () {
+    const message = yield* bothCallersAgree(
+      '<Glob include={["*.md"]} />\n',
+      "return-usage-invalid",
+    );
+    expect(message).toBe(
+      "<Glob /> declares `returns`, so it renders nothing and must be invoked with `as`: " +
+        '<Glob as="binding" />.',
+    );
+  });
+
+  it("DV14: <Answers> props and body shape are decided once", function* () {
+    const prop = yield* bothCallersAgree(
+      "<Answers wrong={1}>body</Answers>\n",
+      "structural-usage-invalid",
+    );
+    expect(prop).toBe('<Answers> does not accept a "wrong" prop (allowed: delegate).');
+
+    const delegate = yield* bothCallersAgree(
+      '<Answers delegate="yes">body</Answers>\n',
+      "structural-usage-invalid",
+    );
+    expect(delegate).toBe(
+      '<Answers> delegate must be a boolean — write delegate={true}, not delegate="yes".',
+    );
+
+    const body = yield* bothCallersAgree(
+      '<Answers><Answer template="t" value={1} /></Answers>\n',
+      "structural-usage-invalid",
+    );
+    expect(body).toContain("<Answers> has no body to answer for.");
+  });
+
+  it("DV14: <Answer> props, template form and required value are decided once", function* () {
+    const prop = yield* bothCallersAgree(
+      "<Answers><Answer bogus={1} value={1} />\n\nbody\n</Answers>\n",
+      "structural-usage-invalid",
+    );
+    expect(prop).toBe('<Answer> does not accept a "bogus" prop (allowed: template, value).');
+
+    const template = yield* bothCallersAgree(
+      "<Answers><Answer template={t} value={1} />\n\nbody\n</Answers>\n",
+      "structural-usage-invalid",
+    );
+    expect(template).toContain("<Answer> template must be a literal string prop");
+
+    const value = yield* bothCallersAgree(
+      '<Answers><Answer template="t" />\n\nbody\n</Answers>\n',
+      "structural-usage-invalid",
+    );
+    expect(value).toBe('<Answer> requires a "value" prop.');
   });
 });
 

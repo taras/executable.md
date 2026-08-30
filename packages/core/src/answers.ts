@@ -89,15 +89,13 @@ import type { ParsedTemplate } from "./template.ts";
 import type { ComponentElement, ErrorSegment, Json, Segment } from "./types.ts";
 import type { AnswersPlacement, DeclarationScanner } from "./declaration-scan.ts";
 import {
-  answerMissingValueMessage,
-  answerPropMessage,
+  answerFormViolations,
+  answersBodyViolation,
   answersDelegateMessage,
-  answersLiteralDelegateMessage,
-  answersNoBodyMessage,
-  answersPropMessage,
-  answerTemplateBothMessage,
-  answerTemplateExpressionMessage,
+  answersPropNameViolations,
+  answerValueViolation,
   isBlankText as isBlankSegment,
+  literalDelegate,
   strayAnswerMessage,
 } from "./structural-rules.ts";
 
@@ -230,10 +228,9 @@ export function* expandAnswers(
   /** The region the answered body renders into. */
   owner: Segment[],
 ): Operation<Segment[]> {
-  for (const name of Object.keys({ ...element.props, ...element.expressions })) {
-    if (name !== "delegate") {
-      return [yield* raise(violationError(answersPropMessage(name), ANSWERS, element))];
-    }
+  const propRefusal = answersPropNameViolations(element)[0];
+  if (propRefusal !== undefined) {
+    return [yield* raise(violationError(propRefusal.message, ANSWERS, element))];
   }
   const delegate = yield* readDelegate(element);
   if (delegate.error) {
@@ -249,8 +246,9 @@ export function* expandAnswers(
   }
   const { matchers, body } = partitioned;
 
-  if (element.selfClosing || body.every(isBlankSegment)) {
-    return [yield* raise(violationError(answersNoBodyMessage(), ANSWERS, element))];
+  const bodyRefusal = answersBodyViolation(element);
+  if (bodyRefusal !== undefined) {
+    return [yield* raise(violationError(bodyRefusal.message, ANSWERS, element))];
   }
 
   const bindings = (yield* env)?.values ?? {};
@@ -310,10 +308,9 @@ function* readChildAnswers(
   element: ComponentElement,
   expand: ExpandSegments,
 ): Operation<Result<AnswerConfiguration>> {
-  for (const name of Object.keys({ ...element.props, ...element.expressions })) {
-    if (name !== "delegate") {
-      return Err(new Error(positioned(answersPropMessage(name), element)));
-    }
+  const propRefusal = answersPropNameViolations(element)[0];
+  if (propRefusal !== undefined) {
+    return Err(new Error(positioned(propRefusal.message, element)));
   }
   const delegate = yield* readDelegate(element);
   if (delegate.error) {
@@ -514,25 +511,18 @@ function* readAnswer(
   expand: ExpandSegments,
   index: number,
 ): Operation<AnswerMatcher | Malformed> {
-  for (const name of Object.keys({ ...element.props, ...element.expressions })) {
-    if (name !== "template" && name !== "value") {
-      return refuseAnswer(element, answerPropMessage(name));
-    }
-  }
-
-  // An expression template is never read, and silently produces a matcher with
-  // no template — which first-wins plus reusable turns into permanent shadowing
-  // of everything below it. `<WhenPrompt>` reaches its "requires a template"
-  // error by the same route; this says so directly.
-  if ("template" in element.expressions) {
-    return refuseAnswer(element, answerTemplateExpressionMessage());
+  // Everything about the matcher's *shape* is decided from what was written:
+  // which props it carries, and whether its template was written as an
+  // expression — which is never read, and would silently produce a matcher with
+  // no template, which first-wins plus reusable turns into permanent shadowing
+  // of everything below it — or written twice.
+  const formRefusal = answerFormViolations(element)[0];
+  if (formRefusal !== undefined) {
+    return refuseAnswer(element, formRefusal.message);
   }
 
   const templateProp = element.props.template;
   const hasChildren = !element.selfClosing && element.children.length > 0;
-  if (typeof templateProp === "string" && hasChildren) {
-    return refuseAnswer(element, answerTemplateBothMessage());
-  }
 
   let template: ParsedTemplate | undefined;
   const source =
@@ -555,8 +545,9 @@ function* readAnswer(
     template = parsed.value;
   }
 
-  if (!("value" in element.props) && !("value" in element.expressions)) {
-    return refuseAnswer(element, answerMissingValueMessage());
+  const valueRefusal = answerValueViolation(element);
+  if (valueRefusal !== undefined) {
+    return refuseAnswer(element, valueRefusal.message);
   }
   const value = yield* readValue(element);
   if (value.error) {
@@ -650,12 +641,6 @@ function* readDelegate(element: ComponentElement): Operation<{ value: boolean; e
     }
     return { value: evaluated };
   }
-  if (!("delegate" in element.props)) {
-    return { value: false };
-  }
-  const raw = element.props.delegate;
-  if (typeof raw !== "boolean") {
-    return { value: false, error: answersLiteralDelegateMessage(raw) };
-  }
-  return { value: raw };
+  const literal = literalDelegate(element);
+  return literal.ok ? { value: literal.value } : { value: false, error: literal.error.message };
 }
