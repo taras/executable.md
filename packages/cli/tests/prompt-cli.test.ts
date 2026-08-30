@@ -213,6 +213,11 @@ describe(
       // caller asked for was never created — so the gate answered a request it
       // had not honoured. Nonzero alone would not catch that: the invocation
       // below would have failed anyway, on the agent it cannot reach.
+      //
+      // This case names the phases that stayed at zero, which a subprocess
+      // cannot see. The one after it drives the real parser and dispatch, which
+      // this one does not reach — the defect lived exactly between those two
+      // layers, so both are needed to pin it.
       yield* useWorkingDirectory(function* (dir, profileRoot) {
         const journal = join(dir, "trace.jsonl");
         const harness = createPromptHarness({ profileRoot });
@@ -255,6 +260,37 @@ describe(
         expect(yield* exists(journal)).toBe(false);
         expect(yield* until(readdir(dir))).toEqual([]);
       });
+    });
+
+    it("C1: a valued --run is refused by the real parser, not just the scanner", function* () {
+      // The defect was a disagreement between the scanner and the parser: the
+      // scanner read `--run=false` as the switch while the parser read it as
+      // false. A case that hands `runPrompt` an already-scanned command skips
+      // the boundary the bug lived on, so this one goes through the command line
+      // an operator actually types.
+      const REFUSAL =
+        "--run does not take a value — write --run to execute the Plan " +
+        "or leave it out to write the Plan";
+
+      for (const spelling of ["--run=false", "--run=true", "--run="]) {
+        yield* useWorkingDirectory(function* (dir) {
+          const { code, stdout, stderr } = yield* runCli(
+            ["prompt", REQUEST, spelling, "--journal", "trace.jsonl"],
+            { cwd: dir },
+          ).join();
+
+          expect(code).toBe(1);
+          expect(stderr).toContain(REFUSAL);
+          // No approved Plan escaped: stdout is where one would have gone.
+          expect(stdout).toBe("");
+          // No provider was reached — reaching one is what reports an agent as
+          // unavailable, and this command line never got that far.
+          expect(stderr).not.toContain("unavailable");
+          // And nothing was written: not the journal it named, not an output
+          // file, not anything else.
+          expect(yield* until(readdir(dir))).toEqual([]);
+        });
+      }
     });
 
     it("C1: --save is gone, and is refused as the unknown option it is", function* () {
