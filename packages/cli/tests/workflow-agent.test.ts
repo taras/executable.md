@@ -491,8 +491,12 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       expect(typed(second.events, "workspace_file").length).toBe(committedReads);
 
       // Reattached, under the same logical key the first attempt established.
-      expect(resumed.ensured.map((input) => input.sessionKey)).toEqual(
-        interrupted.ensured.map((input) => input.sessionKey),
+      // The keys, not how many times each attempt asked for one: the first
+      // attempt placed a session and constructed it at its first Prompt, and
+      // this one meets a session that already exists and attaches to it — so
+      // the counts differ for the reason the reattachment is being made.
+      expect(new Set(resumed.ensured.map((input) => input.sessionKey))).toEqual(
+        new Set(interrupted.ensured.map((input) => input.sessionKey)),
       );
     });
   });
@@ -959,8 +963,11 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       // contacted the provider only for the turn the first one never finished.
       expect(resumed.prompts).toHaveLength(1);
       // Reattached under the same logical key the first attempt established.
-      expect(resumed.ensured.map((input) => input.sessionKey)).toEqual(
-        interrupted.ensured.map((input) => input.sessionKey),
+      // The keys, not the counts: the first attempt placed a session and
+      // constructed it at its first Prompt, and this one attaches to one that
+      // already exists.
+      expect(new Set(resumed.ensured.map((input) => input.sessionKey))).toEqual(
+        new Set(interrupted.ensured.map((input) => input.sessionKey)),
       );
       // Two completed Prompts on the journal and no association for either.
       expect(typed(second.events, "agent_prompt")).toHaveLength(2);

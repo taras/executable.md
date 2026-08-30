@@ -19,6 +19,7 @@ import type {
   AcpRuntimeEnsureInput,
   AcpRuntimeEvent,
   AcpRuntimeHandle,
+  AcpRuntimeMaterialization,
   AcpRuntimeOptions,
   AcpRuntimeTurn,
   AcpRuntimeTurnInput,
@@ -65,6 +66,15 @@ export interface ScriptedTurn {
    */
   readonly requestsTool?: string;
   /**
+   * Whether the backend accepts this turn, when the session is awaiting its
+   * first accepted one.
+   *
+   * Scripted apart from the reply and the result: a turn that produces text and
+   * settles while never reporting acceptance is exactly the case no fallback
+   * may promote.
+   */
+  readonly accepted?: boolean;
+  /**
    * Leave this turn unfinished until it is cancelled.
    *
    * How an interruption is modelled: the turn streams nothing and settles
@@ -103,6 +113,16 @@ export interface FakeAcp {
    * enough today is a flake on a slower machine.
    */
   startedTurns(count: number): Operation<void>;
+  /**
+   * Settles once `count` turns have had their events read.
+   *
+   * A turn's events are read only after the session it belongs to has been
+   * established — the provider waits for the backend's acceptance and commits
+   * the host's mapping before it exposes anything the turn produced. So this is
+   * the barrier for "the mapping this turn earned is committed", which
+   * `startedTurns` is not: a turn can be requested and never accepted.
+   */
+  consumedTurns(count: number): Operation<void>;
 }
 
 /**
@@ -143,17 +163,33 @@ function permissionAsked(
 
 export function createFakeAcp(): FakeAcp {
   const scripted: ScriptedTurn[] = [];
+  /** The identity a record placed for a first turn is not yet asserting. */
+  const withheld = new Map<string, string>();
+  /** The record this fake wrote for each key, so an acceptance can promote it. */
+  const records = new Map<string, AcpSessionRecord>();
   const created: AcpRuntimeOptions[] = [];
   const ensured: AcpRuntimeEnsureInput[] = [];
   const prompts: string[] = [];
   const decisions: string[] = [];
   const waiting: Array<{ count: number; settle: () => void }> = [];
+  const reading: Array<{ count: number; settle: () => void }> = [];
+  let consumed = 0;
   let started = false;
 
   function announceTurn(): void {
     for (const barrier of [...waiting]) {
       if (prompts.length >= barrier.count) {
         waiting.splice(waiting.indexOf(barrier), 1);
+        barrier.settle();
+      }
+    }
+  }
+
+  function announceConsumed(): void {
+    consumed += 1;
+    for (const barrier of [...reading]) {
+      if (consumed >= barrier.count) {
+        reading.splice(reading.indexOf(barrier), 1);
         barrier.settle();
       }
     }
@@ -182,6 +218,18 @@ export function createFakeAcp(): FakeAcp {
         },
       };
     },
+    consumedTurns(count) {
+      return {
+        *[Symbol.iterator]() {
+          if (consumed >= count) {
+            return;
+          }
+          const reached = withResolvers<void>();
+          reading.push({ count, settle: reached.resolve });
+          yield* reached.operation;
+        },
+      };
+    },
     create(options) {
       created.push(options);
       return {
@@ -191,11 +239,15 @@ export function createFakeAcp(): FakeAcp {
         ensureSession(input) {
           started = true;
           ensured.push(input);
+          // Deferred materialization: the record occupies the key and asserts
+          // nothing until a turn is accepted, so a workflow reading it sees
+          // occupancy rather than a conversation.
+          const deferred = input.materialization === "first-turn-acceptance";
+          const identity = `agent-session:${input.sessionKey}`;
           const record: AcpSessionRecord = {
             schema: "acpx.session.v1",
             acpxRecordId: input.sessionKey,
             acpSessionId: `acp:${input.sessionKey}`,
-            agentSessionId: `agent-session:${input.sessionKey}`,
             agentCommand: options.agentRegistry.resolve(input.agent),
             cwd: input.cwd ?? options.cwd,
             createdAt: "2026-01-01T00:00:00.000Z",
@@ -207,16 +259,29 @@ export function createFakeAcp(): FakeAcp {
             cumulative_token_usage: {},
             request_token_usage: {},
           };
+          if (deferred) {
+            record.sessionMaterialization = {
+              state: "pending",
+              contract: "executablemd.session-materialization/v1",
+            };
+            withheld.set(input.sessionKey, identity);
+          } else {
+            record.agentSessionId = identity;
+          }
+          records.set(input.sessionKey, record);
           void options.sessionStore.save(record);
-          return Promise.resolve({
+          const handle: AcpRuntimeHandle = {
             sessionKey: input.sessionKey,
             backend: "acpx",
             runtimeSessionName: input.sessionKey,
             cwd: input.cwd,
             acpxRecordId: input.sessionKey,
             backendSessionId: `acp:${input.sessionKey}`,
-            agentSessionId: `agent-session:${input.sessionKey}`,
-          } satisfies AcpRuntimeHandle);
+          };
+          if (!deferred) {
+            handle.agentSessionId = identity;
+          }
+          return Promise.resolve(handle);
         },
         startTurn(input: AcpRuntimeTurnInput): AcpRuntimeTurn {
           prompts.push(input.text);
@@ -224,6 +289,46 @@ export function createFakeAcp(): FakeAcp {
           const turn = scripted.shift() ?? { reply: "" };
           const settled = withResolvers<AcpRuntimeTurnResult>();
           const released = withResolvers<void>();
+          const recordKey = input.handle.acpxRecordId ?? input.handle.sessionKey;
+          // A native promise rather than an Effection future: this is the acpx
+          // boundary, and a turn nobody accepts leaves it unsettled — which as a
+          // root task would be a pending operation the runner refuses to end on.
+          let resolveMaterialized!: (value: AcpRuntimeMaterialization) => void;
+          let rejectMaterialized!: (error: unknown) => void;
+          const materialized = new Promise<AcpRuntimeMaterialization>((resolve, reject) => {
+            resolveMaterialized = resolve;
+            rejectMaterialized = reject;
+          });
+          // Observed here as the provider's own deferreds are, so a turn nobody
+          // waited on cannot become an unhandled rejection.
+          materialized.catch(() => {});
+          const accept = (): void => {
+            const identity = withheld.get(recordKey);
+            const stored = records.get(recordKey);
+            if (identity !== undefined && stored) {
+              withheld.delete(recordKey);
+              stored.sessionMaterialization = undefined;
+              stored.agentSessionId = identity;
+              void options.sessionStore.save(stored);
+            }
+            resolveMaterialized({
+              acpxRecordId: recordKey,
+              ...(identity === undefined
+                ? {
+                    ...(stored?.agentSessionId === undefined
+                      ? {}
+                      : { agentSessionId: stored.agentSessionId }),
+                  }
+                : { agentSessionId: identity }),
+            });
+          };
+          if (turn.accepted === false) {
+            rejectMaterialized(new Error("this session still awaits first-turn materialization"));
+          } else {
+            // Acceptance is not the turn's output: a backend takes the turn
+            // before it says anything, so a manual turn reports it too.
+            accept();
+          }
           const events: AcpRuntimeEvent[] = [
             { type: "text_delta", text: turn.reply, stream: "output" },
           ];
@@ -251,11 +356,17 @@ export function createFakeAcp(): FakeAcp {
 
           return {
             requestId: input.requestId,
+            materialized,
             events: {
               [Symbol.asyncIterator](): AsyncIterator<AcpRuntimeEvent> {
                 let index = 0;
+                let announced = false;
                 return {
                   next(): Promise<IteratorResult<AcpRuntimeEvent>> {
+                    if (!announced) {
+                      announced = true;
+                      announceConsumed();
+                    }
                     if (turn.manual) {
                       // Never resolves: this turn is the one that gets
                       // interrupted.

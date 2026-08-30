@@ -394,6 +394,24 @@ function* attempt(
   return trace.records.findLast((record) => record.failure)?.failure;
 }
 
+/**
+ * Run one prompt to completion.
+ *
+ * A fresh `<Session>` places a session and constructs nothing, so this is what
+ * establishes one through ACP — and what every case needing an established
+ * session reaches for.
+ */
+function* prompt(text: string, options: { session?: string | Session } = {}): Operation<void> {
+  yield* scoped(function* () {
+    const stream = yield* Agent.operations.prompt(text, options);
+    const subscription = yield* stream;
+    let next = yield* subscription.next();
+    while (!next.done) {
+      next = yield* subscription.next();
+    }
+  });
+}
+
 /** Run a launch that is expected to complete. */
 function* launch(
   instructions: string,
@@ -697,9 +715,12 @@ describe("Tier NL — native session launch", () => {
     const trace = newTrace();
     yield* scoped(function* () {
       yield* installLaunchStack(harness, trace);
-      // What an enclosing `<Session name>` does before the `<Session.Launch>`
-      // inside it: establishes the session, with no instruction layer at all.
+      // What an enclosing `<Session name>` and a `<Prompt>` inside it do before
+      // the `<Session.Launch>` beside them: the placement constructs nothing,
+      // and the prompt establishes the session with no instruction layer at all.
       const session = yield* Agent.operations.session();
+      expect(harness.ensureCalls.length).toBe(0);
+      yield* prompt("hello", { session });
       expect(harness.ensureCalls.length).toBe(1);
       const closesBefore = harness.closeCalls.length;
 
@@ -832,7 +853,7 @@ describe("Tier NL — native session launch", () => {
  * owns the durability and cross-process halves.
  */
 describe("Tier NO — session ownership", () => {
-  it("NO1: agent resolution and placement own nothing; session, prompt and launch do", function* () {
+  it("NO1: agent resolution and a fresh Session own nothing; a prompt and a launch do", function* () {
     const harness = createFakeRuntime();
     const trace = newTrace();
     yield* scoped(function* () {
@@ -844,7 +865,11 @@ describe("Tier NO — session ownership", () => {
       const cold = yield* Agent.operations.prompt("later", {});
       expect(trace.ownership.acquisitions).toEqual([]);
 
+      // Placing a session validates where it will live and constructs nothing,
+      // so there is nothing yet for a native UI to be in.
       yield* Agent.operations.session();
+      expect(trace.ownership.acquisitions).toEqual([]);
+
       yield* scoped(function* () {
         const subscription = yield* cold;
         let next = yield* subscription.next();
@@ -855,7 +880,6 @@ describe("Tier NO — session ownership", () => {
       yield* launch(INSTRUCTIONS);
 
       expect(trace.ownership.acquisitions.map((entry) => entry.kind)).toEqual([
-        "session",
         "prompt",
         "native-launch",
       ]);
@@ -878,7 +902,13 @@ describe("Tier NO — session ownership", () => {
       // Nothing advertised, so no session this provider returns can be handed
       // to a native UI — and ownership is not the question.
       yield* installLaunchStack(harness, trace, { advertise: [] });
-      yield* Agent.operations.session();
+      const session = yield* Agent.operations.session();
+
+      expect(trace.ownership.acquisitions).toEqual([]);
+      // Placement is inert on every host, advertised or not.
+      expect(harness.ensureCalls.length).toBe(0);
+
+      yield* prompt("hello", { session });
 
       expect(trace.ownership.acquisitions).toEqual([]);
       expect(harness.ensureCalls.length).toBe(1);
@@ -1151,24 +1181,22 @@ describe("Tier NO — session ownership", () => {
       try {
         yield* scoped(function* () {
           yield* installLaunchStack(harness, trace);
-          harness.closeFailure = new Error("the agent connection would not close");
 
           if (site === "session") {
+            // A fresh <Session> constructs nothing and so releases nothing.
+            // The release this is about is an established session's: the prompt
+            // establishes it, and the <Session> beside it reattaches.
+            yield* prompt("hello");
+            harness.closeFailure = new Error("the agent connection would not close");
             yield* Agent.operations.session();
           } else {
-            yield* scoped(function* () {
-              const stream = yield* Agent.operations.prompt("hello", {});
-              const subscription = yield* stream;
-              let next = yield* subscription.next();
-              while (!next.done) {
-                next = yield* subscription.next();
-              }
-            });
+            harness.closeFailure = new Error("the agent connection would not close");
+            yield* prompt("hello");
           }
 
           const ensured = harness.ensureCalls.length;
           const refusal = yield* attempt(trace, INSTRUCTIONS);
-          seen.establishedOne = ensured === 1;
+          seen.establishedOne = ensured === (site === "session" ? 2 : 1);
           seen.refusal = refusal?.class;
           seen.ownership = trace.ownership.acquisitions.at(-1)?.outcome;
           seen.noFurtherAcp = harness.ensureCalls.length === ensured;
@@ -1176,7 +1204,7 @@ describe("Tier NO — session ownership", () => {
           // The close failed, so it released nothing: the entry this scope
           // holds is still the live one, still bound to the runtime that made
           // it, and still the only close attempted so far.
-          seen.closesSoFar = harness.closeCalls.length;
+          seen.closesSoFar = harness.closeCalls.length - (site === "session" ? 1 : 0);
 
           // Let teardown's own close succeed, so what it reports below is the
           // one release that actually failed.
@@ -1204,7 +1232,7 @@ describe("Tier NO — session ownership", () => {
       // matters is that both closes went through one and the same. A failed
       // release that had detached the placement, or dropped the entry, would
       // leave nothing here to close.
-      expect([site, harness.closeCalls.length]).toEqual([site, 2]);
+      expect([site, harness.closeCalls.length]).toEqual([site, site === "session" ? 3 : 2]);
       expect([site, new Set(harness.closeRuntimeIndexes).size]).toEqual([site, 1]);
       // Preserved: the provider scope still reports the close it could not
       // complete, rather than swallowing it to keep the session looking clean.
@@ -1425,22 +1453,35 @@ describe("Tier CN — client-allocated construction", () => {
     expect(harness.ensureCalls).toEqual([]);
   });
 
-  it("CN6: an eager Session publishes acp-first, and the launch inside it refuses", function* () {
+  it("CN6: a launch inside a fresh Session constructs the session it placed", function* () {
+    // The first consuming operation chooses the route. A <Session> that
+    // published one would have taken that choice from the <Session.Launch>
+    // nested inside it, which is the composition this whole feature exists for.
     const harness = createFakeRuntime();
     const trace = newTrace();
     const routes = createMemorySessionRouteStore();
     yield* installClientNative(harness, trace, { routeStore: routes });
 
-    yield* Agent.operations.session();
-    expect((yield* routeOf(routes))?.route).toBe("acp-first");
+    const session = yield* Agent.operations.session();
 
-    const refusal = yield* attempt(trace, INSTRUCTIONS);
+    expect(yield* routeOf(routes)).toBe(undefined);
+    expect(harness.ensureCalls).toEqual([]);
+    expect(harness.createdOptions).toEqual([]);
 
-    expect(refusal?.class).toBe("identity-unavailable");
-    expect(trace.launches).toEqual([]);
+    yield* launch(INSTRUCTIONS, { session });
+
+    expect((yield* routeOf(routes))?.route).toBe("client-native");
+    expect(trace.records.filter((record) => record.failure)).toEqual([]);
+
+    // And the value the document has been holding all along attaches to the
+    // identity that launch allocated, rather than to one of its own.
+    yield* prompt("continue", { session });
+
+    expect(harness.ensureCalls.at(-1)?.resumeSessionId).toBe(ALLOCATED);
+    expect(session.agentSessionId).toBe(ALLOCATED);
   });
 
-  it("CN10: the route is published before any provider work exists", function* () {
+  it("CN10: a fresh Session publishes nothing, and the launch publishes before any runtime", function* () {
     // Creating provider history first and writing down how it was constructed
     // afterwards leaves a window in which a crash makes the session look
     // unconstructed — and a launch meeting that window would give a
@@ -1467,34 +1508,59 @@ describe("Tier CN — client-allocated construction", () => {
     const trace = newTrace();
     yield* installClientNative(watched, trace, { routeStore: routes });
 
-    yield* Agent.operations.session();
+    const session = yield* Agent.operations.session();
 
-    expect(order).toEqual(["publish", "runtime"]);
-    // And resolution asked no agent whether it was available: probing spawns a
-    // child, which is provider work on a session nothing has settled yet.
-    expect(harness.doctorCalls).toBe(0);
-    expect(harness.ensureCalls.length).toBe(1);
+    // Placement publishes nothing and builds nothing, and it asked no agent
+    // whether it was available either: probing spawns a child, which is
+    // provider work on a session nothing has settled yet.
+    expect(order).toEqual([]);
+    expect(watched.doctorCalls).toBe(0);
+    expect(watched.ensureCalls.length).toBe(0);
+
+    yield* launch(INSTRUCTIONS, { session });
+
+    // The launch settles how the session is constructed before anything could
+    // act on it: a crash after provider work and before this publication would
+    // leave a conversation that already exists looking unconstructed.
+    expect(order).toEqual(["publish"]);
+    expect(watched.ensureCalls.length).toBe(0);
   });
 
-  it("CN7: a failed ensure leaves the acp-first route standing", function* () {
+  it("CN7: a first turn the backend never accepted leaves the session pending", function* () {
     // The route is published before the provider reaches for an agent, so a
-    // session that could not be established has still said how it was going to
-    // be constructed. Deleting it would let the next run construct it the other
-    // way against provider state that may already exist.
+    // session whose first turn was never accepted has still said how it was
+    // going to be constructed. Deleting it would let the next run construct it
+    // the other way against provider state that may already exist — and
+    // retaining an identity for it would name a conversation nothing made.
     const harness = createFakeRuntime();
     const trace = newTrace();
     const routes = createMemorySessionRouteStore();
-    harness.ensureFailure = new Error("the agent could not be reached");
-    yield* installClientNative(harness, trace, { routeStore: routes });
+    const store = makeStore();
+    yield* installClientNative(harness, trace, { routeStore: routes, store });
 
+    const session = yield* Agent.operations.session();
+    harness.script({ accepted: false });
     let raised: Error | undefined;
     try {
-      yield* Agent.operations.session();
+      yield* prompt("go", { session });
     } catch (error) {
       raised = error as Error;
     }
 
-    expect(raised?.message).toContain("could not be reached");
+    expect(raised).toBeInstanceOf(Error);
+    expect((yield* routeOf(routes))?.route).toBe("acp-first");
+    // Occupancy, not a conversation: nothing asserts an identity, here or on
+    // the value the document is holding.
+    expect(store.records.get(SESSION_KEY)?.agentSessionId).toBe(undefined);
+    expect(session.agentSessionId).toBe(undefined);
+
+    // The same pending value retries, and creates fresh backend state rather
+    // than resuming the arrangement no backend ever accepted.
+    yield* prompt("again", { session });
+
+    expect(harness.ensureCalls.length).toBe(2);
+    expect(harness.ensureCalls.every((call) => call.resumeSessionId === undefined)).toBe(true);
+    expect(session.agentSessionId).toBe(`agent-session:${SESSION_KEY}`);
     expect((yield* routeOf(routes))?.route).toBe("acp-first");
   });
 
@@ -2190,8 +2256,10 @@ describe("Tier RR — racing construction routes", () => {
       space,
       {
         harness: createFakeRuntime(),
+        // A prompt, because a fresh <Session> constructs nothing: the first
+        // consuming operation is what publishes a route at all.
         trace: firstTrace,
-        body: () => Agent.operations.session(),
+        body: () => prompt("go"),
       },
       {
         harness: createFakeRuntime(),
@@ -2212,7 +2280,7 @@ describe("Tier RR — racing construction routes", () => {
     expect([during, during.every((entry) => entry.endsWith(":owned"))]).toEqual([during, true]);
   });
 
-  it("RR2: client-native wins, and the eager session attaches to its identity", function* () {
+  it("RR2: client-native wins, and a later prompt attaches to its identity", function* () {
     const space = namespace();
     const firstTrace = newTrace();
     const secondTrace = newTrace();
@@ -2230,7 +2298,7 @@ describe("Tier RR — racing construction routes", () => {
         trace: secondTrace,
         body: function* () {
           try {
-            yield* Agent.operations.session();
+            yield* prompt("continue");
           } catch (error) {
             raised = error as Error;
           }
@@ -2241,8 +2309,8 @@ describe("Tier RR — racing construction routes", () => {
     const published = yield* routeOf(space);
     expect(published?.route).toBe("client-native");
     // The loser adopts the winner's account rather than replacing it: the
-    // eager session attaches to the conversation the launch named, and no
-    // launch record was authored because none was asked for.
+    // prompt attaches to the conversation the launch named, and no launch
+    // record was authored because none was asked for.
     expect(raised).toBe(undefined);
     expect(secondTrace.records).toEqual([]);
     expect(yield* routeOf(space)).toEqual(published);
@@ -2874,7 +2942,11 @@ describe("Tier CA — client-native attachment", () => {
         // deno-lint-ignore require-yield
         *place(context) {
           const named = typeof context.session === "string" ? context.session : undefined;
-          return { sessionKey: deriveSessionKey(AGENT_COMMAND, CWD, named), cwd: CWD };
+          return {
+            sessionKey: deriveSessionKey(AGENT_COMMAND, CWD, named),
+            cwd: CWD,
+            state: "pending",
+          };
         },
         // deno-lint-ignore require-yield
         *established() {

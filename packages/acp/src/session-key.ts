@@ -31,6 +31,19 @@ export interface SessionCandidate {
   cwd: string;
 }
 
+/**
+ * One candidate, and whether a session already lives there.
+ *
+ * `pending` means this key names where a session will be, and nothing has
+ * constructed one yet. `established` means a durable record already stands
+ * behind it — including a record written before deferred materialization
+ * existed, which carries no marker and asserted its identity when it was
+ * created.
+ */
+export interface SessionPlacement extends SessionCandidate {
+  state: "pending" | "established";
+}
+
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
@@ -82,13 +95,17 @@ export function* sessionCandidates(
  * Select where a session lives: the nearest candidate whose ACPX record
  * exists for the same agent command and directory, or the exact
  * contextual cwd when none does.
+ *
+ * A record still marked pending is occupancy rather than a conversation — its
+ * first turn was never accepted — so the placement it answers with is pending
+ * too, and the next operation constructs rather than continues.
  */
 export function* resolveSessionPlacement(
   store: AcpSessionStore,
   agentCommand: string,
   cwdPath: string,
   name?: string,
-): Operation<SessionCandidate> {
+): Operation<SessionPlacement> {
   const candidates = yield* sessionCandidates(agentCommand, cwdPath, name);
   for (const candidate of candidates) {
     const record = yield* until(store.load(candidate.sessionKey));
@@ -97,8 +114,11 @@ export function* resolveSessionPlacement(
       record.agentCommand === agentCommand &&
       resolve(record.cwd) === resolve(candidate.cwd)
     ) {
-      return candidate;
+      return {
+        ...candidate,
+        state: record.sessionMaterialization?.state === "pending" ? "pending" : "established",
+      };
     }
   }
-  return candidates[0]!;
+  return { ...candidates[0]!, state: "pending" };
 }

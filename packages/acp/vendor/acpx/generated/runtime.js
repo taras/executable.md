@@ -1,4 +1,4 @@
-import { A as REQUESTED_MODEL_UNSUPPORTED_ERROR_CODE, At as listBuiltInAgents, D as applyLifecycleSnapshotToRecord, E as applyConversation, F as modelStateFromConfigOptions, It as normalizeOutputError, Lt as extractAcpError, M as RequestedModelUnsupportedError, Mt as resolveAgentCommand, O as reconcileAgentSessionId, Ot as withTimeout, P as isRequestedModelUnsupportedError, Rt as isAcpResourceNotFoundError, S as advertisedModelState, T as sessionOptionsFromRecord, Z as assertPersistedKeyPolicy, _ as createSessionConversation, a as applyRequestedModelIfAdvertised, b as recordSessionUpdate, c as setCurrentModelId, d as setDesiredModelId, f as syncAdvertisedModelState, g as cloneSessionConversation, h as cloneSessionAcpxState, i as connectAndLoadSession, j as REQUESTED_MODEL_UNSUPPORTED_REASONS, k as AcpClient, kt as DEFAULT_AGENT_NAME, l as setDesiredConfigOption, m as applyConfigOptionsToState, n as runPromptTurn, o as currentModelIdFromSetModelResponse, ot as parseSessionRecord, p as applyConfigOptionsToRecord, r as withConnectedSession, s as clearDesiredConfigOption, st as serializeSessionRecordForDisk, t as LiveSessionCheckpoint, u as setDesiredModeId, ut as defaultSessionEventLog, v as recordClientOperation, w as persistSessionOptions, wt as textPrompt, x as trimConversationForRuntime, y as recordPromptSubmission } from "./live-checkpoint-ClPCSdrW.js";
+import { SESSION_MATERIALIZATION_CONTRACT, A as REQUESTED_MODEL_UNSUPPORTED_ERROR_CODE, At as listBuiltInAgents, D as applyLifecycleSnapshotToRecord, E as applyConversation, F as modelStateFromConfigOptions, It as normalizeOutputError, Lt as extractAcpError, M as RequestedModelUnsupportedError, Mt as resolveAgentCommand, O as reconcileAgentSessionId, Ot as withTimeout, P as isRequestedModelUnsupportedError, Rt as isAcpResourceNotFoundError, S as advertisedModelState, T as sessionOptionsFromRecord, Z as assertPersistedKeyPolicy, _ as createSessionConversation, a as applyRequestedModelIfAdvertised, b as recordSessionUpdate, c as setCurrentModelId, d as setDesiredModelId, f as syncAdvertisedModelState, g as cloneSessionConversation, h as cloneSessionAcpxState, i as connectAndLoadSession, j as REQUESTED_MODEL_UNSUPPORTED_REASONS, k as AcpClient, kt as DEFAULT_AGENT_NAME, l as setDesiredConfigOption, m as applyConfigOptionsToState, n as runPromptTurn, o as currentModelIdFromSetModelResponse, ot as parseSessionRecord, p as applyConfigOptionsToRecord, r as withConnectedSession, s as clearDesiredConfigOption, st as serializeSessionRecordForDisk, t as LiveSessionCheckpoint, u as setDesiredModeId, ut as defaultSessionEventLog, v as recordClientOperation, w as persistSessionOptions, wt as textPrompt, x as trimConversationForRuntime, y as recordPromptSubmission } from "./live-checkpoint-ClPCSdrW.js";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -733,12 +733,32 @@ async function createOrLoadRuntimeSession(client, resumeSessionId, cwd) {
 		sessionResult: created
 	};
 }
+const SESSION_MATERIALIZATION_META = SESSION_MATERIALIZATION_CONTRACT;
+function sessionMaterializationPending(record) {
+	return record?.sessionMaterialization?.state === "pending";
+}
+function pendingSessionMaterialization() {
+	return {
+		state: "pending",
+		contract: SESSION_MATERIALIZATION_CONTRACT
+	};
+}
+function sessionMaterializationAccepted(notification) {
+	const update = notification?.update;
+	if (!update || update.sessionUpdate !== "session_info_update") return false;
+	const signal = update._meta?.[SESSION_MATERIALIZATION_META];
+	return !!signal && typeof signal === "object" && signal.state === "accepted";
+}
+function sessionMaterializationRefused(reason) {
+	return new Error(`this session still awaits first-turn materialization: ${reason}`);
+}
 var AcpRuntimeManager = class {
 	options;
 	deps;
 	activeControllers = /* @__PURE__ */ new Map();
 	pendingPersistentClients = /* @__PURE__ */ new Map();
 	closingActiveRecords = /* @__PURE__ */ new Set();
+	sessionMaterializationIdentities = /* @__PURE__ */ new Map();
 	constructor(options, deps = {}) {
 		this.options = options;
 		this.deps = deps;
@@ -828,7 +848,9 @@ var AcpRuntimeManager = class {
 		const cwd = path.resolve(input.cwd?.trim() || this.options.cwd);
 		const agentCommand = this.options.agentRegistry.resolve(input.agent);
 		const existing = await this.options.sessionStore.load(input.sessionKey);
-		if (input.mode === "persistent" && existing && shouldReuseExistingRecord(existing, {
+		// A pending materialization is occupancy, not a conversation: reusing it
+		// would resume an arrangement no backend ever accepted.
+		if (input.mode === "persistent" && existing && !sessionMaterializationPending(existing) && shouldReuseExistingRecord(existing, {
 			cwd,
 			agentCommand,
 			resumeSessionId: input.resumeSessionId
@@ -893,6 +915,14 @@ var AcpRuntimeManager = class {
 		if (modelApplication.applied) setCurrentModelId(record, currentModelIdFromSetModelResponse(modelApplication.response, input.sessionOptions?.model));
 		applyLifecycleSnapshotToRecord(record, client.getAgentLifecycleSnapshot());
 		persistSessionOptions(record, input.sessionOptions);
+		if (input.materialization === "first-turn-acceptance") {
+			// Occupancy until the backend accepts the first turn. The identity
+			// session/new returned is held here rather than serialized, so the
+			// saved record asserts no conversation.
+			this.sessionMaterializationIdentities.set(record.acpxRecordId, session.agentSessionId);
+			record.sessionMaterialization = pendingSessionMaterialization();
+			record.agentSessionId = void 0;
+		}
 		await this.options.sessionStore.save(record);
 		return record;
 	}
@@ -909,6 +939,10 @@ var AcpRuntimeManager = class {
 		const result = createDeferred();
 		const sessionReady = createDeferred();
 		sessionReady.promise.catch(() => {});
+		const sessionMaterialization = createDeferred();
+		// Observed here as sessionReady is: a consumer driving this turn through
+		// the compatibility runTurn() surface never reads materialization.
+		sessionMaterialization.promise.catch(() => {});
 		let resultSettled = false;
 		const state = {
 			pendingCancel: false,
@@ -943,10 +977,12 @@ var AcpRuntimeManager = class {
 					status: "cancelled",
 					stopReason: "cancelled"
 				});
+				sessionMaterialization.reject(sessionMaterializationRefused("the turn was cancelled before it started"));
 				return {
 					requestId: input.requestId,
 					events: queue.iterate(),
 					result: result.promise,
+					materialized: sessionMaterialization.promise,
 					cancel: async () => {},
 					closeStream: async () => {}
 				};
@@ -958,6 +994,7 @@ var AcpRuntimeManager = class {
 			promptInput,
 			queue,
 			sessionReady,
+			sessionMaterialization,
 			state,
 			settleResult,
 			abortHandler
@@ -966,6 +1003,7 @@ var AcpRuntimeManager = class {
 			requestId: input.requestId,
 			events: queue.iterate(),
 			result: result.promise,
+			materialized: sessionMaterialization.promise,
 			cancel: async () => {
 				await requestCancel();
 			},
@@ -1025,8 +1063,17 @@ var AcpRuntimeManager = class {
 			client,
 			pendingClient,
 			promptMessageId,
-			activeSessionId: record.acpSessionId
+			activeSessionId: record.acpSessionId,
+			sessionMaterializationPending: sessionMaterializationPending(record)
 		};
+		if (!turn.sessionMaterializationPending) {
+			// Already asserting. This says the session no longer awaits first-turn
+			// materialization, not that the backend accepted this turn.
+			task.sessionMaterialization.resolve({
+				acpxRecordId: record.acpxRecordId,
+				...record.agentSessionId === undefined ? {} : { agentSessionId: record.agentSessionId }
+			});
+		}
 		task.state.activeController = this.buildRuntimeTurnController(task, turn);
 		this.activeControllers.set(record.acpxRecordId, task.state.activeController);
 		this.installRuntimeTurnEventHandlers(task, turn);
@@ -1115,6 +1162,12 @@ var AcpRuntimeManager = class {
 	installRuntimeTurnEventHandlers(task, turn) {
 		turn.client.setEventHandlers({
 			onSessionUpdate: (notification) => {
+				if (sessionMaterializationAccepted(notification)) {
+					// Control data. Not conversation, not an event, not a checkpoint
+					// token: materialization consumes it and it goes no further.
+					turn.sessionMaterializationPromotion = this.promoteSessionMaterialization(task, turn);
+					return;
+				}
 				turn.acpxState = recordSessionUpdate(turn.conversation, turn.acpxState, notification);
 				trimConversationForRuntime(turn.conversation);
 				turn.liveCheckpoint.request();
@@ -1133,6 +1186,37 @@ var AcpRuntimeManager = class {
 					...operation
 				});
 			}
+		});
+	}
+	async promoteSessionMaterialization(task, turn) {
+		if (!turn.sessionMaterializationPending) return;
+		turn.sessionMaterializationPending = false;
+		const agentSessionId = this.sessionMaterializationIdentities.get(turn.record.acpxRecordId) ?? turn.record.agentSessionId;
+		const asserting = {
+			...turn.record,
+			acpx: turn.acpxState,
+			agentSessionId,
+			sessionMaterialization: void 0
+		};
+		applyConversation(asserting, turn.conversation);
+		try {
+			// Serialized against live-checkpoint writes, so no interval flush can
+			// put the pending record back over this materialization.
+			await turn.liveCheckpoint.runExclusive(async () => {
+				await this.options.sessionStore.save(asserting);
+			});
+		} catch (error) {
+			// The promotion did not save. The in-memory record is untouched, so it
+			// still awaits materialization and finalization writes it that way.
+			task.sessionMaterialization.reject(error);
+			return;
+		}
+		turn.record.agentSessionId = agentSessionId;
+		turn.record.sessionMaterialization = void 0;
+		this.sessionMaterializationIdentities.delete(turn.record.acpxRecordId);
+		task.sessionMaterialization.resolve({
+			acpxRecordId: turn.record.acpxRecordId,
+			...agentSessionId === undefined ? {} : { agentSessionId }
 		});
 	}
 	emitRuntimeTurnEvent(task, payload) {
@@ -1226,6 +1310,9 @@ var AcpRuntimeManager = class {
 	}
 	async finalizeRuntimeTurn(task, turn) {
 		task.state.turnActive = false;
+		// A promotion still in flight is this turn's own work: finalizing over it
+		// would save the pending record after materialization already asserted.
+		await turn?.sessionMaterializationPromotion;
 		task.input.signal?.removeEventListener("abort", task.abortHandler);
 		turn?.client.clearEventHandlers();
 		if (!(turn ? await this.finalizeRuntimeTurnRecord(turn) : false)) await turn?.client.close().catch(() => {});
@@ -1233,6 +1320,8 @@ var AcpRuntimeManager = class {
 			this.activeControllers.delete(turn.record.acpxRecordId);
 			this.closingActiveRecords.delete(turn.record.acpxRecordId);
 		}
+		// Whatever else this turn settled as, no marker means no materialization.
+		task.sessionMaterialization.reject(sessionMaterializationRefused("the turn ended before the backend accepted it"));
 		task.queue.close();
 	}
 	async finalizeRuntimeTurnRecord(turn) {
@@ -1566,7 +1655,8 @@ var AcpxRuntime = class {
 			mode: input.mode,
 			cwd: input.cwd ?? this.options.cwd,
 			resumeSessionId: input.resumeSessionId,
-			sessionOptions: input.sessionOptions
+			sessionOptions: input.sessionOptions,
+			materialization: input.materialization
 		});
 		const handle = {
 			sessionKey: input.sessionKey,
@@ -1600,11 +1690,16 @@ var AcpxRuntime = class {
 			timeoutMs: input.timeoutMs,
 			signal: input.signal
 		}));
+		const sessionMaterialization = turnPromise.then((turn) => turn.materialized);
+		// One promise rather than a getter: a fresh rejected promise per read
+		// would be an unhandled rejection this materialization owes nobody.
+		sessionMaterialization.catch(() => {});
 		return {
 			requestId: input.requestId,
 			events: { async *[Symbol.asyncIterator]() {
 				yield* (await turnPromise).events;
 			} },
+			materialized: sessionMaterialization,
 			get result() {
 				return turnPromise.then((turn) => turn.result);
 			},

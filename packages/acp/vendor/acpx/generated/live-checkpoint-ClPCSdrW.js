@@ -961,6 +961,8 @@ function extractRuntimeSessionId(meta) {
 }
 //#endregion
 //#region src/session/persistence/serialize.ts
+/** The one versioned identifier this materialization contract is named by. */
+const SESSION_MATERIALIZATION_CONTRACT = "executablemd.session-materialization/v1";
 function serializeSessionRecordForDisk(record) {
 	const canonical = {
 		...record,
@@ -997,6 +999,7 @@ function serializeSessionRecordForDisk(record) {
 		cumulative_cost: canonical.cumulative_cost,
 		request_token_usage: canonical.request_token_usage,
 		acpx: canonical.acpx,
+		session_materialization: canonical.sessionMaterialization,
 		imported_from: canonical.importedFrom ? {
 			record_id: canonical.importedFrom.recordId,
 			cwd_original: canonical.importedFrom.cwdOriginal,
@@ -1419,7 +1422,17 @@ function parseSessionRecord(raw) {
 		cumulative_cost: conversation.cumulative_cost,
 		request_token_usage: conversation.request_token_usage,
 		acpx: parseAcpxState(record.acpx),
+		sessionMaterialization: parseSessionMaterialization(record.session_materialization),
 		importedFrom: metadata.importedFrom
+	};
+}
+function parseSessionMaterialization(value) {
+	const marker = asRecord$4(value);
+	if (!marker || marker.state !== "pending") return;
+	if (marker.contract !== SESSION_MATERIALIZATION_CONTRACT) return;
+	return {
+		state: "pending",
+		contract: SESSION_MATERIALIZATION_CONTRACT
 	};
 }
 function hasValidSessionRecordCore(record) {
@@ -6132,6 +6145,18 @@ var LiveSessionCheckpoint = class {
 		this.dirty = true;
 		await this.flush();
 	}
+	async runExclusive(operation) {
+		// Materialization promotion runs here so an interval flush cannot write
+		// the pending record over a promotion, or over one that failed.
+		while (this.flushing) await this.flushing.catch(() => {});
+		const running = operation();
+		this.flushing = running.then(() => {}, () => {});
+		try {
+			return await running;
+		} finally {
+			this.flushing = void 0;
+		}
+	}
 	async flush() {
 		if (this.timer) {
 			clearTimeout(this.timer);
@@ -6156,5 +6181,5 @@ var LiveSessionCheckpoint = class {
 	}
 };
 //#endregion
-export { getPerfMetricsSnapshot as $, REQUESTED_MODEL_UNSUPPORTED_ERROR_CODE as A, listBuiltInAgents as At, absolutePath as B, AUTH_POLICIES as Bt, mergeSessionOptions as C, promptToDisplayText as Ct, applyLifecycleSnapshotToRecord as D, withInterrupt as Dt, applyConversation as E, TimeoutError as Et, modelStateFromConfigOptions as F, isRetryablePromptError as Ft, listSessions as G, OUTPUT_FORMATS as Gt, findSession as H, NON_INTERACTIVE_PERMISSION_POLICIES as Ht, splitCommandLine as I, normalizeOutputError as It, pruneSessions as J, SESSION_RECORD_SCHEMA as Jt, listSessionsForAgent as K, PERMISSION_MODES as Kt, getAcpxVersion as L, extractAcpError as Lt, RequestedModelUnsupportedError as M, resolveAgentCommand as Mt, assertRequestedModelSupported as N, exitCodeForOutputErrorCode as Nt, reconcileAgentSessionId as O, withTimeout as Ot, isRequestedModelUnsupportedError as P, formatErrorMessage as Pt, formatPerfMetric as Q, QueueProtocolError as Qt, permissionModeSatisfies as R, isAcpResourceNotFoundError as Rt, advertisedModelState as S, parsePromptSource as St, sessionOptionsFromRecord as T, InterruptedError as Tt, findSessionByDirectoryWalk as U, OUTPUT_ERROR_CODES as Ut, findGitRepositoryRoot as V, EXIT_CODES as Vt, isoNow$2 as W, OUTPUT_ERROR_ORIGINS as Wt, writeSessionRecord as X, AgentSpawnError as Xt, resolveSessionRecord as Y, AcpxOperationalError as Yt, assertPersistedKeyPolicy as Z, QueueConnectionError as Zt, createSessionConversation as _, parseJsonRpcErrorMessage as _t, applyRequestedModelIfAdvertised as a, startPerfTimer as at, recordSessionUpdate as b, isPromptInput as bt, setCurrentModelId as c, normalizeRuntimeSessionId as ct, setDesiredModelId as d, sessionBaseDir$1 as dt, incrementPerfCounter as et, syncAdvertisedModelState as f, sessionEventActivePath as ft, cloneSessionConversation as g, isAcpJsonRpcMessage as gt, cloneSessionAcpxState as h, extractSessionUpdateNotification as ht, connectAndLoadSession as i, setPerfGauge as it, REQUESTED_MODEL_UNSUPPORTED_REASONS as j, normalizeAgentName$1 as jt, AcpClient as k, DEFAULT_AGENT_NAME as kt, setDesiredConfigOption as l, DEFAULT_EVENT_SEGMENT_MAX_BYTES as lt, applyConfigOptionsToState as m, sessionEventSegmentPath as mt, runPromptTurn as n, recordPerfDuration as nt, currentModelIdFromSetModelResponse as o, parseSessionRecord as ot, applyConfigOptionsToRecord as p, sessionEventLockPath as pt, normalizeName as q, PERMISSION_POLICY_ACTIONS as qt, withConnectedSession as r, resetPerfMetrics as rt, clearDesiredConfigOption as s, serializeSessionRecordForDisk as st, LiveSessionCheckpoint as t, measurePerf as tt, setDesiredModeId as u, defaultSessionEventLog as ut, recordClientOperation as v, parsePromptStopReason as vt, persistSessionOptions as w, textPrompt as wt, trimConversationForRuntime as x, mergePromptSourceWithText as xt, recordPromptSubmission as y, PromptInputValidationError as yt, DEFAULT_HISTORY_LIMIT as z, toAcpErrorPayload as zt };
+export { SESSION_MATERIALIZATION_CONTRACT, getPerfMetricsSnapshot as $, REQUESTED_MODEL_UNSUPPORTED_ERROR_CODE as A, listBuiltInAgents as At, absolutePath as B, AUTH_POLICIES as Bt, mergeSessionOptions as C, promptToDisplayText as Ct, applyLifecycleSnapshotToRecord as D, withInterrupt as Dt, applyConversation as E, TimeoutError as Et, modelStateFromConfigOptions as F, isRetryablePromptError as Ft, listSessions as G, OUTPUT_FORMATS as Gt, findSession as H, NON_INTERACTIVE_PERMISSION_POLICIES as Ht, splitCommandLine as I, normalizeOutputError as It, pruneSessions as J, SESSION_RECORD_SCHEMA as Jt, listSessionsForAgent as K, PERMISSION_MODES as Kt, getAcpxVersion as L, extractAcpError as Lt, RequestedModelUnsupportedError as M, resolveAgentCommand as Mt, assertRequestedModelSupported as N, exitCodeForOutputErrorCode as Nt, reconcileAgentSessionId as O, withTimeout as Ot, isRequestedModelUnsupportedError as P, formatErrorMessage as Pt, formatPerfMetric as Q, QueueProtocolError as Qt, permissionModeSatisfies as R, isAcpResourceNotFoundError as Rt, advertisedModelState as S, parsePromptSource as St, sessionOptionsFromRecord as T, InterruptedError as Tt, findSessionByDirectoryWalk as U, OUTPUT_ERROR_CODES as Ut, findGitRepositoryRoot as V, EXIT_CODES as Vt, isoNow$2 as W, OUTPUT_ERROR_ORIGINS as Wt, writeSessionRecord as X, AgentSpawnError as Xt, resolveSessionRecord as Y, AcpxOperationalError as Yt, assertPersistedKeyPolicy as Z, QueueConnectionError as Zt, createSessionConversation as _, parseJsonRpcErrorMessage as _t, applyRequestedModelIfAdvertised as a, startPerfTimer as at, recordSessionUpdate as b, isPromptInput as bt, setCurrentModelId as c, normalizeRuntimeSessionId as ct, setDesiredModelId as d, sessionBaseDir$1 as dt, incrementPerfCounter as et, syncAdvertisedModelState as f, sessionEventActivePath as ft, cloneSessionConversation as g, isAcpJsonRpcMessage as gt, cloneSessionAcpxState as h, extractSessionUpdateNotification as ht, connectAndLoadSession as i, setPerfGauge as it, REQUESTED_MODEL_UNSUPPORTED_REASONS as j, normalizeAgentName$1 as jt, AcpClient as k, DEFAULT_AGENT_NAME as kt, setDesiredConfigOption as l, DEFAULT_EVENT_SEGMENT_MAX_BYTES as lt, applyConfigOptionsToState as m, sessionEventSegmentPath as mt, runPromptTurn as n, recordPerfDuration as nt, currentModelIdFromSetModelResponse as o, parseSessionRecord as ot, applyConfigOptionsToRecord as p, sessionEventLockPath as pt, normalizeName as q, PERMISSION_POLICY_ACTIONS as qt, withConnectedSession as r, resetPerfMetrics as rt, clearDesiredConfigOption as s, serializeSessionRecordForDisk as st, LiveSessionCheckpoint as t, measurePerf as tt, setDesiredModeId as u, defaultSessionEventLog as ut, recordClientOperation as v, parsePromptStopReason as vt, persistSessionOptions as w, textPrompt as wt, trimConversationForRuntime as x, mergePromptSourceWithText as xt, recordPromptSubmission as y, PromptInputValidationError as yt, DEFAULT_HISTORY_LIMIT as z, toAcpErrorPayload as zt };
 

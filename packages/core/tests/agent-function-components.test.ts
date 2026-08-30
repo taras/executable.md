@@ -37,9 +37,14 @@ interface Trace {
   agentLookups: (string | undefined)[];
   /** The timeout each prompt carried, in prompt order. */
   timeouts: (number | undefined)[];
+  /** Every value the provider issued for a placement, in order. */
+  sessions?: Session[];
+  /** What each prompt was given as its session, in prompt order. */
+  promptSessions?: (string | Session | undefined)[];
 }
 
 function stubFactory(trace: Trace, fail?: boolean): AgentProviderFactory {
+  const issued = new Map<string, Session>();
   return function* () {
     yield* Agent.around(
       {
@@ -50,13 +55,23 @@ function stubFactory(trace: Trace, fail?: boolean): AgentProviderFactory {
         },
         // deno-lint-ignore require-yield
         *session([name]) {
-          const session: Session = { sessionKey: `stub:${name ?? "default"}`, cwd: "." };
+          // One value per placement, kept — as a provider that pins a session
+          // keeps the exact value it issued rather than minting a look-alike.
+          const key = `stub:${typeof name === "string" ? name : "default"}`;
+          const held = issued.get(key);
+          if (held) {
+            return held;
+          }
+          const session: Session = { sessionKey: key, cwd: "." };
+          issued.set(key, session);
+          trace.sessions = [...(trace.sessions ?? []), session];
           return session;
         },
         // deno-lint-ignore require-yield
         *prompt([content, options]) {
           trace.prompts.push(content);
           trace.timeouts.push(options?.timeout);
+          trace.promptSessions = [...(trace.promptSessions ?? []), options?.session];
           return stubStream(content, options, fail);
         },
       },
@@ -347,6 +362,49 @@ describe("Tier AF — failures that end the document", () => {
 
 describe("Tier AF — registered defaults a document can replace", () => {
   const names = ["AgentProvider", "Agent", "Prompt", "ApproveAll", "AskPermission"];
+
+  it("AF24: a Session hands the exact value it was issued to every nested Prompt", function* () {
+    // The value is the capability. A `<Session>` places one and pins it around
+    // its body, and what the first nested Prompt is given has to be that exact
+    // object — a provider decides whether a session may be acted on by
+    // identity, and a rebuilt look-alike was issued by nobody.
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
+    const { result } = yield* runDoc(
+      [
+        '<Session name="review">',
+        '  <Prompt text="first" />',
+        '  <Prompt text="second" />',
+        "</Session>",
+        "",
+      ].join("\n"),
+      { trace },
+    );
+
+    expect(result.ok).toBe(true);
+    // Placed once, however many prompts are inside it.
+    expect(trace.sessions).toHaveLength(1);
+    const placed = trace.sessions?.[0];
+    expect(trace.promptSessions).toEqual([placed, placed]);
+    expect(trace.promptSessions?.[0]).toBe(placed);
+    expect(trace.promptSessions?.[1]).toBe(placed);
+  });
+
+  it("AF25: a self-closing Session places one and renders nothing", function* () {
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
+    const { output, result } = yield* runDoc(
+      ["BEFORE", "", '<Session name="review" />', "", "AFTER", ""].join("\n"),
+      { trace },
+    );
+
+    expect(result.ok).toBe(true);
+    // The placement happened and nothing else did: no prompt, and nothing in
+    // the document where the element stood.
+    expect(trace.sessions).toHaveLength(1);
+    expect(trace.prompts).toEqual([]);
+    expect(output).toContain("BEFORE");
+    expect(output).toContain("AFTER");
+    expect(output).not.toContain("stub:review");
+  });
 
   it("AF13: each name resolves to core's registration when nothing is on disk", function* () {
     yield* installAgentComponents();

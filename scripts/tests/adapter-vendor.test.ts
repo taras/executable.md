@@ -29,11 +29,11 @@ const VENDOR = "packages/acp/vendor/adapters";
 const REVIEWED = {
   codex: {
     upstreamBase: "50f69e57ca761ccafd2ca29de7fb591068277516",
-    patchedCommit: "8a481f1981c91788f415252bbe0da31c213598ea",
+    patchedCommit: "377d2b0b7f5f99f8e58b6a5927bf67e9805aa94f",
   },
   claude: {
     upstreamBase: "8710ce1cbccf562cb04b4bcc30e053e960aee05f",
-    patchedCommit: "dcb7d52b0bd52a0a7a6cd5d539698f9735281b07",
+    patchedCommit: "beba04dc177ba09bcc9fa10b56e9ded7f219513e",
   },
 } as const;
 
@@ -82,6 +82,7 @@ interface ManifestSnapshot {
   license: string;
   buildCommand: string;
   contract: string;
+  materializationContract: string;
 }
 
 function* manifest(): Operation<ManifestSnapshot[]> {
@@ -188,6 +189,10 @@ describe("Tier AD — embedded ACP adapter snapshots", () => {
     expect([...providers].sort()).toEqual(["claude", "codex"]);
     for (const snapshot of declared) {
       expect(snapshot.contract).toMatch(/^_meta\./);
+      // A second contract of its own, not an overload of the first: which turn
+      // completed and whether a backend accepted one are different claims, and
+      // an adapter can carry either without the other.
+      expect(snapshot.materializationContract).toContain("executablemd.session-materialization/v1");
     }
   });
 });

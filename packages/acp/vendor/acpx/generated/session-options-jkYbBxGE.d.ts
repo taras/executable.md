@@ -252,6 +252,17 @@ type SessionRecord = {
   cumulative_cost?: SessionUsageCost;
   request_token_usage: Record<string, SessionTokenUsage>;
   acpx?: SessionAcpxState;
+  /**
+   * Deferred first-turn materialization, while it is still awaited.
+   *
+   * Present makes this record occupancy rather than an assertion: it names
+   * where a session will live, `agentSessionId` is absent, and the next
+   * ensure creates fresh backend state rather than resuming it.
+   */
+  sessionMaterialization?: {
+    state: "pending";
+    contract: string;
+  };
   importedFrom?: SessionImportedFrom;
 };
 //#endregion

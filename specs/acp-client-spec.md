@@ -442,12 +442,15 @@ addressing a second mapping. The key ACPX places a session under is a different
 thing and namespaces both, because ACPX's store is shared; that key is
 arrangement, not this run's session identity.
 
-**A canonical assertion comes before the mapping.** The order is: provider
-creation, then the provider's canonical, tagged assertion of a durable identity,
-then the mapping commit, then the first Prompt. Holding a key in ACPX's store is
-not an assertion — it says something is there, not what conversation it is — so a
-mapping is committed only from one canonical assertion, and an interruption
-before that commit is reconciled only the same way.
+**A canonical assertion comes before the mapping.** The order is: placement,
+then the backend's acceptance of the session's first turn, then the provider's
+canonical, tagged assertion of a durable identity, then the mapping commit — and
+only then whatever that first turn produced. Placement is inert: it creates no
+provider session and commits no row. Holding a key in ACPX's store is not an
+assertion — it says something is there, not what conversation it is — and a
+record held for a first turn nobody accepted asserts nothing at all, so a mapping
+is committed only from one canonical assertion, and an interruption before that
+commit is reconciled only the same way.
 
 Continuation is decided before a turn starts:
 
@@ -557,12 +560,75 @@ none.
 - **Availability.** The first use of an agent validates it through a disposable
   probe runtime's `doctor()`; a non-ok report throws with the agent's code and
   details. Results are cached per agent.
-- **Sessions.** `session()` resolves a session by (agent, logical session,
+- **Sessions.** `session()` places a session by (agent, logical session,
   contextual cwd): placement walks from the cwd up to the Git root and reuses the
-  nearest existing record for the same agent command and cwd, otherwise creates
-  one at the exact cwd. The resolved `sessionKey` — not the caller cwd — keys the
-  session queue. A `Session` value must come from this provider's `session()`; an
-  unknown or agent-mismatched session is rejected.
+  nearest existing record for the same agent command and cwd, otherwise names the
+  exact cwd. The resolved `sessionKey` — not the caller cwd — keys the session
+  queue.
+
+  A placement is **pending** or **established**. Pending says where a session
+  will live and nothing more, and `session()` returns it having contacted no
+  backend, published no construction route, built no runtime, written no record
+  and started no turn — so a `<Session.Launch>` nested inside that `<Session>`
+  still gets to choose how the session is constructed. Established says the
+  route and the durable identity already exist, and `session()` keeps its eager
+  behavior for one: it takes ownership where the agent needs it, reconciles the
+  retained route, ensures through the bound runtime, validates the exact identity
+  and host mapping, releases the handle, and starts no turn.
+
+  Directory placement classifies a record still carrying the pending
+  materialization marker as pending, and a record without one — including every
+  record written before deferred materialization existed — as established. A
+  retained client-native route is established even before ACPX has attached to
+  it. A published `acp-first` route is not: it is what a first turn writes down
+  before it runs, and a first turn nobody accepted leaves exactly that behind.
+
+  A `Session` value must come from this provider's `session()`, and the test is
+  the exact object it issued rather than the key inside it: a structural copy, a
+  value another provider copy produced, and one whose provider scope has been
+  torn down are all refused before any provider work, as is a value used with a
+  different resolved agent. The provider keeps that object for the placement's
+  life, so a second `<Session>` naming the same placement is answered with it and
+  a `<Prompt>` given it is acting on the thing that was pinned.
+
+- **Materialization.** A pending ACP-first placement is constructed by the first
+  subscribed `<Prompt>`, and only the backend's acceptance of that turn makes it
+  a conversation. The provider ensures with
+  `materialization: "first-turn-acceptance"`, which makes ACPX persist a
+  provisional record: the key is occupied and the serialized `agentSessionId` is
+  absent, so the record is occupancy rather than an assertion.
+  `AcpRuntimeTurn.materialized` settles when the session no longer awaits its
+  first accepted turn — at once for a record that already asserts, and on the
+  adapter's explicit signal for one that does not.
+
+  The signal is one exact versioned key,
+  `executablemd.session-materialization/v1`, carried as `{"state": "accepted"}`
+  in the update metadata of a standard ACP `session_info_update`. It is control
+  data: ACPX consumes it, and it is never appended to the conversation, published
+  as an event, exposed as prompt text or retained as a checkpoint token. Nothing
+  else promotes a record — not a returning `ensureSession()`, a `startTurn()`
+  that returned, a synthesized `started` event, a first text delta, a terminal
+  result, checkpoint metadata, an error code or a diagnostic.
+
+  On acceptance ACPX promotes a copy of the live record by installing the
+  identity the handle privately carries and removing the pending marker, saves
+  that asserting record through the store's own atomic operation, updates the
+  in-memory record only after that save returns, and then resolves
+  `materialized`. Promotion is serialized against live-checkpoint writes, so a
+  promotion that failed is not later overwritten by finalization as though it had
+  succeeded. `materialized` rejects when the turn fails, is cancelled, or ends
+  without the marker, and the runtime observes that rejection itself so a
+  consumer using only `runTurn()` creates no unhandled rejection.
+
+  The durable order is therefore: route, provisional non-asserting record,
+  backend acceptance, asserting record, host mapping, and only then the events
+  the turn produced. If materialization fails the provider removes no route,
+  publishes no identity, calls no host mapping, gives up the handle so the next
+  attempt creates rather than resumes, and leaves the exact `Session` value
+  pending for a retry. If it succeeds and the turn then fails, the session stays
+  established: acceptance, not successful terminal text, is the boundary.
+  `packages/acp/vendor/acpx/PROVENANCE.md` records the vendored patch this rests
+  on and what removes it.
 - **Prompts.** `prompt()` returns a cold stream; each subscription is one turn
   owned by the subscriber. Events are normalized to one `started`, `text_delta`
   for output-stream deltas only (thought/status/tool/usage stay private), and one
@@ -570,10 +636,15 @@ none.
   partial text on failure). A completed turn with an absent stop reason is treated
   as `end_turn`; any other stop reason is a failure.
 - **Serialization.** Prompts for one session run FIFO on that session's queue;
-  different sessions run concurrently. `withSessionRoute` — the hook an embedder
-  supplies through `AcpxProviderDependencies` — wraps registry-dependent work
-  (preparation, ensure/start) and is not held across turn consumption. The
-  queues that serialize this are internal to the package.
+  different sessions run concurrently. A subscription enters that queue before
+  any route, ensure or runtime creation for its placement, and re-reads the
+  placement's state once the queue grants — so two concurrent first prompts on
+  one session perform exactly one backend creation and the waiter continues the
+  conversation its predecessor established. `withSessionRoute` — the hook an
+  embedder supplies through `AcpxProviderDependencies` — wraps registry-dependent
+  work (preparation, ensure/start) and is not held across turn consumption or
+  across the wait on a session's own queue. The queues that serialize this are
+  internal to the package.
 - **Permissions.** ACPX permission requests are routed — keyed by the record's
   live ACP session id, refreshed on demand — to the in-flight prompt's scope and
   answered through `Agent.requestPermission`; an ambiguous or unknown request
@@ -615,8 +686,12 @@ none.
   contextual one is not a directory an agent process could stand in; `mcpServers` and `newSessionOptions` are passed to runtime creation and to
   `ensureSession()` exactly as given; `permissions: "strict"` selects the
   workflow profile's permission path; and `sessions` replaces directory-walk
-  placement with a host's own, and is where a retained session this host cannot
-  continue is refused. Every one of them defaults to the `xmd run` behavior above.
+  placement with a host's own, answering with the placement's `state` as well as
+  its key and directory, and is where a retained session this host cannot
+  continue is refused. `sessions.established()` is called where an assertion
+  exists and not before: after the ensure that validated a reattachment, and
+  after the backend accepted a constructed session's first turn. Every one of
+  them defaults to the `xmd run` behavior above.
 - **Teardown.** Provider-scope teardown cancels active turns and closes each
   distinct runtime handle with an all-settled strategy, throwing a single error or
   an `AggregateError` from the provider scope.

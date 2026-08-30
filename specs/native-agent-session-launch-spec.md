@@ -795,12 +795,18 @@ overwrites, deletes, converts or partially reads it.
 Reconciliation happens while ownership is held, before any provider
 construction effect:
 
-1. a first `session()` or subscribed prompt publishes or adopts `acp-first`
-   before ACP runtime creation, `ensureSession()` or a turn;
-2. an ensure that fails or is interrupted afterwards leaves that route standing,
-   because it may have created provider state before the caller observed the
-   failure, and preserving the route is what stops that uncertainty from later
-   being reclassified;
+1. a fresh `session()` publishes nothing. It places the session — validating the
+   agent and where the session will live — and constructs nothing, so the first
+   operation that consumes that placement is what chooses the route. A
+   `session()` on a placement that is already established reconciles its route
+   eagerly, as it always has;
+2. the first subscribed prompt on a pending placement publishes or adopts
+   `acp-first` before ACP runtime creation, `ensureSession()` or a turn, and a
+   turn that fails, is interrupted, or is never accepted by the backend
+   afterwards leaves that route standing: provider state may exist before the
+   caller observed the failure, and preserving the route is what stops that
+   uncertainty from later being reclassified. An `acp-first` route by itself is
+   not establishment;
 3. a launch by an adapter that names its own sessions reads both the route and
    existing durable ACPX state; existing state publishes or adopts `acp-first`,
    and otherwise the adapter allocates a candidate and publishes `client-native`;
@@ -973,9 +979,11 @@ before detach. Detach failure also prevents spawn.
 Changing instructions on a retained session fails with `instructions-refused`
 whenever the provider cannot replace the layer in place while preserving
 identity and history. Nothing is discarded to make room for a layer, and an
-empty cached transcript authorizes nothing: a session established eagerly by an
-enclosing `<Session>` is refused by a launch carrying a different layer, exactly
-as a session a native UI has been in is.
+empty cached transcript authorizes nothing: a session an enclosing `<Session>`
+placed and a `<Prompt>` then established is refused by a launch carrying a
+different layer, exactly as a session a native UI has been in is. A `<Session>`
+that only placed one has established nothing, so a launch inside it constructs
+the session it named rather than meeting one.
 
 A build this run cannot show is the build behind the session fails with
 `executable-binding-refused`. Resolution, canonicalization, executable-file
@@ -1083,8 +1091,8 @@ Focused tests prove:
     terminal; and
 16. instruction reconciliation installs a layer on a session the launch
     constructs, resumes an equal one, and refuses a changed one — including on a
-    session established eagerly and never used, and with no discard on any
-    path; and
+    session a prompt established and never used again, and with no discard on
+    any path; and
 17. ownership covers session, prompt, launch and incomplete replay under one
     natural key, contention refuses instead of queueing, a crashed owner leaves
     a recovery tombstone, and a host with no coordinator refuses before
@@ -1115,8 +1123,8 @@ Focused tests prove:
 
 The authored half of this is one executable Markdown document,
 `packages/test-agent/src/NativeSessionLaunch.test.md`, run whole. It authors the
-launch, the prompt that proves no turn was spent, and the eager-`<Session>`
-refusal directly — a `<Session.Launch>` written as `<Session.Launch>`, not
+launch, the prompt that proves no turn was spent, and the refusal a launch meets
+on a session an earlier prompt established, directly — a `<Session.Launch>` written as `<Session.Launch>`, not
 assembled from a TypeScript string. `<Session.Launch>` raises a launch failure
 as an error segment whose cause carries `phase` and `failureClass`, so an
 `<AssertThrows as="…">` binding can assert which refusal it was rather than the

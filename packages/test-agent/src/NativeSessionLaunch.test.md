@@ -36,16 +36,25 @@ force would mean discarding the session — and nothing here can show that would
 be safe, because a transcript this side can read is empty whether or not the
 session was ever used.
 
+Naming a `<Session>` does not make it exist: that places it, and the first thing
+inside it is what constructs it. So the prompt below is what establishes this
+conversation — with no instruction layer at all — and the launch that follows is
+the one meeting a session that already exists.
+
 So the launch refuses, and says so.
 
 <Test name="an established session is refused, never converted">
 <Session name="claimed">
+<Prompt as="occupant">who is in here?</Prompt>
+
 <AssertThrows as="refusal" message="already carries a different XMD instruction layer">
 <Session.Launch>
 You are somebody else entirely.
 </Session.Launch>
 </AssertThrows>
 </Session>
+
+<AssertMatch actual={occupant} expected={/nobody but you/} />
 
 The message says what happened; this says which refusal it was. A launch that
 stopped for some other reason — no launcher, no native identity, a session
@@ -129,17 +138,24 @@ You are the repository implementor. Follow the approved plan.
 <AssertMatch actual={continued} expected={/the plan you approved/} />
 </Test>
 
-An eager `<Session>` is the other order. Establishing one settles how that
-session was constructed — through ACP — and a launch that would name the same
-session is not asking to continue that conversation. It is asking to name a
-different one, so it refuses before an identity is allocated, before a private
-file is written, and before anything is started.
+A prompt is the other order. It constructs the session through ACP, which
+settles how that session was made, and a launch that would name the same session
+is not asking to continue that conversation. It is asking to name a different
+one, so it refuses before an identity is allocated, before a private file is
+written, and before anything is started.
+
+Naming the `<Session>` is not what does this. Placing a session settles nothing,
+which is what leaves the `<Session.Launch>` above free to construct the very
+session its enclosing `<Session>` named. It is the prompt below that constructs
+this one, and the launch after it that finds a conversation already there.
 
 <TestAgent.Scenario agent="test-agent-client-native" session="claimed" src="./NativeSessionLaunch.claimed.md" />
 
 <Test name="an ACP-first session refuses a launch that would name it again">
 <Agent name="test-agent-client-native">
 <Session name="claimed">
+<Prompt as="occupant">who is in here?</Prompt>
+
 <AssertThrows as="conversion" message="already has an identity">
 <Session.Launch>
 You are somebody else entirely.
@@ -147,6 +163,8 @@ You are somebody else entirely.
 </AssertThrows>
 </Session>
 </Agent>
+
+<AssertMatch actual={occupant} expected={/nobody but you/} />
 
 A construction route never converts, and the class says which refusal this was
 rather than leaving it to the wording.

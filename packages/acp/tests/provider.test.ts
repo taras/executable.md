@@ -248,6 +248,15 @@ describe("Tier AP — ACPX provider", () => {
       record.acpSessionId = "sid-2";
       record.agentSessionId = "agent-2";
       store.records.set(record.acpxRecordId, record);
+      // A session that already exists, under the placement key a prompt
+      // resolves to. Without it this prompt would be constructing the session
+      // rather than reconnecting to one, and there would be no earlier
+      // conversation whose ids a reconnect could have replaced.
+      const placed = makeRecord("codex-cmd", CWD);
+      placed.acpxRecordId = sessionKey;
+      placed.acpSessionId = "sid-2";
+      placed.agentSessionId = "agent-2";
+      store.records.set(sessionKey, placed);
 
       const started = withResolvers<Session>();
       const promptTask = yield* spawn(() =>
@@ -802,6 +811,267 @@ function* installPartitioned(
  * selector answers with something this module never created, with a partition
  * its owner has already dismantled, or with nothing at all.
  */
+/**
+ * Tier SM — session placement and materialization
+ * (specs/acp-client-spec.md §Session lifecycle).
+ *
+ * A fresh `<Session>` places a session: it validates and pins where a logical
+ * session will live and constructs nothing. The first consuming operation
+ * chooses how it is constructed, and an ACP-first construction is not a
+ * conversation until the backend accepts its first turn.
+ *
+ * What these ask is what the provider does around that boundary — what it does
+ * not do while a placement is pending, what order it does things in once a turn
+ * is accepted, and what it refuses.
+ */
+describe("Tier SM — session placement and materialization", () => {
+  it("SM1: a fresh Session constructs nothing at all", function* () {
+    const harness = createFakeRuntime();
+    const store = makeStore();
+    yield* scoped(function* () {
+      yield* useFlatWorld(CWD);
+      const factory = createAcpxProvider({
+        createRuntime: harness.create,
+        sessionStore: store,
+        agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+      });
+      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+
+      const session = yield* Agent.operations.session();
+
+      expect(session.sessionKey).toBe(deriveSessionKey("codex-cmd", CWD));
+      expect(session.cwd).toBe(CWD);
+      // Placement, and nothing else: no session was ensured, no handle exists,
+      // no record was written, no turn was started, and nothing is asserted
+      // about a conversation. The availability probe beside it is agent
+      // resolution — it opens a disposable runtime of its own and touches no
+      // session.
+      expect(harness.ensureCalls).toEqual([]);
+      expect(harness.handleIds).toEqual([]);
+      expect(harness.turns).toEqual([]);
+      expect([...store.records.keys()]).toEqual([]);
+      expect(session.agentSessionId).toBe(undefined);
+    });
+  });
+
+  it("SM2: the same value comes back, and a copy of it is refused", function* () {
+    const harness = createFakeRuntime();
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const session = yield* Agent.operations.session();
+
+      // The exact value, so a document that pinned it around a body is holding
+      // the thing this provider will admit.
+      expect(yield* Agent.operations.session()).toBe(session);
+
+      // A structural copy carrying the same key was issued by nobody, and
+      // provenance is the object rather than the string inside it.
+      let refused: Error | undefined;
+      try {
+        yield* collectPrompt("go", { session: { ...session } });
+      } catch (error) {
+        refused = error as Error;
+      }
+
+      expect(refused?.message).toContain("must come from this provider's session()");
+      expect(harness.ensureCalls).toEqual([]);
+    });
+  });
+
+  it("SM3: the first prompt ensures and starts a turn through one handle", function* () {
+    const harness = createFakeRuntime();
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const session = yield* Agent.operations.session();
+
+      yield* collectPrompt("go", { session });
+
+      // One ensure, and the turn went through the handle that ensure answered
+      // with — not a second one opened between them.
+      expect(harness.handleIds).toHaveLength(1);
+      expect(harness.turns).toHaveLength(1);
+      expect(harness.turns[0]!.input.handle.runtimeSessionName).toBe(harness.handleIds[0]);
+      // Deferred, so the record ACPX wrote is occupancy rather than an
+      // assertion.
+      expect(harness.ensureCalls[0]!.materialization).toBe("first-turn-acceptance");
+      // And nothing closed in between.
+      expect(harness.closeCalls).toEqual([]);
+    });
+  });
+
+  it("SM4: acceptance promotes before the host mapping, and a turn is never remapped", function* () {
+    const harness = createFakeRuntime();
+    yield* scoped(function* () {
+      const log = yield* installStrictProvider(harness);
+      const session = yield* Agent.operations.session();
+
+      // Placed, and nothing retained: a key is occupied and no conversation is
+      // named, so the host has nothing to map yet.
+      expect(log.places).toHaveLength(1);
+      expect(log.established).toEqual([]);
+      expect(harness.ensureCalls).toEqual([]);
+
+      yield* collectPrompt("first", { session });
+
+      expect(log.established).toHaveLength(1);
+      expect(log.established[0]!.agentSessionId).toBe(`agent-session:${WORKFLOW_SESSION_KEY}`);
+
+      // A second turn continues the conversation the first established: it
+      // neither creates it again nor maps it again.
+      yield* collectPrompt("second", { session });
+
+      expect(harness.turns).toHaveLength(2);
+      expect(log.established).toHaveLength(1);
+      expect(log.places).toHaveLength(1);
+    });
+  });
+
+  it("SM5: a first turn nobody accepted retains nothing, and stays pending", function* () {
+    const harness = createFakeRuntime();
+    harness.script({ accepted: false });
+    yield* scoped(function* () {
+      const log = yield* installStrictProvider(harness);
+      const session = yield* Agent.operations.session();
+
+      let raised: Error | undefined;
+      try {
+        yield* collectPrompt("first", { session });
+      } catch (error) {
+        raised = error as Error;
+      }
+
+      expect(raised).toBeInstanceOf(Error);
+      // No mapping, no identity on the value the document holds, and the
+      // provider's own record still says it is awaiting one.
+      expect(log.established).toEqual([]);
+      expect(session.agentSessionId).toBe(undefined);
+      expect(log.store.records.get(WORKFLOW_SESSION_KEY)?.agentSessionId).toBe(undefined);
+      expect(log.store.records.get(WORKFLOW_SESSION_KEY)?.sessionMaterialization?.state).toBe(
+        "pending",
+      );
+
+      // The same pending value retries and establishes once.
+      yield* collectPrompt("again", { session });
+
+      expect(harness.ensureCalls).toHaveLength(2);
+      expect(log.established).toHaveLength(1);
+      expect(session.agentSessionId).toBe(`agent-session:${WORKFLOW_SESSION_KEY}`);
+    });
+  });
+
+  it("SM6: acceptance followed by a failed turn leaves the session established", function* () {
+    const harness = createFakeRuntime();
+    harness.script({
+      events: [{ type: "text_delta", text: "partial", stream: "output" }],
+      result: { status: "failed", error: { message: "the model gave up" } },
+    });
+    yield* scoped(function* () {
+      const log = yield* installStrictProvider(harness);
+      const session = yield* Agent.operations.session();
+
+      let raised: Error | undefined;
+      let events: AgentPromptEvent[] = [];
+      try {
+        events = (yield* collectPrompt("first", { session })).events;
+      } catch (error) {
+        raised = error as Error;
+      }
+
+      // Acceptance is the boundary, not successful terminal text: the backend
+      // took this turn, so the conversation exists whatever the turn then did.
+      // How the failure reaches the reader is Tier AP's question; that it did
+      // is this one's premise.
+      const failed =
+        raised !== undefined ||
+        events.some((event) => event.type === "terminal" && event.status !== "completed");
+      expect(failed).toBe(true);
+      expect(log.established).toHaveLength(1);
+      expect(log.store.records.get(WORKFLOW_SESSION_KEY)?.sessionMaterialization).toBe(undefined);
+
+      // And the next prompt continues it rather than constructing a second one.
+      yield* collectPrompt("second", { session });
+
+      expect(log.established).toHaveLength(1);
+      expect(harness.ensureCalls).toHaveLength(1);
+      expect(harness.turns).toHaveLength(2);
+    });
+  });
+
+  it("SM7: concurrent first prompts construct one session between them", function* () {
+    const harness = createFakeRuntime();
+    yield* scoped(function* () {
+      const log = yield* installStrictProvider(harness);
+      const session = yield* Agent.operations.session();
+
+      const first = yield* spawn(() => collectPrompt("one", { session }));
+      const second = yield* spawn(() => collectPrompt("two", { session }));
+      yield* first;
+      yield* second;
+
+      // One backend creation, one retained identity, and two turns in the
+      // conversation it established.
+      expect(harness.ensureCalls.filter((call) => call.materialization !== undefined)).toHaveLength(
+        1,
+      );
+      expect(log.established).toHaveLength(1);
+      expect(harness.turns).toHaveLength(2);
+    });
+  });
+
+  it("SM9: a mapping that failed after the promotion leaves one canonical assertion", function* () {
+    const harness = createFakeRuntime();
+    yield* scoped(function* () {
+      const log = yield* installStrictProvider(harness, { refuseFirstRetention: true });
+      const session = yield* Agent.operations.session();
+
+      let raised: Error | undefined;
+      try {
+        yield* collectPrompt("first", { session });
+      } catch (error) {
+        raised = error as Error;
+      }
+
+      // The pre-commit window: the provider's own record was promoted and
+      // asserts a conversation, and the host never recorded what it is.
+      expect(raised?.message).toContain("could not retain this session");
+      const asserted = log.store.records.get(WORKFLOW_SESSION_KEY)?.agentSessionId;
+      expect(asserted).toBe(`agent-session:${WORKFLOW_SESSION_KEY}`);
+      expect(log.store.records.get(WORKFLOW_SESSION_KEY)?.sessionMaterialization).toBe(undefined);
+
+      // The next attachment meets that one assertion, commits it, and creates
+      // nothing in its place.
+      yield* collectPrompt("again", { session });
+
+      expect(log.established.map((identity) => identity.agentSessionId)).toEqual([
+        asserted,
+        asserted,
+      ]);
+      expect(log.store.records.get(WORKFLOW_SESSION_KEY)?.agentSessionId).toBe(asserted);
+      expect([...log.store.records.keys()]).toEqual([WORKFLOW_SESSION_KEY]);
+    });
+  });
+
+  it("SM8: a value from a torn-down provider reaches no session state", function* () {
+    const harness = createFakeRuntime();
+    let escaped: Session | undefined;
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      escaped = yield* Agent.operations.session();
+    });
+
+    yield* scoped(function* () {
+      yield* installProvider(createFakeRuntime());
+      let refused: Error | undefined;
+      try {
+        yield* collectPrompt("go", { session: escaped });
+      } catch (error) {
+        refused = error as Error;
+      }
+      expect(refused?.message).toContain("must come from this provider's session()");
+    });
+  });
+});
+
 describe("Tier PT — partitioned provider installation", () => {
   it("PT1: the selector runs afresh for every dispatch", function* () {
     // Never cached across calls: a partition selected once and reused would
@@ -1046,7 +1316,11 @@ interface StrictHarness {
 
 function* installStrictProvider(
   harness: FakeRuntimeHarness,
-  options: { place?: () => Operation<AcpxSessionPlacement> } = {},
+  options: {
+    place?: () => Operation<AcpxSessionPlacement>;
+    /** Fail the first retention, as a host interrupted before its commit does. */
+    refuseFirstRetention?: boolean;
+  } = {},
 ): Operation<StrictHarness> {
   const store = makeStore();
   const log: StrictHarness = { places: [], established: [], consulted: 0, store };
@@ -1057,11 +1331,14 @@ function* installStrictProvider(
       if (options.place) {
         return yield* options.place();
       }
-      return { sessionKey: WORKFLOW_SESSION_KEY, cwd: SESSION_DIR };
+      return { sessionKey: WORKFLOW_SESSION_KEY, cwd: SESSION_DIR, state: "pending" };
     },
     // deno-lint-ignore require-yield
     *established(_placement, identity) {
       log.established.push(identity);
+      if (options.refuseFirstRetention && log.established.length === 1) {
+        throw new Error("the run could not retain this session");
+      }
     },
   };
   const factory = createAcpxProvider({

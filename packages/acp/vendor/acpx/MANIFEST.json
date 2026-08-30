@@ -5,9 +5,9 @@
   "repository": "https://github.com/openclaw/acpx",
   "commit": "6a24a546d2349cbe71ed032d52d07cab611e320c",
   "behaviorallyPatched": [
-    "generated/runtime.js",
     "generated/live-checkpoint-ClPCSdrW.js",
     "generated/runtime.d.ts",
+    "generated/runtime.js",
     "generated/session-options-jkYbBxGE.d.ts"
   ],
   "packagingAdapted": [
@@ -26,7 +26,7 @@
     {
       "path": "PROVENANCE.md",
       "kind": "provenance",
-      "sha256": "c4d7f5ac56c9a3ef0fba1971054b310190f55a85747deebc6980ff3253173190"
+      "sha256": "07444ab687840e22e16bbba09c80ed916f8aa9a8e222d30fa415c42d865695df"
     },
     {
       "path": "generated/client-DwNyFauq.d.ts",
@@ -36,22 +36,22 @@
     {
       "path": "generated/live-checkpoint-ClPCSdrW.js",
       "kind": "generated",
-      "sha256": "5f30c4eb6e3ca933597338939ead61ec8af3c75ae4e4f3796edfa4801e6664aa"
+      "sha256": "862276038e699594a37a2d0d6c7b4ac7382bd11e2b021b4633bf714d09eb7825"
     },
     {
       "path": "generated/runtime.d.ts",
       "kind": "generated",
-      "sha256": "8f365d033efb872ac40bfb9fd7ca40cf14c5568d2578d8295ebd01e8acc67e25"
+      "sha256": "04b634608eff30d6162b6c5f63a3e733bbdd50505beaafc145d4911933e02bcb"
     },
     {
       "path": "generated/runtime.js",
       "kind": "generated",
-      "sha256": "965114de81ab0493cb85cda85bc23195311c91c590b49ee108e3e92bf2411feb"
+      "sha256": "fd7bf185df900f627a3a2786f133719311bee492d3dd0616a7d739da3c5a913d"
     },
     {
       "path": "generated/session-options-jkYbBxGE.d.ts",
       "kind": "generated",
-      "sha256": "0ab6953e3175dc7fe01ab94b3a779a565ec9597a6e37e551d0ecfa4bf5f7e6ab"
+      "sha256": "2d52250cf4d6f1ac410c53aca9bc1a96e29393d4c95ae31e96c9627d13972d33"
     },
     {
       "path": "upstream/client-DwNyFauq.d.ts",

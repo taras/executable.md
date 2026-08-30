@@ -35,6 +35,15 @@ type AcpRuntimeEnsureInput = {
    * different sessionKey or closing the prior record first.
    */
   sessionOptions?: SessionAgentOptions;
+  /**
+   * Defer materialization to the first turn the backend accepts.
+   *
+   * The created record is persisted as occupancy: it asserts no
+   * `agentSessionId`, and only the adapter's explicit acceptance signal
+   * promotes it. Absent keeps the eager behavior, in which creating the
+   * session is itself the assertion.
+   */
+  materialization?: "first-turn-acceptance";
 };
 type AcpRuntimeTurnAttachment = {
   /**
@@ -202,10 +211,22 @@ type AcpRuntimeTurnResult = {
   status: "failed";
   error: AcpRuntimeTurnResultError;
 };
+/** What a session asserts once first-turn materialization has completed. */
+interface AcpRuntimeMaterialization {
+  readonly acpxRecordId: string;
+  readonly agentSessionId?: string;
+}
 interface AcpRuntimeTurn {
   readonly requestId: string;
   readonly events: AsyncIterable<AcpRuntimeEvent>;
   readonly result: Promise<AcpRuntimeTurnResult>;
+  /**
+   * Settles once this session no longer awaits first-turn materialization.
+   * A session that already asserts one satisfies it immediately; a pending
+   * one waits for the adapter's acceptance signal, and rejects when the turn
+   * fails, is cancelled, or ends without it.
+   */
+  readonly materialized: Promise<AcpRuntimeMaterialization>;
   cancel(input?: {
     reason?: string;
   }): Promise<void>;
@@ -430,6 +451,7 @@ declare class AcpxRuntime implements AcpxRuntimeLike {
       [Symbol.asyncIterator](): AsyncGenerator<AcpRuntimeEvent, void, any>;
     };
     readonly result: Promise<AcpRuntimeTurnResult>;
+    readonly materialized: Promise<AcpRuntimeMaterialization>;
     cancel(inputArgs?: {
       reason?: string;
     }): Promise<void>;
@@ -473,4 +495,4 @@ declare function createRuntimeStore(options: {
   stateDir: string;
 }): AcpSessionStore;
 //#endregion
-export { ACPX_BACKEND_ID, type AcpAgentRegistry, type AcpFileSessionStoreOptions, type AcpPermissionDecision, type AcpPermissionRequest, type AcpRuntime, type AcpRuntimeAvailableCommand, type AcpRuntimeCapabilities, type AcpRuntimeDoctorReport, type AcpRuntimeEnsureInput, AcpRuntimeError, type AcpRuntimeErrorCode, type AcpRuntimeEvent, type AcpRuntimeHandle, type AcpRuntimeOptions, type AcpRuntimePromptMode, type AcpRuntimeSessionMode, type AcpRuntimeSessionModels, type AcpRuntimeSessionUsage, type AcpRuntimeStatus, type AcpRuntimeTurn, type AcpRuntimeTurnAttachment, type AcpRuntimeTurnInput, type AcpRuntimeTurnResult, type AcpRuntimeTurnResultError, type AcpRuntimeUsageBreakdown, type AcpRuntimeUsageCost, type AcpSessionRecord, type AcpSessionStore, type AcpSessionUpdateTag, AcpxRuntime, DEFAULT_AGENT_NAME, REQUESTED_MODEL_UNSUPPORTED_ERROR_CODE, REQUESTED_MODEL_UNSUPPORTED_REASONS, RequestedModelUnsupportedError, type RequestedModelUnsupportedErrorCode, type RequestedModelUnsupportedReason, type SessionAgentOptions, type SystemPromptOption, createAcpRuntime, createAgentRegistry, createFileSessionStore, createRuntimeStore, decodeAcpxRuntimeHandleState, encodeAcpxRuntimeHandleState, isAcpRuntimeError, isRequestedModelUnsupportedError };
+export { ACPX_BACKEND_ID, type AcpRuntimeMaterialization, type AcpAgentRegistry, type AcpFileSessionStoreOptions, type AcpPermissionDecision, type AcpPermissionRequest, type AcpRuntime, type AcpRuntimeAvailableCommand, type AcpRuntimeCapabilities, type AcpRuntimeDoctorReport, type AcpRuntimeEnsureInput, AcpRuntimeError, type AcpRuntimeErrorCode, type AcpRuntimeEvent, type AcpRuntimeHandle, type AcpRuntimeOptions, type AcpRuntimePromptMode, type AcpRuntimeSessionMode, type AcpRuntimeSessionModels, type AcpRuntimeSessionUsage, type AcpRuntimeStatus, type AcpRuntimeTurn, type AcpRuntimeTurnAttachment, type AcpRuntimeTurnInput, type AcpRuntimeTurnResult, type AcpRuntimeTurnResultError, type AcpRuntimeUsageBreakdown, type AcpRuntimeUsageCost, type AcpSessionRecord, type AcpSessionStore, type AcpSessionUpdateTag, AcpxRuntime, DEFAULT_AGENT_NAME, REQUESTED_MODEL_UNSUPPORTED_ERROR_CODE, REQUESTED_MODEL_UNSUPPORTED_REASONS, RequestedModelUnsupportedError, type RequestedModelUnsupportedErrorCode, type RequestedModelUnsupportedReason, type SessionAgentOptions, type SystemPromptOption, createAcpRuntime, createAgentRegistry, createFileSessionStore, createRuntimeStore, decodeAcpxRuntimeHandleState, encodeAcpxRuntimeHandleState, isAcpRuntimeError, isRequestedModelUnsupportedError };

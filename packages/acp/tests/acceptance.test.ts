@@ -135,6 +135,7 @@ describe("Tier WAP — same-named sibling Sessions", () => {
                 return {
                   sessionKey: `placed:${context.sessionIdentity ?? "none"}`,
                   cwd: "/placed",
+                  state: "pending",
                 };
               },
             },
@@ -221,6 +222,7 @@ describe("Tier WAP — same-named sibling Sessions", () => {
                 return {
                   sessionKey: `placed:${context.sessionIdentity ?? "none"}`,
                   cwd: "/placed",
+                  state: "pending",
                 };
               },
             },

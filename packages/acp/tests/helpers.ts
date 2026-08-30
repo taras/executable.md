@@ -33,6 +33,7 @@ import type {
   AcpRuntimeEnsureInput,
   AcpRuntimeEvent,
   AcpRuntimeHandle,
+  AcpRuntimeMaterialization,
   AcpRuntimeOptions,
   AcpRuntimeTurn,
   AcpRuntimeTurnInput,
@@ -92,6 +93,18 @@ export interface ScriptedTurn {
   result?: AcpRuntimeTurnResult;
   /** Leaves the turn unresolved until `finish()` is called. */
   manual?: boolean;
+  /**
+   * Whether the backend accepts this turn, when the session is still awaiting
+   * its first accepted one.
+   *
+   * Scripted apart from the events and the result on purpose: an adapter that
+   * produces text, a stop reason and a terminal result while never reporting
+   * acceptance is exactly the case no fallback may promote. Defaults to
+   * accepting, which is what an ordinary turn does.
+   */
+  accepted?: boolean;
+  /** Withhold acceptance until `accept()`, however the turn itself is driven. */
+  manualAcceptance?: boolean;
 }
 
 export interface FakeTurn {
@@ -99,6 +112,8 @@ export interface FakeTurn {
   turn: AcpRuntimeTurn;
   cancelled: boolean;
   finish(events: AcpRuntimeEvent[], result: AcpRuntimeTurnResult): void;
+  /** Report that the backend accepted this turn, promoting the session's record. */
+  accept(): void;
 }
 
 export interface FakeRuntimeHarness {
@@ -133,6 +148,14 @@ export interface FakeRuntimeHarness {
    */
   closeRuntimeIndexes: number[];
   closeFailure?: Error;
+  /**
+   * Every handle this runtime issued, in order, by the id it carries.
+   *
+   * Unique per ensure, so a test can show that the ensure and the turn beside
+   * it went through one uninterrupted handle rather than through a second one
+   * opened in between.
+   */
+  handleIds: string[];
   /** Fail every attempt to establish a session, as an unreachable agent does. */
   ensureFailure?: Error;
   /**
@@ -216,6 +239,21 @@ export function createFakeObserver(observation?: Partial<FakeObservation>): Fake
   return harness;
 }
 
+/** One settled-once promise, with its resolvers, at the acpx boundary. */
+function promiseWithResolvers<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 const DEFAULT_EVENTS: AcpRuntimeEvent[] = [
   { type: "text_delta", text: "hello ", stream: "output" },
   { type: "text_delta", text: "hidden", stream: "thought" },
@@ -224,12 +262,17 @@ const DEFAULT_EVENTS: AcpRuntimeEvent[] = [
 
 export function createFakeRuntime(): FakeRuntimeHarness {
   const scripted: ScriptedTurn[] = [];
+  /** The identity a pending record is not yet asserting, by record id. */
+  const withheld = new Map<string, string | undefined>();
+  /** The record this fake wrote for each record id, so promotion can move it. */
+  const records = new Map<string, AcpSessionRecord>();
   const harness: FakeRuntimeHarness = {
     createdOptions: [],
     doctorReports: [],
     doctorCalls: 0,
     ensureCalls: [],
     turns: [],
+    handleIds: [],
     closeCalls: [],
     closeInputs: [],
     closeRuntimes: [],
@@ -254,6 +297,12 @@ export function createFakeRuntime(): FakeRuntimeHarness {
             return Promise.reject(harness.ensureFailure);
           }
           harness.ensureCalls.push(input);
+          const handleId = `${input.sessionKey}#${harness.handleIds.length}`;
+          harness.handleIds.push(handleId);
+          // Deferred materialization: the record occupies the key and asserts
+          // nothing, and the identity the adapter answered with is held here
+          // until the backend accepts a turn.
+          const deferred = input.materialization === "first-turn-acceptance";
           // ACPX persists a record as it establishes a session, including the
           // instruction layer the caller asked for; a fake that skipped that
           // would hide every decision a later launch makes by reading it back.
@@ -273,16 +322,23 @@ export function createFakeRuntime(): FakeRuntimeHarness {
           const handle: AcpRuntimeHandle = {
             sessionKey: input.sessionKey,
             backend: "acpx",
-            runtimeSessionName: input.sessionKey,
+            runtimeSessionName: handleId,
             cwd: input.cwd,
             acpxRecordId: `record:${input.sessionKey}`,
             backendSessionId: `backend:${input.sessionKey}`,
           };
-          if (!harness.omitAgentSessionId) {
+          if (deferred) {
+            record.sessionMaterialization = {
+              state: "pending",
+              contract: "executablemd.session-materialization/v1",
+            };
+            withheld.set(handle.acpxRecordId!, harness.omitAgentSessionId ? undefined : asserted);
+          } else if (!harness.omitAgentSessionId) {
             handle.agentSessionId = asserted;
             record.agentSessionId = asserted;
           }
           const answer = (): AcpRuntimeHandle => {
+            records.set(handle.acpxRecordId!, record);
             void options.sessionStore.save(record);
             return handle;
           };
@@ -293,6 +349,16 @@ export function createFakeRuntime(): FakeRuntimeHarness {
         },
         startTurn(input) {
           const script = scripted.shift() ?? {};
+          const recordId = input.handle.acpxRecordId ?? input.handle.sessionKey;
+          const awaiting = withheld.has(recordId);
+          // A native promise rather than an Effection future: this is the acpx
+          // boundary, and a turn nobody accepts leaves it unsettled — which as a
+          // root task would be a pending operation the runner refuses to end on.
+          const materialized = promiseWithResolvers<AcpRuntimeMaterialization>();
+          // Observed here as the provider's own deferreds are: a test that only
+          // reads events must not turn an unaccepted turn into an unhandled
+          // rejection.
+          materialized.promise.catch(() => {});
           const events = script.events ?? DEFAULT_EVENTS;
           const result: AcpRuntimeTurnResult = script.result ?? {
             status: "completed",
@@ -305,13 +371,38 @@ export function createFakeRuntime(): FakeRuntimeHarness {
           const gate = withResolvers<void>();
           const resultReady = withResolvers<AcpRuntimeTurnResult>();
 
+          const promote = (): void => {
+            if (!withheld.has(recordId)) {
+              return;
+            }
+            const identity = withheld.get(recordId);
+            withheld.delete(recordId);
+            const stored = records.get(recordId);
+            if (stored) {
+              stored.sessionMaterialization = undefined;
+              if (identity !== undefined) {
+                stored.agentSessionId = identity;
+              }
+              void options.sessionStore.save(stored);
+            }
+            materialized.resolve({
+              acpxRecordId: recordId,
+              ...(identity === undefined ? {} : { agentSessionId: identity }),
+            });
+          };
+          const refuse = (): void => {
+            materialized.reject(new Error("this session still awaits first-turn materialization"));
+          };
           const fake: FakeTurn = {
             input,
             cancelled: false,
+            accept: promote,
             finish(finishEvents, finishResult) {
               pushEvents = finishEvents;
               gate.resolve();
               resultReady.resolve(finishResult);
+              // A turn that ends still awaiting acceptance never got it.
+              refuse();
             },
             turn: {
               requestId: input.requestId,
@@ -350,6 +441,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
                 },
               },
               result: run(() => resultReady.operation),
+              materialized: materialized.promise,
               cancel() {
                 fake.cancelled = true;
                 fake.finish([], { status: "cancelled" });
@@ -360,6 +452,23 @@ export function createFakeRuntime(): FakeRuntimeHarness {
               },
             },
           };
+          if (!awaiting) {
+            // Already asserting. The barrier says the session no longer awaits
+            // its first accepted turn, not that this one was accepted.
+            const stored = records.get(recordId);
+            materialized.resolve({
+              acpxRecordId: recordId,
+              ...(stored?.agentSessionId === undefined
+                ? {}
+                : { agentSessionId: stored.agentSessionId }),
+            });
+          } else if (script.accepted !== false && script.manualAcceptance !== true) {
+            // Acceptance is not the turn's output: a backend takes the turn
+            // before it says anything, so a manual turn — which withholds its
+            // events — still reports acceptance at once unless a case asks it
+            // not to.
+            promote();
+          }
           if (!script.manual) {
             fake.finish(events, result);
           }

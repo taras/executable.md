@@ -67,6 +67,7 @@ export type {
   AcpRuntimeEnsureInput,
   AcpRuntimeEvent,
   AcpRuntimeHandle,
+  AcpRuntimeMaterialization,
   AcpRuntimeOptions,
   AcpRuntimeTurn,
   AcpRuntimeTurnInput,

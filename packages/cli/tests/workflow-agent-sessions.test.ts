@@ -168,10 +168,10 @@ describe("Tier WSR — a restart reattaches each Session site", () => {
 
       // The first attachment is interrupted while the second site's turn is in
       // flight. Both sites have placed and both mappings have committed by then:
-      // a mapping commits after the provider asserts and before the Prompt that
-      // follows it begins, so a second turn starting means the second commit
-      // already happened. What the interruption leaves unfinished is the turn,
-      // not the retention.
+      // a mapping commits after the backend accepts that site's first turn and
+      // before anything the turn produced is exposed, so a second turn whose
+      // events are being read has already been committed. What the interruption
+      // leaves unfinished is the turn, not the retention.
       const interrupted = createFakeAcp();
       interrupted.script({ reply: "the first reviewer saw the checklist" });
       interrupted.script({ reply: "", manual: true });
@@ -182,7 +182,9 @@ describe("Tier WSR — a restart reattaches each Session site", () => {
           sessionStore: store,
         }),
       );
-      yield* interrupted.startedTurns(2);
+      // Not `startedTurns`: a turn can be requested and never accepted, and it
+      // is acceptance the mapping waits on.
+      yield* interrupted.consumedTurns(2);
       yield* first.halt();
 
       const before = established(interrupted);

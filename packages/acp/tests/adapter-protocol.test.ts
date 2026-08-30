@@ -37,6 +37,13 @@ const FAKE_CLAUDE = join(FIXTURES, "fake-claude-cli.cjs");
 /** One ACP conversation with a spawned adapter. */
 interface Adapter {
   request(method: string, params: unknown): Operation<Record<string, unknown>>;
+  /**
+   * Every `session/update` notification the adapter sent, in arrival order.
+   *
+   * One ordered stdio stream carries both these and the responses, so a marker
+   * already in here when a prompt answers arrived before that answer.
+   */
+  readonly updates: Array<Record<string, unknown>>;
 }
 
 /**
@@ -64,6 +71,7 @@ function useAdapter(provider: string, environment: Record<string, string>): Oper
     });
 
     const pending = new Map<number, (message: Record<string, unknown>) => void>();
+    const updates: Array<Record<string, unknown>> = [];
     let next = 1;
     let buffer = "";
 
@@ -89,6 +97,13 @@ function useAdapter(provider: string, environment: Record<string, string>): Oper
           pending.delete(id);
           continue;
         }
+        if (message["method"] === "session/update" && id === undefined) {
+          const params = message["params"];
+          if (typeof params === "object" && params !== null) {
+            updates.push(params as Record<string, unknown>);
+          }
+          continue;
+        }
         // The adapter asks its client for things too. Answering permissively
         // keeps the turn moving; none of it is what these cases assert on.
         if (typeof id === "number" && typeof message["method"] === "string") {
@@ -98,6 +113,7 @@ function useAdapter(provider: string, environment: Record<string, string>): Oper
     });
 
     yield* provide({
+      updates,
       *request(method: string, params: unknown): Operation<Record<string, unknown>> {
         const id = next++;
         const answered = withResolvers<Record<string, unknown>>();
@@ -147,6 +163,36 @@ function metaOf(response: Record<string, unknown>, namespace: string): unknown {
     return undefined;
   }
   return (meta as Record<string, unknown>)[namespace];
+}
+
+/** The one versioned key an adapter reports backend acceptance on. */
+const SESSION_MATERIALIZATION_META = "executablemd.session-materialization/v1";
+
+/** The sessions this adapter reported acceptance for, in arrival order. */
+function acceptances(adapter: Adapter): string[] {
+  return adapter.updates.flatMap((notification) => {
+    const update = notification["update"];
+    if (typeof update !== "object" || update === null) {
+      return [];
+    }
+    const fields = update as Record<string, unknown>;
+    if (fields["sessionUpdate"] !== "session_info_update") {
+      return [];
+    }
+    const meta = fields["_meta"];
+    if (typeof meta !== "object" || meta === null) {
+      return [];
+    }
+    const signal = (meta as Record<string, unknown>)[SESSION_MATERIALIZATION_META];
+    if (typeof signal !== "object" || signal === null) {
+      return [];
+    }
+    if ((signal as Record<string, unknown>)["state"] !== "accepted") {
+      return [];
+    }
+    const sessionId = notification["sessionId"];
+    return typeof sessionId === "string" ? [sessionId] : [];
+  });
 }
 
 const CODEX_ENV = { CODEX_PATH: FAKE_CODEX };
@@ -214,6 +260,42 @@ describe("Tier EA — the embedded adapters' prompt-response metadata", () => {
 
     expect(metaOf(one, "claudeCode")).toEqual({ assistantMessageUuid: `uuid:${first}` });
     expect(metaOf(two, "claudeCode")).toEqual({ assistantMessageUuid: `uuid:${second}` });
+    expect(first).not.toBe(second);
+  });
+
+  it("EA6: Codex reports its backend's acceptance, on its own session, before answering", function* () {
+    const adapter = yield* useAdapter("codex", CODEX_ENV);
+    yield* initialize(adapter);
+    const first = yield* openSession(adapter);
+    const second = yield* openSession(adapter);
+
+    // Nothing yet: opening a session is not a backend accepting a turn, which
+    // is the whole distinction this marker exists to carry.
+    expect(acceptances(adapter)).toEqual([]);
+
+    const alpha = yield* effectionSpawn(() => prompt(adapter, first));
+    const beta = yield* effectionSpawn(() => prompt(adapter, second));
+    yield* all([alpha, beta]);
+
+    // One per accepted turn, each naming the session its turn started on, and
+    // both already sent by the time their prompts answered.
+    expect(acceptances(adapter).slice().sort()).toEqual([first, second].sort());
+    expect(first).not.toBe(second);
+  });
+
+  it("EA7: Claude reports its SDK's acceptance, on its own session, before answering", function* () {
+    const adapter = yield* useAdapter("claude", CLAUDE_ENV);
+    yield* initialize(adapter);
+    const first = yield* openSession(adapter);
+    const second = yield* openSession(adapter);
+
+    expect(acceptances(adapter)).toEqual([]);
+
+    const alpha = yield* effectionSpawn(() => prompt(adapter, first));
+    const beta = yield* effectionSpawn(() => prompt(adapter, second));
+    yield* all([alpha, beta]);
+
+    expect(acceptances(adapter).slice().sort()).toEqual([first, second].sort());
     expect(first).not.toBe(second);
   });
 
