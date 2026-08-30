@@ -502,9 +502,14 @@ describe("Tier CR — what a document gets", () => {
     expect(String(yield* run(dir))).toContain("MINE");
   });
 
-  it("CR22b: a repository Json.md replaces core's serializer, end to end", function* () {
+  it("CR22b: a repository Json.md replaces core's serializer, `as` and all", function* () {
     const dir = yield* useFixture();
-    yield* writeTextFile(join(dir, "doc.md"), "<Json value={{ serialized: true }} />\n");
+    // `as` is the engine's, so the override takes it the way every text
+    // component does: what it rendered is captured and read back later.
+    yield* writeTextFile(
+      join(dir, "doc.md"),
+      '<Json value={{ serialized: true }} as="captured" />\n\nCAPTURED:{captured}\n',
+    );
     // The override declares `value` as an ordinary prop: `captures` belongs to
     // the registration core made, and a repository file makes none.
     yield* writeTextFile(
@@ -512,10 +517,13 @@ describe("Tier CR — what a document gets", () => {
       ["---", "props:", "  value: { type: object }", "---", "", "MINE"].join("\n"),
     );
 
-    // Core's own would have rendered the object as JSON text; the repository
-    // file renders a word instead, so the output says which one ran.
+    // Core's own would have bound the object as JSON text; the repository file
+    // renders a word instead, so the binding says which one ran.
+    // The override's own rendering keeps the line structure a Markdown
+    // component produces, so the marker and the word are matched together
+    // rather than spelled as one literal.
     const rendered = String(yield* run(dir));
-    expect(rendered).toContain("MINE");
+    expect(rendered).toMatch(/CAPTURED:\s*MINE/);
     expect(rendered).not.toContain("serialized");
   });
 

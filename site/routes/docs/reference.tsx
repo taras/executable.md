@@ -71,8 +71,8 @@ export default define.page(function Reference() {
         </li>
         <li>
           <code>&lt;Json value={"{...}"} /&gt;</code>{" "}
-          renders one value as two-space JSON text where it is written, and
-          binds nothing.
+          renders one value as two-space JSON text where it is written, or binds
+          that text when <code>as</code> names a binding.
         </li>
         <li>
           <code>&lt;Parse schema={"{...}"} as="name"&gt;</code>{" "}

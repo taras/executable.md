@@ -205,7 +205,9 @@ describe("Tier JSON — what the text says", () => {
   it("J3: the text lands in place, with nothing added around it", function* () {
     const result = yield* run("before<Json value={source} />after\n", { source: { ok: true } });
 
-    expect(result.output).toContain('before{\n  "ok": true\n}after');
+    // The complete rendering, untrimmed: a newline this component added would
+    // be invisible to an assertion that trimmed the ends first.
+    expect(result.output).toBe('before{\n  "ok": true\n}after\n');
   });
 
   it("J4: ordinary interpolation still coerces rather than serializing", function* () {
@@ -277,6 +279,71 @@ describe("Tier JSON — the operand arrives live", () => {
   });
 });
 
+describe("Tier JSON — `as` captures the text instead of emitting it", () => {
+  it("J5b: a valid `as` binds the exact text and writes nothing where it stands", function* () {
+    const source = { name: "widget", version: 2 };
+    const values: Record<string, unknown> = { source };
+    const result = yield* run('before<Json value={source} as="captured" />after\n', values);
+
+    expect(result.observed).toEqual([]);
+    // The string itself, not a value, an object, or a rewritten one.
+    expect(values.captured).toBe(JSON.stringify(source, null, 2));
+    // The authored sentinels close up, so the invocation emitted nothing at
+    // all — a duplicate emission alongside the binding would separate them.
+    expect(result.output).toBe("beforeafter\n");
+  });
+
+  it("J5b: capturing is the exact <Let> wrapper, for every kind of value", function* () {
+    const cases: ReadonlyArray<readonly [string, unknown]> = [
+      ["object", { name: "widget", nested: { depth: 1 } }],
+      ["array", [1, ["two"], { three: true }]],
+      ["scalar", "widget"],
+      ["nothing", null],
+    ];
+    for (const [name, value] of cases) {
+      // Separate runs against equivalent environments: one document says it
+      // with `as`, the other with the wrapper it replaces.
+      const direct: Record<string, unknown> = { [name]: value };
+      const directRun = yield* run(`<Json value={${name}} as="captured" />\n`, direct);
+      const wrapped: Record<string, unknown> = { [name]: value };
+      const wrappedRun = yield* run(`<Let as="captured"><Json value={${name}} /></Let>\n`, wrapped);
+
+      expect(directRun.observed).toEqual([]);
+      expect(wrappedRun.observed).toEqual([]);
+      expect(direct.captured).toBe(JSON.stringify(value, null, 2));
+      expect(wrapped.captured).toBe(direct.captured);
+      expect(directRun.output.trim()).toBe("");
+      expect(wrappedRun.output.trim()).toBe("");
+    }
+  });
+
+  it("J6b: a captured invocation still evaluates once and serializes once", function* () {
+    const reads: unknown[] = [];
+    const marker = {
+      get id() {
+        reads.push(this);
+        return 7;
+      },
+    };
+    let evaluated = 0;
+    const values: Record<string, unknown> = {
+      give: () => {
+        evaluated += 1;
+        return marker;
+      },
+    };
+    const result = yield* run('<Json value={give()} as="captured" />\n', values);
+
+    expect(result.observed).toEqual([]);
+    expect(values.captured).toBe('{\n  "id": 7\n}');
+    expect(evaluated).toBe(1);
+    // Read once, from the very object the document named: a projection taken
+    // to build the binding would show up as a second entry here.
+    expect(reads).toEqual([marker]);
+    expect(result.output.trim()).toBe("");
+  });
+});
+
 describe("Tier JSON — the invocation shape is decided first", () => {
   /** A `value` expression that fails the test if anything evaluates it. */
   function tripwire(): { values: Record<string, unknown>; evaluated: () => number } {
@@ -292,14 +359,34 @@ describe("Tier JSON — the invocation shape is decided first", () => {
     };
   }
 
-  it("J5: a literal `as` is refused, binds nothing, and never evaluates `value`", function* () {
+  it("J5: an expression-valued `as` is refused before either expression runs", function* () {
     const wire = tripwire();
-    const env = { ...wire.values };
-    const result = yield* run('<Json as="captured" value={detonate()} />\n', env);
+    let named = 0;
+    const env: Record<string, unknown> = {
+      ...wire.values,
+      name: () => {
+        named += 1;
+        return "captured";
+      },
+    };
+    const result = yield* run("<Json as={name()} value={detonate()} />\n", env);
 
-    expect(reported(result)).toContain("binds nothing");
+    expect(reported(result)).toContain("must be a string literal");
+    // Neither expression ran: `as` names a binding, so it is refused on the
+    // authored text, and the operand belongs to an invocation that never was.
+    expect(named).toBe(0);
     expect(wire.evaluated()).toBe(0);
     expect("captured" in env).toBe(false);
+  });
+
+  it("J5: an `as` that names no binding is refused before `value` evaluates", function* () {
+    const wire = tripwire();
+    const env = { ...wire.values };
+    const result = yield* run('<Json as="not a name" value={detonate()} />\n', env);
+
+    expect(reported(result)).toContain("must be a valid JavaScript identifier");
+    expect(wire.evaluated()).toBe(0);
+    expect("not a name" in env).toBe(false);
   });
 
   it("J5: paired content is refused before `value` evaluates", function* () {
@@ -325,10 +412,13 @@ describe("Tier JSON — the invocation shape is decided first", () => {
   });
 
   it("J5: an unknown prop is still the engine's own refusal", function* () {
-    const result = yield* run('<Json value={1} indent="4" />\n');
+    const wire = tripwire();
+    const result = yield* run('<Json value={detonate()} indent="4" />\n', wire.values);
 
     expect(reported(result)).toContain("Prop validation failed for <Json />");
     expect(reported(result)).toContain("indent");
+    // The closed schema answers before the operand is asked for.
+    expect(wire.evaluated()).toBe(0);
   });
 });
 
@@ -430,6 +520,41 @@ describe("Tier JSON — the two ways serialization fails", () => {
     expect(reaches(result.offered[0]!.error, boom)).toBe(true);
   });
 
+  it("J7/J5b: a captured no-text failure binds nothing and emits no partial JSON", function* () {
+    const values: Record<string, unknown> = { nothing: undefined };
+    const result = yield* run('before<Json value={nothing} as="captured" />after\n', values);
+
+    expect(reported(result)).toContain(NO_TEXT);
+    expect(reported(result)).not.toContain(THREW);
+    // Atomic: the destination is absent rather than holding an empty string,
+    // and the authored bytes on either side are all that reached the document.
+    expect("captured" in values).toBe(false);
+    expect(result.output).toContain("before");
+    expect(result.output).toContain("after");
+    expect(result.output).not.toContain("{");
+  });
+
+  it("J7/J5b: a captured throwing getter keeps its cause and leaks no prefix", function* () {
+    const boom = new Error("the getter refused");
+    const value = {
+      visible: "VISIBLE",
+      get broken(): never {
+        throw boom;
+      },
+    };
+    const values: Record<string, unknown> = { value };
+    const result = yield* run('<Json value={value} as="captured" />\n', values);
+
+    expect(reported(result)).toContain(THREW);
+    expect(reported(result)).not.toContain(NO_TEXT);
+    expect("captured" in values).toBe(false);
+    // The half `JSON.stringify` had built reaches neither the binding nor the
+    // document.
+    expect(result.output).not.toContain("VISIBLE");
+    expect(result.offered.length).toBe(1);
+    expect(reaches(result.offered[0]!.error, boom)).toBe(true);
+  });
+
   it("J5/J7: an operand expression that throws stays a captured-expression failure", function* () {
     const boom = new Error("the expression refused");
     const result = yield* run("<Json value={detonate()} />\n", {
@@ -457,9 +582,9 @@ function useFixture(): Operation<string> {
 
 describe("Tier JSON — durability", () => {
   /**
-   * A registered source for the hostile value, because `<Json>` binds nothing
-   * and a document cannot write a counting hook without an eval block. Its
-   * return binds by reference, so what reaches `<Json>` is this exact object.
+   * A registered source for the hostile value, because a document cannot write
+   * a counting hook without an eval block. Its return binds by reference, so
+   * what reaches `<Json>` is this exact object.
    */
   function source(value: unknown) {
     return {
@@ -502,7 +627,13 @@ describe("Tier JSON — durability", () => {
 
   it("J9: no JSON effect is journaled, partial replay re-serializes, completed replay does not", function* () {
     const dir = yield* useFixture();
-    yield* writeTextFile(dir + "/doc.md", '<Source as="payload" />\n\n<Json value={payload} />\n');
+    // The captured path is what replay has to reach: the text is bound here and
+    // read back from a later authored position, so a run that skipped the
+    // component would render nothing rather than stale JSON.
+    yield* writeTextFile(
+      dir + "/doc.md",
+      '<Source as="payload" />\n\n<Json value={payload} as="text" />\n\n{text}\n',
+    );
 
     let hooks = 0;
     const value = {

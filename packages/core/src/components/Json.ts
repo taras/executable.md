@@ -4,9 +4,9 @@
  *
  * `<Let>` introduces a value, this renders it, and `<Parse>` turns text back
  * into a validated value. The whole transformation is one supplied value to one
- * piece of JSON text at the position the element was written, so there is no
- * option to choose: no `indent`, no replacer, no sorting, and no trailing
- * newline. A file that needs one is written with one.
+ * piece of JSON text — written where the element is, or captured by `as` — so
+ * there is no option to choose: no `indent`, no replacer, no sorting, and no
+ * trailing newline. A file that needs one is written with one.
  *
  * The operand is a **capture**, so the exact evaluation result arrives by
  * reference (§6.5). An ordinary prop would cross the component JSON boundary
@@ -16,10 +16,13 @@
  *
  * ## Shape is decided before the operand runs
  *
- * `as`, content, and a missing `value` are refused before `capture()`, because
- * an operand expression can call a getter, a function, or anything else the
- * author wrote. A malformed invocation therefore costs nothing, in the same way
- * `<File>`'s path arithmetic runs before its children do (§6.13).
+ * The engine validates `as` first and either refuses it or strips it, so a
+ * malformed binding name never reaches here. What is left is checked in the
+ * same spirit: content, then the syntactic presence of `value`, and only then
+ * the captured operand and its serialization. An operand expression can call a
+ * getter, a function, or anything else the author wrote, so a malformed
+ * invocation costs nothing — the same way `<File>`'s path arithmetic runs
+ * before its children do (§6.13).
  *
  * `capture()` stays outside the `try` below. An expression that throws before it
  * produces a value is that invocation's ordinary captured-expression failure,
@@ -46,7 +49,7 @@
  */
 
 import type { Operation } from "effection";
-import { capture, hasBinding, hasCapture, hasContent } from "../component-api.ts";
+import { capture, hasCapture, hasContent } from "../component-api.ts";
 import { printErrors } from "../component-failures.ts";
 
 export const props = {
@@ -63,16 +66,12 @@ export class JsonRenderError extends Error {
   }
 }
 
-const BINDING = "<Json> renders JSON text and binds nothing, so `as` is not accepted.";
 const CONTENT = "<Json> renders the value it is given, not content: write <Json value={…} />.";
 const MISSING = "<Json> requires a `value` prop: write <Json value={…} />.";
 const NO_TEXT = "<Json> serialization produced no JSON text for this value.";
 const THREW = "<Json> serialization of this value failed.";
 
 export default printErrors(function* Json(): Operation<string> {
-  if (yield* hasBinding()) {
-    throw new JsonRenderError(BINDING);
-  }
   if (yield* hasContent()) {
     throw new JsonRenderError(CONTENT);
   }
