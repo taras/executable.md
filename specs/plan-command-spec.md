@@ -159,10 +159,10 @@ The Plan is what the command produces, and where it goes is the caller's choice:
 
 | Invocation | Result |
 | --- | --- |
-| `xmd plan "<plan>"` | the exact approved source on **stdout**; nothing runs |
-| `xmd plan "<plan>" --output <path>` | the exact bytes in `<path>`; no source on stdout; nothing runs |
-| `xmd plan "<plan>" --run` | the Plan runs; no source is printed, and stdout belongs to the Plan's own output |
-| `xmd plan "<plan>" --output <path> --run` | the file is created first, and only a successful write is followed by the run |
+| `xmd plan "<Prompt>"` | the exact approved source on **stdout**; nothing runs |
+| `xmd plan "<Prompt>" --output <path>` | the exact bytes in `<path>`; no source on stdout; nothing runs |
+| `xmd plan "<Prompt>" --run` | the Plan runs; no source is printed, and stdout belongs to the Plan's own output |
+| `xmd plan "<Prompt>" --output <path> --run` | the file is created first, and only a successful write is followed by the run |
 
 Stdout carries the approved source and nothing else: no fence, no label, no
 delimiter and no newline this command added. What a caller reads is what the

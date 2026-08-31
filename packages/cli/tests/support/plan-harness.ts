@@ -215,11 +215,12 @@ export function timesRead(reads: readonly string[], name: string): number {
 }
 
 /**
- * A profile-session root this scope creates, owns and removes whole.
+ * A temporary tree this scope creates, owns and removes whole.
  *
  * Owning it is what makes recursive removal safe: everything under it was made
  * by this scope, so nothing here can reach a directory another case — or a real
- * invocation — is using.
+ * invocation — is using. A case uses it as an authorship root directly, or as
+ * the home a real host places `.xmd` beneath.
  */
 export function* useAuthorshipRoot<T>(body: (root: string) => Operation<T>): Operation<T> {
   const root = join(tmpdir(), `xmd-plan-profile-${randomUUID()}`);

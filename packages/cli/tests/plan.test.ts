@@ -115,6 +115,14 @@ function counting(type: "number" | "string"): string {
   ].join("\n");
 }
 
+/**
+ * What sits in the namespace this command no longer uses.
+ *
+ * Compared byte for byte rather than merely counted: a tree that was emptied and
+ * rebuilt would still hold one entry with that name.
+ */
+const RETIRED_SENTINEL = "not this command's namespace\n";
+
 /** A Plan whose effect is visible on the filesystem if anything runs it. */
 const WRITES_A_FILE = ['<File path="drafted.txt">the draft ran</File>', ""].join("\n");
 
@@ -665,25 +673,41 @@ describe(
       expect(first).not.toBe(second);
 
       // Nothing reads, migrates, empties or removes the namespace the command
-      // used to keep. A sibling tree beside the one this suite owns is left
-      // byte for byte as it was found — after a success, and after a failure.
+      // used to keep. Both namespaces are placed as they sit in a real home —
+      // `.xmd/plan/sessions` beside `.xmd/prompt/sessions` — under a temporary
+      // tree this scope creates and removes whole, so the sibling the command
+      // must not touch is the one it would actually find. Proven after a
+      // success and after an authored failure alike.
       for (const ending of ["approved", "stopped"] as const) {
-        yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-          const retired = join(`${authorshipRoot}-retired`, "sessions");
+        yield* useAuthorshipRoot(function* (home) {
+          const authorshipRoot = join(home, ".xmd", "plan", "sessions");
+          const retired = join(home, ".xmd", "prompt", "sessions");
           const sentinel = join(retired, "kept.txt");
+          yield* ensureDir(authorshipRoot);
           yield* ensureDir(retired);
-          yield* writeTextFile(sentinel, "not this command's namespace\n");
+          yield* writeTextFile(sentinel, RETIRED_SENTINEL);
 
-          const harness = createPlanHarness({ authorshipRoot });
-          harness.fake.script({ reply: VALID });
-          harness.script({ decision: ending === "approved" ? "Approve" : "Stop" });
+          const workdirs: string[] = [];
+          yield* useWorkingDirectory(function* (dir) {
+            const harness = createPlanHarness({ authorshipRoot });
+            harness.fake.script({ reply: VALID });
+            harness.script({ decision: ending === "approved" ? "Approve" : "Stop" });
 
-          const code = yield* runPlan(command(dir, [REQUEST]), harness.deps);
-          expect(code).toBe(ending === "approved" ? 0 : 1);
+            const code = yield* runPlan(command(dir, [REQUEST]), harness.deps);
+            expect(code).toBe(ending === "approved" ? 0 : 1);
+            workdirs.push(String(harness.fake.created[0]?.cwd));
+          });
 
+          // The conversation really did run under this namespace — an empty
+          // listing below would otherwise pass for a command that reached
+          // neither tree — and its invocation-unique leaf was handed back.
+          expect(workdirs[0].startsWith(`${authorshipRoot}${sep}`)).toBe(true);
+          expect(yield* until(readdir(authorshipRoot))).toEqual([]);
+
+          // The sibling is exactly as it was found, down to its bytes.
+          expect((yield* until(readdir(join(home, ".xmd")))).sort()).toEqual(["plan", "prompt"]);
           expect(yield* until(readdir(retired))).toEqual(["kept.txt"]);
-          expect(yield* readTextFile(sentinel)).toBe("not this command's namespace\n");
-          yield* rm(`${authorshipRoot}-retired`, { recursive: true, force: true });
+          expect(yield* readTextFile(sentinel)).toBe(RETIRED_SENTINEL);
         });
       }
     });
