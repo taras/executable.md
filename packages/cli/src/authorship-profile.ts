@@ -1,9 +1,9 @@
 /**
- * The prompt profile — the trusted-host assembly the prompt command document
+ * The authorship profile — the trusted-host assembly the plan command document
  * runs under, and the only thing that ever runs under it
- * (specs/prompt-command-spec.md).
+ * (specs/plan-command-spec.md).
  *
- * `xmd prompt` executes this root on every invocation, and a second one — the
+ * `xmd plan` executes this root on every invocation, and a second one — the
  * Plan it returns — only under `--run`, behind a complete scope boundary. This
  * module is the one that always happens. It supplies that document's inputs, a
  * constrained Agent provider, Elicitation, the fixed first-party components and
@@ -52,25 +52,25 @@ import { API } from "@executablemd/runtime";
 
 import { hostAcpDependencies } from "./agent-stack.ts";
 import type { AgentStack } from "./agent-stack.ts";
-import { PROMPT_COMMAND_DOCUMENT, readPackagedDocument } from "./packaged-document.ts";
+import { PLAN_COMMAND_DOCUMENT, readPackagedDocument } from "./packaged-document.ts";
 
 /**
- * The identity the prompt command document runs under.
+ * The identity the plan command document runs under.
  *
  * Stable and internal: no path selects it, no include resolves it, and a
- * position reading `(<prompt-command>:12:1)` says the source is the CLI's own.
+ * position reading `(<plan-command>:12:1)` says the source is the CLI's own.
  */
-export const PROMPT_COMMAND_IDENTITY = "<prompt-command>";
+export const PLAN_COMMAND_IDENTITY = "<plan-command>";
 
 /**
- * The permission mode the prompt command document runs under.
+ * The permission mode the plan command document runs under.
  *
  * Fixed rather than configured. The provider denies native requests privately,
  * so this is what an authored approval scope inside that document would
  * compose around if one existed — and the honest answer for a profile that
  * grants no native authority is the one that grants none.
  */
-const PROFILE_PERMISSION_MODE = "deny-all";
+const AUTHORSHIP_PERMISSION_MODE = "deny-all";
 
 /** The closed answer the host gives about one candidate. */
 export interface CandidateAssessment {
@@ -79,8 +79,8 @@ export interface CandidateAssessment {
   diagnostics: Json;
 }
 
-/** What the host supplies to one prompt command document execution. */
-export interface PromptProfile {
+/** What the host supplies to one plan command document execution. */
+export interface AuthorshipProfile {
   /** The request as the person typed it. */
   request: string;
   /** The rendered syntax catalog for this run profile and these includes. */
@@ -123,21 +123,21 @@ export interface PromptProfile {
 }
 
 /**
- * Run the packaged prompt command document and answer with the Plan it approved.
+ * Run the packaged plan command document and answer with the Plan it approved.
  *
  * Every resource this builds lives inside one scope, so leaving it is what tears
  * the Prompt tasks, the provider and the Elicitation provider down. A teardown
  * failure raises out of here rather than being folded into the result, because
  * a failure to release is not an outcome the source that was selected survives.
  */
-export function* runPromptCommandDocument(profile: PromptProfile): Operation<Result<string>> {
+export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<Result<string>> {
   // Before a directory exists, before a provider exists, and therefore before
   // any session could be placed or any turn started. A host that cannot
   // establish this ceiling refuses rather than writing a Plan under a weaker one.
   if (profile.stack.provider !== "acpx") {
     return Err(
       new Error(
-        `the ${profile.stack.provider} provider cannot establish the prompt profile's ` +
+        `the ${profile.stack.provider} provider cannot establish the authorship profile's ` +
           "ceiling — nothing was written or run",
       ),
     );
@@ -158,14 +158,14 @@ export function* runPromptCommandDocument(profile: PromptProfile): Operation<Res
     yield* refuseDocumentCapabilities();
     yield* profile.installElicitation();
 
-    const acpx = createAcpxProvider(profileCeiling(profile, workdir));
+    const acpx = createAcpxProvider(authorshipCeiling(profile, workdir));
     yield* registerAgentProvider("acpx", acpx);
     const options = {
       defaultAgent: profile.stack.defaultAgent,
-      permissionMode: PROFILE_PERMISSION_MODE,
+      permissionMode: AUTHORSHIP_PERMISSION_MODE,
     } as const;
     yield* installAgentComponents({ ...options, rootProvider: { factory: acpx, options } });
-    yield* installPermissionMode(PROFILE_PERMISSION_MODE);
+    yield* installPermissionMode(AUTHORSHIP_PERMISSION_MODE);
     // A candidate comes from a turn's complete successful close value or from
     // nowhere. `<Prompt>` ordinarily renders whatever a failed turn managed to
     // emit and carries on, which for a policy that reviews source would mean
@@ -176,12 +176,12 @@ export function* runPromptCommandDocument(profile: PromptProfile): Operation<Res
       return true;
     });
 
-    const source = yield* readPackagedDocument(PROMPT_COMMAND_DOCUMENT);
+    const source = yield* readPackagedDocument(PLAN_COMMAND_DOCUMENT);
     try {
       const approved = yield* collect(
         yield* executeInstalled(
           {
-            ...retainedSource(PROMPT_COMMAND_IDENTITY, source),
+            ...retainedSource(PLAN_COMMAND_IDENTITY, source),
             // Invocation-owned and thrown away with the scope. Ordinary document
             // and Prompt semantics need a durable stream; nothing about writing a
             // Plan needs a durable one, and `--journal` belongs to the Plan you
@@ -201,7 +201,7 @@ export function* runPromptCommandDocument(profile: PromptProfile): Operation<Res
         ),
       );
       if (typeof approved !== "string") {
-        return Err(new Error("the prompt command document returned something that is not a Plan"));
+        return Err(new Error("the plan command document returned something that is not a Plan"));
       }
       return Ok(approved);
     } catch (error) {
@@ -218,10 +218,10 @@ export function* runPromptCommandDocument(profile: PromptProfile): Operation<Res
  * is given: a draft is a string here, and stays one until a person has approved
  * it and the host has validated it again.
  */
-function validator(profile: PromptProfile): IdentityComponent {
+function validator(profile: AuthorshipProfile): IdentityComponent {
   return {
     name: "CheckDraft",
-    origin: "xmd prompt",
+    origin: "xmd plan",
     forms: ["self-closing"] as const,
     props: {
       type: "object",
@@ -257,7 +257,7 @@ function validator(profile: PromptProfile): IdentityComponent {
  * a route store says who owns a session, which this profile still has to respect,
  * while nothing a caller wrote may reach the four fields below.
  */
-function profileCeiling(profile: PromptProfile, workdir: string): AcpxProviderDependencies {
+function authorshipCeiling(profile: AuthorshipProfile, workdir: string): AcpxProviderDependencies {
   return {
     ...hostAcpDependencies(profile.stack.sessions),
     ...profile.acp,
@@ -267,7 +267,7 @@ function profileCeiling(profile: PromptProfile, workdir: string): AcpxProviderDe
     },
     mcpServers: [],
     permissions: "strict",
-    newSessionOptions: { systemPrompt: PROMPT_INSTRUCTIONS, allowedTools: [] },
+    newSessionOptions: { systemPrompt: AUTHORSHIP_INSTRUCTIONS, allowedTools: [] },
   };
 }
 
@@ -277,11 +277,11 @@ function profileCeiling(profile: PromptProfile, workdir: string): AcpxProviderDe
  * The host owns this layer, and it owns only this: that an answer belongs to the
  * message that asked for it. Which shape any particular message wants — a Plan,
  * or an explanation of why there is not one — is that message's own business, and
- * every message is the prompt command document's text. Hiding a shape here would
+ * every message is the plan command document's text. Hiding a shape here would
  * be hiding a policy decision in a place nobody reviewing the workflow can read.
  */
-export const PROMPT_INSTRUCTIONS = [
-  "You are the coding agent behind `xmd prompt`. A workflow asks you for one thing",
+export const AUTHORSHIP_INSTRUCTIONS = [
+  "You are the coding agent behind `xmd plan`. A workflow asks you for one thing",
   "at a time, on behalf of one person, and every message states what its answer has",
   "to be.",
   "",
@@ -298,7 +298,7 @@ export const PROMPT_INSTRUCTIONS = [
  * a document has no reason to read the checkout it will run in, and a ceiling
  * that starts there is not a ceiling.
  */
-export const DEFAULT_PROFILE_ROOT: string = join(homedir(), ".xmd", "prompt", "sessions");
+export const DEFAULT_AUTHORSHIP_ROOT: string = join(homedir(), ".xmd", "plan", "sessions");
 
 /**
  * The directory one logical session's conversation runs in.
@@ -315,7 +315,7 @@ export const DEFAULT_PROFILE_ROOT: string = join(homedir(), ".xmd", "prompt", "s
  * session record it established last time, since a session's key includes the
  * directory it lives in.
  */
-export function profileDirectoryFor(root: string, session: string): string {
+export function authorshipDirectoryFor(root: string, session: string): string {
   return join(root, createHash("sha256").update(session).digest("hex"));
 }
 
@@ -333,8 +333,8 @@ export function profileDirectoryFor(root: string, session: string): string {
  * the first thing registered in the scope is also what puts it last in teardown,
  * after every provider, Prompt task and Elicitation resource has gone.
  */
-function* useSessionDirectory(profile: PromptProfile): Operation<Result<string>> {
-  const directory = profileDirectoryFor(profile.root, profile.session);
+function* useSessionDirectory(profile: AuthorshipProfile): Operation<Result<string>> {
+  const directory = authorshipDirectoryFor(profile.root, profile.session);
   if (profile.explicitSession) {
     return yield* establishDirectory(directory);
   }
@@ -365,7 +365,7 @@ function* establishDirectory(directory: string): Operation<Result<string>> {
     if (entries.length > 0) {
       return Err(
         new Error(
-          `${directory} is not empty, and xmd prompt writes a Plan in a directory of its own ` +
+          `${directory} is not empty, and xmd plan writes a Plan in a directory of its own ` +
             "with nothing in it. Move or remove what is in there, or name a different " +
             "--session; nothing was written or run",
         ),
@@ -425,7 +425,7 @@ function* releaseSessionDirectory(directory: string, claim: DirectoryClaim): Ope
 }
 
 /**
- * The capabilities the prompt command document does not get.
+ * The capabilities the plan command document does not get.
  *
  * Installed above whatever the entrypoint provided, so the document is
  * refused rather than served. It decides what to write; writing a file,
@@ -435,7 +435,7 @@ function* releaseSessionDirectory(directory: string, claim: DirectoryClaim): Ope
 function* refuseDocumentCapabilities(): Operation<void> {
   const refuse = (capability: string) => () => {
     throw new Error(
-      `xmd prompt asked for ${capability}, which the prompt profile grants to nothing`,
+      `xmd plan asked for ${capability}, which the authorship profile grants to nothing`,
     );
   };
   yield* API.Files.around({

@@ -1,5 +1,5 @@
 /**
- * The deterministic seams `xmd prompt` is proven against.
+ * The deterministic seams `xmd plan` is proven against.
  *
  * Every phase the command owns is driven in process: the ACPX runtime is the
  * scriptable fake, the review provider is a scripted `Elicitation` handler, the
@@ -23,11 +23,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { syntaxCatalog } from "../../src/syntax.ts";
-import type { PromptDependencies, PromptExecution } from "../../src/prompt.ts";
+import type { PlanDependencies, PlanExecution } from "../../src/plan.ts";
 import { createFakeAcp, makeRegistry, makeStore } from "./fake-acp.ts";
 import type { FakeAcp, FakeStore } from "./fake-acp.ts";
 
-/** The agent every prompt case drives, and the command it resolves to. */
+/** The agent every plan case drives, and the command it resolves to. */
 export const AGENT = "scripted-agent";
 
 /**
@@ -43,23 +43,23 @@ export interface ScriptedReview {
   raw?: unknown;
 }
 
-export interface PromptHarness {
+export interface PlanHarness {
   fake: FakeAcp;
   /** Every catalog request, by the includes it was made with. */
   catalogCalls: string[][];
   /** Every review request a provider was asked, in order. */
   reviews: ElicitationRequest[];
   /** Every approved execution that reached the executor. */
-  executions: PromptExecution[];
+  executions: PlanExecution[];
   /** What the executor answers with, once each, then `Ok`. */
   executionResults: Result<void>[];
   /** Review answers, taken in order. Running out is a test defect, not a case. */
   script(review: ScriptedReview): void;
-  /** The dependencies `runPrompt` is driven with. */
-  deps: PromptDependencies;
+  /** The dependencies `runPlan` is driven with. */
+  deps: PlanDependencies;
 }
 
-export function createPromptHarness(options: {
+export function createPlanHarness(options: {
   /**
    * Where this harness keeps its profile session directories.
    *
@@ -68,7 +68,7 @@ export function createPromptHarness(options: {
    * developer's own home, and two cases running close together could not tell
    * whose was whose.
    */
-  profileRoot: string;
+  authorshipRoot: string;
   /** Replace the catalog entirely, for a case about catalog failure. */
   catalog?: (includes: readonly string[]) => Operation<SyntaxCatalog>;
   /**
@@ -79,15 +79,15 @@ export function createPromptHarness(options: {
    * session is continued or created a second time.
    */
   store?: FakeStore;
-}): PromptHarness {
+}): PlanHarness {
   const fake = createFakeAcp();
   const catalogCalls: string[][] = [];
   const reviews: ElicitationRequest[] = [];
-  const executions: PromptExecution[] = [];
+  const executions: PlanExecution[] = [];
   const executionResults: Result<void>[] = [];
   const answers: ScriptedReview[] = [];
 
-  const harness: PromptHarness = {
+  const harness: PlanHarness = {
     fake,
     catalogCalls,
     reviews,
@@ -106,7 +106,7 @@ export function createPromptHarness(options: {
         catalogCalls.push([...includes]);
         return yield* (options.catalog ?? syntaxCatalog)(includes);
       },
-      profileRoot: options.profileRoot,
+      authorshipRoot: options.authorshipRoot,
       *installElicitation() {
         yield* Elicitation.around(
           {
@@ -147,21 +147,21 @@ export function createPromptHarness(options: {
  * somewhere.
  */
 export function* useWorkingDirectory<T>(
-  body: (dir: string, profileRoot: string) => Operation<T>,
+  body: (dir: string, authorshipRoot: string) => Operation<T>,
 ): Operation<T> {
-  const dir = join(tmpdir(), `xmd-prompt-${randomUUID()}`);
+  const dir = join(tmpdir(), `xmd-plan-${randomUUID()}`);
   // A sibling rather than a child: the working directory is what the approved
   // document writes into and what several cases read back, and a profile root
   // inside it would show up in those listings.
-  const profileRoot = `${dir}-profile`;
+  const authorshipRoot = `${dir}-profile`;
   yield* ensureDir(dir);
-  yield* ensureDir(profileRoot);
+  yield* ensureDir(authorshipRoot);
   return yield* scoped(function* () {
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
     // Recursive, and safe because it is: everything under this root was created
     // by this scope, so nothing here can reach a directory another case or a
     // real invocation owns.
-    yield* ensure(() => rm(profileRoot, { recursive: true, force: true }));
+    yield* ensure(() => rm(authorshipRoot, { recursive: true, force: true }));
     yield* API.Env.around({
       // deno-lint-ignore require-yield
       *cwd() {
@@ -172,7 +172,7 @@ export function* useWorkingDirectory<T>(
     // the runtime entrypoint installs it: a document that reaches the
     // filesystem must reach the caller's, or fail.
     yield* useHostFiles();
-    return yield* body(dir, profileRoot);
+    return yield* body(dir, authorshipRoot);
   });
 }
 
@@ -215,14 +215,15 @@ export function timesRead(reads: readonly string[], name: string): number {
 }
 
 /**
- * A profile-session root this scope creates, owns and removes whole.
+ * A temporary tree this scope creates, owns and removes whole.
  *
  * Owning it is what makes recursive removal safe: everything under it was made
  * by this scope, so nothing here can reach a directory another case — or a real
- * invocation — is using.
+ * invocation — is using. A case uses it as an authorship root directly, or as
+ * the home a real host places `.xmd` beneath.
  */
-export function* useProfileRoot<T>(body: (root: string) => Operation<T>): Operation<T> {
-  const root = join(tmpdir(), `xmd-prompt-profile-${randomUUID()}`);
+export function* useAuthorshipRoot<T>(body: (root: string) => Operation<T>): Operation<T> {
+  const root = join(tmpdir(), `xmd-plan-profile-${randomUUID()}`);
   yield* ensureDir(root);
   return yield* scoped(function* () {
     yield* ensure(() => rm(root, { recursive: true, force: true }));

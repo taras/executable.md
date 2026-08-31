@@ -1,12 +1,12 @@
 /**
- * Tier PR — `xmd prompt` fixed grammar (specs/prompt-command-spec.md).
+ * Tier PR — `xmd plan` fixed grammar (specs/plan-command-spec.md).
  *
- * Rows P1–P6, in the half that is decidable without a document. `scanPromptArgs`
+ * Rows P1–P6, in the half that is decidable without a document. `scanPlanArgs`
  * is a pure function over argv, so what the command line means — and every
  * refusal it earns — is asserted directly rather than inferred from a process
  * that printed nothing.
  *
- * The rest of P5 and P6 live in `prompt.test.ts`, where a candidate schema
+ * The rest of P5 and P6 live in `plan.test.ts`, where a candidate schema
  * exists to bind against.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -14,13 +14,15 @@ import { expect } from "@executablemd/test-support/expect";
 
 import {
   isReservedOption,
-  namesPrompt,
-  scanPromptArgs,
+  namesPlan,
+  namesRetiredCommand,
+  RETIRED_COMMAND_REFUSAL,
+  scanPlanArgs,
   signatureFailure,
   signatureOf,
   strayPropertyValue,
-} from "../src/prompt-args.ts";
-import type { OptionSignature } from "../src/prompt-args.ts";
+} from "../src/plan-args.ts";
+import type { OptionSignature } from "../src/plan-args.ts";
 import { buildBindings, extractPropsArgs, PropsError } from "../src/props.ts";
 import type { Binding } from "../src/props.ts";
 
@@ -34,38 +36,61 @@ function frozen(entries: Record<string, OptionSignature>): Map<string, OptionSig
   return new Map(Object.entries(entries));
 }
 
-describe("Tier PR — xmd prompt fixed grammar", () => {
+describe("Tier PR — xmd plan fixed grammar", () => {
   it("C1: exactly one request, kept byte for byte", function* () {
-    expect(namesPrompt(["prompt", REQUEST])).toBe(true);
-    expect(namesPrompt(["run", "doc.md"])).toBe(false);
+    expect(namesPlan(["plan", REQUEST])).toBe(true);
+    expect(namesPlan(["run", "doc.md"])).toBe(false);
+    // The command is named `plan` and nothing else names it: the retired
+    // spelling selects no command, so it never reaches this grammar at all.
+    expect(namesPlan(["prompt", REQUEST])).toBe(false);
 
-    const one = scanPromptArgs(["prompt", REQUEST]);
+    // It is refused instead of being left to the default `run` grammar, which
+    // would read a token naming no command as a document reference. Recognized
+    // by the exact first token and nothing else, so `prompt` written as an
+    // argument — including a document that really is called that — is untouched.
+    expect(namesRetiredCommand(["prompt"])).toBe(true);
+    expect(namesRetiredCommand(["prompt", REQUEST])).toBe(true);
+    expect(namesRetiredCommand(["plan", REQUEST])).toBe(false);
+    expect(namesRetiredCommand(["run", "prompt"])).toBe(false);
+    expect(namesRetiredCommand(["run", "./prompt"])).toBe(false);
+    expect(namesRetiredCommand(["./prompt"])).toBe(false);
+    expect(namesRetiredCommand(["prompt.md"])).toBe(false);
+    expect(namesRetiredCommand([])).toBe(false);
+
+    // Both readings are answered: the command somebody meant, and the document
+    // they may actually have.
+    expect(RETIRED_COMMAND_REFUSAL).toBe(
+      'xmd prompt is not a command — use `xmd plan "<Prompt>"` to create a Plan, or ' +
+        "`xmd run ./prompt` to run a document named `prompt`",
+    );
+
+    const one = scanPlanArgs(["plan", REQUEST]);
     expect(one.error).toBe(undefined);
     expect(one.request).toBe(REQUEST);
 
     // Preserved, not trimmed: trimming is only how emptiness is tested.
-    const padded = scanPromptArgs(["prompt", `  ${REQUEST}\n`]);
+    const padded = scanPlanArgs(["plan", `  ${REQUEST}\n`]);
     expect(padded.error).toBe(undefined);
     expect(padded.request).toBe(`  ${REQUEST}\n`);
 
-    expect(scanPromptArgs(["prompt"]).error).toContain("requires one request");
-    expect(scanPromptArgs(["prompt", "", "--raw"]).error).toContain("non-whitespace");
-    expect(scanPromptArgs(["prompt", " \t\n "]).error).toContain("non-whitespace");
-    expect(scanPromptArgs(["prompt", REQUEST, "second"]).error).toContain(
-      "unrecognized argument for xmd prompt: second",
+    expect(scanPlanArgs(["plan"]).error).toContain("requires one request");
+    expect(scanPlanArgs(["plan", "", "--raw"]).error).toContain("non-whitespace");
+    expect(scanPlanArgs(["plan", " \t\n "]).error).toContain("non-whitespace");
+    expect(scanPlanArgs(["plan", REQUEST, "second"]).error).toContain(
+      "unrecognized argument for xmd plan: second",
     );
 
     // A request that begins with a dash is written after the separator, and is
     // still exactly one request.
-    const separated = scanPromptArgs(["prompt", "--", "--not-an-option"]);
+    const separated = scanPlanArgs(["plan", "--", "--not-an-option"]);
     expect(separated.error).toBe(undefined);
     expect(separated.request).toBe("--not-an-option");
     // And it is kept out of the parser's argv, so nothing reads it as an option.
-    expect(separated.fixed).toEqual(["prompt"]);
+    expect(separated.fixed).toEqual(["plan"]);
   });
 
   it("C1: individual options follow the request, aggregate props may precede it", function* () {
-    const early = scanPromptArgs(["prompt", "--props-name", "Ada", REQUEST]);
+    const early = scanPlanArgs(["plan", "--props-name", "Ada", REQUEST]);
     expect(early.error).toContain("unrecognized option: --props-name");
     expect(early.error).toContain("follow the request");
     // Refused before anything is classified: no request was adopted from the
@@ -73,8 +98,8 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
     expect(early.request).toBe(undefined);
     expect(early.occurrences).toEqual([]);
 
-    const aggregate = scanPromptArgs([
-      "prompt",
+    const aggregate = scanPlanArgs([
+      "plan",
       "--props",
       '{"name":"Ada"}',
       REQUEST,
@@ -85,16 +110,16 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
     expect(aggregate.request).toBe(REQUEST);
     // The aggregate never reaches the parser: it coerces a separated value
     // through Number() before any schema could judge it.
-    expect(aggregate.fixed).toEqual(["prompt", REQUEST, "--raw", "--run"]);
+    expect(aggregate.fixed).toEqual(["plan", REQUEST, "--raw", "--run"]);
 
-    const inline = scanPromptArgs(["prompt", '--props={"name":"Ada"}', REQUEST]);
+    const inline = scanPlanArgs(["plan", '--props={"name":"Ada"}', REQUEST]);
     expect(inline.error).toBe(undefined);
-    expect(inline.fixed).toEqual(["prompt", REQUEST]);
+    expect(inline.fixed).toEqual(["plan", REQUEST]);
   });
 
   it("C1: built-in options after generated props stay with the invocation", function* () {
-    const scan = scanPromptArgs([
-      "prompt",
+    const scan = scanPlanArgs([
+      "plan",
       REQUEST,
       "--props-name",
       "Ada",
@@ -113,7 +138,7 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
     expect(scan.error).toBe(undefined);
     expect(scan.request).toBe(REQUEST);
     expect(scan.fixed).toEqual([
-      "prompt",
+      "plan",
       REQUEST,
       "--raw",
       "--include",
@@ -137,7 +162,7 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
     const bindings = bindingsFor({ loud: { type: "string" } });
     let failure: unknown;
     try {
-      extractPropsArgs(["prompt", REQUEST, "--props-loud", "--raw"], bindings, {
+      extractPropsArgs(["plan", REQUEST, "--props-loud", "--raw"], bindings, {
         reserved: isReservedOption,
       });
     } catch (error) {
@@ -159,8 +184,8 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
   });
 
   it("C1: scalar, boolean and aggregate sources are all recorded", function* () {
-    const scan = scanPromptArgs([
-      "prompt",
+    const scan = scanPlanArgs([
+      "plan",
       REQUEST,
       "--props-name",
       "Ada",
@@ -186,7 +211,7 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
     });
     const extraction = extractPropsArgs(
       [
-        "prompt",
+        "plan",
         REQUEST,
         "--props-name",
         "Ada",
@@ -208,7 +233,7 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
   });
 
   it("C1: a boolean binding turns its provisional value into a second request", function* () {
-    const scan = scanPromptArgs(["prompt", REQUEST, "--props-loud", "true"]);
+    const scan = scanPlanArgs(["plan", REQUEST, "--props-loud", "true"]);
     expect(scan.error).toBe(undefined);
     expect(scan.occurrences).toEqual([{ option: "--props-loud", provisional: "true" }]);
 
@@ -219,7 +244,7 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
 
     // One that declares it a switch does not: `true` is then a positional.
     const stray = strayPropertyValue(scan.occurrences, bindingsFor({ loud: { type: "boolean" } }));
-    expect(stray).toContain("unrecognized argument for xmd prompt: true");
+    expect(stray).toContain("unrecognized argument for xmd plan: true");
     expect(stray).toContain("--props-loud=true");
   });
 
@@ -244,14 +269,14 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
       ["--secret-detection"],
       ["--no-secret-detection"],
     ]) {
-      const refused = scanPromptArgs(["prompt", REQUEST, ...flag]);
+      const refused = scanPlanArgs(["plan", REQUEST, ...flag]);
       expect(refused.error).toContain(`${flag[0]} configures running the Plan`);
       expect(refused.error).toContain("add --run");
 
       // With `--run` the same command line is ordinary, wherever the two are
       // written relative to each other.
-      expect(scanPromptArgs(["prompt", REQUEST, ...flag, "--run"]).error).toBe(undefined);
-      expect(scanPromptArgs(["prompt", REQUEST, "--run", ...flag]).error).toBe(undefined);
+      expect(scanPlanArgs(["plan", REQUEST, ...flag, "--run"]).error).toBe(undefined);
+      expect(scanPlanArgs(["plan", REQUEST, "--run", ...flag]).error).toBe(undefined);
     }
 
     // The options the command always uses are never refused: they build the
@@ -265,7 +290,7 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
       ["--timeout", "5s"],
       ["--output", "plan.md"],
     ]) {
-      expect(scanPromptArgs(["prompt", REQUEST, ...flag]).error).toBe(undefined);
+      expect(scanPlanArgs(["plan", REQUEST, ...flag]).error).toBe(undefined);
     }
   });
 
@@ -278,38 +303,36 @@ describe("Tier PR — xmd prompt fixed grammar", () => {
       "or leave it out to write the Plan";
 
     for (const spelling of ["--run=false", "--run=true", "--run="]) {
-      const scan = scanPromptArgs(["prompt", REQUEST, spelling]);
+      const scan = scanPlanArgs(["plan", REQUEST, spelling]);
       expect(scan.error).toBe(REFUSAL);
       // It established nothing: the token reached neither the parser's argv nor
       // the record of what this invocation asked for.
-      expect(scan.fixed).toEqual(["prompt", REQUEST]);
+      expect(scan.fixed).toEqual(["plan", REQUEST]);
 
       // And it does not answer for `--run` where a run is what makes an option
       // meaningful. Without the fix this command line is accepted, and then
       // nothing runs — so the journal the caller asked for is never created.
-      const gated = scanPromptArgs(["prompt", REQUEST, spelling, "--journal", "trace.jsonl"]);
+      const gated = scanPlanArgs(["plan", REQUEST, spelling, "--journal", "trace.jsonl"]);
       expect(gated.error).toBe(REFUSAL);
-      expect(gated.fixed).toEqual(["prompt", REQUEST]);
+      expect(gated.fixed).toEqual(["plan", REQUEST]);
     }
 
     // The switch itself is unaffected, wherever it is written.
-    expect(scanPromptArgs(["prompt", REQUEST, "--run"]).error).toBe(undefined);
-    expect(scanPromptArgs(["prompt", REQUEST, "--run", "--journal", "t.jsonl"]).error).toBe(
-      undefined,
-    );
+    expect(scanPlanArgs(["plan", REQUEST, "--run"]).error).toBe(undefined);
+    expect(scanPlanArgs(["plan", REQUEST, "--run", "--journal", "t.jsonl"]).error).toBe(undefined);
   });
 
   it("C1: an option this command does not define is refused, not dropped", function* () {
     // The parser stops at the first option it does not define and drops the
     // rest, so silence here would mean accepting a command line nobody honoured.
-    const unknown = scanPromptArgs(["prompt", REQUEST, "--not-a-thing", "value"]);
-    expect(unknown.error).toBe("unrecognized option for xmd prompt: --not-a-thing");
+    const unknown = scanPlanArgs(["plan", REQUEST, "--not-a-thing", "value"]);
+    expect(unknown.error).toBe("unrecognized option for xmd plan: --not-a-thing");
 
     // `--save` was replaced before release, so there is no alias — and the
     // refusal says where the Plan goes now rather than only that the option is
     // unknown.
-    const retired = scanPromptArgs(["prompt", REQUEST, "--save", "out.md"]);
-    expect(retired.error).toContain("unrecognized option for xmd prompt: --save");
+    const retired = scanPlanArgs(["plan", REQUEST, "--save", "out.md"]);
+    expect(retired.error).toContain("unrecognized option for xmd plan: --save");
     expect(retired.error).toContain("goes to stdout");
     expect(retired.error).toContain("--output writes it to a file");
     // It is not quietly read as the option that replaced it.

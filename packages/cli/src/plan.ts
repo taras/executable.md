@@ -1,20 +1,20 @@
 /**
- * `xmd prompt` — the trusted host around the prompt command document
- * (specs/prompt-command-spec.md).
+ * `xmd plan` — the trusted host around the plan command document
+ * (specs/plan-command-spec.md).
  *
- * Every invocation executes one root document — the packaged prompt command
+ * Every invocation executes one root document — the packaged plan command
  * document — and a second one only when `--run` asks for it:
  *
  * ```text
  * fixed command preflight
  *   -> build the run-profile syntax catalog
- *   -> execute the exact packaged prompt command document
+ *   -> execute the exact packaged plan command document
  *   -> await that execution and provider teardown
  *   -> validate the returned source again
  *   -> deliver those exact bytes, in exactly one of four ways:
  *        (default)          write the source to stdout
  *        --output           exclusively create the file
- *        --run              execute retainedSource("<prompt>", source)
+ *        --run              execute retainedSource("<plan>", source)
  *                             through the ordinary run path
  *        --output --run     create the file, then execute it
  * ```
@@ -26,14 +26,14 @@
  *
  * What a person is asked, how many drafts may be repaired, how many may be
  * reviewed and what happens when nobody approves anything are not here. They are
- * in `src/documents/prompt-command.md`, written in the open, where they can be
+ * in `src/documents/plan-command.md`, written in the open, where they can be
  * read and argued with. This module is what a policy cannot be trusted to do for
  * itself: settle the command line, build the ceiling the assistant runs under,
  * answer honestly about a draft, and hold the boundary between text an agent
  * wrote and a Plan this host will hand over or run.
  *
  * Two kinds of failure are told apart throughout, because they have different
- * remedies. A *draft* failure is something the agent wrote, so the prompt
+ * remedies. A *draft* failure is something the agent wrote, so the plan
  * command document is told the facts and may ask for another draft. A *caller*
  * failure is something the command line or the environment said, so it raises
  * out of the validator and ends that execution: no draft the agent could write
@@ -66,8 +66,8 @@ import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { cwd } from "@executablemd/runtime";
 
 import type { AgentStack } from "./agent-stack.ts";
-import { DEFAULT_PROFILE_ROOT, runPromptCommandDocument } from "./prompt-profile.ts";
-import type { CandidateAssessment } from "./prompt-profile.ts";
+import { DEFAULT_AUTHORSHIP_ROOT, runPlanCommandDocument } from "./authorship-profile.ts";
+import type { CandidateAssessment } from "./authorship-profile.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import {
   buildBindings,
@@ -83,32 +83,32 @@ import {
   signatureFailure,
   signatureOf,
   strayPropertyValue,
-} from "./prompt-args.ts";
-import type { OptionSignature, PromptScan } from "./prompt-args.ts";
+} from "./plan-args.ts";
+import type { OptionSignature, PlanScan } from "./plan-args.ts";
 
 /**
  * The identity approved text runs under.
  *
  * Deliberate and fixed, the way `<eval>` is for an inline document: the bytes
  * came from an agent, not from a file, and a source position reading
- * `(<prompt>:5:1)` says so. It affects positions and diagnostics only —
+ * `(<plan>:5:1)` says so. It affects positions and diagnostics only —
  * components, includes and every relative filesystem operation still resolve
  * from the contextual working directory.
  */
-export const PROMPT_IDENTITY = "<prompt>";
+export const PLAN_IDENTITY = "<plan>";
 
 /** The approved bytes, and the props resolved under exactly those bytes. */
-export interface PromptExecution {
+export interface PlanExecution {
   root: RootDocumentSource;
   props: Record<string, Json>;
 }
 
-/** What one `xmd prompt` invocation was asked to do. */
-export interface PromptCommand {
+/** What one `xmd plan` invocation was asked to do. */
+export interface PlanCommand {
   /** The argv this invocation holds, and the props source for every candidate. */
   argv: string[];
   /** What fixed grammar established about that argv. */
-  scan: PromptScan;
+  scan: PlanScan;
   include: string[];
   /** Where the approved Plan is written, when the caller asked for a file. */
   output?: string;
@@ -127,7 +127,7 @@ export interface PromptCommand {
 }
 
 /** What the host supplies. Every entry is a decision only a host can make. */
-export interface PromptDependencies {
+export interface PlanDependencies {
   /** What this host states about machine-wide agent sessions, if anything. */
   sessions?: MachineSessionAssembly;
   /** What the profile's provider is built on, beyond the host's own assembly. */
@@ -144,13 +144,13 @@ export interface PromptDependencies {
    * one — there is no flag, no environment variable and no contextual Api to
    * reach, so a document cannot move where the ceiling lives.
    */
-  profileRoot?: string;
+  authorshipRoot?: string;
   /** Run the approved document the way this host runs any supplied one. */
-  execute(approved: PromptExecution): Operation<Result<void>>;
+  execute(approved: PlanExecution): Operation<Result<void>>;
 }
 
-/** The prompt-owned findings that are not core's to report. */
-interface PromptDiagnostic {
+/** The command-owned findings that are not core's to report. */
+interface DraftDiagnostic {
   code: "generated-binding-collision" | "root-props-unreadable";
   message: string;
 }
@@ -160,7 +160,7 @@ interface CandidateDefects {
   /** Core's complete versioned answer, whenever core produced one. */
   validation?: DocumentValidation;
   /** What this command found about the options the candidate generates. */
-  prompt?: PromptDiagnostic;
+  draft?: DraftDiagnostic;
 }
 
 type CandidateOutcome =
@@ -184,10 +184,10 @@ const DECLARATION_CODES: ReadonlySet<DocumentValidationCode> = new Set<DocumentV
  * Every phase is behind a returned value rather than behind a flag another
  * phase reads, so a refusal cannot be followed by the work it refused.
  */
-export function* runPrompt(command: PromptCommand, deps: PromptDependencies): Operation<number> {
+export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operation<number> {
   const { scan } = command;
   if (scan.error !== undefined || scan.request === undefined) {
-    console.error(scan.error ?? 'xmd prompt requires one request — `xmd prompt "<what you want>"`');
+    console.error(scan.error ?? 'xmd plan requires one request — `xmd plan "<what you want>"`');
     return 1;
   }
   const request = scan.request;
@@ -213,7 +213,7 @@ export function* runPrompt(command: PromptCommand, deps: PromptDependencies): Op
   // and the run that would otherwise already have happened.
   let authored: Result<string>;
   try {
-    authored = yield* runPromptCommandDocument({
+    authored = yield* runPlanCommandDocument({
       request,
       syntax,
       session: command.session ?? invocationSessionName(),
@@ -221,7 +221,7 @@ export function* runPrompt(command: PromptCommand, deps: PromptDependencies): Op
       // session somebody can ask for again needs its directory to outlive the
       // invocation, and only the host knows whether somebody named one.
       explicitSession: command.session !== undefined,
-      root: deps.profileRoot ?? DEFAULT_PROFILE_ROOT,
+      root: deps.authorshipRoot ?? DEFAULT_AUTHORSHIP_ROOT,
       stack: command.stack,
       ...(deps.acp === undefined ? {} : { acp: deps.acp }),
       installElicitation: deps.installElicitation,
@@ -275,7 +275,7 @@ export function* runPrompt(command: PromptCommand, deps: PromptDependencies): Op
   }
 
   const executed = yield* deps.execute({
-    root: retainedSource(PROMPT_IDENTITY, source),
+    root: retainedSource(PLAN_IDENTITY, source),
     props: admitted.props,
   });
   if (!executed.ok) {
@@ -292,13 +292,16 @@ export function* runPrompt(command: PromptCommand, deps: PromptDependencies): Op
 /**
  * A logical session name nothing else can name.
  *
- * The conversation belongs to this invocation: a second `xmd prompt` places a
+ * The conversation belongs to this invocation: a second `xmd plan` places a
  * different session rather than continuing this one, and a request nobody meant
  * to repeat never arrives in a history it did not create. `--session` replaces
  * it when a caller wants the provider's ordinary continuation instead.
+ *
+ * Exported for the suite that pins the generated shape. Nothing outside this
+ * package names it, and a caller reaches it through no command line.
  */
-function invocationSessionName(): string {
-  return `xmd-prompt:${randomUUID()}`;
+export function invocationSessionName(): string {
+  return `xmd-plan:${randomUUID()}`;
 }
 
 /**
@@ -309,7 +312,7 @@ function invocationSessionName(): string {
  * and it never sees an argument the command line got wrong.
  */
 function* assess(
-  command: PromptCommand,
+  command: PlanCommand,
   frozen: Map<string, OptionSignature>,
   source: string,
 ): Operation<CandidateAssessment> {
@@ -333,13 +336,13 @@ function* assess(
  * vocabulary it only describes.
  */
 function* assessCandidate(
-  command: PromptCommand,
+  command: PlanCommand,
   frozen: Map<string, OptionSignature>,
   candidate: string,
 ): Operation<CandidateOutcome> {
   return yield* scoped(function* (): Operation<CandidateOutcome> {
     yield* useRunProfileRegistry();
-    const root = retainedSource(PROMPT_IDENTITY, candidate);
+    const root = retainedSource(PLAN_IDENTITY, candidate);
     const includes = command.include;
     const components = agentIdentityComponents();
 
@@ -357,7 +360,7 @@ function* assessCandidate(
     } catch (error) {
       return {
         kind: "repairable",
-        defects: { prompt: { code: "root-props-unreadable", message: describeError(error) } },
+        defects: { draft: { code: "root-props-unreadable", message: describeError(error) } },
       };
     }
 
@@ -368,7 +371,7 @@ function* assessCandidate(
       return {
         kind: "repairable",
         defects: {
-          prompt: { code: "generated-binding-collision", message: describeError(error) },
+          draft: { code: "generated-binding-collision", message: describeError(error) },
         },
       };
     }

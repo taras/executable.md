@@ -61,7 +61,7 @@ export function* syntaxCatalog(includes: readonly string[]): Operation<SyntaxCat
  * The registrations the `run` profile installs, as registry state and nothing
  * else.
  *
- * Shared with `xmd prompt`, which both describes this vocabulary to a generator
+ * Shared with `xmd plan`, which both describes this vocabulary to a generator
  * and validates what comes back. Registering only here would make the catalog
  * advertise `<Agent>` while validation reported it unresolved — a document told
  * to use a component nobody would accept.

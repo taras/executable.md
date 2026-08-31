@@ -92,7 +92,7 @@ documents at the revision it checks.
   prerelease marker — so a forgotten bump is visible where the release was
   made, then refuses to build. On a valid tag it compiles
   `packages/cli/src/compiled.ts` per target with
-  `--include packages/code-review-agent --include packages/cli/src/documents/prompt-command.md`
+  `--include packages/code-review-agent --include packages/cli/src/documents/plan-command.md`
   and attaches the binaries and
   sha256 checksums to the tag's GitHub Release. That module is the
   compiled-binary entrypoint: it installs the `API.Env.command` adapter that
@@ -550,8 +550,8 @@ without its browser asset and never published while private.
 A document-backed command executes first-party Markdown through the ordinary XMD
 engine rather than a TypeScript policy. A package declares which Markdown it
 ships by putting it in `src/documents/`; every other Markdown under `src/` —
-test documents, scenario fixtures — stays out of the product. `xmd prompt` is
-the first such command, and `packages/cli/src/documents/prompt-command.md` is
+test documents, scenario fixtures — stays out of the product. `xmd plan` is
+the first such command, and `packages/cli/src/documents/plan-command.md` is
 the document that implements it: the checked-in Markdown is the deployed
 artifact and the single source of truth, not a generated string mirror of one.
 
@@ -564,7 +564,7 @@ Every build therefore keeps the asset beside its module, at the same relative
 path:
 
 - **source checkout** — the file as committed;
-- **`deno compile`** — embedded by `--include packages/cli/src/documents/prompt-command.md`,
+- **`deno compile`** — embedded by `--include packages/cli/src/documents/plan-command.md`,
   in `deno task build` and in `release.yml`'s matrix compile;
 - **npm (dnt)** — copied by `scripts/build-npm.ts`, which copies each package's
   `src/documents/` into `esm/src/documents/`, preserving relative location. dnt
@@ -582,7 +582,7 @@ The checks that hold this together, each proving a different build:
   under Deno, Node and Bun, which is what makes it evidence rather than one
   runtime's opinion.
 - `scripts/tests/cli-npm-bin.test.ts` builds the real package and asserts
-  `esm/src/documents/prompt-command.md` is byte-identical to the source.
+  `esm/src/documents/plan-command.md` is byte-identical to the source.
 - `scripts/tests/packaged-document.test.ts` holds the two `deno compile` sites
   to the documents that exist, because that list is the one thing no build
   discovers for itself.

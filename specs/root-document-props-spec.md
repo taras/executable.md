@@ -354,18 +354,18 @@ than another spelling of the same one.
 
 ## Command Scope
 
-Root document props belong to `xmd run` and `xmd prompt`. The inline root
+Root document props belong to `xmd run` and `xmd plan`. The inline root
 document belongs to `xmd run` alone. `xmd test` accepts neither `--props`,
 `--props-*`, `XMD_PROPS`, `XMD_PROPS_*`, nor `--eval`/`-e`.
 
 ## Generated documents
 
-`xmd prompt` resolves root props from the same sources, in the same order, with
-the same decoding ([`xmd prompt`](./prompt-command-spec.md)). What differs is
+`xmd plan` resolves root props from the same sources, in the same order, with
+the same decoding ([`xmd plan`](./plan-command-spec.md)). What differs is
 where the schema comes from: the document is written by an agent while the
 command runs, and one invocation may see several drafts of it.
 
-That command executes two roots. The first is the packaged prompt command
+That command executes two roots. The first is the packaged plan command
 document, whose own props — the request, the rendered syntax catalog and the
 assistant-session name — are host-supplied internal inputs. They are not draft
 props, they are declared by no command-line option, and they consume none of the
@@ -376,7 +376,7 @@ same reason they follow the path under `xmd run` — the schema that gives them
 meaning arrives after them:
 
 ```console
-xmd prompt "greet someone" --props-name Ada --props-loud
+xmd plan "greet someone" --props-name Ada --props-loud
 ```
 
 An individual `--props-*` written before the request fails in preflight, before
@@ -384,7 +384,7 @@ any catalog, agent, elicitation, save, journal or document operation. The
 aggregate `--props` may be written before it, because its meaning never depends
 on a document.
 
-`xmd prompt --help` describes the Prompt, `--output`, `--run`, `--session`, the
+`xmd plan --help` describes the Prompt, `--output`, `--run`, `--session`, the
 aggregate sources and where individual options go. It names no individual option and no
 default: the document that would declare them does not exist yet, and generating
 one in order to describe it is not what help does.

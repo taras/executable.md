@@ -532,7 +532,7 @@ export interface ExtractOptions {
    *
    * `xmd run` supplies none: the document is already named, so the schema that
    * decides a property's arity cannot change under the same command line.
-   * `xmd prompt` re-binds the same argv against every candidate, so a value
+   * `xmd plan` re-binds the same argv against every candidate, so a value
    * option that swallowed `--raw` in one draft would take the flag away from
    * the invocation itself. A value that really begins with `-` is written
    * `--props-name=-value`.

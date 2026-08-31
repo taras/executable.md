@@ -1,9 +1,9 @@
 /**
- * Tier PR — the `xmd prompt` command lifecycle
- * (specs/prompt-command-spec.md).
+ * Tier PR — the `xmd plan` command lifecycle
+ * (specs/plan-command-spec.md).
  *
  * The command's grammar, filesystem, journal, lifetime and execution rows: what
- * `xmd prompt` does to the disk, to the process status and to the document it
+ * `xmd plan` does to the disk, to the process status and to the document it
  * ends in. The approved document runs through the production executor, so what
  * these prove about execution is what `xmd run` does with a supplied root.
  *
@@ -14,7 +14,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { runCli } from "@executablemd/test-support/launch";
-import { readTextFile, writeTextFile } from "@effectionx/fs";
+import { ensureDir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { stat } from "@executablemd/runtime";
 import { ensure, Ok, scoped, spawn, until } from "effection";
 import type { Operation, Result } from "effection";
@@ -22,21 +22,26 @@ import { join } from "node:path";
 import { readdir } from "node:fs/promises";
 import process from "node:process";
 
-import { promptExecutor } from "../src/cli.ts";
+import { planExecutor } from "../src/cli.ts";
 import { resolveAgentStack } from "../src/agent-stack.ts";
 import type { AgentStack } from "../src/agent-stack.ts";
-import { runPrompt } from "../src/prompt.ts";
-import type { PromptCommand, PromptExecution } from "../src/prompt.ts";
-import { scanPromptArgs } from "../src/prompt-args.ts";
+import { runPlan } from "../src/plan.ts";
+import type { PlanCommand, PlanExecution } from "../src/plan.ts";
+import {
+  namesPlan,
+  namesRetiredCommand,
+  RETIRED_COMMAND_REFUSAL as RETIRED_REFUSAL,
+  scanPlanArgs,
+} from "../src/plan-args.ts";
 import {
   AGENT,
-  createPromptHarness,
+  createPlanHarness,
   timesRead,
   useEnvironment,
   useRecordedEnvironment,
   useWorkingDirectory,
-} from "./support/prompt-harness.ts";
-import type { PromptHarness } from "./support/prompt-harness.ts";
+} from "./support/plan-harness.ts";
+import type { PlanHarness } from "./support/plan-harness.ts";
 
 const REQUEST = "write a greeting";
 
@@ -67,6 +72,23 @@ const GREETER = [
 const FAILS_AT_RUN = ["```bash exec", "exit 3", "```", ""].join("\n");
 
 const PLAIN = "Nothing but prose.\n";
+
+const PROBE_HEADING = "Retired token probe";
+const PROBE_SENTINEL = "the document ran";
+
+/**
+ * A document whose filename is the retired command spelling.
+ *
+ * It writes a file, because whether the default `run` grammar reached it is a
+ * fact on disk. A case that only watched stdout would pass against a command
+ * that executed the document and printed nothing.
+ */
+const NAMED_LIKE_THE_RETIRED_TOKEN = [
+  `# ${PROBE_HEADING}`,
+  "",
+  `<File path="sentinel.txt">${PROBE_SENTINEL}</File>`,
+  "",
+].join("\n");
 
 /**
  * A document that validates, runs, and fails its own tests.
@@ -99,11 +121,11 @@ const STACK: AgentStack = {
  * modes that write the Plan instead are exercised by their own cases below,
  * which pass `run: false` and say which destination they mean.
  */
-function command(dir: string, args: string[], output?: string): PromptCommand {
-  const argv = ["prompt", ...args, "--run"];
+function command(dir: string, args: string[], output?: string): PlanCommand {
+  const argv = ["plan", ...args, "--run"];
   return {
     argv,
-    scan: scanPromptArgs(argv),
+    scan: scanPlanArgs(argv),
     include: [dir],
     ...(output === undefined ? {} : { output }),
     run: true,
@@ -112,11 +134,11 @@ function command(dir: string, args: string[], output?: string): PromptCommand {
 }
 
 /** The same invocation, writing the Plan rather than running it. */
-function writing(dir: string, args: string[], output?: string): PromptCommand {
-  const argv = ["prompt", ...args];
+function writing(dir: string, args: string[], output?: string): PlanCommand {
+  const argv = ["plan", ...args];
   return {
     argv,
-    scan: scanPromptArgs(argv),
+    scan: scanPlanArgs(argv),
     include: [dir],
     ...(output === undefined ? {} : { output }),
     run: false,
@@ -129,8 +151,8 @@ function executor(
   dir: string,
   journal?: string,
   stack?: AgentStack,
-): (approved: PromptExecution) => Operation<Result<void>> {
-  return promptExecutor(
+): (approved: PlanExecution) => Operation<Result<void>> {
+  return planExecutor(
     {
       include: [dir],
       verbose: false,
@@ -149,7 +171,7 @@ function* exists(path: string): Operation<boolean> {
 }
 
 /** Every phase after the refusal, at zero. */
-function untouched(harness: PromptHarness): Record<string, number | boolean> {
+function untouched(harness: PlanHarness): Record<string, number | boolean> {
   return {
     catalogs: harness.catalogCalls.length,
     runtimes: harness.fake.created.length,
@@ -170,13 +192,13 @@ const NOTHING = {
 };
 
 describe(
-  "Tier PR — the xmd prompt command",
+  "Tier PR — the xmd plan command lifecycle",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
     it("C1: a misplaced individual option refuses before any phase begins", function* () {
-      yield* useWorkingDirectory(function* (dir, profileRoot) {
-        const harness = createPromptHarness({ profileRoot });
-        const code = yield* runPrompt(
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const harness = createPlanHarness({ authorshipRoot });
+        const code = yield* runPlan(
           command(dir, ["--props-name", "Ada", REQUEST], "out.md"),
           harness.deps,
         );
@@ -192,7 +214,7 @@ describe(
       // the whole invocation shares now happens.
       yield* useWorkingDirectory(function* (dir) {
         const { code, stderr } = yield* runCli(
-          ["prompt", REQUEST, "--approve-all", "--deny-all", "--run"],
+          ["plan", REQUEST, "--approve-all", "--deny-all", "--run"],
           { cwd: dir },
         ).join();
 
@@ -218,14 +240,14 @@ describe(
       // cannot see. The one after it drives the real parser and dispatch, which
       // this one does not reach — the defect lived exactly between those two
       // layers, so both are needed to pin it.
-      yield* useWorkingDirectory(function* (dir, profileRoot) {
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
         const journal = join(dir, "trace.jsonl");
-        const harness = createPromptHarness({ profileRoot });
+        const harness = createPlanHarness({ authorshipRoot });
         harness.deps.execute = executor(dir, journal);
         harness.fake.script({ reply: PLAIN });
         harness.script({ decision: "Approve" });
 
-        const argv = ["prompt", REQUEST, "--run=false", "--journal", journal];
+        const argv = ["plan", REQUEST, "--run=false", "--journal", journal];
         const written = console.error;
         const lines: string[] = [];
         const value = yield* scoped(function* (): Operation<number> {
@@ -235,8 +257,8 @@ describe(
           console.error = (...parts: unknown[]) => {
             lines.push(parts.map((part) => String(part)).join(" "));
           };
-          return yield* runPrompt(
-            { argv, scan: scanPromptArgs(argv), include: [dir], run: false, stack: STACK },
+          return yield* runPlan(
+            { argv, scan: scanPlanArgs(argv), include: [dir], run: false, stack: STACK },
             harness.deps,
           );
         });
@@ -251,10 +273,10 @@ describe(
         // Every phase after preflight stayed at zero: no catalog, no provider,
         // no turn, no review, no execution.
         expect(untouched(harness)).toEqual(NOTHING);
-        // No prompt-profile session was opened either — neither established
+        // No authorship-profile session was opened either — neither established
         // with the provider nor given a directory to run in.
         expect(harness.fake.ensured).toEqual([]);
-        expect(yield* until(readdir(profileRoot))).toEqual([]);
+        expect(yield* until(readdir(authorshipRoot))).toEqual([]);
         // And nothing durable exists — neither the journal it named, nor an
         // output file, nor anything else.
         expect(yield* exists(journal)).toBe(false);
@@ -265,7 +287,7 @@ describe(
     it("C1: a valued --run is refused by the real parser, not just the scanner", function* () {
       // The defect was a disagreement between the scanner and the parser: the
       // scanner read `--run=false` as the switch while the parser read it as
-      // false. A case that hands `runPrompt` an already-scanned command skips
+      // false. A case that hands `runPlan` an already-scanned command skips
       // the boundary the bug lived on, so this one goes through the command line
       // an operator actually types.
       const REFUSAL =
@@ -275,7 +297,7 @@ describe(
       for (const spelling of ["--run=false", "--run=true", "--run="]) {
         yield* useWorkingDirectory(function* (dir) {
           const { code, stdout, stderr } = yield* runCli(
-            ["prompt", REQUEST, spelling, "--journal", "trace.jsonl"],
+            ["plan", REQUEST, spelling, "--journal", "trace.jsonl"],
             { cwd: dir },
           ).join();
 
@@ -299,7 +321,7 @@ describe(
       // otherwise entirely valid: a case that also carried a second, earlier
       // failure would pass whether or not `--save` still worked.
       yield* useWorkingDirectory(function* (dir) {
-        const { code, stdout, stderr } = yield* runCli(["prompt", REQUEST, "--save", "out.md"], {
+        const { code, stdout, stderr } = yield* runCli(["plan", REQUEST, "--save", "out.md"], {
           cwd: dir,
         }).join();
 
@@ -317,8 +339,96 @@ describe(
       });
     });
 
+    it("C1: the retired spelling names no command and reaches no authorship", function* () {
+      // The command is `plan`. The spelling it replaced is not registered,
+      // aliased or kept as a tombstone — and it is not left to the default
+      // `run` grammar either, which would read it as a document reference. It
+      // is refused in preflight, before any scanner, parse or path lookup.
+      expect(namesPlan(["prompt", REQUEST])).toBe(false);
+      expect(namesRetiredCommand(["prompt", REQUEST])).toBe(true);
+      expect(namesRetiredCommand(["plan", REQUEST])).toBe(false);
+      // Only as the first token. `prompt` written anywhere else is an ordinary
+      // argument, and this refusal never reaches it.
+      expect(namesRetiredCommand(["run", "prompt"])).toBe(false);
+      expect(namesRetiredCommand(["plan", "prompt"])).toBe(false);
+
+      yield* useWorkingDirectory(function* (dir) {
+        const home = join(dir, "home");
+        yield* ensureDir(home);
+        const { code, stdout, stderr } = yield* runCli(["prompt", REQUEST], {
+          cwd: dir,
+          env: { HOME: home },
+        }).join();
+
+        expect(code).not.toBe(0);
+        expect(stderr).toContain(RETIRED_REFUSAL);
+        // Nothing this command owns was reached: no approved source on stdout,
+        // no catalog, no provider to report an agent unavailable, no authored
+        // refusal from the plan command document, and nobody asked to review.
+        // The refusal names `xmd plan` as the spelling to use, so an authored
+        // failure is told apart by its own words rather than by that name.
+        expect(stdout).toBe("");
+        expect(stderr).not.toContain("## Built-in components");
+        expect(stderr).not.toContain("unavailable");
+        expect(stderr).not.toContain("Nothing was output or run");
+        expect(stderr).not.toContain("Request changes");
+        // And neither namespace exists under the isolated home: the new one was
+        // never opened, and the old one is not read, migrated or created.
+        expect(yield* exists(join(home, ".xmd", "plan"))).toBe(false);
+        expect(yield* exists(join(home, ".xmd", "prompt"))).toBe(false);
+        // No output file and no journal: the only entry is the home this case
+        // made for the subprocess.
+        expect(yield* until(readdir(dir))).toEqual(["home"]);
+      });
+    });
+
+    it("C1: the retired token is refused before it can be read as a document path", function* () {
+      // The whole reason this is a preflight refusal rather than a fall-through.
+      // A first token naming no command is a document reference to the default
+      // `run` command, so a file called `prompt` in the working directory was
+      // rendered and executed — exit 0, and a file written — by a caller who
+      // wrote what they believed was a command. Proven on disk: the document
+      // writes a sentinel, so whether it ran is a fact rather than an inference
+      // from output nobody produced.
+      yield* useWorkingDirectory(function* (dir) {
+        const home = join(dir, "home");
+        yield* ensureDir(home);
+        yield* writeTextFile(join(dir, "prompt"), NAMED_LIKE_THE_RETIRED_TOKEN);
+        const options = { cwd: dir, env: { HOME: home } };
+        const sentinel = join(dir, "sentinel.txt");
+
+        const refused = yield* runCli(["prompt"], options).join();
+
+        expect(refused.code).not.toBe(0);
+        expect(refused.stderr).toContain(RETIRED_REFUSAL);
+        // Neither rendered nor executed: its heading reached no stream, and the
+        // file it writes was never created.
+        expect(refused.stdout).toBe("");
+        expect(refused.stderr).not.toContain(PROBE_HEADING);
+        expect(yield* exists(sentinel)).toBe(false);
+        // No catalog was built, no provider was reached to report an agent
+        // unavailable, and no authorship directory was placed — so no Agent and
+        // no Session either. The isolated home has no `.xmd` at all.
+        expect(refused.stderr).not.toContain("## Built-in components");
+        expect(refused.stderr).not.toContain("unavailable");
+        expect(yield* exists(join(home, ".xmd"))).toBe(false);
+        // And nothing else was written: no output file and no journal. The
+        // document and the home this case made are the only entries.
+        expect((yield* until(readdir(dir))).sort()).toEqual(["home", "prompt"]);
+
+        // The refusal costs nothing. A document that is legitimately called
+        // `prompt` still runs, by the spelling the message itself names — a fix
+        // that made this file unrunnable would trade one defect for another.
+        const ran = yield* runCli(["run", "./prompt"], options).join();
+
+        expect(ran.code).toBe(0);
+        expect(ran.stdout).toContain(PROBE_HEADING);
+        expect(yield* readTextFile(sentinel)).toContain(PROBE_SENTINEL);
+      });
+    });
+
     it("C1: inline source is refused before any phase begins", function* () {
-      // `-e` belongs to `xmd run`. `xmd prompt` is the command that *writes* a
+      // `-e` belongs to `xmd run`. `xmd plan` is the command that *writes* a
       // document, so a second one supplied on the command line is a
       // contradiction — and one the parser used to drop in silence, leaving the
       // caller watching a different document get generated.
@@ -326,7 +436,7 @@ describe(
         yield* useWorkingDirectory(function* (dir) {
           const { code, stdout, stderr } = yield* runCli(
             [
-              "prompt",
+              "plan",
               REQUEST,
               flag,
               "# supplied",
@@ -341,7 +451,7 @@ describe(
 
           expect(code).toBe(1);
           expect(stderr).toContain(
-            "unrecognized option for xmd prompt: --eval — inline documents are exclusive to xmd run",
+            "unrecognized option for xmd plan: --eval — inline documents are exclusive to xmd run",
           );
           // Every later phase, unreached: no catalog was rendered, no provider
           // was built, no review was asked, and neither named file was made.
@@ -358,7 +468,7 @@ describe(
       yield* useWorkingDirectory(function* (dir) {
         const { code, stdout, stderr } = yield* runCli(
           [
-            "prompt",
+            "plan",
             "--help",
             "--output",
             "out.md",
@@ -371,7 +481,7 @@ describe(
         ).join();
 
         expect(code).toBe(0);
-        expect(stdout).toContain("Usage: xmd prompt [OPTIONS] [request]");
+        expect(stdout).toContain("Usage: xmd plan [OPTIONS] [request]");
         expect(stdout).toContain("Exactly one Prompt is required");
         expect(stdout).toContain("--props <json>");
         expect(stdout).toContain("XMD_PROPS");
@@ -396,13 +506,19 @@ describe(
       });
 
       const program = yield* runCli(["--help"]).expect();
-      expect(program.stdout).toMatch(/^\s+prompt\s/m);
+      expect(program.stdout).toMatch(/^\s+plan\s/m);
+      // Named for its result where a person choosing a command reads, and the
+      // spelling it replaced is listed nowhere.
+      expect(program.stdout).toContain(
+        "Create an executable Plan from a Prompt and review it before writing or running it.",
+      );
+      expect(program.stdout).not.toMatch(/^\s+prompt\s/m);
 
       // A session is named or it is not selected, and the refusal happens in
       // preflight, beside the request's own — a parser that read the empty value
       // as absent would have used the generated name instead.
       yield* useWorkingDirectory(function* (dir) {
-        const empty = yield* runCli(["prompt", REQUEST, "--session", ""], { cwd: dir }).join();
+        const empty = yield* runCli(["plan", REQUEST, "--session", ""], { cwd: dir }).join();
         expect(empty.code).toBe(1);
         expect(empty.stderr).toContain("--session needs a name");
         expect(empty.stdout).not.toContain("## Built-in components");
@@ -410,7 +526,7 @@ describe(
         // A flag that only configures running a Plan, without --run: refused
         // before authorship and before anything reaches the filesystem.
         for (const flag of [["--journal", "trace.jsonl"], ["--raw"], ["--deny-all"]]) {
-          const stray = yield* runCli(["prompt", REQUEST, ...flag], { cwd: dir }).join();
+          const stray = yield* runCli(["plan", REQUEST, ...flag], { cwd: dir }).join();
           expect(stray.code).toBe(1);
           expect(stray.stderr).toContain(`${flag[0]} configures running the Plan`);
           expect(stray.stderr).toContain("add --run");
@@ -424,14 +540,14 @@ describe(
     });
 
     it("C15: individual, aggregate and environment sources resolve and reach the run", function* () {
-      yield* useWorkingDirectory(function* (dir, profileRoot) {
-        const harness = createPromptHarness({ profileRoot });
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const harness = createPlanHarness({ authorshipRoot });
         harness.deps.execute = executor(dir);
         harness.fake.script({ reply: GREETER });
         harness.script({ decision: "Approve" });
 
         yield* useEnvironment({ XMD_PROPS: '{"name":"FromEnv","count":7}' });
-        const code = yield* runPrompt(
+        const code = yield* runPlan(
           command(dir, [REQUEST, "--props-name", "Ada", "--props-loud"]),
           harness.deps,
         );
@@ -447,13 +563,13 @@ describe(
       const journalName = "trace.jsonl";
 
       // Stop at review, through the command document's authored failure.
-      yield* useWorkingDirectory(function* (dir, profileRoot) {
-        const harness = createPromptHarness({ profileRoot });
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const harness = createPlanHarness({ authorshipRoot });
         harness.deps.execute = executor(dir, join(dir, journalName));
         harness.fake.script({ reply: PLAIN });
         harness.script({ decision: "Stop" });
 
-        const code = yield* runPrompt(command(dir, [REQUEST], "out.md"), harness.deps);
+        const code = yield* runPlan(command(dir, [REQUEST], "out.md"), harness.deps);
 
         expect(code).toBe(1);
         expect(harness.executions).toHaveLength(0);
@@ -462,12 +578,12 @@ describe(
       });
 
       // A turn that produced text and then failed.
-      yield* useWorkingDirectory(function* (dir, profileRoot) {
-        const harness = createPromptHarness({ profileRoot });
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const harness = createPlanHarness({ authorshipRoot });
         harness.deps.execute = executor(dir, join(dir, journalName));
         harness.fake.script({ reply: PLAIN, stopReason: "refusal" });
 
-        const code = yield* runPrompt(command(dir, [REQUEST], "out.md"), harness.deps);
+        const code = yield* runPlan(command(dir, [REQUEST], "out.md"), harness.deps);
 
         expect(code).toBe(1);
         expect(harness.reviews).toHaveLength(0);
@@ -476,12 +592,12 @@ describe(
       });
 
       // A terminal property-source failure.
-      yield* useWorkingDirectory(function* (dir, profileRoot) {
-        const harness = createPromptHarness({ profileRoot });
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const harness = createPlanHarness({ authorshipRoot });
         harness.deps.execute = executor(dir, join(dir, journalName));
         harness.fake.script({ reply: PLAIN });
 
-        const code = yield* runPrompt(
+        const code = yield* runPlan(
           command(dir, [REQUEST, "--props-absent", "x"], "out.md"),
           harness.deps,
         );
@@ -494,14 +610,14 @@ describe(
       });
 
       // An approved run's journal holds the document's events and no authorship.
-      yield* useWorkingDirectory(function* (dir, profileRoot) {
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
         const journal = join(dir, journalName);
-        const harness = createPromptHarness({ profileRoot });
+        const harness = createPlanHarness({ authorshipRoot });
         harness.deps.execute = executor(dir, journal);
         harness.fake.script({ reply: PLAIN });
         harness.script({ decision: "Approve" });
 
-        const code = yield* runPrompt(command(dir, [REQUEST]), harness.deps);
+        const code = yield* runPlan(command(dir, [REQUEST]), harness.deps);
         expect(code).toBe(0);
 
         const trace = yield* readTextFile(journal);
@@ -519,8 +635,8 @@ describe(
       // Default: the exact source on stdout, and nothing runs. Written with
       // `process.stdout.write`, so what a pipe receives is the bytes and not a
       // line the command added.
-      yield* useWorkingDirectory(function* (dir, profileRoot) {
-        const harness = createPromptHarness({ profileRoot });
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const harness = createPlanHarness({ authorshipRoot });
         harness.deps.execute = executor(dir);
         harness.fake.script({ reply: PLAIN });
         harness.script({ decision: "Approve" });
@@ -535,7 +651,7 @@ describe(
             written.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
             return true;
           }) as typeof process.stdout.write;
-          return yield* runPrompt(writing(dir, [REQUEST]), harness.deps);
+          return yield* runPlan(writing(dir, [REQUEST]), harness.deps);
         });
 
         expect(code).toBe(0);
@@ -547,8 +663,8 @@ describe(
       });
 
       // `--output`: the same bytes in the file, a quiet stdout, and still no run.
-      yield* useWorkingDirectory(function* (dir, profileRoot) {
-        const harness = createPromptHarness({ profileRoot });
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const harness = createPlanHarness({ authorshipRoot });
         harness.deps.execute = executor(dir);
         harness.fake.script({ reply: GREETER });
         harness.script({ decision: "Approve" });
@@ -563,10 +679,10 @@ describe(
             written.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
             return true;
           }) as typeof process.stdout.write;
-          return yield* runPrompt(
+          return yield* runPlan(
             {
               ...writing(dir, [REQUEST, "--props-name", "Ada"], "plan.md"),
-              argv: ["prompt", REQUEST, "--props-name", "Ada", "--output", "plan.md"],
+              argv: ["plan", REQUEST, "--props-name", "Ada", "--output", "plan.md"],
             },
             harness.deps,
           );
@@ -581,8 +697,8 @@ describe(
       });
 
       // `--run`: the Plan runs, and stdout is the Plan's own to use.
-      yield* useWorkingDirectory(function* (dir, profileRoot) {
-        const harness = createPromptHarness({ profileRoot });
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const harness = createPlanHarness({ authorshipRoot });
         harness.deps.execute = executor(dir);
         harness.fake.script({ reply: GREETER });
         harness.script({ decision: "Approve" });
@@ -597,7 +713,7 @@ describe(
             written.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
             return true;
           }) as typeof process.stdout.write;
-          return yield* runPrompt(command(dir, [REQUEST, "--props-name", "Ada"]), harness.deps);
+          return yield* runPlan(command(dir, [REQUEST, "--props-name", "Ada"]), harness.deps);
         });
 
         expect(code).toBe(0);
@@ -610,8 +726,8 @@ describe(
 
     it("C11: the approved bytes are created exclusively, before the run", function* () {
       // Created before execution, and byte for byte.
-      yield* useWorkingDirectory(function* (dir, profileRoot) {
-        const harness = createPromptHarness({ profileRoot });
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const harness = createPlanHarness({ authorshipRoot });
         const run = executor(dir);
         const seen: boolean[] = [];
         harness.deps.execute = function* (approved) {
@@ -621,7 +737,7 @@ describe(
         harness.fake.script({ reply: GREETER });
         harness.script({ decision: "Approve" });
 
-        const code = yield* runPrompt(
+        const code = yield* runPlan(
           command(dir, [REQUEST, "--props-name", "Ada"], "out.md"),
           harness.deps,
         );
@@ -634,14 +750,14 @@ describe(
       });
 
       // An existing path is left exactly as it is, and stops the run.
-      yield* useWorkingDirectory(function* (dir, profileRoot) {
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
         yield* writeTextFile(join(dir, "out.md"), "keep me\n");
-        const harness = createPromptHarness({ profileRoot });
+        const harness = createPlanHarness({ authorshipRoot });
         harness.deps.execute = executor(dir);
         harness.fake.script({ reply: PLAIN });
         harness.script({ decision: "Approve" });
 
-        const code = yield* runPrompt(command(dir, [REQUEST], "out.md"), harness.deps);
+        const code = yield* runPlan(command(dir, [REQUEST], "out.md"), harness.deps);
 
         expect(code).toBe(1);
         expect(yield* readTextFile(join(dir, "out.md"))).toBe("keep me\n");
@@ -649,13 +765,13 @@ describe(
       });
 
       // Without the option, no generated source file is created at all.
-      yield* useWorkingDirectory(function* (dir, profileRoot) {
-        const harness = createPromptHarness({ profileRoot });
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const harness = createPlanHarness({ authorshipRoot });
         harness.deps.execute = executor(dir);
         harness.fake.script({ reply: GREETER });
         harness.script({ decision: "Approve" });
 
-        const code = yield* runPrompt(command(dir, [REQUEST, "--props-name", "Ada"]), harness.deps);
+        const code = yield* runPlan(command(dir, [REQUEST, "--props-name", "Ada"]), harness.deps);
 
         expect(code).toBe(0);
         // Only what the document itself wrote.
@@ -663,22 +779,26 @@ describe(
       });
     });
 
-    it("C15: the approved source runs as an ordinary document under <prompt>", function* () {
-      yield* useWorkingDirectory(function* (dir, profileRoot) {
+    it("C15: the approved source runs as an ordinary document under <plan>", function* () {
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
         const journal = join(dir, "trace.jsonl");
-        const harness = createPromptHarness({ profileRoot });
+        const harness = createPlanHarness({ authorshipRoot });
         harness.deps.execute = executor(dir, journal);
         harness.fake.script({ reply: GREETER });
         harness.script({ decision: "Approve" });
 
-        const code = yield* runPrompt(
+        const code = yield* runPlan(
           command(dir, [REQUEST, "--props-name", "Ada"], "out.md"),
           harness.deps,
         );
         expect(code).toBe(0);
 
-        // The identity the run reports is the deliberate one.
-        expect(yield* readTextFile(journal)).toContain("<prompt>");
+        // The identity the run reports is the deliberate one, and the command
+        // owns no other.
+        const trace = yield* readTextFile(journal);
+        expect(trace).toContain("<plan>");
+        expect(trace).not.toContain("<prompt>");
+        expect(trace).not.toContain("<plan-command>");
         // Relative filesystem operations resolved the contextual cwd, not the
         // identity, so the document's own write landed beside the output file.
         expect(yield* exists(join(dir, "greeting.txt"))).toBe(true);
@@ -687,13 +807,13 @@ describe(
 
       // A runtime failure is an ordinary run failure: nonzero, with the file the
       // caller asked for still on disk to hand-edit.
-      yield* useWorkingDirectory(function* (dir, profileRoot) {
-        const harness = createPromptHarness({ profileRoot });
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const harness = createPlanHarness({ authorshipRoot });
         harness.deps.execute = executor(dir);
         harness.fake.script({ reply: FAILS_AT_RUN });
         harness.script({ decision: "Approve" });
 
-        const code = yield* runPrompt(command(dir, [REQUEST], "out.md"), harness.deps);
+        const code = yield* runPlan(command(dir, [REQUEST], "out.md"), harness.deps);
 
         expect(code).toBe(1);
         expect(yield* readTextFile(join(dir, "out.md"))).toBe(FAILS_AT_RUN);
@@ -704,8 +824,8 @@ describe(
     });
 
     it("C15: a failing test in the approved document reports as a run reports it", function* () {
-      yield* useWorkingDirectory(function* (dir, profileRoot) {
-        const harness = createPromptHarness({ profileRoot });
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const harness = createPlanHarness({ authorshipRoot });
         harness.deps.execute = executor(dir);
         harness.fake.script({ reply: FAILING_TEST });
         harness.script({ decision: "Approve" });
@@ -719,7 +839,7 @@ describe(
           console.error = (...parts: unknown[]) => {
             lines.push(parts.map((part) => String(part)).join(" "));
           };
-          return yield* runPrompt(command(dir, [REQUEST], "out.md"), harness.deps);
+          return yield* runPlan(command(dir, [REQUEST], "out.md"), harness.deps);
         });
 
         expect(code).toBe(1);
@@ -738,7 +858,7 @@ describe(
     });
 
     it("C15: one Agent resolution serves generation and the execution after it", function* () {
-      yield* useWorkingDirectory(function* (dir, profileRoot) {
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
         const reads: string[] = [];
         yield* useRecordedEnvironment(reads, { DEFAULT_AGENT_NAME: "settled-agent" });
 
@@ -760,12 +880,12 @@ describe(
         expect(stack.defaultAgent).toBe("settled-agent");
         expect(timesRead(reads, "DEFAULT_AGENT_NAME")).toBe(1);
 
-        const harness = createPromptHarness({ profileRoot });
+        const harness = createPlanHarness({ authorshipRoot });
         harness.deps.execute = executor(dir, undefined, stack);
         harness.fake.script({ reply: PLAIN });
         harness.script({ decision: "Approve" });
 
-        const code = yield* runPrompt({ ...command(dir, [REQUEST]), stack }, harness.deps);
+        const code = yield* runPlan({ ...command(dir, [REQUEST]), stack }, harness.deps);
 
         expect(code).toBe(0);
         // The command document resolved the settled agent rather than a name of
@@ -783,14 +903,14 @@ describe(
       // the turn in flight is cancelled, the provider is dismantled, and no later
       // phase begins. The barrier is what makes this a gate rather than a race —
       // the turn it interrupts is known to be running.
-      yield* useWorkingDirectory(function* (dir, profileRoot) {
-        const harness = createPromptHarness({ profileRoot });
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const harness = createPlanHarness({ authorshipRoot });
         harness.deps.execute = executor(dir);
         harness.fake.script({ reply: PLAIN, manual: true });
 
         yield* scoped(function* () {
           const running = yield* spawn(() =>
-            runPrompt(command(dir, [REQUEST], "out.md"), harness.deps),
+            runPlan(command(dir, [REQUEST], "out.md"), harness.deps),
           );
           yield* harness.fake.startedTurns(1);
           yield* running.halt();
@@ -804,14 +924,14 @@ describe(
 
       // A teardown failure prevents the final admission, the output file and the run,
       // whatever the command document selected.
-      yield* useWorkingDirectory(function* (dir, profileRoot) {
-        const harness = createPromptHarness({ profileRoot });
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const harness = createPlanHarness({ authorshipRoot });
         harness.deps.execute = executor(dir);
         harness.fake.closeFailure = new Error("the profile provider would not close");
         harness.fake.script({ reply: PLAIN });
         harness.script({ decision: "Approve" });
 
-        const code = yield* runPrompt(command(dir, [REQUEST], "out.md"), harness.deps);
+        const code = yield* runPlan(command(dir, [REQUEST], "out.md"), harness.deps);
 
         expect(code).toBe(1);
         expect(harness.executions).toHaveLength(0);
@@ -820,8 +940,8 @@ describe(
 
       // Nothing bounds an authoring turn: the exec and fetch defaults belong to
       // the document, and the run deadline is the enclosing timebox above.
-      yield* useWorkingDirectory(function* (dir, profileRoot) {
-        const harness = createPromptHarness({ profileRoot });
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const harness = createPlanHarness({ authorshipRoot });
         // deno-lint-ignore require-yield
         harness.deps.execute = function* () {
           return Ok(undefined);
@@ -829,17 +949,17 @@ describe(
         harness.fake.script({ reply: PLAIN });
         harness.script({ decision: "Approve" });
 
-        const code = yield* runPrompt(command(dir, [REQUEST]), harness.deps);
+        const code = yield* runPlan(command(dir, [REQUEST]), harness.deps);
         expect(code).toBe(0);
         expect(harness.fake.turns[0]?.timeoutMs).toBe(undefined);
       });
     });
 
-    it("C13: the deadline is the whole prompt command's, as it is a run's", function* () {
-      // Read for prompt exactly as for run: a value that is not a duration fails
+    it("C13: the deadline is the whole plan command's, as it is a run's", function* () {
+      // Read for plan exactly as for run: a value that is not a duration fails
       // the invocation before it prepares anything.
       for (const flag of ["--timeout", "--timeout-exec", "--timeout-fetch"]) {
-        const { code, stderr } = yield* runCli(["prompt", REQUEST, `${flag}=abc`]).join();
+        const { code, stderr } = yield* runCli(["plan", REQUEST, `${flag}=abc`]).join();
         expect(code).toBe(1);
         expect(stderr).toContain(flag);
       }
@@ -847,7 +967,7 @@ describe(
       // And it bounds the command rather than only its final document: the
       // deadline expires while the catalog is still being built, long before any
       // document exists to bound.
-      const expired = yield* runCli(["prompt", REQUEST, "--timeout=1ms"]).join();
+      const expired = yield* runCli(["plan", REQUEST, "--timeout=1ms"]).join();
       expect(expired.code).toBe(1);
       expect(expired.stderr).toContain("exceeded its --timeout of 1ms and was cancelled");
     });
