@@ -49,6 +49,7 @@ import { createAcpxProvider } from "@executablemd/acp";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { API } from "@executablemd/runtime";
+import { FormOpener } from "@executablemd/web";
 
 import { hostAcpDependencies } from "./agent-stack.ts";
 import type { AgentStack } from "./agent-stack.ts";
@@ -143,10 +144,12 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
     );
   }
 
-  // Taken before the profile's own scope, because putting this build's adapter
-  // on disk is host work and the profile refuses a command to everything inside
-  // it. The refusals are installed on the scope below, so this one still answers
-  // with the capabilities the entrypoint gave this invocation.
+  // Taken before the profile's own scope, because two of the things this command
+  // does are the host's rather than the document's — putting this build's adapter
+  // on disk, and opening the review form — and both run a command, which the
+  // profile refuses to everything inside it. The refusals are installed on the
+  // scope below, so this one still answers with the capabilities the entrypoint
+  // gave this invocation.
   const host = yield* useScope();
 
   return yield* scoped(function* (): Operation<Result<string>> {
@@ -162,6 +165,7 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
     const workdir = established.value;
 
     yield* refuseDocumentCapabilities();
+    yield* openFormsThroughHost(host);
     yield* profile.installElicitation();
 
     const acpx = createAcpxProvider(authorshipCeiling(profile, workdir, host));
@@ -299,6 +303,29 @@ export function authorshipCeiling(
     permissions: "strict",
     newSessionOptions: { systemPrompt: AUTHORSHIP_INSTRUCTIONS, allowedTools: [] },
   };
+}
+
+/**
+ * Open this host's own review form the way this host opens anything.
+ *
+ * Showing a person the review means running `open`, `xdg-open` or `start`, and
+ * the profile refuses a command to everything inside it — so `xmd plan` printed
+ * its form's URL and then warned that it could not open it, naming the ceiling as
+ * the reason. The act belongs to the host: it is the host's provider asking the
+ * host's question, about a URL the host is serving, and no document, agent or
+ * authored element decides that it happens or what it opens.
+ *
+ * Only the opening moves. Everything a document could reach through the profile —
+ * a file, a command, the network, a service — is refused exactly as before, and a
+ * launch that fails is still a warning printed beside a URL that stands on its
+ * own.
+ */
+function openFormsThroughHost(host: Scope): Operation<void> {
+  return FormOpener.around({
+    *open([url], next): Operation<void> {
+      yield* inScope(host, () => next(url));
+    },
+  });
 }
 
 /**
