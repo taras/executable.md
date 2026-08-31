@@ -1,6 +1,6 @@
 {
   "name": "@executablemd/web",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "Schema-backed local web form input for executable.md documents.",
   "type": "module",
   "exports": {
