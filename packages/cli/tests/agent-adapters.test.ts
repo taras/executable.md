@@ -98,7 +98,7 @@ describe("Tier AE — embedded adapters on the run and plan paths", () => {
   it("AE1: the run path resolves an embedded agent to this build's own adapter", function* () {
     const root = adapterRoot();
     const adapters = createEmbeddedAdapters(root);
-    const registry = hostAcpDependencies(stackWith(adapters), yield* useScope()).agentRegistry;
+    const registry = hostAcpDependencies(stackWith(adapters)).agentRegistry;
     if (registry === undefined) {
       throw new Error("the run path handed its provider no agent registry");
     }
@@ -116,10 +116,7 @@ describe("Tier AE — embedded adapters on the run and plan paths", () => {
 
   it("AE2: an agent this build carries no snapshot for resolves as it always did", function* () {
     const root = adapterRoot();
-    const registry = hostAcpDependencies(
-      stackWith(createEmbeddedAdapters(root)),
-      yield* useScope(),
-    ).agentRegistry;
+    const registry = hostAcpDependencies(stackWith(createEmbeddedAdapters(root))).agentRegistry;
     if (registry === undefined) {
       throw new Error("the run path handed its provider no agent registry");
     }
@@ -156,10 +153,7 @@ describe("Tier AE — embedded adapters on the run and plan paths", () => {
 
   it("AE4: preparing an agent this build carries nothing for writes nothing", function* () {
     const root = adapterRoot();
-    const prepare = hostAcpDependencies(
-      stackWith(createEmbeddedAdapters(root)),
-      yield* useScope(),
-    ).prepareAgent;
+    const prepare = hostAcpDependencies(stackWith(createEmbeddedAdapters(root))).prepareAgent;
     if (prepare === undefined) {
       throw new Error("the run path handed its provider no preparation");
     }

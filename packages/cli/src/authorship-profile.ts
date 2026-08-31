@@ -26,7 +26,7 @@
  * network capability either. It decides what to write; it writes nothing.
  */
 
-import { ensure, Err, Ok, scoped, until } from "effection";
+import { ensure, Err, Ok, scoped, until, useScope } from "effection";
 import type { Operation, Result, Scope } from "effection";
 import { createHash } from "node:crypto";
 import { mkdir, readdir, rmdir } from "node:fs/promises";
@@ -49,9 +49,9 @@ import { createAcpxProvider } from "@executablemd/acp";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { API } from "@executablemd/runtime";
+import { FormOpener } from "@executablemd/web";
 
 import { hostAcpDependencies } from "./agent-stack.ts";
-import { hostScope, installHostFormOpener } from "./host-acts.ts";
 import type { AgentStack } from "./agent-stack.ts";
 import { PLAN_COMMAND_DOCUMENT, readPackagedDocument } from "./packaged-document.ts";
 
@@ -150,7 +150,7 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
   // profile refuses to everything inside it. The refusals are installed on the
   // scope below, so this one still answers with the capabilities the entrypoint
   // gave this invocation.
-  const host = yield* hostScope();
+  const host = yield* useScope();
 
   return yield* scoped(function* (): Operation<Result<string>> {
     // First, and before anything is built: this session's directory is claimed,
@@ -164,7 +164,7 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
     }
     const workdir = established.value;
 
-    yield* installHostFormOpener(host);
+    yield* openFormsThroughHost(host);
     yield* profile.installElicitation();
 
     const acpx = createAcpxProvider(authorshipCeiling(profile, workdir, host));
@@ -296,8 +296,13 @@ export function authorshipCeiling(
   workdir: string,
   host: Scope,
 ): AcpxProviderDependencies {
+  const assembly = hostAcpDependencies(profile.stack);
+  const prepare = assembly.prepareAgent;
   return {
-    ...hostAcpDependencies(profile.stack, host),
+    ...assembly,
+    ...(prepare === undefined
+      ? {}
+      : { prepareAgent: (agentName: string) => inScope(host, () => prepare(agentName)) }),
     ...profile.acp,
     // deno-lint-ignore require-yield
     *agentCwd() {
@@ -307,6 +312,49 @@ export function authorshipCeiling(
     permissions: "strict",
     newSessionOptions: { systemPrompt: AUTHORSHIP_INSTRUCTIONS, allowedTools: [] },
   };
+}
+
+/**
+ * Open this host's own review form the way this host opens anything.
+ *
+ * A ceiling refuses *ambiently*: the middleware sits on a scope, and a call
+ * carries no mark saying who made it — `API.Process.exec` looks the same whether
+ * an `exec` fence reached it or this host did. So showing a person the review,
+ * which runs `open`, `xdg-open` or `start`, was refused as though the document
+ * had asked, and `xmd plan` printed its URL and warned that it could not open it.
+ *
+ * The act is the host's: its provider asking its question, about a URL it is
+ * serving, decided by no document, agent or authored element. Only the opening
+ * moves — a file, a command, the network and a service stay refused — and a
+ * failed launch is still a warning printed beside a URL that stands on its own.
+ */
+function openFormsThroughHost(host: Scope): Operation<void> {
+  return FormOpener.around({
+    *open([url], next): Operation<void> {
+      yield* inScope(host, () => next(url));
+    },
+  });
+}
+
+/**
+ * Run one operation in a scope this one is nested inside, and wait for it here.
+ *
+ * The waiting is what makes it this operation's work: a task created in an outer
+ * scope outlives its creator by construction, so the halt is registered before
+ * the wait and an ended command takes an unfinished act with it rather than
+ * leaving one running under a conversation that is over.
+ *
+ * `@effectionx/scope-eval` answers a different question. Its worker decouples the
+ * call from the work — the operation finishes even when the caller is gone, which
+ * is what `persist`, `daemon` and `service` want from it and the opposite of what
+ * a host act wants.
+ */
+function* inScope<T>(scope: Scope, operation: () => Operation<T>): Operation<T> {
+  return yield* scoped(function* () {
+    const task = scope.run(operation);
+    yield* ensure(() => task.halt());
+    return yield* task;
+  });
 }
 
 /**

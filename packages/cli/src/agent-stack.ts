@@ -32,12 +32,11 @@ import {
 } from "@executablemd/acp/embedded-adapters";
 import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import { Err, Ok } from "effection";
-import type { Operation, Result, Scope } from "effection";
+import type { Operation, Result } from "effection";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { resolveAgentConfig } from "./agent-config.ts";
-import { hostScope, inScope } from "./host-acts.ts";
 import type { AgentFlags } from "./agent-config.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 
@@ -113,21 +112,9 @@ export function* resolveAgentStack(
  * ones a document could replace are not ones. The two advertised sets are stated
  * by the host, not inherited.
  */
-export function hostAcpDependencies(stack: AgentStack, host: Scope): AcpxProviderDependencies {
+export function hostAcpDependencies(stack: AgentStack): AcpxProviderDependencies {
   const { sessions } = stack;
-  const stated = embeddedAdapterDependencies(stack.adapters);
-  const prepare = stated.prepareAgent;
-  const adapters: AcpxProviderDependencies = {
-    ...stated,
-    // Installing this build's adapter is the host's act, so it runs in the
-    // host's scope. Under a profile that refuses its document a command, that
-    // is the difference between installing the adapter and being refused as
-    // though the document had asked (src/host-acts.ts); under a host with no
-    // ceiling it changes nothing.
-    ...(prepare === undefined
-      ? {}
-      : { prepareAgent: (agentName: string) => inScope(host, () => prepare(agentName)) }),
-  };
+  const adapters = embeddedAdapterDependencies(stack.adapters);
   if (sessions === undefined) {
     return adapters;
   }
@@ -151,7 +138,7 @@ export function hostAcpDependencies(stack: AgentStack, host: Scope): AcpxProvide
  * asks for no agent installs no adapter.
  */
 export function* installRunAgentStack(stack: AgentStack): Operation<void> {
-  const acpx = createAcpxProvider(hostAcpDependencies(stack, yield* hostScope()));
+  const acpx = createAcpxProvider(hostAcpDependencies(stack));
   yield* registerAgentProvider("acpx", acpx);
 
   // The trusted host selects its own root provider by name. Document-level
