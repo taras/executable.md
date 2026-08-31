@@ -581,6 +581,12 @@ network capability, and the host decides for that whole execution that a failing
 `<Prompt>` ends it — so a turn that streamed text and then failed presents
 nothing.
 
+That refusal covers the document, and installing this build's adapter is not the
+document's act: it runs a command, and it runs it in the scope the invocation was
+called in rather than inside the profile. Nothing the document, the assistant or
+an authored element reaches can get there — the host prepares the adapter it was
+always going to launch, and an ended command takes an unfinished install with it.
+
 The profile's working directory is derived from the logical session name rather
 than shared or freshly made: `~/.xmd/plan/sessions/<sha256(name)>`, with the
 digest in the path and never the name. A session's key includes the directory it

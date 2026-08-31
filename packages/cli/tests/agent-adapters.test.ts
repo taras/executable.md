@@ -20,9 +20,10 @@ import { exists } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { API } from "@executablemd/runtime";
+import { API, exec } from "@executablemd/runtime";
 import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
+import { useScope } from "effection";
 import type { Operation } from "effection";
 
 import {
@@ -33,6 +34,9 @@ import {
 import type { AgentStack } from "../src/agent-stack.ts";
 import { authorshipCeiling } from "../src/authorship-profile.ts";
 import type { AuthorshipProfile, CandidateAssessment } from "../src/authorship-profile.ts";
+import { runPlan } from "../src/plan.ts";
+import { scanPlanArgs } from "../src/plan-args.ts";
+import { AGENT, createPlanHarness, useWorkingDirectory } from "./support/plan-harness.ts";
 
 /** The two agents this build carries a patched snapshot for. */
 const EMBEDDED = ["codex", "claude"] as const;
@@ -44,6 +48,32 @@ function adapterRoot(): string {
 
 function stackWith(adapters: EmbeddedAdapters): AgentStack {
   return { provider: "acpx", defaultAgent: "codex", permissionMode: "deny-all", adapters };
+}
+
+/** A Plan the profile's validator accepts and the command writes out. */
+const PLAN = ['<File path="drafted.txt">the draft ran</File>', ""].join("\n");
+
+const REQUEST = "write a greeting";
+
+/**
+ * Adapters that carry the scripted agent and install it the way the real ones
+ * do: by running a command.
+ *
+ * The bytes are not the point — the capability is. A real snapshot install runs
+ * `npm install` in a private directory, and this stands in for it so a case can
+ * observe which scope that command was reached from.
+ */
+function installingAdapters(prepared: string[]): EmbeddedAdapters {
+  return {
+    providers: [AGENT],
+    identity: () => `test-embedded:${AGENT}`,
+    executablePath: () => join(tmpdir(), "never-written", "index.js"),
+    command: () => `${AGENT}-cmd`,
+    *materialize(provider: string): Operation<void> {
+      prepared.push(provider);
+      yield* exec({ command: ["npm", "install"] });
+    },
+  };
 }
 
 /** The profile `xmd plan` builds its ceiling from, with nothing else supplied. */
@@ -105,7 +135,7 @@ describe("Tier AE — embedded adapters on the run and plan paths", () => {
     const root = adapterRoot();
     const adapters = createEmbeddedAdapters(root);
     const stack = stackWith(adapters);
-    const ceiling = authorshipCeiling(profileWith(stack), join(root, "workdir"));
+    const ceiling = authorshipCeiling(profileWith(stack), join(root, "workdir"), yield* useScope());
     const registry = ceiling.agentRegistry;
     if (registry === undefined) {
       throw new Error("the plan path handed its provider no agent registry");
@@ -134,6 +164,61 @@ describe("Tier AE — embedded adapters on the run and plan paths", () => {
     // other name is already a command on this machine, and asking about one
     // creates no directory to install into.
     expect(yield* exists(root)).toBe(false);
+  });
+
+  it("AE6: the plan profile prepares its adapter through the host, not the document", function* () {
+    yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+      // The command an install runs, answered here rather than spawned. What the
+      // case is about is which capability the preparation reaches, and a real
+      // `npm install` would answer that question with a subprocess.
+      //
+      // At `min`, so it is the weakest thing in the chain: the profile's own
+      // refusal is installed at the default strength and still wins wherever it
+      // applies. A recorder that outranked it would answer for the refused call
+      // too, and the case would pass against the defect.
+      const commands: string[][] = [];
+      yield* API.Process.around(
+        {
+          // deno-lint-ignore require-yield
+          *exec([options]) {
+            commands.push([...options.command]);
+            return { exitCode: 0, stdout: "", stderr: "" };
+          },
+        },
+        { at: "min" },
+      );
+
+      const prepared: string[] = [];
+      const harness = createPlanHarness({ authorshipRoot });
+      harness.fake.script({ reply: PLAN });
+      harness.script({ decision: "Approve" });
+
+      const argv = ["plan", REQUEST];
+      const code = yield* runPlan(
+        {
+          argv,
+          scan: scanPlanArgs(argv),
+          include: [dir],
+          output: join(dir, "plan.md"),
+          run: false,
+          stack: { ...stackWith(installingAdapters(prepared)), defaultAgent: AGENT },
+        },
+        harness.deps,
+      );
+
+      // The profile refuses a command to everything inside it, and putting this
+      // build's adapter on disk runs one. Preparation therefore happens in the
+      // scope the command was called in — the defect that made a real
+      // `xmd plan` end with "asked for a command, which the authorship profile
+      // grants to nothing" before any turn.
+      // Once per agent resolution — the document resolves one several times, and
+      // preparing an agent already prepared is defined to be harmless.
+      expect(prepared.length).toBeGreaterThan(0);
+      expect([...new Set(prepared)]).toEqual([AGENT]);
+      expect(commands).toEqual(prepared.map(() => ["npm", "install"]));
+      expect(code).toBe(0);
+      expect(yield* exists(join(dir, "plan.md"))).toBe(true);
+    });
   });
 
   it("AE5: a settled stack carries this host's own adapter root", function* () {

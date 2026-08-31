@@ -26,8 +26,8 @@
  * network capability either. It decides what to write; it writes nothing.
  */
 
-import { ensure, Err, Ok, scoped, until } from "effection";
-import type { Operation, Result } from "effection";
+import { ensure, Err, Ok, scoped, until, useScope } from "effection";
+import type { Operation, Result, Scope } from "effection";
 import { createHash } from "node:crypto";
 import { mkdir, readdir, rmdir } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -143,6 +143,12 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
     );
   }
 
+  // Taken before the profile's own scope, because putting this build's adapter
+  // on disk is host work and the profile refuses a command to everything inside
+  // it. The refusals are installed on the scope below, so this one still answers
+  // with the capabilities the entrypoint gave this invocation.
+  const host = yield* useScope();
+
   return yield* scoped(function* (): Operation<Result<string>> {
     // First, and before anything is built: this session's directory is claimed,
     // established and proven empty, or the command stops here. Nothing has been
@@ -158,7 +164,7 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
     yield* refuseDocumentCapabilities();
     yield* profile.installElicitation();
 
-    const acpx = createAcpxProvider(authorshipCeiling(profile, workdir));
+    const acpx = createAcpxProvider(authorshipCeiling(profile, workdir, host));
     yield* registerAgentProvider("acpx", acpx);
     const options = {
       defaultAgent: profile.stack.defaultAgent,
@@ -262,6 +268,12 @@ function validator(profile: AuthorshipProfile): IdentityComponent {
  * the approved Plan. A ceiling built without them resolved Codex and Claude
  * through ACPX's published pins and could reach neither (#672).
  *
+ * Putting one on disk runs `npm install`, which is the one thing this profile
+ * refuses to everything inside it. So preparation runs in `host` — the scope
+ * this command was called in, which the refusals below were never installed on.
+ * The distinction is the whole of it: the document decides what to write and may
+ * run nothing, while the host installs the adapter it was always going to launch.
+ *
  * Exported for the suite that pins exactly that: what a provider is built from
  * is not observable through a provider, and a case that could only watch a turn
  * fail would be reading a live agent's machine rather than this host's decision.
@@ -269,9 +281,15 @@ function validator(profile: AuthorshipProfile): IdentityComponent {
 export function authorshipCeiling(
   profile: AuthorshipProfile,
   workdir: string,
+  host: Scope,
 ): AcpxProviderDependencies {
+  const assembly = hostAcpDependencies(profile.stack);
+  const prepare = assembly.prepareAgent;
   return {
-    ...hostAcpDependencies(profile.stack),
+    ...assembly,
+    ...(prepare === undefined
+      ? {}
+      : { prepareAgent: (agentName: string) => inScope(host, () => prepare(agentName)) }),
     ...profile.acp,
     // deno-lint-ignore require-yield
     *agentCwd() {
@@ -281,6 +299,22 @@ export function authorshipCeiling(
     permissions: "strict",
     newSessionOptions: { systemPrompt: AUTHORSHIP_INSTRUCTIONS, allowedTools: [] },
   };
+}
+
+/**
+ * Run one operation in a scope this one is nested inside, and wait for it there.
+ *
+ * The wait is what makes it this operation's: a task created in an outer scope
+ * outlives the caller by construction, so the halt is registered before the wait
+ * and an ended command takes the work with it rather than leaving an install
+ * running under a conversation that is over.
+ */
+function* inScope<T>(scope: Scope, operation: () => Operation<T>): Operation<T> {
+  return yield* scoped(function* () {
+    const task = scope.run(operation);
+    yield* ensure(() => task.halt());
+    return yield* task;
+  });
 }
 
 /**
