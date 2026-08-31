@@ -581,14 +581,18 @@ network capability, and the host decides for that whole execution that a failing
 `<Prompt>` ends it — so a turn that streamed text and then failed presents
 nothing.
 
-That refusal covers the document. Two things the command itself does are not the
-document's acts, and both run a command: installing this build's adapter, and
-opening the review form in a browser. Each runs in the scope the invocation was
-called in rather than inside the profile. Nothing the document, the assistant or
-an authored element reaches can get there — the host prepares the adapter it was
-always going to launch and opens the form it is already serving — and an ended
-command takes an unfinished install with it. A failed open stays a warning beside
-the printed URL.
+Those refusals are installed on a scope holding the document execution and
+nothing else, so what the ceiling covers is what it says it covers.
+
+It cannot tell the host's own acts from the document's on its own. A call carries
+no mark saying who made it, and a provider's work happens inside the execution
+that reached it — core constructs a root provider from within the document — so a
+refusal over that scope covers both parties. Two things the command does are the
+host's, and both run a command: installing this build's adapter, and opening the
+review form in a browser. The command therefore takes its own scope before it
+installs the ceiling and states those two acts as its own; they run there, and
+everything else stays refused. An ended command takes an unfinished install with
+it, and a failed open stays a warning beside the printed URL.
 
 The profile's working directory is derived from the logical session name rather
 than shared or freshly made: `~/.xmd/plan/sessions/<sha256(name)>`, with the
