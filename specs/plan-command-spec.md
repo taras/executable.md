@@ -288,10 +288,12 @@ provider:
   document itself.
 
 The provider may use its own transport to perform the model turn; that does not
-grant the Agent a native network tool. Nor does putting this build's own ACP
-adapter on disk, which runs a command in the scope that invoked `xmd plan`: the
-document is refused a command, and the host still installs the adapter it is
-about to launch ([`xmd run` and `xmd plan`](./acp-client-spec.md)).
+grant the Agent a native network tool. Nor do the two acts the command performs
+as the host — putting this build's own ACP adapter on disk, and opening the
+review form in a browser — each of which runs a command in the scope that invoked
+`xmd plan`. The document is refused a command; the host still installs the
+adapter it is about to launch and opens the form it is already serving
+([`xmd run` and `xmd plan`](./acp-client-spec.md)).
 
 `--approve-all`, `--approve-reads` and `--deny-all` do not change this ceiling.
 They apply to the approved Plan later. A provider that cannot establish this

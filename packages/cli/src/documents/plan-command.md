@@ -155,10 +155,15 @@ you may ask the coding agent to explain what went wrong or stop.
     required: ["decision"],
     additionalProperties: false,
     if: {
+      type: "object",
       properties: { decision: { const: "Request changes" } },
       required: ["decision"],
     },
-    then: { required: ["feedback"], properties: { feedback: { type: "string", minLength: 1 } } },
+    then: {
+      type: "object",
+      required: ["feedback"],
+      properties: { feedback: { type: "string", minLength: 1 } },
+    },
   }}
 >
 ### Original Prompt

@@ -49,6 +49,7 @@ import { createAcpxProvider } from "@executablemd/acp";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { API } from "@executablemd/runtime";
+import { FormOpener } from "@executablemd/web";
 
 import { hostAcpDependencies } from "./agent-stack.ts";
 import type { AgentStack } from "./agent-stack.ts";
@@ -143,10 +144,12 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
     );
   }
 
-  // Taken before the profile's own scope, because putting this build's adapter
-  // on disk is host work and the profile refuses a command to everything inside
-  // it. The refusals are installed on the scope below, so this one still answers
-  // with the capabilities the entrypoint gave this invocation.
+  // Taken before the profile's own scope, because two of the things this command
+  // does are the host's rather than the document's — putting this build's adapter
+  // on disk, and opening the review form — and both run a command, which the
+  // profile refuses to everything inside it. The refusals are installed on the
+  // scope below, so this one still answers with the capabilities the entrypoint
+  // gave this invocation.
   const host = yield* useScope();
 
   return yield* scoped(function* (): Operation<Result<string>> {
@@ -161,7 +164,7 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
     }
     const workdir = established.value;
 
-    yield* refuseDocumentCapabilities();
+    yield* openFormsThroughHost(host);
     yield* profile.installElicitation();
 
     const acpx = createAcpxProvider(authorshipCeiling(profile, workdir, host));
@@ -184,28 +187,38 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
 
     const source = yield* readPackagedDocument(PLAN_COMMAND_DOCUMENT);
     try {
-      const approved = yield* collect(
-        yield* executeInstalled(
-          {
-            ...retainedSource(PLAN_COMMAND_IDENTITY, source),
-            // Invocation-owned and thrown away with the scope. Ordinary document
-            // and Prompt semantics need a durable stream; nothing about writing a
-            // Plan needs a durable one, and `--journal` belongs to the Plan you
-            // approved rather than to the conversation that wrote it.
-            stream: new InMemoryStream(),
-            // No repository component search. What the document may name is
-            // what this profile declares, so a file in the caller's tree cannot
-            // answer for `<CheckDraft>`, `<Prompt>` or anything else.
-            includes: [],
-            props: {
-              request: profile.request,
-              syntax: profile.syntax,
-              session: profile.session,
+      // The refusals go on a scope holding the document and nothing else, so
+      // what the ceiling covers is what it says it covers. It cannot separate
+      // the host's own acts from the document's on its own — a provider's work
+      // happens inside this execution, and `API.Process.exec` looks the same
+      // whichever party reached it — which is why those acts are stated above
+      // and run in the host's scope (src/host-acts.ts).
+      const approved = yield* scoped(function* (): Operation<Json> {
+        yield* refuseDocumentCapabilities();
+        return yield* collect(
+          yield* executeInstalled(
+            {
+              ...retainedSource(PLAN_COMMAND_IDENTITY, source),
+              // Invocation-owned and thrown away with the scope. Ordinary
+              // document and Prompt semantics need a durable stream; nothing
+              // about writing a Plan needs a durable one, and `--journal`
+              // belongs to the Plan you approved rather than to the
+              // conversation that wrote it.
+              stream: new InMemoryStream(),
+              // No repository component search. What the document may name is
+              // what this profile declares, so a file in the caller's tree
+              // cannot answer for `<CheckDraft>`, `<Prompt>` or anything else.
+              includes: [],
+              props: {
+                request: profile.request,
+                syntax: profile.syntax,
+                session: profile.session,
+              },
             },
-          },
-          [{ components: [...agentIdentityComponents(), validator(profile)] }],
-        ),
-      );
+            [{ components: [...agentIdentityComponents(), validator(profile)] }],
+          ),
+        );
+      });
       if (typeof approved !== "string") {
         return Err(new Error("the plan command document returned something that is not a Plan"));
       }
@@ -269,10 +282,10 @@ function validator(profile: AuthorshipProfile): IdentityComponent {
  * through ACPX's published pins and could reach neither (#672).
  *
  * Putting one on disk runs `npm install`, which is the one thing this profile
- * refuses to everything inside it. So preparation runs in `host` — the scope
- * this command was called in, which the refusals below were never installed on.
- * The distinction is the whole of it: the document decides what to write and may
- * run nothing, while the host installs the adapter it was always going to launch.
+ * refuses to everything inside it, so the host states that act as its own and it
+ * runs in `host` (src/host-acts.ts). The distinction is the whole of it: the
+ * document decides what to write and may run nothing, while the host installs
+ * the adapter it was always going to launch.
  *
  * Exported for the suite that pins exactly that: what a provider is built from
  * is not observable through a provider, and a case that could only watch a turn
@@ -302,12 +315,39 @@ export function authorshipCeiling(
 }
 
 /**
- * Run one operation in a scope this one is nested inside, and wait for it there.
+ * Open this host's own review form the way this host opens anything.
  *
- * The wait is what makes it this operation's: a task created in an outer scope
- * outlives the caller by construction, so the halt is registered before the wait
- * and an ended command takes the work with it rather than leaving an install
- * running under a conversation that is over.
+ * A ceiling refuses *ambiently*: the middleware sits on a scope, and a call
+ * carries no mark saying who made it — `API.Process.exec` looks the same whether
+ * an `exec` fence reached it or this host did. So showing a person the review,
+ * which runs `open`, `xdg-open` or `start`, was refused as though the document
+ * had asked, and `xmd plan` printed its URL and warned that it could not open it.
+ *
+ * The act is the host's: its provider asking its question, about a URL it is
+ * serving, decided by no document, agent or authored element. Only the opening
+ * moves — a file, a command, the network and a service stay refused — and a
+ * failed launch is still a warning printed beside a URL that stands on its own.
+ */
+function openFormsThroughHost(host: Scope): Operation<void> {
+  return FormOpener.around({
+    *open([url], next): Operation<void> {
+      yield* inScope(host, () => next(url));
+    },
+  });
+}
+
+/**
+ * Run one operation in a scope this one is nested inside, and wait for it here.
+ *
+ * The waiting is what makes it this operation's work: a task created in an outer
+ * scope outlives its creator by construction, so the halt is registered before
+ * the wait and an ended command takes an unfinished act with it rather than
+ * leaving one running under a conversation that is over.
+ *
+ * `@effectionx/scope-eval` answers a different question. Its worker decouples the
+ * call from the work — the operation finishes even when the caller is gone, which
+ * is what `persist`, `daemon` and `service` want from it and the opposite of what
+ * a host act wants.
  */
 function* inScope<T>(scope: Scope, operation: () => Operation<T>): Operation<T> {
   return yield* scoped(function* () {

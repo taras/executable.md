@@ -232,6 +232,66 @@ describe("compile: the server is built the way the browser is", () => {
       });
     }
   });
+
+  /**
+   * A conditional branch is compiled on its own, so it declares its own type.
+   *
+   * The generator does not compile the schema as one piece: RJSF's schema parser
+   * extracts `if`, `then` and the rest into separate schemas and compiles each as
+   * a root. A branch that leaned on its parent for `type` is then a schema with
+   * `required` and no type at all, which strict mode refuses — while the server,
+   * compiling the whole thing in one piece, reads the type from the parent and
+   * accepts it.
+   *
+   * So the two sides disagree about a schema an author can write, and the
+   * disagreement surfaces at the moment the form is asked for. This is the
+   * authoring rule that follows, pinned in both directions.
+   */
+  it("refuses a conditional branch that leans on its parent for a type", function* () {
+    const branchWithoutType = {
+      type: "object",
+      properties: { decision: { type: "string" }, feedback: { type: "string" } },
+      required: ["decision"],
+      if: { properties: { decision: { const: "Request changes" } }, required: ["decision"] },
+      then: { required: ["feedback"], properties: { feedback: { type: "string", minLength: 1 } } },
+    };
+    // The server compiles it, which is the disagreement: only the message the
+    // browser generator produced says this schema cannot be served.
+    expect(() => compileForm(parseDeclaration("WebForm", branchWithoutType))).toThrow(
+      SchemaCompileError,
+    );
+    expect(() => compileForm(parseDeclaration("WebForm", branchWithoutType))).toThrow(
+      /compiled for the browser[\s\S]*strictTypes/,
+    );
+
+    const branchWithType = {
+      ...branchWithoutType,
+      if: {
+        type: "object",
+        properties: { decision: { const: "Request changes" } },
+        required: ["decision"],
+      },
+      then: {
+        type: "object",
+        required: ["feedback"],
+        properties: { feedback: { type: "string", minLength: 1 } },
+      },
+    };
+    const compiled = compileForm(parseDeclaration("WebForm", branchWithType));
+    // More than one, which is the mechanism itself: the branches were extracted
+    // and compiled as schemas of their own, which is why each needs a type.
+    const registration = yield* runValidatorScript(compiled.validatorScript);
+    expect(Object.keys(registration.validateFns).length).toBeGreaterThan(1);
+
+    const accepted: JsonObject[] = [
+      { decision: "Approve" },
+      { decision: "Request changes", feedback: "say more" },
+    ];
+    for (const data of accepted) {
+      expect({ data, server: compiled.validate(data) }).toEqual({ data, server: true });
+    }
+    expect(compiled.validate({ decision: "Request changes" })).toBe(false);
+  });
 });
 
 describe("compile: what the browser receives is JSON, not source", () => {

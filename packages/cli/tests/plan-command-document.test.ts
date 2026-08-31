@@ -189,4 +189,27 @@ describe("the packaged plan command document", () => {
     expect(run.failure).toBe(undefined);
     expect(run.value).toBe(CANDIDATE);
   });
+
+  /**
+   * The review this document asks has to be servable as a browser form, which
+   * is how `xmd plan` asks it: `installWebElicitation` compiles the request's
+   * schema before a port exists.
+   *
+   * Compiling for the browser extracts each conditional branch and compiles it
+   * as a schema of its own, so a branch that reached `required` through its
+   * parent's type is refused there while the server accepts it
+   * (`packages/web/tests/compile.test.ts`, and specs/web-form-spec.md
+   * §The preflight boundary). Until both branches said `object`, a real
+   * `xmd plan` completed its turn and then ended at the review with
+   * `<WebForm> schema could not be compiled for the browser`.
+   */
+  it("C9: every conditional branch of the review schema declares its own type", function* () {
+    const run = yield* useWorkingDirectory(function* () {
+      return yield* runDocument();
+    });
+
+    const schema = Object(run.reviews[0]?.schema);
+    expect(Reflect.get(Object(Reflect.get(schema, "if")), "type")).toBe("object");
+    expect(Reflect.get(Object(Reflect.get(schema, "then")), "type")).toBe("object");
+  });
 });

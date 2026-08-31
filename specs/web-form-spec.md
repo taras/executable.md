@@ -50,6 +50,14 @@ same-document `$ref` that resolves to nothing is valid draft-07 and unusable. Ha
 compilation happened during the run, that schema would have read the browser
 assets, begun a durable operation, and recorded its failure.
 
+Compiling for the browser takes the schema apart: `if`, `then`, `else` and the
+other subschema keywords are extracted and compiled as schemas of their own. A
+branch therefore declares its own `type` — one that reached `required` through
+its parent's type is a typeless schema by the time it is compiled, and strict
+mode refuses it. The server, compiling the whole schema in one piece, accepts
+that same branch, so this is the one shape the two sides read differently and the
+refusal names which side produced it.
+
 ## The live form
 
 `liveForm()` is the browser interaction without the component around it, so
