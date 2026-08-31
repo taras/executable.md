@@ -1,7 +1,7 @@
 /**
  * The Markdown documents this CLI ships and executes itself.
  *
- * `xmd prompt` runs a first-party document rather than a TypeScript policy, so
+ * `xmd plan` runs a first-party document rather than a TypeScript policy, so
  * that document has to be present wherever the command is: a source checkout, a
  * published npm package, and a compiled binary with no checkout at all. It is
  * located from this module's own URL, never from the working directory and never
@@ -20,8 +20,8 @@ import { readFile } from "node:fs/promises";
 import { until } from "effection";
 import type { Operation } from "effection";
 
-/** The document `xmd prompt` executes to turn a request into a Plan. */
-export const PROMPT_COMMAND_DOCUMENT = "prompt-command.md";
+/** The document `xmd plan` executes to turn a request into a Plan. */
+export const PLAN_COMMAND_DOCUMENT = "plan-command.md";
 
 /**
  * Where a packaged document lives, as a URL beside this module.

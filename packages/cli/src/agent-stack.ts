@@ -2,11 +2,11 @@
  * The one Agent configuration an invocation resolves, and the two things a
  * host does with it (specs/acp-client-spec.md §Command-line configuration).
  *
- * `xmd run` and `xmd prompt` take the same Agent, permission and provider
+ * `xmd run` and `xmd plan` take the same Agent, permission and provider
  * options, so they resolve them once, here, rather than each reading the flags
  * again. What they do with the result differs, and deliberately: a run installs
  * the registered provider into the Agent Api so a document may reach it, while
- * `xmd prompt` hands the same answer to two consumers — the prompt profile, which
+ * `xmd plan` hands the same answer to two consumers — the authorship profile, which
  * takes the provider name and the default agent and nothing else, and the
  * approved document, which runs the ordinary run stack.
  *

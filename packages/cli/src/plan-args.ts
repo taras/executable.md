@@ -1,6 +1,6 @@
 /**
- * `xmd prompt` argument grammar — everything decidable before a document exists
- * (specs/prompt-command-spec.md).
+ * `xmd plan` argument grammar — everything decidable before a document exists
+ * (specs/plan-command-spec.md).
  *
  * A pure function over argv. It reads no Context Apis, contacts no agent, and
  * inspects nothing on disk, which is what lets the command refuse a malformed
@@ -19,7 +19,7 @@
 import { AGGREGATE_OPTION } from "./props.ts";
 import type { Binding } from "./props.ts";
 
-export const PROMPT_COMMAND = "prompt";
+export const PLAN_COMMAND = "plan";
 export const OUTPUT_OPTION = "--output";
 export const SESSION_OPTION = "--session";
 export const RUN_OPTION = "--run";
@@ -57,7 +57,7 @@ const SWITCH_OPTIONS: readonly string[] = [
 /**
  * The options that configure the Plan's execution and nothing else.
  *
- * `xmd prompt` prints an approved Plan unless `--run` asks for it to be run, so
+ * `xmd plan` prints an approved Plan unless `--run` asks for it to be run, so
  * each of these describes work that would not happen. Accepting one silently
  * would mean answering a caller who asked for a journal, a permission mode or an
  * exec deadline with a command that creates none of them.
@@ -127,8 +127,8 @@ export interface PropertyOccurrence {
   provisional?: string;
 }
 
-/** What fixed grammar establishes about one `xmd prompt` command line. */
-export interface PromptScan {
+/** What fixed grammar establishes about one `xmd plan` command line. */
+export interface PlanScan {
   /** The request, byte for byte, when exactly one was written. */
   request?: string;
   /**
@@ -147,17 +147,16 @@ export interface PromptScan {
   error?: string;
 }
 
-/** Whether these arguments select the `prompt` command. */
-export function namesPrompt(args: readonly string[]): boolean {
-  return args[0] === PROMPT_COMMAND;
+/** Whether these arguments select the `plan` command. */
+export function namesPlan(args: readonly string[]): boolean {
+  return args[0] === PLAN_COMMAND;
 }
 
 const ORDER_HELP =
-  "document properties follow the request, as in " +
-  '`xmd prompt "<request>" --props-name <value>`';
+  "document properties follow the request, as in " + '`xmd plan "<request>" --props-name <value>`';
 
-export function scanPromptArgs(args: readonly string[]): PromptScan {
-  const fixed: string[] = [PROMPT_COMMAND];
+export function scanPlanArgs(args: readonly string[]): PlanScan {
+  const fixed: string[] = [PLAN_COMMAND];
   const occurrences: PropertyOccurrence[] = [];
   let request: string | undefined;
   let extra: string | undefined;
@@ -221,9 +220,9 @@ export function scanPromptArgs(args: readonly string[]): PromptScan {
           occurrences,
           error:
             name === "--save"
-              ? `unrecognized option for xmd prompt: --save — the approved Plan goes to stdout, ` +
+              ? `unrecognized option for xmd plan: --save — the approved Plan goes to stdout, ` +
                 `and ${OUTPUT_OPTION} writes it to a file`
-              : `unrecognized option for xmd prompt: ${name}`,
+              : `unrecognized option for xmd plan: ${name}`,
         };
       }
 
@@ -300,7 +299,7 @@ export function scanPromptArgs(args: readonly string[]): PromptScan {
       fixed,
       occurrences,
       error:
-        `unrecognized argument for xmd prompt: ${extra} — the command takes exactly one ` +
+        `unrecognized argument for xmd plan: ${extra} — the command takes exactly one ` +
         "request, and " +
         ORDER_HELP,
     };
@@ -310,7 +309,7 @@ export function scanPromptArgs(args: readonly string[]): PromptScan {
     return {
       fixed,
       occurrences,
-      error: 'xmd prompt requires one request — `xmd prompt "<what you want>"`',
+      error: 'xmd plan requires one request — `xmd plan "<what you want>"`',
     };
   }
 
@@ -319,7 +318,7 @@ export function scanPromptArgs(args: readonly string[]): PromptScan {
       request,
       fixed,
       occurrences,
-      error: "xmd prompt requires a request with at least one non-whitespace character",
+      error: "xmd plan requires a request with at least one non-whitespace character",
     };
   }
 
@@ -412,7 +411,7 @@ export function strayPropertyValue(
     const binding = byOption.get(occurrence.option);
     if (binding?.boolean === true) {
       return (
-        `unrecognized argument for xmd prompt: ${provisional} — ${occurrence.option} is a ` +
+        `unrecognized argument for xmd plan: ${provisional} — ${occurrence.option} is a ` +
         `switch, so this is a second request; write \`${occurrence.option}=${provisional}\` ` +
         "to give it a value"
       );

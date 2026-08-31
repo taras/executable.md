@@ -11,7 +11,7 @@ returns:
   type: string
 ---
 
-# `xmd prompt` turns steps into a program
+# `xmd plan` turns steps into a program
 
 This document is a workflow that generates an executable Plan from a sequence of
 steps. It combines the original Prompt, which describes those steps, with the XMD
@@ -23,7 +23,7 @@ plan must be interpreted again before its steps can happen. An XMD Plan already
 contains those executable steps, so running it simply executes them.
 
 A draft remains text while this workflow reviews it. Nothing in it runs before
-you approve it. After approval, `xmd prompt` validates the exact source again. By
+you approve it. After approval, `xmd plan` validates the exact source again. By
 default it prints the approved XMD source. `--output` writes that source to a
 file instead, and `--run` executes the Plan. With both options, the command
 writes the source before running it.
@@ -194,9 +194,9 @@ remaining choices are to ask the coding agent what went wrong, or to stop.
 
 <If condition={review.decision === "Stop"}>
 <If condition={round === 10 && !check.valid}>
-<Fail message="xmd prompt reviewed ten drafts without an approved Plan. Nothing was output or run." />
+<Fail message="xmd plan reviewed ten drafts without an approved Plan. Nothing was output or run." />
 <Else>
-<Fail message="xmd prompt stopped at your request. Nothing was output or run." />
+<Fail message="xmd plan stopped at your request. Nothing was output or run." />
 </Else>
 </If>
 </If>
@@ -213,7 +213,7 @@ clarify in their next Prompt. Do not create another Plan.
 </Prompt>
 
 <Fail
-  message={`xmd prompt reviewed ten drafts without an approved Plan. The coding agent explained why:\n\n${explanation}\n\nNothing was output or run.`}
+  message={`xmd plan reviewed ten drafts without an approved Plan. The coding agent explained why:\n\n${explanation}\n\nNothing was output or run.`}
 />
 </If>
 
@@ -252,6 +252,6 @@ the coding agent wrote it.
 <If condition={approved !== null}>
 <Return value={approved} />
 <Else>
-<Fail message="xmd prompt ended without an approved Plan. Nothing was output or run." />
+<Fail message="xmd plan ended without an approved Plan. Nothing was output or run." />
 </Else>
 </If>

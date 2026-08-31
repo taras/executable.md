@@ -8237,15 +8237,15 @@ identity, and no temporary file is created: the text is captured inside the
 durable root import, so the journal holds it and a replay restores it without
 reading anything.
 
-Text a host generated reports `<prompt>` on the same terms. `xmd prompt` runs a
+Text a host generated reports `<plan>` on the same terms. `xmd plan` runs a
 packaged first-party command document that turns a Prompt into a Plan — asking a
 coding agent for a complete root, having the host check it, and having a person
 approve it; the host then validates the returned bytes again. What happens to
 them is the caller's choice: by default the exact source goes to stdout, and
 nothing runs; `--output` writes those bytes to a file instead; and only `--run`
-executes `retainedSource("<prompt>", source)`, with `--output --run` writing the
+executes `retainedSource("<plan>", source)`, with `--output --run` writing the
 file first. So the identity says where the bytes came from, and a source position
-reads `(<prompt>:5:1)`. It is a deliberate identity rather than a path nobody
+reads `(<plan>:5:1)`. It is a deliberate identity rather than a path nobody
 could read back, and it is the only thing that differs: an approved Plan that is
 run goes through the ordinary supplied-source path, renders and returns exactly
 as any other root, resolves the contextual working directory for every relative
@@ -8253,11 +8253,11 @@ operation, and creates its journal only when that execution starts — so the mo
 that write a Plan create none.
 
 That command document is the other root the command executes, under its own
-stable internal identity `<prompt-command>`, on an invocation-owned in-memory
+stable internal identity `<plan-command>`, on an invocation-owned in-memory
 durable stream that is discarded when authorship is over. So nothing about
 generation, repair or approval is journaled or replayed, and the two executions
 share no scope. The command's complete contract is
-[`xmd prompt`](./prompt-command-spec.md).
+[`xmd plan`](./plan-command-spec.md).
 
 `inspectDocument(root)` loads and validates the root definition and returns
 what it declares — without executing the document or creating a journal:
@@ -10027,7 +10027,7 @@ itself, so an execution starting anywhere fails the row. Defined in §5.3.
 | SX4–SX6 | Renderers take a value | Both formats render from a supplied catalog with the filesystem refusing every call, twice with identical bytes, under the fixed category headings; every table cell is escaped, a prop name holding a pipe included |
 | SX7/SX8 | Includes | Repeated values select in caller order and replace the defaults; absent, the defaults apply |
 | SX9 | Failure | An unusable include exits 1, reports on stderr and prints no catalog |
-| SX10/SX11 | Formats | Markdown by default, version-1 JSON with `--json`; the catalog is inspection, and `xmd prompt` is the command that writes with the same structured value |
+| SX10/SX11 | Formats | Markdown by default, version-1 JSON with `--json`; the catalog is inspection, and `xmd plan` is the command that writes with the same structured value |
 | SX12 | A package tree | Bare `xmd syntax` succeeds with the default includes in a repository whose `node_modules` holds directory links |
 
 ### Tier SM — `xmd syntax` end to end
@@ -10041,15 +10041,15 @@ One checked-in Markdown suite runs the real command against a fixture directory.
 | SM6/SM7 | Nothing runs | A `.ts` fixture that throws at top level is origin-only and the command still succeeds; a fixture whose body writes a file leaves no file |
 | SM8–SM11 | Discovery | Direct, dotted and index paths; the two formats agree; repeated includes replace the defaults in caller order; the built-in category holds the run profile including `<Session>` |
 
-### Tier PR — The `xmd prompt` command
+### Tier PR — The `xmd plan` command
 
-One root execution on every invocation — the packaged prompt command document,
+One root execution on every invocation — the packaged plan command document,
 which owns the visible generation, repair, review and failure policy — and a
 second only under `--run`: the Plan it returned, which runs as any supplied root
 does, behind a complete scope boundary. Without `--run` the approved Plan is the
 result rather than a second execution: stdout by default, or an exclusively
 created `--output` file. Defined in
-[`xmd prompt`](./prompt-command-spec.md), whose acceptance table this points at
+[`xmd plan`](./plan-command-spec.md), whose acceptance table this points at
 rather than restating. The ACPX runtime is a scriptable fake, the review provider
 is a scripted `Elicitation` handler, and the contextual working directory is a
 temporary one — no live agent, browser or network appears in this evidence, and
@@ -10058,11 +10058,11 @@ every refusal is proven by the phase tripwires that stayed at zero.
 | # | Test | Verify |
 |---|------|--------|
 | C1 | Fixed grammar and help | One Prompt preserved byte for byte; missing, repeated, empty and whitespace-only Prompts refused; individual options after the Prompt and aggregate props before it; a built-in option never read as a generated property's value; `--session` named or refused; every run-only flag refused without `--run` before any effect; generic help with no effects, explaining `--output` and `--run` |
-| C2–C3 | The packaged document is the policy | The command executes the checked-in Markdown value root under `<prompt-command>`, and the turn text is that document's own words; generation, repair, review, revision, approval, stopping, exhaustion and the final explanation are Markdown under visible headings, every Plan-producing turn states the complete Plan requirements for itself, `<Prompt>` stays one turn, and what a person reads says each thing once however many rounds it took |
-| C4–C6 | Session and ceiling | One enclosing Session carries every turn, defaults differ per invocation and `--session` supplies the exact override; the prompt profile gives the assistant an empty host-owned directory, no MCP servers, no native tools and a private strict denial no permission flag widens; a draft is data until the approved Plan is delivered, and no draft effect happens before that |
+| C2–C3 | The packaged document is the policy | The command executes the checked-in Markdown value root under `<plan-command>`, and the turn text is that document's own words; generation, repair, review, revision, approval, stopping, exhaustion and the final explanation are Markdown under visible headings, every Plan-producing turn states the complete Plan requirements for itself, `<Prompt>` stays one turn, and what a person reads says each thing once however many rounds it took |
+| C4–C6 | Session and ceiling | One enclosing Session carries every turn, defaults differ per invocation and `--session` supplies the exact override; the authorship profile gives the assistant an empty host-owned directory, no MCP servers, no native tools and a private strict denial no permission flag widens; a draft is data until the approved Plan is delivered, and no draft effect happens before that |
 | C7–C9 | Classification, bounds and presentation | Draft defects return structured facts and caller defects escape the checker; one base draft plus three repairs, and ten presentations with no revision on the last; arbitrary source cannot close `<CodeBlock>`, the review schemas expose exactly the friendly choices for each round and state, and stopping, exhaustion and the explanation ending each reach their own authored `<Fail>` |
 | C10–C13 | Admission and lifetime | The host revalidates after the command document has completely torn down and resolves props for the exact returned bytes; those bytes reach exactly one of stdout, an exclusively created `--output` file, a run, or a file and then a run; a journal exists only when `--run` begins and holds only the Plan's events; cancellation and teardown failure settle before anything later begins |
-| C14–C15 | Result | The shipped generation, repair and revision instructions each carry the complete titled-Plan rule, and a titled Plan of prose interleaved with components survives approval byte for byte into stdout, a file and a run alike; a run reports `<prompt>` and behaves as `xmd run` does |
+| C14–C15 | Result | The shipped generation, repair and revision instructions each carry the complete titled-Plan rule, and a titled Plan of prose interleaved with components survives approval byte for byte into stdout, a file and a run alike; a run reports `<plan>` and behaves as `xmd run` does |
 
 ### Tier WB — The workflow component bundle in core
 

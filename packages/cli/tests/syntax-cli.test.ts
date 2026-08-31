@@ -384,13 +384,13 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
     );
   });
 
-  it("SX11: the catalog is inspection, and prompt is the command that writes with it", function* () {
+  it("SX11: the catalog is inspection, and plan is the command that writes with it", function* () {
     const { stdout } = yield* runCli(["--help"]).expect();
 
     expect(stdout).toContain("syntax");
-    // `xmd prompt` is the other reader of this catalog: it feeds the same
+    // `xmd plan` is the other reader of this catalog: it feeds the same
     // structured value to a generator rather than spawning this command and
     // parsing what it printed.
-    expect(stdout).toMatch(/^\s+prompt\s/m);
+    expect(stdout).toMatch(/^\s+plan\s/m);
   });
 });

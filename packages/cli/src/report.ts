@@ -1,7 +1,7 @@
 /**
  * How a completed document's failure reaches the terminal.
  *
- * Shared because `xmd run` and `xmd prompt` end in the same thing — one
+ * Shared because `xmd run` and `xmd plan` end in the same thing — one
  * ordinary document execution — and a person reading the output of either has
  * no reason to see the same failure worded two ways. A test failure is the case
  * that makes the difference visible: it earns a heading and a blank line above

@@ -1,7 +1,7 @@
 /**
  * The documents the CLI ships and executes itself.
  *
- * `xmd prompt` runs a first-party Markdown program, so that program has to be
+ * `xmd plan` runs a first-party Markdown program, so that program has to be
  * present and identical wherever the command is. This suite runs under Deno,
  * Node and Bun, which is what makes it evidence: the lookup is package-relative,
  * and a resolution that only works under the runtime the author happened to use
@@ -13,15 +13,16 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { readTextFile } from "@effectionx/fs";
+import { readTextFile, writeTextFile } from "@effectionx/fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
   packagedDocumentUrl,
-  PROMPT_COMMAND_DOCUMENT,
+  PLAN_COMMAND_DOCUMENT,
   readPackagedDocument,
 } from "../src/packaged-document.ts";
-import { useWorkingDirectory } from "./support/prompt-harness.ts";
+import { useWorkingDirectory } from "./support/plan-harness.ts";
 
 /**
  * The approved introduction, exactly.
@@ -33,7 +34,7 @@ import { useWorkingDirectory } from "./support/prompt-harness.ts";
  * approved wording around whatever the file happens to hold.
  */
 const INTRODUCTION = [
-  "# `xmd prompt` turns steps into a program",
+  "# `xmd plan` turns steps into a program",
   "",
   "This document is a workflow that generates an executable Plan from a sequence of",
   "steps. It combines the original Prompt, which describes those steps, with the XMD",
@@ -45,7 +46,7 @@ const INTRODUCTION = [
   "contains those executable steps, so running it simply executes them.",
   "",
   "A draft remains text while this workflow reviews it. Nothing in it runs before",
-  "you approve it. After approval, `xmd prompt` validates the exact source again. By",
+  "you approve it. After approval, `xmd plan` validates the exact source again. By",
   "default it prints the approved XMD source. `--output` writes that source to a",
   "file instead, and `--run` executes the Plan. With both options, the command",
   "writes the source before running it.",
@@ -64,20 +65,24 @@ const PLAN_REQUIREMENTS = [
 ].join("\n");
 
 describe("packaged documents", () => {
-  it("reads the prompt command document from beside its module, whatever the cwd is", function* () {
+  it("reads the plan command document from beside its module, whatever the cwd is", function* () {
     // A temporary contextual cwd with no document in it. A lookup that reached
     // for the working directory would find nothing here, and one that reached
     // through the component search path would be answerable by a repository
     // file — neither may decide which program this command runs.
-    const source = yield* useWorkingDirectory(function* () {
-      return yield* readPackagedDocument(PROMPT_COMMAND_DOCUMENT);
+    const source = yield* useWorkingDirectory(function* (dir) {
+      // A file of the same name, in the directory a person is standing in. A
+      // lookup that resolved the working directory would read this one, and a
+      // program a repository file can replace is not the program that shipped.
+      yield* writeTextFile(join(dir, PLAN_COMMAND_DOCUMENT), "# not the shipped program\n");
+      return yield* readPackagedDocument(PLAN_COMMAND_DOCUMENT);
     });
 
     const committed = yield* readTextFile(
-      fileURLToPath(packagedDocumentUrl(PROMPT_COMMAND_DOCUMENT)),
+      fileURLToPath(packagedDocumentUrl(PLAN_COMMAND_DOCUMENT)),
     );
     expect(source).toBe(committed);
-    // It is the prompt command document, not merely some file that exists.
+    // It is the plan command document, not merely some file that exists.
     expect(source).toContain("returns:");
     expect(source).toContain("<CheckDraft");
     expect(source).toContain("<Fail");
@@ -102,7 +107,7 @@ describe("packaged documents", () => {
     );
     // Every visible stage of the workflow is a heading somebody can audit.
     for (const heading of [
-      "# `xmd prompt` turns steps into a program",
+      "# `xmd plan` turns steps into a program",
       "## Create the first draft",
       "## Check and repair the draft",
       "## Review the draft",
@@ -119,7 +124,7 @@ describe("packaged documents", () => {
     // copy of exhaustion: exhaustion is decided inside review, and saying it
     // twice would make the two endings indistinguishable to a reader.
     expect(source).toContain(
-      '<Fail message="xmd prompt ended without an approved Plan. Nothing was output or run." />',
+      '<Fail message="xmd plan ended without an approved Plan. Nothing was output or run." />',
     );
     expect(source.split("reviewed ten drafts without an approved Plan").length - 1).toBe(2);
     // The choices are the words a person reads, with no internal spelling

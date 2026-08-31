@@ -1,11 +1,11 @@
 /**
- * The packaged prompt command document, executed as itself.
+ * The packaged plan command document, executed as itself.
  *
  * This runs the exact Markdown the CLI ships — read through the packaged
  * loader, not copied into a fixture — so what it proves is what a release does.
  * The seams around it are deterministic: a scriptable ACP runtime for the one
  * Agent turn, a scripted Elicitation answer for the review, and a test-only
- * validator in the place the prompt profile declares the production one.
+ * validator in the place the authorship profile declares the production one.
  *
  * The include list is empty on purpose. Repository component search must not be
  * able to supply `Loop`, `If`, `Return`, `Fail`, `CodeBlock` or the validator:
@@ -29,8 +29,9 @@ import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { createAcpxProvider } from "@executablemd/acp";
 
-import { PROMPT_COMMAND_DOCUMENT, readPackagedDocument } from "../src/packaged-document.ts";
-import { AGENT, useWorkingDirectory } from "./support/prompt-harness.ts";
+import { PLAN_COMMAND_DOCUMENT, readPackagedDocument } from "../src/packaged-document.ts";
+import { PLAN_COMMAND_IDENTITY } from "../src/authorship-profile.ts";
+import { AGENT, useWorkingDirectory } from "./support/plan-harness.ts";
 import { createFakeAcp, makeRegistry, makeStore } from "./support/fake-acp.ts";
 
 /**
@@ -68,7 +69,7 @@ interface CommandRun {
 }
 
 function* runDocument(): Operation<CommandRun> {
-  const source = yield* readPackagedDocument(PROMPT_COMMAND_DOCUMENT);
+  const source = yield* readPackagedDocument(PLAN_COMMAND_DOCUMENT);
   const fake = createFakeAcp();
   fake.script({ reply: CANDIDATE });
 
@@ -105,13 +106,13 @@ function* runDocument(): Operation<CommandRun> {
       value = yield* collect(
         yield* executeInstalled(
           {
-            ...retainedSource("<prompt-command>", source),
+            ...retainedSource(PLAN_COMMAND_IDENTITY, source),
             stream: new InMemoryStream(),
             includes: [],
             props: {
               request: "ask me for my age and write the result to a file",
               syntax: "## Built-in components\n\n### `<File>`\n",
-              session: "prompt-command-regression",
+              session: "plan-command-regression",
             },
           },
           [
@@ -161,11 +162,16 @@ function* runDocument(): Operation<CommandRun> {
   return { validated, reviews, prompts: fake.prompts, value, failure };
 }
 
-describe("the packaged prompt command document", () => {
+describe("the packaged plan command document", () => {
   it("C2: returns the approved candidate's exact bytes and never reaches exhaustion", function* () {
     const run = yield* useWorkingDirectory(function* () {
       return yield* runDocument();
     });
+
+    // The root this document ran under is the internal one the host declares:
+    // no path selects it, and a position naming it says the source is the
+    // CLI's own.
+    expect(PLAN_COMMAND_IDENTITY).toBe("<plan-command>");
 
     // Approving the first valid candidate is one turn and one question. A
     // repair or revision turn here would mean the loops ran when they had

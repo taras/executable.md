@@ -477,7 +477,7 @@ own session store and one empty working directory per session, both disposable.
 
 ## Command-line configuration
 
-`xmd run` and `xmd prompt` configure the agent stack; the options belong to
+`xmd run` and `xmd plan` configure the agent stack; the options belong to
 those two commands, and `xmd test` rejects them, driving agents through the
 deterministic test-agent stack instead.
 
@@ -531,9 +531,9 @@ The default agent resolves in order, each entry overriding the ones above it:
 The installed provider belongs to the run's `DocumentExecution` scope and closes
 during its teardown.
 
-### The `xmd prompt` prompt profile
+### The `xmd plan` authorship profile
 
-`xmd prompt` resolves that configuration once and uses it for the prompt command
+`xmd plan` resolves that configuration once and uses it for the plan command
 document that writes the Plan, and — when `--run` asks for one — for the run that
 follows. Without `--run` the approved Plan is written rather than executed, so
 the second consumer never appears and the resolved configuration is used once.
@@ -546,13 +546,13 @@ consumers, not the flags that produced it: `DEFAULT_AGENT_NAME` is read once per
 invocation, and authorship and a run of the Plan cannot reach different
 conclusions from one command line.
 
-The prompt profile takes the provider name and the default agent from that
+The authorship profile takes the provider name and the default agent from that
 answer, and nothing else. Its ceiling is the host's, assembled for that one
 document and not readable from the command line:
 
 | The profile's provider gets | Stated as |
 | --- | --- |
-| one host-owned directory per logical session | `agentCwd`, `~/.xmd/prompt/sessions/<sha256(name)>`, required empty |
+| one host-owned directory per logical session | `agentCwd`, `~/.xmd/plan/sessions/<sha256(name)>`, required empty |
 | no MCP servers | `mcpServers: []`, an empty set rather than an omission |
 | no native tools on a fresh session | `newSessionOptions.allowedTools: []` |
 | a private refusal of every native permission request | `permissions: "strict"` |
@@ -570,7 +570,7 @@ network capability, and the host decides for that whole execution that a failing
 nothing.
 
 The profile's working directory is derived from the logical session name rather
-than shared or freshly made: `~/.xmd/prompt/sessions/<sha256(name)>`, with the
+than shared or freshly made: `~/.xmd/plan/sessions/<sha256(name)>`, with the
 digest in the path and never the name. A session's key includes the directory it
 lives in, so a shared location would put two conversations in one ambient
 directory while a fresh one would leave `--session` unable to name a conversation
@@ -595,7 +595,7 @@ one fixed statement — that an answer belongs to the message that asked for it 
 and nothing else. Which shape any particular message wants, a Plan or an
 explanation of why there is not one, is that message's own business, and every
 message is the command document's to send in its own turns
-([`xmd prompt`](./prompt-command-spec.md)). ACPX applies those options when it
+([`xmd plan`](./plan-command-spec.md)). ACPX applies those options when it
 creates a session and ignores them when it reuses a record. Without `--session`
 the command places a name unique to the invocation, so each invocation is a fresh
 conversation created under those instructions; `--session <name>` selects an
