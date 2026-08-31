@@ -24,12 +24,31 @@ import type { AgentProviderFactory, PermissionMode } from "@executablemd/core";
 import { installForegroundLauncher, env as readEnv } from "@executablemd/runtime";
 import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
+// A separate entrypoint because the embedded adapters are temporary (#636) and
+// must not become part of the package's stable surface.
+import {
+  createEmbeddedAdapters,
+  embeddedAdapterDependencies,
+} from "@executablemd/acp/embedded-adapters";
+import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 import { resolveAgentConfig } from "./agent-config.ts";
 import type { AgentFlags } from "./agent-config.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
+
+/**
+ * Where a command that is not a workflow run materializes its adapters.
+ *
+ * One root for this machine, content-addressed beneath it: two invocations
+ * asking for the same adapter name the same directory, so the second one runs
+ * what the first installed, and a build carrying a different snapshot names a
+ * different directory instead of deciding whether this one is current.
+ */
+export const DEFAULT_ADAPTER_ROOT: string = join(homedir(), ".xmd", "adapters");
 
 /** Everything one invocation settled about agents, resolved exactly once. */
 export interface AgentStack {
@@ -38,6 +57,14 @@ export interface AgentStack {
   /** The agent every consumer defaults to, environment fallback applied. */
   defaultAgent: string;
   permissionMode: PermissionMode;
+  /**
+   * The ACP adapters this build carries, and where this host puts them.
+   *
+   * Part of the one settled answer because both consumers resolve agents
+   * through it: the assistant that writes a Plan and the run of the approved
+   * Plan are the same Codex or Claude, launched from the same snapshot.
+   */
+  adapters: EmbeddedAdapters;
   /** What this host states about machine-wide agent sessions, if anything. */
   sessions?: MachineSessionAssembly;
 }
@@ -67,25 +94,32 @@ export function* resolveAgentStack(
     provider: flags.agentProvider,
     defaultAgent,
     permissionMode: config.permissionMode,
+    adapters: createEmbeddedAdapters(DEFAULT_ADAPTER_ROOT),
     ...(sessions === undefined ? {} : { sessions }),
   });
 }
 
 /**
- * What this host built, if it built anything.
+ * What this host carries and what it built, stated to the provider.
  *
- * Each piece reaches the provider directly rather than through a context: who
- * owns a session and which build it belongs to are security decisions, and ones
- * a document could replace are not ones. The two advertised sets are stated by
- * the host, not inherited.
+ * The adapters are first, and unconditional: an `xmd run` or an `xmd plan` that
+ * asked for Codex or Claude and got ACPX's own registry would run whatever
+ * `npx` resolved from that build's pins — an adapter that names no turn, or one
+ * carrying an agent release this machine does not have (#672).
+ *
+ * Each of the rest reaches the provider directly rather than through a context:
+ * who owns a session and which build it belongs to are security decisions, and
+ * ones a document could replace are not ones. The two advertised sets are stated
+ * by the host, not inherited.
  */
-export function hostAcpDependencies(
-  sessions: MachineSessionAssembly | undefined,
-): AcpxProviderDependencies {
+export function hostAcpDependencies(stack: AgentStack): AcpxProviderDependencies {
+  const { sessions } = stack;
+  const adapters = embeddedAdapterDependencies(stack.adapters);
   if (sessions === undefined) {
-    return {};
+    return adapters;
   }
   return {
+    ...adapters,
     ...(sessions.coordinator ? { coordinator: sessions.coordinator } : {}),
     ...(sessions.routeStore ? { routeStore: sessions.routeStore } : {}),
     ...(sessions.executableObserver ? { executableObserver: sessions.executableObserver } : {}),
@@ -99,10 +133,12 @@ export function hostAcpDependencies(
  * components with the resolved root provider, the permission mode, and the
  * terminal this command has to give away.
  *
- * Nothing starts an agent — the provider validates availability on first use.
+ * Nothing starts an agent — the provider validates availability on first use,
+ * and an embedded adapter reaches the disk at that same point. A document that
+ * asks for no agent installs no adapter.
  */
 export function* installRunAgentStack(stack: AgentStack): Operation<void> {
-  const acpx = createAcpxProvider(hostAcpDependencies(stack.sessions));
+  const acpx = createAcpxProvider(hostAcpDependencies(stack));
   yield* registerAgentProvider("acpx", acpx);
 
   // The trusted host selects its own root provider by name. Document-level

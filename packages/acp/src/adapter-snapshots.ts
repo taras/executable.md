@@ -81,6 +81,7 @@ import { readdir, readFile, rename as renamePath, rm as rmPath, writeFile } from
 import { exec, useQuietProcessOutput } from "@executablemd/runtime";
 import { createAgentRegistry } from "./acpx-runtime.ts";
 import type { AcpAgentRegistry } from "./acpx-runtime.ts";
+import type { AcpxProviderDependencies } from "./provider.ts";
 import { ensure, type Operation, scoped, sleep } from "effection";
 import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
@@ -720,6 +721,39 @@ export function overlaidAdapterRegistry(
 /** Whether this build carries an embedded adapter for `agentName`. */
 export function carriesEmbeddedAdapter(adapters: EmbeddedAdapters, agentName: string): boolean {
   return adapters.providers.includes(agentName);
+}
+
+/**
+ * What a host that carries its own adapters states to a provider.
+ *
+ * Both clauses together, because neither is an arrangement on its own: the
+ * registry says Codex and Claude resolve to this build's snapshot, and the
+ * preparation is what puts that snapshot on disk. A host that stated only the
+ * registry would name a file nothing had written, and one that stated only the
+ * preparation would materialize an adapter and then run whatever `npx` resolved.
+ *
+ * Preparation happens at the first point the provider would run that command,
+ * which is its availability probe — earlier than a `<Session>` placement, and
+ * earlier than any turn. A snapshot that cannot prove itself refuses the agent
+ * there rather than surfacing later as an adapter that would not start.
+ *
+ * It is asked only about an agent this build actually carries. An agent ACPX
+ * resolves is already a command on this machine, so there is nothing to put on
+ * disk for it, and reaching into the snapshots to find that out would make every
+ * run pay for a mechanism that has nothing to say about it.
+ */
+export function embeddedAdapterDependencies(
+  adapters: EmbeddedAdapters,
+): Pick<AcpxProviderDependencies, "agentRegistry" | "prepareAgent"> {
+  return {
+    agentRegistry: overlaidAdapterRegistry(adapters),
+    *prepareAgent(agentName: string): Operation<void> {
+      if (!carriesEmbeddedAdapter(adapters, agentName)) {
+        return;
+      }
+      yield* adapters.materialize(agentName);
+    },
+  };
 }
 
 /** Every embedded snapshot's identity, for provenance checks and diagnostics. */

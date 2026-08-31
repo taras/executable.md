@@ -34,6 +34,7 @@ import {
   scanPlanArgs,
 } from "../src/plan-args.ts";
 import {
+  ADAPTERS,
   AGENT,
   createPlanHarness,
   timesRead,
@@ -111,6 +112,7 @@ const STACK: AgentStack = {
   provider: "acpx",
   defaultAgent: AGENT,
   permissionMode: "deny-all",
+  adapters: ADAPTERS,
 };
 
 /**

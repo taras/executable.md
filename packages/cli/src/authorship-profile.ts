@@ -256,10 +256,22 @@ function validator(profile: AuthorshipProfile): IdentityComponent {
  * The host's own assembly is passed through, then overridden: a coordinator or
  * a route store says who owns a session, which this profile still has to respect,
  * while nothing a caller wrote may reach the four fields below.
+ *
+ * That assembly is also where this build's own ACP adapters enter, so the
+ * assistant that writes a Plan is launched from the same snapshot as the run of
+ * the approved Plan. A ceiling built without them resolved Codex and Claude
+ * through ACPX's published pins and could reach neither (#672).
+ *
+ * Exported for the suite that pins exactly that: what a provider is built from
+ * is not observable through a provider, and a case that could only watch a turn
+ * fail would be reading a live agent's machine rather than this host's decision.
  */
-function authorshipCeiling(profile: AuthorshipProfile, workdir: string): AcpxProviderDependencies {
+export function authorshipCeiling(
+  profile: AuthorshipProfile,
+  workdir: string,
+): AcpxProviderDependencies {
   return {
-    ...hostAcpDependencies(profile.stack.sessions),
+    ...hostAcpDependencies(profile.stack),
     ...profile.acp,
     // deno-lint-ignore require-yield
     *agentCwd() {

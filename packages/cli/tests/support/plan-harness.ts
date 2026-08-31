@@ -22,6 +22,8 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { API, useHostFiles } from "@executablemd/runtime";
+import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
+import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import { syntaxCatalog } from "../../src/syntax.ts";
 import type { PlanDependencies, PlanExecution } from "../../src/plan.ts";
 import { createFakeAcp, makeRegistry, makeStore } from "./fake-acp.ts";
@@ -29,6 +31,18 @@ import type { FakeAcp, FakeStore } from "./fake-acp.ts";
 
 /** The agent every plan case drives, and the command it resolves to. */
 export const AGENT = "scripted-agent";
+
+/**
+ * The embedded adapters a case's Agent stack carries.
+ *
+ * Nothing is ever written beneath this root: materialization happens only for an
+ * agent this build carries a snapshot for, and every case drives
+ * {@link AGENT}. Naming a temporary root anyway is what keeps a case that came
+ * to resolve `codex` from installing an adapter under the developer's own home.
+ */
+export const ADAPTERS: EmbeddedAdapters = createEmbeddedAdapters(
+  join(tmpdir(), `xmd-plan-adapters-${randomUUID()}`),
+);
 
 /**
  * One review answer, scripted.
