@@ -89,6 +89,30 @@ No request, more than one request, an empty string and a whitespace-only string
 each fail the invocation. There is no stdin form and no editor form: a request
 nobody wrote is never guessed, and no token is silently dropped.
 
+### The retired spelling is refused, not absorbed
+
+`prompt` is not a command. It is not registered, aliased, listed in help or kept
+as a tombstone that runs anything, and it does not fall through to the default
+`run` command: a first token naming no command is a *document reference*, so a
+file called `prompt` in the working directory would be rendered and executed by
+a caller who wrote what they believed was a command.
+
+So an invocation whose exact first token is `prompt` is refused in preflight —
+before the inline-document scan, before command selection, and before anything
+reads a path:
+
+```console
+$ xmd prompt
+xmd prompt is not a command — use `xmd plan "<Prompt>"` to create a Plan, or `xmd run ./prompt` to run a document named `prompt`
+```
+
+The message answers both readings, because the token is ambiguous by
+construction. Nothing else changes: only the exact first token is recognized, so
+`xmd run ./prompt`, `xmd run prompt` and `xmd ./prompt` still execute a document
+that is legitimately called that. The refusal exits nonzero and establishes
+nothing — no catalog, no Agent, no Session, no authorship directory, no output,
+no journal and no execution.
+
 `--` ends option parsing, so a request that begins with `-` is written after it:
 
 ```console
@@ -618,7 +642,7 @@ produced.
 
 | # | Criterion | Required observation |
 | --- | --- | --- |
-| C1 | Fixed grammar and help | Prompt cardinality, individual-property ordering, aggregate props before the Prompt, `--session` including its empty-value refusal, run-only flags refused without `--run` before any authorship or filesystem effect, and effect-free generic help that explains `--output` and `--run` |
+| C1 | Fixed grammar and help | Prompt cardinality, individual-property ordering, aggregate props before the Prompt, `--session` including its empty-value refusal, run-only flags refused without `--run` before any authorship or filesystem effect, a first token of `prompt` refused in preflight rather than read as a document path — leaving `xmd run ./prompt` still able to execute a document of that name — and effect-free generic help that explains `--output` and `--run` |
 | C2 | Exact packaged root | The command executes the checked-in Markdown value root under `<plan-command>`; the turn text is that document's own words, and no TypeScript authorship loop or custom root chooses policy |
 | C3 | Visible policy | Generation, three-turn repair, ten-round review, revision, approval, stopping, exhaustion and the explanation turn are present in Markdown under visible headings; the generation, repair and revision instructions each require the descriptive title and the steps-beside-components structure; `<Prompt>` remains one turn |
 | C4 | One Session | One enclosing Session expansion carries every turn; two default invocations get different profile directories and session keys, two `--session` invocations get the same directory and key with the raw name absent from the path, and two named invocations sharing one ACPX store continue the established record rather than placing a second |

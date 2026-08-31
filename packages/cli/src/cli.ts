@@ -109,7 +109,15 @@ import {
   resolvePropsFromSources,
 } from "./props.ts";
 import type { Binding, Extraction } from "./props.ts";
-import { namesPlan, OUTPUT_OPTION, RUN_OPTION, scanPlanArgs, SESSION_OPTION } from "./plan-args.ts";
+import {
+  namesPlan,
+  namesRetiredCommand,
+  OUTPUT_OPTION,
+  RETIRED_COMMAND_REFUSAL,
+  RUN_OPTION,
+  scanPlanArgs,
+  SESSION_OPTION,
+} from "./plan-args.ts";
 import type { PlanScan } from "./plan-args.ts";
 import { runPlan } from "./plan.ts";
 import type { PlanExecution } from "./plan.ts";
@@ -2135,6 +2143,18 @@ export function* runXmd(
   // gets no machine sessions at all, which is the ordinary ACP behaviour.
   sessions?: MachineSessionAssembly,
 ): Operation<void> {
+  // Before every scanner, before command selection, and before anything reads a
+  // path. `prompt` names no command, and a first token that names none is a
+  // document reference to the default `run` command — so a file of that name in
+  // the working directory would be rendered and executed by a caller who wrote
+  // a command, not a path. Refused closed here, where there is nothing yet to
+  // undo: no eval scan, no parse, no catalog, no profile, no document.
+  if (namesRetiredCommand(args)) {
+    console.error(RETIRED_COMMAND_REFUSAL);
+    yield* exit(1);
+    return;
+  }
+
   // First, so that no later scanner — help, properties, agent flags — can
   // mistake the inline document's own text for an option.
   const evalFlags = readEvalFlags(args);

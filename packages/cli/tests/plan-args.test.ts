@@ -15,6 +15,8 @@ import { expect } from "@executablemd/test-support/expect";
 import {
   isReservedOption,
   namesPlan,
+  namesRetiredCommand,
+  RETIRED_COMMAND_REFUSAL,
   scanPlanArgs,
   signatureFailure,
   signatureOf,
@@ -41,6 +43,26 @@ describe("Tier PR — xmd plan fixed grammar", () => {
     // The command is named `plan` and nothing else names it: the retired
     // spelling selects no command, so it never reaches this grammar at all.
     expect(namesPlan(["prompt", REQUEST])).toBe(false);
+
+    // It is refused instead of being left to the default `run` grammar, which
+    // would read a token naming no command as a document reference. Recognized
+    // by the exact first token and nothing else, so `prompt` written as an
+    // argument — including a document that really is called that — is untouched.
+    expect(namesRetiredCommand(["prompt"])).toBe(true);
+    expect(namesRetiredCommand(["prompt", REQUEST])).toBe(true);
+    expect(namesRetiredCommand(["plan", REQUEST])).toBe(false);
+    expect(namesRetiredCommand(["run", "prompt"])).toBe(false);
+    expect(namesRetiredCommand(["run", "./prompt"])).toBe(false);
+    expect(namesRetiredCommand(["./prompt"])).toBe(false);
+    expect(namesRetiredCommand(["prompt.md"])).toBe(false);
+    expect(namesRetiredCommand([])).toBe(false);
+
+    // Both readings are answered: the command somebody meant, and the document
+    // they may actually have.
+    expect(RETIRED_COMMAND_REFUSAL).toBe(
+      'xmd prompt is not a command — use `xmd plan "<Prompt>"` to create a Plan, or ' +
+        "`xmd run ./prompt` to run a document named `prompt`",
+    );
 
     const one = scanPlanArgs(["plan", REQUEST]);
     expect(one.error).toBe(undefined);

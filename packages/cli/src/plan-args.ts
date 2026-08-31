@@ -20,6 +20,35 @@ import { AGGREGATE_OPTION } from "./props.ts";
 import type { Binding } from "./props.ts";
 
 export const PLAN_COMMAND = "plan";
+
+/**
+ * The spelling this command had before it was named for its result.
+ *
+ * Refused rather than left to the default `run` grammar, which reads a first
+ * token naming no command as a document reference. A file called `prompt` in
+ * the working directory would otherwise be rendered and executed by a token
+ * nobody wrote as a path — an effect from a spelling that is supposed to do
+ * nothing at all. It is not a command: nothing registers, aliases or lists it,
+ * and the refusal builds no profile and reads no document.
+ */
+export const RETIRED_COMMAND = "prompt";
+
+/** Whether these arguments lead with the retired spelling, exactly. */
+export function namesRetiredCommand(args: readonly string[]): boolean {
+  return args[0] === RETIRED_COMMAND;
+}
+
+/**
+ * What a caller who wrote the retired spelling is told.
+ *
+ * Both readings are answered, because the token is ambiguous by construction:
+ * whoever meant the command is sent to `xmd plan`, and whoever really does have
+ * a document of that name is shown the spelling that still runs it.
+ */
+export const RETIRED_COMMAND_REFUSAL: string =
+  `xmd ${RETIRED_COMMAND} is not a command — use \`xmd ${PLAN_COMMAND} "<Prompt>"\` to create ` +
+  `a Plan, or \`xmd run ./${RETIRED_COMMAND}\` to run a document named \`${RETIRED_COMMAND}\``;
+
 export const OUTPUT_OPTION = "--output";
 export const SESSION_OPTION = "--session";
 export const RUN_OPTION = "--run";

@@ -27,7 +27,12 @@ import { resolveAgentStack } from "../src/agent-stack.ts";
 import type { AgentStack } from "../src/agent-stack.ts";
 import { runPlan } from "../src/plan.ts";
 import type { PlanCommand, PlanExecution } from "../src/plan.ts";
-import { namesPlan, scanPlanArgs } from "../src/plan-args.ts";
+import {
+  namesPlan,
+  namesRetiredCommand,
+  RETIRED_COMMAND_REFUSAL as RETIRED_REFUSAL,
+  scanPlanArgs,
+} from "../src/plan-args.ts";
 import {
   AGENT,
   createPlanHarness,
@@ -67,6 +72,23 @@ const GREETER = [
 const FAILS_AT_RUN = ["```bash exec", "exit 3", "```", ""].join("\n");
 
 const PLAIN = "Nothing but prose.\n";
+
+const PROBE_HEADING = "Retired token probe";
+const PROBE_SENTINEL = "the document ran";
+
+/**
+ * A document whose filename is the retired command spelling.
+ *
+ * It writes a file, because whether the default `run` grammar reached it is a
+ * fact on disk. A case that only watched stdout would pass against a command
+ * that executed the document and printed nothing.
+ */
+const NAMED_LIKE_THE_RETIRED_TOKEN = [
+  `# ${PROBE_HEADING}`,
+  "",
+  `<File path="sentinel.txt">${PROBE_SENTINEL}</File>`,
+  "",
+].join("\n");
 
 /**
  * A document that validates, runs, and fails its own tests.
@@ -319,9 +341,16 @@ describe(
 
     it("C1: the retired spelling names no command and reaches no authorship", function* () {
       // The command is `plan`. The spelling it replaced is not registered,
-      // aliased or kept as a tombstone, so the fixed grammar never sees it and
-      // the existing default-run grammar answers instead.
+      // aliased or kept as a tombstone — and it is not left to the default
+      // `run` grammar either, which would read it as a document reference. It
+      // is refused in preflight, before any scanner, parse or path lookup.
       expect(namesPlan(["prompt", REQUEST])).toBe(false);
+      expect(namesRetiredCommand(["prompt", REQUEST])).toBe(true);
+      expect(namesRetiredCommand(["plan", REQUEST])).toBe(false);
+      // Only as the first token. `prompt` written anywhere else is an ordinary
+      // argument, and this refusal never reaches it.
+      expect(namesRetiredCommand(["run", "prompt"])).toBe(false);
+      expect(namesRetiredCommand(["plan", "prompt"])).toBe(false);
 
       yield* useWorkingDirectory(function* (dir) {
         const home = join(dir, "home");
@@ -332,13 +361,16 @@ describe(
         }).join();
 
         expect(code).not.toBe(0);
+        expect(stderr).toContain(RETIRED_REFUSAL);
         // Nothing this command owns was reached: no approved source on stdout,
         // no catalog, no provider to report an agent unavailable, no authored
         // refusal from the plan command document, and nobody asked to review.
+        // The refusal names `xmd plan` as the spelling to use, so an authored
+        // failure is told apart by its own words rather than by that name.
         expect(stdout).toBe("");
         expect(stderr).not.toContain("## Built-in components");
         expect(stderr).not.toContain("unavailable");
-        expect(stderr).not.toContain("xmd plan");
+        expect(stderr).not.toContain("Nothing was output or run");
         expect(stderr).not.toContain("Request changes");
         // And neither namespace exists under the isolated home: the new one was
         // never opened, and the old one is not read, migrated or created.
@@ -347,6 +379,51 @@ describe(
         // No output file and no journal: the only entry is the home this case
         // made for the subprocess.
         expect(yield* until(readdir(dir))).toEqual(["home"]);
+      });
+    });
+
+    it("C1: the retired token is refused before it can be read as a document path", function* () {
+      // The whole reason this is a preflight refusal rather than a fall-through.
+      // A first token naming no command is a document reference to the default
+      // `run` command, so a file called `prompt` in the working directory was
+      // rendered and executed — exit 0, and a file written — by a caller who
+      // wrote what they believed was a command. Proven on disk: the document
+      // writes a sentinel, so whether it ran is a fact rather than an inference
+      // from output nobody produced.
+      yield* useWorkingDirectory(function* (dir) {
+        const home = join(dir, "home");
+        yield* ensureDir(home);
+        yield* writeTextFile(join(dir, "prompt"), NAMED_LIKE_THE_RETIRED_TOKEN);
+        const options = { cwd: dir, env: { HOME: home } };
+        const sentinel = join(dir, "sentinel.txt");
+
+        const refused = yield* runCli(["prompt"], options).join();
+
+        expect(refused.code).not.toBe(0);
+        expect(refused.stderr).toContain(RETIRED_REFUSAL);
+        // Neither rendered nor executed: its heading reached no stream, and the
+        // file it writes was never created.
+        expect(refused.stdout).toBe("");
+        expect(refused.stderr).not.toContain(PROBE_HEADING);
+        expect(yield* exists(sentinel)).toBe(false);
+        // No catalog was built, no provider was reached to report an agent
+        // unavailable, and no authorship directory was placed — so no Agent and
+        // no Session either. The isolated home has no `.xmd` at all.
+        expect(refused.stderr).not.toContain("## Built-in components");
+        expect(refused.stderr).not.toContain("unavailable");
+        expect(yield* exists(join(home, ".xmd"))).toBe(false);
+        // And nothing else was written: no output file and no journal. The
+        // document and the home this case made are the only entries.
+        expect((yield* until(readdir(dir))).sort()).toEqual(["home", "prompt"]);
+
+        // The refusal costs nothing. A document that is legitimately called
+        // `prompt` still runs, by the spelling the message itself names — a fix
+        // that made this file unrunnable would trade one defect for another.
+        const ran = yield* runCli(["run", "./prompt"], options).join();
+
+        expect(ran.code).toBe(0);
+        expect(ran.stdout).toContain(PROBE_HEADING);
+        expect(yield* readTextFile(sentinel)).toContain(PROBE_SENTINEL);
       });
     });
 
