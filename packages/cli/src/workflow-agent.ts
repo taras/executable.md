@@ -93,7 +93,7 @@ import type {
 import {
   carriesEmbeddedAdapter,
   createEmbeddedAdapters,
-  overlaidAdapterRegistry,
+  embeddedAdapterDependencies,
 } from "@executablemd/acp/embedded-adapters";
 import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import {
@@ -421,25 +421,11 @@ export function* useWorkflowAgentProfile(options: WorkflowAgentProfileOptions): 
 
   const factory: AgentProviderFactory = createAcpxProvider({
     sessionStore: store,
-    // ACPX's own registry with this build's two patched snapshots over the top.
-    // Codex and Claude resolve to the adapter that names its turns; every other
-    // agent resolves to the command it always did.
-    agentRegistry: overlaidAdapterRegistry(adapters),
-    // At the first point the provider would run that command, which is its
-    // availability probe — earlier than a `<Session>` placement, and earlier
-    // than any turn. A snapshot that cannot prove itself refuses the agent here
-    // rather than surfacing later as an adapter that would not start.
-    //
-    // Asked only about an agent this build actually carries. An agent ACPX
-    // resolves is already a command on this machine, so there is nothing to put
-    // on disk for it, and reaching into the snapshots to find that out would
-    // make every run pay for a mechanism that has nothing to say about it.
-    *prepareAgent(agentName): Operation<void> {
-      if (!carriesEmbeddedAdapter(adapters, agentName)) {
-        return;
-      }
-      yield* adapters.materialize(agentName);
-    },
+    // ACPX's own registry with this build's two patched snapshots over the top,
+    // and the preparation that puts one on disk. Codex and Claude resolve to the
+    // adapter that names its turns; every other agent resolves to the command it
+    // always did.
+    ...embeddedAdapterDependencies(adapters),
     ...(options.createRuntime === undefined ? {} : { createRuntime: options.createRuntime }),
     // ACP-only, stated rather than inherited. A workflow session belongs to a
     // run, not to this machine: it is named by a row in the run's own database,

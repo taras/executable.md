@@ -531,6 +531,15 @@ The default agent resolves in order, each entry overriding the ones above it:
 The installed provider belongs to the run's `DocumentExecution` scope and closes
 during its teardown.
 
+Both commands resolve `codex` and `claude` to the ACP adapter this build carries,
+the way the workflow attachment does, and every other agent to the command ACPX
+resolves for it. The snapshot is installed under `~/.xmd/adapters/<sha256>` at the
+provider's availability probe — the first point either command would run an agent
+— so an invocation that asks for no agent installs nothing, and a second one runs
+what the first put there. An embedded agent never falls through to the published
+adapter ACPX's own table pins: a snapshot that cannot be verified or materialized
+refuses that agent.
+
 ### The `xmd plan` authorship profile
 
 `xmd plan` resolves that configuration once and uses it for the plan command
@@ -546,9 +555,11 @@ consumers, not the flags that produced it: `DEFAULT_AGENT_NAME` is read once per
 invocation, and authorship and a run of the Plan cannot reach different
 conclusions from one command line.
 
-The authorship profile takes the provider name and the default agent from that
-answer, and nothing else. Its ceiling is the host's, assembled for that one
-document and not readable from the command line:
+The authorship profile takes the provider name, the default agent and the
+adapters this build carries from that answer, and nothing else — so the
+assistant that writes a Plan is launched from the same snapshot as the run of
+the approved Plan. Its ceiling is the host's, assembled for that one document
+and not readable from the command line:
 
 | The profile's provider gets | Stated as |
 | --- | --- |
@@ -556,6 +567,7 @@ document and not readable from the command line:
 | no MCP servers | `mcpServers: []`, an empty set rather than an omission |
 | no native tools on a fresh session | `newSessionOptions.allowedTools: []` |
 | a private refusal of every native permission request | `permissions: "strict"` |
+| this build's own ACP adapters | `agentRegistry`, ACPX's table with the embedded snapshots over it, and the `prepareAgent` that installs one |
 
 `"strict"` answers the request inside the provider: the request is denied, the
 turn it belongs to fails, and no public Agent handler is consulted or can

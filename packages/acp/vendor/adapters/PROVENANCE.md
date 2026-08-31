@@ -1,6 +1,7 @@
 # Embedded ACP adapter provenance
 
-This directory carries one npm tarball per provider, and a workflow run executes
+This directory carries one npm tarball per provider, and every command that runs
+one of those providers — `xmd workflow`, `xmd run` and `xmd plan` — executes
 those instead of the adapter `npx` would resolve.
 
 | Provider | Package | Version | Contracts |
