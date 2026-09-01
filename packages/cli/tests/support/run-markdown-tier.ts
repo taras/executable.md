@@ -35,6 +35,7 @@ import { useBunService } from "../../src/bun-service.ts";
 import { useDenoService } from "../../src/deno-service.ts";
 import { useNodeService } from "../../src/node-service.ts";
 
+import { unsupportedRepositories } from "../../src/run-repositories.ts";
 /** The native service adapter the entrypoint for this runtime installs. */
 const SERVICES = {
   bun: useBunService,
@@ -81,6 +82,9 @@ export function runMarkdownTier(document: string): Operation<MarkdownTierRun> {
           return renderSyntaxMarkdown(yield* syntaxCatalog(["components", "."]));
         },
       }),
+      // This harness runs Markdown tiers, not repository work: a child that
+      // asked for a checkout is told there is no provider.
+      installRepositories: unsupportedRepositories,
     });
     const execution = yield* executeInstalled({ path: document, stream: new InMemoryStream() }, [
       testHarnessInstallation(testingHost),

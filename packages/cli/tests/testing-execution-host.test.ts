@@ -27,6 +27,7 @@ import { runCli } from "@executablemd/test-support/launch";
 import { testingExecutionHost } from "../src/testing-host.ts";
 import { planComponentDescription } from "../src/plan-component.ts";
 
+import { unsupportedRepositories } from "../src/run-repositories.ts";
 function doc(...lines: string[]): string {
   return `${lines.join("\n")}\n`;
 }
@@ -501,6 +502,7 @@ describe("deterministic dependencies declared for a nested run", () => {
       secretDetection: true,
       // deno-lint-ignore require-yield
       installService: function* (): Operation<void> {},
+      installRepositories: unsupportedRepositories,
       testAgentWorker: Err(new Error("xmd command not installed")),
       // The run profile's own Component travels to every child, and this case is
       // about the relaunch it cannot perform rather than about `<Plan>`.
@@ -518,6 +520,10 @@ describe("deterministic dependencies declared for a nested run", () => {
             configuration: [{ kind: "test-agent", defaultAgent: "test", scenarios: [] }],
           },
           run: undefined,
+          // Unobservable here: the refusal is reached before the child stands
+          // anywhere, and `tmpdir()` is a directory this assertion cannot
+          // depend on having any particular contents.
+          cwd: tmpdir(),
           // deno-lint-ignore require-yield
           *chunk(): Operation<void> {},
         });

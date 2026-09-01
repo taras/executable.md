@@ -592,6 +592,12 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
       "the same provider reached through an ordinary run, asked the questions only a runtime that operates repositories can answer: managed-Worktree session placement, an ordinary journal's diagnostic status, and diagnostic-trace non-authority",
     issue: DERIVED_SCOPE,
   },
+  {
+    path: "packages/cli/tests/run-composition-nested.test.ts",
+    reason:
+      "a nested execution's own provider instance, which needs the same kernel-released advisory lock the root's does, and real subprocesses to prove where a child stands",
+    issue: DERIVED_SCOPE,
+  },
 ];
 
 const BUN_MISSING_NODE_SQLITE: RuntimeExclusion[] = [

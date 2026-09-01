@@ -85,6 +85,7 @@ import type {
   SourcePosition,
 } from "@executablemd/core";
 import { DeclarationScan } from "@executablemd/core/host";
+import { cwd } from "@executablemd/runtime";
 import type {
   AnswerConfiguration,
   AnswersPlacement,
@@ -939,9 +940,19 @@ function* runChild(
   // Spent only once the chain has agreed there is a child to run, and never
   // twice: two nested executions are two authorizations.
   grant.spend();
+  // Read here, on the last line that is still inside this invocation. The
+  // isolated scope below does not descend from the document's, so this is the
+  // only place a `<Dir>` or `<TempDir>` around the `<Execution>` is still
+  // observable — one statement later it is the process directory.
+  const directory = yield* cwd();
   return yield* inIsolation(function* (childScope) {
     return yield* childScope.run(() =>
-      provider.runChild({ request: settled, run: run?.scope, chunk: channel.chunk }),
+      provider.runChild({
+        request: settled,
+        run: run?.scope,
+        chunk: channel.chunk,
+        cwd: directory,
+      }),
     );
   });
 }

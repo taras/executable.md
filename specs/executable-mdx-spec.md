@@ -11876,6 +11876,7 @@ user's own `~/.xmd/repositories`.
 | ORC16 | Live Issues | Configured reads and upserts use the existing normalized contracts and this execution's own identity; absent or out-of-ceiling configuration sends no credential and no request |
 | ORC17 | Live PullRequests | Configured reviews, comments and checks reads, and a Push-authorized upsert, run under ordinary Deno; the read ceiling and the local evidence check both precede credential and network access |
 | ORC18 | The journal is diagnostic | The same fixture without and with `--journal` performs the same live operations once per invocation; the trace is newly created and never consumed as continuation or evidence |
+| ORC19 | Nested run profile | An isolated `host="run"` child receives the declarations and a fresh provider; its evidence and locks reach neither its parent nor a sibling |
 | ORC20 | Retained workflow regression | Repository and Worktree replay, transactional Git, Push and pull-request history evidence, Issue effects, forks and completed replay keep their records, identities, provider call counts and native-launch refusal unchanged |
 | ORC21 | Compiled binary | A compiled smoke creates a root-level ambient Worktree, runs a command there, proves `.git` is a file and the checkout persists after exit; a second gated process proves lock refusal and release |
 

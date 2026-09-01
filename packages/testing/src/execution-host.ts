@@ -234,6 +234,27 @@ export interface WorkflowRunScope {
 export interface ChildInvocation {
   /** The profile the terminal recorded. */
   readonly request: HostProfileRequest;
+  /**
+   * The contextual working directory the `<Execution>` invocation was standing
+   * in, captured before the child's isolated scope existed.
+   *
+   * A child is a root execution in a scope that does not descend from the
+   * document's, so it inherits no `API.Env` handler and `cwd()` would fall back
+   * to the *process* directory. That silently disagrees with the document: a
+   * `<Dir>` or `<TempDir>` around an `<Execution host="run">` would scope every
+   * component in it except the child, and a run provider discovering its
+   * ambient repository would find the one the process happens to be standing
+   * in — a shared checkout nobody addressed.
+   *
+   * Deliberately here and not on {@link HostProfileRequest}. The profile is
+   * what middleware reads, refuses on, and delegates, and a handler that could
+   * see this could also swap it: the directory a child resolves its root and
+   * its repository in would become something composed policy chose rather than
+   * something the document did. So it travels on the private invocation the
+   * terminal hands the trusted provider, where the same rule already keeps
+   * `run` and `chunk`.
+   */
+  readonly cwd: string;
   /** The isolated workflow run this child belongs to, under the workflow profile. */
   readonly run: WorkflowRunScope | undefined;
   /**
