@@ -20,6 +20,8 @@ import { until } from "effection";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { GitOperationAuthorityError } from "../src/composition/errors.ts";
 import { admitLivePushEvidence } from "../src/deno/run-composition/operations.ts";
+import { GitComposition } from "../src/composition/git-api.ts";
+import type { GitPushOutcome } from "../src/composition/git-push-records.ts";
 import {
   ManagedCheckoutError,
   NoAmbientRepositoryError,
@@ -69,6 +71,108 @@ import {
 
 /** The github.com repository the modeled store answers for. */
 const GITHUB_LOCATOR = "https://github.com/octo/project";
+
+/** The head every modeled pull request in this file is opened from. */
+const HEAD = "a".repeat(40);
+
+/**
+ * The routes one modeled pull request answers a reviews read on.
+ *
+ * The pull request itself is one of them: an answer is authenticated against
+ * the subject it claims, so a collection with no pull request behind it is
+ * refused rather than bound.
+ */
+function reviewRoutes(endpoint: string): Record<string, string> {
+  return {
+    "/repos/octo/project/pulls/4": JSON.stringify({
+      number: 4,
+      head: { sha: HEAD },
+      base: { repo: { full_name: "octo/project" } },
+    }),
+    "/repos/octo/project/pulls/4/reviews": JSON.stringify([
+      {
+        id: 10,
+        user: { login: "reviewer" },
+        state: "APPROVED",
+        body: "looks right",
+        submitted_at: "2026-01-01T00:00:00Z",
+        commit_id: HEAD,
+        html_url: "https://github.test/pr/4#r10",
+        pull_request_url: `${endpoint}/repos/octo/project/pulls/4`,
+      },
+    ]),
+  };
+}
+
+/** Every route the three collections are read from, each answering its own. */
+function evidenceRoutes(endpoint: string): Record<string, string> {
+  const subject = `${endpoint}/repos/octo/project/pulls/4`;
+  return {
+    ...reviewRoutes(endpoint),
+    "/repos/octo/project/issues/4/comments": JSON.stringify([
+      {
+        id: 20,
+        user: { login: "watcher" },
+        body: "a conversation comment",
+        created_at: "2026-01-01T01:00:00Z",
+        updated_at: "2026-01-01T01:00:00Z",
+        html_url: "https://github.test/pr/4#c20",
+        issue_url: `${endpoint}/repos/octo/project/issues/4`,
+      },
+    ]),
+    "/repos/octo/project/pulls/4/comments": JSON.stringify([
+      {
+        id: 21,
+        pull_request_review_id: 10,
+        user: { login: "reviewer" },
+        body: "an inline comment",
+        created_at: "2026-01-01T02:00:00Z",
+        updated_at: "2026-01-01T02:00:00Z",
+        html_url: "https://github.test/pr/4#d21",
+        path: "packages/core/mod.ts",
+        diff_hunk: "@@ -1 +1 @@\n-old\n+new",
+        commit_id: HEAD,
+        original_commit_id: HEAD,
+        line: 12,
+        side: "RIGHT",
+        start_line: null,
+        start_side: null,
+        in_reply_to_id: null,
+        pull_request_url: subject,
+      },
+    ]),
+    [`/repos/octo/project/commits/${HEAD}/check-runs`]: JSON.stringify({
+      total_count: 1,
+      check_runs: [
+        {
+          id: 30,
+          head_sha: HEAD,
+          name: "test-deno",
+          status: "completed",
+          conclusion: "failure",
+          html_url: "https://github.test/run/30",
+          started_at: "2026-01-01T03:00:00Z",
+          completed_at: "2026-01-01T03:10:00Z",
+          output: { title: "1 failed", summary: "a summary", text: null },
+        },
+      ],
+    }),
+    [`/repos/octo/project/commits/${HEAD}/status`]: JSON.stringify({
+      sha: HEAD,
+      statuses: [
+        {
+          id: 31,
+          context: "deploy",
+          state: "error",
+          description: "a description",
+          target_url: null,
+          created_at: "2026-01-01T04:00:00Z",
+          updated_at: "2026-01-01T04:00:00Z",
+        },
+      ],
+    }),
+  };
+}
 
 /** The second process every exclusive-ownership case runs. */
 const CHILD = fileURLToPath(new URL("./support/run-composition-child.ts", import.meta.url));
@@ -147,7 +251,6 @@ describe("ORC3 — the ambient primary checkout", () => {
           root,
           cwd: elsewhere,
           host: counting.host,
-          authentication: counting.authentication,
         }),
       );
       const refusal = causedBy(failure, isMissingAmbient);
@@ -194,14 +297,17 @@ describe("ORC4 — the ambient linked worktree", () => {
 });
 
 describe("ORC5 — origin is not local authority", () => {
-  it("creates a Worktree and commits with no origin, and refuses to publish", function* () {
+  it("does local work with no origin, and refuses to publish before reaching anything", function* () {
     const root = yield* useManagedRoot();
     const solo = yield* useOriginlessCheckout();
 
+    // Worktree, Switch, Add and Commit all work without an origin: none of them
+    // has anywhere to go.
     const bound = yield* runOrdinaryDocument(
       [
         `<Worktree name="feature" branch="feature" as="worktree" />`,
         "<Dir path={worktree}>",
+        `<Git.Switch branch="feature-two" />`,
         `<File path="local.md">no remote</File>`,
         `<Git.Add paths="local.md" />`,
         `<Git.Commit message="Local only" as="commit" />`,
@@ -210,13 +316,71 @@ describe("ORC5 — origin is not local authority", () => {
       { root, cwd: solo.root },
     );
     expect(typeof bound).toBe("string");
-    expect(solo.run("log", "-1", "--pretty=%s", "feature")).toBe("Local only");
+    expect(solo.run("log", "-1", "--pretty=%s", "feature-two")).toBe("Local only");
 
-    // Push refuses before a credential, a session or a transport exists.
-    const failure = yield* raised(runOrdinaryDocument(`<Git.Push />`, { root, cwd: solo.root }));
-    const refusal = causedBy(failure, isAuthorityFailure);
-    expect(refusal).toBeInstanceOf(GitOperationAuthorityError);
-    expect(String(refusal)).toContain("no usable origin");
+    // Push and PullRequest each refuse, and each refuses before a credential is
+    // read, a session is opened or a byte leaves for a Git host.
+    for (const source of [`<Git.Push />`, `<PullRequest title="t" as="pr" />`]) {
+      const counting = countingOrdinaryHost();
+      const github = recordingAccess({});
+      const failure = yield* raised(
+        runOrdinaryDocument(source, {
+          root,
+          cwd: solo.root,
+          host: counting.host,
+          gitHubPullRequests: { access: gitHubSource(github.access) },
+          gitHubIssues: { ceiling: [GITHUB_LOCATOR], access: gitHubSource(github.access) },
+        }),
+      );
+      expect(`${source} ${String(failure)}`).toContain("no usable origin");
+      // No authentication session was opened for any locator.
+      expect(counting.counters.sessions).toEqual([]);
+      // No transport ran: neither observation nor publication.
+      expect(subcommands(counting.counters)).not.toContain("ls-remote");
+      expect(subcommands(counting.counters)).not.toContain("push");
+      // And nothing was asked of a Git host — no credential, no request.
+      expect(github.credentials).toBe(0);
+      expect(github.requests).toEqual([]);
+    }
+  });
+
+  it("opens a session and transports when there is an origin, so the counters can fail", function* () {
+    // The same counters, on a repository that *does* have an origin. Without
+    // this, every assertion above would pass on a counter that can never be
+    // incremented — which is the one way "nothing was reached" lies.
+    const remote = yield* useBareRemote(REMOTE);
+    const root = yield* useManagedRoot();
+    const checkout = yield* useHostCheckout(remote.locator);
+    const counting = countingOrdinaryHost();
+
+    yield* runOrdinaryDocument(
+      [`<Git.Switch branch="published" />`, `<Git.Push />`].join("\n"),
+      { root, cwd: checkout.root, host: counting.host },
+    );
+
+    expect(counting.counters.sessions).toEqual([remote.locator]);
+    expect(subcommands(counting.counters)).toContain("ls-remote");
+    expect(subcommands(counting.counters)).toContain("push");
+  });
+
+  it("reaches a Git host when one is configured, so those counters can fail too", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const root = yield* useManagedRoot();
+    const checkout = yield* useHostCheckout(remote.locator);
+    const endpoint = "https://api.github.test";
+    const github = recordingAccess(reviewRoutes(endpoint), endpoint);
+
+    yield* runOrdinaryDocument(
+      `<PullRequest.Reviews url="${GITHUB_LOCATOR}/pull/4" as="reviews" />`,
+      {
+        root,
+        cwd: checkout.root,
+        gitHubPullRequests: { allowed: [GITHUB_LOCATOR], access: gitHubSource(github.access) },
+      },
+    );
+
+    expect(github.credentials).toBeGreaterThan(0);
+    expect(github.requests.length).toBeGreaterThan(0);
   });
 });
 
@@ -418,6 +582,45 @@ describe("ORC8 — managed checkouts are persistent", () => {
       expect(yield* readSidecar(slot)).not.toBe(undefined);
     }
     expect(yield* exists(`${worktree.checkout}/in-flight.md`)).toBe(true);
+  });
+
+  it("keeps a managed Repository after an authored failure inside its body", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const root = yield* useManagedRoot();
+    const checkout = yield* useHostCheckout(remote.locator);
+    const slot = repositorySlotOf(root, remote.locator, "surviving");
+
+    yield* raised(
+      runOrdinaryDocument(
+        [
+          `<Repository name="surviving" url="${remote.locator}">`,
+          `<File path="kept.md">written before the failure</File>`,
+          `<Git.Switch branch="in-progress" />`,
+          `<Git.Add paths="kept.md" />`,
+          `<Git.Add paths="absent-on-purpose.md" />`,
+          "</Repository>",
+        ].join("\n"),
+        { root, cwd: checkout.root },
+      ),
+    );
+
+    // The path, the sidecar, the Git state and the working file all survive.
+    expect(yield* exists(slot.checkout)).toBe(true);
+    expect(yield* readSidecar(slot)).toMatchObject({
+      kind: "repository",
+      version: 1,
+      name: "surviving",
+      locator: remote.locator,
+    });
+    expect(yield* readTextFile(`${slot.checkout}/kept.md`)).toBe("written before the failure");
+    // The branch the document switched to and the staging it did are both still
+    // there: nothing rolled back, and nothing was cleaned up on the way out.
+    expect(git(["rev-parse", "--abbrev-ref", "HEAD"], slot.checkout, checkout.home)).toBe(
+      "in-progress",
+    );
+    expect(git(["diff", "--cached", "--name-only"], slot.checkout, checkout.home)).toContain(
+      "kept.md",
+    );
   });
 
   it("keeps the checkout after an authored failure inside the Worktree body", function* () {
@@ -1010,7 +1213,7 @@ describe("ORC14 — live Push evidence", () => {
     const failure = yield* raised(
       runOrdinaryDocument(
         [`<Git.Push />`, `<PullRequest title="Equal" as="pullRequest" />`].join("\n"),
-        { root, cwd: checkout.root, host: counting.host, authentication: counting.authentication },
+        { root, cwd: checkout.root, host: counting.host },
       ),
     );
     expect(subcommands(counting.counters)).toContain("ls-remote");
@@ -1245,6 +1448,85 @@ describe("ORC15 — evidence cannot cross runs", () => {
     expect(patches(store)).toBe(0);
   });
 
+  it("grants nothing to a Push result middleware handed back without performing one", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const root = yield* useManagedRoot();
+    const checkout = yield* useHostCheckout(remote.locator);
+
+    // One execution really publishes, and the suite keeps the exact outcome the
+    // provider answered with — the whole successful `GitPushOutcome`.
+    let published: GitPushOutcome | undefined;
+    yield* runOrdinaryDocument(
+      [
+        `<Git.Switch branch="copied" />`,
+        `<File path="copied.md">copied</File>`,
+        `<Git.Add paths="copied.md" />`,
+        `<Git.Commit message="Copied" as="commit" />`,
+        `<Git.Push />`,
+        "<Capture />",
+      ].join("\n"),
+      {
+        root,
+        cwd: checkout.root,
+        around: function* () {
+          yield* GitComposition.around({
+            *pushCurrentBranch([invocation], next): Operation<GitPushOutcome> {
+              published = yield* next(invocation);
+              return published;
+            },
+          });
+        },
+        components: [
+          {
+            name: "Capture",
+            origin: "test",
+            props: { type: "object", additionalProperties: false },
+            // deno-lint-ignore require-yield
+            *fn(): Operation<string> {
+              return "";
+            },
+          },
+        ],
+      },
+    );
+    expect(published).toBeDefined();
+    expect(published?.decision).toBe("performed");
+    const head = checkout.run("rev-parse", "HEAD");
+
+    // A new execution whose `<Git.Push>` is answered by middleware handing that
+    // exact successful outcome back. The provider underneath never runs, so it
+    // never verifies a publication and never records evidence — and a result is
+    // not evidence.
+    let delegated = 0;
+    const failure = yield* raised(
+      runOrdinaryDocument([`<Git.Push />`, `<PullRequest title="Copied" as="pr" />`].join("\n"), {
+        root,
+        cwd: checkout.root,
+        around: function* () {
+          yield* GitComposition.around({
+            // deno-lint-ignore require-yield
+            *pushCurrentBranch([_invocation], _next): Operation<GitPushOutcome> {
+              delegated += 1;
+              if (published === undefined) {
+                throw new Error("the suite captured no publication to hand back");
+              }
+              return published;
+            },
+          });
+        },
+      }),
+    );
+
+    // The middleware answered, so the component saw a successful Push.
+    expect(delegated).toBe(1);
+    // The branch really is still published at that commit, so nothing about the
+    // world contradicts the copied result.
+    expect(remoteBranch(remote, "copied")).toBe(head);
+    // And the pull request is refused anyway: what authorizes it is what this
+    // provider verified, not what anything handed it.
+    expect(String(failure)).toContain("holds no successful <Git.Push> result");
+  });
+
   it("grants nothing to a copied selection, a copied result or a previous trace", function* () {
     const remote = yield* useBareRemote(REMOTE);
     const root = yield* useManagedRoot();
@@ -1424,46 +1706,28 @@ describe("ORC17 — live PullRequests", () => {
     expect(String(rendered)).toContain("number 1");
   });
 
-  it("reads evidence collections and holds a URL to the configured ceiling", function* () {
+  it("reads all three collections, each from its own route", function* () {
     const remote = yield* useBareRemote(REMOTE);
     const root = yield* useManagedRoot();
     const checkout = yield* useHostCheckout(remote.locator);
     const endpoint = "https://api.github.test";
-    const recording = recordingAccess(
-      {
-        // The pull request itself, which is what an answer is authenticated
-        // against, and the collection this read asks for.
-        "/repos/octo/project/pulls/4": JSON.stringify({
-          number: 4,
-          head: { sha: "a".repeat(40) },
-          base: { repo: { full_name: "octo/project" } },
-        }),
-        "/repos/octo/project/pulls/4/reviews": JSON.stringify([
-          {
-            id: 10,
-            user: { login: "reviewer" },
-            state: "APPROVED",
-            body: "looks right",
-            submitted_at: "2026-01-01T00:00:00Z",
-            commit_id: "a".repeat(40),
-            html_url: "https://github.test/pr/4#r10",
-            pull_request_url: `${endpoint}/repos/octo/project/pulls/4`,
-          },
-        ]),
-      },
-      endpoint,
-    );
+    const recording = recordingAccess(evidenceRoutes(endpoint), endpoint);
     const access = gitHubSource(recording.access);
 
-    // Allowed: the read reaches the transport under an authorization header and
-    // binds what came back.
+    // All three, in one document, under the ordinary provider.
     const rendered = yield* runOrdinaryDocument(
       [
         `<PullRequest.Reviews url="${GITHUB_LOCATOR}/pull/4" as="reviews" />`,
+        `<PullRequest.Comments url="${GITHUB_LOCATOR}/pull/4" as="comments" />`,
+        `<PullRequest.Checks url="${GITHUB_LOCATOR}/pull/4" as="checks" />`,
         "",
-        "reviews {reviews.length}",
+        "counts {reviews.length} {comments.length} {checks.length}",
         "",
         "<Json value={reviews} />",
+        "",
+        "<Json value={comments} />",
+        "",
+        "<Json value={checks} />",
       ].join("\n"),
       {
         root,
@@ -1471,15 +1735,35 @@ describe("ORC17 — live PullRequests", () => {
         gitHubPullRequests: { allowed: [GITHUB_LOCATOR], access },
       },
     );
-    expect(String(rendered)).toContain("reviews 1");
-    // The collection itself, normalized by the shared adapter and bound here.
+
+    // One review, two comments of both kinds, and two checks of both kinds.
+    expect(String(rendered)).toContain("counts 1 2 2");
+    // Each collection carries the existing normalized contract.
     expect(String(rendered)).toContain('"state": "approved"');
     expect(String(rendered)).toContain('"author": "reviewer"');
-    const asked = recording.requests.length;
-    expect(asked).toBeGreaterThan(0);
+    expect(String(rendered)).toContain('"kind": "conversation"');
+    expect(String(rendered)).toContain('"kind": "review"');
+    expect(String(rendered)).toContain('"diffHunk"');
+    expect(String(rendered)).toContain('"kind": "check-run"');
+    expect(String(rendered)).toContain('"conclusion": "failure"');
+    expect(String(rendered)).toContain('"kind": "commit-status"');
+    expect(String(rendered)).toContain('"state": "error"');
+
+    // Each read reached the route its own collection lives at.
+    const asked = recording.requests.map((request) => new URL(request.url).pathname);
+    for (const route of [
+      "/repos/octo/project/pulls/4/reviews",
+      "/repos/octo/project/issues/4/comments",
+      "/repos/octo/project/pulls/4/comments",
+      `/repos/octo/project/commits/${HEAD}/check-runs`,
+      `/repos/octo/project/commits/${HEAD}/status`,
+    ]) {
+      expect(`${route}: ${asked.includes(route)}`).toBe(`${route}: true`);
+    }
     expect(recording.requests.every((request) => request.authorized)).toBe(true);
 
     // Outside the ceiling: refused before anything is sent.
+    const sent = recording.requests.length;
     const failure = yield* raised(
       runOrdinaryDocument(
         `<PullRequest.Reviews url="https://github.com/other/repo/pull/4" as="reviews" />`,
@@ -1487,7 +1771,7 @@ describe("ORC17 — live PullRequests", () => {
       ),
     );
     expect(String(failure)).toContain("has not authorized");
-    expect(recording.requests).toHaveLength(asked);
+    expect(recording.requests).toHaveLength(sent);
 
     // And with nothing allowed, no read this host performs exists at all.
     const unconfigured = yield* raised(
@@ -1498,7 +1782,7 @@ describe("ORC17 — live PullRequests", () => {
       }),
     );
     expect(String(unconfigured)).toContain("no pull-request provider handles");
-    expect(recording.requests).toHaveLength(asked);
+    expect(recording.requests).toHaveLength(sent);
   });
 
   it("refuses an unpublished head before a credential or a request", function* () {
@@ -1513,7 +1797,6 @@ describe("ORC17 — live PullRequests", () => {
         root,
         cwd: checkout.root,
         host: counting.host,
-        authentication: counting.authentication,
         gitHubPullRequests: { access: gitHubSource(fakeGitHubAccess(store)) },
       }),
     );

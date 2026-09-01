@@ -54,14 +54,30 @@ function git(args: readonly string[], cwd: string, home: string): string {
   return outcome.stdout.trim();
 }
 
+/** A bare repository this suite can publish to, made from a real checkout. */
+function* useRemote(): Operation<string> {
+  const home = yield* useTempDirectory("xmd-orc-remote-home-");
+  const parent = yield* until(realpath(yield* useTempDirectory("xmd-orc-remote-")));
+  const seed = join(parent, "seed");
+  git(["init", "--initial-branch=main", seed], parent, home);
+  git(["commit", "--allow-empty", "-m", "first"], seed, home);
+  const bare = join(parent, "remote.git");
+  git(["clone", "--bare", "--", seed, bare], parent, home);
+  return bare;
+}
+
 /** A repository the command is "run in", and a managed root of this suite's own. */
-function* useAmbient(): Operation<{ checkout: string; root: string; home: string }> {
+function* useAmbient(locator?: string): Operation<{ checkout: string; root: string; home: string }> {
   const home = yield* useTempDirectory("xmd-orc-home-");
   // Canonical, so what this fixture names and what Git reports are one string.
   const parent = yield* until(realpath(yield* useTempDirectory("xmd-orc-ambient-")));
   const checkout = join(parent, "checkout");
-  git(["init", "--initial-branch=main", checkout], parent, home);
-  git(["commit", "--allow-empty", "-m", "first"], checkout, home);
+  if (locator === undefined) {
+    git(["init", "--initial-branch=main", checkout], parent, home);
+    git(["commit", "--allow-empty", "-m", "first"], checkout, home);
+  } else {
+    git(["clone", "--", locator, checkout], parent, home);
+  }
   const managed = yield* until(realpath(yield* useTempDirectory("xmd-orc-managed-")));
   return { checkout, root: join(managed, "repositories"), home };
 }
@@ -169,6 +185,59 @@ describe("ORC18 — the journal is diagnostic", () => {
     expect(
       git(["log", "--oneline", "traced"], third.checkout, third.home).split("\n"),
     ).toHaveLength(2);
+  });
+});
+
+describe("ORC15 — a trace is not evidence", () => {
+  it("refuses a PullRequest handed the trace of an execution that really published", function* () {
+    const remote = yield* useRemote();
+    const first = yield* useAmbient(remote);
+    const trace = join(first.root, "..", "published.jsonl");
+
+    // A real publication, written into a real diagnostic trace.
+    yield* runOrdinary(
+      [
+        `<Git.Switch branch="traced-push" />`,
+        `<File path="pushed.md">pushed</File>`,
+        `<Git.Add paths="pushed.md" />`,
+        `<Git.Commit message="Pushed" as="commit" />`,
+        `<Git.Push />`,
+      ].join("\n"),
+      { root: first.root, cwd: first.checkout, journal: trace },
+    );
+    const published = git(["rev-parse", "HEAD"], first.checkout, first.home);
+    expect(git(["rev-parse", "traced-push"], remote, first.home)).toBe(published);
+    expect(yield* exists(trace)).toBe(true);
+    const written = yield* readTextFile(trace);
+    // The trace holds this run's own events, and none of them is the
+    // publication: an ordinary run journals no repository effect at all, so
+    // there is not even a record for a later run to misread as evidence.
+    expect(written.length).toBeGreaterThan(0);
+    expect(written).toContain("import_component");
+    expect(written).not.toContain("git-push");
+    expect(written).not.toContain("git_host");
+
+    // A new execution, on the same checkout, on the same branch, at the same
+    // commit — handed that exact file as its journal, and containing only a
+    // pull request.
+    const failure = yield* raisedValue(
+      runOrdinary(`<PullRequest title="Traced" as="pullRequest" />`, {
+        root: first.root,
+        cwd: first.checkout,
+        journal: trace,
+      }),
+    );
+    expect(String(failure)).toContain("holds no successful <Git.Push> result");
+
+    // The second run wrote its own events after the first run's, which is what
+    // a trace is: a file appended to, never a file read back. Nothing in it
+    // authorized anything, and there is still no publication recorded anywhere
+    // in it.
+    const after = yield* readTextFile(trace);
+    expect(after.startsWith(written)).toBe(true);
+    expect(after.length).toBeGreaterThan(written.length);
+    expect(after).not.toContain("git-push");
+    expect(after).not.toContain("git_host");
   });
 });
 

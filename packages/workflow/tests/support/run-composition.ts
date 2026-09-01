@@ -112,13 +112,12 @@ export function* useManagedRoot(): Operation<string> {
 export interface OrdinaryCounters {
   /** Every Git command, in order, as its argument list. */
   readonly commands: string[][];
-  /** Every authentication session opened, by locator. */
+  /** Every authentication session this host was asked to open, by locator. */
   readonly sessions: string[];
 }
 
 export interface CountingOrdinaryHost {
   readonly host: RepositoryHost;
-  readonly authentication: GitAuthentication;
   readonly counters: OrdinaryCounters;
 }
 
@@ -126,8 +125,15 @@ export interface CountingOrdinaryHost {
  * The production host, counted.
  *
  * Both leaves are wrapped rather than replaced: what a suite needs to know is
- * *whether* a credential was opened and *whether* a transport ran, and the only
+ * *whether* a session was opened and *whether* a transport ran, and the only
  * honest way to answer is to let the real one happen and watch.
+ *
+ * The session counter is on `useAuthentication` rather than on a separate
+ * `authentication` option, because that option only reaches the *default* host
+ * — a suite that supplies its own has already replaced the thing a session
+ * would be opened by. A counter installed there would never be incremented,
+ * and every "no session was opened" assertion made against it would pass
+ * without ever having been able to fail.
  */
 export function countingOrdinaryHost(
   inner: RepositoryHost = denoRepositoryHost(),
@@ -135,21 +141,18 @@ export function countingOrdinaryHost(
   const counters: OrdinaryCounters = { commands: [], sessions: [] };
   return {
     counters,
-    authentication: {
-      *open(locator: string): Operation<GitAuthenticationSession> {
-        counters.sessions.push(locator);
-        return UNAUTHENTICATED;
-      },
-    },
     host: {
       *git(invocation: GitInvocation): Operation<GitOutcome> {
         counters.commands.push([...invocation.args]);
         return yield* inner.git(invocation);
       },
       useDirectory: inner.useDirectory,
-      ...(inner.useAuthentication === undefined
-        ? {}
-        : { useAuthentication: inner.useAuthentication }),
+      *useAuthentication(locator: string): Operation<GitAuthenticationSession> {
+        counters.sessions.push(locator);
+        return inner.useAuthentication === undefined
+          ? UNAUTHENTICATED
+          : yield* inner.useAuthentication(locator);
+      },
     },
   };
 }
@@ -192,6 +195,14 @@ export interface RunOptions extends Omit<RunCompositionOptions, "root" | "cwd"> 
    * over to prove that replacing it buys nothing.
    */
   readonly contextualRepository?: RepositorySelection;
+  /**
+   * Middleware installed after the provider and before the document.
+   *
+   * The nearest handler at the same depth, which is what a document's own
+   * composition would be: a suite uses it to answer an operation the provider
+   * would otherwise perform, and to prove that answering one grants nothing.
+   */
+  readonly around?: () => Operation<void>;
 }
 
 /**
@@ -224,6 +235,9 @@ export function runOrdinaryDocument(source: string, options: RunOptions): Operat
     }
     if (contextualRepository !== undefined) {
       yield* RepositoryContext.around({ current: () => contextualRepository }, { at: "min" });
+    }
+    if (options.around !== undefined) {
+      yield* options.around();
     }
     return yield* collect(
       yield* execute({
@@ -433,6 +447,8 @@ export interface RecordedRequest {
 export interface RecordingAccess {
   readonly access: GitHubAccess;
   readonly requests: RecordedRequest[];
+  /** How many times this access was asked for a credential. */
+  readonly credentials: number;
 }
 
 /**
@@ -448,12 +464,17 @@ export function recordingAccess(
   token: string | undefined = "test-token",
 ): RecordingAccess {
   const requests: RecordedRequest[] = [];
+  let credentials = 0;
   return {
     requests,
+    get credentials(): number {
+      return credentials;
+    },
     access: {
       endpoint,
       // deno-lint-ignore require-yield
       *token(): Operation<string | undefined> {
+        credentials += 1;
         return token;
       },
       // deno-lint-ignore require-yield
