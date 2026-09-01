@@ -551,9 +551,7 @@ function selectionProbe(seen: (RepositorySelection | undefined)[]): ComponentReg
 }
 
 describe("ORC6 — Dir makes the directory it names", () => {
-  // ORC6: the ordering claim and the two path rules, in one document. The
-  // `<File>` inside can only land if the directory was already there, so
-  // ordering is observed from the outcome rather than asserted about the code.
+  // ORC6: the ordering claim and the two path rules, in one document.
   it("ORC6: creates missing parents, keeps an absolute path, and finishes before content", function* () {
     const root = yield* useManagedRoot();
     const checkout = (yield* useOriginlessCheckout()).root;

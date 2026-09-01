@@ -1226,11 +1226,6 @@ describe("host Files — making a directory exist", () => {
     expect(yield* entries(target)).toEqual(["kept.txt", "sub"]);
   });
 
-  // HF26: a file where a directory was asked for is a mistake to report, never
-  // a thing to remove. Both positions are covered — the target itself, and an
-  // intermediate on the way to it — because they refuse through different code:
-  // the target is classified here, the intermediate is the platform's ENOTDIR
-  // carried into the shared vocabulary.
   // HF26: a non-directory is a mistake to report, never a thing to remove. The
   // matrix is four cases, not two: the entry may be a regular file or a
   // supported special one, and it may stand at the target or on the way to it.

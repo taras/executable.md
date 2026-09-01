@@ -1515,13 +1515,9 @@ the retained note
   // not silently receive the wider authority.
   //
   // Two halves, and neither is evidence alone. The control shows the current
-  // admission really does resume and really does not create again — without it,
-  // the refusal below could be a run that was broken for some other reason. The
-  // refusal shows the former identity is what stops it.
-  //
-  // The counter is the low-level `mkdir`, not the retained effect count: a
-  // replay that restored its record while quietly creating the directory a
-  // second time would leave the effect count unchanged and still be wrong.
+  // admission really does execute its generated `<Dir>` and really does resume
+  // — without it, the refusal below could be a run that was broken for some
+  // other reason. The refusal shows the former identity is what stops it.
   function* wgac17(
     store: string,
   ): Operation<{ runId: string; path: string; rendered: string[]; calls: AgentCalls }> {
@@ -1546,9 +1542,25 @@ the retained note
 
     const suspended = retained(path);
     expect(suspended.status).toBe("suspended");
-    // The admission carries the versioned identity, and the generated Dir made
-    // its directory exactly once.
+    // The admission carries the versioned identity.
     expect(readRecords(path).some((record) => record.includes("dir-v2#Dir"))).toBe(true);
+
+    // And the generated `<Dir>` really executed before the run suspended: the
+    // retained file effects hold an ensure for `/generated` ahead of the nested
+    // write beneath it. Read from the committed order rather than from the
+    // fragment's text, because the text says what was asked for and the order
+    // says what happened.
+    const files = orderedEffects(path)
+      .filter((effect) => effect.type === FILE_EFFECT)
+      .map((effect) => effect.name);
+    const ensured = files.findIndex(
+      (name) => name.startsWith("ensure-directory:") && name.endsWith(":/generated"),
+    );
+    const wrote = files.findIndex(
+      (name) => name.startsWith("write:") && name.endsWith(":/generated/inside.md"),
+    );
+    expect(ensured).toBeGreaterThanOrEqual(0);
+    expect(wrote).toBeGreaterThan(ensured);
 
     yield* manage(
       {
@@ -1563,7 +1575,7 @@ the retained note
     return { runId, path, rendered, calls };
   }
 
-  it("WGAC17: the current admission resumes and does not create again", function* () {
+  it("WGAC17: the current admission executes Dir, resumes, and publishes nothing further", function* () {
     const store = yield* useRunStore();
     const { runId, path, rendered, calls } = yield* wgac17(store);
     const atSuspension = counts(path);
@@ -1580,17 +1592,21 @@ the retained note
     expect(resumed.exitCode).toBe(0);
     expect(retained(path).status).toBe("completed");
     expect(rendered).toHaveLength(1);
-    // And publishes nothing further: no additional effect, and no new Workspace
-    // root. That is the claim these two observables support and the whole of
-    // it — root invariance means no *published mutation*, not that no
-    // low-level call was made. An ensure that found the directory already there
-    // would publish no root either, so this cannot stand in for a call count.
+    // And the resume publishes nothing further: no additional effect, and no
+    // new Workspace root.
     //
-    // The call count belongs to WF26, which decorates `mkdir` and counts it
-    // directly. It is not reachable here: the CLI host fixes the private
-    // workspace options to `{}` (`run-host.ts`), and threading a decorator
-    // through would mean changing a production signature for a test. What this
-    // case adds is that the current generated admission actually resumes.
+    // That is exactly what these two observables support, and no more. Root
+    // invariance does not prove that no low-level ensure ran — an ensure
+    // finding the directory already there would publish no root either. The
+    // low-level call count is WF26's, which decorates `mkdir` and counts it
+    // directly; it is not reachable from this harness, because the CLI host
+    // fixes the private workspace options to `{}` (`run-host.ts`) and threading
+    // a decorator through would mean changing a production signature for a
+    // test.
+    //
+    // What this case establishes is the pair WF26 cannot: that the generated
+    // `<Dir>` effect occurred under the current admission, and that resuming
+    // that admission publishes no further effect or root.
     expect(workspaceRootState(path)).toEqual(rootsAtSuspension);
     expect(counts(path)).toEqual(atSuspension);
   });
@@ -1618,9 +1634,8 @@ the retained note
       pinnedBody(rendered),
     );
 
-    // Refused, and before anything generated ran: no further effect of any
-    // kind was committed, no Workspace root was published, and no directory was
-    // created a second time.
+    // Refused, and before anything generated ran: no further effect of any kind
+    // was committed and no Workspace root was published.
     expect(resumed.exitCode).not.toBe(0);
     expect(counts(path)).toEqual(beforeResume);
     expect(workspaceRootState(path)).toEqual(rootsBeforeResume);
