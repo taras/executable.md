@@ -2163,7 +2163,12 @@ function* expandComponent(
       withdraw?.();
     }
     selected = selection?.settle();
-    if (authority?.imports === undefined) {
+    // Closed for this exact name, not for the execution that closed it. A
+    // bundled run closes every import; a host that declared exact Markdown
+    // closed the names it declared, and an unrelated one is the open import it
+    // has always been — the chain's answer, unverified, with no selection
+    // recorded against it.
+    if (authority?.imports === undefined || !authority.imports.closes(name)) {
       imported = answered;
     } else {
       imported = authority.imports.authorize(name, answered);

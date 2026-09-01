@@ -32,7 +32,20 @@ export type ImportedDefinition = ComponentDefinition | FunctionComponentDefiniti
  * document, component, or middleware can reach it, replace it, or add to it.
  */
 export interface ImportAuthority {
-  /** The definition this import may invoke, or the refusal saying why it may invoke none. */
+  /**
+   * Whether canonical execution answers for this name rather than the chain.
+   *
+   * Closing an import is a claim about *that name*, not about the execution
+   * that made it. A workflow bundle closes every import because a workflow run
+   * is a run of one pinned tree; a host declaring exact Markdown closes only
+   * the names it declared, so an unrelated name resolves and composes exactly
+   * as it does in an execution with no authority at all.
+   */
+  closes(name: string): boolean;
+  /**
+   * The definition this import may invoke, or the refusal saying why it may
+   * invoke none. Asked only for a name `closes()` answered for.
+   */
   authorize(name: string, answer: ImportedDefinition): ImportedDefinition;
 }
 
@@ -241,6 +254,18 @@ export class CanonicalImports {
 export interface ImportTier {
   /** Whether this tier is the one that answers for `name`. */
   claims(name: string): boolean;
+  /**
+   * Whether this tier closes every import in the execution, or only the names
+   * it claims.
+   *
+   * A workflow bundle closes the execution: a run is a run *of* that pinned
+   * tree, and a name resolving outside it is the thing the bundle exists to
+   * prevent. Exact declared Markdown closes only what it declares: the host
+   * claimed those names and nothing else, so closing an unrelated import would
+   * take away a supported way to decide what a name means without any
+   * declaration having said anything about it.
+   */
+  readonly closesExecution: boolean;
   /** The error this tier throws when the answer is not the one core produced. */
   refuse(refusal: ImportRefusal): Error;
 }
@@ -266,14 +291,33 @@ export class ExecutionImports implements ImportAuthority {
     return this.#imports.issue(name, definition);
   }
 
+  /** Whether canonical execution answers for this name rather than the chain. */
+  closes(name: string): boolean {
+    return this.#answering(name) !== undefined;
+  }
+
   /** Core's own copy of the definition this import may invoke. */
   authorize(name: string, answer: ImportedDefinition): ImportedDefinition {
-    const tier = this.#tiers.find((candidate) => candidate.claims(name)) ?? this.#tiers[0];
+    const tier = this.#answering(name);
     return this.#imports.authorize(name, answer, (refusal) => {
       if (tier === undefined) {
-        return new Error("this execution authorizes no import");
+        return new Error("this execution authorizes no import of this name");
       }
       return tier.refuse(refusal);
     });
+  }
+
+  /**
+   * The tier this name is closed by, if any.
+   *
+   * A tier that claims the name answers for it; otherwise a tier that closes
+   * the whole execution does, which is what keeps a bundled run's every import
+   * — and every refusal's wording — exactly what it was.
+   */
+  #answering(name: string): ImportTier | undefined {
+    return (
+      this.#tiers.find((candidate) => candidate.claims(name)) ??
+      this.#tiers.find((candidate) => candidate.closesExecution)
+    );
   }
 }

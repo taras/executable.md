@@ -378,6 +378,14 @@ export class DeclaredImports implements ImportTier {
     return this.#catalog.component(name) !== undefined || this.#privates.has(name);
   }
 
+  /**
+   * A declaration claims the names it declares and says nothing about any
+   * other, so an unrelated import composes exactly as it does in an execution
+   * with no declarations at all. Closing those too would take a supported way
+   * to decide what a name means away from every host that declares one asset.
+   */
+  readonly closesExecution = false;
+
   refuse(refusal: ImportRefusal): Error {
     return new DeclaredMarkdownError(REFUSED[refusal]);
   }

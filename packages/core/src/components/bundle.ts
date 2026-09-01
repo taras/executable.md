@@ -118,6 +118,13 @@ export class WorkflowImportAuthority implements ImportTier {
     return this.#components.has(name);
   }
 
+  /**
+   * A workflow run is a run *of* one pinned tree, so every import it makes is
+   * canonical execution's — including one that resolved to a core default
+   * underneath the bundle.
+   */
+  readonly closesExecution = true;
+
   refuse(refusal: ImportRefusal): Error {
     return new WorkflowBundleError(REFUSED[refusal]);
   }

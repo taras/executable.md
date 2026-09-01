@@ -630,6 +630,16 @@ class GeneratedImportAuthority implements ImportAuthority {
   /** The form authority under each admitted name's wrapper. */
   readonly #dispatchers = new Map<string, unknown>();
 
+  /**
+   * A generated fragment may invoke only what the host admitted for it, so
+   * every import it makes is canonical execution's — including a name the
+   * allowlist does not hold, which is refused rather than answered.
+   */
+  // deno-lint-ignore no-unused-vars
+  closes(_name: string): boolean {
+    return true;
+  }
+
   constructor(named: readonly Planned[]) {
     const planned = new Map<string, Planned[]>();
     for (const invocation of named) {

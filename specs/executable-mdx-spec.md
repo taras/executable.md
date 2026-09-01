@@ -2674,6 +2674,19 @@ else it is the ordinary unresolved printed error. This is lexical availability
 rather than authority: every private component still takes its operation from
 the invocation that carries it.
 
+**Only the declared names are closed.** Canonical core answers for the declared
+component and for its private closure, and `Component.importComponent`
+middleware cannot answer, replace or change one of those. It says nothing about
+any other name: an unrelated import in the same execution is the ordinary open
+import it has always been.
+
+**Every declaration is read once, before any installation runs.** The name,
+origin, source, digest, forms, stated schemas and each private declaration —
+its factory bound, its arrays copied, its schemas and prose read — are captured
+by the invocation and held by it. A host that hands over a declaration and then
+replaces a member of it has replaced nothing: what is admitted, registered and
+executed is what it declared at the moment of capture.
+
 **The journal records the asset.** A declared import records exactly
 `{ kind: "declared-markdown", origin, digest, content }` and a private one
 records exactly `{ kind: "declared-private", origin }`. A continuation reads
@@ -2789,17 +2802,28 @@ definition's source is already described by the selection that chose it, so
 source identity lives on the selection rather than being copied onto every
 definition.
 
-#### Only canonical execution answers a bundled import
+#### Only canonical execution answers a closed import
 
 `Component.importComponent` is an overridable public surface: a handler may
 observe an import, delegate it, refuse it by throwing, and — ordinarily — answer
 it with a definition of its own.
 
-While a component bundle or a declared Markdown component is installed, it may
-still do the first three and no longer the fourth. A handler that returns without delegating, replaces what came
-back, changes it afterwards, or answers a name the bundle does not declare fails
-the import before the component runs. A refusal is still a refusal, and
+For a **closed** import it may still do the first three and no longer the
+fourth. A handler that returns without delegating, replaces what came back,
+changes it afterwards, or answers a name canonical execution did not resolve
+fails that import before the component runs. A refusal is still a refusal, and
 observation and delegation are unchanged.
+
+**Which imports are closed is a property of the name, not of the execution.** A
+component bundle closes every import a workflow run makes, including one that
+resolved to a core default underneath it: a run is a run *of* that pinned tree,
+and a name resolving outside it is what the bundle exists to prevent. A declared
+Markdown component closes only the names it declares — the component itself and
+its private closure. Every other name in that execution resolves and composes
+exactly as it does in an execution with no authority at all: a handler may still
+answer it, and nothing about the answer is verified or recorded as canonical
+resolution's product. Declaring one asset does not take component substitution
+away from every document the host runs.
 
 Two things hold that together, and the second is what makes the first safe.
 Canonical core keeps its own copy of the definition it produced, taken before
@@ -2820,8 +2844,8 @@ the same terms a journal admission, a durable preparation and a Markdown
 declaration cross on. It is execution-local: two concurrent workflows declaring
 one name with different sources resolve their own, and leaving the execution
 scope removes it. One retention answers for every closed tier an execution has,
-so which tier produced an answer decides how a refusal reads and never whether
-one is authorized.
+so which tier closed a name decides how its refusal reads and never whether an
+answer is authorized.
 
 #### Origin
 

@@ -125,6 +125,7 @@ import {
   privateClosure,
 } from "./components/declared-markdown.ts";
 import type { DeclaredMarkdownComponent } from "./components/declared-markdown.ts";
+import { documentationOf } from "./components/documentation.ts";
 import { registerComponents } from "./components/registration.ts";
 import {
   declaredForms,
@@ -2704,6 +2705,33 @@ function reconcile(document: Result<Json> | undefined, teardown: Error | undefin
   return document ?? Err(new Error("the document execution did not complete"));
 }
 
+/**
+ * One declared component, read once and held by this execution.
+ *
+ * Every member is copied here — the factory bound, the arrays copied, the
+ * schemas and prose read — because reading one later would be reading it after
+ * an installation ran. A host that hands over a declaration and then replaces
+ * its factory, its schemas or its prose has replaced nothing: what is admitted,
+ * registered and executed is what it declared at the moment the invocation
+ * captured it.
+ *
+ * Shared by the components a host declares to an execution and by the private
+ * declarations one declared Markdown component carries, so a member added to
+ * one is not silently dropped from the other.
+ */
+function retainedIdentityComponent(component: IdentityComponent): IdentityComponent {
+  return Object.freeze({
+    name: component.name,
+    origin: component.origin,
+    props: component.props,
+    ...(component.returns === undefined ? {} : { returns: component.returns }),
+    ...(component.captures === undefined ? {} : { captures: [...component.captures] }),
+    ...(component.forms === undefined ? {} : { forms: [...component.forms] }),
+    ...documentationOf(component),
+    factory: component.factory.bind(component),
+  });
+}
+
 function* invoke(
   options: ExecuteOptions,
   installations: readonly ExecutionInstallation[],
@@ -2766,16 +2794,7 @@ function* invoke(
   // its own values rather than over an array a host still holds.
   const identityComponents = Object.freeze(
     installations.flatMap((installation) =>
-      [...(installation.components ?? [])].map((component) =>
-        Object.freeze({
-          name: component.name,
-          origin: component.origin,
-          props: component.props,
-          ...(component.returns === undefined ? {} : { returns: component.returns }),
-          ...(component.captures === undefined ? {} : { captures: [...component.captures] }),
-          factory: component.factory.bind(component),
-        }),
-      ),
+      [...(installation.components ?? [])].map(retainedIdentityComponent),
     ),
   );
 
@@ -2794,7 +2813,9 @@ function* invoke(
           ...(declaration.forms === undefined ? {} : { forms: [...declaration.forms] }),
           ...(declaration.props === undefined ? {} : { props: declaration.props }),
           ...(declaration.returns === undefined ? {} : { returns: declaration.returns }),
-          ...(declaration.privates === undefined ? {} : { privates: [...declaration.privates] }),
+          ...(declaration.privates === undefined
+            ? {}
+            : { privates: [...declaration.privates].map(retainedIdentityComponent) }),
         }),
       ),
     ),

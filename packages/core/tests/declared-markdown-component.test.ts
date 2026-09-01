@@ -442,6 +442,75 @@ describe("Tier DM — the name is claimed rather than offered", () => {
     expect(message).toContain("changed the definition canonical execution produced");
   });
 
+  it("DM37: an unrelated name is answered exactly as it is with nothing declared", function* () {
+    // The whole point of the case: `Virtual` is a name no declaration mentions,
+    // so a handler answering it is doing the ordinary supported thing. If
+    // declaring an unused `Policy` changed that, every host shipping one asset
+    // would have taken component substitution away from every document it runs.
+    const substitute: ExecutionInstallation = {
+      *install() {
+        yield* Component.around(
+          {
+            *importComponent([name, position], next) {
+              if (name !== "Virtual") {
+                return yield* next(name, position);
+              }
+              return {
+                kind: "markdown",
+                name: "Virtual",
+                path: "middleware://virtual",
+                meta: {},
+                props: NO_PROPS,
+                bodySegments: [{ type: "text", content: "the handler answered." }],
+              };
+            },
+          },
+          { at: "max" },
+        );
+      },
+    };
+
+    const undeclared = yield* run("<Virtual />\n", [], [substitute]);
+    const declaring = yield* run("<Virtual />\n", [declared(POLICY_SOURCE)], [substitute]);
+
+    expect(undeclared).toContain("the handler answered.");
+    expect(declaring).toEqual(undeclared);
+
+    // And the declared name is still not one a handler may answer.
+    const message = yield* refusal(
+      run(
+        "<Policy />\n",
+        [declared(POLICY_SOURCE)],
+        [
+          {
+            *install() {
+              yield* Component.around(
+                {
+                  *importComponent([name, position], next) {
+                    if (name !== "Policy") {
+                      return yield* next(name, position);
+                    }
+                    return {
+                      kind: "markdown",
+                      name: "Policy",
+                      path: ORIGIN,
+                      meta: {},
+                      props: NO_PROPS,
+                      bodySegments: [{ type: "text", content: "substituted" }],
+                    };
+                  },
+                },
+                { at: "max" },
+              );
+            },
+          },
+        ],
+      ),
+    );
+
+    expect(message).toContain("canonical execution did not produce");
+  });
+
   it("DM14: middleware that observes and delegates sees the declared origin", function* () {
     const seen: string[] = [];
     const output = yield* run(
@@ -564,6 +633,39 @@ describe("Tier DM — the private closure is lexical", () => {
     );
 
     expect(message).toContain("canonical execution did not produce");
+  });
+
+  it("DM38: a factory replaced after capture does not become what runs", function* () {
+    // The declaration object is the host's, and an installation runs after the
+    // invocation captured it. Reading the factory then rather than now would
+    // let a hook installed by the same host — or by anything that reached the
+    // object — decide what a private name executes.
+    const original = secret();
+    const replaced: IdentityComponent = {
+      ...original,
+      // deno-lint-ignore require-yield
+      factory: () =>
+        function* Replacement(): Operation<string> {
+          return "the replacement answer";
+        },
+    };
+    const declaration = declared(WITH_PRIVATE, { privates: [original] });
+
+    const output = yield* run(
+      "<Policy />\n",
+      [declaration],
+      [
+        {
+          // deno-lint-ignore require-yield
+          *install() {
+            Reflect.set(original, "factory", replaced.factory);
+          },
+        },
+      ],
+    );
+
+    expect(output).toContain("policy says the private answer");
+    expect(String(output)).not.toContain("the replacement answer");
   });
 
   it("DM21: a private name a registration also claims refuses the declaration", function* () {

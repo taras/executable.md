@@ -26,7 +26,7 @@ Existing documents and code get aligned to this section retroactively.
 | document execution | one evaluation of a root document initiated through `execute()`, producing one output stream and one completion result while reading and appending a durable journal; its ongoing effects belong to the Effection scope in which the evaluation runs |
 | workflow definition | what a workflow run is a run of: a versioned descriptor naming an immutable object — its format and object ID — together with the repository-relative path of the root document inside it, the exact canonical document target when one is selected, and the component bundle it is closed over when it declares one. A repository locator is not part of it, and it is distinct from every Repository created inside the run's Workspace |
 | workflow component bundle | the closed set of authored Markdown components a workflow root declares, each named, located by a canonical repository-relative path inside the pinned commit, and identified by that blob's object ID. It is both definition identity and execution authority: the names it declares resolve to its exact pinned sources and to nothing else |
-| declared Markdown component | exact first-party Markdown a trusted host declares to one document execution, as immutable data on an `ExecutionInstallation`: the public name, the reported origin, the bytes, the SHA-256 of those bytes, the accepted forms, the contract parsed from them, and any private component closure only those bytes may write. The host claims the name rather than offering a default for it, so it resolves ahead of a repository file, a workflow component bundle and every registration; a second claim on one name is a configuration failure. It is a composition mechanism and not a policy loader: no caller-facing option selects one, adds one, or names its source |
+| declared Markdown component | exact first-party Markdown a trusted host declares to one document execution, read once and held by the invocation before any installation runs, as immutable data on an `ExecutionInstallation`: the public name, the reported origin, the bytes, the SHA-256 of those bytes, the accepted forms, the contract parsed from them, and any private component closure only those bytes may write. The host claims the name rather than offering a default for it, so it resolves ahead of a repository file, a workflow component bundle and every registration; a second claim on one name is a configuration failure. It is a composition mechanism and not a policy loader: no caller-facing option selects one, adds one, or names its source |
 | private component closure | the components one declared Markdown component carries that only its own bytes may write. Each is minted like any other invocation-identity component and registered nowhere, so it resolves while canonical core is expanding that declaration's body and nowhere else — not from the caller's root, the content the caller projected through it, a sibling declaration, an imported component, middleware, or an implementation kept past teardown. It is lexical availability, not authority: every private component still takes its operation from the invocation that carries it |
 | retrieval metadata | replaceable, credential-free information about where a workflow definition can be fetched from now; it takes no part in run identity and is reauthorized by the host before use |
 | stop reason | why a workflow run or a document execution stopped: a categorical host code, or a reference to an already-filtered journal event |
@@ -3397,12 +3397,26 @@ are refused rather than ordered, so the tier never chooses. A repository
 `Policy.md`, a bundled `Policy`, an ordinary registration and another loaded
 copy of the host package can none of them answer for a declared `Policy`.
 
-**Invocation is canonical.** A declaring execution imports through the same
-retention a bundled one does: canonical core keeps its own copy of the
-definition it produced and invokes that copy, then compares the answer that came
-back against it by own property descriptor. `Component.importComponent`
-middleware may observe an import, delegate it and refuse it by throwing; it
-cannot answer one, replace one, or change one before it runs.
+**Invocation is canonical, for the declared names.** A declaring execution
+imports through the same retention a bundled one does: canonical core keeps its
+own copy of the definition it produced and invokes that copy, then compares the
+answer that came back against it by own property descriptor.
+`Component.importComponent` middleware may observe a declared import, delegate
+it and refuse it by throwing; it cannot answer one, replace one, or change one
+before it runs.
+
+That closure is a property of the name. A workflow component bundle closes every
+import its run makes, because a run is a run of one pinned tree. A declaration
+closes only what it declares — the component and its private closure — and every
+other name in the execution stays the ordinary open import it has always been.
+Declaring one asset does not take component substitution away from every
+document the host runs.
+
+**Every declaration is read once, before any installation runs.** Name, origin,
+source, digest, forms, stated schemas and each private declaration — factory
+bound, arrays copied, schemas and prose read — are captured by the invocation
+and held by it, on the same terms as the admissions and the bundle. A host that
+hands one over and then replaces a member of it has replaced nothing.
 
 **The private closure is lexical and expansion-scoped.** A declaration's private
 components are minted exactly like the identity components a host declares —
@@ -3634,7 +3648,7 @@ Status is measured against main.
 | document-aware `xmd run … --help` | describes what one document declares and every target it addresses, each as a full document reference with the description its section states, by inspection alone | built on the #463 stack |
 | targeted `xmd run` | reads a file argument as a document reference and executes the one exact target its selector resolved to, replacing the selector before execution rereads the file | built on the #412 stack |
 | targeted workflow definition | the V1 workflow definition optionally carries the exact canonical document target, which takes part in definition identity and in compatible reuse | built on the #412 stack; the workflow CLI does not supply one yet |
-| declared Markdown component | a trusted host declares exact first-party Markdown to one execution as immutable data on an `ExecutionInstallation`: name, origin, source, its SHA-256, the accepted forms, an optional statement of the props and return that must agree with the parsed source, and an optional private component closure. Admission parses the bytes and refuses a mismatched digest or schema, a non-canonical form, a name that is not a component name or is structural, a duplicate, a reserved-registration collision and a private name a registration also claims. Resolution places it in the protected tier with reserved registrations, above the workflow component bundle, repository files and every registered default. Live import and retained history are held to the declared origin, digest and bytes, private names resolve only while canonical core expands the declaring bytes' own body, and `xmd syntax` and document validation describe the declared contract from the same declaration without describing the closure | built on the #660 stack; no public component uses it yet (#660 PR 2) |
+| declared Markdown component | a trusted host declares exact first-party Markdown to one execution as immutable data on an `ExecutionInstallation`: name, origin, source, its SHA-256, the accepted forms, an optional statement of the props and return that must agree with the parsed source, and an optional private component closure. Admission parses the bytes and refuses a mismatched digest or schema, a non-canonical form, a name that is not a component name or is structural, a duplicate, a reserved-registration collision and a private name a registration also claims. Resolution places it in the protected tier with reserved registrations, above the workflow component bundle, repository files and every registered default. Live import and retained history are held to the declared origin, digest and bytes, private names resolve only while canonical core expands the declaring bytes' own body, and `xmd syntax` and document validation describe the declared contract from the same declaration without describing the closure. Closure is per name: only the declared component and its private closure become canonical imports, and every other name in the execution stays the ordinary open import middleware may still answer | built on the #660 stack; no public component uses it yet (#660 PR 2) |
 | workflow component bundle | a workflow root declares a closed set of authored Markdown components; the V1 workflow definition optionally carries them as one array sorted by component name, each entry holding the name, its canonical repository-relative path inside the pinned commit and that blob's object ID, and an absent member identifies a run closed over no components — so a definition retained before the member existed reads unchanged. `start` and `resume` read every component from the definition's own pinned commit; the array takes part in definition identity and is compared as part of the same V1 descriptor in compatible reuse; and canonical core resolves those names and holds both live import and retained history to that exact bundle | built on the #301 stack; the full adversarial implementation loop and its scheduling remain unbuilt (#300), and generated XMD admits no bundled Markdown component (#369) |
 | `workflowInstallation()` / `getWorkflowRun()` | associates one document execution with a workflow run, through an `ExecutionInstallation` the trusted host passes to `executeInstalled()` | built on the #366 stack |
 | `retainedWorkflowInstallation()` | associates one document execution with a run storage already created, requiring exact journal agreement | built on the #366 stack |
