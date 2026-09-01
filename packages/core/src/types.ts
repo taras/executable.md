@@ -326,7 +326,13 @@ export interface PartialContent {
 export type ComponentOrigin =
   | { kind: "structural"; construct: string }
   | { kind: "repository"; path: string }
-  | { kind: "registered"; origin: string; reserved: boolean };
+  | { kind: "registered"; origin: string; reserved: boolean }
+  /**
+   * Exact Markdown a trusted host declared to this environment. It names the
+   * first-party asset the bytes came from, never a path a repository could
+   * supply and never the root that invoked it.
+   */
+  | { kind: "declared-markdown"; origin: string; digest: string };
 
 /**
  * What resolving a name decided, before anything is loaded.
@@ -344,6 +350,19 @@ export type ComponentSelection =
    * the pinned tree holds. Nothing was read from the filesystem to answer this.
    */
   | { kind: "workflow"; path: string; sourceHash: string; content: string }
+  /**
+   * Exact Markdown this environment declares, already parsed. Nothing was read
+   * from the filesystem to answer this: the bytes were admitted before the root
+   * document was imported, and the parse they produced is what runs.
+   */
+  | {
+      kind: "declared-markdown";
+      origin: string;
+      digest: string;
+      source: string;
+      forms: readonly InvocationForm[];
+      definition: ComponentDefinition;
+    }
   | { kind: "unresolved"; searched: string[]; registered: readonly ComponentOrigin[] };
 
 /** A registered implementation and the origin that named it. */

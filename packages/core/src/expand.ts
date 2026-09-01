@@ -92,7 +92,7 @@ import {
 import { printsErrors, usePrintErrors } from "./component-failures.ts";
 import { containedLedger, recoveringLedger } from "./component-failures.ts";
 import type { CheckedFailures } from "./component-failures.ts";
-import type { ExpansionAuthority } from "./components/import-authority.ts";
+import type { ExpansionAuthority, ImportedDefinition } from "./components/import-authority.ts";
 import CoreTest from "./components/Test.ts";
 import { carriesTestActivationDecision } from "./test-activation.ts";
 import { declaredRouting, withRouting } from "./foreground.ts";
@@ -646,6 +646,36 @@ function validateRenderOverride(override: unknown): Record<string, unknown> | un
     result[key] = value;
   }
   return result;
+}
+
+/**
+ * The authority a definition's own body expands under.
+ *
+ * Only one member changes: the private closure. A declaration's body carries
+ * its own, so the names only those bytes may write resolve while they are being
+ * expanded and nowhere else. Everything else — a repository component, a
+ * bundled one, a registration — carries the caller's, which clears a closure
+ * rather than passing it down.
+ *
+ * Content the caller projected is not this body. It expands through the
+ * invocation's projection handle, which restores the frame and the authority
+ * read at the invocation site, so a `<Content />` inside a declaration reaches
+ * no private name.
+ */
+function authorityForBody(
+  authority: ExpansionAuthority | undefined,
+  name: string,
+  definition: ComponentDefinition,
+): ExpansionAuthority | undefined {
+  if (authority === undefined) {
+    return undefined;
+  }
+  const privates = authority.declared?.closureFor(name, definition);
+  if (privates === authority.privates) {
+    return authority;
+  }
+  const { privates: _cleared, ...rest } = authority;
+  return privates === undefined ? rest : { ...rest, privates };
 }
 
 const MAX_EXPANSION_DEPTH = 64;
@@ -2120,7 +2150,18 @@ function* expandComponent(
     // may observe this import, delegate it, and refuse it by throwing; nothing
     // it returns is invoked. Without an authority the answer is whatever the
     // chain produced, exactly as it always was.
-    const answered = yield* importComponent(name, position);
+    // The offer is open for exactly this ask. Middleware composes inside it
+    // and may observe, delegate or refuse the import; what it cannot do is
+    // obtain the declaration for an element that did not author it, because
+    // the offer is made from the closure the segments being expanded carry and
+    // is spent by whatever asks first.
+    const withdraw = authority?.declared?.offer(authority.privates, name);
+    let answered: ImportedDefinition;
+    try {
+      answered = yield* importComponent(name, position);
+    } finally {
+      withdraw?.();
+    }
     selected = selection?.settle();
     if (authority?.imports === undefined) {
       imported = answered;
@@ -2187,6 +2228,13 @@ function* expandComponent(
   }
 
   const definition = imported;
+
+  // What this definition's own body may write. A declaration carries its
+  // private closure here; every other body carries whatever the caller carried,
+  // which for an ordinary document is nothing. Decided from the definition
+  // canonical resolution retained — the one this expansion is about to invoke,
+  // reporting the origin core declared — rather than from the name alone.
+  const bodyAuthority = authorityForBody(authority, name, definition);
 
   const placementError = validateBodyStructure(definition.bodySegments, definition.returns);
   if (placementError) {
@@ -2392,7 +2440,7 @@ function* expandComponent(
           claimProjection,
           path,
           checkedFailures,
-          authority,
+          bodyAuthority,
           returnBody,
         );
       });
@@ -2437,7 +2485,7 @@ function* expandComponent(
       bodyOwner,
       path,
       checkedFailures,
-      authority,
+      bodyAuthority,
       returnBody,
     );
   });

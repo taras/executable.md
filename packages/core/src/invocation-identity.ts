@@ -735,6 +735,16 @@ export interface IdentityInstallation {
   readonly identities: InvocationIdentities;
   /** The registrations to make, already built from their factories. */
   readonly registrations: readonly IdentityRegistration[];
+  /**
+   * The implementations that are declared but never registered, by name.
+   *
+   * A private declaration is minted exactly like a registered one — one domain,
+   * one claimant, revoked with the execution — and then handed here instead of
+   * to registration, because what makes it private is that no registry answers
+   * for it. Canonical core resolves one only while it is expanding the body of
+   * the declaration that carries it.
+   */
+  readonly privates: ReadonlyMap<string, FunctionComponentDefinition>;
   /** Called once the registrations have been validated and committed. */
   activate(): void;
 }
@@ -748,14 +758,36 @@ export interface IdentityInstallation {
  * been validated and committed, so a refused registration leaves a claimant
  * that answers for nothing.
  */
-export function installIdentities(components: readonly IdentityComponent[]): IdentityInstallation {
+export function installIdentities(
+  components: readonly IdentityComponent[],
+  privateComponents: readonly IdentityComponent[] = [],
+): IdentityInstallation {
   // Before any factory: a set nobody can register is a set nobody may build
   // implementations from either, and a duplicate that reached a factory would
-  // have minted a claimant for a domain that is about to be discarded.
-  assertDistinctIdentityNames(components);
+  // have minted a claimant for a domain that is about to be discarded. The two
+  // sets are checked together because they mint into one table of domains, so a
+  // private name that shadowed a registered one would take its domain.
+  assertDistinctIdentityNames([...components, ...privateComponents]);
 
   const minted = new Map<string, Minted>();
   const registrations: IdentityRegistration[] = [];
+  const privates = new Map<string, FunctionComponentDefinition>();
+  for (const component of privateComponents) {
+    const domain = mintDomain(component.name);
+    minted.set(component.name, domain);
+    const implementation = component.factory(domain.claim);
+    domain.implementation = implementation;
+    privates.set(component.name, {
+      kind: "function",
+      name: component.name,
+      props: component.props,
+      ...(component.returns === undefined ? {} : { returns: component.returns }),
+      ...(component.captures === undefined ? {} : { captures: component.captures }),
+      ...(component.forms === undefined ? {} : { forms: component.forms }),
+      ...documentationOf(component),
+      fn: implementation,
+    });
+  }
   for (const component of components) {
     const domain = mintDomain(component.name);
     minted.set(component.name, domain);
@@ -825,6 +857,7 @@ export function installIdentities(components: readonly IdentityComponent[]): Ide
       },
     },
     registrations,
+    privates,
     activate: () => {
       for (const domain of minted.values()) {
         domain.activate();

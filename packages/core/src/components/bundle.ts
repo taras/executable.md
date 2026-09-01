@@ -36,8 +36,7 @@
  * different sources resolve their own and can observe neither.
  */
 
-import { CanonicalImports } from "./import-authority.ts";
-import type { ImportAuthority, ImportedDefinition, ImportRefusal } from "./import-authority.ts";
+import type { ImportRefusal, ImportTier } from "./import-authority.ts";
 import { CORE_COMPONENT_NAMES } from "./registry.ts";
 import { isComponentName } from "./registration.ts";
 import { RESERVED_STRUCTURAL } from "../structural.ts";
@@ -88,14 +87,23 @@ const REFUSED: Record<ImportRefusal, string> = {
 };
 
 /**
- * The authority one bundled execution imports through.
+ * The bundle tier one bundled execution resolves and refuses through.
  *
  * Held by canonical core and passed by value into core's own expansion, so no
  * document, component, or middleware can reach it, replace it, or add to it.
+ * Retention is the execution's — one answer per import, whichever tier produced
+ * it — and this decides what a refusal of a bundled name says.
+ *
+ * The ways a handler can decide an import — answering without delegating,
+ * replacing what came back, and changing it afterwards — are one question at
+ * the call site: is this the answer canonical execution produced for this name,
+ * still describing what core produced? What comes back there is core's own
+ * copy, never the object that travelled through the chain, so the comparison
+ * decides whether an import is *refused* and nothing a handler still holds
+ * decides what is *invoked*.
  */
-export class WorkflowImportAuthority implements ImportAuthority {
+export class WorkflowImportAuthority implements ImportTier {
   readonly #components: ReadonlyMap<string, WorkflowBundleComponent>;
-  readonly #imports = new CanonicalImports();
 
   constructor(components: ReadonlyMap<string, WorkflowBundleComponent>) {
     this.#components = components;
@@ -106,34 +114,12 @@ export class WorkflowImportAuthority implements ImportAuthority {
     return this.#components.get(name);
   }
 
-  /**
-   * Record that canonical execution produced this answer for this name, and
-   * keep core's own copy of it.
-   */
-  issue(name: string, definition: ImportedDefinition): ImportedDefinition {
-    return this.#imports.issue(name, definition);
+  claims(name: string): boolean {
+    return this.#components.has(name);
   }
 
-  /**
-   * The definition this import may invoke, or the refusal saying why it may
-   * invoke none.
-   *
-   * Verified at the call site, after the public chain has returned and before
-   * anything is expanded or called. The ways a handler can decide an import —
-   * answering without delegating, replacing what came back, and changing it
-   * afterwards — are one question here: is this the answer canonical execution
-   * produced for this name, still describing what core produced?
-   *
-   * What comes back is core's own copy, never the object that travelled through
-   * the chain. So the comparison decides whether this import is *refused*, and
-   * nothing a handler still holds decides what is *invoked*.
-   */
-  authorize(name: string, answer: ImportedDefinition): ImportedDefinition {
-    return this.#imports.authorize(
-      name,
-      answer,
-      (refusal) => new WorkflowBundleError(REFUSED[refusal]),
-    );
+  refuse(refusal: ImportRefusal): Error {
+    return new WorkflowBundleError(REFUSED[refusal]);
   }
 }
 

@@ -20,6 +20,7 @@
 
 import type { ComponentDefinition, FunctionComponentDefinition } from "../types.ts";
 import type { FormSelections, InvocationIdentities } from "../invocation-identity.ts";
+import type { DeclaredImports, PrivateClosure } from "./declared-markdown.ts";
 
 /** A definition an import may answer with. */
 export type ImportedDefinition = ComponentDefinition | FunctionComponentDefinition;
@@ -47,6 +48,25 @@ export interface ImportAuthority {
 export interface ExpansionAuthority {
   /** What a closed execution may invoke for a name. Absent for an open one. */
   readonly imports?: ImportAuthority;
+  /**
+   * The exact Markdown this execution declares, and the register one private
+   * import is offered through.
+   *
+   * Held by the execution and handed here by value, like everything else on
+   * this object: an expansion reaching it is core's own, and nothing a
+   * document, a component or middleware can name reaches it.
+   */
+  readonly declared?: DeclaredImports;
+  /**
+   * The private names the segments being expanded may write, when they are a
+   * declaration's own body.
+   *
+   * This is the one member that changes as expansion descends. A declared
+   * component's body carries its closure; everything else — the caller, the
+   * content the caller projected, an imported component, a sibling invocation —
+   * carries whatever it carried, which for an ordinary document is nothing.
+   */
+  readonly privates?: PrivateClosure;
   /** The domains this execution minted, for the components it gave one. */
   readonly identities?: InvocationIdentities;
   /**
@@ -208,5 +228,52 @@ export class CanonicalImports {
       throw refuse("changed");
     }
     return canonical;
+  }
+}
+
+/**
+ * How one closed tier words a refusal of an answer it did not produce.
+ *
+ * The tiers share retention because an execution has one answer per import, and
+ * word their own refusals because "a workflow bundle" and "the Markdown this
+ * host declared" are different things for a reader to be told about.
+ */
+export interface ImportTier {
+  /** Whether this tier is the one that answers for `name`. */
+  claims(name: string): boolean;
+  /** The error this tier throws when the answer is not the one core produced. */
+  refuse(refusal: ImportRefusal): Error;
+}
+
+/**
+ * The authority one closed execution imports through, however many tiers close
+ * it.
+ *
+ * One `CanonicalImports` for the whole execution: a witness is issued where the
+ * answer is produced and verified where it is invoked, so which tier produced
+ * an answer decides only how a refusal reads, never whether one is authorized.
+ */
+export class ExecutionImports implements ImportAuthority {
+  readonly #imports = new CanonicalImports();
+  readonly #tiers: readonly ImportTier[];
+
+  constructor(tiers: readonly ImportTier[]) {
+    this.#tiers = tiers;
+  }
+
+  /** Record that canonical execution produced this answer for this name. */
+  issue(name: string, definition: ImportedDefinition): ImportedDefinition {
+    return this.#imports.issue(name, definition);
+  }
+
+  /** Core's own copy of the definition this import may invoke. */
+  authorize(name: string, answer: ImportedDefinition): ImportedDefinition {
+    const tier = this.#tiers.find((candidate) => candidate.claims(name)) ?? this.#tiers[0];
+    return this.#imports.authorize(name, answer, (refusal) => {
+      if (tier === undefined) {
+        return new Error("this execution authorizes no import");
+      }
+      return tier.refuse(refusal);
+    });
   }
 }

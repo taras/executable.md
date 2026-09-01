@@ -90,6 +90,20 @@ export type { IdentityClaimant, IdentityComponent } from "./src/invocation-ident
 export { props as elicitProps, returns as elicitReturns } from "./src/components/Elicit.ts";
 export { WorkflowBundleError } from "./src/components/bundle.ts";
 export type { WorkflowBundleComponent, WorkflowComponentBundle } from "./src/components/bundle.ts";
+
+/**
+ * Exact Markdown a trusted host declares to an execution — see
+ * `src/components/declared-markdown.ts`.
+ *
+ * The fifth act of infrastructure, and the same shape as the rest: plain
+ * immutable data the host holds and passes. The host states the bytes, their
+ * origin and their digest, and canonical core refuses the declaration if what
+ * the host said about them is not what they say about themselves. `sourceDigest`
+ * is the same hash core checks against, so a build states the digest of what it
+ * actually shipped rather than a constant someone updates by hand.
+ */
+export { DeclaredMarkdownError, sourceDigest } from "./src/components/declared-markdown.ts";
+export type { DeclaredMarkdownComponent } from "./src/components/declared-markdown.ts";
 export {
   evaluateGeneratedXmd,
   GeneratedXmdError,
