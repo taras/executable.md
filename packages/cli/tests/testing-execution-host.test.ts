@@ -25,7 +25,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runCli } from "@executablemd/test-support/launch";
 import { testingExecutionHost } from "../src/testing-host.ts";
-import { planPolicyDescription } from "../src/plan-policy.ts";
+import { planComponentDescription } from "../src/plan-component.ts";
 
 function doc(...lines: string[]): string {
   return `${lines.join("\n")}\n`;
@@ -504,7 +504,7 @@ describe("deterministic dependencies declared for a nested run", () => {
       testAgentWorker: Err(new Error("xmd command not installed")),
       // The run profile's own policy travels to every child, and this case is
       // about the relaunch it cannot perform rather than about `<Plan>`.
-      plan: yield* planPolicyDescription(),
+      plan: yield* planComponentDescription(),
     });
     const refusal = yield* scoped(function* () {
       try {

@@ -1,13 +1,14 @@
 /**
- * `<Plan>` — the one packaged Markdown policy that writes a Plan, and the four
- * private capabilities it is the only document allowed to write.
+ * `<Plan>` — how this host declares the component, and the four private
+ * capabilities only its own bytes may write.
  *
- * There is one policy. `xmd plan` and a `<Plan>` written in an ordinary run both
- * expand the exact bytes of `src/documents/Plan.md`, and this module is what
- * hands those bytes to an execution: the public name, the origin that identifies
- * the packaged asset rather than a path, the digest of what this build actually
- * shipped, the paired-only form, and the private closure the policy's own phases
- * need.
+ * The component's body is the *standard Plan policy*, and that is
+ * `src/documents/Plan.md` rather than anything here: `xmd plan` and a `<Plan>`
+ * written in an ordinary run both expand those exact bytes. What this module
+ * contributes is the declaration around them — the public name, the origin that
+ * identifies the packaged asset rather than a path, the digest of what this
+ * build actually shipped, the paired-only form, and the private closure the
+ * policy's own phases need.
  *
  * ## What the host contributes, and what it does not
  *
@@ -94,7 +95,7 @@ export const PLAN_IDENTITY = "<plan>";
 export type PlanSurface = "command" | "component";
 
 /** Everything the host settles before a `<Plan>` invocation can exist. */
-export interface PlanPolicyAssembly {
+export interface PlanComponentAssembly {
   /**
    * Which surface is asking.
    *
@@ -215,8 +216,8 @@ const CHECK_RETURNS = {
  * parsed one — so the only thing this adds to the source is what the source
  * cannot say about itself.
  */
-export function* planPolicyDeclaration(
-  assembly: PlanPolicyAssembly,
+export function* planComponentDeclaration(
+  assembly: PlanComponentAssembly,
 ): Operation<DeclaredMarkdownComponent> {
   const source = yield* readPackagedDocument(PLAN_DOCUMENT);
   // The admission validates against the profile a Plan will run in, and that
@@ -260,7 +261,7 @@ export function* planPolicyDeclaration(
  * digest and the same contract the run would expand, read from the same packaged
  * bytes. That is what makes `xmd syntax` a check on which policy a build ships.
  */
-export function* planPolicyDescription(): Operation<DeclaredMarkdownComponent> {
+export function* planComponentDescription(): Operation<DeclaredMarkdownComponent> {
   const source = yield* readPackagedDocument(PLAN_DOCUMENT);
   return {
     name: PLAN_COMPONENT,
@@ -281,7 +282,7 @@ export function* planPolicyDescription(): Operation<DeclaredMarkdownComponent> {
  * minted for this exact expansion — which is what makes two `<Plan>` sites, and
  * two iterations of one site, distinct without either of them being nameable.
  */
-function planInputs(assembly: PlanPolicyAssembly): IdentityComponent {
+function planInputs(assembly: PlanComponentAssembly): IdentityComponent {
   return {
     name: "PlanInputs",
     origin: `${PLAN_ORIGIN}#PlanInputs`,
@@ -337,7 +338,7 @@ function planInputs(assembly: PlanPolicyAssembly): IdentityComponent {
  * `xmd plan` settles its own answer before the document exists, from whether
  * `--session` was written, and that answer is used exactly as given.
  */
-function durability(assembly: PlanPolicyAssembly, authored: string | undefined): boolean {
+function durability(assembly: PlanComponentAssembly, authored: string | undefined): boolean {
   if (assembly.session !== undefined) {
     return assembly.explicitSession === true;
   }
@@ -345,7 +346,7 @@ function durability(assembly: PlanPolicyAssembly, authored: string | undefined):
 }
 
 function placementFor(
-  assembly: PlanPolicyAssembly,
+  assembly: PlanComponentAssembly,
   id: string,
   authored: string | undefined,
 ): string {
@@ -369,7 +370,7 @@ function placementFor(
  * policy — the structural admission and the return — is therefore written after
  * teardown by construction rather than by a rule somebody has to remember.
  */
-function planAuthorship(assembly: PlanPolicyAssembly): IdentityComponent {
+function planAuthorship(assembly: PlanComponentAssembly): IdentityComponent {
   return {
     name: "PlanAuthorship",
     origin: `${PLAN_ORIGIN}#PlanAuthorship`,
@@ -436,7 +437,7 @@ function planAuthorship(assembly: PlanPolicyAssembly): IdentityComponent {
  * never reaches the description — only the digest that tells two drafts apart.
  */
 function checkDraft(
-  assembly: PlanPolicyAssembly,
+  assembly: PlanComponentAssembly,
   declared: readonly DeclaredMarkdownComponent[],
 ): IdentityComponent {
   const assess = assembly.assess ?? structuralAssessment(assembly, declared);
@@ -489,7 +490,7 @@ function checkDraft(
  * being one.
  */
 function* structurally(
-  assembly: PlanPolicyAssembly,
+  assembly: PlanComponentAssembly,
   declared: readonly DeclaredMarkdownComponent[],
   candidate: string,
 ): Operation<DocumentValidation> {
@@ -510,7 +511,7 @@ function* structurally(
 
 /** What a surface that states no assessment of its own answers with. */
 function structuralAssessment(
-  assembly: PlanPolicyAssembly,
+  assembly: PlanComponentAssembly,
   declared: readonly DeclaredMarkdownComponent[],
 ): (source: string) => Operation<CandidateAssessment> {
   return function* (source: string): Operation<CandidateAssessment> {
@@ -523,7 +524,7 @@ function structuralAssessment(
 }
 
 function admitPlan(
-  assembly: PlanPolicyAssembly,
+  assembly: PlanComponentAssembly,
   declared: readonly DeclaredMarkdownComponent[],
 ): IdentityComponent {
   return {

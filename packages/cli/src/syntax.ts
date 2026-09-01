@@ -12,7 +12,7 @@
  * and says so when a schema is richer than a table can summarize honestly.
  */
 
-import { planPolicyDescription } from "./plan-policy.ts";
+import { planComponentDescription } from "./plan-component.ts";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import {
@@ -61,7 +61,7 @@ export function* syntaxCatalog(includes: readonly string[]): Operation<SyntaxCat
       // describe a vocabulary no run has. Described from the packaged bytes:
       // inspection mints nothing, so it reports the policy's identity and
       // contract without building the capabilities only a run can build.
-      declarations: [yield* planPolicyDescription()],
+      declarations: [yield* planComponentDescription()],
     });
   });
 }

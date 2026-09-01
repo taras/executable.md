@@ -25,8 +25,8 @@ import { API, useHostFiles } from "@executablemd/runtime";
 import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import { syntaxCatalog } from "../../src/syntax.ts";
-import { planPolicyDeclaration } from "../../src/plan-policy.ts";
-import type { PlanSurface } from "../../src/plan-policy.ts";
+import { planComponentDeclaration } from "../../src/plan-component.ts";
+import type { PlanSurface } from "../../src/plan-component.ts";
 import type { CandidateAssessment } from "../../src/authorship-profile.ts";
 import type { AgentStack } from "../../src/agent-stack.ts";
 import type { DeclaredMarkdownComponent } from "@executablemd/core/host";
@@ -292,7 +292,7 @@ export function* planDeclarationHarness(options: {
   const reviews: ElicitationRequest[] = [];
   const answers: ScriptedReview[] = [];
 
-  const declaration = yield* planPolicyDeclaration({
+  const declaration = yield* planComponentDeclaration({
     surface: options.surface,
     includes: options.includes ?? [],
     ...(options.stack === null

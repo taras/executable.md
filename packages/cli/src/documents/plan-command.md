@@ -28,14 +28,6 @@ default it prints the approved XMD source. `--output` writes that source to a
 file instead, and `--run` executes the Plan. With both options, the command
 writes the source before running it.
 
-## Hand the request to the standard workflow
-
-How a Plan is written — the Prompt the coding agent receives, the checking and
-repair loop, the review you are shown, the revisions, and every way this can end
-without a Plan — is `<Plan>`, which an ordinary document can write too. This
-command adds the command line and the delivery, and nothing else: there is one
-policy, and this is not a second copy of it.
-
 <Plan session={props.session} as="approved">{props.request}</Plan>
 
 <Return value={approved} />

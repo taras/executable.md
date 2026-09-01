@@ -68,7 +68,7 @@ import { cwd } from "@executablemd/runtime";
 import type { AgentStack } from "./agent-stack.ts";
 import { DEFAULT_AUTHORSHIP_ROOT, runPlanCommandDocument } from "./authorship-profile.ts";
 import type { CandidateAssessment } from "./authorship-profile.ts";
-import { PLAN_IDENTITY, planPolicyDeclaration } from "./plan-policy.ts";
+import { PLAN_IDENTITY, planComponentDeclaration } from "./plan-component.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import {
   buildBindings,
@@ -94,7 +94,7 @@ import type { OptionSignature, PlanScan } from "./plan-args.ts";
  * reads the same bytes under the same identity: a position reading
  * `(<plan>:5:1)` means the same thing whichever gate produced it.
  */
-export { PLAN_IDENTITY } from "./plan-policy.ts";
+export { PLAN_IDENTITY } from "./plan-component.ts";
 
 /** The approved bytes, and the props resolved under exactly those bytes. */
 export interface PlanExecution {
@@ -225,7 +225,7 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
     // disk, and opening the review form — and both run a command, which the
     // ceiling the policy installs refuses to everything inside it.
     const host = yield* useScope();
-    const declaration = yield* planPolicyDeclaration({
+    const declaration = yield* planComponentDeclaration({
       surface: "command",
       // The adapter root resolves no repository component, and neither does the
       // policy it invokes. A Plan's own components are the caller's business,

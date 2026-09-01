@@ -40,7 +40,7 @@ import {
   useWorkingDirectory,
 } from "./support/plan-harness.ts";
 import type { PlanDeclarationHarness } from "./support/plan-harness.ts";
-import { PLAN_ORIGIN } from "../src/plan-policy.ts";
+import { PLAN_ORIGIN } from "../src/plan-component.ts";
 import { syntaxCatalog } from "../src/syntax.ts";
 
 const ROOT = "document.md";

@@ -93,7 +93,7 @@ import { installWebComponents, installWebElicitation } from "@executablemd/web";
 import { timebox } from "@effectionx/timebox";
 import { timeout as runTimeout } from "@executablemd/runtime";
 import { installRunAgentStack, resolveAgentStack } from "./agent-stack.ts";
-import { planPolicyDeclaration } from "./plan-policy.ts";
+import { planComponentDeclaration } from "./plan-component.ts";
 import type { AgentStack } from "./agent-stack.ts";
 import { reportFailure } from "./report.ts";
 import { TIMEOUT_FLAGS, resolveRunTimeouts } from "./timeouts.ts";
@@ -761,7 +761,7 @@ function* runDocument(
   // declares the policy, so a document that writes `<Plan>` there resolves the
   // same protected bytes and is refused at the ceiling rather than told the
   // component does not exist.
-  const plan = yield* planPolicyDeclaration({
+  const plan = yield* planComponentDeclaration({
     surface: "component",
     includes: include,
     ...(mode.agent === undefined ? {} : { stack: mode.agent }),

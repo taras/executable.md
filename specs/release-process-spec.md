@@ -92,8 +92,7 @@ documents at the revision it checks.
   prerelease marker — so a forgotten bump is visible where the release was
   made, then refuses to build. On a valid tag it compiles
   `packages/cli/src/compiled.ts` per target with
-  `--include packages/code-review-agent --include packages/cli/src/documents/plan-command.md
-  --include packages/cli/src/documents/Plan.md`
+  `--include packages/code-review-agent --include packages/cli/src/documents`
   and attaches the binaries and
   sha256 checksums to the tag's GitHub Release. That module is the
   compiled-binary entrypoint: it installs the `API.Env.command` adapter that
@@ -577,8 +576,8 @@ Every build therefore keeps the asset beside its module, at the same relative
 path:
 
 - **source checkout** — the file as committed;
-- **`deno compile`** — embedded by an `--include` per document, in `deno task
-  build` and in `release.yml`'s matrix compile;
+- **`deno compile`** — embedded by one `--include packages/<name>/src/documents`
+  per package, in `deno task build` and in `release.yml`'s matrix compile;
 - **npm (dnt)** — copied by `scripts/build-npm.ts`, which copies each package's
   `src/documents/` into `esm/src/documents/`, preserving relative location. dnt
   emits the module graph and nothing else, so an asset no TypeScript imports is
@@ -604,10 +603,11 @@ The checks that hold this together, each proving a different build:
   compiled binary, which has no checkout to fall back to. It runs in the `smoke`
   job, beside the other suites whose subject is `dist/xmd`.
 - `scripts/tests/packaged-document.test.ts` holds the two `deno compile` sites
-  to the documents that exist, because that list is the one thing no build
-  discovers for itself.
+  to the document *directories* that exist and are not empty, because which
+  packages ship documents is the one thing no build discovers for itself.
 
-Adding another packaged document needs no npm-build change — `build-npm.ts`
-copies the directory. Only `deno compile` names files individually, so a new
-document must be added to `deno task build` and to `release.yml`, which
+Adding another packaged document to a package that already ships one needs no
+build change at all: `build-npm.ts` copies the directory and each `deno compile`
+site names it. A package that ships its *first* document adds one `--include` to
+`deno task build` and to `release.yml`, which
 `scripts/tests/packaged-document.test.ts` enforces.
