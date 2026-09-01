@@ -85,6 +85,13 @@ export default define.page(function Reference() {
           expands one branch; the other performs no work.
         </li>
         <li>
+          <code>&lt;Switch value={"{...}"}&gt;</code> holds{" "}
+          <code>&lt;Case value={"{...}"}&gt;</code>{" "}
+          branches and an optional final <code>&lt;Case default&gt;</code>{" "}
+          — the first branch whose matcher is <code>===</code>{" "}
+          the selector expands, and no other performs any work.
+        </li>
+        <li>
           <code>&lt;Loop max={"{n}"}&gt;</code> expands its body at most{" "}
           <code>n</code> times, sharing the enclosing bindings;{" "}
           <code>&lt;Break /&gt;</code>{" "}

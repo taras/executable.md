@@ -749,6 +749,77 @@ describe("Tier XP — expansion identity", () => {
     expect(yield* executed(only!)).toEqual(yield* executed(only!));
   });
 
+  // `<Case>` is consumed by its `<Switch>` and never reaches expansion's
+  // dispatch, so without its own frame the corresponding children of two
+  // branches expand under one path. Hand-built and positionless throughout:
+  // scanned markup would carry source offsets that hide the missing frame.
+  it("XP27: two selected <Case> branches expand under different identities", function* () {
+    const branch = (selector: string): Segment => ({
+      type: "component",
+      name: "Switch",
+      props: { value: selector },
+      expressions: {},
+      children: [
+        {
+          type: "component",
+          name: "Case",
+          props: { value: "first" },
+          expressions: {},
+          children: [element("Probe")],
+          selfClosing: false,
+        },
+        {
+          type: "component",
+          name: "Case",
+          props: { value: "second" },
+          expressions: {},
+          children: [element("Probe")],
+          selfClosing: false,
+        },
+      ],
+      selfClosing: false,
+    });
+
+    const first = yield* collectFrom([branch("first")]);
+    const second = yield* collectFrom([branch("second")]);
+
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(1);
+    expect(first[0]).not.toBe(second[0]);
+
+    // Structural, not incidental: each branch reproduces its own identifier.
+    expect(yield* collectFrom([branch("first")])).toEqual(first);
+    expect(yield* collectFrom([branch("second")])).toEqual(second);
+  });
+
+  it("XP28: a selected case derives the same identifiers on a truncated replay", function* () {
+    const [only] = yield* useDocuments(
+      ["switch.md"],
+      [
+        '<Switch value="second">',
+        '<Case value="first"><Probe /></Case>',
+        '<Case value="second">',
+        "",
+        "<Probe />",
+        "",
+        "<Probe />",
+        "",
+        "</Case>",
+        "</Switch>",
+        "",
+      ].join("\n"),
+    );
+    const stream = new InMemoryStream();
+    const live = yield* executed(only!, stream);
+
+    const truncated = new InMemoryStream(
+      stream.snapshot().filter((event: DurableEvent) => event.type !== "close"),
+    );
+
+    expect(live).toHaveLength(2);
+    expect(yield* executed(only!, truncated)).toEqual(live);
+  });
+
   it("XP21: a truncated replay derives the identifiers already recorded", function* () {
     const [only] = yield* useDocuments(["a.md"], "<Probe />\n\n<Probe />\n");
     const stream = new InMemoryStream();

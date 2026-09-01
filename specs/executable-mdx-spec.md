@@ -2610,8 +2610,8 @@ deterministic from the content, so it needs no separate journal entry.
 A component name is resolved in tiers, and the first tier that answers wins:
 
 1. **structural syntax** — `<Content>`, `<Output>`, `<Return>`, `<Let>`,
-   `<Each>`, `<If>`/`<Else>`, `<Loop>`/`<Break>`, `<PrintErrors>`,
-   `<Answers>`/`<Answer>`. These are the language's own
+   `<Each>`, `<If>`/`<Else>`, `<Switch>`/`<Case>`, `<Loop>`/`<Break>`,
+   `<PrintErrors>`, `<Answers>`/`<Answer>`. These are the language's own
    constructs. They are reserved: a registration cannot claim one, and a
    repository file named after one never stands in for it. A structural name
    written where its construct gives it no meaning is a printed error, not a
@@ -2959,6 +2959,14 @@ component and a value component declaring `returns: { type: "string" }` have the
 same schema and different invocation contracts, and captures stay explicit
 because they are caller-visible props the schema deliberately excludes.
 
+`Switch` and `Case` are two such entries. `Switch` publishes the one authored
+form `<Switch value={value}>…</Switch>`, and `Case` publishes
+`<Case value={value}>…</Case>` and `<Case default>…</Case>` in that order.
+Neither binds, so neither carries `as`; both read content, so `Switch` states
+that its content is the direct `<Case>` branches considered in source order and
+`Case` states that its content is the markdown expanded when that case is
+selected.
+
 A repository `.ts` component is `inspectability: "origin-only"` and carries no
 contract field at all — no props, forms, captures, return or documentation.
 Reading its contract would import the module, which describing an environment
@@ -3134,7 +3142,13 @@ opaque. A dynamic schema-visible expression, or a repository `.ts` contract that
 lives on the module's exports, makes an otherwise acceptable invocation not
 statically checkable — validation solves no JSON Schema partially around the
 value it does not have. A definite independent failure still wins, so an invalid
-form does not become opaque because another prop is dynamic. Every check whose
+form does not become opaque because another prop is dynamic. `<Switch>` and
+`<Case>` are the two structural constructs that compare a value, and they answer
+on the same terms: their complete case structure is decided from source and
+reported wherever it is wrong, while an operand written as an expression the
+scanner could not resolve makes that one element not statically checkable. A
+literal operand, and one the scanner resolved, are both static, and no selector
+or matcher is ever evaluated. Every check whose
 answer is independent runs, and every one that fails is reported: where
 expansion refuses a construct at its first violation and expands nothing
 further, validation reads the whole of that construct's shared facts, because an
@@ -4566,6 +4580,10 @@ document order:
   optionally narrowed by a `select` prop — or, written with `value`, stores
   that value by reference without expanding anything (§6.5). `<Content />` is
   replaced by the caller's projected children (§6.3).
+- **`<Switch>`** decides its whole case structure from source, evaluates its
+  selector once and each non-default matcher in source order, and expands the
+  first `===` match — or the final `<Case default>`, or nothing — inline into the
+  surrounding list (§6.5). No other case expands.
 - **Any other component** is expanded (§6.2) and replaced by its result.
 - **Executable code blocks** run their modifier chain (§3.3); a block
   contributes its emitted output, or an `ErrorSegment` when it fails with no
@@ -5453,6 +5471,96 @@ Printed errors from `<If>` and `<Else>` carry the source location of the element
 that caused them, as `path:line:column` when the element came from a file and
 `line:column` for text scanned without an origin.
 
+#### `<Switch>` / `<Case>` branch selection
+
+`<Switch>` chooses one branch by comparing a value. Like `<Let>`, `<Each>` and
+`<If>` it is a native directive handled by the expansion engine, never resolved
+from the filesystem, and `<Case>` is reserved on the same terms.
+
+```markdown
+<Switch value={comparison}>
+<Case value="newer">Install the selected release.</Case>
+<Case value="current">This version is already installed.</Case>
+<Case value="older">Downgrading needs explicit consent.</Case>
+<Case default><Fail message="The release comparison is not recognized." /></Case>
+</Switch>
+```
+
+Where `<If>` asks whether one thing holds, `<Switch>` states a set of mutually
+exclusive answers as a set, so a reader sees the alternatives beside each other
+instead of reconstructing them from a chain of negated conditions.
+
+**The authored structure.** `value` is the only prop `<Switch>` accepts, and it
+is required. The element is paired, and its substantive direct children are
+paired `<Case>` elements — whitespace between them is Markdown formatting.
+Each `<Case>` carries either exactly one `value` matcher or the bare word
+`default`, never both and never neither, and `default` is written as the bare
+word rather than as `default={true}` or `default="yes"`. At most one
+`<Case default>` is written, and it is the last branch: a case after it could
+never be compared. A `<Case>` below the switch but not directly beneath it is
+misplaced, and a nested `<Switch>` owns the cases beneath it. A `<Case>` outside
+every `<Switch>` is a printed error, not a component invocation — the name never
+resolves from the filesystem. An empty paired `<Case>` is a branch that renders
+nothing, which is allowed; a self-closing one is not.
+
+**Structure is decided before anything is evaluated.** All of it is read from
+source, so a malformed branch stops the selector too, including a branch no
+comparison would have reached and including one in a case the switch would never
+have selected.
+
+**Evaluation order.** The selector is evaluated once. Each non-default matcher is
+evaluated at most once, in source order, and evaluation stops at the first
+match. A matcher written after the one that matched is never evaluated at all.
+
+**Comparison is the `===` operator**, and nothing else — not `Object.is`, not
+serialization, not deep equality. So `NaN` matches no case, including one written
+`NaN`; `0` and `-0` are one value; two objects match only when they are the same
+object; and `1` does not match `"1"`.
+
+**Operands are not restricted to JSON.** Like an `<If>` condition, a selector or
+matcher is decided and discarded rather than passed to a component or recorded,
+so it takes whatever its expression evaluates to — `undefined`, `NaN`, `-0`, a
+function, a class instance, a `Symbol`. `<Switch value={undefined}>` compares
+`undefined`, not `null`.
+
+**No match and no default renders nothing**, creates no binding and reports no
+error. With a default, the default expands only after every matcher missed.
+
+**Only the selected case does work.** No other case expands, so nothing in one
+imports a component, runs an eval or exec block, reaches a provider, performs a
+filesystem effect, creates a binding, or writes a journal entry. Placing a
+deliberately failing assertion in an unselected case is the direct way to test
+non-execution.
+
+**The selected case is transparent.** Its segments expand inline into the region
+holding the switch, in place. `<Switch>` opens no binding scope, so a `<Let>`
+inside the selected case stays available after `</Switch>`; no loop boundary, so
+a `<Break>` inside it exits the authored enclosing `<Loop>`; and no return
+boundary, so a `<Return>` inside it selects the value of the body the switch was
+written in. Nested switches select independently.
+
+There is no fallthrough, because expansion enters one case's children once, and
+`<Break>` carries no case-specific meaning.
+
+**`<Switch>` is not an observation boundary.** Under the one-observation rule
+(§6.9) it reports only the errors it creates itself — a broken case structure, a
+selector that fails to evaluate, a matcher that fails to evaluate — and hands
+back the selected case's segments untouched. A selector failure reports one
+positioned `<Switch>` error and evaluates no matcher and no body; a matcher
+failure reports one positioned `<Case>` error at that case and evaluates no later
+matcher and no body. A failing element inside a selected case settles exactly
+once, as it would inline, and an ambient `throw` error mode still aborts at the
+first error.
+
+Printed errors from `<Switch>` and `<Case>` carry source locations on the same
+terms as `<If>`.
+
+**Neither construct is durable state.** They append no journal event. A partial
+replay rebuilds the selection through ordinary expansion and restores completed
+effects in the chosen case from their own records, continuing live at the next
+effect; a completed replay returns the retained result without expanding
+anything.
+
 #### `<Loop>` bounded repetition directive
 
 `<Loop>` expands a region of a document more than once, under a bound the
@@ -5628,6 +5736,11 @@ the direct way to test that. Everything the iteration produced before the
 
 A nested `<Loop>` handles its own `<Break>`: the inner loop exits and the outer
 one keeps running. There is no way to break a named outer loop.
+
+A `<Break>` in a selected `<Case>` is written in the loop's own text, so it ends
+that loop exactly as it would inline — `<Switch>` opens no loop boundary. A
+`<Break>` in a case the comparison did not select never expands and does nothing
+at all.
 
 **Which loop a `<Break>` means is decided by where the author wrote it.** A
 component's own body is isolated from the loop that invoked it: a `<Break>`
@@ -6366,7 +6479,8 @@ A value component declares one or more `<Return value={…} />` elements in its
 body's own source flow and executes exactly one of them. Each takes that one
 prop, takes no children, and renders nothing.
 
-**Depth is not placement.** A `<Return>` under `<If>`, inside a `<Loop>` or an
+**Depth is not placement.** A `<Return>` under `<If>` or a selected `<Case>`,
+inside a `<Loop>` or an
 `<Each>`, or within a `<Let>` body belongs to the body those directives are
 written in, so a value can be selected conditionally. What decides ownership is
 whose flow the element was written in, not how deeply it sits — the same rule
@@ -11114,6 +11228,66 @@ Identifiers match `packages/core/tests/if.test.ts` one to one.
 | IF52 | `<If>`-owned errors observed once | A missing `condition`, an unresolvable condition expression, and a malformed `<Else>` each report once |
 | IF53 | Throwing error mode | An ambient `throw` error mode still aborts on a selected-branch error |
 | IF54 | Provider boundary | An unselected branch makes zero Sample Api calls; the same probe records one when selected |
+
+### Tier SWITCH / CASE — branch selection directive
+
+Identifiers match `packages/core/tests/switch.test.ts` one to one.
+
+| # | Test | Verify |
+|---|------|--------|
+| SW1 | First match expands | A literal selector selects the case whose matcher equals it |
+| SW2 | Evaluation order and count | The selector is evaluated once, matchers in source order, and a matcher after the match is never reached |
+| SW3 | Duplicate matchers | Two cases carrying the same matcher select the first |
+| SW4 | `NaN` | `NaN` matches no case, including one written `NaN` |
+| SW5 | `-0` | `0` and `-0` are one value under `===` |
+| SW6 | Object identity | Two structurally equal objects do not match; the same object does |
+| SW7 | Not a JSON reading | `value={undefined}` compares `undefined`, so it misses a `null` case and matches an `undefined` one |
+| SW8 | No coercion | A number selector does not match `"1"` or `true` |
+| SW9 | Default after every miss | The final default expands only once every matcher has been evaluated and missed |
+| SW10 | Silent no-match | No match and no default renders nothing, creates no binding and reports no error |
+| SW11 | Empty selected branch | An empty paired `<Case>` renders nothing and is not an error |
+| SW12–SW27 | Malformed structure | Missing and unknown `<Switch>` prop, self-closing and empty `<Switch>`, substantive direct text, component and code block, missing and doubled case mode, unknown `<Case>` prop, self-closing `<Case>`, expression-valued and non-`true` `default`, repeated default, non-final default and a misplaced nested `<Case>` are each rejected; no branch renders, no component is imported and no block runs |
+| SW28 | Stray `<Case>` | A `<Case>` outside every `<Switch>` is reserved and never resolved from the filesystem |
+| SW29 | Structure precedes selection | A malformed case runs zero selectors, zero matchers and no body |
+| SW30 | Whitespace between branches | Formatting between cases is ignored |
+| SW31 | Nested ownership | A nested `<Switch>` owns its own cases and selects independently |
+| SW32 | Selector failure | One positioned `<Switch>` error; no matcher and no body run |
+| SW33 | Matcher failure | One positioned `<Case>` error at that case; no later matcher and no body run |
+| SW34 | Undeclared identifier | Quoted in the printed error rather than treated as a miss |
+| SW35 | Local position | A structural error carries `line:column` for the responsible element |
+| SW36 | Case position | A case's own structural error anchors at that case |
+| SW37 | Origin position | A scanned origin adds `path:` to a selector failure |
+| SW38 | Error source | A matcher failure names `Case` as its source |
+| SW39 | No position | An element built without scanning diagnoses without a location |
+| SW40 | Stray position | A stray `<Case>` reports its own location |
+| SW41 | Inline expansion | The selected case renders in place, between the content around the switch |
+| SW42 | Bindings | A `<Let>` in the selected case survives `</Switch>`; one in an unselected case does not exist |
+| SW43 | Selected `<Break>` | Exits the authored enclosing `<Loop>` |
+| SW44 | Unselected `<Break>` | Does nothing; the loop runs to its bound |
+| SW45 | Selected error observed once | An error inside the selected case passes through `Component.raise` once |
+| SW46 | Unselected error unobserved | An error in an unselected case is observed zero times |
+| SW47 | Construct-owned errors | A broken structure and a stray `<Case>` each report once |
+| SW48 | Throwing error mode | An ambient `throw` mode still aborts on a selected-case error |
+| SW49 | Unselected expansion | A component in an unselected case never expands |
+| SW50 | Filesystem | No `stat` or read happens for an unselected case's component |
+| SW51 | Process runtime | `exec` is never invoked for an unselected block |
+| SW52 | Durable events | An unselected case writes no exec or eval event |
+| SW53 | Bindings (execution) | Later content sees no binding from an unselected case |
+| SW54 | Provider boundary | An unselected case makes zero Sample Api calls; the same probe records one when selected |
+| SW55 | `<Return>` | A `<Return>` in the selected case satisfies the value body that owns the switch |
+| SW56 | Projection | A `<Switch>` through `<Content />` reads the caller's bindings |
+| SW57 | Journal | Only the selected case's eval entry reaches the journal |
+| SW58 | Partial replay | From a journal prefix without the root Close, the selected effect restores, selection is rebuilt, the run continues at the next live effect and the output is reproduced |
+| SW59 | Completed replay | The retained result is returned with no selector, matcher, import or block |
+
+The shared entrypoints carry the rest: `syntax-catalog.test.ts` SY4b and SY5b
+freeze both catalog entries and prove no repository file or registration can
+supply either name; `document-validation.test.ts` Tier DV `<Switch>` covers
+static and dynamic operands, a definite failure beside a dynamic one, the
+diagnostic a case shares with its switch, nested ownership, a stray case and the
+no-execution boundary; and `expansion-identity.test.ts` XP27 and XP28 prove two
+selected cases derive different identifiers and that a selected case reproduces
+its own across a truncated replay.
 
 ### Tier OBS — error observation
 

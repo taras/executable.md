@@ -54,10 +54,12 @@ import {
   loopPropsViolation,
   printErrorsViolations,
   strayBreakMessage,
+  strayCaseMessage,
   strayElseMessage,
   strayStructuralMessage,
+  switchStructure,
 } from "./structural-rules.ts";
-import type { StructuralViolation } from "./structural-rules.ts";
+import type { StructuralViolation, SwitchCase } from "./structural-rules.ts";
 import {
   asBindingViolation,
   asExpressionViolation,
@@ -1135,6 +1137,39 @@ function* expandListSegments(
           break;
         }
 
+        if (segment.name === "Switch") {
+          // No raise() here, like <If> above: expandSwitch reports the errors
+          // it creates, and the selected case settled its own (§6.9).
+          yield* expandSwitch(
+            segment,
+            parentMeta,
+            parentProps,
+            hideSet,
+            counter,
+            result,
+            elementPath,
+            checkedFailures,
+            authority,
+            returnBody,
+          );
+          break;
+        }
+
+        if (segment.name === "Case") {
+          // A well-placed <Case> is consumed by its <Switch> and never expanded
+          // on its own. Reaching this branch means the element sits outside any
+          // <Switch>, so it names no component and is diagnosed rather than
+          // resolved from the filesystem.
+          result.push(
+            yield* raise({
+              type: "error",
+              message: positioned(strayCaseMessage(), segment),
+              source: "Case",
+            }),
+          );
+          break;
+        }
+
         if (segment.name === "Break") {
           result.push(...(yield* expandBreak(segment, loop)));
           break;
@@ -1848,6 +1883,141 @@ function* expandIf(
     counter,
     owner,
     branchPath,
+    0,
+    checkedFailures,
+    authority,
+    returnBody,
+  );
+}
+
+function switchError(segment: ComponentElement, message: string): ErrorSegment {
+  return { type: "error", message: positioned(message, segment), source: "Switch" };
+}
+
+function caseError(segment: ComponentElement, message: string): ErrorSegment {
+  return { type: "error", message: positioned(message, segment), source: "Case" };
+}
+
+/**
+ * The value a `<Switch>` or a `<Case>` compares with, exactly as written.
+ *
+ * Three spellings reach here, and the reading a structural operand needs is the
+ * same for all three: the value the author's own expression produced. The
+ * scanner resolves what it can read as JSON into `props` and keeps the authored
+ * text beside it, so that text is evaluated in preference to the reading of it
+ * — `undefined` stays `undefined`, `NaN` stays `NaN`, and an object stays the
+ * object it was rather than a copy that no longer compares equal to itself.
+ * A prop the scanner could not read at all is an ordinary expression, and a
+ * quoted attribute is the string the author typed.
+ */
+function* structuralOperand(segment: ComponentElement, construct: string): Operation<unknown> {
+  const authored = segment.authoredExpressions?.value;
+  if (authored !== undefined) {
+    return yield* evaluateExpression(authored, construct, "value", segment.projectedEnv);
+  }
+  if ("value" in segment.expressions) {
+    return yield* evaluateExpression(
+      segment.expressions.value,
+      construct,
+      "value",
+      segment.projectedEnv,
+    );
+  }
+  return segment.props.value;
+}
+
+/**
+ * Expand the one `<Case>` the selector selects (spec §6.5 `<Switch>`). Every
+ * other branch is never expanded, so nothing in it imports a component, runs a
+ * code block, creates a binding, or reaches a provider — and neither does a
+ * matcher written after the one that matched.
+ *
+ * The whole body's structure is decided from source first, so a malformed
+ * branch stops the selector too: a switch that could not be read chooses
+ * nothing rather than choosing from part of what was written.
+ *
+ * The selected case is transparent, exactly as a selected `<If>` branch is. It
+ * opens no binding scope, no observation boundary and no loop boundary: a
+ * `<Let>` it creates stays available after `</Switch>`, a `<Return>` claims the
+ * value body that owns the switch, and a `<Break>` exits the loop that lexically
+ * encloses it. Errors the construct creates itself — a broken structure, a
+ * selector or matcher that fails to evaluate — are reported here, exactly once.
+ */
+function* expandSwitch(
+  segment: ComponentElement,
+  parentMeta: Record<string, unknown>,
+  parentProps: Record<string, Json>,
+  hideSet: Set<string>,
+  counter: BlockCounter,
+  /** The region this renders into: the selected case writes there directly. */
+  owner: Segment[],
+  path: string,
+  /** Whether the enclosing region grants checked-failure recovery (§3.6). */
+  checkedFailures: CheckedFailures | undefined,
+  authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
+): Operation<void> {
+  // Decided from source alone and shared with validation: which props were
+  // written, and how the body divides into branches.
+  const structure = switchStructure(segment);
+  if (structure.violations.length > 0) {
+    for (const violation of structure.violations) {
+      owner.push(yield* raise(structuralErrorSegment(violation, segment)));
+    }
+    return;
+  }
+
+  let selector: unknown;
+  try {
+    selector = yield* structuralOperand(segment, "Switch");
+  } catch (error) {
+    owner.push(
+      yield* raise(switchError(segment, error instanceof Error ? error.message : String(error))),
+    );
+    return;
+  }
+
+  let selected: SwitchCase | undefined;
+  for (const candidate of structure.matching) {
+    let matcher: unknown;
+    try {
+      matcher = yield* structuralOperand(candidate.element, "Case");
+    } catch (error) {
+      owner.push(
+        yield* raise(
+          caseError(candidate.element, error instanceof Error ? error.message : String(error)),
+        ),
+      );
+      return;
+    }
+    // The `===` operator, and nothing else: `NaN` matches no case including one
+    // written `NaN`, `0` and `-0` are the same value, and two objects match only
+    // when they are the same object.
+    if (selector === matcher) {
+      selected = candidate;
+      break;
+    }
+  }
+
+  const chosen = selected ?? structure.fallback;
+  if (chosen === undefined) {
+    return;
+  }
+
+  // The selected `<Case>` is consumed above and never reaches dispatch, so its
+  // frame is added here — otherwise corresponding children of two branches
+  // would expand under one path (§5.6).
+  yield* expandSegmentsWithin(
+    chosen.element.children,
+    parentMeta,
+    parentProps,
+    hideSet,
+    counter,
+    owner,
+    extendPath(
+      path,
+      elementFrame(chosen.element.name, elementSite(chosen.element.position, chosen.index)),
+    ),
     0,
     checkedFailures,
     authority,

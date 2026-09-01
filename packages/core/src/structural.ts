@@ -100,6 +100,25 @@ export const STRUCTURAL_DECLARATIONS: readonly StructuralDeclaration[] = [
     context: "The branch taken when the enclosing condition does not hold.",
   },
   {
+    name: "Switch",
+    syntax: ["<Switch value={value}>…</Switch>"],
+    description:
+      "Choose one branch by comparing a value with `===`. " +
+      '`<Switch value={status}><Case value="ready">…</Case><Case default>…</Case></Switch>` ' +
+      "expands the first matching case, or the final default when none matches.",
+    as: null,
+    context: "Direct `<Case>` branches considered in source order.",
+  },
+  {
+    name: "Case",
+    syntax: ["<Case value={value}>…</Case>", "<Case default>…</Case>"],
+    description:
+      'Define one branch of a `<Switch>`. `<Case value="ready">…</Case>` matches with ' +
+      "`===`; `<Case default>…</Case>` is the final fallback.",
+    as: null,
+    context: "Markdown expanded when this case is selected.",
+  },
+  {
     name: "Loop",
     syntax: ["<Loop max={count}>…</Loop>"],
     description:

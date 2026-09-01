@@ -316,6 +316,77 @@ describe("Tier SY: structural vocabulary", () => {
     expect(find(entries, "Answers").context).toBeDefined();
   });
 
+  it("SY4b: freezes the <Switch> and <Case> entries the catalog publishes", function* () {
+    const catalog = yield* catalogFor({}, []);
+    const entries = structural(catalog);
+
+    expect(catalog.version).toBe(1);
+    expect(find(entries, "Switch")).toEqual({
+      kind: "structural",
+      name: "Switch",
+      origin: { kind: "structural", construct: "Switch" },
+      syntax: ["<Switch value={value}>…</Switch>"],
+      description:
+        "Choose one branch by comparing a value with `===`. " +
+        '`<Switch value={status}><Case value="ready">…</Case><Case default>…</Case></Switch>` ' +
+        "expands the first matching case, or the final default when none matches.",
+      context: "Direct `<Case>` branches considered in source order.",
+    });
+    expect(find(entries, "Case")).toEqual({
+      kind: "structural",
+      name: "Case",
+      origin: { kind: "structural", construct: "Case" },
+      syntax: ["<Case value={value}>…</Case>", "<Case default>…</Case>"],
+      description:
+        'Define one branch of a `<Switch>`. `<Case value="ready">…</Case>` matches with ' +
+        "`===`; `<Case default>…</Case>` is the final fallback.",
+      context: "Markdown expanded when this case is selected.",
+    });
+    // Neither construct binds, so neither carries an `as` sentence at all.
+    expect(find(entries, "Switch").as).toBeUndefined();
+    expect(find(entries, "Case").as).toBeUndefined();
+  });
+
+  it("SY5b: a repository file cannot supply <Switch> or <Case>, and neither can a registration", function* () {
+    const catalog = yield* catalogFor(
+      {
+        components: { kind: "directory" },
+        "components/Switch.md": markdown("a repository switch\n"),
+        "components/Case.md": markdown("a repository case\n"),
+      },
+      ["components"],
+    );
+
+    for (const name of ["Switch", "Case"]) {
+      expect(names(structural(catalog))).toContain(name);
+      expect(names(userProvided(catalog))).not.toContain(name);
+      expect(names(builtIn(catalog))).not.toContain(name);
+    }
+
+    for (const name of ["Switch", "Case"]) {
+      let refused: unknown;
+      yield* scoped(function* () {
+        try {
+          yield* registerComponents([
+            {
+              name,
+              origin: "tier-sy",
+              props: {},
+              *fn() {
+                return "";
+              },
+            },
+          ]);
+        } catch (error) {
+          refused = error;
+        }
+      });
+      expect(refused instanceof Error ? refused.message : "").toContain(
+        `cannot register "${name}": it is structural syntax the engine owns`,
+      );
+    }
+  });
+
   it("SY5: keeps a structural name structural even when a file claims it", function* () {
     const catalog = yield* catalogFor(
       {

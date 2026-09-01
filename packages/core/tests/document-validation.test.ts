@@ -508,6 +508,179 @@ describe("Tier DV: structural facts and the records that own them", () => {
   });
 });
 
+describe("Tier DV: <Switch> branch selection", () => {
+  const SWITCH_DOC = [
+    '<Switch value="ready">',
+    '<Case value="ready">READY</Case>',
+    '<Case value="waiting">WAITING</Case>',
+    "<Case default>UNKNOWN</Case>",
+    "</Switch>",
+    "",
+  ].join("\n");
+
+  it("DV16: a well-formed switch with static operands is valid throughout", function* () {
+    const { result } = yield* validateText(SWITCH_DOC);
+
+    expect(result.outcome).toBe("valid");
+    expect(result.diagnostics).toEqual([]);
+    expect(names(result)).toEqual(["Switch", "Case", "Case", "Case"]);
+    expect(outcomes(result)).toEqual(["valid", "valid", "valid", "valid"]);
+    expect(named(result, "Switch").origin).toEqual({ kind: "structural", construct: "Switch" });
+    expect(named(result, "Case").origin).toEqual({ kind: "structural", construct: "Case" });
+  });
+
+  it("DV16: a dynamic selector and a dynamic matcher are opaque, a literal one is not", function* () {
+    const { result } = yield* validateText(
+      [
+        "<Switch value={state}>",
+        "<Case value={preferred}>ONE</Case>",
+        '<Case value="waiting">TWO</Case>',
+        "<Case default>THREE</Case>",
+        "</Switch>",
+        "",
+      ].join("\n"),
+    );
+
+    // Nothing is definitely wrong here: the operands are values the document
+    // computes, and comparing them is expansion's alone.
+    expect(result.outcome).toBe("valid");
+    expect(result.diagnostics).toEqual([]);
+    expect(outcomes(result)).toEqual([
+      "not-statically-checkable",
+      "not-statically-checkable",
+      "valid",
+      "valid",
+    ]);
+    const opaque = result.invocations.filter(
+      (invocation) => invocation.outcome === "not-statically-checkable",
+    );
+    for (const invocation of opaque) {
+      expect(invocation.outcome === "not-statically-checkable" && invocation.reasons).toEqual([
+        "dynamic-props",
+      ]);
+    }
+  });
+
+  it("DV16: a scanner-resolved operand is static, not opaque", function* () {
+    const { result } = yield* validateText(
+      ["<Switch value={2}>", "<Case value={2}>TWO</Case>", "</Switch>", ""].join("\n"),
+    );
+
+    expect(result.outcome).toBe("valid");
+    expect(outcomes(result)).toEqual(["valid", "valid"]);
+  });
+
+  it("DV16: a definite structural failure wins over a dynamic operand", function* () {
+    const { result } = yield* validateText(
+      [
+        "<Switch value={state} on={extra}>",
+        "<Case value={preferred} default>ONE</Case>",
+        "</Switch>",
+        "",
+      ].join("\n"),
+    );
+
+    expect(codes(result)).toEqual(["structural-usage-invalid", "structural-usage-invalid"]);
+    expect(result.diagnostics.map((diagnostic) => diagnostic.component)).toEqual([
+      "Switch",
+      "Case",
+    ]);
+    expect(result.diagnostics[0]!.message).toContain('only accepts a "value" prop');
+    expect(result.diagnostics[1]!.message).toContain("not both");
+    expect(outcomes(result)).toEqual(["invalid", "invalid"]);
+    // The case's own defect belongs to the case and to the switch that read it.
+    expect(diagnosticsOf(result, named(result, "Switch"))).toHaveLength(2);
+    expect(
+      diagnosticsOf(result, named(result, "Case")).map((diagnostic) => diagnostic.component),
+    ).toEqual(["Case"]);
+  });
+
+  it("DV16: a misplaced case's diagnostic is shared with the switch that found it", function* () {
+    const { result } = yield* validateText(
+      [
+        '<Switch value="a">',
+        '<Case value="a"><Let as="x"><Case value="b">INNER</Case></Let></Case>',
+        "</Switch>",
+        "",
+      ].join("\n"),
+    );
+
+    expect(codes(result)).toEqual(["structural-usage-invalid"]);
+    const [diagnostic] = result.diagnostics;
+    expect(diagnostic!.component).toBe("Case");
+    expect(diagnostic!.message).toContain("<Case> must be a direct child of <Switch>");
+
+    const inner = result.invocations.filter((invocation) => invocation.name === "Case")[1]!;
+    // Positioned at the misplaced `<Case>`, not at the `<Switch>` that read it.
+    expect(diagnostic!.position?.offset).toBe(inner.position?.offset);
+    expect(diagnosticsOf(result, inner)).toEqual([diagnostic]);
+    expect(diagnosticsOf(result, named(result, "Switch"))).toEqual([diagnostic]);
+    expect(named(result, "Let").outcome).toBe("valid");
+  });
+
+  it("DV16: a nested <Switch> owns the cases beneath it", function* () {
+    const { result } = yield* validateText(
+      [
+        '<Switch value="outer">',
+        '<Case value="outer">',
+        '<Switch value="inner">',
+        '<Case value="inner">NESTED</Case>',
+        "</Switch>",
+        "</Case>",
+        "</Switch>",
+        "",
+      ].join("\n"),
+    );
+
+    expect(result.outcome).toBe("valid");
+    expect(names(result)).toEqual(["Switch", "Case", "Switch", "Case"]);
+  });
+
+  it("DV16: a <Case> with no <Switch> above it is reserved and diagnoses itself", function* () {
+    const { result, seen } = yield* validateText(
+      '<If condition={true}><Case value="a">orphan</Case></If>\n',
+    );
+
+    expect(codes(result)).toEqual(["structural-usage-invalid"]);
+    expect(result.diagnostics[0]!.message).toContain("never resolves a component");
+    const stray = named(result, "Case");
+    expect(stray.outcome).toBe("invalid");
+    expect(stray.origin).toEqual({ kind: "structural", construct: "Case" });
+    // Reserved means selection never looked for a file that could supply it.
+    expect(seen.reads.some((read) => read.includes("Case"))).toBe(false);
+  });
+
+  it("DV16: every case body is walked, and none of it runs", function* () {
+    const { result, seen } = yield* validateText(
+      [
+        "<Switch value={state}>",
+        '<Case value="a">',
+        '<Widget title="selected" />',
+        "</Case>",
+        "<Case default>",
+        "<Widget />",
+        "",
+        "```sh exec",
+        "rm -rf /",
+        "```",
+        "",
+        "</Case>",
+        "</Switch>",
+        "",
+      ].join("\n"),
+      { tree: { "components/Widget.md": WIDGET } },
+    );
+
+    // Validation follows source rather than runtime reachability, so the
+    // unselectable branch is checked too — and its missing `title` is reported.
+    expect(codes(result)).toEqual(["props-invalid"]);
+    expect(names(result)).toEqual(["Switch", "Case", "Widget", "Case", "Widget"]);
+    expect(seen.effects).toEqual([]);
+    // One read per path: the definition both branches invoke was read once.
+    expect(seen.reads.filter((read) => read === "components/Widget.md")).toHaveLength(1);
+  });
+});
+
 describe("Tier DV: source, target and declaration failures", () => {
   const ROWS: {
     readonly id: string;
