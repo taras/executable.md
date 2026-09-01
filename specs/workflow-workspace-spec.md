@@ -94,10 +94,11 @@ components a workflow run has, over the caller's own filesystem:
   transports under the same host ceilings, retaining nothing.
 
 Node and Bun register the same thirteen declarations and install no operational
-provider, so `xmd syntax` describes one language everywhere and every
-repository operation there reports an absent provider before a lock, a
-credential, a subprocess or a request exists. `<Dir>` needs no provider and
-works everywhere.
+repository provider, so `xmd syntax` describes one language everywhere and
+every repository operation there reports an absent provider before a lock, a
+credential, a subprocess or a request exists. Their host `API.Files` provider
+still supplies `<Dir>`'s directory operation, so directory composition remains
+operational on every runtime.
 
 ### 2.2 `xmd workflow`
 
@@ -1018,7 +1019,7 @@ checkout path while also rendering them.
 
 ### 6.3 Directory context
 
-`<Dir>` has one meaning: lexical cwd.
+`<Dir>` creates or adopts a directory and gives its content that lexical cwd.
 
 ```md
 <Dir path={repository_api}>
@@ -1026,18 +1027,40 @@ checkout path while also rendering them.
 </Dir>
 ```
 
-It restores the previous cwd after its children finish. Self-closing `<Dir />`
-is invalid, and which form it was written as comes from the invocation the
-engine issued rather than from the contextual `hasContent()` chain — a handler
-installed outside the invocation answers that chain first, and could otherwise
-validate a self-closing `<Dir />` the document wrote no children for, or refuse
-a paired one that has them (executable-mdx-spec §5.6). A Prompt sent to an already-established Agent does not acquire a new
-cwd merely because its invocation appears inside a later Dir.
+Before installing the cwd or expanding any child, `<Dir>` asks the mandatory
+provider-neutral `API.Files.ensureDirectory` operation to ensure its target. A
+relative path resolves from the enclosing contextual cwd; an absolute path
+keeps its existing absolute meaning. The operation recursively creates a
+missing directory, succeeds without replacing, clearing or otherwise changing
+an existing directory and its contents, and refuses when the target or an
+intermediate entry is a file or another non-directory. That refusal is fixed
+and sanitized, begins no content and exposes no host path or platform error.
 
-Its paired form is also a pinned identity in the standard generated-XMD write
-table (§8.4), built from this same implementation and schema. Being registered
-grants that nothing: a generated fragment reaches the pinned identity and never
-the registration, and a repository component named `Dir` satisfies neither.
+After a successful ensure, `<Dir>` installs the resulting directory as cwd and
+expands its content. It restores the previous cwd on success, ordinary failure
+and cancellation. Restoration performs no deletion: a directory created by the
+ensure persists even when later content fails or is cancelled. `<Dir>` changes
+only cwd. It neither selects nor replaces the Repository in scope, so a Git
+operation inside a directory beneath a selected checkout still addresses that
+same Repository.
+
+Self-closing `<Dir />` is invalid, and which form it was written as comes from
+the invocation the engine issued rather than from the contextual `hasContent()`
+chain — a handler installed outside the invocation answers that chain first,
+and could otherwise validate a self-closing `<Dir />` the document wrote no
+children for, or refuse a paired one that has them (executable-mdx-spec §5.6).
+A Prompt sent to an already-established Agent does not acquire a new cwd merely
+because its invocation appears inside a later Dir.
+
+Its paired form is also the versioned pinned identity
+`@executablemd/workflow/composition/dir-v2#Dir` in the standard generated-XMD
+write table (§8.4), built from this same implementation and schema. Selecting
+`allow={["write"]}` intentionally authorizes its persistent recursive directory
+creation. The former `@executablemd/workflow/composition#Dir` identity never
+authorizes creation, so a continuation retaining it refuses before generated
+execution. Being registered grants the current identity nothing: a generated
+fragment reaches the pinned identity and never the registration, and a
+repository component named `Dir` satisfies neither.
 
 Everything the lexical directory covers reads and writes through it, including
 `<File.Delete>` (§10.1), which removes one file from the Workspace the same
@@ -2029,11 +2052,11 @@ unadmitted component, live registration or not.
 
 Mutation admission is the same boundary asked for the other class. The standard
 Deno workflow profile's write table holds exactly three identities, in the order
-it states them: core's paired `File:write`, this package's lexical `Dir` — built
-from the same implementation and schema the ordinary registration owns so the two
-cannot drift — and core's self-closing `File.Delete`. A host's own extensions
-come after them, and the profile supplies no external-write and no execution
-table.
+it states them: core's paired `File:write`, the paired versioned
+`@executablemd/workflow/composition/dir-v2#Dir` — built from the same
+implementation and schema the ordinary registration owns so the two cannot
+drift — and core's self-closing `File.Delete`. A host's own extensions come
+after them, and the profile supplies no external-write and no execution table.
 
 That order is retained identity. A continuation compares the entries position by
 position (§8.4, *A resumed run is held to its ceilings*), so a run admitted under
@@ -2042,15 +2065,22 @@ resumed under the wider one. A read-only admission never selected the write tabl
 and is unaffected by a change to it.
 
 An admitted mutation runs as the ordinary component it is. A paired `<File>` and
-a self-closing `<File.Delete>` each cross `API.Files`, which under a workflow run
-is the transaction-bound provider, so the mutation, the published logical root
-and the filtered journal result commit in the run's one effect transaction
-(§10.1) — a generated deletion is the same `workspace_file` effect an authored
-one publishes, carrying `{ kind: "deleted" }`; `<Dir>` installs a lexical working
-directory for its content and creates nothing of its own.
-Generated source receives no special mutation API, and the evaluator adds none:
-it owns admission, and the component's own contract owns atomicity, failure and
-cancellation.
+a paired `<Dir>` and a self-closing `<File.Delete>` each cross `API.Files`, which
+under a workflow run is the transaction-bound provider, so each mutation, its
+published logical root and its filtered journal result commit in the run's one
+effect transaction (§10.1). A generated directory creation is the same
+`workspace_file` effect an authored `<Dir>` publishes, and a generated deletion
+is the same effect an authored deletion publishes, carrying
+`{ kind: "deleted" }`. Generated source receives no special mutation API, and
+the evaluator adds none: it owns admission, and the component's own contract
+owns atomicity, failure and cancellation.
+
+Selecting `allow={["write"]}` therefore intentionally authorizes persistent,
+recursive directory creation by the current pinned `<Dir>`. The former
+`@executablemd/workflow/composition#Dir` identity described contextual placement
+without creation and is not interchangeable with this authority. A continuation
+whose retained table contains that former identity refuses before any generated
+component executes; the write ceiling is not silently broadened.
 
 Because the whole fragment is decided inside the admission before its first
 effect, a fragment mixing an admitted write with anything unadmitted — a later
@@ -2273,7 +2303,8 @@ durable observations and mutations restore.
 | --- | --- |
 | implicit Workspace | reattach the same run-owned Workspace |
 | bundled component import | restore the retained `{ kind: "workflow", path, sourceHash, content }` selection and reconstruct the component from that exact source, resolving no name and reading no file |
-| lexical Dir/Repository/Worktree | reinstall contextual cwd and live facade |
+| lexical Repository/Worktree | reinstall contextual cwd and live facade |
+| Dir directory ensure | restore the recorded `workspace_file` success and retained root without creating again, then reinstall the contextual cwd |
 | Agent provider/session | attach lazily before the first live Agent operation |
 | Repository base/default resolution | restore pinned result |
 | Repository/Worktree creation | restore the retained creation record, then reattach and verify the retained Git state without recloning |
@@ -2391,6 +2422,29 @@ parent's effect transaction begins. Direct filesystem operations and
 declarative Git operations use this boundary, and so does a mutation an
 admitted generated fragment performs (§8.4) — it is the same component crossing
 the same provider, with no second path of the evaluator's own.
+
+**Document directory ensure** is one of them. `<Dir>` resolves its path in the
+logical Workspace filesystem and publishes one `workspace_file` effect, named
+by the expansion, the directory operation and the resolved logical target. A
+relative path resolves from the enclosing logical cwd; an absolute path keeps
+its established logical-root meaning. The provider recursively creates a
+missing target and succeeds unchanged for an existing directory, preserving all
+of its contents. A file or any other non-directory at the target or along the
+route is a documented refusal before `<Dir>` installs the cwd or begins content.
+
+The ensure runs in a mutation savepoint. On success, the mutation and the
+resulting Workspace root commit with the sanitized successful outcome; only
+then does `<Dir>` install that directory as cwd for its content. A documented
+refusal rolls back the savepoint and publishes its sanitized refusal against the
+unchanged root. An infrastructure failure or cancellation before commit rolls
+the outer transaction back and publishes neither outcome nor root. No retained
+record contains a host path, platform code, raw platform message or cause.
+
+A completed replay restores the recorded success and retained resulting root
+without attempting creation again. Once committed, creation is not owned by the
+cwd scope: later content failure or cancellation restores the enclosing cwd but
+does not remove the directory. `<Dir>` neither reads nor changes the Repository
+selection in scope.
 
 **Document deletion** is one of them. `<File.Delete>` (executable-mdx-spec
 §6.13.1) removes one file from the run's Workspace, resolving its path inside
@@ -3365,9 +3419,9 @@ fetch operation requires its own language and durability contract.
 | workflow-run and expansion identity | built by #289 / PR #341 |
 | retained run record and filtered journal | built by #291 |
 | caller-owned storage transaction | built by #291; Workspace mutations join it in #365 |
-| provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; document deletion (§10.1) built by #567 for both providers; process capabilities unbuilt (#218) |
+| provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; document deletion (§10.1) built by #567 for both providers; mandatory directory ensure is specified by #643 for both providers; process capabilities unbuilt (#218) |
 | `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; both acquire #367's executor lock |
-| `<Repository>`, `<Worktree>` and `<Dir>` composition under a workflow run | built by #293, Deno provider only |
+| `<Repository>`, `<Worktree>` and `<Dir>` composition under a workflow run | Repository and Worktree built by #293, Deno provider only; `<Dir>`'s mandatory `API.Files.ensureDirectory` is specified by #643 as one transactional `workspace_file` mutation followed by lexical cwd installation |
 | the same thirteen declarations under every runtime | built by #643: one shadowable array consumed by the workflow attachment, `xmd syntax`, `xmd plan` and an ordinary document execution |
 | `<Repository>`, `<Worktree>` and the ambient Repository under an ordinary run | built by #643, Deno and compiled only: managed checkouts under `~/.xmd/repositories` with version 1 sidecars and execution-owned non-blocking locks, and the checkout the command was run in as the default Repository. Node and Bun install no operational provider |
 | local Git operations and `Git.Push` evidence under an ordinary run | built by #643, Deno and compiled only: the same authored transitions with no transaction and no replay, commits recorded under the invoking user's own captured Git identity with an actionable refusal when the host can name none, and a private per-execution Push evidence entry that authorizes `<PullRequest>` and crosses no run |
@@ -3386,8 +3440,8 @@ fetch operation requires its own language and durability contract.
 | workflow Agent isolation | built by #302: no directory attachment, an empty host-owned working directory, no MCP servers, an empty requested tool set and deny-all with a failing permission path; the portable no-tool proof is tracked by #496 |
 | workflow Agent session retention | built by #302: a row in the run's own database, keyed by the engine-derived Session expansion identity alone — the authored name is descriptive — with provider, agent command and policy fingerprint beside it as compatibility attributes. A `<Session>` places one and creates nothing; the first subscribed Prompt constructs it, and the mapping commits after the backend accepted that turn and the provider made its canonical tagged assertion, before anything the turn produced is exposed. Occupancy of a provider key is never identity — including a record held for a first turn nobody accepted — and missing, mismatched, replaced or ambiguous assertions each refuse instead of starting a replacement session |
 | generated-XMD admission | built by #369, through `@executablemd/core/host`; the workflow policy wrapper is internal. Host policy is a read table and a write table of exact pinned identities, each entry carrying the authored forms it is admitted for, and an authored `allow` selects a canonical subset of the closed classes `read` and `write` — omitted means `read`. The complete fragment is preflighted inside one `generated_xmd` effect before its first generated effect |
-| `<Evaluate source allow>` and the authored loop | built by #302 and #369: a workflow-host component with a closed schema of one required `source` and one optional `allow`, declared to the execution rather than registered by the attachment — canonical execution calls the host's factory with the claimant it minted and registers what comes back, which provides availability only. Its ceilings come from the run's own storage, core's pinned `<File>` read and write identities and this package's lexical `<Dir>`; iteration, branching, approval and exhaustion are ordinary Markdown |
-| generated-XMD mutation-proposal admission | built by #369 and #567: the standard Deno profile's write table is core's paired `File:write`, this package's lexical `Dir` and core's self-closing `File.Delete`, in that retained order and followed by any host extension; admitted mutations run as the ordinary components they are through the run's effect transactions, a generated deletion publishing the same `workspace_file` effect an authored one does; the evaluator adds no receipt or result entry, so a write-only fragment still binds `{ observations: [], output: "" }`; and approval is authored control flow before the element. Local Git, Git-host, issue, process, execution, credential and external-write effects are outside the class |
+| `<Evaluate source allow>` and the authored loop | built by #302 and #369: a workflow-host component with a closed schema of one required `source` and one optional `allow`, declared to the execution rather than registered by the attachment — canonical execution calls the host's factory with the claimant it minted and registers what comes back, which provides availability only. Its ceilings come from the run's own storage, core's pinned `<File>` read and write identities and the versioned paired `@executablemd/workflow/composition/dir-v2#Dir`; iteration, branching, approval and exhaustion are ordinary Markdown |
+| generated-XMD mutation-proposal admission | built by #369 and #567, amended by #643: the standard Deno profile's write table is core's paired `File:write`, the paired versioned `@executablemd/workflow/composition/dir-v2#Dir` and core's self-closing `File.Delete`, in that retained order and followed by any host extension. `allow={["write"]}` intentionally authorizes the current Dir's persistent recursive creation; the former unversioned identity never authorizes it and a retained table naming that identity refuses before generated execution. Admitted mutations run as the ordinary components they are through the run's effect transactions, directory ensure and deletion each publishing the same `workspace_file` effect their authored forms do; the evaluator adds no receipt or result entry, so a write-only fragment still binds `{ observations: [], output: "" }`; and approval is authored control flow before the element. Local Git, Git-host, issue, process, execution, credential and external-write effects are outside the class |
 | Deno-local DOFS persistence | POC proven by #349 / PR #350 |
 | scoped Deno Worker Shell | containment proven by #351 / PR #353 and transactions by #357 / PR #362; production integration unbuilt |
 | Worker JavaScript | deferred |
