@@ -54,6 +54,7 @@ import {
 import type { LoadedGitApi } from "./support/composition.ts";
 import { committedRoot, dropRootClose, latestRoot, publishedRoots } from "./support/replay.ts";
 
+import type { RepositorySelection } from "../src/composition/selection.ts";
 const REMOTE = {
   commits: [
     {
@@ -565,7 +566,7 @@ describe("workflow Git.Add composition routing", () => {
 /** A component that stages through a loaded copy's Api, on a chosen record. */
 function probe(
   copy: LoadedGitApi,
-  observe: (repository: RepositoryRecord) => RepositoryRecord,
+  observe: (repository: RepositorySelection) => RepositorySelection,
 ): ComponentRegistration {
   return {
     name: "Probe",

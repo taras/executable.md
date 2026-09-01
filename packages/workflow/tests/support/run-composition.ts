@@ -1,0 +1,198 @@
+/**
+ * The harness the ordinary-run repository suites drive.
+ *
+ * Everything here is real: a real bare remote, a real working checkout the
+ * command is "run in", real `git`, real advisory locks and a real managed root
+ * in a temporary directory. What is substituted is only what a claim needs to
+ * be deterministic about — the managed root, so no suite ever touches the
+ * user's own `~/.xmd/repositories`, and the Git subprocess where a suite counts
+ * invocations.
+ *
+ * There is no database, no journal and no WorkflowRun anywhere in this file.
+ * That is the point of the profile: an ordinary run has none of them.
+ */
+
+import { scoped, until, type Operation } from "effection";
+import { ensureDir, exists, readTextFile } from "@effectionx/fs";
+import { realpathSync } from "node:fs";
+import { realpath } from "node:fs/promises";
+import { join } from "node:path";
+import { collect, execute, inlineSource } from "@executablemd/core";
+import { API, useHostFiles } from "@executablemd/runtime";
+import { InMemoryStream } from "@executablemd/durable-streams";
+import type { Json } from "@executablemd/durable-streams";
+import { useTempDirectory } from "@executablemd/test-support/temp";
+import { useCompositionComponents } from "../../src/composition/installation.ts";
+import { useRunComposition } from "../../src/deno/run-composition/provider.ts";
+import type { RunCompositionOptions } from "../../src/deno/run-composition/provider.ts";
+import {
+  checkoutOf,
+  metadataOf,
+  repositorySlot,
+  worktreeSlot,
+} from "../../src/deno/run-composition/placement.ts";
+import { git } from "./git-remotes.ts";
+
+/** A working checkout on this host, as if somebody had cloned it by hand. */
+export interface HostCheckout {
+  /** The canonical root of the checkout. */
+  readonly root: string;
+  /** The home Git runs with when this fixture drives it directly. */
+  readonly home: string;
+  /** Run a Git command in this checkout and answer what it printed. */
+  run(...args: string[]): string;
+}
+
+/**
+ * Clone `locator` into a directory the acquiring scope owns.
+ *
+ * Acquired in the caller's scope rather than a bounded one: the checkout is
+ * what the whole test runs against, and a `scoped()` around this would remove
+ * it before the first assertion.
+ */
+export function* useHostCheckout(locator: string, branch?: string): Operation<HostCheckout> {
+  const home = yield* useTempDirectory("xmd-run-composition-");
+  const parent = yield* useTempDirectory("xmd-host-");
+  const resolved = yield* until(realpath(parent));
+  const root = join(resolved, "checkout");
+  git(["clone", "--", locator, root], resolved, home);
+  if (branch !== undefined) {
+    git(["checkout", "-B", branch], root, home);
+  }
+  return {
+    root,
+    home,
+    run(...args: string[]): string {
+      return git(args, root, home);
+    },
+  };
+}
+
+/** A Git checkout with no remote at all, made here rather than cloned. */
+export function* useOriginlessCheckout(): Operation<HostCheckout> {
+  const home = yield* useTempDirectory("xmd-run-composition-");
+  const parent = yield* useTempDirectory("xmd-solo-");
+  const resolved = yield* until(realpath(parent));
+  const root = join(resolved, "checkout");
+  git(["init", "--initial-branch=main", root], resolved, home);
+  git(["commit", "--allow-empty", "-m", "first"], root, home);
+  return {
+    root,
+    home,
+    run(...args: string[]): string {
+      return git(args, root, home);
+    },
+  };
+}
+
+/** A managed root of this suite's own, removed when the scope ends. */
+export function* useManagedRoot(): Operation<string> {
+  const created = yield* useTempDirectory("xmd-run-composition-");
+  const root = join(created, "repositories");
+  yield* ensureDir(root);
+  return root;
+}
+
+export interface RunOptions extends Omit<RunCompositionOptions, "root" | "cwd"> {
+  /** The managed root this execution uses. */
+  readonly root: string;
+  /** The directory the command is run in, which ambient discovery starts from. */
+  readonly cwd: string;
+  /** Props the document is executed with. */
+  readonly props?: Record<string, Json>;
+}
+
+/**
+ * Execute one document under the ordinary repository provider.
+ *
+ * The contextual working directory is installed to `cwd` first, exactly as a
+ * runtime entrypoint's host filesystem provider would leave it, so a document's
+ * root-level element is written "in" that directory.
+ */
+export function runOrdinaryDocument(source: string, options: RunOptions): Operation<Json> {
+  return scoped(function* () {
+    yield* API.Env.around(
+      {
+        // deno-lint-ignore require-yield
+        *cwd(): Operation<string> {
+          return options.cwd;
+        },
+      },
+      { at: "min" },
+    );
+    // What a runtime entrypoint installs beside the provider: `API.Files` has
+    // no host default, and a document that writes `<File>` must reach the
+    // caller's own filesystem exactly as `xmd run` leaves it.
+    yield* useHostFiles();
+    yield* useCompositionComponents();
+    const { root, cwd, props: _props, ...rest } = options;
+    yield* useRunComposition({ root, cwd, ...rest });
+    return yield* collect(
+      yield* execute({
+        ...inlineSource(source),
+        stream: new InMemoryStream(),
+        ...(options.props === undefined ? {} : { props: options.props }),
+      }),
+    );
+  });
+}
+
+/** What a suite reads back about one managed slot. */
+export interface ManagedSlot {
+  readonly slot: string;
+  readonly checkout: string;
+  readonly metadata: string;
+}
+
+export function repositorySlotOf(root: string, locator: string, name: string): ManagedSlot {
+  const slot = repositorySlot(root, locator, name);
+  return { slot, checkout: checkoutOf(slot), metadata: metadataOf(slot) };
+}
+
+export function worktreeSlotOf(root: string, commonDirectory: string, name: string): ManagedSlot {
+  const slot = worktreeSlot(root, commonDirectory, name);
+  return { slot, checkout: checkoutOf(slot), metadata: metadataOf(slot) };
+}
+
+/** The parsed sidecar at this slot, or `undefined` when it holds none. */
+export function* readSidecar(slot: ManagedSlot): Operation<unknown> {
+  if (!(yield* exists(slot.metadata))) {
+    return undefined;
+  }
+  return JSON.parse(yield* readTextFile(slot.metadata));
+}
+
+/** The canonical common Git directory of this checkout. */
+export function commonDirectoryOf(checkout: HostCheckout): string {
+  const reported = checkout.run("rev-parse", "--git-common-dir");
+  const absolute = reported.startsWith("/") ? reported : join(checkout.root, reported);
+  // Synchronous so a test body can name a slot in an ordinary expression, the
+  // way it already names one from `git()`. Nothing is in flight to lose: this
+  // is a fixture reading its own directory before an execution exists.
+  // oxlint-disable-next-line local/no-sync-filesystem
+  return realpathSync(absolute);
+}
+
+/** Whatever this operation raised, as a value. */
+export function* raised(operation: Operation<unknown>): Operation<unknown> {
+  try {
+    yield* operation;
+  } catch (error) {
+    return error;
+  }
+  throw new Error("the operation did not fail");
+}
+
+/** The first cause in this error's chain that `is` accepts. */
+export function causedBy<T>(error: unknown, is: (value: unknown) => value is T): T | undefined {
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  while (current !== undefined && current !== null && !seen.has(current)) {
+    seen.add(current);
+    if (is(current)) {
+      return current;
+    }
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return undefined;
+}

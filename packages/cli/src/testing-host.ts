@@ -49,6 +49,7 @@ import type {
 } from "@executablemd/testing";
 import { installDocumentComponents } from "./cli.ts";
 import type { HostServiceInstaller } from "./cli.ts";
+import type { RepositoryInstaller } from "./run-repositories.ts";
 
 /** What the entrypoint already decided, and a child must not decide again. */
 export interface TestingHostSettings {
@@ -69,6 +70,15 @@ export interface TestingHostSettings {
   readonly secretDetection: boolean;
   /** The native service adapter this entrypoint supplies. */
   readonly installService: HostServiceInstaller;
+  /**
+   * How this entrypoint installs repository operations for one execution.
+   *
+   * Called again for every child, so an isolated `<Execution host="run">`
+   * constructs a provider instance of its own: its own invocation identity, its
+   * own leases and its own Push evidence. Nothing it publishes authorizes its
+   * parent or a sibling, and nothing they published authorizes it.
+   */
+  readonly installRepositories: RepositoryInstaller;
   /**
    * How this entrypoint re-invokes itself as the test-agent worker, or why it
    * cannot.
@@ -203,6 +213,9 @@ function* runProfileChild(
   // Native service authority belongs only to document execution, here as in the
   // command that owns it.
   yield* settings.installService();
+  // And repository authority the same way, from the same installer the command
+  // used — a fresh instance for this child alone.
+  yield* settings.installRepositories();
 
   const execution = yield* executeInstalled(
     {

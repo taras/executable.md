@@ -50,8 +50,11 @@ import { useWorkflowElicitation } from "../../suspension/elicitation.ts";
 import {
   useGitComposition,
   useRepositoryComposition,
+  workflowSelections,
   type CompositionProviderOptions,
 } from "../composition/provider.ts";
+import { useRetainedPullRequestOperations } from "../composition/pull-request-operations.ts";
+import { useRetainedIssueOperations } from "../../issue/effect.ts";
 import { useGitHubIssues, type GitHubIssuesOptions } from "../issue/github.ts";
 import type { HelperAssembly } from "../composition/credential-helper.ts";
 import { withWorkspaceEffects } from "./effect.ts";
@@ -154,15 +157,24 @@ export function withWorkflowWorkspace<T>(
     scoped(function* () {
       yield* useLogicalWorkspaceCwd();
       yield* useWorkflowFiles(database);
+      // One registry for the whole attachment: `<Git.Add>` is handed what
+      // `<Repository>` minted, and two registries would be two providers that
+      // could not recognize each other's selections.
+      const selections = options.composition?.selections ?? workflowSelections();
       const composition = {
         ...options.composition,
         ...(options.helper === undefined ? {} : { helper: options.helper }),
+        selections,
       };
       yield* useRepositoryComposition(database, composition);
       yield* useGitComposition(database, composition);
       if (options.gitHubIssues !== undefined) {
         yield* useGitHubIssues(options.gitHubIssues);
       }
+      // The retained lifecycle for both service-reaching vocabularies, above
+      // whichever transport middleware this host installed for them.
+      yield* useRetainedIssueOperations();
+      yield* useRetainedPullRequestOperations();
       yield* useCompositionComponents();
       // Ordinary middleware, installed the way the Issue adapter is: it owns
       // the URLs it recognizes and delegates the rest.
@@ -173,6 +185,7 @@ export function withWorkflowWorkspace<T>(
         database,
         composition.host ?? denoRepositoryHost(),
         options.gitHubPullRequests ?? {},
+        selections,
       );
       // After the composition components and inside this attachment: a
       // completed replay never reaches here, so it registers no second `Elicit`

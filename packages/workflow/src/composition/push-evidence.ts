@@ -38,11 +38,11 @@ import {
   parseGitPushNaturalKey,
   parseGitPushRecord,
   pushExpectation,
-  sameRepositoryIdentity,
 } from "./git-push-records.ts";
 import { PullRequestAuthorityError } from "./errors.ts";
 import type { PullRequestInputs } from "./pull-request-records.ts";
 
+import { sameRepositoryIdentity } from "./selection.ts";
 function refuse(reason: "missing" | "conflicting" | "unreadable"): never {
   if (reason === "missing") {
     throw new PullRequestAuthorityError(

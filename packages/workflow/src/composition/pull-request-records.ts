@@ -49,15 +49,15 @@
 import type { Json } from "@executablemd/durable-streams";
 import type { GitHostDecision, GitHostReconciliationRecord } from "../git-host/records.ts";
 import { members, text } from "./parse.ts";
-import {
-  gitObjectId,
-  gitPushRepositoryIdentityJson,
-  parseGitPushRepositoryIdentity,
-  sameRepositoryIdentity,
-  type GitPushRepositoryIdentity,
-} from "./git-push-records.ts";
+import { gitObjectId } from "./git-push-records.ts";
 import type { GitObjectFormat, RepositoryRecord } from "./records.ts";
 
+import {
+  parseRepositoryIdentity,
+  repositoryIdentityJson,
+  sameRepositoryIdentity,
+} from "./selection.ts";
+import type { RepositoryIdentity } from "./selection.ts";
 /** The Git-host effect kind one pull-request upsert is reconciled under. */
 export const PULL_REQUEST = "pull-request";
 
@@ -85,7 +85,7 @@ export interface PullRequestRequest {
 
 /** The filtered inputs one pull-request reconciliation acts on. */
 export interface PullRequestInputs {
-  readonly repository: GitPushRepositoryIdentity;
+  readonly repository: RepositoryIdentity;
   /**
    * The pull request this asks for by number, or `null` when it asks for one to
    * exist.
@@ -106,7 +106,7 @@ export interface PullRequestInputs {
 /** What the provider looks an unnumbered request up by: the branch pair. */
 export interface PullRequestCreateKey {
   readonly mode: "create";
-  readonly repository: GitPushRepositoryIdentity;
+  readonly repository: RepositoryIdentity;
   readonly headBranch: string;
   readonly baseBranch: string;
 }
@@ -114,7 +114,7 @@ export interface PullRequestCreateKey {
 /** What the provider looks a numbered request up by: that exact number. */
 export interface PullRequestUpdateKey {
   readonly mode: "update";
-  readonly repository: GitPushRepositoryIdentity;
+  readonly repository: RepositoryIdentity;
   readonly number: number;
 }
 
@@ -155,7 +155,7 @@ export interface PullRequestObservations {
 
 /** What a reconciled pull request retains, and what a document binds. */
 export interface PullRequestResult {
-  readonly repository: GitPushRepositoryIdentity;
+  readonly repository: RepositoryIdentity;
   readonly providerId: string;
   readonly number: number;
   readonly url: string;
@@ -254,7 +254,7 @@ export function pullRequestMode(inputs: PullRequestInputs): PullRequestMode {
 
 export function pullRequestInputsJson(inputs: PullRequestInputs): Json {
   return {
-    repository: gitPushRepositoryIdentityJson(inputs.repository),
+    repository: repositoryIdentityJson(inputs.repository),
     number: inputs.number,
     title: inputs.title,
     body: inputs.body,
@@ -269,13 +269,13 @@ export function pullRequestNaturalKeyJson(key: PullRequestNaturalKey): Json {
   return key.mode === "create"
     ? {
         mode: key.mode,
-        repository: gitPushRepositoryIdentityJson(key.repository),
+        repository: repositoryIdentityJson(key.repository),
         headBranch: key.headBranch,
         baseBranch: key.baseBranch,
       }
     : {
         mode: key.mode,
-        repository: gitPushRepositoryIdentityJson(key.repository),
+        repository: repositoryIdentityJson(key.repository),
         number: key.number,
       };
 }
@@ -309,7 +309,7 @@ export function pullRequestObservationsJson(observations: PullRequestObservation
 
 export function pullRequestResultJson(result: PullRequestResult): Json {
   return {
-    repository: gitPushRepositoryIdentityJson(result.repository),
+    repository: repositoryIdentityJson(result.repository),
     providerId: result.providerId,
     number: result.number,
     url: result.url,
@@ -403,7 +403,7 @@ export function parsePullRequestInputs(value: unknown): PullRequestInputs | unde
   if (record === undefined) {
     return undefined;
   }
-  const repository = parseGitPushRepositoryIdentity(record.repository);
+  const repository = parseRepositoryIdentity(record.repository);
   const number = optionalNumber(record.number);
   const title = text(record.title);
   const body = bodyText(record.body);
@@ -451,7 +451,7 @@ export function parsePullRequestNaturalKey(value: unknown): PullRequestNaturalKe
     if (record === undefined) {
       return undefined;
     }
-    const repository = parseGitPushRepositoryIdentity(record.repository);
+    const repository = parseRepositoryIdentity(record.repository);
     const headBranch = text(record.headBranch);
     const baseBranch = text(record.baseBranch);
     if (repository === undefined || headBranch === undefined || baseBranch === undefined) {
@@ -466,7 +466,7 @@ export function parsePullRequestNaturalKey(value: unknown): PullRequestNaturalKe
   if (record === undefined) {
     return undefined;
   }
-  const repository = parseGitPushRepositoryIdentity(record.repository);
+  const repository = parseRepositoryIdentity(record.repository);
   const number = pullRequestNumber(record.number);
   if (repository === undefined || number === undefined) {
     return undefined;
@@ -593,7 +593,7 @@ export function parsePullRequestResult(
     return undefined;
   }
   const format = expected.repository.objectFormat;
-  const repository = parseGitPushRepositoryIdentity(record.repository);
+  const repository = parseRepositoryIdentity(record.repository);
   const providerId = text(record.providerId);
   const number = pullRequestNumber(record.number);
   const url = text(record.url);

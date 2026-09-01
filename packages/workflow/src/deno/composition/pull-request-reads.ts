@@ -14,52 +14,33 @@
  * what is allowed is asked before a credential is read, and every response is held to
  * the URL that was requested rather than to whatever it says about itself.
  *
- * ## What one read retains
+ * ## Transport, and only transport
  *
- * One ordinary durable effect. Its input is the whole normalized request —
- * operation, canonical URL, provider discriminator, collection, run and
- * expansion — so a reader of the history knows what was asked, and a document
- * edited to read a different URL or collection at that position is a different
- * effect rather than one replaying the first answer.
- *
- * It is not a reconciled Git-host effect. There is no natural key, no
- * pre-state and nothing to adopt: repeating a read is safe in the way
- * repeating a write is not, and a completed one restores from the journal
- * without opening a session.
+ * What a read *costs* — whether it is performed once and retained, or performed
+ * afresh every execution — belongs to the profile above this, which is why both
+ * profiles install this same middleware and answer that question differently.
+ * Here there is one job: recognize the URL, hold it to the ceiling, open a
+ * session, and hand back the normalized evidence.
  */
 
-import { getExpansion, sourceDescription } from "@executablemd/core";
-import { createDurableOperation } from "@executablemd/durable-streams";
-import type { EffectDescription, Json as DurableJson } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
-import { scoped } from "effection";
-import { gitOperationFingerprint } from "./operations.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
-import { parseJsonValue } from "../../storage/members.ts";
-import { PullRequestReadError } from "../../composition/errors.ts";
-import {
-  parsePullRequestReadResult,
-  pullRequestReadEnvelopeJson,
-  pullRequestReadRequestJson,
-  readRequest,
-} from "../../composition/pull-request-read-records.ts";
+import { GitOperationAuthorityError, PullRequestReadError } from "../../composition/errors.ts";
 import type {
   PullRequestReadKind,
-  PullRequestReadRequest,
   PullRequestReadResult,
 } from "../../composition/pull-request-read-records.ts";
 import { PullRequestAPI } from "../../composition/pull-request-api.ts";
 import type { PullRequestReadOptions } from "../../composition/pull-request-api.ts";
-import { getWorkflowRun } from "../../run.ts";
+import type { RepositoryRecord } from "../../composition/records.ts";
+import type { SelectionRegistry } from "../selections.ts";
 import { denoGitHubSource } from "./github.ts";
 import type { GitHubRepositoryName, GitHubSource } from "./github.ts";
 import { readPullRequestEvidence as readEvidence } from "./pull-request-evidence.ts";
 import { upsertPullRequest } from "./pull-request.ts";
 import type { RepositoryHost } from "./host.ts";
+import { PULL_REQUEST_ELEMENT } from "../../composition/components/PullRequest.ts";
 import type { PullRequestResult } from "../../composition/pull-request-records.ts";
-
-/** The durable effect type one evidence read is retained under. */
-export const PULL_REQUEST_READ = "pull_request_read";
 
 /** How this middleware names itself when a document names it explicitly. */
 export const GITHUB = "github";
@@ -166,148 +147,40 @@ export interface GitHubPullRequestsOptions {
   readonly access?: GitHubSource;
 }
 
-function* describeRead(request: PullRequestReadRequest): Operation<EffectDescription> {
-  const expansion = yield* getExpansion();
-  // The run is in the retained request, and deliberately not in this
-  // fingerprint. A fork is a different run reaching the same position with the
-  // same question, and a name that carried the run would make every inherited
-  // read a different effect — which is to say, unforkable. What the name has to
-  // separate is different *questions*, and the four members below are what a
-  // question is made of.
-  const configuration = gitOperationFingerprint([
-    request.operation,
-    request.url,
-    request.provider,
-    request.kind,
-  ]);
-  return {
-    type: PULL_REQUEST_READ,
-    name: `${request.expansionId}:${configuration}`,
-    input: pullRequestReadRequestJson(request),
-    configuration,
-    ...sourceDescription(expansion.position),
-  };
-}
-
-/** Perform one read and retain it, or restore what is retained. */
-function retainedRead(
-  database: WorkflowRunDatabase,
-  source: GitHubSource,
-  request: PullRequestReadRequest,
-  name: GitHubPullRequestName,
-): Operation<PullRequestReadResult> {
-  const element = ELEMENT[request.kind];
-
-  return scoped(function* () {
-    const description = yield* describeRead(request);
-
-    const stored = yield createDurableOperation<DurableJson>(
-      description,
-      function* (): Operation<DurableJson> {
-        // After the ceiling, never before: a session opened first would be an
-        // identity established for a target this host had not authorized.
-        const access = yield* source.open();
-        const reading = yield* readEvidence(access, name, name.number, request.kind);
-        if (reading.state === "unavailable") {
-          throw new PullRequestReadError(
-            "unavailable",
-            element,
-            "the Git host did not answer with the complete collection. None of what it did " +
-              "answer is evidence that there is nothing there.",
-          );
-        }
-        if (reading.state === "protocol-invalid") {
-          throw new PullRequestReadError(
-            "protocol",
-            element,
-            "the Git host answered about a different subject, or with an item outside the " +
-              "evidence contract. A well-formed answer to another question is still the wrong " +
-              "answer.",
-          );
-        }
-        return pullRequestReadEnvelopeJson(reading.result);
-      },
-    );
-
-    const result = parsePullRequestReadResult(
-      parseJsonValue(
-        stored,
-        "$",
-        (reason, path) =>
-          new PullRequestReadError(
-            "protocol",
-            element,
-            `what this run retained for it is not a value it can carry: ${reason} at ${path}.`,
-          ),
-      ),
-    );
-    if (result === undefined || result.kind !== request.kind) {
-      throw new PullRequestReadError(
-        "protocol",
-        element,
-        "what this run retained for it is not the evidence that read produces.",
-      );
-    }
-    return result;
-  });
+/**
+ * The source this adapter reaches GitHub through.
+ *
+ * Credential-free, so holding one for a middleware's whole lifetime retains
+ * nothing. A session — which does have an identity — is opened per request,
+ * after that request is allowed.
+ *
+ * Precedence: an injected transport, then a configured endpoint, then the
+ * platform's own GitHub. A suite that supplies its own access is not asking for
+ * a different endpoint as well.
+ */
+function sourceOf(options: GitHubPullRequestsOptions): GitHubSource {
+  return (
+    options.access ??
+    (options.endpoint === undefined ? denoGitHubSource() : denoGitHubSource(options.endpoint))
+  );
 }
 
 /**
  * Install GitHub pull-request reading for the current scope and below.
  *
+ * Both profiles install exactly this. What a read *costs* — retained once, or
+ * performed afresh every execution — is decided above it, at
+ * `PullRequestOperations`; what is decided here is which URLs this host will
+ * read at all and what a credential may see.
+ *
  * Installing a second adapter beside it needs no coordination between them, and
  * installing none leaves `PullRequestAPI`'s own base error to report that
  * nothing handled the request.
  */
-export function* useGitHubPullRequests(
-  database: WorkflowRunDatabase,
-  host: RepositoryHost,
-  options: GitHubPullRequestsOptions,
-): Operation<void> {
-  // A source rather than an access: it is credential-free, so holding one for
-  // the middleware's whole lifetime retains nothing. A session — which does
-  // have an identity — is opened per request, after that request is allowed.
-  //
-  // Precedence: an injected transport, then a configured endpoint, then the
-  // platform's own GitHub. A suite that supplies its own access is not asking
-  // for a different endpoint as well.
-  const source =
-    options.access ??
-    (options.endpoint === undefined ? denoGitHubSource() : denoGitHubSource(options.endpoint));
+export function* useGitHubPullRequestReads(options: GitHubPullRequestsOptions): Operation<void> {
+  const source = sourceOf(options);
 
   yield* PullRequestAPI.around({
-    /**
-     * The upsert this host performs, unchanged in everything but where it is
-     * reached from.
-     *
-     * It still proves this run published the branch, still reconciles through
-     * the Git-host engine, and still refuses a pull request belonging to
-     * another Repository. What moved is only the surface: `<PullRequest>` asks
-     * this Api rather than the Git composition one, so both questions about a
-     * pull request are asked in the same place.
-     */
-    *upsert([pullRequest, options], next): Operation<PullRequestResult> {
-      const mine = options.provider === undefined || options.provider === GITHUB;
-      if (!mine) {
-        return yield* next(pullRequest, options);
-      }
-      const outcome = yield* upsertPullRequest(
-        database,
-        host,
-        {
-          repository: options.repository,
-          workingDirectory: options.workingDirectory,
-          number: pullRequest.number,
-          title: pullRequest.title,
-          body: pullRequest.body,
-          draft: pullRequest.draft,
-          base: pullRequest.base,
-        },
-        source,
-      );
-      return outcome.result;
-    },
-
     *read([url, read], next): Operation<PullRequestReadResult> {
       // Matched by discriminator, or — with no discriminator — by URL.
       // With nothing allowed there is no URL read this host performs, so the
@@ -344,16 +217,84 @@ export function* useGitHubPullRequests(
         );
       }
 
-      const run = yield* getWorkflowRun();
-      const expansion = yield* getExpansion();
-      return yield* retainedRead(
-        database,
-        source,
-        readRequest(url, read.kind, read.provider, run.runId, expansion.id),
-        name,
-      );
+      // After the ceiling, never before: a session opened first would be an
+      // identity established for a target this host had not authorized.
+      const access = yield* source.open();
+      const reading = yield* readEvidence(access, name, name.number, read.kind);
+      if (reading.state === "unavailable") {
+        throw new PullRequestReadError(
+          "unavailable",
+          element,
+          "the Git host did not answer with the complete collection. None of what it did " +
+            "answer is evidence that there is nothing there.",
+        );
+      }
+      if (reading.state === "protocol-invalid") {
+        throw new PullRequestReadError(
+          "protocol",
+          element,
+          "the Git host answered about a different subject, or with an item outside the " +
+            "evidence contract. A well-formed answer to another question is still the wrong " +
+            "answer.",
+        );
+      }
+      return reading.result;
     },
   });
+}
+
+/**
+ * Install the workflow host's reconciled pull-request upsert, and its reads.
+ *
+ * The upsert is unchanged in everything but where it is reached from: it still
+ * proves this run published the branch, still reconciles through the Git-host
+ * engine, and still refuses a pull request belonging to another Repository. The
+ * selection it is handed is resolved through the provider's own registry, never
+ * believed, which is the same rule every Git operation follows.
+ */
+export function* useGitHubPullRequests(
+  database: WorkflowRunDatabase,
+  host: RepositoryHost,
+  options: GitHubPullRequestsOptions,
+  selections: SelectionRegistry<RepositoryRecord>,
+): Operation<void> {
+  const source = sourceOf(options);
+
+  yield* PullRequestAPI.around({
+    *upsert([pullRequest, upsert], next): Operation<PullRequestResult> {
+      const mine = upsert.provider === undefined || upsert.provider === GITHUB;
+      if (!mine) {
+        return yield* next(pullRequest, upsert);
+      }
+      const outcome = yield* upsertPullRequest(
+        database,
+        host,
+        {
+          // The record this provider itself holds for the selection, never the
+          // selection's own words: a Repository nobody selected is exactly what
+          // a replaced context would name.
+          repository: selections.authenticate(
+            upsert.repository,
+            () =>
+              new GitOperationAuthorityError(
+                PULL_REQUEST_ELEMENT,
+                "the Repository in scope is not one this run selected, so it names no retained " +
+                  "checkout",
+              ),
+          ),
+          workingDirectory: upsert.workingDirectory,
+          number: pullRequest.number,
+          title: pullRequest.title,
+          body: pullRequest.body,
+          draft: pullRequest.draft,
+          base: pullRequest.base,
+        },
+        source,
+      );
+      return outcome.result;
+    },
+  });
+  yield* useGitHubPullRequestReads(options);
 }
 
 /** The options a read carries, re-exported for a host installing this. */

@@ -34,7 +34,6 @@ import {
   PUSH_REMOTE,
   refspecFor,
   type GitPushInputs,
-  type GitPushRepositoryIdentity,
 } from "../src/composition/git-push-records.ts";
 import { GIT_HOST_EFFECT } from "../src/git-host/effect.ts";
 import { GitComposition } from "../src/composition/git-api.ts";
@@ -44,6 +43,9 @@ import type { GitInvocation, GitOutcome } from "../src/deno/composition/host.ts"
 import type { WorkflowRunDatabase } from "../src/storage/api.ts";
 import { createRun, runPath, tamper, useStorageRoot, withStorage } from "./support/storage.ts";
 import { remoteBranch, remoteRefs, useBareRemote } from "./support/git-remotes.ts";
+import { currentRepository } from "../src/composition/context.ts";
+import type { RepositorySelection } from "../src/composition/selection.ts";
+import type { RepositoryIdentity } from "../src/composition/selection.ts";
 import {
   causedBy,
   compositionEvents,
@@ -583,7 +585,7 @@ describe("workflow Git.Push durability", () => {
    */
   // deno-lint-ignore require-yield
   it("refuses a record that published over the commit it says was already there", function* () {
-    const repository: GitPushRepositoryIdentity = Object.freeze({
+    const repository: RepositoryIdentity = Object.freeze({
       name: "project",
       locatorFingerprint: "a".repeat(64),
       requestedBase: null,
@@ -779,13 +781,15 @@ describe("workflow Git.Push durability", () => {
         origin: "test",
         props: { type: "object", additionalProperties: true },
         *fn(): Operation<string> {
-          const [repository] = yield* retainedRepositories(database);
-          const record = repository?.record as RepositoryRecord;
-          const observed: Record<string, unknown> = { ...record };
-          const request = { repository: observed, workingDirectory: record.checkoutPath };
+          const selected = yield* currentRepository();
+          if (selected === undefined) {
+            throw new Error("the probe was written outside a Repository");
+          }
+          const observed: Record<string, unknown> = { ...selected };
+          const request = { repository: observed, workingDirectory: selected.checkoutPath };
           const task = yield* spawn(() =>
             GitComposition.operations.pushCurrentBranch(
-              request as unknown as { repository: RepositoryRecord; workingDirectory: string },
+              request as unknown as { repository: RepositorySelection; workingDirectory: string },
             ),
           );
           yield* observing.operation;
@@ -844,14 +848,16 @@ describe("workflow Git.Push durability", () => {
         origin: "test",
         props: { type: "object", additionalProperties: true },
         *fn(): Operation<string> {
-          const [repository] = yield* retainedRepositories(database);
-          const record = repository?.record as RepositoryRecord;
+          const selected = yield* currentRepository();
+          if (selected === undefined) {
+            throw new Error("the probe was written outside a Repository");
+          }
           // A second physical module holding the same Api name. Sharing the
           // name is how composition works; it is deliberately not how authority
           // works, so this still reaches the one installed provider.
           yield* loaded.GitComposition.operations.pushCurrentBranch({
-            repository: record,
-            workingDirectory: record.checkoutPath,
+            repository: selected,
+            workingDirectory: selected.checkoutPath,
           });
           return "";
         },

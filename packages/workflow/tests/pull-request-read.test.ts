@@ -30,7 +30,7 @@ import type { WorkflowRunDatabase } from "../mod.ts";
 import { dropRootClose } from "./support/replay.ts";
 import { raised, runWorkflowDocument } from "./support/composition.ts";
 import { gitHubSource } from "../src/deno/composition/github.ts";
-import { PULL_REQUEST_READ } from "../src/deno/composition/pull-request-reads.ts";
+import { PULL_REQUEST_READ } from "../src/deno/composition/pull-request-operations.ts";
 import { collect, execute, inlineSource, isJsonObject } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { readPullRequestEvidence } from "../src/deno/composition/pull-request-evidence.ts";

@@ -116,7 +116,7 @@ function* describeCommit(admitted: GitCommitRequest): Operation<EffectDescriptio
 }
 
 /** What the commit turned out to be, once the repository has been asked. */
-interface Committed {
+export interface Committed {
   readonly parent: string;
   readonly tree: string;
   readonly commit: string;
@@ -136,7 +136,7 @@ function unexpected(reason: string): never {
  * compared and — when it is not what this operation asked for — thrown on,
  * before anything is canonicalized, imported or published.
  */
-function* performCommit(
+export function* performCommit(
   checkout: GitCheckout,
   before: GitCheckoutState,
   message: string,

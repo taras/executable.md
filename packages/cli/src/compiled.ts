@@ -12,6 +12,7 @@ import { compileDataUri } from "@executablemd/core";
 import { runXmd } from "./cli.ts";
 import { useMachineSessions } from "./session-coordinator.ts";
 import { useDenoWorkflowHost } from "./deno-workflow.ts";
+import { denoRunRepositories } from "./run-repositories.ts";
 import {
   isCredentialHelperMode,
   runCredentialHelper,
@@ -64,9 +65,13 @@ if (isCredentialHelperMode(process.argv.slice(2))) {
     // two owners of one conversation.
     // Helper mode receives neither this nor the workflow host: it is not the
     // public CLI and assembles none of it.
+    // The ordinary repository provider, on the same terms the Deno entrypoint
+    // installs it: the binary is Deno, and the helper assembly it hands over is
+    // the one that names this executable rather than a module path.
     yield* runXmd(
       args,
       useCompiledService,
+      denoRunRepositories(HELPER),
       () => useDenoWorkflowHost(HELPER),
       useMachineSessions(),
     );

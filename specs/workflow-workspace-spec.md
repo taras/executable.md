@@ -60,6 +60,34 @@ exits.
 - `--journal` remains a diagnostic trace and is not continuation input.
 - Agent permissions remain caller-selected.
 
+Repository operations are part of that environment under Deno and inside the
+compiled binary. The ordinary provider gives a document the same thirteen
+components a workflow run has, over the caller's own filesystem:
+
+- The **ambient Repository** is the Git checkout the command was run in,
+  discovered once before root expansion. Its identity is the canonical common
+  Git directory and its selected checkout is the canonical checkout root, so a
+  command started in a linked worktree names the same repository as one started
+  in the primary checkout while Git operations act on the worktree. A document
+  that never asks for a repository runs unchanged outside one.
+- `<Repository name url base?>` selects a **managed checkout** beneath
+  `~/.xmd/repositories`, and `<Worktree>` selects a linked one of whichever
+  Repository is in scope. Both survive every execution and are held for one
+  document execution by an exclusive non-blocking advisory lock.
+- Local Git operations happen directly against the selected checkout. There is
+  no transaction, no rollback and no replay, and none is claimed.
+- `<Git.Push>` keeps the observe/adopt/fast-forward/refuse rules and stores
+  private evidence of what it published. `<PullRequest>` is authorized by that
+  evidence and by nothing else, so a new run must publish again.
+- `<Issue>` and the pull-request evidence reads reach the same configured
+  transports under the same host ceilings, retaining nothing.
+
+Node and Bun register the same thirteen declarations and install no operational
+provider, so `xmd syntax` describes one language everywhere and every
+repository operation there reports an absent provider before a lock, a
+credential, a subprocess or a request exists. `<Dir>` needs no provider and
+works everywhere.
+
 ### 2.2 `xmd workflow`
 
 `xmd workflow` executes supported operations against a retained constrained
@@ -813,6 +841,32 @@ run whose history it has just replaced.
 
 ## 6. Repository and Worktree
 
+`<Repository>`, `<Worktree>` and `<Dir>` are one component language with two
+providers behind it (§2.1). What an author writes — the forms, the props, what
+`as` binds, and the refusal vocabulary — is the same either way; what differs
+is what a checkout *is*.
+
+Under a workflow run a checkout is retained Workspace state: creation identity
+is a durable effect, placement is Workspace-relative, and a completed effect
+restores from the journal. That is what the rest of this section describes.
+
+Under an ordinary `xmd run` a checkout is a directory. `<Repository>` and
+`<Worktree>` select a managed checkout beneath `~/.xmd/repositories`, described
+by a closed version 1 sidecar and held for one document execution by an
+exclusive non-blocking advisory lock; reuse compares creation identity alone
+and never resets, cleans, fetches, repairs or deletes; and a Worktree written
+outside a lexical `<Repository>` belongs to the ambient Repository the command
+was run in. Nothing there is retained, replayed or forkable, and none of the
+durability this section states applies to it.
+
+What both share is the composition value a component observes: a Repository
+selection carries a provider-minted identifier, a display name, the
+credential-free repository identity and the selected checkout path, and grants
+nothing. Every operation authenticates the selection it was handed against the
+installed provider's private state before it touches Git, so a replaced
+contextual Repository can misname a checkout and be refused but can never reach
+one.
+
 `<Repository>`, `<Worktree>` and `<Dir>` are ordinary registered defaults that
 the workflow host installs for a live or partial execution, alongside the
 document filesystem. A repository-local component with one of those names is
@@ -979,6 +1033,19 @@ Everything the lexical directory covers reads and writes through it, including
 contextual way `<File>` writes one.
 
 ## 7. Git operations
+
+The four Git components are likewise one language with two providers. Which
+checkout one acts on is decided the same way in both: by the Repository in
+scope and by the contextual working directory, neither of which carries
+authority.
+
+Under a workflow run each is a durable Workspace effect, or — for Push — a
+reconciled Git-host effect, and that is what the rest of this section
+describes. Under an ordinary `xmd run` the same authored transitions happen
+directly against the selected checkout: no transaction encloses them, nothing
+rolls back, nothing replays, and no such claim is made. Push keeps the
+observe/adopt/fast-forward/refuse rules and, instead of a reconciliation
+record, leaves private evidence in the provider instance that verified it.
 
 Git operations require a contextual Repository or Worktree checkout. They use
 the transactional Workspace Git implementation, not an implicit host command.
@@ -2178,6 +2245,11 @@ retained no checkpoint remains unassociated.
 
 ## 9. Replay and continuation
 
+Everything in this section is workflow-only. An ordinary `xmd run` has no
+WorkflowRun, no retained history and nothing to replay: its repository
+operations are performed once per execution, and a second run is a second
+question rather than a continuation of the first.
+
 Replay rehydrates the Effection tree. Ephemeral structure executes again;
 durable observations and mutations restore.
 
@@ -2335,6 +2407,14 @@ delete` (§12), which no document can reach.
 
 ### 10.2 Git-host effects
 
+The reconciliation described here is a workflow run's. Under an ordinary run
+there is no history to reconcile against: a pull request is observed once,
+created or updated at most once inside that execution, and decided by one exact
+observation afterwards, and what authorizes it is the provider instance's own
+record of publishing the branch rather than a journal scan. Within one
+invocation the attempt happens at most once; across a process interruption
+there is no exactly-once claim.
+
 A **Git host** is an external service that owns remote Git repositories and
 associated collaboration objects such as branches and pull requests. GitHub is
 one Git-host adapter. A Git host is distinct from the local Git capability of
@@ -2486,6 +2566,12 @@ No separate local `started` and `completed` journal protocol is required. A
 missing result causes reconciliation under the same deterministic identity.
 
 ### 10.3 Issue effects
+
+The durable envelope described here is a workflow run's. Under an ordinary run
+`<Issue>` reaches the same configured transport under the same host ceiling
+with no envelope at all: identity is that execution's own opaque invocation
+identity together with the engine's expansion identity, an upsert presents an
+idempotency key derived from them, and nothing is retained.
 
 An **Issue provider** is an external service that owns a collection of issues.
 GitHub and Atlassian Cloud are Issue-provider adapters.
@@ -3007,6 +3093,15 @@ is outside the initial local capability set; Worker Shell follows §10.4. A late
 Cloudflare-hosted or workerd-backed provider may install the same Workspace and
 lifecycle contracts; documents do not choose that topology.
 
+An ordinary `xmd run` has a topology of its own beside this one. Managed
+checkouts live under `~/.xmd/repositories`, in `repositories/<digest>/` and
+`worktrees/<digest>/<digest>/` slots holding a `checkout/` directory and a
+`metadata.json` sidecar, with lock sidecars under `locks/<kind>/<digest>.lock`
+outside the slot they protect. Every authored string — a name, a locator — is
+present only as a digest, so no name a document writes decides a path. It uses
+the same host authentication and the same `XMD_WORKFLOW_GITHUB_ISSUES` and
+`XMD_WORKFLOW_GITHUB_PULL_REQUESTS` configurations this host already reads.
+
 The local lifecycle adapter owns a non-blocking exclusive advisory lock on one
 deterministic sidecar per run. The open file belongs to the workflow executor's
 scope and the operating system releases it when the process exits. The exact
@@ -3256,7 +3351,11 @@ fetch operation requires its own language and durability contract.
 | caller-owned storage transaction | built by #291; Workspace mutations join it in #365 |
 | provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; document deletion (§10.1) built by #567 for both providers; process capabilities unbuilt (#218) |
 | `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; both acquire #367's executor lock |
-| `<Repository>`, `<Worktree>` and `<Dir>` composition | built by #293, Deno provider only |
+| `<Repository>`, `<Worktree>` and `<Dir>` composition under a workflow run | built by #293, Deno provider only |
+| the same thirteen declarations under every runtime | built by #643: one shadowable array consumed by the workflow attachment, `xmd syntax`, `xmd plan` and an ordinary document execution |
+| `<Repository>`, `<Worktree>` and the ambient Repository under an ordinary run | built by #643, Deno and compiled only: managed checkouts under `~/.xmd/repositories` with version 1 sidecars and execution-owned non-blocking locks, and the checkout the command was run in as the default Repository. Node and Bun install no operational provider |
+| local Git operations and `Git.Push` evidence under an ordinary run | built by #643, Deno and compiled only: the same authored transitions with no transaction and no replay, and a private per-execution Push evidence entry that authorizes `<PullRequest>` and crosses no run |
+| `<Issue>` and pull-request reads under an ordinary run | built by #643, Deno and compiled only: the same transports and ceilings with no durable envelope, keyed by this execution's own invocation identity |
 | transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | built by #294, Deno provider only |
 | `<Issue>` read and upsert, and the `issue_effect` boundary (§10.3) | built by #296; GitHub middleware, Deno host |
 | `<PullRequest.Reviews>`, `<PullRequest.Comments>`, `<PullRequest.Checks>` (§7.7) | built by #576; GitHub middleware, Deno host. Named by canonical URL and asked of `PullRequestApi`, which carries the upsert too; ordinary durable reads rather than reconciled effects, inheritable by a fork; complete or unavailable, never truncated. Which URLs may be read is operator configuration |

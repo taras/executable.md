@@ -116,6 +116,28 @@ paths relative to cwd, and the engine's own file access is written that way:
 component search directories (`["./components", "./"]`) are relative, and
 resolved paths in the journal (`"components/Greeting.md"`) are relative.
 
+#### Lexical working directories
+
+Three components produce the contextual working directory the operations above
+resolve against, and each restores the enclosing one when its invocation ends —
+on success, failure and cancellation alike.
+
+- `<Repository name url base?>` expands its content at the selected checkout.
+- `<Worktree name branch base?>` expands its content at the linked checkout it
+  selected of the Repository in scope.
+- `<Dir path>` expands its content at `path`, reading a relative one against
+  the directory already in effect. It selects no repository.
+
+Written self-closing with `as`, Repository and Worktree render nothing and bind
+the checkout path instead, which is what lets a later sibling `<Dir path={…}>`
+render descendants there.
+
+Every consumer of the contextual working directory observes the selected
+checkout: a process a document runs, a `<Session>` an agent is launched into,
+and every relative document path. Which repository a Git element acts on is
+therefore decided by where it is written, and the same element inside a `<Dir>`
+at a linked worktree acts on that worktree.
+
 #### Document data and engine control plane
 
 Two kinds of filesystem access are separate boundaries, and the separation is
@@ -2632,6 +2654,23 @@ included, and a reserved registration overrides the repository. Only genuine
 absence falls through to a default: a candidate that exists but cannot be read,
 imported, parsed, or compiled fails where it is loaded, so a broken local
 component is never quietly replaced.
+
+#### The run profile's repository declarations
+
+Thirteen names — `Repository`, `Worktree`, `Dir`, `Git.Switch`, `Git.Add`,
+`Git.Commit`, `Git.Push`, `PullRequest`, `PullRequest.Reviews`,
+`PullRequest.Comments`, `PullRequest.Checks`, `IssueTracker` and `Issue` — are
+ordinary registered defaults in tier 5. A repository-local Markdown or
+TypeScript component of any of those names is chosen ahead of them, exactly as
+it is ahead of any other package's default, and for its own scope alone.
+
+They are one array with several consumers: an ordinary document execution, a
+workflow attachment, `xmd syntax`, and `xmd plan`'s validation and generation.
+Registering them installs no provider, discovers no repository, acquires no
+lock, spawns no Git and reads no credential — describing an environment mints
+nothing. What each name *does* is decided by whichever repository provider the
+command installed (§8.1), and a host that installed none still resolves every
+one of them.
 
 The bundle tier exists only inside a workflow run, and such a run searches no
 repository directories at all — so a declared name resolves to the exact source
@@ -8279,6 +8318,45 @@ workflow and returns a `DocumentExecution` handle. Options:
 - `secretDetection?` — detect credentials before durable events persist
   (default: enabled)
 
+#### The host's repository provider
+
+A document execution reaches repository operations only through the provider
+the command installed inside the execution scope, before the root document is
+imported. There are two, and they differ in lifetime and authority rather than
+in what an author writes.
+
+The **ordinary provider** is what the Deno source entrypoint and the compiled
+binary install for `xmd run` and for an approved `xmd plan --run`. Constructing
+it mints a fresh opaque invocation identity and empty state, both private to
+that one execution:
+
+- **Ambient discovery** happens once, before root expansion, from the
+  invocation's starting directory: the canonical checkout root, the canonical
+  common Git directory, the object format, the current HEAD and branch, the
+  locally recorded admitted `origin` when there is one, and the recorded default
+  branch. Being outside a Git checkout is not a startup failure — only an
+  element that needs a repository refuses, and it names how to run inside one.
+- **The invocation identity** names this execution to a service. It is not a
+  prop, a Context value, a component result, a middleware answer or a journal
+  event; it is neither addressable nor reusable, and the engine's own
+  `Expansion.id` names the authored site inside it.
+- **The journal is not authority.** `--journal` writes a diagnostic trace that
+  starts from a path that did not exist; nothing reads one back. A run with an
+  in-memory stream and a run with `--journal` perform the same live operations,
+  the same number of times, and a later run starts with a new identity, empty
+  evidence and a new request.
+
+The **retained provider** is what a workflow host installs inside its Workspace
+attachment. Its operations are durable effects keyed by the WorkflowRun, so a
+completed one restores from the journal without contacting anything.
+
+Node and Bun install neither. They register the same declarations (§5.3), and
+every repository operation there reports an absent provider before a lock, a
+credential, a subprocess or a request exists.
+
+A nested `<Execution host="run">` child constructs a provider of its own, so its
+identity, its locks and its evidence do not reach its parent or a sibling.
+
 #### Secret detection
 
 Every execution refuses to persist a durable event that carries a credential.
@@ -11439,6 +11517,39 @@ timed.
 | NEX16–NEX22 | Host-profile authority | `<Execution>` outside a canonical `<Test>`, under a repository `Test`, and with no trusted host profile each refuse; middleware that returns without delegating, that delegates twice, or that delegates another invocation's request publishes nothing; a declaration outside `<Execution>` refuses; a repository component of a declaration's name is an ordinary component |
 | NEX23–NEX31 | Authority transport | A canonical `<Test>` whose host attached no installer refuses; installers planted under the delivery context's name are handed nothing and displace no real delivery; providers planted under the former public context are ignored; public `Component` middleware cannot change bound/unbound classification, rescue an unbound child failure, or suppress early publication; host middleware sees no replacement operation and cannot mutate the frozen profile or props; the `<Test>` behavior hook is called with the test's props alone, so middleware and a second loaded copy composing there acquire nothing |
 | NEXH1–NEXH4 | Production assembly | Under `xmd test`, a child resolves `./dir/kebab-name.md` and `file.md#Target`, runs a foreground command through the entrypoint's own adapter, collects a diagnostic journal, leaves no file behind for inline source, and refuses `<WorkflowRun>` on a host with no workflow profile |
+
+### Tier ORC — Repository composition under an ordinary run (§5.3, §8.1)
+
+Every case distinguishes what a *document* observed from what the *host*
+holds, because that is the boundary the two profiles differ across. Real Git
+repositories, a real managed root and a real second process carry the
+canonical-identity, linked-worktree and kernel-lock claims; injected roots,
+transports, credential readers and gates carry the rest. No case points at the
+user's own `~/.xmd/repositories`.
+
+| # | Test | Verify |
+|---|------|--------|
+| ORC1 | One declaration surface | All thirteen names appear in the catalog with complete contracts; a repository file of one of those names shadows the default; catalog construction performs no ambient discovery, lock, Git, credential or network operation |
+| ORC2 | Runtime declaration parity | The same catalog assertion holds under Deno, Node and Bun; on a runtime that installs no operational provider, representative Repository, Worktree, Git, Issue and PullRequest forms each report an absent provider with zero mutation, and `<Dir>` still works |
+| ORC3 | Ambient primary checkout | From a normal repository, root Switch/Add/Commit select the ambient Repository and the contextual checkout; outside Git, a root Worktree, Git operation or PullRequest refusal names how to run inside one |
+| ORC4 | Ambient linked worktree | Invoked from a linked worktree, Repository identity follows the canonical common directory, Git acts on that worktree's root, and the primary checkout is untouched |
+| ORC5 | Origin is not local authority | A repository with no `origin` creates a Worktree and performs local Git; Push and PullRequest refuse before a credential, session or transport exists |
+| ORC6 | Lexical working directories | Repository, Worktree and Dir bodies each observe their own checkout, and the enclosing directory is restored on success and on a printed failure |
+| ORC7 | Session placement | A Session launched in a managed Worktree receives that Git root and a distinct worktree session key; `.git`-file discovery remains the boundary |
+| ORC8 | Persistent lifecycle | Managed paths, metadata and working files survive normal completion, authored failure and cancellation; no teardown Git or delete command occurs |
+| ORC9 | Compatible reuse | A second invocation with the same immutable request reuses the same path and preserves a moved branch and a later commit while revalidating owner, origin, object format and creation commit |
+| ORC10 | Conflict is non-mutating | A changed base, Worktree branch or base, metadata, origin, common directory, object format or owner relationship refuses, and the slot's entries and sidecar are identical before and after |
+| ORC11 | Partial creation | A metadata-free slot in exactly the pre-exposure state is adopted and receives its sidecar; an incompatible or non-empty one refuses and remains byte-identical |
+| ORC12 | Exclusive ownership | A second process selecting the same slot is refused while the first holds it; another slot succeeds concurrently; normal release permits a later owner and the checkout remains |
+| ORC13 | Live local Git | Switch, Add and Commit keep their authored semantics and make real, non-transactional changes; a failure claims neither rollback nor replay |
+| ORC14 | Live Push evidence | A performed or already-equal Push stores exact private evidence; a Push of another branch, checkout, origin, destination or commit does not authorize a PullRequest; the latest publication of a destination decides |
+| ORC15 | Evidence cannot cross runs | A PullRequest succeeds only after an exact Push in the same execution; a new run must publish again, and copying a Context value, a result or a previous trace grants nothing |
+| ORC16 | Live Issues | Configured reads and upserts use the existing normalized contracts and this execution's own identity; absent or out-of-ceiling configuration sends no credential and no request |
+| ORC17 | Live PullRequests | Configured reviews, comments and checks reads, and a Push-authorized upsert, run under ordinary Deno; the read ceiling and the local evidence check both precede credential and network access |
+| ORC18 | The journal is diagnostic | The same fixture without and with `--journal` performs the same live operations once per invocation; the trace is newly created and never consumed as continuation or evidence |
+| ORC19 | Nested run profile | An isolated `host="run"` child receives the declarations and a fresh provider; its evidence and locks reach neither its parent nor a sibling |
+| ORC20 | Retained workflow regression | Repository and Worktree replay, transactional Git, Push and pull-request history evidence, Issue effects, forks and completed replay keep their records, identities, provider call counts and native-launch refusal unchanged |
+| ORC21 | Compiled binary | A compiled smoke creates a root-level ambient Worktree, runs a command there, proves `.git` is a file and the checkout persists after exit; a second gated process proves lock refusal and release |
 
 
 ---

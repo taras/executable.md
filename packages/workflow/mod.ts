@@ -146,25 +146,21 @@ export type {
 } from "./src/composition/git-records.ts";
 export {
   destinationRefFor,
-  filteredRepositoryIdentity,
   GIT_PUSH,
   gitPushInputsJson,
   gitPushNaturalKeyJson,
   gitPushObservationsJson,
   gitPushPreStateJson,
-  gitPushRepositoryIdentityJson,
   gitPushResultJson,
   parseGitPushInputs,
   parseGitPushNaturalKey,
   parseGitPushObservations,
   parseGitPushPreState,
   parseGitPushRecord,
-  parseGitPushRepositoryIdentity,
   parseGitPushResult,
   PUSH_REMOTE,
   pushExpectation,
   refspecFor,
-  sameRepositoryIdentity,
 } from "./src/composition/git-push-records.ts";
 export type {
   GitPushExpectation,
@@ -173,7 +169,6 @@ export type {
   GitPushObservations,
   GitPushOutcome,
   GitPushPreState,
-  GitPushRepositoryIdentity,
   GitPushRequest,
   GitPushResult,
 } from "./src/composition/git-push-records.ts";
@@ -216,7 +211,10 @@ export type {
   PullRequestUpdateKey,
 } from "./src/composition/pull-request-records.ts";
 export { admitPushEvidence } from "./src/composition/push-evidence.ts";
-export { useCompositionComponents } from "./src/composition/installation.ts";
+export {
+  COMPOSITION_REGISTRATIONS,
+  useCompositionComponents,
+} from "./src/composition/installation.ts";
 
 export { ISSUE_API, IssueApi, NoIssueProvider } from "./src/issue/api.ts";
 export type {
@@ -409,6 +407,13 @@ export {
 } from "./src/suspension/api.ts";
 export type { WorkflowSuspensionApi, WorkflowSuspensionRequest } from "./src/suspension/api.ts";
 export { SUSPENSION_ANSWER } from "./src/suspension/answer.ts";
+export {
+  filteredRepositoryIdentity,
+  parseRepositoryIdentity,
+  repositoryIdentityJson,
+  sameRepositoryIdentity,
+} from "./src/composition/selection.ts";
+export type { RepositoryIdentity } from "./src/composition/selection.ts";
 export {
   WorkflowAnswerDeliveryError,
   WorkflowInputDelivery,

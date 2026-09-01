@@ -20,6 +20,7 @@ import * as net from "node:net";
 import { API, Config, Service, fetch, useHostFiles } from "@executablemd/runtime";
 import { runXmd } from "../src/cli.ts";
 
+import { unsupportedRepositories } from "../src/run-repositories.ts";
 /**
  * The exit continuation `exit()` reaches for. `main()` installs one under this
  * name; a suite that drives `runXmd` directly installs its own so a command's
@@ -109,17 +110,21 @@ function* drive(args: string[], options: DriveOptions = {}): Operation<Driven> {
 
     yield* useHostFiles();
 
-    yield* runXmd(args, function* () {
-      serviceInstalled = true;
-      yield* Service.around({
-        *start() {
-          throw new Error("the run started a service");
-        },
-      });
-      if (options.inScope) {
-        yield* options.inScope();
-      }
-    });
+    yield* runXmd(
+      args,
+      function* () {
+        serviceInstalled = true;
+        yield* Service.around({
+          *start() {
+            throw new Error("the run started a service");
+          },
+        });
+        if (options.inScope) {
+          yield* options.inScope();
+        }
+      },
+      unsupportedRepositories,
+    );
 
     return { status, stderr, reads, events, serviceInstalled, deadlineReads };
   });

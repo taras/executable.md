@@ -74,8 +74,8 @@ import { content, hasContent } from "@executablemd/core";
 import type { PropsSchema, ReturnsSchema } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import { PullRequestAPI } from "../pull-request-api.ts";
-import { currentRepository } from "../context.ts";
+import { PullRequestOperations } from "../pull-request-operations.ts";
+import { selectedRepository } from "../context.ts";
 import { PullRequestAuthorityError } from "../errors.ts";
 import { pullRequestResultJson } from "../pull-request-records.ts";
 
@@ -145,7 +145,7 @@ export default function* PullRequest(props: Record<string, Json>): Operation<Jso
   // one that was published.
   const body = (yield* hasContent()) ? yield* content() : "";
 
-  const repository = yield* currentRepository();
+  const repository = yield* selectedRepository();
   if (repository === undefined) {
     throw new PullRequestAuthorityError(
       "no-repository-context",
@@ -154,8 +154,8 @@ export default function* PullRequest(props: Record<string, Json>): Operation<Jso
     );
   }
 
-  const result = yield* PullRequestAPI.operations.upsert(
-    {
+  const result = yield* PullRequestOperations.operations.upsert({
+    pullRequest: {
       // Normalized once, here: absence is `null` from this point on, because
       // the durable request is JSON and a member that is sometimes missing
       // would be a second shape rather than a value.
@@ -165,12 +165,15 @@ export default function* PullRequest(props: Record<string, Json>): Operation<Jso
       // trimming or reflowing it here would publish something nobody authored.
       body,
       draft: props.draft === true,
-      // The Repository's own initial branch, retained when it was created,
+      // The Repository's own initial branch, pinned when it was selected,
       // rather than whatever its default branch is at the host right now.
       base:
-        typeof props.base === "string" && props.base !== "" ? props.base : repository.primaryBranch,
+        typeof props.base === "string" && props.base !== ""
+          ? props.base
+          : repository.identity.primaryBranch,
     },
-    { repository, workingDirectory: yield* cwd() },
-  );
+    repository,
+    workingDirectory: yield* cwd(),
+  });
   return pullRequestResultJson(result);
 }

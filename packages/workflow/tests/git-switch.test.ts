@@ -64,6 +64,10 @@ import {
 import type { LoadedGitApi } from "./support/composition.ts";
 import { committedRoot, dropRootClose, latestRoot, publishedRoots } from "./support/replay.ts";
 
+import {
+  filteredRepositoryIdentity,
+  type RepositorySelection,
+} from "../src/composition/selection.ts";
 /**
  * Two branches whose content differs, plus one file that does not.
  *
@@ -109,13 +113,17 @@ function isInfrastructureFailure(value: unknown): value is GitOperationInfrastru
 }
 
 /** A well-formed record naming a Repository nothing retains. */
-const FORGED = Object.freeze({
+const FORGED: RepositorySelection = Object.freeze({
+  selection: "forged",
   name: "ghost",
-  locatorFingerprint: "0".repeat(64),
-  requestedBase: null,
-  creationCommit: "0".repeat(40),
-  primaryBranch: "main",
-  objectFormat: "sha1" as const,
+  identity: Object.freeze({
+    name: "ghost",
+    locatorFingerprint: "0".repeat(64),
+    requestedBase: null,
+    creationCommit: "0".repeat(40),
+    primaryBranch: "main",
+    objectFormat: "sha1" as const,
+  }),
   checkoutPath: "/repositories/ghost",
 });
 
@@ -128,7 +136,7 @@ const FORGED = Object.freeze({
  */
 function runForged(
   database: WorkflowRunDatabase,
-  record: RepositoryRecord,
+  record: RepositorySelection,
   source: string,
   options: WorkflowWorkspaceOptions,
 ): Operation<Json> {
@@ -599,15 +607,27 @@ describe("workflow Git.Switch selection", () => {
       expect(yield* retainedRepositories(substitutedRun)).toHaveLength(1);
       expect(yield* gitEvents(substitutedRun)).toHaveLength(0);
 
-      // And a context carrying the exact retained record still supplies no
-      // place: the working directory a self-closing Repository leaves behind is
-      // the Workspace root, which is inside no checkout. The record is the one
-      // the first run retained, which the same fixture retains again here —
+      // And a context carrying the retained Repository's own facts, exactly,
+      // still supplies no authority: a selection is what this provider minted,
+      // not what a value says about itself. The identity here is the one the
+      // first run retained, which the same fixture retains again here —
       // creation identity is a function of the name, the url and the base.
       const [retained] = yield* retainedRepositories(unretainedRun);
       const exactRun = yield* createRun({ runId: "exact" });
       const exact = yield* raised(
-        runForged(exactRun, retained?.record ?? FORGED, source, countingOptions(counting)),
+        runForged(
+          exactRun,
+          retained === undefined
+            ? FORGED
+            : {
+                ...FORGED,
+                name: retained.record.name,
+                identity: filteredRepositoryIdentity(retained.record),
+                checkoutPath: retained.record.checkoutPath,
+              },
+          source,
+          countingOptions(counting),
+        ),
       );
       expect(causedBy(exact, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
       expect(subcommands(counting.counters)).not.toContain("switch");
@@ -926,7 +946,7 @@ describe("workflow Git composition routing", () => {
 /** A component that switches through a loaded copy's Api, on a chosen record. */
 function probe(
   copy: LoadedGitApi,
-  observe: (repository: RepositoryRecord) => RepositoryRecord,
+  observe: (repository: RepositorySelection) => RepositorySelection,
 ): ComponentRegistration {
   return {
     name: "Probe",
@@ -952,7 +972,7 @@ function probe(
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
 interface MutableSwitchRequest {
-  repository: Mutable<RepositoryRecord>;
+  repository: Mutable<RepositorySelection>;
   workingDirectory: string;
   branch: string;
   base: string | undefined;

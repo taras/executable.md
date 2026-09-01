@@ -19,6 +19,7 @@ import { compileTempFile } from "@executablemd/core";
 import { runXmd } from "./cli.ts";
 import { unassembledMachineSessions } from "./session-coordinator.ts";
 import { unsupportedWorkflowHost } from "./workflow.ts";
+import { unsupportedRepositories } from "./run-repositories.ts";
 import { useNodeService } from "./node-service.ts";
 
 const ENTRYPOINT = fileURLToPath(import.meta.url);
@@ -51,5 +52,16 @@ await main(function* (args) {
   // build either. Advertising the same names is what makes the refusal say so:
   // every advertised operation stops before provider work, while ordinary ACP
   // work is unaffected.
-  yield* runXmd(args, useNodeService, unsupportedWorkflowHost, unassembledMachineSessions());
+  // The same thirteen repository components, and no provider that operates
+  // any of them. This runtime has no kernel-released advisory lock to hold a
+  // managed checkout with, so a Repository, Worktree, Git, Issue or PullRequest
+  // operation reports an absent provider before a local or remote change could
+  // happen. `xmd syntax` still describes one language everywhere.
+  yield* runXmd(
+    args,
+    useNodeService,
+    unsupportedRepositories,
+    unsupportedWorkflowHost,
+    unassembledMachineSessions(),
+  );
 });
