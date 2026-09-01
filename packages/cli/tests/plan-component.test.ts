@@ -284,7 +284,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       expect(Reflect.get(Object(plan?.origin), "origin")).toBe(PLAN_ORIGIN);
       // The description a document author reads is the packaged Component's own
       // frontmatter, so the asset and the entry describing it are one text.
-      expect(plan?.description).toContain("Create and review an executable Plan from a Prompt.");
+      expect(plan?.description).toContain("Create an XMD program from a Prompt.");
 
       for (const category of catalog.categories) {
         const names = category.entries.map((entry) => entry.name);

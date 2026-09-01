@@ -7,11 +7,8 @@ props:
 returns:
   type: string
 description: >-
-  Create and review an executable Plan from a Prompt.
-  `<Plan as="approved">Inspect this project and write the complete XMD
-  program.</Plan>` expands its content once with the document's existing
-  capabilities, then uses the standard checking and review flow. Completed
-  authorship is retained with the enclosing document.
+  Create an XMD program from a Prompt. `<Plan as="program">Ask for the user's
+  age.</Plan>` expands its content normally to form the complete Prompt.
 as: Required. The exact approved Plan source after teardown and structural admission.
 context: The complete Prompt, expanded once before authorship.
 ---
