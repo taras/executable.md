@@ -1888,7 +1888,7 @@ run but are absent from the diagnostic trace.
 | `src/modifiers/persist.ts` | `persistFactory` |
 | `src/modifiers/timeout.ts` | `timeoutFactory` |
 | `packages/runtime/duration.ts` | `asDuration()`, `parseDuration()`, `durationError()` — the one duration grammar |
-| `packages/runtime/config.ts` | `Config`, and the validated `timeout` / `timeoutExec` / `timeoutFetch` operations |
+| `packages/runtime/config.ts` | `Config`, the validated `timeout` / `timeoutExec` / `timeoutFetch` operations, and the validated `verbose` operation |
 | `src/modifiers/daemon.ts` | `daemonFactory` — long-running subprocess terminal modifier |
 | `src/modifiers/ephemeral.ts` | `ephemeralFactory` — replay-safe live eval wrapper |
 | `src/modifiers/service.ts` | `serviceFactory` — scoped service attachment |
@@ -1901,8 +1901,8 @@ run but are absent from the diagnostic trace.
 | `src/output/mod.ts` | Barrel export for output middleware |
 | `src/output/normalize.ts` | `useNormalizedOutput()` — whitespace normalization middleware (§9.4) |
 | `src/output/terminal.ts` | `useTerminalOutput()` — terminal ANSI formatting middleware (§9.5) |
-| `packages/cli/src/cli.ts` | Runtime-neutral CLI (separate `cli` workspace package) with `--verbose`, `--journal`, and `--raw` flags; Output Api stream consumption (§9.6); installs `<Verbose>` (§6.20) |
-| `packages/cli/src/verbose-component.ts` | CLI run-profile `<Verbose>` declaration and host-verbose implementation (§6.20) |
+| `packages/cli/src/cli.ts` | Runtime-neutral CLI (separate `cli` workspace package) with `--verbose`, `--journal`, and `--raw` flags; Output Api stream consumption (§9.6); seeds `Config.verbose` and registers `<Verbose>` (§6.20) |
+| `packages/cli/src/verbose-component.ts` | The static CLI run-profile `<Verbose>` declaration, whose implementation reads `Config.verbose` (§6.20) |
 | `packages/cli/src/service-host.ts` | shared XMD service handshake observer and supervised host-process adapter |
 | `packages/cli/src/{deno,node,bun,compiled}-service.ts` | runtime-named service adapters for token, environment and stdio behavior |
 | `packages/cli/src/{deno,node,bun,compiled}.ts` | Entrypoints — each installs matching `API.Env` and `API.Service` adapters, then calls `runXmd` |
@@ -8267,23 +8267,57 @@ Running the expensive integration probe now.
 </Verbose>
 ```
 
-The component declares no props and renders text. In an ordinary non-verbose
-run it returns the empty string and does not expand its content, so effects
-inside it do not run and failures inside it do not settle anything. In a verbose
-run it renders its content at the invocation site, under the same output, error,
+The component declares no props and renders text. Where verbosity is off it
+returns the empty string and does not expand its content, so effects inside it
+do not run and failures inside it do not settle anything. Where verbosity is on
+it renders its content at the invocation site, under the same output, error,
 capture and projection rules as any other text component. `as` is ordinary text
 capture: it binds the rendered verbose text, or `""` when verbosity is off.
 
+#### Where the answer comes from
+
+Verbosity is contextual configuration, read where the element is written.
+`Config.verbose` (§Config of specs/acp-client-spec.md) is a boolean that is
+`false` until something says otherwise; `xmd run` seeds it for the whole
+execution from the `--verbose` it already resolved, before the root expands; and
+the component reads it each time it expands, before it decides anything.
+
+A component may install a nearer value for its own content the way a block's
+own `timeout=` outranks the run's exec default:
+
+```typescript
+yield* Config.around({ verbose: () => true }, { at: "min" });
+```
+
+That decides what its content renders and nothing else. The scopes enclosing it
+and the siblings after it read the value that already applied to them, restored
+by ordinary structured teardown whether the content finished, failed or was
+cancelled. A configured value that is not a boolean fails where `<Verbose>`
+reads it, before its content expands.
+
+What the command line prints is a separate question with a separate answer. The
+journal file, the `--verbose` event echo on stderr, a value root's
+observational output and the testing report's own verbosity are process
+presentation, owned by the command and read from the flag — so a document
+decides what it renders and never what the process presents.
+
 `<Verbose>` is a CLI run-profile default, not a core component and not a
-reserved name. The CLI installs it from the same declaration `xmd syntax` reads,
-with the host's already-resolved verbosity flag closed over by the component
-implementation. No document context, prop, binding or middleware answer decides
-whether the host is verbose, and a repository `Verbose.md` is chosen ahead of
-the default.
+reserved name. The CLI registers the same static declaration `xmd syntax`
+describes, and `xmd syntax` reads that declaration's metadata without invoking
+it, so inspection consults no configuration at all. A repository `Verbose.md` or
+`Verbose.ts` is chosen ahead of the default.
+
+The profiles are unchanged by where the answer comes from: `xmd run` has
+`<Verbose>`, an approved Plan executed by `xmd plan --run` has it, an
+`<Execution host="run">` child has it, and a direct `xmd test` root does not —
+even under `--verbose`.
 
 It opens no scope, acquires no resource, holds no authority and has no durable
-effect of its own. Its skipped body is absence, not a retained decision; replay
-therefore follows ordinary expansion under the host options for that execution.
+effect of its own, and contextual verbosity takes no part in durable identity,
+authorization, replay admission, retained-effect ownership or journal identity.
+Its skipped body is absence, not a retained decision. Replay of a completed root
+is unchanged, and a live or partial expansion reads the value that applies to
+that execution.
 
 
 ## 7. Entry point
@@ -11469,6 +11503,26 @@ timed.
 | NEX16–NEX22 | Host-profile authority | `<Execution>` outside a canonical `<Test>`, under a repository `Test`, and with no trusted host profile each refuse; middleware that returns without delegating, that delegates twice, or that delegates another invocation's request publishes nothing; a declaration outside `<Execution>` refuses; a repository component of a declaration's name is an ordinary component |
 | NEX23–NEX31 | Authority transport | A canonical `<Test>` whose host attached no installer refuses; installers planted under the delivery context's name are handed nothing and displace no real delivery; providers planted under the former public context are ignored; public `Component` middleware cannot change bound/unbound classification, rescue an unbound child failure, or suppress early publication; host middleware sees no replacement operation and cannot mutate the frozen profile or props; the `<Test>` behavior hook is called with the test's props alone, so middleware and a second loaded copy composing there acquire nothing |
 | NEXH1–NEXH4 | Production assembly | Under `xmd test`, a child resolves `./dir/kebab-name.md` and `file.md#Target`, runs a foreground command through the entrypoint's own adapter, collects a diagnostic journal, leaves no file behind for inline source, and refuses `<WorkflowRun>` on a host with no workflow profile |
+
+### Tier VB — `<Verbose>` (§6.20)
+
+The behavioral rows run the real `xmd run` command against a document on disk,
+so what they observe is what a reader of that command sees. VB5 and VB6 are
+TypeScript rows: one inspects the catalog without running anything, and one
+drives the `xmd plan` command.
+
+| Criterion | Evidence |
+| --- | --- |
+| VB1 | An ordinary run skips verbose content |
+| VB2 | `--verbose` renders verbose content |
+| VB3 | A skipped body does not expand |
+| VB4 | A repository component overrides the registered default |
+| VB5 | `xmd syntax` describes the component |
+| VB6 | `xmd plan --run --verbose` gives the approved Plan `<Verbose>` |
+| VB7 | A run-profile child has `<Verbose>` |
+| VB8 | A direct `xmd test --verbose` root does not have `<Verbose>` |
+| VB9 | Host false is overridden to true for one lexical subtree |
+| VB10 | Host true is overridden to false, the body is skipped, and sibling state is restored |
 
 
 ---

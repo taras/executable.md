@@ -315,13 +315,15 @@ specs/native-agent-session-launch-spec.md.
 `Config` (`@executablemd/runtime`, re-exported from `@executablemd/core`) is the
 shared execution config. It carries three optional timeouts in milliseconds, and
 **there is no timeout by default**: each is `undefined` until something
-configures it, and `undefined` means the operation is not bounded.
+configures it, and `undefined` means the operation is not bounded. It carries
+one boolean besides, which bounds nothing.
 
-| Field | Bounds | Consumed by |
-| --- | --- | --- |
-| `timeout` | the entire run, preparation and execution together | the outer run boundary |
-| `timeoutExec` | each exec block | exec blocks and the built-in `timeout` modifier |
-| `timeoutFetch` | each Fetch | Fetch |
+| Field | Default | Bounds or states | Consumed by |
+| --- | --- | --- | --- |
+| `timeout` | `undefined` | the entire run, preparation and execution together | the outer run boundary |
+| `timeoutExec` | `undefined` | each exec block | exec blocks and the built-in `timeout` modifier |
+| `timeoutFetch` | `undefined` | each Fetch | Fetch |
+| `verbose` | `false` | whether the reading scope renders verbose-only content | `<Verbose>` |
 
 Override a field for a scope with
 `yield* Config.around({ timeoutExec: () => 30_000 }, { at: "min" })`. Installing
@@ -330,6 +332,17 @@ enclosing value; it does not clear it. The validated `timeout`, `timeoutExec`
 and `timeoutFetch` operations each return a positive, finite number of
 milliseconds or `undefined`, and throw on any other value (zero, negative, NaN,
 Infinity, or a non-number) before the operation they would bound starts.
+
+`verbose` is not a timeout and is owned by nothing the three timeouts are owned
+by. It is `false` rather than absent — a scope either renders verbose-only
+content or it does not — and it is installed and overridden exactly the way a
+timeout is, so `yield* Config.around({ verbose: () => true }, { at: "min" })`
+decides what the installing scope's descendants render and leaves every
+enclosing scope and every following sibling reading the value they already had.
+The validated `verbose` operation returns that boolean and throws on any other
+value, including one an untyped JavaScript consumer installs, at the point a
+reader asks rather than as truthiness. Configuring it moves no timeout, and
+configuring a timeout does not move it.
 
 Ownership is strict, and nothing falls back to a field it does not own. A
 per-call `timeout` always wins where one is supported; otherwise Fetch resolves

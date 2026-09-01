@@ -19,7 +19,8 @@
  * - `API.Service` — scoped attached service startup (`startService`)
  * - `NativeLauncher` — handing one native agent UI the foreground terminal
  *   (`reserveTerminal`, `flushOutput`, `nativeLaunch`)
- * - `Config` — shared execution config (`timeout`, `timeoutExec`, `timeoutFetch`)
+ * - `Config` — shared execution config (`timeout`, `timeoutExec`, `timeoutFetch`,
+ *   `verbose`)
  *
  * See `apis.ts` for architecture rationale.
  * See `@executablemd/runtime/test` for composable test stubs.
@@ -79,7 +80,7 @@ export type {
   ServiceAttachment,
   ServiceStartOptions,
 } from "./service.ts";
-export { Config, timeout, timeoutExec, timeoutFetch } from "./config.ts";
+export { Config, timeout, timeoutExec, timeoutFetch, verbose } from "./config.ts";
 export type { ConfigApi } from "./config.ts";
 export { asDuration, durationError, parseDuration } from "./duration.ts";
 export type { ProcessExecOptions, ProcessOutcome } from "./apis.ts";

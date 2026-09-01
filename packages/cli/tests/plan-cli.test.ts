@@ -738,8 +738,9 @@ describe(
         expect(yield* readTextFile(join(dir, "greeting.txt"))).toBe("name=Ada loud=false count=");
       });
 
-      // `--run --verbose`: the approved Plan receives the production
-      // run-profile `<Verbose>` component.
+      // VB6 — `--run --verbose`: the approved Plan receives the production
+      // run-profile `<Verbose>` component, and the run's own verbosity is
+      // what it reads.
       yield* useWorkingDirectory(function* (dir, authorshipRoot) {
         const harness = createPlanHarness({ authorshipRoot });
         harness.deps.execute = executor(dir, undefined, undefined, true);

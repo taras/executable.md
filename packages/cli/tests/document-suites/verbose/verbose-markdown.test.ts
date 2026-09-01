@@ -3,7 +3,8 @@
  * runtime corpus.
  *
  * The row evidence lives in `Verbose.test.md`; this wrapper supplies a script
- * for invoking this repository's runtime-specific `xmd` entrypoint and asserts
+ * for invoking this repository's runtime-specific `xmd` entrypoint, the
+ * absolute path of the checked-in fixture components beside it, and asserts
  * only that the Markdown suite produced passing rows.
  */
 
@@ -18,9 +19,34 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { runMarkdownTier } from "../../support/run-markdown-tier.ts";
 
 const XMD = "XMD_VERBOSE_BIN";
+const COMPONENTS = "XMD_VERBOSE_COMPONENTS";
+
+/**
+ * The lexical-override fixtures, by absolute path.
+ *
+ * The rows that use them run from a temporary directory, so a repository-
+ * relative `--include` would name nothing. Taken from this module's own URL
+ * rather than from the working directory, because the corpus launches each
+ * runtime's test process its own way.
+ */
+const COMPONENTS_DIR = fileURLToPath(new URL("./components", import.meta.url));
+
+/** Publish `name` for the child processes the Markdown rows launch. */
+function* useEnv(name: string, value: string): Operation<void> {
+  const previous = process.env[name];
+  process.env[name] = value;
+  yield* ensure(function* () {
+    if (previous === undefined) {
+      delete process.env[name];
+      return;
+    }
+    process.env[name] = previous;
+  });
+}
 
 function quote(argument: string): string {
   return `'${argument.replaceAll("'", "'\\''")}'`;
@@ -36,15 +62,7 @@ function* useXmdScript(): Operation<string> {
   yield* writeTextFile(script, `#!/bin/sh\nexec ${[command, ...args].map(quote).join(" ")} "$@"\n`);
   yield* until(chmod(script, 0o755));
 
-  const previous = process.env[XMD];
-  process.env[XMD] = script;
-  yield* ensure(function* () {
-    if (previous === undefined) {
-      delete process.env[XMD];
-      return;
-    }
-    process.env[XMD] = previous;
-  });
+  yield* useEnv(XMD, script);
   return script;
 }
 
@@ -55,6 +73,7 @@ describe(
     it("runs Verbose.test.md once under the production run command", function* () {
       const run = yield* scoped(function* () {
         yield* useXmdScript();
+        yield* useEnv(COMPONENTS, COMPONENTS_DIR);
         return yield* runMarkdownTier("packages/cli/tests/document-suites/verbose/Verbose.test.md");
       });
       if (!run.completion.ok) {
