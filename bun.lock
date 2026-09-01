@@ -51,7 +51,7 @@
     },
     "packages/acp": {
       "name": "@executablemd/acp",
-      "version": "0.10.2",
+      "version": "0.11.0",
       "dependencies": {
         "@executablemd/core": "workspace:*",
         "@executablemd/runtime": "workspace:*",
@@ -61,7 +61,7 @@
     },
     "packages/cli": {
       "name": "@executablemd/cli",
-      "version": "0.10.2",
+      "version": "0.11.0",
       "bin": {
         "xmd": "./src/node.ts",
       },
@@ -83,11 +83,11 @@
     },
     "packages/code-review-agent": {
       "name": "@executablemd/code-review-agent",
-      "version": "0.10.2",
+      "version": "0.11.0",
     },
     "packages/core": {
       "name": "@executablemd/core",
-      "version": "0.10.2",
+      "version": "0.11.0",
       "dependencies": {
         "@effectionx/context-api": "0.6.0",
         "@effectionx/converge": "0.1.4",
@@ -119,7 +119,7 @@
     },
     "packages/durable-streams": {
       "name": "@executablemd/durable-streams",
-      "version": "0.10.2",
+      "version": "0.11.0",
       "dependencies": {
         "@durable-streams/client": "^0.2.2",
         "effection": "4.1.0",
@@ -127,7 +127,7 @@
     },
     "packages/runtime": {
       "name": "@executablemd/runtime",
-      "version": "0.10.2",
+      "version": "0.11.0",
       "dependencies": {
         "@effectionx/context-api": "0.6.0",
         "@effectionx/fetch": "0.2.1",
@@ -139,7 +139,7 @@
     },
     "packages/test-agent": {
       "name": "@executablemd/test-agent",
-      "version": "0.10.2",
+      "version": "0.11.0",
       "dependencies": {
         "@agentclientprotocol/sdk": "1.3.0",
         "@effectionx/node": "0.2.4",
@@ -169,7 +169,7 @@
     },
     "packages/testing": {
       "name": "@executablemd/testing",
-      "version": "0.10.2",
+      "version": "0.11.0",
       "dependencies": {
         "@effectionx/context-api": "0.6.0",
         "@effectionx/scope-eval": "0.1.3",
@@ -181,7 +181,7 @@
     },
     "packages/web": {
       "name": "@executablemd/web",
-      "version": "0.10.2",
+      "version": "0.11.0",
       "dependencies": {
         "@effectionx/node": "0.2.4",
         "@executablemd/core": "workspace:*",
@@ -208,7 +208,7 @@
     },
     "packages/workflow": {
       "name": "@executablemd/workflow",
-      "version": "0.10.2",
+      "version": "0.11.0",
       "dependencies": {
         "@effectionx/context-api": "0.6.0",
         "@effectionx/fs": "0.3.0",

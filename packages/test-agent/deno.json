@@ -1,6 +1,6 @@
 {
   "name": "@executablemd/test-agent",
-  "version": "0.10.2",
+  "version": "0.11.0",
   "exports": {
     ".": "./mod.ts"
   },
