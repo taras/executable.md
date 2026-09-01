@@ -12,6 +12,7 @@
     "@effectionx/timebox": "0.4.3",
     "@executablemd/core": "workspace:*",
     "@executablemd/durable-streams": "workspace:*",
+    "@executablemd/runtime": "workspace:*",
     "effection": "4.1.0"
   }
 }

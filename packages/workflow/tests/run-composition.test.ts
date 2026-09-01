@@ -353,10 +353,11 @@ describe("ORC5 — origin is not local authority", () => {
     const checkout = yield* useHostCheckout(remote.locator);
     const counting = countingOrdinaryHost();
 
-    yield* runOrdinaryDocument(
-      [`<Git.Switch branch="published" />`, `<Git.Push />`].join("\n"),
-      { root, cwd: checkout.root, host: counting.host },
-    );
+    yield* runOrdinaryDocument([`<Git.Switch branch="published" />`, `<Git.Push />`].join("\n"), {
+      root,
+      cwd: checkout.root,
+      host: counting.host,
+    });
 
     expect(counting.counters.sessions).toEqual([remote.locator]);
     expect(subcommands(counting.counters)).toContain("ls-remote");

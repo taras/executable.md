@@ -389,6 +389,9 @@ importers:
       '@executablemd/durable-streams':
         specifier: workspace:*
         version: link:../durable-streams
+      '@executablemd/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       effection:
         specifier: 4.1.0
         version: 4.1.0

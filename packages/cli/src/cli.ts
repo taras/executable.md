@@ -743,6 +743,7 @@ function* runDocument(
   mode: DocumentMode,
   installService: HostServiceInstaller,
   installRepositories: RepositoryInstaller,
+  childRepositories: RepositoryInstaller,
 ): Operation<Result<void>> {
   const { root, include, verbose, journal, raw, secretDetection, retainProcessOutput } = config;
 
@@ -872,11 +873,13 @@ function* runDocument(
     includes: include,
     secretDetection,
     installService,
-    // Passed rather than inherited: a child runs in an isolated scope, and what
-    // it needs is a *fresh* provider instance of its own. Handing it the
-    // installer is what gives an isolated `host="run"` child its own invocation
-    // identity, its own leases and its own Push evidence.
-    installRepositories,
+    // The *entrypoint's* installer, not this command's. A `host="run"` child is
+    // an ordinary run whatever command is hosting it, so `xmd test` — which
+    // installs no repository provider for its own document — still gives one to
+    // a child that asked to be a run. Passed rather than inherited because a
+    // child runs in an isolated scope and needs a fresh instance: its own
+    // invocation identity, its own leases and its own Push evidence.
+    installRepositories: childRepositories,
     testAgentWorker: yield* readWorkerCommand(),
     plan,
   });
@@ -979,9 +982,12 @@ function* runScopedDocument(
   mode: DocumentMode,
   installService: HostServiceInstaller,
   installRepositories: RepositoryInstaller,
+  childRepositories: RepositoryInstaller = installRepositories,
 ): Operation<Result<void>> {
   try {
-    return yield* scoped(() => runDocument(config, mode, installService, installRepositories));
+    return yield* scoped(() =>
+      runDocument(config, mode, installService, installRepositories, childRepositories),
+    );
   } catch (error) {
     return Err(error instanceof Error ? error : new Error(String(error)));
   }
@@ -1096,6 +1102,8 @@ function* test(
   config: TestConfig,
   args: string[],
   installService: HostServiceInstaller,
+  /** What a `<Execution host="run">` child installs. This command installs none. */
+  installRepositories: RepositoryInstaller,
 ): Operation<void> {
   const patterns = readPatternFlags(args);
   if (patterns.missingValue) {
@@ -1131,9 +1139,10 @@ function* test(
       installService,
       // The outer `xmd test` command installs no operational repository
       // provider. A test that needs the production behavior exercises an
-      // explicit `<Execution host="run">` child, which constructs one of its
-      // own.
+      // explicit `<Execution host="run">` child, which is an ordinary run and
+      // is handed the entrypoint's own installer below.
       unsupportedRepositories,
+      installRepositories,
     );
     if (!result.ok) {
       reportFailure(result.error);
@@ -1175,6 +1184,7 @@ function* test(
       { testing: true },
       installService,
       unsupportedRepositories,
+      installRepositories,
     );
     if (!result.ok) {
       reportFailure(result.error, document.relativePath);
@@ -2101,6 +2111,7 @@ function* dispatch(
         { ...command.config, retainProcessOutput: keepsProcessOutput(command.config.journal) },
         evalFlags.rest,
         installService,
+        installRepositories,
       );
       break;
     }

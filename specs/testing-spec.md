@@ -305,6 +305,14 @@ arbitrary directory is addressable without being a component. A `source` is
 markdown supplied directly and follows the production `run -e` path: it reports
 the `<eval>` identity and writes no file. `props` are the child root's props.
 
+A child runs in the working directory the `<Execution>` was written in, not the
+one the process was launched from. A `<Dir>` or `<TempDir>` around an
+`<Execution>` therefore scopes the child as it scopes everything else in it: a
+relative `target` resolves there, and a host profile that discovers an ambient
+repository discovers it from there. The child's scope does not descend from the
+document's, so this is the trusted host installing what the invocation was
+standing in rather than the child inheriting it.
+
 `host="workflow"`, and the `<WorkflowRun>` scope it requires, are specified in
 issue #454 and are not built: a host that provides no workflow profile refuses
 them, naming that.

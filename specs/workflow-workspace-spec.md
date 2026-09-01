@@ -69,7 +69,11 @@ components a workflow run has, over the caller's own filesystem:
   Git directory and its selected checkout is the canonical checkout root, so a
   command started in a linked worktree names the same repository as one started
   in the primary checkout while Git operations act on the worktree. A document
-  that never asks for a repository runs unchanged outside one.
+  that never asks for a repository runs unchanged outside one. Each execution
+  discovers its own: a nested `<Execution host="run">` builds a provider of its
+  own and discovers from the working directory that `<Execution>` was written
+  in, so a child under a `<Dir>` is in that directory's repository rather than
+  in the one the outer command was started in.
 - `<Repository name url base?>` selects a **managed checkout** beneath
   `~/.xmd/repositories`, and `<Worktree>` selects a linked one of whichever
   Repository is in scope. Both survive every execution and are held for one

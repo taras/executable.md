@@ -520,6 +520,10 @@ describe("deterministic dependencies declared for a nested run", () => {
             configuration: [{ kind: "test-agent", defaultAgent: "test", scenarios: [] }],
           },
           run: undefined,
+          // Unobservable here: the refusal is reached before the child stands
+          // anywhere, and `tmpdir()` is a directory this assertion cannot
+          // depend on having any particular contents.
+          cwd: tmpdir(),
           // deno-lint-ignore require-yield
           *chunk(): Operation<void> {},
         });

@@ -26,7 +26,7 @@ import type { DeclaredMarkdownComponent } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { forEach } from "@effectionx/stream-helpers";
-import { useHostFiles } from "@executablemd/runtime";
+import { API, useHostFiles } from "@executablemd/runtime";
 import { installWebElicitation } from "@executablemd/web";
 import type { Operation, Result } from "effection";
 import {
@@ -159,6 +159,23 @@ function* runProfileChild(
   if (request.host !== "run") {
     throw new Error(`the ${request.host} host profile is not available on this entrypoint`);
   }
+  // First, because everything below resolves against it. This scope inherits no
+  // `API.Env` handler, so without this the child would stand in the *process*
+  // directory: a `<Dir>` around the `<Execution>` would scope every component
+  // in it except the child, the root reference would resolve from somewhere the
+  // document never named, and the repository provider installed below would
+  // discover its ambient Git from whatever checkout the process was launched
+  // in. Installed ahead of the root, the provider and the execution, so all
+  // three agree with the document that asked.
+  yield* API.Env.around(
+    {
+      // deno-lint-ignore require-yield
+      *cwd(): Operation<string> {
+        return invocation.cwd;
+      },
+    },
+    { at: "min" },
+  );
   const root = rootOf(request);
   // `--journal` is the only thing that asks `xmd run` for a diagnostic record,
   // and a declaration is the only thing that asks a child for one. Neither
