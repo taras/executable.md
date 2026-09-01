@@ -51,7 +51,7 @@ import {
   type GitPushPreState,
 } from "../../composition/git-push-records.ts";
 import { beneath } from "../../composition/parse.ts";
-import type { RepositoryIdentity } from "../../composition/selection.ts";
+import { sameRepositoryIdentity, type RepositoryIdentity } from "../../composition/selection.ts";
 import {
   GitHostAmbiguousError,
   GitHostConflictError,
@@ -119,6 +119,21 @@ export interface PushEvidence {
  * says which of them the element was written in. The longest match wins, so a
  * `<Dir>` inside a linked worktree selects the worktree rather than the
  * repository it belongs to.
+ *
+ * ## A candidate is a candidate only under the whole identity
+ *
+ * "The repository" means every member of the identity, compared by
+ * `sameRepositoryIdentity`. A locator fingerprint alone names *where a
+ * repository came from*, and two Repositories selected from one locator under
+ * different names are different repositories with separate leases, separate
+ * placements and separate Push evidence. Admitting on the fingerprint would let
+ * a `<Dir>` into the second one carry the first one's authority — the element
+ * would be authenticated against the Repository in scope and then act in a
+ * checkout that Repository never selected.
+ *
+ * Every checkout of one repository still carries that repository's identity —
+ * a Worktree registers under its owner's — so requiring the whole identity
+ * narrows nothing a document can legitimately reach.
  */
 export function selectCheckout(
   registered: readonly RegisteredCheckout[],
@@ -128,7 +143,7 @@ export function selectCheckout(
 ): RegisteredCheckout {
   let selected: RegisteredCheckout | undefined;
   for (const candidate of registered) {
-    if (candidate.identity.locatorFingerprint !== identity.locatorFingerprint) {
+    if (!sameRepositoryIdentity(candidate.identity, identity)) {
       continue;
     }
     if (!beneath(candidate.root, workingDirectory)) {

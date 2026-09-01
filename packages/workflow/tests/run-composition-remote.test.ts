@@ -19,7 +19,8 @@ import { admitLivePushEvidence } from "../src/deno/run-composition/operations.ts
 import { GitComposition } from "../src/composition/git-api.ts";
 import type { GitPushOutcome } from "../src/composition/git-push-records.ts";
 import { LivePushEvidenceError } from "../src/deno/run-composition/errors.ts";
-import { remoteBranch, remoteRefs, useBareRemote } from "./support/git-remotes.ts";
+import { git, remoteBranch, remoteRefs, useBareRemote } from "./support/git-remotes.ts";
+import type { BareRemote } from "./support/git-remotes.ts";
 import { selectedRepository } from "../src/composition/context.ts";
 import type { RepositorySelection } from "../src/composition/selection.ts";
 import { gitHubSource } from "../src/deno/composition/github.ts";
@@ -31,12 +32,16 @@ import {
   patches,
 } from "./support/github.ts";
 import {
+  causedBy,
   countingOrdinaryHost,
+  fingerprintTree,
+  gitStateOf,
   subcommands,
   raised,
   runOrdinaryDocument,
   recordingAccess,
   rewritingHost,
+  statedIdentity,
   useHostCheckout,
   useManagedRoot,
   useNamedOriginCheckout,
@@ -47,6 +52,7 @@ import {
   REMOTE,
   TOKEN,
   evidenceRoutes,
+  isAuthorityFailure,
 } from "./support/run-composition-tier.ts";
 
 describe("ORC14 — live Push evidence", () => {
@@ -693,5 +699,239 @@ describe("ORC17 — live PullRequests", () => {
     expect(String(failure)).toContain("holds no successful <Git.Push> result");
     expect(store.requests).toHaveLength(0);
     expect(counting.counters.sessions).toEqual([]);
+  });
+});
+
+/**
+ * A checkout is authority only under the whole repository identity.
+ *
+ * Two `<Repository>` elements naming one url under two names are two
+ * repositories: two slots, two advisory leases, two lines of Push evidence.
+ * Every member of their identities is equal except `name`, which is exactly the
+ * case a comparison that stops at the locator fingerprint cannot see — and a
+ * `<Dir>` into the second, written where the first is the Repository in scope,
+ * would carry the first's authority into a checkout it never selected.
+ *
+ * The refusal is asked for at the three surfaces that reach different things: a
+ * local mutation, a publication, and a Git host. The two cases after it are the
+ * controls — one that the same document shape does reach every one of those
+ * boundaries when the identity matches, and one that a Worktree of the
+ * Repository in scope is still reachable, so the comparison is of identities
+ * and not of checkout paths or worktree names.
+ */
+/** Every ref the bare remote holds, as one comparable value. */
+function refsOf(remote: BareRemote): string[] {
+  return [...remoteRefs(remote)].map(([name, commit]) => `${name} ${commit}`).toSorted();
+}
+
+describe("checkout authority is the whole repository identity", () => {
+  /** Deterministic, so no case depends on who this host says its user is. */
+  const IDENT = "Tester <tester@example.test> 0 +0000";
+
+  it("refuses Git, Push and PullRequest in a same-locator Repository the scope did not select", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const root = yield* useManagedRoot();
+    const here = yield* useHostCheckout(remote.locator);
+    const rewriting = () => rewritingHost(GITHUB_LOCATOR, remote.locator);
+
+    // Created once and reused afterwards: what is under test is an operation
+    // written in B, not the creation of either repository.
+    const arranged = String(
+      yield* runOrdinaryDocument(
+        [
+          `<Repository name="alpha" url="${GITHUB_LOCATOR}" as="alpha" />`,
+          `<Repository name="beta" url="${GITHUB_LOCATOR}" as="beta" />`,
+          "",
+          "alpha {alpha}",
+          "",
+          "beta {beta}",
+        ].join("\n"),
+        { root, cwd: here.root, host: rewriting() },
+      ),
+    );
+    const alphaPath = /alpha (\S+)/.exec(arranged)?.[1] ?? "";
+    const betaPath = /beta (\S+)/.exec(arranged)?.[1] ?? "";
+    expect(alphaPath).not.toBe("");
+    expect(betaPath).not.toBe("");
+    // Two names, one locator: different slots, and neither inside the other.
+    expect(betaPath).not.toBe(alphaPath);
+
+    // Entering B is not the act under test. Running it once here settles B's
+    // index, so the comparisons below are against a checkout that has already
+    // been selected and stood in.
+    yield* runOrdinaryDocument(
+      [
+        `<Repository name="alpha" url="${GITHUB_LOCATOR}">`,
+        `<Repository name="beta" url="${GITHUB_LOCATOR}" as="beta" />`,
+        "<Dir path={beta}>",
+        "nothing is asked of Git here",
+        "</Dir>",
+        "</Repository>",
+      ].join("\n"),
+      { root, cwd: here.root, host: rewriting() },
+    );
+
+    for (const [element, written] of [
+      ["<Git.Switch>", `<Git.Switch branch="hijacked" />`],
+      ["<Git.Push>", `<Git.Push />`],
+      ["<PullRequest>", `<PullRequest title="Hijacked" as="pullRequest" />`],
+    ] as const) {
+      const counting = countingOrdinaryHost(rewriting());
+      // The credential-counting access, so "no credential was read" is a
+      // measurement rather than an inference from where the refusal sits.
+      const recording = recordingAccess({});
+      // Observed rather than inferred: the branch, the head, the index and the
+      // working tree B holds, and the refs its remote holds.
+      const state = gitStateOf(here, betaPath);
+      const tree = yield* fingerprintTree(betaPath);
+      const refs = refsOf(remote);
+
+      const failure = yield* raised(
+        runOrdinaryDocument(
+          [
+            `<Repository name="alpha" url="${GITHUB_LOCATOR}">`,
+            `<Repository name="beta" url="${GITHUB_LOCATOR}" as="beta" />`,
+            "<Dir path={beta}>",
+            written,
+            "</Dir>",
+            "</Repository>",
+          ].join("\n"),
+          {
+            root,
+            cwd: here.root,
+            host: counting.host,
+            identity: statedIdentity(IDENT),
+            gitHubPullRequests: { access: gitHubSource(recording.access) },
+          },
+        ),
+      );
+
+      // The checkout-authority refusal, named for the element that was written
+      // — not a later failure that happens to stop the same document.
+      const authority = causedBy(failure, isAuthorityFailure);
+      expect(`${element} ${authority?.operation}`).toBe(`${element} ${element}`);
+      expect(`${element} ${String(failure)}`).toContain(
+        "is inside none of the checkouts this execution selected for the repository in scope",
+      );
+
+      // B was not mutated ...
+      expect(`${element} ${gitStateOf(here, betaPath).join("|")}`).toBe(
+        `${element} ${state.join("|")}`,
+      );
+      expect(yield* fingerprintTree(betaPath)).toEqual(tree);
+      // ... nothing was published ...
+      expect(refsOf(remote)).toEqual(refs);
+      expect(subcommands(counting.counters)).not.toContain("push");
+      expect(subcommands(counting.counters)).not.toContain("ls-remote");
+      // ... no authentication session was opened for any locator ...
+      expect(`${element} ${counting.counters.sessions.join(",")}`).toBe(`${element} `);
+      // ... and no Git host was reached for a credential or a request.
+      expect(`${element} ${recording.credentials}`).toBe(`${element} 0`);
+      expect(recording.requests).toEqual([]);
+    }
+  });
+
+  it("reaches the mutation, the publication and the Git host when the identity is the same one", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const root = yield* useManagedRoot();
+    const here = yield* useHostCheckout(remote.locator);
+    const store = gitHubStore({ token: TOKEN });
+    store.resolveHead = (branch) => remoteRefs(remote).get(`refs/heads/${branch}`);
+    const counting = countingOrdinaryHost(rewritingHost(GITHUB_LOCATOR, remote.locator));
+
+    // The same two repositories, the same `<Dir>` into B's own path. The one
+    // thing that differs from the refusal above is which of them is the
+    // Repository in scope, so nothing else can be what decides.
+    const rendered = String(
+      yield* runOrdinaryDocument(
+        [
+          `<Repository name="beta" url="${GITHUB_LOCATOR}">`,
+          `<Repository name="alpha" url="${GITHUB_LOCATOR}" as="alpha" />`,
+          `<Repository name="beta" url="${GITHUB_LOCATOR}" as="beta" />`,
+          "<Dir path={beta}>",
+          `<Git.Switch branch="control" />`,
+          `<File path="control.md">control</File>`,
+          `<Git.Add paths="control.md" />`,
+          `<Git.Commit message="Control" as="commit" />`,
+          `<Git.Push />`,
+          `<PullRequest title="Control" as="pullRequest">`,
+          "the body",
+          "</PullRequest>",
+          "</Dir>",
+          "</Repository>",
+          "",
+          "state {pullRequest.state}",
+        ].join("\n"),
+        {
+          root,
+          cwd: here.root,
+          host: counting.host,
+          identity: statedIdentity(IDENT),
+          gitHubPullRequests: { access: gitHubSource(fakeGitHubAccess(store)) },
+        },
+      ),
+    );
+
+    // Every boundary the refusal stops short of is reached here: the branch
+    // moved, the publication ran, and a pull request was opened.
+    expect(subcommands(counting.counters)).toContain("push");
+    // The same counter the refusal above requires to be empty, non-empty here
+    // under the same host and the same fixtures — so that "no session was
+    // opened" is a measurement and not a counter that never moves.
+    expect(counting.counters.sessions).toContain(GITHUB_LOCATOR);
+    expect(remoteRefs(remote).has("refs/heads/control")).toBe(true);
+    expect(creations(store)).toBe(1);
+    expect(rendered).toContain("state open");
+  });
+
+  it("operates in a Worktree of the Repository in scope, entered by its returned path", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const root = yield* useManagedRoot();
+    const here = yield* useHostCheckout(remote.locator);
+    const rewriting = rewritingHost(GITHUB_LOCATOR, remote.locator);
+
+    const arranged = String(
+      yield* runOrdinaryDocument(
+        [
+          `<Repository name="alpha" url="${GITHUB_LOCATOR}" as="alpha" />`,
+          "",
+          "alpha {alpha}",
+        ].join("\n"),
+        { root, cwd: here.root, host: rewriting },
+      ),
+    );
+    const alphaPath = /alpha (\S+)/.exec(arranged)?.[1] ?? "";
+    expect(alphaPath).not.toBe("");
+    const head = git(["rev-parse", "HEAD"], alphaPath, here.home);
+    const branch = git(["rev-parse", "--abbrev-ref", "HEAD"], alphaPath, here.home);
+
+    const rendered = String(
+      yield* runOrdinaryDocument(
+        [
+          `<Repository name="alpha" url="${GITHUB_LOCATOR}">`,
+          `<Worktree name="side" branch="side" as="side" />`,
+          "<Dir path={side}>",
+          `<File path="in-worktree.md">written here</File>`,
+          `<Git.Add paths="in-worktree.md" />`,
+          `<Git.Commit message="In the worktree" as="commit" />`,
+          "</Dir>",
+          "</Repository>",
+          "",
+          "side {side}",
+        ].join("\n"),
+        { root, cwd: here.root, host: rewriting, identity: statedIdentity(IDENT) },
+      ),
+    );
+    const sidePath = /side (\S+)/.exec(rendered)?.[1] ?? "";
+    // A different checkout of the same repository, under a different root.
+    expect(sidePath).not.toBe("");
+    expect(sidePath).not.toBe(alphaPath);
+
+    // The commit landed in the Worktree — whose identity is its owner's, and
+    // whose root and name are its own — and the Repository's own checkout did
+    // not move.
+    expect(git(["log", "-1", "--pretty=%s", "side"], alphaPath, here.home)).toBe("In the worktree");
+    expect(git(["rev-parse", "HEAD"], alphaPath, here.home)).toBe(head);
+    expect(git(["rev-parse", "--abbrev-ref", "HEAD"], alphaPath, here.home)).toBe(branch);
   });
 });
