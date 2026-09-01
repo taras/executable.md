@@ -98,6 +98,30 @@ function secret(name = "Secret", answer = "the private answer"): IdentityCompone
   };
 }
 
+/**
+ * A private component that records each entry into its body.
+ *
+ * A tripwire rather than a fake: what a case about the closure has to show is
+ * that the implementation did not run, and rendered output cannot show that on
+ * its own. It deliberately never calls its claimant — core promises the closure
+ * to a private component whether or not one names durable work.
+ */
+function watching(entered: string[], name = "Secret"): IdentityComponent {
+  return {
+    name,
+    origin: `${ORIGIN}#${name}`,
+    props: NO_PROPS,
+    returns: { type: "string" },
+    forms: ["self-closing"],
+    // deno-lint-ignore require-yield
+    factory: () =>
+      function* Secret(): Operation<string> {
+        entered.push("policy");
+        return "the private answer";
+      },
+  };
+}
+
 /** A private component that names its own durable work, to prove the claimant works. */
 function claiming(seen: string[], name = "Claiming"): IdentityComponent {
   return {
@@ -633,7 +657,11 @@ describe("Tier DM — the private closure is lexical", () => {
       ),
     );
 
-    expect(message).toContain("canonical execution did not produce");
+    // A private import words its own refusal: what it is about is not that
+    // canonical execution produced some other answer, but that this ask
+    // produced this one and no answer from anywhere else authorizes it.
+    expect(message).toContain("did not produce");
+    expect(message).toContain("an answer kept from another import authorizes nothing here");
   });
 
   it("DM38: a factory replaced after capture does not become what runs", function* () {
@@ -709,6 +737,98 @@ describe("Tier DM — the private closure is lexical", () => {
     expect(message).toContain("Secret");
     // The refusal is the contract's, so the body it guards never ran.
     expect(entered).toHaveLength(0);
+  });
+
+  it("DM40: middleware cannot reuse a delegated private answer at another site", function* () {
+    // The hole this closes: a handler delegates a legitimate private import from
+    // inside the declaration, keeps the exact definition canonical execution
+    // produced, and hands it back when the caller's root writes the same name.
+    // Authorizing by name would let the private implementation run for an
+    // element the declaration never authored — which is the whole of what the
+    // closure is for.
+    const entered: string[] = [];
+    const message = yield* refusal(
+      run(
+        ["<Policy />", '<Secret as="stolen" />', ""].join("\n"),
+        [declared(WITH_PRIVATE, { privates: [watching(entered)] })],
+        [
+          {
+            *install() {
+              let kept: unknown;
+              yield* Component.around(
+                {
+                  *importComponent([name, position], next) {
+                    if (name !== "Secret") {
+                      return yield* next(name, position);
+                    }
+                    if (kept === undefined) {
+                      // Inside the declaration: an ordinary delegated import,
+                      // and the answer is retained rather than altered.
+                      kept = yield* next(name, position);
+                      return kept as never;
+                    }
+                    // At the caller's root: answered from what was kept.
+                    return kept as never;
+                  },
+                },
+                { at: "max" },
+              );
+            },
+          },
+        ],
+      ),
+    );
+
+    expect(message).toContain("Secret");
+    // The declaration's own invocation ran once. The root's did not run at all.
+    expect(entered).toEqual(["policy"]);
+  });
+
+  it("DM41: a repository component cannot answer for a private name", function* () {
+    const root = yield* workspace({ "Secret.md": "the repository file ran.\n" });
+    const entered: string[] = [];
+
+    const message = yield* refusal(
+      run(
+        ['<Secret as="answer" />', ""].join("\n"),
+        [declared(WITH_PRIVATE, { privates: [watching(entered)] })],
+        [],
+        new InMemoryStream(),
+        [root],
+      ),
+    );
+
+    // Unresolved before any tier could answer, so the file beside the caller is
+    // never read and never runs.
+    expect(message).toContain("Cannot resolve component: Secret");
+    expect(message).not.toContain("the repository file ran.");
+    expect(entered).toEqual([]);
+  });
+
+  it("DM42: describing and validating agree that the outside occurrence resolves nothing", function* () {
+    const root = yield* workspace({ "Secret.md": "the repository file ran.\n" });
+    const declarations = [declared(WITH_PRIVATE, { privates: [secret()] })];
+
+    // A repository candidate exists, and it still answers for nothing: the
+    // decision is `selectComponent()`'s, so execution, inspection and validation
+    // cannot come to different conclusions about it.
+    const info = yield* inspectComponent({ name: "Secret", includes: [root], declarations });
+    expect(info.kind).toBe("unresolved");
+
+    const catalog = yield* inspectSyntax({ includes: [root], declarations });
+    for (const category of catalog.categories) {
+      expect(category.entries.map((entry) => entry.name)).not.toContain("Secret");
+    }
+
+    const validation = yield* validateDocument({
+      ...retainedSource(ROOT_PATH, '<Secret as="answer" />\n'),
+      includes: [root],
+      declarations,
+    });
+    expect(validation.outcome).toBe("invalid");
+    expect(validation.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      "component-unresolved",
+    );
   });
 
   it("DM21: a private name a registration also claims refuses the declaration", function* () {

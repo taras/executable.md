@@ -46,7 +46,8 @@ import { parseMarkdownDefinition } from "../definition.ts";
 import { formsRefusal } from "../invocation-identity.ts";
 import type { IdentityComponent } from "../invocation-identity.ts";
 import { RESERVED_STRUCTURAL } from "../structural.ts";
-import type { ImportRefusal, ImportTier } from "./import-authority.ts";
+import { CanonicalImports, retain } from "./import-authority.ts";
+import type { ImportedDefinition, ImportRefusal, ImportTier } from "./import-authority.ts";
 import { admitDeclaration, isComponentName } from "./registration.ts";
 import { documentationOf } from "./documentation.ts";
 import type {
@@ -283,9 +284,15 @@ function describesSameReturn(
  */
 export class DeclaredMarkdownCatalog {
   readonly #byName: ReadonlyMap<string, AdmittedDeclaredMarkdown>;
+  readonly #privateNames: ReadonlySet<string>;
 
   constructor(declarations: readonly AdmittedDeclaredMarkdown[]) {
     this.#byName = new Map(declarations.map((declaration) => [declaration.name, declaration]));
+    this.#privateNames = new Set(
+      declarations.flatMap((declaration) =>
+        declaration.privates.map((component) => component.name),
+      ),
+    );
   }
 
   /** The declaration this name resolves to, if one was declared. */
@@ -296,6 +303,18 @@ export class DeclaredMarkdownCatalog {
   /** Every declared name, so a catalog can ask about each of them. */
   names(): readonly string[] {
     return [...this.#byName.keys()];
+  }
+
+  /**
+   * Whether this name belongs to some declaration's private closure.
+   *
+   * Asked by selection, which is what makes it one decision: a private name
+   * written where its own declaration is not being expanded resolves to nothing,
+   * and it resolves to nothing for a document being run, a name being described
+   * and a document being validated alike.
+   */
+  isPrivate(name: string): boolean {
+    return this.#privateNames.has(name);
   }
 }
 
@@ -320,6 +339,29 @@ export interface PrivateClosure {
 }
 
 /**
+ * One private import, open for exactly one ask.
+ *
+ * The offer is the authority, and it is spent where it was made. What may be
+ * invoked is the object canonical core's own resolver produced *inside this
+ * ask* — so an answer retained from another import authorizes nothing, however
+ * exactly it describes the same private component, and a name written where no
+ * offer was made is not a private import at all.
+ */
+export interface PrivateImport {
+  /**
+   * Core's own copy of the definition this ask may invoke, or the refusal
+   * saying why it may invoke none.
+   *
+   * Verified after the public chain has returned and before anything is
+   * expanded or called, on the same terms a closed import is: the answer has to
+   * be the object this ask produced, still describing what core produced.
+   */
+  authorize(answer: ImportedDefinition): ImportedDefinition;
+  /** The ask is over. */
+  close(): void;
+}
+
+/**
  * What a declaring execution imports through.
  *
  * Two questions, one owner. *Which* declaration a name resolves to is public —
@@ -334,6 +376,21 @@ export interface PrivateClosure {
  * falls through to ordinary selection — which is the safe direction, because
  * ordinary selection does not resolve a private name at all.
  */
+/** What a private import says when the answer is not this ask's own. */
+const PRIVATE_REFUSED: Record<ImportRefusal, string> = {
+  unissued:
+    "Component.importComponent middleware answered a private import with a definition this " +
+    "import did not produce. A private component runs for the element the declaration that " +
+    "carries it authored, and for no other — an answer kept from another import authorizes " +
+    "nothing here.",
+  "another-name":
+    "Component.importComponent middleware answered a private import with the definition " +
+    "canonical execution produced for another component.",
+  changed:
+    "Component.importComponent middleware changed the private definition canonical execution " +
+    "produced before it was invoked.",
+};
+
 /** The fixed diagnostic each verification failure produces. */
 const REFUSED: Record<ImportRefusal, string> = {
   unissued:
@@ -352,7 +409,7 @@ export class DeclaredImports implements ImportTier {
   readonly #catalog: DeclaredMarkdownCatalog;
   readonly #privates: ReadonlyMap<string, FunctionComponentDefinition>;
   readonly #closures: ReadonlyMap<string, PrivateClosure>;
-  #offered: { closure: PrivateClosure; name: string } | undefined;
+  #offered: OpenOffer | undefined;
 
   constructor(
     catalog: DeclaredMarkdownCatalog,
@@ -408,23 +465,44 @@ export class DeclaredImports implements ImportTier {
     return imported.path === declaration.origin ? this.#closures.get(name) : undefined;
   }
 
+  /** Whether some declaration keeps this name to itself. */
+  declaresPrivate(name: string): boolean {
+    return this.#privates.has(name);
+  }
+
   /**
    * Offer one private import, for the duration of one ask.
    *
-   * Returns the withdrawal, or `undefined` when this closure declares no such
-   * name — in which case the ask is an ordinary one and resolves the ordinary
-   * way.
+   * Returns the offer, or `undefined` when the segments being expanded declare
+   * no such name — in which case this is not a private import, and the name
+   * resolves the ordinary way, which for a private name is to nothing.
    */
-  offer(closure: PrivateClosure | undefined, name: string): (() => void) | undefined {
+  offer(closure: PrivateClosure | undefined, name: string): PrivateImport | undefined {
     if (closure === undefined || !closure.has(name)) {
       return undefined;
     }
-    const offer = { closure, name };
-    this.#offered = offer;
-    return () => {
-      if (this.#offered === offer) {
-        this.#offered = undefined;
-      }
+    // One retention per ask. An answer is authorized because it is the object
+    // *this* ask produced, so an answer kept from another import is not in this
+    // table at all and is refused as unissued.
+    const imports = new CanonicalImports();
+    const open: OpenOffer = { closure, name, imports, produced: undefined };
+    this.#offered = open;
+    return {
+      authorize: (answer) => {
+        if (open.produced === undefined) {
+          throw new DeclaredMarkdownError(PRIVATE_REFUSED.unissued);
+        }
+        return imports.authorize(
+          name,
+          answer,
+          (refusal) => new DeclaredMarkdownError(PRIVATE_REFUSED[refusal]),
+        );
+      },
+      close: () => {
+        if (this.#offered === open) {
+          this.#offered = undefined;
+        }
+      },
     };
   }
 
@@ -432,7 +510,9 @@ export class DeclaredImports implements ImportTier {
    * Take the offer, if this ask is the one it was made for.
    *
    * Read once: whatever asks first spends it, so a second ask inside the same
-   * window resolves ordinarily and fails to find the name.
+   * window resolves ordinarily and fails to find the name. What comes back is a
+   * copy this ask owns rather than the shared implementation, because the offer
+   * authorizes by the object it produced and two asks must not produce one.
    */
   claim(name: string): { definition: FunctionComponentDefinition; origin: string } | undefined {
     const offered = this.#offered;
@@ -440,13 +520,27 @@ export class DeclaredImports implements ImportTier {
     if (offered === undefined || offered.name !== name) {
       return undefined;
     }
-    const definition = this.#privates.get(name);
+    const minted = this.#privates.get(name);
     const origin = offered.closure.origin(name);
-    if (definition === undefined || origin === undefined) {
+    if (minted === undefined || origin === undefined) {
       return undefined;
     }
-    return { definition, origin };
+    const copy = retain(minted);
+    if (copy === undefined || copy.kind !== "function") {
+      return undefined;
+    }
+    offered.produced = copy;
+    offered.imports.issue(name, copy);
+    return { definition: copy, origin };
   }
+}
+
+/** One offer, while the ask it was made for is still open. */
+interface OpenOffer {
+  readonly closure: PrivateClosure;
+  readonly name: string;
+  readonly imports: CanonicalImports;
+  produced: FunctionComponentDefinition | undefined;
 }
 
 /**

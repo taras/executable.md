@@ -2669,10 +2669,26 @@ one import, from the closure the segments being expanded carry, and the resolver
 takes it once. So a private name resolves while core is expanding the declaring
 bytes' own body and nowhere else: not from the caller's root, not from content
 the caller projected through the declaration, not from a sibling declaration,
-not from a component the declaration imported, and not from middleware. Anywhere
-else it is the ordinary unresolved printed error. This is lexical availability
-rather than authority: every private component still takes its operation from
-the invocation that carries it.
+not from a component the declaration imported, and not from middleware.
+
+**The offer is the authority, and it is spent where it was made.** What a private
+import may invoke is the object canonical core's own resolver produced *inside
+that ask*. An answer retained from another import authorizes nothing, however
+exactly it describes the same private component: eligibility belongs to the
+authored occurrence, not to the name, so a handler that delegates a legitimate
+private import and keeps what came back cannot hand it to a later site.
+
+**Everywhere else the name resolves to nothing, before any tier answers.**
+Selection refuses a name some declaration keeps to itself, ahead of the workflow
+bundle, the repository and every registration — so a file, a bundle member or a
+registration under a private name never runs, and the printed error is the
+ordinary unresolved one. Inspection and document validation share that decision,
+so a repository candidate under a private name is described by neither and
+validates as unresolved.
+
+This is lexical availability rather than authority: every private component still
+takes its operation from the invocation that carries it, and core promises the
+closure whether or not a particular private implementation names durable work.
 
 **Only the declared names are closed.** Canonical core answers for the declared
 component and for its private closure, and `Component.importComponent`

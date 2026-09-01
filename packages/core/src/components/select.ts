@@ -149,6 +149,16 @@ export function* selectComponent(
     };
   }
 
+  // A name some declaration keeps to itself resolves to nothing here. Selection
+  // is the wrong place to decide *whether* an element may write one — that is
+  // lexical, and canonical core answers it where the element is expanded — but
+  // it is the right place to stop every other tier answering for it. Without
+  // this a repository file, a bundle member or a registration under a private
+  // name would run wherever the closure did not apply.
+  if (options.declared?.isPrivate(name) === true) {
+    return { kind: "unresolved", searched: [...includes], registered: [] };
+  }
+
   const bundled = options.workflow?.component(name);
   if (bundled !== undefined) {
     return {

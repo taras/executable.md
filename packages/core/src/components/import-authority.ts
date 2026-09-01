@@ -180,6 +180,19 @@ function describesSame(canonical: unknown, answer: unknown): boolean {
   return true;
 }
 
+/**
+ * Whether `answer` still describes what core produced, reading it defensively.
+ *
+ * Shared, because two authorities ask it: the execution-wide one below, and the
+ * per-occurrence one a private import is authorized through. Reading the answer
+ * runs whatever it is made of — a proxy's traps, an exotic object's own
+ * machinery — so a value that refuses to be compared is a value that failed the
+ * comparison.
+ */
+export function stillDescribes(canonical: unknown, answer: unknown): boolean {
+  return read(() => describesSame(canonical, answer)) === true;
+}
+
 /** One read of a value the chain controls: its answer, or nothing. */
 function read<T>(inspect: () => T): T | undefined {
   try {

@@ -93,6 +93,7 @@ import { printsErrors, usePrintErrors } from "./component-failures.ts";
 import { containedLedger, recoveringLedger } from "./component-failures.ts";
 import type { CheckedFailures } from "./component-failures.ts";
 import type { ExpansionAuthority, ImportedDefinition } from "./components/import-authority.ts";
+import type { PrivateImport } from "./components/declared-markdown.ts";
 import CoreTest from "./components/Test.ts";
 import { carriesTestActivationDecision } from "./test-activation.ts";
 import { declaredRouting, withRouting } from "./foreground.ts";
@@ -646,6 +647,26 @@ function validateRenderOverride(override: unknown): Record<string, unknown> | un
     result[key] = value;
   }
   return result;
+}
+
+/**
+ * The definition one private import may invoke.
+ *
+ * An offer that was never made, or one canonical resolution never took,
+ * authorizes nothing — a handler that answered such an import answered with
+ * something core did not produce for it.
+ */
+function requirePrivate(
+  offered: PrivateImport | undefined,
+  name: string,
+  answered: ImportedDefinition,
+): ImportedDefinition {
+  if (offered === undefined) {
+    throw new Error(
+      `${name} is declared privately by exact Markdown, and this is not an element it authored`,
+    );
+  }
+  return offered.authorize(answered);
 }
 
 /**
@@ -2150,25 +2171,35 @@ function* expandComponent(
     // may observe this import, delegate it, and refuse it by throwing; nothing
     // it returns is invoked. Without an authority the answer is whatever the
     // chain produced, exactly as it always was.
-    // The offer is open for exactly this ask. Middleware composes inside it
-    // and may observe, delegate or refuse the import; what it cannot do is
-    // obtain the declaration for an element that did not author it, because
-    // the offer is made from the closure the segments being expanded carry and
-    // is spent by whatever asks first.
-    const withdraw = authority?.declared?.offer(authority.privates, name);
+    // The offer is open for exactly this ask. Middleware composes inside it and
+    // may observe, delegate or refuse the import; what it cannot do is obtain
+    // the declaration for an element that did not author it, because the offer
+    // is made from the closure the segments being expanded carry, is spent by
+    // whatever asks first, and authorizes only the answer it produced itself.
+    const offered = authority?.declared?.offer(authority.privates, name);
     let answered: ImportedDefinition;
     try {
       answered = yield* importComponent(name, position);
     } finally {
-      withdraw?.();
+      offered?.close();
     }
     selected = selection?.settle();
-    // Closed for this exact name, not for the execution that closed it. A
-    // bundled run closes every import; a host that declared exact Markdown
-    // closed the names it declared, and an unrelated one is the open import it
-    // has always been — the chain's answer, unverified, with no selection
-    // recorded against it.
-    if (authority?.imports === undefined || !authority.imports.closes(name)) {
+    // A private import is authorized by the ask that made the offer, and by
+    // nothing else. Not by the name: a private component runs for the element
+    // the declaration that carries it authored, so an answer kept from another
+    // import — however exactly it describes the same definition — authorizes
+    // nothing here. And a private name written where no offer was made never
+    // reaches this at all: selection resolves it to nothing, so what arrives is
+    // the ordinary unresolved failure.
+    if (authority?.declared?.declaresPrivate(name) === true) {
+      imported = requirePrivate(offered, name, answered);
+      authority.forms?.select(name, imported);
+    } else if (authority?.imports === undefined || !authority.imports.closes(name)) {
+      // Closed for this exact name, not for the execution that closed it. A
+      // bundled run closes every import; a host that declared exact Markdown
+      // closed the names it declared, and an unrelated one is the open import it
+      // has always been — the chain's answer, unverified, with no selection
+      // recorded against it.
       imported = answered;
     } else {
       imported = authority.imports.authorize(name, answered);
