@@ -247,18 +247,26 @@ function refuseConsent() {
 
 const consentRefusal = refuseConsent();
 
-// Named once so each installation phase below can be its own top-level
-// segment. Nesting them inside a single `<If>` makes the whole branch one
-// segment, and its content reaches the reader only when the branch ends —
-// which would turn the transcript back into a report written after the fact.
-const authorized = !props.status && comparison !== "current";
+// The three outcomes are mutually exclusive, so one `<Switch>` decides between
+// them. Named here rather than only inside it because each installation phase
+// below is its own top-level segment and tests the same name. Nesting those
+// phases inside the install case, or inside one further `<If>`, would make the
+// whole branch a single segment whose content reaches the reader only when it
+// ends — which would turn the transcript back into a report written after the
+// fact.
+const outcome = props.status
+  ? "status"
+  : comparison === "current"
+    ? "current"
+    : "install";
 ```
 
 <If condition={consentRefusal !== null}>
 <Fail message={consentRefusal} />
 </If>
 
-<If condition={props.status}>
+<Switch value={outcome}>
+<Case value="status">
 ## Release status
 
 The installed and selected versions were compared using semantic version
@@ -268,9 +276,9 @@ Installed version: {props.installation.currentVersion}
 Selected release: {selected.tag} ({comparison})
 Release notes: {selected.url}
 No files were changed.
-</If>
+</Case>
 
-<If condition={!props.status && comparison === "current"}>
+<Case value="current">
 ## Installing existing version
 
 The selected release was compared with the installed version. They are the same,
@@ -280,17 +288,18 @@ xmd {props.installation.currentVersion} is already installed.
 Binary: {props.installation.executablePath}
 Release notes: {selected.url}
 No download or replacement was needed.
-</If>
+</Case>
 
-<If condition={authorized}>
+<Case value="install">
 ## Install selected release
 
 The selected release passed the comparison and consent checks.
 
 Selected release: {selected.tag} ({comparison} than installed version {props.installation.currentVersion})
-</If>
+</Case>
+</Switch>
 
-<If condition={authorized}>
+<If condition={outcome === "install"}>
 Downloads the checksum file and target binary from the selected GitHub release.
 Stages the binary beside the installed one without making it executable.
 
@@ -334,7 +343,7 @@ const downloadFailure = downloadResult.ok
 Downloaded binary: {downloadResult.value.asset}
 </If>
 
-<If condition={authorized}>
+<If condition={outcome === "install"}>
 Verifies the binary against its published SHA-256 checksum. Makes it executable
 only after the checksum passes, then checks that it reports the selected
 version.
@@ -354,7 +363,7 @@ const verifyFailure = verifyResult.ok
 Verified: SHA-256 checksum and version {verifyResult.value.version}
 </If>
 
-<If condition={authorized}>
+<If condition={outcome === "install"}>
 Atomically replaces the installed binary with the verified binary. Until
 replacement succeeds, the installed binary remains unchanged.
 
