@@ -20,6 +20,7 @@
 
 import type { ComponentDefinition, FunctionComponentDefinition } from "../types.ts";
 import type { FormSelections, InvocationIdentities } from "../invocation-identity.ts";
+import type { DeclaredImports, PrivateClosure } from "./declared-markdown.ts";
 
 /** A definition an import may answer with. */
 export type ImportedDefinition = ComponentDefinition | FunctionComponentDefinition;
@@ -31,7 +32,20 @@ export type ImportedDefinition = ComponentDefinition | FunctionComponentDefiniti
  * document, component, or middleware can reach it, replace it, or add to it.
  */
 export interface ImportAuthority {
-  /** The definition this import may invoke, or the refusal saying why it may invoke none. */
+  /**
+   * Whether canonical execution answers for this name rather than the chain.
+   *
+   * Closing an import is a claim about *that name*, not about the execution
+   * that made it. A workflow bundle closes every import because a workflow run
+   * is a run of one pinned tree; a host declaring exact Markdown closes only
+   * the names it declared, so an unrelated name resolves and composes exactly
+   * as it does in an execution with no authority at all.
+   */
+  closes(name: string): boolean;
+  /**
+   * The definition this import may invoke, or the refusal saying why it may
+   * invoke none. Asked only for a name `closes()` answered for.
+   */
   authorize(name: string, answer: ImportedDefinition): ImportedDefinition;
 }
 
@@ -47,6 +61,25 @@ export interface ImportAuthority {
 export interface ExpansionAuthority {
   /** What a closed execution may invoke for a name. Absent for an open one. */
   readonly imports?: ImportAuthority;
+  /**
+   * The exact Markdown this execution declares, and the register one private
+   * import is offered through.
+   *
+   * Held by the execution and handed here by value, like everything else on
+   * this object: an expansion reaching it is core's own, and nothing a
+   * document, a component or middleware can name reaches it.
+   */
+  readonly declared?: DeclaredImports;
+  /**
+   * The private names the segments being expanded may write, when they are a
+   * declaration's own body.
+   *
+   * This is the one member that changes as expansion descends. A declared
+   * component's body carries its closure; everything else — the caller, the
+   * content the caller projected, an imported component, a sibling invocation —
+   * carries whatever it carried, which for an ordinary document is nothing.
+   */
+  readonly privates?: PrivateClosure;
   /** The domains this execution minted, for the components it gave one. */
   readonly identities?: InvocationIdentities;
   /**
@@ -147,6 +180,19 @@ function describesSame(canonical: unknown, answer: unknown): boolean {
   return true;
 }
 
+/**
+ * Whether `answer` still describes what core produced, reading it defensively.
+ *
+ * Shared, because two authorities ask it: the execution-wide one below, and the
+ * per-occurrence one a private import is authorized through. Reading the answer
+ * runs whatever it is made of — a proxy's traps, an exotic object's own
+ * machinery — so a value that refuses to be compared is a value that failed the
+ * comparison.
+ */
+export function stillDescribes(canonical: unknown, answer: unknown): boolean {
+  return read(() => describesSame(canonical, answer)) === true;
+}
+
 /** One read of a value the chain controls: its answer, or nothing. */
 function read<T>(inspect: () => T): T | undefined {
   try {
@@ -208,5 +254,83 @@ export class CanonicalImports {
       throw refuse("changed");
     }
     return canonical;
+  }
+}
+
+/**
+ * How one closed tier words a refusal of an answer it did not produce.
+ *
+ * The tiers share retention because an execution has one answer per import, and
+ * word their own refusals because "a workflow bundle" and "the Markdown this
+ * host declared" are different things for a reader to be told about.
+ */
+export interface ImportTier {
+  /** Whether this tier is the one that answers for `name`. */
+  claims(name: string): boolean;
+  /**
+   * Whether this tier closes every import in the execution, or only the names
+   * it claims.
+   *
+   * A workflow bundle closes the execution: a run is a run *of* that pinned
+   * tree, and a name resolving outside it is the thing the bundle exists to
+   * prevent. Exact declared Markdown closes only what it declares: the host
+   * claimed those names and nothing else, so closing an unrelated import would
+   * take away a supported way to decide what a name means without any
+   * declaration having said anything about it.
+   */
+  readonly closesExecution: boolean;
+  /** The error this tier throws when the answer is not the one core produced. */
+  refuse(refusal: ImportRefusal): Error;
+}
+
+/**
+ * The authority one closed execution imports through, however many tiers close
+ * it.
+ *
+ * One `CanonicalImports` for the whole execution: a witness is issued where the
+ * answer is produced and verified where it is invoked, so which tier produced
+ * an answer decides only how a refusal reads, never whether one is authorized.
+ */
+export class ExecutionImports implements ImportAuthority {
+  readonly #imports = new CanonicalImports();
+  readonly #tiers: readonly ImportTier[];
+
+  constructor(tiers: readonly ImportTier[]) {
+    this.#tiers = tiers;
+  }
+
+  /** Record that canonical execution produced this answer for this name. */
+  issue(name: string, definition: ImportedDefinition): ImportedDefinition {
+    return this.#imports.issue(name, definition);
+  }
+
+  /** Whether canonical execution answers for this name rather than the chain. */
+  closes(name: string): boolean {
+    return this.#answering(name) !== undefined;
+  }
+
+  /** Core's own copy of the definition this import may invoke. */
+  authorize(name: string, answer: ImportedDefinition): ImportedDefinition {
+    const tier = this.#answering(name);
+    return this.#imports.authorize(name, answer, (refusal) => {
+      if (tier === undefined) {
+        return new Error("this execution authorizes no import of this name");
+      }
+      return tier.refuse(refusal);
+    });
+  }
+
+  /**
+   * The tier this name is closed by, if any.
+   *
+   * A tier that claims the name answers for it; otherwise a tier that closes
+   * the whole execution does, which is what keeps a bundled run's every import
+   * — and every refusal's wording — exactly what it was.
+   */
+  #answering(name: string): ImportTier | undefined {
+    return (
+      this.#tiers.find((candidate) => candidate.claims(name)) ??
+      this.#tiers.find((candidate) => candidate.closesExecution)
+    );
   }
 }

@@ -18,6 +18,8 @@ import { Component } from "./component-api.ts";
 import { DEFAULT_INCLUDES, effectiveRegistry, selectComponent } from "./components/select.ts";
 import { admitDeclaration, mergeRegistry } from "./components/registration.ts";
 import { declaredRegistry } from "./components/declared-registry.ts";
+import { admitDeclaredMarkdown, declaredCatalog } from "./components/declared-markdown.ts";
+import type { DeclaredMarkdownComponent } from "./components/declared-markdown.ts";
 import { repositoryCandidateNames } from "./components/candidates.ts";
 import { documentationOf } from "./components/documentation.ts";
 import type { ComponentDocumentation } from "./components/documentation.ts";
@@ -127,6 +129,13 @@ export interface InspectComponentOptions {
   name: string;
   /** Where to look, matching the search path execution uses. */
   includes?: string[];
+  /**
+   * The exact Markdown a host would declare to an execution, with the same
+   * meaning `ExecutionInstallation.declarations` gives it — admissibility
+   * included. Private declarations are never described: nothing a document can
+   * write resolves one.
+   */
+  declarations?: readonly DeclaredMarkdownComponent[];
 }
 
 /**
@@ -180,7 +189,14 @@ export interface DescribedContract extends ComponentDocumentation {
 export function* inspectComponent(options: InspectComponentOptions): Operation<ComponentInfo> {
   const { name, includes } = options;
   const registry = yield* Component.operations.registry;
-  const selected = yield* selectComponent(name, { includes, registry });
+  const declared = declaredCatalog(
+    yield* admitDeclaredMarkdown(options.declarations ?? [], registry),
+  );
+  const selected = yield* selectComponent(name, {
+    includes,
+    registry,
+    ...(declared === undefined ? {} : { declared }),
+  });
 
   switch (selected.kind) {
     case "structural":
@@ -199,6 +215,16 @@ export function* inspectComponent(options: InspectComponentOptions): Operation<C
           : { returns: selected.definition.returns }),
         ...describedContract(yield* completeEntry(name, selected)),
       };
+    case "declared-markdown": {
+      const entry = yield* completeEntry(name, selected);
+      return {
+        kind: "markdown",
+        origin: entry.origin,
+        props: entry.props,
+        ...(entry.returnMode === "text" ? {} : { returns: entry.returns }),
+        ...describedContract(entry),
+      };
+    }
     case "unresolved":
       return { kind: "unresolved", searched: selected.searched, registered: selected.registered };
     case "workflow":
@@ -307,7 +333,7 @@ export interface CompleteComponentSyntaxEntry {
   readonly kind: "component";
   readonly name: string;
   readonly origin: Exclude<ComponentOrigin, { kind: "structural" }>;
-  readonly sourceKind: "registered" | "markdown";
+  readonly sourceKind: "registered" | "markdown" | "declared-markdown";
   readonly inspectability: "complete";
   readonly forms: readonly ("self-closing" | "paired")[];
   readonly props: PropsSchema;
@@ -349,6 +375,14 @@ export interface InspectSyntaxOptions {
    * no claimant to give it.
    */
   readonly components?: readonly IdentityComponent[];
+  /**
+   * The exact Markdown a host would declare to an execution, with the same
+   * meaning `ExecutionInstallation.declarations` gives it — admissibility
+   * included. A private declaration contributes no entry: it is not a name a
+   * document can write, so a catalog that listed it would describe syntax that
+   * does not exist.
+   */
+  readonly declarations?: readonly DeclaredMarkdownComponent[];
 }
 
 /**
@@ -378,8 +412,17 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxC
     yield* admitDeclaration(component);
   }
   const registry = mergeRegistry(yield* Component.operations.registry, declaredRegistry(declared));
+  // Admitted on exactly the terms an execution installs declarations on, and
+  // for the same reason the identity components above are: a set a run would
+  // refuse describes an environment no document could ever run in.
+  const declarations = declaredCatalog(
+    yield* admitDeclaredMarkdown(options.declarations ?? [], registry),
+  );
 
   const names = yield* repositoryCandidateNames(includes);
+  for (const name of declarations?.names() ?? []) {
+    names.add(name);
+  }
   for (const declaration of STRUCTURAL_DECLARATIONS) {
     names.add(declaration.name);
   }
@@ -392,7 +435,11 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxC
   const userProvided: (CompleteComponentSyntaxEntry | OriginOnlyComponentSyntaxEntry)[] = [];
 
   for (const name of [...names].sort(byCodePoint)) {
-    const selected = yield* selectComponent(name, { includes, registry });
+    const selected = yield* selectComponent(name, {
+      includes,
+      registry,
+      ...(declarations === undefined ? {} : { declared: declarations }),
+    });
     if (selected.kind === "structural") {
       structural.push(structuralEntry(selected.construct));
       continue;
@@ -482,6 +529,17 @@ function* componentEntry(
     });
   }
 
+  if (selected.kind === "declared-markdown") {
+    const { definition, origin, digest, forms } = selected;
+    return complete(name, { kind: "declared-markdown", origin, digest }, "declared-markdown", {
+      forms,
+      props: definition.props,
+      captures: [],
+      returns: definition.returns,
+      documentation: documentationOf(definition.meta),
+    });
+  }
+
   if (selected.kind !== "repository") {
     // A bundled or unresolved name describes no environment a document writes
     // in: inspection installs no bundle, and a name nothing supplies is exactly
@@ -528,7 +586,7 @@ interface CompleteContract {
 function complete(
   name: string,
   origin: Exclude<ComponentOrigin, { kind: "structural" }>,
-  sourceKind: "registered" | "markdown",
+  sourceKind: "registered" | "markdown" | "declared-markdown",
   contract: CompleteContract,
 ): CompleteComponentSyntaxEntry {
   return {

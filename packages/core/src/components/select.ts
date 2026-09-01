@@ -5,7 +5,9 @@
  * disagree about which tier won:
  *
  * 1. structural syntax the engine owns;
- * 2. a reserved registration — a host protecting an invariant;
+ * 2. a host claiming the name — a reserved registration, or exact Markdown this
+ *    environment declares. Two claims on one name are refused where they are
+ *    installed, so this tier never has to choose between them;
  * 3. the workflow component bundle this execution is closed over;
  * 4. a repository-local file;
  * 5. a registered default, including core's own components;
@@ -25,6 +27,7 @@
 import { stat } from "@executablemd/runtime";
 import type { Operation } from "effection";
 import type { WorkflowImportAuthority } from "./bundle.ts";
+import type { DeclaredMarkdownCatalog } from "./declared-markdown.ts";
 import { mergeRegistry } from "./registration.ts";
 import { CORE_REGISTRY } from "./registry.ts";
 import { RESERVED_STRUCTURAL } from "../structural.ts";
@@ -46,6 +49,16 @@ export interface SelectOptions {
    * exists or can ask to resolve through one.
    */
   workflow?: WorkflowImportAuthority;
+  /**
+   * The exact Markdown this environment declares, when a trusted host declared
+   * any.
+   *
+   * Host-owned: it crosses on an installation by value, so nothing a document,
+   * a component or middleware can reach decides that a name is declared or what
+   * it is declared as. Inspection and validation read the same catalog, which is
+   * what stops them describing an environment execution would not have.
+   */
+  declared?: DeclaredMarkdownCatalog;
 }
 
 /** Strip leading ./ from paths for workspace-relative normalization. */
@@ -122,6 +135,28 @@ export function* selectComponent(
       definition: entry.reserved.definition,
       origin: { kind: "registered", origin: entry.reserved.origin, reserved: true },
     };
+  }
+
+  const declared = options.declared?.component(name);
+  if (declared !== undefined) {
+    return {
+      kind: "declared-markdown",
+      origin: declared.origin,
+      digest: declared.digest,
+      source: declared.source,
+      forms: declared.forms,
+      definition: declared.definition,
+    };
+  }
+
+  // A name some declaration keeps to itself resolves to nothing here. Selection
+  // is the wrong place to decide *whether* an element may write one — that is
+  // lexical, and canonical core answers it where the element is expanded — but
+  // it is the right place to stop every other tier answering for it. Without
+  // this a repository file, a bundle member or a registration under a private
+  // name would run wherever the closure did not apply.
+  if (options.declared?.isPrivate(name) === true) {
+    return { kind: "unresolved", searched: [...includes], registered: [] };
   }
 
   const bundled = options.workflow?.component(name);

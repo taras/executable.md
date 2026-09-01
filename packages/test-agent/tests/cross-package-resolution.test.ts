@@ -202,6 +202,8 @@ function describeOrigin(info: ComponentInfo): string {
       return `registered:${info.origin.origin}${info.origin.reserved ? " (reserved)" : ""}`;
     case "repository":
       return `repository:${info.origin.path}`;
+    case "declared-markdown":
+      return `declared-markdown:${info.origin.origin}`;
   }
 }
 

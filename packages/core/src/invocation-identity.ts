@@ -719,6 +719,59 @@ export function assertDistinctIdentityNames(components: readonly IdentityCompone
   }
 }
 
+/**
+ * The mark a private implementation carries, for as long as it exists.
+ *
+ * Carried *on the function* rather than in a table, because what makes a private
+ * implementation private outlives the execution that built it: an execution that
+ * has ended authorizes nothing, so an answer carrying one is refused wherever it
+ * is later presented — under another name, inside a copy of the definition, and
+ * in a run that declares no Markdown at all and has no closure left to ask. A
+ * per-execution table cannot say that, and a process-lifetime registry is a
+ * registry every run shares.
+ *
+ * A stable namespaced symbol, so a separately loaded copy of core refuses the
+ * same functions this one does. It is non-configurable and non-writable: a
+ * holder cannot take the mark off. Putting one *on* a function of its own is
+ * possible and harmless — it refuses that holder's own component, which is the
+ * safe direction.
+ */
+const PRIVATE_IMPLEMENTATION = Symbol.for("executablemd.core.private-implementation");
+
+/** Mark one implementation as a private declaration's, permanently. */
+function markPrivateImplementation(fn: FunctionComponent): void {
+  Object.defineProperty(fn, PRIVATE_IMPLEMENTATION, {
+    value: true,
+    configurable: false,
+    writable: false,
+    enumerable: false,
+  });
+}
+
+/**
+ * Whether this is an implementation some declaration's private closure built.
+ *
+ * Asked at the one place an answer becomes something the engine will invoke, so
+ * a private implementation returned through component resolution is refused
+ * whatever name it arrives under and whatever execution is running. It says
+ * nothing about a handler that calls a function value it is holding, or that
+ * wraps one in a component of its own: that is not resolution, and nothing here
+ * pretends to be a defence against it.
+ */
+export function isPrivateImplementation(fn: unknown): boolean {
+  if (typeof fn !== "function") {
+    return false;
+  }
+  try {
+    return Reflect.get(fn, PRIVATE_IMPLEMENTATION) === true;
+  } catch {
+    // Reading it runs whatever the value is made of. One that refuses to answer
+    // is one this cannot clear, and an answer the engine would invoke is not
+    // something to give the benefit of the doubt to.
+    return true;
+  }
+}
+
 /** One built implementation, ready for core's own registration path. */
 export interface IdentityRegistration extends ComponentDocumentation {
   readonly name: string;
@@ -735,6 +788,16 @@ export interface IdentityInstallation {
   readonly identities: InvocationIdentities;
   /** The registrations to make, already built from their factories. */
   readonly registrations: readonly IdentityRegistration[];
+  /**
+   * The implementations that are declared but never registered, by name.
+   *
+   * A private declaration is minted exactly like a registered one — one domain,
+   * one claimant, revoked with the execution — and then handed here instead of
+   * to registration, because what makes it private is that no registry answers
+   * for it. Canonical core resolves one only while it is expanding the body of
+   * the declaration that carries it.
+   */
+  readonly privates: ReadonlyMap<string, FunctionComponentDefinition>;
   /** Called once the registrations have been validated and committed. */
   activate(): void;
 }
@@ -748,14 +811,40 @@ export interface IdentityInstallation {
  * been validated and committed, so a refused registration leaves a claimant
  * that answers for nothing.
  */
-export function installIdentities(components: readonly IdentityComponent[]): IdentityInstallation {
+export function installIdentities(
+  components: readonly IdentityComponent[],
+  privateComponents: readonly IdentityComponent[] = [],
+): IdentityInstallation {
   // Before any factory: a set nobody can register is a set nobody may build
   // implementations from either, and a duplicate that reached a factory would
-  // have minted a claimant for a domain that is about to be discarded.
-  assertDistinctIdentityNames(components);
+  // have minted a claimant for a domain that is about to be discarded. The two
+  // sets are checked together because they mint into one table of domains, so a
+  // private name that shadowed a registered one would take its domain.
+  assertDistinctIdentityNames([...components, ...privateComponents]);
 
   const minted = new Map<string, Minted>();
   const registrations: IdentityRegistration[] = [];
+  const privates = new Map<string, FunctionComponentDefinition>();
+  for (const component of privateComponents) {
+    const domain = mintDomain(component.name);
+    minted.set(component.name, domain);
+    const implementation = component.factory(domain.claim);
+    domain.implementation = implementation;
+    // Marked where it is built, not where it is installed: what this records is
+    // that the function exists because a declaration asked for one, and that
+    // stays true after this execution is gone.
+    markPrivateImplementation(implementation);
+    privates.set(component.name, {
+      kind: "function",
+      name: component.name,
+      props: component.props,
+      ...(component.returns === undefined ? {} : { returns: component.returns }),
+      ...(component.captures === undefined ? {} : { captures: component.captures }),
+      ...(component.forms === undefined ? {} : { forms: component.forms }),
+      ...documentationOf(component),
+      fn: implementation,
+    });
+  }
   for (const component of components) {
     const domain = mintDomain(component.name);
     minted.set(component.name, domain);
@@ -825,6 +914,7 @@ export function installIdentities(components: readonly IdentityComponent[]): Ide
       },
     },
     registrations,
+    privates,
     activate: () => {
       for (const domain of minted.values()) {
         domain.activate();

@@ -92,14 +92,16 @@ import {
 import { printsErrors, usePrintErrors } from "./component-failures.ts";
 import { containedLedger, recoveringLedger } from "./component-failures.ts";
 import type { CheckedFailures } from "./component-failures.ts";
-import type { ExpansionAuthority } from "./components/import-authority.ts";
+import type { ExpansionAuthority, ImportedDefinition } from "./components/import-authority.ts";
+import { DeclaredMarkdownError } from "./components/declared-markdown.ts";
+import type { PrivateImport } from "./components/declared-markdown.ts";
 import CoreTest from "./components/Test.ts";
 import { carriesTestActivationDecision } from "./test-activation.ts";
 import { declaredRouting, withRouting } from "./foreground.ts";
 import { issueBoundExec } from "./bound-exec.ts";
 import { elementFrame, elementSite, extendPath, publishExpansion, snapshot } from "./expansion.ts";
 import type { ExpansionFrame } from "./expansion.ts";
-import { issueInvocation } from "./invocation-identity.ts";
+import { isPrivateImplementation, issueInvocation } from "./invocation-identity.ts";
 import type { IdentityDomain } from "./invocation-identity.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
@@ -646,6 +648,78 @@ function validateRenderOverride(override: unknown): Record<string, unknown> | un
     result[key] = value;
   }
   return result;
+}
+
+/**
+ * Refuse an answer that carries a private implementation to an import no
+ * closure authorized.
+ *
+ * Asked of every import that was not itself an authorized private one, so it
+ * holds where there is no declaration to consult: a second execution that
+ * declares no Markdown still refuses the implementation a first one built. What
+ * is recognized is the function, which is what a copy of the definition cannot
+ * change and a handler cannot forge — a component a handler wrote itself carries
+ * a different one and stays the open import it always was.
+ */
+function refuseEscapedPrivate(name: string, imported: ImportedDefinition): void {
+  if (imported.kind !== "function" || !isPrivateImplementation(imported.fn)) {
+    return;
+  }
+  throw new DeclaredMarkdownError(
+    `${name} was answered with a component only exact declared Markdown may write. A private ` +
+      "implementation runs for the element the declaration that carries it authored, and for " +
+      "no other name, copy, later site or run.",
+  );
+}
+
+/**
+ * The definition one private import may invoke.
+ *
+ * An offer that was never made, or one canonical resolution never took,
+ * authorizes nothing — a handler that answered such an import answered with
+ * something core did not produce for it.
+ */
+function requirePrivate(
+  offered: PrivateImport | undefined,
+  name: string,
+  answered: ImportedDefinition,
+): ImportedDefinition {
+  if (offered === undefined) {
+    throw new Error(
+      `${name} is declared privately by exact Markdown, and this is not an element it authored`,
+    );
+  }
+  return offered.authorize(answered);
+}
+
+/**
+ * The authority a definition's own body expands under.
+ *
+ * Only one member changes: the private closure. A declaration's body carries
+ * its own, so the names only those bytes may write resolve while they are being
+ * expanded and nowhere else. Everything else — a repository component, a
+ * bundled one, a registration — carries the caller's, which clears a closure
+ * rather than passing it down.
+ *
+ * Content the caller projected is not this body. It expands through the
+ * invocation's projection handle, which restores the frame and the authority
+ * read at the invocation site, so a `<Content />` inside a declaration reaches
+ * no private name.
+ */
+function authorityForBody(
+  authority: ExpansionAuthority | undefined,
+  name: string,
+  definition: ComponentDefinition,
+): ExpansionAuthority | undefined {
+  if (authority === undefined) {
+    return undefined;
+  }
+  const privates = authority.declared?.closureFor(name, definition);
+  if (privates === authority.privates) {
+    return authority;
+  }
+  const { privates: _cleared, ...rest } = authority;
+  return privates === undefined ? rest : { ...rest, privates };
 }
 
 const MAX_EXPANSION_DEPTH = 64;
@@ -2120,9 +2194,37 @@ function* expandComponent(
     // may observe this import, delegate it, and refuse it by throwing; nothing
     // it returns is invoked. Without an authority the answer is whatever the
     // chain produced, exactly as it always was.
-    const answered = yield* importComponent(name, position);
+    // The offer is open for exactly this ask. Middleware composes inside it and
+    // may observe, delegate or refuse the import; what it cannot do is obtain
+    // the declaration for an element that did not author it, because the offer
+    // is made from the closure the segments being expanded carry, is spent by
+    // whatever asks first, and authorizes only the answer it produced itself.
+    const offered = authority?.declared?.offer(authority.privates, name);
+    let answered: ImportedDefinition;
+    try {
+      answered = yield* importComponent(name, position);
+    } finally {
+      offered?.close();
+    }
     selected = selection?.settle();
-    if (authority?.imports === undefined) {
+    // A private import is authorized by the ask that made the offer, and by
+    // nothing else. Not by the name: a private component runs for the element
+    // the declaration that carries it authored, so an answer kept from another
+    // import — however exactly it describes the same definition — authorizes
+    // nothing here. And a private name written where no offer was made never
+    // reaches this at all: selection resolves it to nothing, so what arrives is
+    // the ordinary unresolved failure.
+    let authorizedPrivate = false;
+    if (authority?.declared?.declaresPrivate(name) === true) {
+      imported = requirePrivate(offered, name, answered);
+      authorizedPrivate = true;
+      authority.forms?.select(name, imported);
+    } else if (authority?.imports === undefined || !authority.imports.closes(name)) {
+      // Closed for this exact name, not for the execution that closed it. A
+      // bundled run closes every import; a host that declared exact Markdown
+      // closed the names it declared, and an unrelated one is the open import it
+      // has always been — the chain's answer, unverified, with no selection
+      // recorded against it.
       imported = answered;
     } else {
       imported = authority.imports.authorize(name, answered);
@@ -2135,6 +2237,16 @@ function* expandComponent(
       // a wrapper whose `fn` is no dispatcher records nothing, so a dispatcher
       // an authority recorded explicitly is never displaced.
       authority.forms?.select(name, imported);
+    }
+    // Whatever tier answered, and whatever this execution declares, an
+    // implementation some declaration's private closure built runs only for an
+    // import that closure authorized. Neither the name nor the current
+    // execution can decide it: an answer kept from a legitimate private import
+    // can be returned for any *other* name, in a copy of the definition, and in
+    // a later run that declares nothing at all — and a run that has ended
+    // authorizes nothing.
+    if (!authorizedPrivate) {
+      refuseEscapedPrivate(name, imported);
     }
     // Read off the answer rather than from a frame the engine opened: what is
     // recognized is the exact definition canonical resolution produced for this
@@ -2187,6 +2299,13 @@ function* expandComponent(
   }
 
   const definition = imported;
+
+  // What this definition's own body may write. A declaration carries its
+  // private closure here; every other body carries whatever the caller carried,
+  // which for an ordinary document is nothing. Decided from the definition
+  // canonical resolution retained — the one this expansion is about to invoke,
+  // reporting the origin core declared — rather than from the name alone.
+  const bodyAuthority = authorityForBody(authority, name, definition);
 
   const placementError = validateBodyStructure(definition.bodySegments, definition.returns);
   if (placementError) {
@@ -2392,7 +2511,7 @@ function* expandComponent(
           claimProjection,
           path,
           checkedFailures,
-          authority,
+          bodyAuthority,
           returnBody,
         );
       });
@@ -2437,7 +2556,7 @@ function* expandComponent(
       bodyOwner,
       path,
       checkedFailures,
-      authority,
+      bodyAuthority,
       returnBody,
     );
   });

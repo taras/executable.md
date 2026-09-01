@@ -118,6 +118,14 @@ import {
   unresolvedMessage,
 } from "./components/select.ts";
 import { installedBundle } from "./components/bundle.ts";
+import {
+  admitDeclaredMarkdown,
+  declaredCatalog,
+  DeclaredImports,
+  privateClosure,
+} from "./components/declared-markdown.ts";
+import type { DeclaredMarkdownComponent } from "./components/declared-markdown.ts";
+import { documentationOf } from "./components/documentation.ts";
 import { registerComponents } from "./components/registration.ts";
 import {
   declaredForms,
@@ -127,7 +135,8 @@ import {
   parseFormDeclaration,
 } from "./invocation-identity.ts";
 import type { IdentityComponent } from "./invocation-identity.ts";
-import type { ExpansionAuthority } from "./components/import-authority.ts";
+import { ExecutionImports } from "./components/import-authority.ts";
+import type { ExpansionAuthority, ImportTier } from "./components/import-authority.ts";
 import type { WorkflowComponentBundle, WorkflowImportAuthority } from "./components/bundle.ts";
 import type { CodeBlockContext, CodeBlockResult, EvalEnv } from "./types.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
@@ -202,7 +211,26 @@ type DurableSelection =
    * blob's own object id — which is what a trusted host verifies the retained
    * selection against before any of it is replayed.
    */
-  | { kind: "workflow"; path: string; sourceHash: string; content: string };
+  | { kind: "workflow"; path: string; sourceHash: string; content: string }
+  /**
+   * Exact Markdown this execution declares.
+   *
+   * The origin, the digest and the bytes are all retained, because what a
+   * replay has to be sure of is that the run it is continuing was expanding
+   * *this* asset. A build that ships different bytes under the same name, or a
+   * host that no longer declares it, refuses rather than continuing somebody
+   * else's policy.
+   */
+  | { kind: "declared-markdown"; origin: string; digest: string; content: string }
+  /**
+   * A component only the declaration that carries it may write.
+   *
+   * Nothing else is retained: the implementation is built from a claimant this
+   * execution minted and is reachable from nowhere, so a replay reconstructs it
+   * the same way the live run did — by being inside the same declaration's body
+   * when it asks.
+   */
+  | { kind: "declared-private"; origin: string };
 
 /**
  * What a recorded import decided, read as a closed protocol.
@@ -227,6 +255,29 @@ function readDurableSelection(value: unknown): DurableSelection | undefined {
       return undefined;
     }
     return { kind: "registered", origin, reserved };
+  }
+
+  if (kind === "declared-private") {
+    const origin = record["origin"];
+    if (members !== 2 || typeof origin !== "string") {
+      return undefined;
+    }
+    return { kind: "declared-private", origin };
+  }
+
+  if (kind === "declared-markdown") {
+    const origin = record["origin"];
+    const digest = record["digest"];
+    const declaredContent = record["content"];
+    if (
+      members !== 4 ||
+      typeof origin !== "string" ||
+      typeof digest !== "string" ||
+      typeof declaredContent !== "string"
+    ) {
+      return undefined;
+    }
+    return { kind: "declared-markdown", origin, digest, content: declaredContent };
   }
 
   const path = record["path"];
@@ -320,7 +371,12 @@ function* durableImportComponent(
   registry: ComponentRegistry,
   position: Readonly<SourcePosition> | undefined,
   bundle: WorkflowImportAuthority | undefined,
+  declared: DeclaredImports | undefined,
 ): Workflow<ComponentDefinition | FunctionComponentDefinition> {
+  // Taken before the durable operation and outside it, because the offer is
+  // canonical core's own and a replay has to reach this the same way the live
+  // run did: the element asking is inside the declaration's body, or it is not.
+  const claimed = name === "__root__" ? undefined : declared?.claim(name);
   const recorded = yield createDurableOperation<DurableSelection>(
     // The root import is the run's own entry rather than an authored element,
     // so it carries no source however it was reached.
@@ -357,10 +413,15 @@ function* durableImportComponent(
         };
       }
 
+      if (claimed !== undefined) {
+        return { kind: "declared-private", origin: claimed.origin };
+      }
+
       const selected = yield* selectComponent(name, {
         includes: searchPaths,
         registry,
         ...(bundle === undefined ? {} : { workflow: bundle }),
+        ...(declared === undefined ? {} : { declared: declared.catalog }),
       });
 
       switch (selected.kind) {
@@ -379,6 +440,16 @@ function* durableImportComponent(
             path: selected.path,
             sourceHash: selected.sourceHash,
             content: selected.content,
+          };
+        case "declared-markdown":
+          // The exact declared bytes, already in hand: they were admitted
+          // before this run imported a root, so recording them reads nothing
+          // and a replay reconstructs the component without resolving a name.
+          return {
+            kind: "declared-markdown",
+            origin: selected.origin,
+            digest: selected.digest,
+            content: selected.source,
           };
         case "registered":
           return {
@@ -429,6 +500,37 @@ function* durableImportComponent(
       );
     }
     return found.definition;
+  }
+
+  if (selection.kind === "declared-private") {
+    // The offer is what makes a private name resolvable, and it was taken
+    // before the record was read. A replay that reaches this without one is
+    // expanding something other than the declaration that authored the element.
+    if (claimed === undefined || claimed.origin !== selection.origin) {
+      throw new Error(
+        `Component ${name} was recorded as a private declaration, which nothing being expanded ` +
+          "here declares.",
+      );
+    }
+    return claimed.definition;
+  }
+
+  if (selection.kind === "declared-markdown") {
+    const declaration = declared?.component(name);
+    if (
+      declaration === undefined ||
+      declaration.origin !== selection.origin ||
+      declaration.digest !== selection.digest ||
+      declaration.source !== selection.content
+    ) {
+      throw new Error(
+        `Component ${name} was recorded as the declared Markdown "${selection.origin}", which is ` +
+          `not what this run declares${declaration ? ` — "${declaration.origin}" is declared instead` : ""}.`,
+      );
+    }
+    // The parse admission produced, from the exact bytes the record carries.
+    // Reading a file here would let a checkout answer for a first-party asset.
+    return declaration.definition;
   }
 
   if (selection.kind === "workflow") {
@@ -1916,6 +2018,7 @@ function* executeDocument(
   preparations: readonly DurablePreparation[] = [],
   bundles: readonly WorkflowComponentBundle[] = [],
   identityComponents: readonly IdentityComponent[] = [],
+  declarations: readonly DeclaredMarkdownComponent[] = [],
 ): Operation<DocumentExecution> {
   const {
     stream,
@@ -2011,7 +2114,16 @@ function* executeDocument(
       // is read, before the root document is imported, and before any component
       // runs — because a bundle that could take one back would change what a
       // document already written means.
-      const bundle = installedBundle(bundles, yield* Component.operations.registry);
+      const startingRegistry = yield* Component.operations.registry;
+      const bundle = installedBundle(bundles, startingRegistry);
+
+      // The exact Markdown this host declares, admitted against its own bytes
+      // before the journal is read, before the root document is imported, and
+      // before any component runs. A declaration that disagrees with the source
+      // it names, or that claims a name a host already reserved, describes a
+      // document that cannot mean what it says.
+      const admittedDeclarations = yield* admitDeclaredMarkdown(declarations, startingRegistry);
+      const catalog = declaredCatalog(admittedDeclarations);
 
       // What this execution gives a durable identity to, from what installation
       // declared before anything could observe or replace it. Each factory is
@@ -2020,7 +2132,10 @@ function* executeDocument(
       // nowhere. Registration goes through the ordinary path, so a refused one
       // throws before `activate()`, and a claimant that was never activated
       // answers for nothing.
-      const identity = installIdentities(identityComponents);
+      const identity = installIdentities(
+        identityComponents,
+        admittedDeclarations.flatMap((declaration) => [...declaration.privates]),
+      );
       yield* registerComponents(identity.registrations);
       identity.activate();
       // The domains stop answering with the execution that minted them, so an
@@ -2030,8 +2145,37 @@ function* executeDocument(
       // expansion by value. Nothing a document, a component or middleware can
       // name reaches them.
       const forms = installFormSelections();
+      // The private closures, built from the minted implementations rather than
+      // from the declarations: what a private name resolves to is the function
+      // this execution built, and it names nothing once the execution is torn
+      // down above.
+      const declaredImports =
+        catalog === undefined
+          ? undefined
+          : new DeclaredImports(
+              catalog,
+              identity.privates,
+              new Map(
+                admittedDeclarations.map((declaration) => [
+                  declaration.name,
+                  privateClosure(declaration.privates),
+                ]),
+              ),
+            );
+      // The bundle first, so a bundled execution words every refusal exactly as
+      // it always did; a tier answers for the names it claims and the first one
+      // answers for the rest.
+      const tiers: ImportTier[] = [];
+      if (bundle !== undefined) {
+        tiers.push(bundle);
+      }
+      if (declaredImports !== undefined) {
+        tiers.push(declaredImports);
+      }
+      const imports = tiers.length === 0 ? undefined : new ExecutionImports(tiers);
       const authority: ExpansionAuthority = {
-        ...(bundle === undefined ? {} : { imports: bundle }),
+        ...(imports === undefined ? {} : { imports }),
+        ...(declaredImports === undefined ? {} : { declared: declaredImports }),
         identities: identity.identities,
         forms,
       };
@@ -2052,6 +2196,7 @@ function* executeDocument(
               registered,
               position,
               bundle,
+              declaredImports,
             );
             // Canonical selection, recorded where it is made. This is the only
             // thing that puts an invocation in one of this execution's identity
@@ -2068,7 +2213,7 @@ function* executeDocument(
             // The witness for this answer. It is issued where the answer is
             // produced and verified where it is invoked, so what a handler does
             // to the value in between is visible rather than authoritative.
-            return bundle === undefined ? definition : bundle.issue(name, definition);
+            return imports === undefined ? definition : imports.issue(name, definition);
           },
           *applyModifiers([modifiers, context], _next) {
             const chain = composeModifierChain(modifiers, context, registry);
@@ -2263,6 +2408,16 @@ export interface ExecutionInstallation {
    * refused rather than merged.
    */
   readonly bundle?: WorkflowComponentBundle;
+  /**
+   * The exact Markdown this host declares to the execution.
+   *
+   * Plain immutable data: the public name, the reported origin, the bytes,
+   * their digest, the forms and any private declarations those bytes alone may
+   * write. Captured by value alongside the admissions, before any installation
+   * runs, so what a declared name resolves to — and which answers a document
+   * may invoke — is fixed before anything can observe or replace it.
+   */
+  readonly declarations?: readonly DeclaredMarkdownComponent[];
   /**
    * What this installation records inside the durable root.
    *
@@ -2550,6 +2705,51 @@ function reconcile(document: Result<Json> | undefined, teardown: Error | undefin
   return document ?? Err(new Error("the document execution did not complete"));
 }
 
+/**
+ * One declared component, read once and held by this execution.
+ *
+ * Every member is copied here — the factory bound, the arrays copied, the
+ * schemas and prose read — because reading one later would be reading it after
+ * an installation ran. A host that hands over a declaration and then replaces
+ * its factory, its schemas or its prose has replaced nothing: what is admitted,
+ * registered and executed is what it declared at the moment the invocation
+ * captured it.
+ *
+ * Shared by the components a host declares to an execution and by the private
+ * declarations one declared Markdown component carries, so a member added to
+ * one is not silently dropped from the other.
+ */
+function retainedIdentityComponent(component: IdentityComponent): IdentityComponent {
+  return Object.freeze({
+    name: component.name,
+    origin: component.origin,
+    props: detachedSchema(component.props),
+    ...(component.returns === undefined ? {} : { returns: detachedSchema(component.returns) }),
+    ...(component.captures === undefined ? {} : { captures: [...component.captures] }),
+    ...(component.forms === undefined ? {} : { forms: [...component.forms] }),
+    ...documentationOf(component),
+    factory: component.factory.bind(component),
+  });
+}
+
+/**
+ * A schema this execution owns, copied out of the object the host handed over.
+ *
+ * A schema is the one member of a declaration that is a whole object graph
+ * rather than a value, so copying the reference copies nothing: an installation
+ * hook — or anything else still holding the caller's object — could reach into
+ * it after the capture and change the contract admission compiles, registration
+ * publishes and expansion validates every invocation against. The copy is
+ * structural, so a `__proto__` key stays an ordinary own property instead of
+ * reaching `Object.prototype`'s setter the way an assignment would.
+ *
+ * A value that will not copy is not a JSON Schema, and refusing here is the
+ * first place that can say so.
+ */
+function detachedSchema<Schema extends PropsSchema | ReturnsSchema>(schema: Schema): Schema {
+  return structuredClone(schema);
+}
+
 function* invoke(
   options: ExecuteOptions,
   installations: readonly ExecutionInstallation[],
@@ -2612,14 +2812,30 @@ function* invoke(
   // its own values rather than over an array a host still holds.
   const identityComponents = Object.freeze(
     installations.flatMap((installation) =>
-      [...(installation.components ?? [])].map((component) =>
+      [...(installation.components ?? [])].map(retainedIdentityComponent),
+    ),
+  );
+
+  // Read once and copied entry by entry, before any installation runs and for
+  // the reason the rest are: what a declared name means here is settled before
+  // anything can observe it, and the execution closes over its own values
+  // rather than over an array a host still holds.
+  const declarations = Object.freeze(
+    installations.flatMap((installation) =>
+      [...(installation.declarations ?? [])].map((declaration) =>
         Object.freeze({
-          name: component.name,
-          origin: component.origin,
-          props: component.props,
-          ...(component.returns === undefined ? {} : { returns: component.returns }),
-          ...(component.captures === undefined ? {} : { captures: [...component.captures] }),
-          factory: component.factory.bind(component),
+          name: declaration.name,
+          origin: declaration.origin,
+          source: declaration.source,
+          digest: declaration.digest,
+          ...(declaration.forms === undefined ? {} : { forms: [...declaration.forms] }),
+          ...(declaration.props === undefined ? {} : { props: detachedSchema(declaration.props) }),
+          ...(declaration.returns === undefined
+            ? {}
+            : { returns: detachedSchema(declaration.returns) }),
+          ...(declaration.privates === undefined
+            ? {}
+            : { privates: [...declaration.privates].map(retainedIdentityComponent) }),
         }),
       ),
     ),
@@ -2662,6 +2878,7 @@ function* invoke(
     preparations,
     bundles,
     identityComponents,
+    declarations,
   );
 }
 

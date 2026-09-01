@@ -35,6 +35,11 @@ import {
 import type { BodyStructureFacts } from "./body-structure.ts";
 import { Component } from "./component-api.ts";
 import { declaredRegistry } from "./components/declared-registry.ts";
+import { admitDeclaredMarkdown, declaredCatalog } from "./components/declared-markdown.ts";
+import type {
+  DeclaredMarkdownCatalog,
+  DeclaredMarkdownComponent,
+} from "./components/declared-markdown.ts";
 import { admitDeclaration, mergeRegistry } from "./components/registration.ts";
 import { DEFAULT_INCLUDES, selectComponent, unresolvedMessage } from "./components/select.ts";
 import {
@@ -109,6 +114,18 @@ export interface ValidateDocumentSettings {
    * document could run in. The factory is never called.
    */
   readonly components?: readonly IdentityComponent[];
+  /**
+   * The exact Markdown a host would declare to an execution, with the same
+   * meaning `ExecutionInstallation.declarations` gives it — admissibility
+   * included.
+   *
+   * A declared component describes itself completely, so an invocation of one
+   * is checked against its contract exactly as a registration is. Its body is
+   * not walked: those bytes are the host's, an author cannot change them, and
+   * the names only they may write resolve nowhere else — so reporting on them
+   * would be reporting a document's author for the engine's own asset.
+   */
+  readonly declarations?: readonly DeclaredMarkdownComponent[];
 }
 
 /** The root to validate, and the environment to validate it against. */
@@ -335,6 +352,35 @@ interface CompleteContract {
  * deep-equal diagnostics and invocation records every time.
  */
 export function* validateDocument(options: ValidateDocumentOptions): Operation<DocumentValidation> {
+  return yield* validate(options, true);
+}
+
+/**
+ * The same answer, about the source alone.
+ *
+ * Every check `validateDocument()` makes is made here except one: the root's
+ * own props are not validated against the values a run would supply, because
+ * there are no such values to supply. A caller reaching for this is asking
+ * whether a document *is* a document — its declarations, its component
+ * resolution, its forms, its bodies, its bindings, its captures and its returns
+ * — for a run that has not been asked for yet.
+ *
+ * A root that declares required props is therefore structurally valid here and
+ * invalid to `validateDocument({})`, which is the difference between "this
+ * source is a program" and "this source is a program that can run with
+ * nothing". Everything else is byte for byte the same walk and the same rule
+ * catalog, so the two cannot come to disagree about what a document says.
+ */
+export function* validateDocumentStructure(
+  options: ValidateDocumentOptions,
+): Operation<DocumentValidation> {
+  return yield* validate(options, false);
+}
+
+function* validate(
+  options: ValidateDocumentOptions,
+  rootValues: boolean,
+): Operation<DocumentValidation> {
   const includes = options.includes ?? DEFAULT_INCLUDES;
   const declared = options.components ?? [];
   // Admitted before anything is read, on exactly the terms ordinary execution
@@ -346,8 +392,11 @@ export function* validateDocument(options: ValidateDocumentOptions): Operation<D
     yield* admitDeclaration(component);
   }
   const registry = mergeRegistry(yield* Component.operations.registry, declaredRegistry(declared));
+  const declarations = declaredCatalog(
+    yield* admitDeclaredMarkdown(options.declarations ?? [], registry),
+  );
 
-  const state = new ValidationState(includes, registry);
+  const state = new ValidationState(includes, registry, declarations, rootValues);
   yield* state.run(options);
   return state.finish();
 }
@@ -363,6 +412,9 @@ export function* validateDocument(options: ValidateDocumentOptions): Operation<D
 class ValidationState {
   readonly #includes: readonly string[];
   readonly #registry: ComponentRegistry;
+  readonly #declarations: DeclaredMarkdownCatalog | undefined;
+  /** Whether the root's props are checked against the values a run would pass. */
+  readonly #rootValues: boolean;
   readonly #diagnostics: DraftDiagnostic[] = [];
   readonly #invocations: DraftInvocation[] = [];
   /**
@@ -402,9 +454,16 @@ class ValidationState {
   #nextToken = 0;
   #sequence = 0;
 
-  constructor(includes: readonly string[], registry: ComponentRegistry) {
+  constructor(
+    includes: readonly string[],
+    registry: ComponentRegistry,
+    declarations: DeclaredMarkdownCatalog | undefined,
+    rootValues: boolean,
+  ) {
     this.#includes = includes;
     this.#registry = registry;
+    this.#declarations = declarations;
+    this.#rootValues = rootValues;
   }
 
   *run(options: ValidateDocumentOptions): Operation<void> {
@@ -416,7 +475,9 @@ class ValidationState {
     // Root props are supplied JSON rather than document expressions, so the
     // whole object is validated: there is no dynamic value here to be opaque
     // about. A failure belongs to the root itself and invents no invocation.
-    yield* this.#validateRootProps(root, options.props ?? {});
+    if (this.#rootValues) {
+      yield* this.#validateRootProps(root, options.props ?? {});
+    }
 
     this.#queue.push(root);
     while (this.#queue.length > 0) {
@@ -710,6 +771,7 @@ class ValidationState {
     const selected = yield* selectComponent(segment.name, {
       includes: this.#includes,
       registry: this.#registry,
+      ...(this.#declarations === undefined ? {} : { declared: this.#declarations }),
     });
 
     if (selected.kind === "structural") {
@@ -783,6 +845,27 @@ class ValidationState {
       captureViolations.length > 0
         ? { refused: true }
         : { refused: false, binding: capturedBinding(segment.props.as) };
+
+    if (selected.kind === "declared-markdown") {
+      draft.origin = {
+        kind: "declared-markdown",
+        origin: selected.origin,
+        digest: selected.digest,
+      };
+      yield* this.#checkContract(
+        segment,
+        context,
+        draft,
+        {
+          props: selected.definition.props,
+          captures: [],
+          forms: selected.forms,
+          hasReturns: selected.definition.returns !== undefined,
+        },
+        capture,
+      );
+      return;
+    }
 
     if (selected.kind === "registered") {
       draft.origin = selected.origin;

@@ -287,6 +287,9 @@ function describeOrigin(origin: ComponentOrigin): string {
   if (origin.kind === "registered") {
     return `${code(origin.origin)} (${origin.reserved ? "reserved registration" : "registered default"})`;
   }
+  if (origin.kind === "declared-markdown") {
+    return `${code(origin.origin)} (declared Markdown)`;
+  }
   return `structural syntax (${code(origin.construct)})`;
 }
 

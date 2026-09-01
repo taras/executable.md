@@ -2616,8 +2616,11 @@ A component name is resolved in tiers, and the first tier that answers wins:
    repository file named after one never stands in for it. A structural name
    written where its construct gives it no meaning is a printed error, not a
    missing component.
-2. **a reserved registration** — a host protecting a language or security
-   invariant.
+2. **a host claiming the name** — a reserved registration protecting a language
+   or security invariant, or a *declared Markdown component*: exact first-party
+   Markdown a trusted host handed this execution. Both claim the name rather
+   than offering a default for it, so two claims on one name are refused where
+   they are installed and this tier never chooses between them.
 3. **the workflow component bundle** this execution is closed over, when a
    trusted host installed one.
 4. **a repository-local file**, by the candidate order below.
@@ -2638,6 +2641,101 @@ structural syntax, a name core supplies, nor a name the host reserved: those
 collisions are refused before the root document is imported. Ordinary
 `execute()`, `xmd run` and every inspection resolve without the tier, so nothing
 outside a workflow run learns that a bundle exists.
+
+#### Declared Markdown
+
+A trusted host may hand one execution exact first-party Markdown: the public
+name, the reported origin, the source, the SHA-256 of those bytes, the accepted
+forms, an optional statement of the props schema and return, and an optional
+private component closure. It crosses on an `ExecutionInstallation`, by value,
+before any installation, middleware or document code exists — the same terms the
+component bundle crosses on — so no caller-facing option selects one, adds one,
+or names its source.
+
+**It is held to its own bytes.** Canonical core parses the source and refuses
+the declaration before the root document is imported when the stated digest is
+not the digest of those bytes, when a stated schema is not the schema they
+declare, when the forms are not canonical, when the name is not a component name
+or is structural syntax, when one name is declared twice, or when a reserved
+registration already claims it. A build that ships different bytes under a
+declared name therefore fails where it is installed. The prose a reader sees is
+the source's own frontmatter, exactly as it is for any other Markdown component,
+so the asset and the entry describing it are one text.
+
+**A declaration may carry private components.** They are ordinary declared
+components (§5.6) — one domain, one claimant, revoked when the execution is torn
+down — and nothing registers them. Canonical core offers one for the duration of
+one import, from the closure the segments being expanded carry, and the resolver
+takes it once. So a private name resolves while core is expanding the declaring
+bytes' own body and nowhere else: not from the caller's root, not from content
+the caller projected through the declaration, not from a sibling declaration,
+not from a component the declaration imported, and not from middleware.
+
+**The offer is the authority, and it is spent where it was made.** What a private
+import may invoke is the object canonical core's own resolver produced *inside
+that ask*. An answer retained from another import authorizes nothing, however
+exactly it describes the same private component: eligibility belongs to the
+authored occurrence, not to the name, so a handler that delegates a legitimate
+private import and keeps what came back cannot hand it to a later site.
+
+**What is restricted is the implementation, not the name it arrives under, and
+not for this execution only.** A name alone cannot decide it: a handler holding a
+legitimately delegated private answer can return it for any *other* name, and
+answering an undeclared name is the ordinary open import a handler is supposed to
+be able to make. Neither can the current execution decide it: the run that built
+the implementation is exactly what is gone by the time a reusable installation
+presents it again.
+
+So every import that was not itself an authorized private one is refused when
+what came back carries a function some declaration's private closure built —
+under an alias, inside a copy of the definition the handler made itself, at a
+site after the invocation that produced it is over, and in a later execution that
+declares no Markdown at all and has no closure left to ask. A run that has ended
+authorizes nothing. A definition a handler wrote carries a different function and
+stays open, which is what keeps an unrelated middleware-provided component
+exactly as answerable as it is in an execution that declares nothing.
+
+The boundary is where an answer becomes something the engine will invoke. It says
+nothing about a handler that calls a function value it is holding: that is not
+component resolution, and nothing here pretends to be a defence against it.
+
+**Everywhere else the name resolves to nothing, before any tier answers.**
+Selection refuses a name some declaration keeps to itself, ahead of the workflow
+bundle, the repository and every registration — so a file, a bundle member or a
+registration under a private name never runs, and the printed error is the
+ordinary unresolved one. Inspection and document validation share that decision,
+so a repository candidate under a private name is described by neither and
+validates as unresolved.
+
+This is lexical availability rather than authority: every private component still
+takes its operation from the invocation that carries it, and core promises the
+closure whether or not a particular private implementation names durable work.
+
+**Only the declared names are closed.** Canonical core answers for the declared
+component and for its private closure, and `Component.importComponent`
+middleware cannot answer, replace or change one of those. It says nothing about
+any other name: an unrelated import in the same execution is the ordinary open
+import it has always been.
+
+**Every declaration is read once, before any installation runs.** The name,
+origin, source, digest, forms, prose and each private declaration are captured
+by the invocation and held by it, with the factory bound and every array and
+schema copied. A schema is copied rather than referenced because it is a whole
+object graph: holding the caller's object would let a hook reach into it after
+capture and change the contract admission compiles, registration publishes and
+expansion validates each invocation against. So a host that hands over a
+declaration and then replaces a member of it — or mutates a schema it still
+holds — has replaced nothing: what is admitted, registered and executed is what
+it declared at the moment of capture.
+
+**The journal records the asset.** A declared import records exactly
+`{ kind: "declared-markdown", origin, digest, content }` and a private one
+records exactly `{ kind: "declared-private", origin }`. A continuation reads
+both as hostile data and verifies the recorded origin, digest and bytes against
+what this run declares, reading no file: a host that no longer declares the name,
+or that declares different bytes under it, refuses rather than continuing
+somebody else's Markdown, and a recorded private import refuses unless the
+element asking is inside the same declaration.
 
 Two registrations for one name and kind at the same scope are a configuration
 error naming both origins. Installation order is not a resolution mechanism —
@@ -2745,17 +2843,28 @@ definition's source is already described by the selection that chose it, so
 source identity lives on the selection rather than being copied onto every
 definition.
 
-#### Only canonical execution answers a bundled import
+#### Only canonical execution answers a closed import
 
 `Component.importComponent` is an overridable public surface: a handler may
 observe an import, delegate it, refuse it by throwing, and — ordinarily — answer
 it with a definition of its own.
 
-While a component bundle is installed, it may still do the first three and no
-longer the fourth. A handler that returns without delegating, replaces what came
-back, changes it afterwards, or answers a name the bundle does not declare fails
-the import before the component runs. A refusal is still a refusal, and
+For a **closed** import it may still do the first three and no longer the
+fourth. A handler that returns without delegating, replaces what came back,
+changes it afterwards, or answers a name canonical execution did not resolve
+fails that import before the component runs. A refusal is still a refusal, and
 observation and delegation are unchanged.
+
+**Which imports are closed is a property of the name, not of the execution.** A
+component bundle closes every import a workflow run makes, including one that
+resolved to a core default underneath it: a run is a run *of* that pinned tree,
+and a name resolving outside it is what the bundle exists to prevent. A declared
+Markdown component closes only the names it declares — the component itself and
+its private closure. Every other name in that execution resolves and composes
+exactly as it does in an execution with no authority at all: a handler may still
+answer it, and nothing about the answer is verified or recorded as canonical
+resolution's product. Declaring one asset does not take component substitution
+away from every document the host runs.
 
 Two things hold that together, and the second is what makes the first safe.
 Canonical core keeps its own copy of the definition it produced, taken before
@@ -2772,9 +2881,12 @@ exactly the function core selected.
 
 The bundle reaches core as plain immutable data on an `ExecutionInstallation`,
 captured by value before any installation, middleware or document code exists —
-the same terms a journal admission and a durable preparation cross on. It is
-execution-local: two concurrent workflows declaring one name with different
-sources resolve their own, and leaving the execution scope removes it.
+the same terms a journal admission, a durable preparation and a Markdown
+declaration cross on. It is execution-local: two concurrent workflows declaring
+one name with different sources resolve their own, and leaving the execution
+scope removes it. One retention answers for every closed tier an execution has,
+so which tier closed a name decides how its refusal reads and never whether an
+answer is authorized.
 
 #### Origin
 
@@ -2785,7 +2897,8 @@ for both execution and inspection so they cannot disagree about which tier won:
 type ComponentOrigin =
   | { kind: "structural"; construct: string }
   | { kind: "repository"; path: string }
-  | { kind: "registered"; origin: string; reserved: boolean };
+  | { kind: "registered"; origin: string; reserved: boolean }
+  | { kind: "declared-markdown"; origin: string; digest: string };
 ```
 
 `inspectComponent(name)` reports the selected kind and origin without running
@@ -2828,7 +2941,7 @@ inside `syntax`, `forms`, `props`, `captures` and `returns`; forms are always
 A structural entry carries its name, its structural origin, its exact authored
 forms, a description, and `as` or `context` when those concepts apply to it. A
 complete component entry carries its name, selected origin and source kind
-(`registered` or `markdown`), `inspectability: "complete"`, its accepted forms,
+(`registered`, `markdown`, or `declared-markdown`), `inspectability: "complete"`, its accepted forms,
 its canonical draft-07 props schema, its captured prop names, an explicit
 `returnMode` of `"text"` or `"value"`, and the effective returns schema —
 `{ type: "string" }` in text mode. The mode stays explicit because a text
@@ -2900,11 +3013,18 @@ holds directory links.
 
 **A declared component is admitted the way an execution would admit it.** A host
 may hand inspection the identity components it would declare to an execution
-(§5.6). They are read without an execution existing, so the admissibility
-question is asked from the one place that answers it for both: two declarations
-of one name fail, and each declaration's name, origin, props and returns
-schemas, captures and forms are held to the check registration performs. What
-inspection does not do is build anything from them.
+(§5.6), and the exact Markdown it would declare (§5.3). They are read without an
+execution existing, so the admissibility question is asked from the one place
+that answers it for both: two declarations of one name fail, each declaration's
+name, origin, props and returns schemas, captures and forms are held to the
+check registration performs, and a declared Markdown component is held to its
+own bytes. What inspection does not do is build anything from them.
+
+Each declared Markdown name contributes one complete entry under built-in,
+reporting `declared-markdown` as its source kind and the declared origin and
+digest as its origin. Its private closure contributes nothing: those names are
+not syntax a document may write, so listing them would describe an environment
+that does not exist.
 
 **Inspection is observation, never authority.** Building a catalog installs only
 the declarative registration layer selection needs. It enters no execution,
@@ -2936,17 +3056,33 @@ type ValidateDocumentOptions = RootDocumentSource & {
   readonly props?: Record<string, Json>;
   readonly includes?: readonly string[];
   readonly components?: readonly IdentityComponent[];
+  readonly declarations?: readonly DeclaredMarkdownComponent[];
 };
 
 function* validateDocument(
   options: ValidateDocumentOptions,
 ): Operation<DocumentValidation>;
+
+function* validateDocumentStructure(
+  options: ValidateDocumentOptions,
+): Operation<DocumentValidation>;
 ```
+
+**`validateDocumentStructure()` is the same walk without the run's values.** It
+skips exactly one check — the root's own props against the values a run would
+supply — and runs every other one: the source walk, component selection, forms,
+body shape, bindings, captures, returns and the same diagnostic catalog, sharing
+one traversal and one rule set. A caller reaching for it is asking whether a
+document *is* a program, for a run that has not been asked for yet. So a root
+declaring required props is structurally valid and invalid to
+`validateDocument()` with no props, and the two answers cannot come to disagree
+about anything else. The answer is the same versioned `DocumentValidation`.
 
 The environment is the declarative one `inspectSyntax()` reads and no more:
 supplied text or a path with its optional target, root props as plain JSON, the
-ordered includes, the contextual component registry, and the identity
-declarations a host would make. There is no working-directory option — a
+ordered includes, the contextual component registry, the identity declarations a
+host would make and the exact Markdown it would declare. There is no
+working-directory option — a
 relative root or include resolves against the contextual runtime's, as execution
 resolves it. A declaration set an execution would refuse is refused here too,
 and it is the caller's configuration error rather than a diagnostic about the
@@ -2993,6 +3129,15 @@ answer is independent runs, and every one that fails is reported: where
 expansion refuses a construct at its first violation and expands nothing
 further, validation reads the whole of that construct's shared facts, because an
 author reading a result is owed all of them at once.
+
+**A declared Markdown component is checked as the contract it declares.** An
+invocation of one is held to the props, forms and return mode parsed from the
+declared bytes, exactly as a registration's invocation is held to its
+declaration, and its origin is recorded on the invocation record. Its body is
+not walked: those bytes are the host's, an author cannot change them, and the
+private names only they may write resolve nowhere else — so reporting on them
+would report a document's author for the engine's own asset. A private name
+written anywhere a document can write is the ordinary unresolved component.
 
 **Parsing stays one language rule.** The scanner and the definition parsers are
 execution's. Component-like text the scanner treats as text remains text, and a
