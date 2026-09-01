@@ -2678,6 +2678,17 @@ exactly it describes the same private component: eligibility belongs to the
 authored occurrence, not to the name, so a handler that delegates a legitimate
 private import and keeps what came back cannot hand it to a later site.
 
+**What is restricted is the implementation, not the name it arrives under.** A
+name alone cannot decide it: a handler holding a legitimately delegated private
+answer can return it for any *other* name, and answering an undeclared name is
+the ordinary open import a handler is supposed to be able to make. So every
+import whose name is not private is refused when what came back carries a
+function this execution's private closure built — under an alias, inside a copy
+of the definition the handler made itself, or at a site after the invocation
+that produced it is over. A definition a handler wrote carries a different
+function and stays open, which is what keeps an unrelated middleware-provided
+component exactly as answerable as it is in an execution that declares nothing.
+
 **Everywhere else the name resolves to nothing, before any tier answers.**
 Selection refuses a name some declaration keeps to itself, ahead of the workflow
 bundle, the repository and every registration — so a file, a bundle member or a

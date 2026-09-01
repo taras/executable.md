@@ -53,6 +53,7 @@ import { validateDocument, validateDocumentStructure } from "../src/document-val
 import { registerComponents } from "../src/components/registration.ts";
 import { retainedSource } from "../src/root-source.ts";
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
+import type { ImportedDefinition } from "../src/components/import-authority.ts";
 import type { PropsSchema } from "../src/types.ts";
 
 const ROOT_PATH = "documents/root.md";
@@ -119,6 +120,38 @@ function watching(entered: string[], name = "Secret"): IdentityComponent {
         entered.push("policy");
         return "the private answer";
       },
+  };
+}
+
+/**
+ * A handler that keeps the private answer and returns it under `Virtual`.
+ *
+ * `Virtual` is an ordinary open name — nothing declares it, so answering it is
+ * the supported thing DM37 protects. What is not supported is answering it with
+ * something the private closure produced.
+ */
+function aliasing(
+  through: (kept: ImportedDefinition) => ImportedDefinition = (kept) => kept,
+): ExecutionInstallation {
+  return {
+    *install() {
+      let kept: ImportedDefinition | undefined;
+      yield* Component.around(
+        {
+          *importComponent([name, position], next) {
+            if (name === "Secret") {
+              kept = yield* next(name, position);
+              return kept;
+            }
+            if (name === "Virtual" && kept !== undefined) {
+              return through(kept);
+            }
+            return yield* next(name, position);
+          },
+        },
+        { at: "max" },
+      );
+    },
   };
 }
 
@@ -829,6 +862,63 @@ describe("Tier DM — the private closure is lexical", () => {
     expect(validation.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
       "component-unresolved",
     );
+  });
+
+  it("DM43: a private implementation cannot run under an unrelated open name", function* () {
+    // The name is the wrong thing to check. A handler delegates a legitimate
+    // private import from inside the declaration, keeps the definition, and
+    // hands it back as the answer for `Virtual` — a name nothing declares, which
+    // is exactly the open import DM37 protects. Restricting by name lets the
+    // private implementation run under it.
+    const entered: string[] = [];
+    const message = yield* refusal(
+      run(
+        ["<Policy />", '<Virtual as="aliased" />', ""].join("\n"),
+        [declared(WITH_PRIVATE, { privates: [watching(entered)] })],
+        [aliasing()],
+      ),
+    );
+
+    expect(message).toContain("Virtual");
+    // The declaration's own invocation ran once. The alias ran not at all.
+    expect(entered).toEqual(["policy"]);
+  });
+
+  it("DM44: a copy of the private definition grants no authority either", function* () {
+    // The same reach, through a definition of the handler's own making that
+    // carries the implementation it kept. What is restricted is the
+    // implementation, not the object it arrives in.
+    const entered: string[] = [];
+    const message = yield* refusal(
+      run(
+        ["<Policy />", '<Virtual as="aliased" />', ""].join("\n"),
+        [declared(WITH_PRIVATE, { privates: [watching(entered)] })],
+        [aliasing((kept) => ({ ...kept, name: "Virtual" }))],
+      ),
+    );
+
+    expect(message).toContain("Virtual");
+    expect(entered).toEqual(["policy"]);
+  });
+
+  it("DM45: an answer kept past the declaration's teardown grants none", function* () {
+    // The declaration has finished expanding and its closure is gone. What the
+    // handler is holding is an answer from an invocation that is over, and an
+    // invocation that is over authorizes nothing — under its own name or any
+    // other.
+    const entered: string[] = [];
+    const message = yield* refusal(
+      run(
+        ["<Policy />", "", "the declaration is done", "", '<Virtual as="aliased" />', ""].join(
+          "\n",
+        ),
+        [declared(WITH_PRIVATE, { privates: [watching(entered)] })],
+        [aliasing()],
+      ),
+    );
+
+    expect(message).toContain("Virtual");
+    expect(entered).toEqual(["policy"]);
   });
 
   it("DM21: a private name a registration also claims refuses the declaration", function* () {

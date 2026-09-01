@@ -2213,6 +2213,12 @@ function* expandComponent(
       // an authority recorded explicitly is never displaced.
       authority.forms?.select(name, imported);
     }
+    // Whatever tier answered, an implementation this execution's private closure
+    // built runs only for an import that closure authorized. The name alone
+    // cannot decide it: an answer kept from a legitimate private import can be
+    // returned for any *other* name, and answering an undeclared name is the
+    // ordinary open import a handler is supposed to be able to make.
+    authority?.declared?.refuseEscaped(name, imported);
     // Read off the answer rather than from a frame the engine opened: what is
     // recognized is the exact definition canonical resolution produced for this
     // exact name, whenever it produced it.
