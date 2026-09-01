@@ -66,6 +66,7 @@ import {
 import type { CountingHost } from "./support/composition.ts";
 import { committedRoot, latestRoot, publishedRoots } from "./support/replay.ts";
 
+import type { RepositorySelection } from "../src/composition/selection.ts";
 const REMOTE = {
   commits: [
     {
@@ -179,13 +180,17 @@ function publishOnlyOnRemote(
 }
 
 /** A well-formed Repository record naming a Repository nothing retains. */
-const FORGED: RepositoryRecord = Object.freeze({
+const FORGED: RepositorySelection = Object.freeze({
+  selection: "forged",
   name: "ghost",
-  locatorFingerprint: "0".repeat(64),
-  requestedBase: null,
-  creationCommit: "0".repeat(40),
-  primaryBranch: "main",
-  objectFormat: "sha1",
+  identity: Object.freeze({
+    name: "ghost",
+    locatorFingerprint: "0".repeat(64),
+    requestedBase: null,
+    creationCommit: "0".repeat(40),
+    primaryBranch: "main",
+    objectFormat: "sha1" as const,
+  }),
   checkoutPath: "/repositories/ghost",
 });
 

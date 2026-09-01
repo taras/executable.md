@@ -114,6 +114,31 @@ export class RepositoryCompositionProviderError extends WorkflowStorageError {
   }
 }
 
+/**
+ * A Repository selection no installed provider minted, or one whose facts were
+ * edited after it did.
+ *
+ * A selection names a target and grants nothing: the provider keeps the
+ * authority in its own closure and asks what a selection names before it
+ * touches anything. So a value that was copied out of one execution, rebuilt
+ * from what a document could see, or handed over with a member changed reaches
+ * this rather than a checkout.
+ *
+ * A `StaleInputError`, on the same terms as {@link GitOperationAuthorityError}:
+ * a document cannot avoid it by asking for something else, and later siblings
+ * must not run as though the operation had happened.
+ */
+export class RepositorySelectionError extends StaleInputError {
+  override name = "RepositorySelectionError";
+
+  constructor(operation: string) {
+    super(
+      `${operation} was handed a Repository selection this provider did not make. Nothing was ` +
+        "read and nothing was changed.",
+    );
+  }
+}
+
 /** The provider answered with something that is not a record. */
 export class RepositoryCompositionProtocolError extends WorkflowStorageError {
   override name = "RepositoryCompositionProtocolError";

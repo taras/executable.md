@@ -43,6 +43,7 @@ import type { WorkflowWorkspaceOptions } from "../src/deno/workspace/host.ts";
 import type { WorkflowRunDatabase } from "../src/storage/api.ts";
 import { createRun, useStorageRoot, withStorage } from "./support/storage.ts";
 import { useBareRemote } from "./support/git-remotes.ts";
+import type { RepositorySelection } from "../src/composition/selection.ts";
 import {
   causedBy,
   countingHost,
@@ -79,13 +80,17 @@ const REMOTE = {
   ],
 } as const;
 
-const FORGED = Object.freeze({
+const FORGED: RepositorySelection = Object.freeze({
+  selection: "forged",
   name: "ghost",
-  locatorFingerprint: "0".repeat(64),
-  requestedBase: null,
-  creationCommit: "0".repeat(40),
-  primaryBranch: "main",
-  objectFormat: "sha1" as const,
+  identity: Object.freeze({
+    name: "ghost",
+    locatorFingerprint: "0".repeat(64),
+    requestedBase: null,
+    creationCommit: "0".repeat(40),
+    primaryBranch: "main",
+    objectFormat: "sha1" as const,
+  }),
   checkoutPath: "/repositories/ghost",
 });
 
@@ -131,7 +136,7 @@ function* expectation(
  */
 function runForged(
   database: WorkflowRunDatabase,
-  record: RepositoryRecord,
+  record: RepositorySelection,
   source: string,
   options: WorkflowWorkspaceOptions,
 ): Operation<Json> {

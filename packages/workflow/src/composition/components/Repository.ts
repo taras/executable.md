@@ -1,19 +1,24 @@
 /**
- * `<Repository>` — name a Git repository inside the run's Workspace
+ * `<Repository>` — select a managed Git repository by name and url
  * (specs/workflow-workspace-spec.md §6.1).
  *
  * Two forms, one meaning. Lexical
- * `<Repository name=".." url={..}>…</Repository>` creates or restores the named
+ * `<Repository name=".." url={..}>…</Repository>` creates or reuses the named
  * checkout, then expands its content with that Repository installed as the
  * contextual one and its checkout as the contextual working directory. Both are
  * restored when the invocation ends, on success, failure and cancellation
  * alike, because they live on the invocation's own scope.
  *
- * Self-closing `<Repository name=".." url={..} />` creates or restores the same
- * checkout, renders nothing, and returns the stable Workspace-relative checkout
- * path. Nothing here reaches into how `as` works: the engine's ordinary capture
- * binds the returned string, which is what keeps `as` one rule rather than a
- * Repository-shaped exception to one.
+ * Self-closing `<Repository name=".." url={..} />` creates or reuses the same
+ * checkout, renders nothing, and returns its checkout path. Nothing here reaches
+ * into how `as` works: the engine's ordinary capture binds the returned string,
+ * which is what keeps `as` one rule rather than a Repository-shaped exception to
+ * one.
+ *
+ * Where that checkout lives is the installed provider's. A workflow run holds it
+ * inside the run's own retained Workspace; an ordinary `xmd run` holds it under
+ * the managed root on the caller's filesystem, protected for the execution by an
+ * advisory lock.
  *
  * ## Who decides what a failure means
  *
@@ -42,9 +47,9 @@ import { content, hasContent } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { RepositoryComposition } from "../api.ts";
+import type { RepositoryRequest } from "../api.ts";
 import { RepositoryContext } from "../context.ts";
 import { RepositoryCompositionError } from "../errors.ts";
-import type { RepositoryCreationRequest } from "../records.ts";
 
 export const props = {
   type: "object",
@@ -74,7 +79,7 @@ function optional(props: Record<string, Json>, prop: string): string | undefined
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
-export function parseRepositoryProps(props: Record<string, Json>): RepositoryCreationRequest {
+export function parseRepositoryProps(props: Record<string, Json>): RepositoryRequest {
   return {
     name: required(props, "name"),
     locator: required(props, "url"),
@@ -83,21 +88,20 @@ export function parseRepositoryProps(props: Record<string, Json>): RepositoryCre
 }
 
 export default function* Repository(props: Record<string, Json>): Operation<string> {
-  const record = yield* RepositoryComposition.operations.createRepository(
+  const selection = yield* RepositoryComposition.operations.selectRepository(
     parseRepositoryProps(props),
   );
-  yield* RepositoryComposition.operations.attachRepository(record);
 
   if (!(yield* hasContent())) {
-    return record.checkoutPath;
+    return selection.checkoutPath;
   }
 
-  yield* RepositoryContext.around({ current: () => record }, { at: "min" });
+  yield* RepositoryContext.around({ current: () => selection }, { at: "min" });
   yield* API.Env.around(
     {
       // deno-lint-ignore require-yield
       *cwd(): Operation<string> {
-        return record.checkoutPath;
+        return selection.checkoutPath;
       },
     },
     { at: "min" },

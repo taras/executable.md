@@ -48,6 +48,8 @@ import { getWorkflowRun, retainedIssueIdentitiesHere } from "../run.ts";
 import { claimRetainedIssueIdentity, exhaustRetainedIssueIdentities } from "./identities.ts";
 import { ISSUE_EFFECT } from "./effect-type.ts";
 import { IssueApi } from "./api.ts";
+import { IssueOperations } from "./operations.ts";
+import type { IssueReadInvocation, IssueUpsertInvocation } from "./operations.ts";
 import type { IssueDetails, IssueInput, IssueReference } from "./api.ts";
 import { IssueProtocolError } from "./errors.ts";
 import {
@@ -226,3 +228,22 @@ function* attempt(
 }
 
 export { issueRequestJson };
+
+/**
+ * Install the retained Issue lifecycle for the current scope and below.
+ *
+ * What a workflow run adds to the transport underneath is exactly the envelope
+ * above: one durable effect per operation, named by this run and this
+ * expansion. `<Issue>` asks `IssueOperations`, this answers, and the installed
+ * `IssueApi` middleware still owns which service is reached and what a
+ * credential may see.
+ */
+export function useRetainedIssueOperations(): Operation<void> {
+  return IssueOperations.around(
+    {
+      read: ([invocation]: [IssueReadInvocation]) => readIssue(invocation),
+      upsert: ([invocation]: [IssueUpsertInvocation]) => upsertIssue(invocation),
+    },
+    { at: "min" },
+  );
+}

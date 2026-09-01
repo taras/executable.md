@@ -45,10 +45,7 @@ import {
   PullRequestAuthorityError,
 } from "../../composition/errors.ts";
 import { PULL_REQUEST_ELEMENT } from "../../composition/components/PullRequest.ts";
-import {
-  filteredRepositoryIdentity,
-  sameRepositoryIdentity,
-} from "../../composition/git-push-records.ts";
+
 import {
   parsePullRequestInputs,
   parsePullRequestPreState,
@@ -88,6 +85,7 @@ import {
   type GitHubSource,
 } from "./github.ts";
 import type { RepositoryHost } from "./host.ts";
+import { filteredRepositoryIdentity, sameRepositoryIdentity } from "../../composition/selection.ts";
 import {
   exportCheckoutFamily,
   prepareCheckout,

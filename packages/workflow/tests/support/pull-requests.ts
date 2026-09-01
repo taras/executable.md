@@ -24,6 +24,7 @@ import {
 } from "./github.ts";
 import { gitHubSource } from "../../src/deno/composition/github.ts";
 
+import type { RepositorySelection } from "../../src/composition/selection.ts";
 /** The repository the document names, and the one the fake GitHub holds. */
 export const LOCATOR = "https://github.com/octo/project";
 
@@ -43,14 +44,18 @@ export const REMOTE = {
   commits: [{ message: "first", entries: [{ path: "which.txt", content: "main\n" }] }],
 } as const;
 
-/** A well-formed Repository record naming a Repository nothing retains. */
-export const FORGED: RepositoryRecord = Object.freeze({
+/** A well-formed Repository selection no provider ever minted. */
+export const FORGED: RepositorySelection = Object.freeze({
+  selection: "forged",
   name: "ghost",
-  locatorFingerprint: "0".repeat(64),
-  requestedBase: null,
-  creationCommit: "0".repeat(40),
-  primaryBranch: "main",
-  objectFormat: "sha1",
+  identity: Object.freeze({
+    name: "ghost",
+    locatorFingerprint: "0".repeat(64),
+    requestedBase: null,
+    creationCommit: "0".repeat(40),
+    primaryBranch: "main",
+    objectFormat: "sha1" as const,
+  }),
   checkoutPath: "/repositories/ghost",
 });
 

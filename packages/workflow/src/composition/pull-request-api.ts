@@ -49,7 +49,7 @@ import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
 import type { PullRequestReadKind, PullRequestReadResult } from "./pull-request-read-records.ts";
 import type { PullRequestResult } from "./pull-request-records.ts";
-import type { RepositoryRecord } from "./records.ts";
+import type { RepositorySelection } from "./selection.ts";
 
 /** The stable name every loaded copy composes through. */
 export const PULL_REQUEST_API = "executablemd.workflow.pull-request";
@@ -81,12 +81,12 @@ export interface PullRequestInput {
  * Where the pull request goes, and what the provider needs to get it there.
  *
  * Unlike a read, an upsert is about a branch in a checkout this run holds, so
- * the Repository record and the working directory the component observed travel
- * with it. They are what the selected provider authenticates against the run's
- * own retained state before it publishes anything.
+ * the Repository selection and the working directory the component observed
+ * travel with it. The selected provider authenticates the selection against its
+ * own private state before it publishes anything.
  */
 export interface PullRequestUpsertOptions {
-  readonly repository: RepositoryRecord;
+  readonly repository: RepositorySelection;
   readonly workingDirectory: string;
   /** The explicit discriminator, when the document named one. */
   readonly provider?: string;

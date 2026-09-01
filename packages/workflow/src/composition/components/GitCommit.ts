@@ -41,7 +41,7 @@ import type { PropsSchema, ReturnsSchema } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { GitComposition } from "../git-api.ts";
-import { currentRepository } from "../context.ts";
+import { selectedRepository } from "../context.ts";
 import { GitOperationAuthorityError, GitOperationError } from "../errors.ts";
 import { wellFormedText } from "../parse.ts";
 import { parseGitCommitMessageSource } from "../git-records.ts";
@@ -188,7 +188,7 @@ export default function* GitCommit(props: Record<string, Json>): Operation<strin
   const body = (yield* hasContent()) ? yield* content() : "";
   const composed = composeCommitMessage(message, body);
 
-  const repository = yield* currentRepository();
+  const repository = yield* selectedRepository();
   if (repository === undefined) {
     throw new GitOperationAuthorityError(
       COMMIT,

@@ -32,7 +32,7 @@ import {
   GitOperationInfrastructureError,
   type GitFailureReason,
 } from "../../composition/errors.ts";
-import type { GitOutcome, RepositoryHost } from "./host.ts";
+import type { GitCommitIdentity, GitOutcome, RepositoryHost } from "./host.ts";
 import { unauthenticable } from "./authentication.ts";
 import type { GitAttachment, GitAuthenticationSession } from "./authentication.ts";
 
@@ -65,6 +65,8 @@ export interface GitCommand {
   readonly input?: string;
   /** The whole Unix second an object-writing command records. */
   readonly committedAt?: number;
+  /** Who this command records as author and committer, when not the fixed one. */
+  readonly identity?: GitCommitIdentity;
   /**
    * What the provider invocation running this command borrowed from the host.
    *
@@ -642,6 +644,8 @@ export interface IndexCommit {
   /** The canonical message bytes, exactly as they are to be committed. */
   readonly message: string;
   readonly committedAt: number;
+  /** Who this commit is by, when it is not the fixed workflow identity. */
+  readonly identity?: GitCommitIdentity;
 }
 
 /**
@@ -656,7 +660,11 @@ export function* commitIndex(git: GitSession, request: IndexCommit): Operation<v
   const outcome = yield* git.run(
     ["commit", "--cleanup=verbatim", "--no-gpg-sign", "--file", "-"],
     request.workingDirectory,
-    { input: request.message, committedAt: request.committedAt },
+    {
+      input: request.message,
+      committedAt: request.committedAt,
+      ...(request.identity === undefined ? {} : { identity: request.identity }),
+    },
   );
   if (outcome.code !== 0) {
     throw new GitOperationInfrastructureError(
@@ -672,6 +680,11 @@ export interface CommitFacts {
   readonly tree: string;
   readonly authoredAt: number;
   readonly committedAt: number;
+  /** Who the object records, so a caller can hold it to what it asked for. */
+  readonly authorName: string;
+  readonly authorEmail: string;
+  readonly committerName: string;
+  readonly committerEmail: string;
 }
 
 /**
@@ -687,16 +700,34 @@ export function* readCommit(
   commit: string,
 ): Operation<CommitFacts | undefined> {
   const reported = yield* git.read(
-    ["log", "-1", "--pretty=format:%T%n%at%n%ct%n%P", commit, "--"],
+    ["log", "-1", "--pretty=format:%T%n%at%n%ct%n%an%n%ae%n%cn%n%ce%n%P", commit, "--"],
     directory,
   );
   if (reported === undefined) {
     return undefined;
   }
-  const [tree, authored, committed, parents] = reported.split("\n");
+  const [
+    tree,
+    authored,
+    committed,
+    authorName,
+    authorEmail,
+    committerName,
+    committerEmail,
+    parents,
+  ] = reported.split("\n");
   const authoredAt = wholeSeconds(authored);
   const committedAt = wholeSeconds(committed);
-  if (tree === undefined || tree === "" || authoredAt === undefined || committedAt === undefined) {
+  if (
+    tree === undefined ||
+    tree === "" ||
+    authoredAt === undefined ||
+    committedAt === undefined ||
+    authorName === undefined ||
+    authorEmail === undefined ||
+    committerName === undefined ||
+    committerEmail === undefined
+  ) {
     return undefined;
   }
   return {
@@ -704,6 +735,10 @@ export function* readCommit(
     tree,
     authoredAt,
     committedAt,
+    authorName,
+    authorEmail,
+    committerName,
+    committerEmail,
   };
 }
 

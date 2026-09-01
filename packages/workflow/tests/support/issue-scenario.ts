@@ -40,6 +40,7 @@ import {
 } from "./issue-providers.ts";
 import type { ProviderLog } from "./issue-providers.ts";
 import { useGitHubIssues } from "../../src/deno/issue/github.ts";
+import { useRetainedIssueOperations } from "../../src/issue/effect.ts";
 import { credential, useIssueTrackerServer } from "./issue-tracker-server.ts";
 import type { IssueTrackerServer, ServedIssue } from "./issue-tracker-server.ts";
 
@@ -160,6 +161,10 @@ export function* useScenarioFixture(): Operation<ScenarioFixture> {
   const attempting: Attempting = { current: undefined };
 
   yield* useCompositionComponents();
+  // The retained lifecycle `<Issue>` asks for, above whichever transport a
+  // scenario installs beneath it. The scenarios are about a workflow run's
+  // durability, so it is the workflow one they run under.
+  yield* useRetainedIssueOperations();
   yield* useProviderComponents(log);
   yield* useKeyRecorder(log);
   yield* useScenarioComponents(server, held, log, staged, attempting);

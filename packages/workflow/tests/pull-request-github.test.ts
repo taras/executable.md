@@ -12,6 +12,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import process from "node:process";
 import type { Operation } from "effection";
+import type { RepositoryIdentity } from "../src/composition/selection.ts";
 import {
   denoGitHubAccess,
   gitHubPullRequests,
@@ -28,7 +29,7 @@ import type {
   PullRequestInputs,
   PullRequestSnapshot,
 } from "../src/composition/pull-request-records.ts";
-import type { GitPushRepositoryIdentity } from "../src/composition/git-push-records.ts";
+
 import {
   creations,
   fakeGitHubAccess,
@@ -43,7 +44,7 @@ const HEAD = "a".repeat(40);
 const BASE = "b".repeat(40);
 const ENDPOINT = "https://api.github.test";
 
-const IDENTITY: GitPushRepositoryIdentity = Object.freeze({
+const IDENTITY: RepositoryIdentity = Object.freeze({
   name: "project",
   locatorFingerprint: "0".repeat(64),
   requestedBase: null,

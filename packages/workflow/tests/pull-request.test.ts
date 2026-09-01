@@ -1067,9 +1067,9 @@ describe("workflow PullRequest containment", () => {
 
       // There is no host-less fallback. A pull request that "ran" without a
       // provider would say this run published something it never did. Since
-      // #576 the surface reporting that is `PullRequestApi`, which carries both
-      // questions about a pull request; the property is the one it always was.
-      expect(String(failure)).toContain("no pull-request provider handles");
+      // #643 the surface reporting that is `PullRequestOperations`, which is
+      // where the two profiles differ; the property is the one it always was.
+      expect(String(failure)).toContain("no pull-request provider is installed");
     });
   });
 });
