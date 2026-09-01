@@ -131,6 +131,8 @@ import type { UpgradeAssembly } from "./upgrade.ts";
 import { componentSearchPath, resolveTestTarget } from "./test-target.ts";
 import { renderSyntaxJson, renderSyntaxMarkdown, syntaxCatalog } from "./syntax.ts";
 import { testingExecutionHost } from "./testing-host.ts";
+import { unsupportedRepositories } from "./run-repositories.ts";
+import type { RepositoryInstaller } from "./run-repositories.ts";
 import { EVAL_ALIAS, EVAL_OPTION, evalGrammarError, readEvalFlags } from "./eval-source.ts";
 import type { EvalFlags } from "./eval-source.ts";
 import {
@@ -144,7 +146,7 @@ import type { HostWorkflowInstaller, WorkflowHost, WorkflowStart } from "./workf
 import { runWorkflowManagement } from "./workflow-management.ts";
 import { establishDefinition } from "./workflow-definition.ts";
 import type { EstablishedDefinition } from "./workflow-definition.ts";
-import { useWorkflowServiceDenial } from "@executablemd/workflow";
+import { COMPOSITION_REGISTRATIONS, useWorkflowServiceDenial } from "@executablemd/workflow";
 import denoJson from "../deno.json" with { type: "json" };
 
 const SECRET_DETECTION_OPTION = "--secret-detection";
@@ -862,6 +864,13 @@ export function* installDocumentComponents(mode: DocumentMode, verbose: boolean)
   // `<Verbose>` is registered at all.
   yield* Config.around({ verbose: () => verbose }, { at: "min" });
 
+  // The repository-composition vocabulary, as ordinary shadowable defaults.
+  // Registering it installs no provider, discovers no repository, acquires no
+  // lock and reaches no network: what a name *does* is decided by whichever
+  // provider the command installed, and a runtime that installs none still
+  // resolves every one of these.
+  yield* registerComponents(COMPOSITION_REGISTRATIONS);
+
   // Compose testing around the single core execution entrypoint: both
   // commands register the components (assertions work in regular documents,
   // explicit <Testing> boundaries affect the outcome), while `xmd test`
@@ -913,6 +922,7 @@ function* runDocument(
   config: DocumentConfig,
   mode: DocumentMode,
   installService: HostServiceInstaller,
+  installRepositories: RepositoryInstaller,
 ): Operation<Result<void>> {
   const { root, include, verbose, journal, raw, secretDetection, retainProcessOutput } = config;
 
@@ -1020,6 +1030,15 @@ function* runDocument(
   // reread inside `execute()` below has passed this line and still never asks
   // the provider for a service.
   yield* installService();
+
+  // Repository authority belongs to document execution too, and it is this
+  // execution's own: the provider it installs holds an invocation identity, the
+  // leases on the checkouts this document selects, and the evidence of what it
+  // published. `xmd run` and an approved `xmd plan --run` supply the live one;
+  // `xmd test` and every runtime without an operational provider supply the one
+  // that installs nothing, and every repository operation then reports an
+  // absent provider before touching anything.
+  yield* installRepositories();
 
   // What a `<Test>` in this document runs a nested execution under. Captured
   // before document code begins, so a child is offered exactly what this
@@ -1134,9 +1153,10 @@ function* runScopedDocument(
   config: DocumentConfig,
   mode: DocumentMode,
   installService: HostServiceInstaller,
+  installRepositories: RepositoryInstaller,
 ): Operation<Result<void>> {
   try {
-    return yield* scoped(() => runDocument(config, mode, installService));
+    return yield* scoped(() => runDocument(config, mode, installService, installRepositories));
   } catch (error) {
     return Err(error instanceof Error ? error : new Error(String(error)));
   }
@@ -1166,6 +1186,7 @@ export function planExecutor(
   stack: AgentStack,
   sessions: MachineSessionAssembly | undefined,
   installService: HostServiceInstaller,
+  installRepositories: RepositoryInstaller,
 ): (approved: PlanExecution) => Operation<Result<void>> {
   return (approved) =>
     scoped(function* (): Operation<Result<void>> {
@@ -1192,6 +1213,10 @@ export function planExecutor(
           agent: stack,
         },
         installService,
+        // An approved plan's second execution is an ordinary run, so it gets
+        // the ordinary provider — a fresh one, since the authorship profile's
+        // scope is already gone.
+        installRepositories,
       );
     });
 }
@@ -1246,6 +1271,8 @@ function* test(
   config: TestConfig,
   args: string[],
   installService: HostServiceInstaller,
+  /** What a `<Execution host="run">` child installs. This command installs none. */
+  installRepositories: RepositoryInstaller,
 ): Operation<void> {
   const patterns = readPatternFlags(args);
   if (patterns.missingValue) {
@@ -1279,6 +1306,10 @@ function* test(
       { ...config, root: { path } },
       { testing: true },
       installService,
+      // `xmd test` installs no operational repository provider, for its own
+      // document or for a nested one: every repository operation under it
+      // reaches a clear provider-absence error.
+      unsupportedRepositories,
     );
     if (!result.ok) {
       reportFailure(result.error);
@@ -1319,6 +1350,7 @@ function* test(
       },
       { testing: true },
       installService,
+      unsupportedRepositories,
     );
     if (!result.ok) {
       reportFailure(result.error, document.relativePath);
@@ -2105,6 +2137,7 @@ function* dispatch(
   helpRequest: { requested: boolean; args: string[] },
   installService: HostServiceInstaller,
   upgrade: UpgradeAssembly,
+  installRepositories: RepositoryInstaller,
   workflowHost: WorkflowHost | undefined,
   sessions: MachineSessionAssembly | undefined,
 ): Operation<void> {
@@ -2206,6 +2239,7 @@ function* dispatch(
             agent: runStack,
           },
           installService,
+          installRepositories,
         );
       });
       if (!result.ok) {
@@ -2263,7 +2297,7 @@ function* dispatch(
           // A host that answers installs a provider; one that does not installs
           // none, and nothing downstream reads a profile to find out which.
           installElicitation: installWebElicitation,
-          execute: planExecutor(config, planStack, sessions, installService),
+          execute: planExecutor(config, planStack, sessions, installService, installRepositories),
         },
       );
       if (exitCode !== 0) {
@@ -2364,6 +2398,7 @@ function* dispatch(
         { ...command.config, retainProcessOutput: keepsProcessOutput(command.config.journal) },
         evalFlags.rest,
         installService,
+        installRepositories,
       );
       break;
     }
@@ -2469,6 +2504,9 @@ function* dispatch(
             // service adapter would: installed inside the execution scope,
             // before the root document is imported.
             useWorkflowServiceDenial,
+            // A workflow run's repositories are the retained ones its Workspace
+            // attachment installs, so this path installs none of its own.
+            unsupportedRepositories,
           ),
         ),
       );
@@ -2486,6 +2524,12 @@ export function* runXmd(
   // command run under any other one refuses with that installation's own remedy
   // rather than reaching for a release, a lock or a file.
   upgrade: UpgradeAssembly,
+  // What an ordinary document execution installs for `<Repository>`,
+  // `<Worktree>`, the Git operations, `<Issue>` and `<PullRequest>`. Deno and
+  // the compiled binary supply the live provider; Node and Bun supply the one
+  // that installs nothing, so those runtimes describe the same vocabulary and
+  // operate none of it.
+  installRepositories: RepositoryInstaller,
   // Defaults to the host that refuses. A caller driving this without naming a
   // workflow host has no run store, and inheriting one by omission is the
   // failure mode the whole boundary exists to prevent — so the default is the
@@ -2556,7 +2600,15 @@ export function* runXmd(
     (selected.name === "run" || selected.name === "plan");
 
   if (!executes) {
-    return yield* dispatch(evalFlags, helpRequest, installService, upgrade, workflowHost, sessions);
+    return yield* dispatch(
+      evalFlags,
+      helpRequest,
+      installService,
+      upgrade,
+      installRepositories,
+      workflowHost,
+      sessions,
+    );
   }
 
   const timeouts = resolveRunTimeouts(evalFlags.rest);
@@ -2567,6 +2619,14 @@ export function* runXmd(
   }
 
   yield* underRunDeadline(timeouts, () =>
-    dispatch(evalFlags, helpRequest, installService, upgrade, workflowHost, sessions),
+    dispatch(
+      evalFlags,
+      helpRequest,
+      installService,
+      upgrade,
+      installRepositories,
+      workflowHost,
+      sessions,
+    ),
   );
 }

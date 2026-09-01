@@ -132,6 +132,23 @@ function catalogWith(props: PropsSchema): SyntaxCatalog {
   };
 }
 
+/** The thirteen names #643 settled, exactly as a document writes them. */
+const COMPOSITION_NAMES = [
+  "Repository",
+  "Worktree",
+  "Dir",
+  "Git.Switch",
+  "Git.Add",
+  "Git.Commit",
+  "Git.Push",
+  "PullRequest",
+  "PullRequest.Reviews",
+  "PullRequest.Comments",
+  "PullRequest.Checks",
+  "IssueTracker",
+  "Issue",
+] as const;
+
 describe("Tier SX — the run profile the command describes", () => {
   it("SX1: names core, Agent, testing and web defaults, and <Session>", function* () {
     const catalog = yield* syntaxCatalog([]);
@@ -156,6 +173,58 @@ describe("Tier SX — the run profile the command describes", () => {
       expect(builtIn).toContain(name);
     }
     expect(catalog.categories[2].entries).toEqual([]);
+  });
+
+  it("ORC1: names all thirteen repository-composition components, with contracts", function* () {
+    const catalog = yield* syntaxCatalog([]);
+    const entries = catalog.categories[1].entries;
+    const builtIn = names(entries);
+
+    for (const name of COMPOSITION_NAMES) {
+      expect(builtIn).toContain(name);
+    }
+
+    // A complete contract, not a bare name: every one of them says what it is
+    // for, which forms it takes, and what its props are.
+    for (const name of COMPOSITION_NAMES) {
+      const entry = entries.find((candidate) => candidate.name === name);
+      expect(entry?.description ?? "").not.toBe("");
+      expect(entry?.forms?.length ?? 0).toBeGreaterThan(0);
+      // Registered rather than reserved, which is what makes a repository
+      // component of the same name win.
+      expect(entry?.origin).toEqual({
+        kind: "registered",
+        origin: "@executablemd/workflow/composition",
+        reserved: false,
+      });
+    }
+
+    // The ones that produce a value say what `as` binds; the ones that render
+    // nothing and produce nothing do not pretend to.
+    expect(entries.find((entry) => entry.name === "Git.Commit")?.as).toContain("object id");
+    expect(entries.find((entry) => entry.name === "PullRequest.Reviews")?.as).toContain("Required");
+    expect(entries.find((entry) => entry.name === "Git.Push")?.as).toBe(undefined);
+  });
+
+  it("ORC1: a repository component of the same name shadows the default", function* () {
+    yield* useWorkspace(
+      {
+        "Worktree.md": [
+          "---",
+          "description: the repository's own Worktree",
+          "---",
+          "",
+          "shadowed",
+          "",
+        ].join("\n"),
+      },
+      function* (dir) {
+        const catalog = yield* syntaxCatalog([dir]);
+        const provided = catalog.categories[2].entries.find((entry) => entry.name === "Worktree");
+        expect(provided).toBeDefined();
+        expect(names(catalog.categories[1].entries)).not.toContain("Worktree");
+      },
+    );
   });
 
   it("SX2: documents every complete built-in in the profile", function* () {

@@ -33,14 +33,16 @@ import type {
 import { TESTING_REGISTRATIONS } from "@executablemd/testing";
 import { WEB_REGISTRATIONS } from "@executablemd/web";
 import { VERBOSE_REGISTRATION } from "./verbose-component.ts";
+import { COMPOSITION_REGISTRATIONS } from "@executablemd/workflow";
 
 /**
  * The catalog for the production `run` profile, in the contextual working
  * directory.
  *
  * The registrations are the ones `installTestingComponents()`,
- * `installWebComponents()` and `installAgentComponents()` register, read as
- * values so this cannot drift from what a run installs. What those installers
+ * `installWebComponents()`, `installAgentComponents()` and the
+ * repository-composition installer register, read as values so this cannot
+ * drift from what a run installs. What those installers
  * *also* do — testing activation and its execution middleware, the elicitation
  * provider, the agent provider, the permission mode, the foreground launcher —
  * is operational and belongs to a run, so none of it happens here.
@@ -82,6 +84,10 @@ export function* useRunProfileRegistry(): Operation<void> {
     ...AGENT_REGISTRATIONS,
     ...TESTING_REGISTRATIONS,
     ...WEB_REGISTRATIONS,
+    // The repository-composition vocabulary. Registering it is all that happens
+    // here: catalog construction installs no provider, discovers no ambient
+    // repository, acquires no lock, spawns no Git and reads no credential.
+    ...COMPOSITION_REGISTRATIONS,
   ]);
 }
 
