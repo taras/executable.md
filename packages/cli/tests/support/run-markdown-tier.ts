@@ -18,7 +18,7 @@
  * result left unread would hold the completion open.
  */
 
-import { Ok, scoped } from "effection";
+import { Ok, scoped, useScope } from "effection";
 import type { Operation, Result } from "effection";
 import { forEach } from "@effectionx/stream-helpers";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -28,6 +28,8 @@ import { executeInstalled } from "@executablemd/core/host";
 import { testHarnessInstallation, useTesting } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
 import { cliBase, cliRuntime } from "@executablemd/test-support/launch";
+import { planComponentDeclaration } from "../../src/plan-component.ts";
+import { renderSyntaxMarkdown, syntaxCatalog } from "../../src/syntax.ts";
 import { testingExecutionHost } from "../../src/testing-host.ts";
 import { useBunService } from "../../src/bun-service.ts";
 import { useDenoService } from "../../src/deno-service.ts";
@@ -64,6 +66,21 @@ export function runMarkdownTier(document: string): Operation<MarkdownTierRun> {
       // harness bypasses `runXmd()` and there is no `API.Env` handler here to
       // ask.
       testAgentWorker: Ok([...cliBase(), "test-agent"]),
+      // The run profile's own `<Plan>`, so a child assembled here has the
+      // vocabulary a child assembled by `xmd run` has. This harness settles no
+      // Agent stack, so a document that writes one resolves the packaged policy
+      // and is refused at the ceiling — which is what a host with no coding
+      // agent should say, rather than that the component does not exist.
+      plan: yield* planComponentDeclaration({
+        surface: "component",
+        includes: ["components", "."],
+        host: yield* useScope(),
+        // deno-lint-ignore require-yield
+        *installElicitation(): Operation<void> {},
+        *catalog(): Operation<string> {
+          return renderSyntaxMarkdown(yield* syntaxCatalog(["components", "."]));
+        },
+      }),
     });
     const execution = yield* executeInstalled({ path: document, stream: new InMemoryStream() }, [
       testHarnessInstallation(testingHost),
