@@ -1,5 +1,5 @@
 /**
- * GitHub's pull-request middleware: reads by URL, retained.
+ * GitHub's pull-request middleware: reads by URL.
  *
  * Ordinary middleware around `PullRequestAPI`, the way `useGitHubIssues` is
  * ordinary middleware around `IssueApi`. It looks at the URL, handles the ones
@@ -16,11 +16,24 @@
  *
  * ## Transport, and only transport
  *
- * What a read *costs* — whether it is performed once and retained, or performed
- * afresh every execution — belongs to the profile above this, which is why both
- * profiles install this same middleware and answer that question differently.
- * Here there is one job: recognize the URL, hold it to the ceiling, open a
- * session, and hand back the normalized evidence.
+ * Nothing here is retained. What a read *costs* — whether it is performed once
+ * and kept, or performed afresh every execution — is selected through
+ * `PullRequestReadExecution`, whose base performs the transport and around
+ * which a workflow run installs the policy that makes an admitted read durable.
+ * That is a different surface from `PullRequestOperations`, deliberately: this
+ * middleware reaches the execution boundary from *inside*, once it has admitted
+ * a request, while the operations seam sits above the transport entirely and
+ * cannot see what was admitted.
+ *
+ * The order is what that buys. Matching, the host ceiling and target validation
+ * are this middleware's own decisions and are made before any profile hears
+ * about the read, so a target this host never authorized leaves no record
+ * anywhere — not even a failed one. Everything after admission is the profile's.
+ *
+ * So there is one job here: recognize the URL, hold it to the ceiling, validate
+ * the target, then open a session and hand back the normalized evidence when
+ * the installed policy asks for it. Both profiles install this same middleware
+ * and neither changes it.
  */
 
 import type { Operation } from "effection";
@@ -31,6 +44,7 @@ import type {
   PullRequestReadResult,
 } from "../../composition/pull-request-read-records.ts";
 import { PullRequestAPI } from "../../composition/pull-request-api.ts";
+import { PullRequestReadExecution } from "../../composition/pull-request-read-execution.ts";
 import type { PullRequestReadOptions } from "../../composition/pull-request-api.ts";
 import type { RepositoryRecord } from "../../composition/records.ts";
 import type { SelectionRegistry } from "../selections.ts";
@@ -217,28 +231,43 @@ export function* useGitHubPullRequestReads(options: GitHubPullRequestsOptions): 
         );
       }
 
-      // After the ceiling, never before: a session opened first would be an
-      // identity established for a target this host had not authorized.
-      const access = yield* source.open();
-      const reading = yield* readEvidence(access, name, name.number, read.kind);
-      if (reading.state === "unavailable") {
-        throw new PullRequestReadError(
-          "unavailable",
-          element,
-          "the Git host did not answer with the complete collection. None of what it did " +
-            "answer is evidence that there is nothing there.",
-        );
-      }
-      if (reading.state === "protocol-invalid") {
-        throw new PullRequestReadError(
-          "protocol",
-          element,
-          "the Git host answered about a different subject, or with an item outside the " +
-            "evidence contract. A well-formed answer to another question is still the wrong " +
-            "answer.",
-        );
-      }
-      return reading.result;
+      // Admitted. Everything above decided whether this host may answer at all,
+      // and none of it is retained: a target outside the ceiling, or one this
+      // adapter cannot name, leaves no record of a question that was never
+      // permitted.
+      //
+      // What happens from here is the profile's, not this adapter's. Both
+      // profiles install this same middleware, so it asks rather than decides:
+      // an ordinary run performs the transport afresh, and a workflow run wraps
+      // it in one durable effect. Neither a WorkflowRun nor an expansion is
+      // reachable from here, which is what keeps that true.
+      return yield* PullRequestReadExecution.operations.perform(
+        { url, kind: read.kind, provider: read.provider },
+        function* (): Operation<PullRequestReadResult> {
+          // After the ceiling, never before: a session opened first would be an
+          // identity established for a target this host had not authorized.
+          const access = yield* source.open();
+          const reading = yield* readEvidence(access, name, name.number, read.kind);
+          if (reading.state === "unavailable") {
+            throw new PullRequestReadError(
+              "unavailable",
+              element,
+              "the Git host did not answer with the complete collection. None of what it did " +
+                "answer is evidence that there is nothing there.",
+            );
+          }
+          if (reading.state === "protocol-invalid") {
+            throw new PullRequestReadError(
+              "protocol",
+              element,
+              "the Git host answered about a different subject, or with an item outside the " +
+                "evidence contract. A well-formed answer to another question is still the wrong " +
+                "answer.",
+            );
+          }
+          return reading.result;
+        },
+      );
     },
   });
 }

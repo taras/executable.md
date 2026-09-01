@@ -30,6 +30,7 @@ import type { WorkflowRunDatabase } from "../mod.ts";
 import { dropRootClose } from "./support/replay.ts";
 import { raised, runWorkflowDocument } from "./support/composition.ts";
 import { gitHubSource } from "../src/deno/composition/github.ts";
+import { useGitHubPullRequestReads } from "../src/deno/composition/pull-request-reads.ts";
 import { PULL_REQUEST_READ } from "../src/deno/composition/pull-request-operations.ts";
 import { collect, execute, inlineSource, isJsonObject } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -984,10 +985,182 @@ describe("Tier PRR — pull-request evidence", () => {
         ),
       );
       expect(String(failure)).toContain("has not authorized");
+
+      // And the run retains nothing for it. A target outside the ceiling is a
+      // question this host never permitted, so there is no read in the history
+      // — not a failed one either. Retaining the refusal would put a record of
+      // an unauthorized target into the journal and make the ceiling look like
+      // something a read can fail, rather than something asked before one
+      // exists. PRR22 keeps the other half: once a read is admitted, a failure
+      // after that point is durable.
+      expect(yield* reads(database)).toEqual([]);
     });
 
     // No access session was opened, so no credential was read and nothing was
     // sent. The ceiling is asked before any of that exists.
+    expect(sessions).toEqual([]);
+    expect(host.requests).toEqual([]);
+  });
+
+  // PRR29: the shared adapter is both profiles', so it must work with neither a
+  // WorkflowRun nor an expansion in scope. Installed outside a run entirely and
+  // asked through an injected transport, an admitted read performs afresh —
+  // which is the ordinary profile's whole lifecycle, and the default this
+  // boundary carries when no policy is installed.
+  //
+  // This is the case an adapter coupled to workflow context cannot pass: it
+  // would reach for a run that is not there.
+  it("PRR29: an admitted read executes afresh with no WorkflowRun in scope", function* () {
+    const host = server({
+      [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },
+    });
+
+    // No storage, no run, no attachment — just the adapter and the components.
+    const answers = yield* scoped(function* () {
+      yield* useGitHubPullRequestReads({
+        allowed: [SUBJECT_REPO],
+        access: gitHubSource(host.access),
+      });
+      const first = yield* PullRequestAPI.operations.read(SUBJECT_URL, { kind: "reviews" });
+      const second = yield* PullRequestAPI.operations.read(SUBJECT_URL, { kind: "reviews" });
+      return [first, second];
+    });
+
+    // Both reads answered, and each really went to the host: performing afresh
+    // is the point, so two reads are two requests rather than one and a
+    // restored snapshot.
+    expect(answers[0]?.kind).toBe("reviews");
+    expect(answers[1]?.kind).toBe("reviews");
+    expect(host.requests.length).toBeGreaterThanOrEqual(2);
+  });
+
+  // PRR29a: and the refusals still precede everything, outside a run as well.
+  // The ceiling is the adapter's own decision, so it cannot depend on a profile
+  // being installed.
+  it("PRR29a: a ceiling refusal outside a run opens no session and sends nothing", function* () {
+    const sessions: string[] = [];
+    const host = server({ [REVIEWS]: { body: "[]" } });
+    const counted: GitHubSource = {
+      endpoint: host.access.endpoint,
+      open(): Operation<GitHubAccess> {
+        return resource(function* (provide) {
+          sessions.push("open");
+          try {
+            yield* provide(host.access);
+          } finally {
+            sessions.push("close");
+          }
+        });
+      },
+    };
+
+    const failure = yield* raised(
+      scoped(function* () {
+        yield* useGitHubPullRequestReads({
+          allowed: ["https://github.com/octo/other"],
+          access: counted,
+        });
+        return yield* PullRequestAPI.operations.read(SUBJECT_URL, { kind: "reviews" });
+      }),
+    );
+
+    expect(String(failure)).toContain("has not authorized");
+    expect(sessions).toEqual([]);
+    expect(host.requests).toEqual([]);
+  });
+
+  // PRR30: a provider the adapter is not, inside a real workflow run, with
+  // nothing else installed to answer. The adapter delegates rather than
+  // refusing, the request reaches the surface's own base error, and the run
+  // retains nothing — matching is a decision about whether this adapter answers
+  // at all, and a question nobody answered is not a read that failed.
+  //
+  // Inside a run, because that is the only place a journal exists: PRR29a makes
+  // the same point about sessions and requests outside one, and cannot speak
+  // about Yields.
+  it("PRR30: an explicit non-match retains nothing and reaches no transport", function* () {
+    const sessions: string[] = [];
+    const host = server({ [REVIEWS]: { body: "[]" } });
+    const counted: GitHubSource = {
+      endpoint: host.access.endpoint,
+      open(): Operation<GitHubAccess> {
+        return resource(function* (provide) {
+          sessions.push("open");
+          try {
+            yield* provide(host.access);
+          } finally {
+            sessions.push("close");
+          }
+        });
+      },
+    };
+
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const failure = yield* raised(
+        runWorkflowDocument(
+          database,
+          `<PullRequest.Reviews url="${SUBJECT_URL}" provider="not-this-one" as="reviews" />\n`,
+          {
+            composition: {},
+            // The ceiling would admit the target; the discriminator is what
+            // this adapter does not answer to.
+            gitHubPullRequests: { allowed: [SUBJECT_REPO], access: counted },
+          },
+        ),
+      );
+
+      expect(failure).toBeDefined();
+      expect(yield* reads(database)).toEqual([]);
+    });
+
+    expect(sessions).toEqual([]);
+    expect(host.requests).toEqual([]);
+  });
+
+  // PRR31: the adapter's own target validation, inside a real workflow run. The
+  // URL passes the configured ceiling — it is beneath the admitted repository —
+  // and still names no pull request this adapter can read. GitHub is named
+  // explicitly, so matching is not what refuses; the shape is.
+  it("PRR31: an invalid target retains nothing and reaches no transport", function* () {
+    const sessions: string[] = [];
+    const host = server({ [REVIEWS]: { body: "[]" } });
+    const counted: GitHubSource = {
+      endpoint: host.access.endpoint,
+      open(): Operation<GitHubAccess> {
+        return resource(function* (provide) {
+          sessions.push("open");
+          try {
+            yield* provide(host.access);
+          } finally {
+            sessions.push("close");
+          }
+        });
+      },
+    };
+
+    // Inside the ceiling by prefix, and not a pull request.
+    const notAPullRequest = `${SUBJECT_REPO}/issues/7`;
+
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const failure = yield* raised(
+        runWorkflowDocument(
+          database,
+          `<PullRequest.Reviews url="${notAPullRequest}" provider="github" as="reviews" />\n`,
+          {
+            composition: {},
+            gitHubPullRequests: { allowed: [SUBJECT_REPO], access: counted },
+          },
+        ),
+      );
+
+      expect(String(failure)).toContain("does not name a pull request");
+      expect(yield* reads(database)).toEqual([]);
+    });
+
     expect(sessions).toEqual([]);
     expect(host.requests).toEqual([]);
   });

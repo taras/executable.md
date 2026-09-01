@@ -2,12 +2,27 @@
  * A workflow run's pull-request lifecycle.
  *
  * The four components ask `PullRequestOperations`; this is what a workflow host
- * installs behind it, and what it adds to the transport underneath is
- * durability. A read becomes one ordinary durable effect, so a completed one
- * restores its snapshot without opening a session. An upsert is passed straight
- * through to the middleware that reconciles it as a Git-host effect, because
- * that reconciliation is already durable and already holds this run's own Push
- * evidence.
+ * installs behind it. Both members pass straight through to the transport, and
+ * what makes each durable lives underneath.
+ *
+ * A read becomes one durable effect, but not from here: retaining around the
+ * whole transport would wrap the adapter's own decisions — whether it matches
+ * the request, whether the host ceiling authorizes the target, whether the URL
+ * names something it can read — and a target the host never authorized would
+ * leave a failed read in the history, a record of a question this run was never
+ * permitted to ask.
+ *
+ * So the durability is installed one layer down, as policy on
+ * `PullRequestReadExecution`. That surface is profile-neutral and performs
+ * afresh by default; an adapter reaches it only after it has admitted a read,
+ * and this middleware is what makes an admitted one durable under a workflow
+ * run. The adapter itself stays free of WorkflowRun and expansion context,
+ * which is what lets an ordinary run install the same adapter and keep
+ * nothing.
+ *
+ * An upsert passes through for a different reason: the Git-host reconciliation
+ * beneath it is already durable and already holds this run's own Push evidence,
+ * so a second envelope would retain one answer under two identities.
  *
  * ## What one read retains
  *
@@ -29,6 +44,7 @@ import type { Operation } from "effection";
 import { scoped } from "effection";
 import { PullRequestReadError } from "../../composition/errors.ts";
 import { PullRequestAPI } from "../../composition/pull-request-api.ts";
+import { PullRequestReadExecution } from "../../composition/pull-request-read-execution.ts";
 import {
   PullRequestOperations,
   type PullRequestReadInvocation,
@@ -83,8 +99,20 @@ function* describeRead(request: PullRequestReadRequest): Operation<EffectDescrip
   };
 }
 
-/** Perform one read and retain it, or restore what is retained. */
-function retainedRead(request: PullRequestReadRequest): Operation<PullRequestReadResult> {
+/**
+ * Retain one admitted read, or restore what is already retained.
+ *
+ * Reached only through `PullRequestReadExecution`, after a transport has
+ * matched the request, admitted it against the host ceiling and validated the
+ * target — so the effect this creates always describes a question this run was
+ * permitted to ask. Everything from here is durable: a transport or evidence
+ * failure retains the failed read, and a completed one restores its snapshot
+ * without opening a session or reaching the network.
+ */
+function retainDurableRead(
+  request: PullRequestReadRequest,
+  perform: () => Operation<PullRequestReadResult>,
+): Operation<PullRequestReadResult> {
   const element = ELEMENT[request.kind];
 
   return scoped(function* () {
@@ -93,10 +121,7 @@ function retainedRead(request: PullRequestReadRequest): Operation<PullRequestRea
     const stored = yield createDurableOperation<DurableJson>(
       description,
       function* (): Operation<DurableJson> {
-        const answered = yield* PullRequestAPI.operations.read(request.url, {
-          kind: request.kind,
-          ...(request.provider === null ? {} : { provider: request.provider }),
-        });
+        const answered = yield* perform();
         if (answered.kind !== request.kind) {
           throw new PullRequestReadError(
             "protocol",
@@ -132,27 +157,46 @@ function retainedRead(request: PullRequestReadRequest): Operation<PullRequestRea
   });
 }
 
+/**
+ * Make an admitted read durable, for this scope and below.
+ *
+ * Installed by the workflow host beside the transport. The run and expansion it
+ * needs come from context it has and the adapter does not, which is the whole
+ * reason the boundary exists.
+ */
+export function useRetainedPullRequestReads(): Operation<void> {
+  return PullRequestReadExecution.around(
+    {
+      *perform([admitted, transport]): Operation<PullRequestReadResult> {
+        const run = yield* getWorkflowRun();
+        const expansion = yield* getExpansion();
+        return yield* retainDurableRead(
+          readRequest(admitted.url, admitted.kind, admitted.provider, run.runId, expansion.id),
+          transport,
+        );
+      },
+    },
+    { at: "min" },
+  );
+}
+
 /** Install the retained pull-request lifecycle for the current scope and below. */
 export function useRetainedPullRequestOperations(): Operation<void> {
   return PullRequestOperations.around(
     {
+      // Straight through, so the adapter beneath decides when a read is
+      // admitted and retains it from there. Wrapping it here would put the
+      // ceiling and URL refusals inside the effect.
       *read([invocation]: [PullRequestReadInvocation]): Operation<PullRequestReadResult> {
-        const run = yield* getWorkflowRun();
-        const expansion = yield* getExpansion();
-        return yield* retainedRead(
-          readRequest(
-            invocation.url,
-            invocation.kind,
-            invocation.provider,
-            run.runId,
-            expansion.id,
-          ),
-        );
+        return yield* PullRequestAPI.operations.read(invocation.url, {
+          kind: invocation.kind,
+          ...(invocation.provider === null ? {} : { provider: invocation.provider }),
+        });
       },
 
-      // Straight through. The Git-host reconciliation underneath is already a
-      // durable effect keyed by this run, and wrapping it in a second envelope
-      // would retain one answer under two identities.
+      // Straight through for its own reason: the Git-host reconciliation
+      // underneath is already a durable effect keyed by this run, and wrapping
+      // it in a second envelope would retain one answer under two identities.
       *upsert([invocation]: [PullRequestUpsertInvocation]): Operation<PullRequestResult> {
         return yield* PullRequestAPI.operations.upsert(invocation.pullRequest, {
           repository: invocation.repository,

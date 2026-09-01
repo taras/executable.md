@@ -53,7 +53,10 @@ import {
   workflowSelections,
   type CompositionProviderOptions,
 } from "../composition/provider.ts";
-import { useRetainedPullRequestOperations } from "../composition/pull-request-operations.ts";
+import {
+  useRetainedPullRequestOperations,
+  useRetainedPullRequestReads,
+} from "../composition/pull-request-operations.ts";
 import { useRetainedIssueOperations } from "../../issue/effect.ts";
 import { useGitHubIssues, type GitHubIssuesOptions } from "../issue/github.ts";
 import type { HelperAssembly } from "../composition/credential-helper.ts";
@@ -175,6 +178,9 @@ export function withWorkflowWorkspace<T>(
       // whichever transport middleware this host installed for them.
       yield* useRetainedIssueOperations();
       yield* useRetainedPullRequestOperations();
+      // Durability for an admitted read, installed beside the transport rather
+      // than above it: the adapter admits, this retains.
+      yield* useRetainedPullRequestReads();
       yield* useCompositionComponents();
       // Ordinary middleware, installed the way the Issue adapter is: it owns
       // the URLs it recognizes and delegates the rest.
