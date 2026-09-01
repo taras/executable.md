@@ -32,6 +32,7 @@ import type {
 } from "@executablemd/core";
 import { TESTING_REGISTRATIONS } from "@executablemd/testing";
 import { WEB_REGISTRATIONS } from "@executablemd/web";
+import { VERBOSE_REGISTRATION } from "./verbose-component.ts";
 
 /**
  * The catalog for the production `run` profile, in the contextual working
@@ -77,6 +78,7 @@ export function* syntaxCatalog(includes: readonly string[]): Operation<SyntaxCat
  */
 export function* useRunProfileRegistry(): Operation<void> {
   yield* registerComponents([
+    VERBOSE_REGISTRATION,
     ...AGENT_REGISTRATIONS,
     ...TESTING_REGISTRATIONS,
     ...WEB_REGISTRATIONS,

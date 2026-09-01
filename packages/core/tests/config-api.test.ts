@@ -7,6 +7,11 @@
  * inherits the exec default, and a field nobody configured is nothing rather
  * than a number somebody guessed.
  *
+ * Contextual verbosity is the fourth field and bounds nothing. Its cases hold
+ * the same separation from the other direction: it starts false, it overrides
+ * and restores lexically the way a timeout does, and configuring it moves no
+ * timeout — nor does configuring a timeout move it.
+ *
  * The Process and Fetch cases ask which field each Api consults rather than
  * waiting for a command to be killed. Resolution happens inside each handler,
  * so an invalid configured value is the instrument: consulting it throws, and
@@ -16,9 +21,9 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
-import { Config, timeout, timeoutExec, timeoutFetch } from "@executablemd/core";
+import { Config, timeout, timeoutExec, timeoutFetch, verbose } from "@executablemd/core";
 import { API, exec, fetch } from "@executablemd/runtime";
-import { installInvalidTimeout } from "./invalid-config.fixture.js";
+import { installInvalidTimeout, installInvalidVerbose } from "./invalid-config.fixture.js";
 
 /** Every timeout an exec call was given while `body` ran. */
 function* recordExec<T>(body: () => Operation<T>): Operation<(number | undefined)[]> {
@@ -208,5 +213,62 @@ describe("Tier CF — Config Api", () => {
       fetch("data:text/plain,hello"),
     );
     expect(viaExecDefault).toBe(undefined);
+  });
+
+  it("CF9: verbosity is false until something configures it", function* () {
+    expect(yield* verbose).toBe(false);
+  });
+
+  it("CF10: a scoped verbosity override wins inside its scope and resets outside", function* () {
+    const inner = yield* scoped(function* () {
+      yield* Config.around({ verbose: () => true }, { at: "min" });
+      return yield* verbose;
+    });
+    expect(inner).toBe(true);
+    expect(yield* verbose).toBe(false);
+  });
+
+  it("CF10a: a nested false wins beneath an enclosing true", function* () {
+    yield* Config.around({ verbose: () => true }, { at: "min" });
+    const inner = yield* scoped(function* () {
+      yield* Config.around({ verbose: () => false }, { at: "min" });
+      return yield* verbose;
+    });
+    expect(inner).toBe(false);
+    // The enclosing value is what the scope after the override reads.
+    expect(yield* verbose).toBe(true);
+  });
+
+  it("CF10b: verbosity and the three timeouts move independently", function* () {
+    yield* scoped(function* () {
+      yield* Config.around({ verbose: () => true }, { at: "min" });
+      expect(yield* verbose).toBe(true);
+      expect(yield* timeout).toBe(undefined);
+      expect(yield* timeoutExec).toBe(undefined);
+      expect(yield* timeoutFetch).toBe(undefined);
+    });
+
+    yield* scoped(function* () {
+      yield* Config.around({ timeoutExec: () => 5_000 }, { at: "min" });
+      expect(yield* timeoutExec).toBe(5_000);
+      expect(yield* verbose).toBe(false);
+    });
+  });
+
+  it("CF11: a verbosity that is not a boolean is refused when it is read", function* () {
+    // Truthiness is not the question a reader asked, so anything a plain
+    // JavaScript consumer can install and TypeScript forbids fails here.
+    for (const invalid of ["true", "false", 1, 0, null] as unknown[]) {
+      const result = yield* scoped(function* () {
+        yield* installInvalidVerbose(invalid);
+        try {
+          yield* verbose;
+          return undefined;
+        } catch (error) {
+          return error;
+        }
+      });
+      expect(result).toBeInstanceOf(Error);
+    }
   });
 });

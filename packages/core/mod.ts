@@ -335,9 +335,10 @@ export {
   installPromptFailurePolicy,
 } from "./src/agent/permission.ts";
 
-// Shared execution config — the run deadline and the exec and Fetch defaults,
-// plus the one duration grammar they are written in (re-exported from runtime).
-export { Config, timeout, timeoutExec, timeoutFetch } from "@executablemd/runtime";
+// Shared execution config — the run deadline, the exec and Fetch defaults, and
+// contextual verbosity, plus the one duration grammar the three timeouts are
+// written in (re-exported from runtime).
+export { Config, timeout, timeoutExec, timeoutFetch, verbose } from "@executablemd/runtime";
 export { asDuration, durationError, parseDuration } from "@executablemd/runtime";
 export type { ConfigApi } from "@executablemd/runtime";
 
