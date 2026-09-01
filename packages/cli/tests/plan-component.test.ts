@@ -29,6 +29,7 @@ import {
   retainedSource,
 } from "@executablemd/core";
 import type { Json } from "@executablemd/core";
+import { validateDocument } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
@@ -40,7 +41,7 @@ import {
   useWorkingDirectory,
 } from "./support/plan-harness.ts";
 import type { PlanDeclarationHarness } from "./support/plan-harness.ts";
-import { PLAN_ORIGIN } from "../src/plan-component.ts";
+import { PLAN_ORIGIN, planComponentDescription } from "../src/plan-component.ts";
 import { syntaxCatalog } from "../src/syntax.ts";
 
 const ROOT = "document.md";
@@ -291,6 +292,39 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           expect(names).not.toContain(priv);
         }
       }
+    });
+  });
+
+  it("PC7b: a repository file under a private name answers for nothing anywhere", function* () {
+    yield* useWorkingDirectory(function* (dir) {
+      // The name a document might reach for, sitting right beside the caller.
+      // Selection refuses a name the declaration keeps to itself before any tier
+      // can answer, so this file is described by nothing, validates as
+      // unresolved, and never runs.
+      yield* writeTextFile(join(dir, "CheckDraft.md"), "the repository file ran.\n");
+
+      const catalog = yield* syntaxCatalog([dir]);
+      for (const category of catalog.categories) {
+        expect(category.entries.map((entry) => entry.name)).not.toContain("CheckDraft");
+      }
+
+      const validation = yield* validateDocument({
+        ...retainedSource(ROOT, '<CheckDraft source="x" as="check" />\n'),
+        includes: [dir],
+        declarations: [yield* planComponentDescription()],
+      });
+      expect(validation.outcome).toBe("invalid");
+      expect(validation.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+        "component-unresolved",
+      );
+
+      const run = yield* runDocument({
+        source: ['<CheckDraft source="x" as="check" />', ""].join("\n"),
+        includes: [dir],
+        reviews: [],
+      });
+      expect(run.failure).toContain("Cannot resolve component: CheckDraft");
+      expect(run.output).not.toContain("the repository file ran.");
     });
   });
 

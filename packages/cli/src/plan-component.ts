@@ -269,7 +269,50 @@ export function* planComponentDescription(): Operation<DeclaredMarkdownComponent
     source,
     digest: sourceDigest(source),
     forms: ["paired"],
+    // The private names travel too, even though none of them is ever described.
+    // Selection refuses a name a declaration keeps to itself, and it has to
+    // refuse the same names here as it does in a run — otherwise a repository
+    // file called `CheckDraft.md` would be listed and validated as though a
+    // document could write it, and only the run would say otherwise.
+    privates: describedPrivates(),
   };
+}
+
+/**
+ * The private closure as a description: the names, origins and contracts, with
+ * no implementation behind them.
+ *
+ * Describing an environment mints no execution and therefore no claimant, so
+ * there is nothing to build one from. The factory is a refusal rather than an
+ * omission: nothing that only describes a document reaches an implementation, so
+ * it is unreachable — it is there so that anything which ever did would fail
+ * loudly rather than run a private component with no invocation behind it.
+ */
+function describedPrivates(): readonly IdentityComponent[] {
+  const described: readonly Omit<IdentityComponent, "origin" | "factory">[] = [
+    {
+      name: "PlanInputs",
+      props: OPTIONAL_SESSION,
+      returns: INPUTS_RETURNS,
+      forms: ["self-closing"],
+    },
+    { name: "PlanAuthorship", props: AUTHORSHIP_PROPS, forms: ["paired"] },
+    { name: "CheckDraft", props: SOURCE_PROP, returns: CHECK_RETURNS, forms: ["self-closing"] },
+    { name: "AdmitPlan", props: SOURCE_PROP, returns: { type: "string" }, forms: ["self-closing"] },
+  ];
+  return described.map((component) => ({
+    ...component,
+    origin: `${PLAN_ORIGIN}#${component.name}`,
+    factory: () => uninvocable,
+  }));
+}
+
+// deno-lint-ignore require-yield
+function* uninvocable(): Operation<never> {
+  throw new Error(
+    "this private component was described rather than executed, so it has no implementation " +
+      "to run",
+  );
 }
 
 /**
