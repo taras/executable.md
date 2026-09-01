@@ -471,6 +471,251 @@ export function ifStructure(segment: ComponentElement): IfStructure {
   };
 }
 
+const SWITCH_PROPS = new Set(["value"]);
+const CASE_PROPS = new Set(["value", "default"]);
+
+/** What a `<Case>` written outside the `<Switch>` that selects it says. */
+export function strayCaseMessage(): string {
+  return (
+    "<Case> must be a direct child of <Switch>. <Case> is reserved: it never resolves a " +
+    "component, and only the <Switch> it belongs to can select it."
+  );
+}
+
+/**
+ * Whether this `<Case>` was written as the fallback branch.
+ *
+ * Presence, not the value: `default={false}` still names the fallback, and
+ * saying so wrongly is a mistake about the syntax rather than a branch the
+ * switch quietly stops having.
+ */
+function isDefaultCase(segment: ComponentElement): boolean {
+  return "default" in segment.props || "default" in segment.expressions;
+}
+
+/** Everything one `<Case>` decides from what the author wrote (spec §6.5). */
+function caseElementViolations(segment: ComponentElement): StructuralViolation[] {
+  const found: StructuralViolation[] = [];
+  const unknownProp = authoredPropNames(segment).find((name) => !CASE_PROPS.has(name));
+  if (unknownProp !== undefined) {
+    found.push(
+      violation(
+        "structural-usage-invalid",
+        "Case",
+        `<Case> only accepts "value" and "default" props. Got: "${unknownProp}".`,
+        segment,
+      ),
+    );
+  }
+
+  const hasValue = "value" in segment.props || "value" in segment.expressions;
+  const isDefault = isDefaultCase(segment);
+  if (hasValue && isDefault) {
+    found.push(
+      violation(
+        "structural-usage-invalid",
+        "Case",
+        '<Case> either matches a "value" or is the "default" branch, not both.',
+        segment,
+      ),
+    );
+  } else if (!hasValue && !isDefault) {
+    found.push(
+      violation(
+        "structural-usage-invalid",
+        "Case",
+        '<Case> requires a "value" prop. Write <Case value={...}>...</Case>, or ' +
+          "<Case default>...</Case> for the final branch.",
+        segment,
+      ),
+    );
+  }
+
+  // How it was written, not what it reads as: the scanner resolves `{true}`
+  // into the same `true` the bare word produces, and the fallback branch is
+  // spelled one way rather than being a value the document computes.
+  if ("default" in segment.expressions || segment.authoredExpressions?.default !== undefined) {
+    found.push(
+      violation(
+        "structural-usage-invalid",
+        "Case",
+        "<Case> default is the bare word. Write <Case default>, not default={...}.",
+        segment,
+      ),
+    );
+  } else if (isDefault && segment.props.default !== true) {
+    found.push(
+      violation(
+        "structural-usage-invalid",
+        "Case",
+        "<Case> default is the bare word. Write <Case default>, not " +
+          `default=${JSON.stringify(segment.props.default)}.`,
+        segment,
+      ),
+    );
+  }
+
+  if (segment.selfClosing) {
+    found.push(
+      violation(
+        "structural-usage-invalid",
+        "Case",
+        "<Case> holds the markdown it expands, so it is written paired: " +
+          "<Case value={...}>...</Case>. An empty branch is written <Case value={...}></Case>.",
+        segment,
+      ),
+    );
+  }
+  return found;
+}
+
+/**
+ * Every `<Case>` below a `<Switch>` that is not one of its direct children. The
+ * walk stops at a nested `<Switch>`, which owns the `<Case>` elements beneath it.
+ */
+function misplacedCaseViolations(children: Segment[]): StructuralViolation[] {
+  const found: StructuralViolation[] = [];
+
+  const walk = (segments: Segment[], depth: number): void => {
+    for (const segment of segments) {
+      if (segment.type !== "component" || segment.name === "Switch") {
+        continue;
+      }
+      if (segment.name === "Case" && depth > 0) {
+        found.push(violation("structural-usage-invalid", "Case", strayCaseMessage(), segment));
+      }
+      walk(segment.children, depth + 1);
+    }
+  };
+
+  walk(children, 0);
+  return found;
+}
+
+/** One branch a `<Switch>` may select, and where it sat among its siblings. */
+export interface SwitchCase {
+  readonly element: ComponentElement;
+  /**
+   * The child index the branch was written at.
+   *
+   * A selected `<Case>` contributes its own frame, so two branches holding
+   * corresponding children cannot expand under one path (§5.6).
+   */
+  readonly index: number;
+}
+
+/** How a `<Switch>` body divides into branches, and what the division got wrong. */
+export interface SwitchStructure {
+  readonly violations: StructuralViolation[];
+  /** The branches carrying a matcher, in source order. */
+  readonly matching: SwitchCase[];
+  /** The final `<Case default>` branch, when one is written. */
+  readonly fallback?: SwitchCase;
+}
+
+/**
+ * Divide a `<Switch>` body into its branches and validate the division
+ * (spec §6.5). Everything here is read from source, so a malformed branch is
+ * diagnosed before the selector or any matcher is evaluated — including a
+ * branch the comparison would never have reached.
+ *
+ * `<Case default>` is the fallback, so it is the final branch: a `<Case>`
+ * written after it could never be compared, and is rejected rather than
+ * silently kept.
+ */
+export function switchStructure(segment: ComponentElement): SwitchStructure {
+  const violations: StructuralViolation[] = [];
+  const matching: SwitchCase[] = [];
+  let fallback: SwitchCase | undefined;
+
+  const unknownProp = authoredPropNames(segment).find((name) => !SWITCH_PROPS.has(name));
+  if (unknownProp !== undefined) {
+    violations.push(
+      violation(
+        "structural-usage-invalid",
+        "Switch",
+        `<Switch> only accepts a "value" prop. Got: "${unknownProp}".`,
+      ),
+    );
+  }
+  if (!("value" in segment.props) && !("value" in segment.expressions)) {
+    violations.push(
+      violation("structural-usage-invalid", "Switch", '<Switch> requires a "value" prop.'),
+    );
+  }
+  if (segment.selfClosing) {
+    violations.push(
+      violation(
+        "structural-usage-invalid",
+        "Switch",
+        "<Switch> holds the <Case> branches it chooses between, so it is written paired: " +
+          "<Switch value={...}><Case value={...}>...</Case></Switch>.",
+      ),
+    );
+  }
+
+  let substantive = 0;
+  for (const [index, child] of segment.children.entries()) {
+    if (isBlankText(child)) {
+      continue;
+    }
+    substantive++;
+    if (child.type !== "component" || child.name !== "Case") {
+      violations.push(
+        violation(
+          "structural-usage-invalid",
+          "Switch",
+          `<Switch> holds only <Case> branches. Found ${describeSegment(child)} directly ` +
+            "inside it.",
+          child.type === "component" ? child : undefined,
+        ),
+      );
+      continue;
+    }
+    violations.push(...caseElementViolations(child));
+    if (isDefaultCase(child)) {
+      if (fallback !== undefined) {
+        violations.push(
+          violation(
+            "structural-usage-invalid",
+            "Case",
+            "<Switch> accepts at most one <Case default> branch.",
+            child,
+          ),
+        );
+        continue;
+      }
+      fallback = { element: child, index };
+      continue;
+    }
+    if (fallback !== undefined) {
+      violations.push(
+        violation(
+          "structural-usage-invalid",
+          "Case",
+          "<Case default> must be the final branch of its <Switch>.",
+          child,
+        ),
+      );
+      continue;
+    }
+    matching.push({ element: child, index });
+  }
+
+  if (!segment.selfClosing && substantive === 0) {
+    violations.push(
+      violation(
+        "structural-usage-invalid",
+        "Switch",
+        "<Switch> requires at least one <Case> branch.",
+      ),
+    );
+  }
+
+  violations.push(...misplacedCaseViolations(segment.children));
+  return { violations, matching, ...(fallback === undefined ? {} : { fallback }) };
+}
+
 const LOOP_PROPS = new Set(["max", "name"]);
 
 /** How a `<Loop>` names itself in its own printed errors. */

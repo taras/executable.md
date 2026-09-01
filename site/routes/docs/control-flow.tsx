@@ -47,6 +47,36 @@ const BINDING = `<If condition={verdict.passed}>
 
 <GitHubComment body={headline} />`;
 
+const SWITCH = `<Compare left={installed} right={latest} as="comparison" />
+
+<Switch value={comparison}>
+<Case value="newer">
+Installing {latest}.
+
+<Install version={latest} />
+</Case>
+<Case value="current">
+{installed} is already the latest release.
+</Case>
+<Case value="older">
+{installed} is newer than {latest}. Downgrading needs \`--allow-downgrade\`.
+</Case>
+<Case default>
+<Fail message="The release comparison is not recognized." />
+</Case>
+</Switch>`;
+
+const SWITCH_BINDING = `<Switch value={verdict.state}>
+<Case value="passed">
+<Let as="headline">All {verdict.total} checks passed.</Let>
+</Case>
+<Case value="failed">
+<Let as="headline">{verdict.failed} of {verdict.total} checks failed.</Let>
+</Case>
+</Switch>
+
+<GitHubComment body={headline} />`;
+
 const LET_RENDERED = `<Let as="summary">
 {passed} of {total} checks passed.
 </Let>`;
@@ -116,12 +146,13 @@ export default define.page(function ControlFlow() {
     <>
       <h1>Control flow</h1>
       <p class="muted">
-        <code>&lt;If&gt;</code> chooses one branch of a document, and{" "}
+        <code>&lt;If&gt;</code> chooses between two branches,{" "}
+        <code>&lt;Switch&gt;</code> chooses among several, and{" "}
         <code>&lt;Loop&gt;</code>{" "}
-        repeats a region a bounded number of times. Both are directives the
-        expansion engine handles directly, like <code>&lt;Each&gt;</code> and
+        repeats a region a bounded number of times. All of them are directives
+        the expansion engine handles directly, like <code>&lt;Each&gt;</code>
         {" "}
-        <code>&lt;Let&gt;</code> — there is no <code>If.md</code> or{" "}
+        and <code>&lt;Let&gt;</code> — there is no <code>If.md</code> or{" "}
         <code>Loop.md</code> to import.
       </p>
 
@@ -196,6 +227,58 @@ export default define.page(function ControlFlow() {
         branch binds nothing at all.
       </p>
       <CodeBlock>{BINDING}</CodeBlock>
+
+      <h2>Choosing among several answers</h2>
+      <p>
+        When a value has three or four answers rather than two,{" "}
+        <code>&lt;Switch&gt;</code>{" "}
+        states them beside each other instead of asking a reader to reconstruct
+        them from a chain of negated conditions. The selector is evaluated once,
+        each <code>&lt;Case&gt;</code>{" "}
+        is compared to it in the order you wrote them, and the first one that
+        matches expands.
+      </p>
+      <CodeBlock>{SWITCH}</CodeBlock>
+      <p>
+        Matching is JavaScript's <code>===</code>{" "}
+        — the same comparison you would write by hand. So <code>"1"</code>{" "}
+        does not match{" "}
+        <code>1</code>, two objects match only when they are the same object,
+        and <code>NaN</code>{" "}
+        matches nothing, itself included. Comparison stops at the first match,
+        so a case written after it is never evaluated.
+      </p>
+      <p>
+        <code>&lt;Case default&gt;</code>{" "}
+        is the fallback and is written last. It expands only after every other
+        case has been compared and missed. It is optional: a switch with no
+        matching case and no default renders nothing and reports no error, which
+        is what you want when a state simply has nothing to say. Leave it out
+        when the states are closed and an unexpected one should not quietly
+        acquire a branch's behavior.
+      </p>
+      <p>
+        Only the selected case does work. No other case expands, so nothing in
+        one imports a component, runs a block, reaches a provider, touches the
+        filesystem, or creates a binding — the same guarantee an unselected{" "}
+        <code>&lt;If&gt;</code> branch gives.
+      </p>
+      <p>
+        The whole structure is checked before anything is evaluated. A{" "}
+        <code>&lt;Case&gt;</code> that names both a <code>value</code> and{" "}
+        <code>default</code>, a stray <code>&lt;Case&gt;</code>{" "}
+        outside its switch, or a default written before another case is an error
+        — and it stops the switch, so the selector never runs either.
+      </p>
+      <p>
+        Like <code>&lt;If&gt;</code>, <code>&lt;Switch&gt;</code>{" "}
+        creates no binding scope. The selected case expands inline, so a{" "}
+        <code>&lt;Let&gt;</code> inside it stays available after{" "}
+        <code>&lt;/Switch&gt;</code>{" "}
+        and every case can bind the same name. Switches nest, and each one owns
+        the cases written directly inside it.
+      </p>
+      <CodeBlock>{SWITCH_BINDING}</CodeBlock>
 
       <h2>Binding a name with Let</h2>
       <p>

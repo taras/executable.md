@@ -2384,8 +2384,8 @@ direct top-level child. What decides whose declaration an element satisfies is
 the body it was written in, which is the ownership `<Break>` already establishes
 for the loop it exits.
 
-One state exists per execution of one value body. `<If>`, `<Loop>`, `<Each>` and
-`<Let>` keep the ambient one; a component invocation hides the caller's from the
+One state exists per execution of one value body. `<If>`, `<Switch>`, `<Loop>`,
+`<Each>` and `<Let>` keep the ambient one; a component invocation hides the caller's from the
 invoked body, so a component's own `<Return>` satisfies its own declaration; a
 nested value body installs a separate one, and both executions stand; and
 content the caller projected restores the caller's, through a Markdown
@@ -2431,6 +2431,43 @@ partial replay reconstructs it while completed effects replay, and a completed
 document replay reuses the retained result without expanding the body. `<Return>`
 does not end the body, so later documentation runs and a later failure,
 cancellation or teardown failure keeps its existing precedence.
+
+### Structural branch selection
+
+`<Switch value>` and `<Case>` are the engine's own syntax, not components, so
+core owns what they mean and no repository file, registration or bundle can
+supply either name.
+
+A switch decides its whole structure from source before it evaluates anything.
+Which props were written, that every substantive direct child is a paired
+`<Case>`, that each case carries exactly one of a matcher or the bare `default`
+word, and that at most one default is written and written last — all of it is one
+shared rule that expansion and non-executing validation read. A malformed branch
+therefore stops the selector too, including a branch no comparison would have
+reached.
+
+Only then does selection run. The selector is evaluated once, each non-default
+matcher at most once in source order, and the first `===` match wins. Operands
+are arbitrary JavaScript values evaluated through the expression evaluator rather
+than through prop resolution, so `undefined` stays `undefined`, `NaN` matches no
+case including one written `NaN`, `0` and `-0` are one value, and two objects
+match only when they are the same object. With no match and no default, the
+switch renders nothing and reports nothing.
+
+The selected case is transparent. It expands inline into the region that holds
+the switch, opening no binding scope, no observation boundary, no error mode and
+no loop boundary: a `<Let>` it creates stays available after `</Switch>`, a
+`<Return>` claims the value body that owns the switch, a `<Break>` exits the
+loop that lexically encloses it, and an error inside it is observed exactly where
+inline content would be. Fallthrough does not exist, because expansion enters one
+child list once.
+
+The selected `<Case>` contributes its own expansion frame even though the
+`<Switch>` consumed it, so corresponding children of two branches cannot share
+one identity. Neither construct is durable state: they append no journal event, a
+partial replay rebuilds the selection through ordinary expansion while completed
+effects in the chosen branch replay from their own records, and a completed
+document replay reuses the retained result without expanding anything.
 
 ## Foreground commands
 
@@ -3655,6 +3692,7 @@ Status is measured against main.
 | document validation | validates one supplied root projection and the recursive Markdown source closure normal component selection discovers, returning deterministic version-1 document diagnostics and `valid`, `invalid` or `not-statically-checkable` invocation outcomes without evaluating document code or installing operational host behavior | built on the #654 stack |
 | `xmd plan` | turns one Prompt into a Plan and delivers it, by executing one root document — and, only under `--run`, a second — with a complete scope boundary between them. First the packaged plan command document, under the internal `<plan-command>` identity — an adapter that projects the request into `<Plan>` and returns what comes back — and inside that, the packaged `<Plan>` Component under the authorship profile its own `<PlanAuthorship>` installs: one enclosing Session, a host ceiling of one host-owned directory dedicated to that logical session — under `~/.xmd/plan/sessions` by default, keyed by the digest of the name, never the name, created empty and required to be empty before the provider exists or a session is materialized, refused rather than cleaned when it is not, durable when the caller named the session and handed back non-recursively after teardown when it did not — with no additional directories, no MCP servers, no native tools and a private strict denial no permission flag widens, no Files, command, service or network capability for that document, no repository component search, and the Component's own private `<CheckDraft>` whose closed assessment answers `valid: false` for a defect the draft authored and raises for a defect the command line authored. Its instructions require every Plan to begin with one descriptive level-one title and to keep the Prompt's outcomes as readable steps with each component beside the step it performs, through repairs and revisions alike; that is an authorship and human-review requirement, and `<CheckDraft>` never enforces it. A tenth draft that still has problems may be stopped or explained: the explanation is one more ordinary turn in the same Session carrying only the final diagnostics, is inert text, reopens no draft limit, and ends the command. The host's instruction layer states only that an answer belongs to the message that asked for it, so which shape a turn wants stays in the document. Authorship sits outside durability: it runs on an invocation-owned in-memory stream that is never journaled, persisted, reused or replayed. Then, only after every provider, Prompt task and Elicitation resource inside the authorship frame has torn down, the Component's own `<AdmitPlan>` structurally admits the exact approved bytes, and after that execution ends the host validates the returned Plan again against the command line, resolves props for exactly those bytes, and then delivers the approved Plan where the caller asked: to stdout byte for byte by default, to an exclusively created `--output` path, and — only under `--run` — through the ordinary supplied-source path under the `<plan>` identity, one ordinary document with its own Agent provider, its own journal and ordinary run output, result and failure behavior. A journal exists only when `--run` begins, and the flags that configure only a run are refused in preflight without it. The retired `prompt` spelling is not a command and is not absorbed by the default `run` grammar, which would read it as a document reference and execute a file of that name: an invocation whose exact first token is `prompt` is refused before any scan, selection or path lookup, establishing nothing, while `xmd run ./prompt` still executes a document legitimately called that | built on the #660 stack |
 | `<Plan>` | writes and reviews one Plan, from a Prompt an ordinary document wrote. `<Plan session="optional-name" as="approved">…</Plan>` expands its paired body once with the capabilities the calling document already has — the complete untrimmed rendering is the Prompt, and it is never emitted separately — and binds the exact approved Plan source. It is the public name of the packaged `<Plan>` Component: exact first-party Markdown declared to every ordinary run, so a repository `Plan.md`, a workflow bundle, a registration, `Component.importComponent` middleware and another loaded copy can none of them answer for it. Paired only, one optional non-empty `session` prop, and a required `as`; a body that renders to nothing fails before any catalog, directory, Session, turn, review or check exists. The Agent writes under exactly the `xmd plan` ceiling however broad the calling document's authority is, and a host that cannot establish it refuses before placement — including the `<Execution host="run">` child an `xmd test` document launches, which is the run profile and therefore resolves the same protected bytes rather than reporting a missing component. An authored `session` keeps the existing durable named-directory lifetime, so the same name at the same site reaches the same conversation next time, while an omitted one is site- and iteration-unique, replay-stable and handed back after teardown; sibling sites stay distinct even when they write one name, and the name never becomes a path. Every turn, answer, check, approval and admission belongs to the enclosing document's journal, so a continuation restores completed authorship instead of repeating it; there is no second journal. Complete authorship teardown precedes structural admission, which precedes the binding — and the admission is structure alone, so a Plan declaring properties a later run will supply is returned rather than refused. It prints no source, creates no file, and executes nothing it returns | built on the #660 stack; no delivery, custom root, policy prop or replacement selector exists (#536 owns constrained caller-authored policy) |
+| `<Switch value>` / `<Case>` | chooses one branch by comparing a value with `===`. `<Switch value={status}><Case value="ready">…</Case><Case default>…</Case></Switch>` decides its whole case structure from source before evaluating anything, then evaluates the selector once and each non-default matcher at most once in source order, expands the first `===` match — or the final default, or nothing — inline and transparently, and appends no journal event | built on the #692 stack |
 | `<PrintErrors>` / `printErrors(fn)` | prints failures | built on main |
 | `<Fail message>` | stops authored work with the sentence its author wrote, raised where it is written. An ordinary overridable core default — never structural, never reserved, so a repository `Fail.md` is chosen ahead of it — with a closed schema of one required non-empty `message` and **self-closing only**: a paired spelling never enters its body, and `as` is refused by the body itself because there is nothing to bind. Every refusal reports the invocation and happens before the authored message, so a document that never reached its decision is never reported as having made one. A valid invocation is the ordinary failure of a function component: an `Error` carrying the exact authored message, positioned at the opening tag, rendering nothing and binding nothing. It carries no `printErrors()` declaration, which is what leaves recovery to an authored `<PrintErrors>` region under ordinary text-root modes; a value body's `throw` is not replaced there, so the authored failure settles the body ahead of missing-`<Return>` settlement. No authority, context, provider, resource, module state or durable operation of its own: replay of a completed root restores the recorded outcome without re-expanding the body | built on the #659 stack |
 | `<Let as="name">` | binds one name in the current environment from exactly one source: the content it renders, or the exact value `value` names, bound by reference and never through the JSON boundary component props cross — the scanner resolves no JSON for that one prop, and expansion projects none. Which source it has is read from what the author wrote, before either one runs, so a construct naming both expands no child and evaluates no expression. It opens no scope, owns no resource, adds no middleware boundary and writes no journal record — replay reconstructs both sources through ordinary expansion | built on the #527 stack |

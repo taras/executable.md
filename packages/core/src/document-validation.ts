@@ -71,8 +71,10 @@ import {
   loopViolations,
   printErrorsViolations,
   strayAnswerMessage,
+  strayCaseMessage,
   strayElseMessage,
   strayStructuralMessage,
+  switchStructure,
 } from "./structural-rules.ts";
 import type { StructuralViolation } from "./structural-rules.ts";
 import type {
@@ -310,6 +312,8 @@ interface LexicalContext {
   readonly insideLoop: boolean;
   /** Whether an `<If>` in this source lexically encloses this point. */
   readonly insideIf: boolean;
+  /** Whether a `<Switch>` in this source lexically encloses this point. */
+  readonly insideSwitch: boolean;
   /** Whether the immediate parent is an `<Answers>`. */
   readonly underAnswers: boolean;
 }
@@ -487,6 +491,7 @@ class ValidationState {
         isRoot: entry.ordinal === 0,
         insideLoop: false,
         insideIf: false,
+        insideSwitch: false,
         underAnswers: false,
       });
     }
@@ -791,6 +796,13 @@ class ValidationState {
           this.#defer(anchor, token);
         }
       }
+      // A structural operand the scanner could not read is a value the document
+      // computes, and comparing it is expansion's alone. The construct's own
+      // structure was still decided above, so a definite failure is reported as
+      // a failure and only a well-formed element is reported opaque.
+      if (draft.tokens.length === 0 && hasDynamicOperand(segment)) {
+        draft.reasons.push("dynamic-props");
+      }
       return;
     }
 
@@ -1041,6 +1053,11 @@ class ValidationState {
         }
         return found;
       }
+      case "Switch":
+        // Every branch's own source is decided here too, so a malformed `<Case>`
+        // is reported wherever it was written — including one the comparison
+        // would never have reached.
+        return switchStructure(segment).violations;
       case "Loop":
         return loopViolations(segment);
       case "Break":
@@ -1059,6 +1076,13 @@ class ValidationState {
                 message: strayAnswerMessage(),
               },
             ];
+      case "Case":
+        // A well-placed `<Case>` is its `<Switch>`'s, and one placed wrongly
+        // under a `<Switch>` is already reported by that `<Switch>`'s own
+        // structure. What is left is a `<Case>` with no `<Switch>` above it.
+        return context.insideSwitch
+          ? []
+          : [{ code: "structural-usage-invalid", source: "Case", message: strayCaseMessage() }];
       case "Else":
         // A well-placed `<Else>` is its `<If>`'s, and one placed wrongly under
         // an `<If>` is already reported by that `<If>`'s own structure. What is
@@ -1206,6 +1230,21 @@ function compareDrafts(left: DraftDiagnostic, right: DraftDiagnostic): number {
   return left.sequence - right.sequence;
 }
 
+/**
+ * Whether this construct compares a value it cannot read from source.
+ *
+ * `<Switch>` and `<Case>` are the two that compare one, and the answer is how
+ * the operand was written: a literal, and an expression the scanner resolved,
+ * are both static. Every other construct decides its whole contract from source
+ * and is never opaque.
+ */
+function hasDynamicOperand(segment: ComponentElement): boolean {
+  if (segment.name !== "Switch" && segment.name !== "Case") {
+    return false;
+  }
+  return "value" in segment.expressions;
+}
+
 /** The lexical facts one element's children are written under. */
 function childContext(segment: ComponentElement, context: LexicalContext): LexicalContext {
   return {
@@ -1213,6 +1252,7 @@ function childContext(segment: ComponentElement, context: LexicalContext): Lexic
     isRoot: context.isRoot,
     insideLoop: context.insideLoop || segment.name === "Loop",
     insideIf: context.insideIf || segment.name === "If",
+    insideSwitch: context.insideSwitch || segment.name === "Switch",
     underAnswers: segment.name === "Answers",
   };
 }
