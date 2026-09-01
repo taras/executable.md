@@ -1901,7 +1901,8 @@ run but are absent from the diagnostic trace.
 | `src/output/mod.ts` | Barrel export for output middleware |
 | `src/output/normalize.ts` | `useNormalizedOutput()` — whitespace normalization middleware (§9.4) |
 | `src/output/terminal.ts` | `useTerminalOutput()` — terminal ANSI formatting middleware (§9.5) |
-| `packages/cli/src/cli.ts` | Runtime-neutral CLI (separate `cli` workspace package) with `--verbose`, `--journal`, and `--raw` flags; Output Api stream consumption (§9.6) |
+| `packages/cli/src/cli.ts` | Runtime-neutral CLI (separate `cli` workspace package) with `--verbose`, `--journal`, and `--raw` flags; Output Api stream consumption (§9.6); installs `<Verbose>` (§6.20) |
+| `packages/cli/src/verbose-component.ts` | CLI run-profile `<Verbose>` declaration and host-verbose implementation (§6.20) |
 | `packages/cli/src/service-host.ts` | shared XMD service handshake observer and supervised host-process adapter |
 | `packages/cli/src/{deno,node,bun,compiled}-service.ts` | runtime-named service adapters for token, environment and stdio behavior |
 | `packages/cli/src/{deno,node,bun,compiled}.ts` | Entrypoints — each installs matching `API.Env` and `API.Service` adapters, then calls `runXmd` |
@@ -8254,6 +8255,35 @@ no durable effect of its own — resolving it is the ordinary `import_component`
 every component resolution produces. A live run and a partial replay both reach
 it through normal expansion and fence the string that execution reconstructed;
 completed-root terminal reuse is unchanged.
+
+### 6.20 Verbose-only content: `<Verbose>`
+
+`<Verbose>` is the CLI run profile's component for progress notes that are useful
+while watching a run and noise otherwise:
+
+```md
+<Verbose>
+Running the expensive integration probe now.
+</Verbose>
+```
+
+The component declares no props and renders text. In an ordinary non-verbose
+run it returns the empty string and does not expand its content, so effects
+inside it do not run and failures inside it do not settle anything. In a verbose
+run it renders its content at the invocation site, under the same output, error,
+capture and projection rules as any other text component. `as` is ordinary text
+capture: it binds the rendered verbose text, or `""` when verbosity is off.
+
+`<Verbose>` is a CLI run-profile default, not a core component and not a
+reserved name. The CLI installs it from the same declaration `xmd syntax` reads,
+with the host's already-resolved verbosity flag closed over by the component
+implementation. No document context, prop, binding or middleware answer decides
+whether the host is verbose, and a repository `Verbose.md` is chosen ahead of
+the default.
+
+It opens no scope, acquires no resource, holds no authority and has no durable
+effect of its own. Its skipped body is absence, not a retained decision; replay
+therefore follows ordinary expansion under the host options for that execution.
 
 
 ## 7. Entry point

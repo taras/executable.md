@@ -64,6 +64,7 @@ import {
   inspectDocument,
   agentIdentityComponents,
   installAgentComponents,
+  registerComponents,
   retainedSource,
   rootSourcePath,
   useNormalizedOutput,
@@ -94,6 +95,7 @@ import { timebox } from "@effectionx/timebox";
 import { timeout as runTimeout } from "@executablemd/runtime";
 import { installRunAgentStack, resolveAgentStack } from "./agent-stack.ts";
 import { planComponentDeclaration } from "./plan-component.ts";
+import { verboseComponentRegistration } from "./verbose-component.ts";
 import type { AgentStack } from "./agent-stack.ts";
 import { reportFailure } from "./report.ts";
 import { TIMEOUT_FLAGS, resolveRunTimeouts } from "./timeouts.ts";
@@ -682,6 +684,8 @@ export type HostServiceInstaller = () => Operation<void>;
  * value root's stdout — stays with the command that owns those streams.
  */
 export function* installDocumentComponents(mode: DocumentMode, verbose: boolean): Operation<void> {
+  yield* registerComponents([verboseComponentRegistration(verbose)]);
+
   // Compose testing around the single core execution entrypoint: both
   // commands register the components (assertions work in regular documents,
   // explicit <Testing> boundaries affect the outcome), while `xmd test`
