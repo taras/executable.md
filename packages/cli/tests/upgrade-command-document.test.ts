@@ -799,6 +799,22 @@ describe("Tier UG — the packaged upgrade command document", () => {
     // The failure that also covers staging and permissions must not claim the
     // candidate reached verification.
     expect(replaced.failure).not.toContain("verified");
+
+    // `replacement-failed` reaches all three phases, because staging a
+    // candidate and preparing one are the same kind of filesystem work as the
+    // rename. Each phase answers it with the same words, so a person who
+    // could not write to the directory reads the same advice wherever the
+    // attempt stopped.
+    const wherever =
+      "The command could not prepare or atomically replace the installed binary " +
+      "with release v0.11.0.";
+    const staging = yield* upgrade({ downloadFailure: "replacement-failed" });
+    expect(staging.failure).toContain(wherever);
+    expect(staging.verifies).toEqual([]);
+
+    const preparation = yield* upgrade({ verifyFailure: "replacement-failed" });
+    expect(preparation.failure).toContain(wherever);
+    expect(preparation.replacements).toEqual([]);
   });
 
   it("UG19: semantic version precedence is exact, past the safe-integer range", function* () {
@@ -897,5 +913,107 @@ describe("Tier UG — the packaged upgrade command document", () => {
       "<Upgrade.Replace",
       "<Upgrade.Verify",
     ]);
+  });
+
+  it("UG24: every exact multi-way choice is a <Switch>, not a lookup table", function* () {
+    // The document decides six things by comparing one value against a fixed
+    // set of alternatives. Each is written as a `<Switch>` so the alternatives
+    // are visible as a set. Two of them used to be TypeScript objects keyed by
+    // an error code, which put the policy where a reader of the Markdown could
+    // not see it and where an unlisted key answered silently.
+    const source = yield* readPackagedDocument(UPGRADE_COMMAND_DOCUMENT);
+
+    for (const classifier of ["releaseReadFailures", "installationFailure"]) {
+      expect({ classifier, present: source.includes(classifier) }).toEqual({
+        classifier,
+        present: false,
+      });
+    }
+
+    for (const selector of [
+      "<Switch value={props.installation.provenance}>",
+      "<Switch value={mode}>",
+      "<Switch value={releaseRead.error.code}>",
+      "<Switch value={outcome}>",
+      "<Switch value={downloadResult.error.code}>",
+      "<Switch value={verifyResult.error.code}>",
+      "<Switch value={replacementResult.error.code}>",
+    ]) {
+      expect({ selector, present: source.includes(selector) }).toEqual({ selector, present: true });
+    }
+  });
+
+  it("UG25: each phase answers for the codes it can produce, and no others", function* () {
+    // The compiled host decides which code each phase can return, and the
+    // document answers each one by name. Listing a code under the wrong phase
+    // would be dead policy; omitting a reachable one would send a person the
+    // generic fallback for a failure the command knows the words for. Reading
+    // the matchers out of the source is what makes this a claim about the
+    // policy rather than about the four scenarios a behavioral case tries.
+    const source = yield* readPackagedDocument(UPGRADE_COMMAND_DOCUMENT);
+
+    /** The `value` matchers of the cases directly beneath one switch. */
+    function matchers(selector: string): string[] {
+      const start = source.indexOf(selector);
+      const end = source.indexOf("\n</Switch>", start);
+      expect({ selector, found: start >= 0 && end > start }).toEqual({ selector, found: true });
+      const block = source.slice(start, end);
+      return [...block.matchAll(/<Case value="([^"]+)">/g)].map((match) => match[1]).sort();
+    }
+
+    /** Whether the block ends with the general refusal every code falls back to. */
+    function hasDefault(selector: string): boolean {
+      const start = source.indexOf(selector);
+      return source.slice(start, source.indexOf("\n</Switch>", start)).includes("<Case default>");
+    }
+
+    expect(matchers("<Switch value={releaseRead.error.code}>")).toEqual([
+      "busy",
+      "symbolic-link",
+      "unsupported-filesystem",
+      "unwritable-parent",
+    ]);
+    expect(matchers("<Switch value={downloadResult.error.code}>")).toEqual([
+      "asset-missing",
+      "checksums-missing",
+      "download-failed",
+      "redirect-refused",
+      "replacement-failed",
+    ]);
+    expect(matchers("<Switch value={verifyResult.error.code}>")).toEqual([
+      "candidate-version-mismatch",
+      "checksum-entry-duplicate",
+      "checksum-entry-missing",
+      "checksum-mismatch",
+      "replacement-failed",
+    ]);
+    expect(matchers("<Switch value={replacementResult.error.code}>")).toEqual([
+      "replacement-failed",
+    ]);
+
+    // A code no phase list names still gets an answer rather than an empty
+    // branch, which is the whole reason a `<Switch>` may replace a lookup that
+    // ended in `??`.
+    for (const selector of [
+      "<Switch value={releaseRead.error.code}>",
+      "<Switch value={downloadResult.error.code}>",
+      "<Switch value={verifyResult.error.code}>",
+      "<Switch value={replacementResult.error.code}>",
+    ]) {
+      expect({ selector, fallback: hasDefault(selector) }).toEqual({ selector, fallback: true });
+    }
+
+    // Every provenance the props schema admits is decided by name, and the one
+    // eligible provenance is written as an empty case rather than left to fall
+    // off the end — so adding a provenance to the schema without deciding what
+    // it may do shows up here.
+    expect(matchers("<Switch value={props.installation.provenance}>")).toEqual([
+      "bun-source",
+      "compiled",
+      "compiled-windows",
+      "deno-source",
+      "npm-node",
+    ]);
+    expect(hasDefault("<Switch value={props.installation.provenance}>")).toBe(false);
   });
 });

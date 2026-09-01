@@ -26,21 +26,25 @@ props:
 
 # Upgrade XMD
 
-<If condition={props.installation.provenance === "compiled-windows"}>
+<Switch value={props.installation.provenance}>
+<Case value="compiled-windows">
 <Fail message="The Windows xmd binary cannot replace itself while it is running. Run the standalone installer again or download xmd-x86_64-pc-windows-msvc.exe from the Releases page. No release was read, and the binary was not changed." />
-</If>
+</Case>
 
-<If condition={props.installation.provenance === "npm-node"}>
+<Case value="npm-node">
 <Fail message="npm manages this xmd installation. Run npm install -g @executablemd/cli@latest, or replace latest with an exact package version. No release was read, and the binary was not changed." />
-</If>
+</Case>
 
-<If condition={props.installation.provenance === "bun-source"}>
+<Case value="bun-source">
 <Fail message="Bun manages this xmd installation. Run bun add -g @executablemd/cli@latest, or replace latest with an exact package version. No release was read, and the binary was not changed." />
-</If>
+</Case>
 
-<If condition={props.installation.provenance === "deno-source"}>
+<Case value="deno-source">
 <Fail message="This xmd is running through Deno or a repository checkout. Update the jsr:@executablemd/cli version, or update the checkout and run deno task setup. No release was read, and no binary was changed." />
-</If>
+</Case>
+
+<Case value="compiled"></Case>
+</Switch>
 
 <If condition={props.installation.target === null}>
 <Fail
@@ -142,26 +146,38 @@ function refuseOptions() {
 }
 
 const optionRefusal = refuseOptions();
+
+// What this invocation is for. The three modes are mutually exclusive, and the
+// opening paragraph is the first place the reader learns which one they asked
+// for, so the document names them once here rather than re-deriving `status`
+// and `requestedTag` at each paragraph.
+const mode = props.status
+  ? "status"
+  : props.requestedTag === null
+    ? "latest"
+    : "tag";
 ```
 
 <If condition={optionRefusal !== null}>
 <Fail message={optionRefusal} />
 </If>
 
-<If condition={props.status}>
+<Switch value={mode}>
+<Case value="status">
 Compares the installed XMD version with the selected release without downloading
 a binary or changing the installation.
-</If>
+</Case>
 
-<If condition={!props.status && props.requestedTag === null}>
+<Case value="latest">
 Installs the latest published stable version of XMD. Verifies the release before
 replacing the standalone binary that ran this command.
-</If>
+</Case>
 
-<If condition={!props.status && props.requestedTag !== null}>
+<Case value="tag">
 Installs XMD release {props.requestedTag}. Verifies the release before replacing
 the standalone binary that ran this command.
-</If>
+</Case>
+</Switch>
 
 <If condition={props.status}>
 ## Select a release
@@ -179,25 +195,36 @@ installation lock without waiting. Reads release information from
 
 <Upgrade.Releases requestedTag={props.requestedTag} as="releaseRead" />
 
-```ts eval
-const releaseReadFailures = {
-  "busy":
-    `Another xmd upgrade is already running.\nBinary: ${props.installation.executablePath}\nLet it finish, then run this command again. No release was read, no binary was downloaded or staged, and the installation was not changed.`,
-  "symbolic-link":
-    `This xmd binary is a symbolic link.\nBinary: ${props.installation.executablePath}\nReinstall xmd as a regular file with:\ncurl -fsSL https://executable.md/install.sh | sh\nNo release was read, and the binary was not changed.`,
-  "unwritable-parent":
-    `The directory containing this xmd binary is not writable.\nBinary: ${props.installation.executablePath}\nMove the binary to a writable directory, or reinstall xmd with:\ncurl -fsSL https://executable.md/install.sh | sh\nThis command did not run sudo. No release was read, and the binary was not changed.`,
-  "unsupported-filesystem":
-    `The filesystem containing this xmd binary does not support atomic replacement.\nBinary: ${props.installation.executablePath}\nMove or reinstall xmd on a local filesystem, then run this command again. No release was read, and the binary was not changed.`,
-};
-const releaseReadFailure = releaseRead.ok
-  ? null
-  : releaseReadFailures[releaseRead.error.code] ??
-    "The command could not read or validate GitHub release information. Check your network connection and https://github.com/taras/executable.md/releases, then run this command again. No binary was downloaded, and the installation was not changed.";
-```
+<If condition={!releaseRead.ok}>
+<Switch value={releaseRead.error.code}>
+<Case value="busy">
+<Fail
+  message={`Another xmd upgrade is already running.\nBinary: ${props.installation.executablePath}\nLet it finish, then run this command again. No release was read, no binary was downloaded or staged, and the installation was not changed.`}
+/>
+</Case>
 
-<If condition={releaseReadFailure !== null}>
-<Fail message={releaseReadFailure} />
+<Case value="symbolic-link">
+<Fail
+  message={`This xmd binary is a symbolic link.\nBinary: ${props.installation.executablePath}\nReinstall xmd as a regular file with:\ncurl -fsSL https://executable.md/install.sh | sh\nNo release was read, and the binary was not changed.`}
+/>
+</Case>
+
+<Case value="unwritable-parent">
+<Fail
+  message={`The directory containing this xmd binary is not writable.\nBinary: ${props.installation.executablePath}\nMove the binary to a writable directory, or reinstall xmd with:\ncurl -fsSL https://executable.md/install.sh | sh\nThis command did not run sudo. No release was read, and the binary was not changed.`}
+/>
+</Case>
+
+<Case value="unsupported-filesystem">
+<Fail
+  message={`The filesystem containing this xmd binary does not support atomic replacement.\nBinary: ${props.installation.executablePath}\nMove or reinstall xmd on a local filesystem, then run this command again. No release was read, and the binary was not changed.`}
+/>
+</Case>
+
+<Case default>
+<Fail message="The command could not read or validate GitHub release information. Check your network connection and https://github.com/taras/executable.md/releases, then run this command again. No binary was downloaded, and the installation was not changed." />
+</Case>
+</Switch>
 </If>
 
 ```ts eval
@@ -305,39 +332,44 @@ Stages the binary beside the installed one without making it executable.
 
 <Upgrade.Download release={selected.identity} as="downloadResult" />
 
-```ts eval
-function installationFailure(code) {
-  const failures = {
-    "asset-missing":
-      `Release ${selected.tag} does not include a binary for ${props.installation.target}. The installed binary was not changed. Choose another published release, or report it at https://github.com/taras/executable.md/issues.`,
-    "checksums-missing":
-      `Release ${selected.tag} does not include checksums.txt, so its binary cannot be verified. The installed binary was not changed. Choose another published release, or report it at https://github.com/taras/executable.md/issues.`,
-    "checksum-entry-missing":
-      `checksums.txt for release ${selected.tag} does not include the ${props.installation.target} binary, so it cannot be verified. The installed binary was not changed. Choose another published release, or report it at https://github.com/taras/executable.md/issues.`,
-    "checksum-entry-duplicate":
-      `checksums.txt for release ${selected.tag} includes the ${props.installation.target} binary more than once, so it cannot be verified reliably. The installed binary was not changed. Report the release at https://github.com/taras/executable.md/issues. Do not install it manually.`,
-    "checksum-mismatch":
-      `The downloaded ${selected.tag} binary does not match its published SHA-256 checksum. The installed binary was not changed, and the downloaded binary was not run. Try again, or report the release at https://github.com/taras/executable.md/issues.`,
-    "candidate-version-mismatch":
-      `The checksum-verified ${selected.tag} binary did not report version ${selected.tag.slice(1)}. The installed binary was not changed. Report the release at https://github.com/taras/executable.md/issues. Do not install the downloaded binary manually.`,
-    "redirect-refused":
-      `A download for release ${selected.tag} redirected outside GitHub’s release download service. The installed binary was not changed. Check ${selected.url}, then try again or report it at https://github.com/taras/executable.md/issues.`,
-    "download-failed":
-      `The command could not completely download the ${selected.tag} binary or checksums.txt. The installed binary was not changed. Check your network connection, then run this command again.`,
-    "replacement-failed":
-      `The command could not prepare or atomically replace the installed binary with release ${selected.tag}.\nBinary: ${props.installation.executablePath}\nThe installed binary was not changed. Check available disk space, directory permissions, and filesystem support, then run this command again.`,
-  };
-  return failures[code] ??
-    `xmd ${selected.tag.slice(1)} was not installed. The installed binary was not changed.\nReinstall xmd with:\ncurl -fsSL https://executable.md/install.sh | sh\nThen repeat the original upgrade command.`;
-}
+<If condition={!downloadResult.ok}>
+<Switch value={downloadResult.error.code}>
+<Case value="asset-missing">
+<Fail
+  message={`Release ${selected.tag} does not include a binary for ${props.installation.target}. The installed binary was not changed. Choose another published release, or report it at https://github.com/taras/executable.md/issues.`}
+/>
+</Case>
 
-const downloadFailure = downloadResult.ok
-  ? null
-  : installationFailure(downloadResult.error.code);
-```
+<Case value="checksums-missing">
+<Fail
+  message={`Release ${selected.tag} does not include checksums.txt, so its binary cannot be verified. The installed binary was not changed. Choose another published release, or report it at https://github.com/taras/executable.md/issues.`}
+/>
+</Case>
 
-<If condition={downloadFailure !== null}>
-<Fail message={downloadFailure} />
+<Case value="redirect-refused">
+<Fail
+  message={`A download for release ${selected.tag} redirected outside GitHub’s release download service. The installed binary was not changed. Check ${selected.url}, then try again or report it at https://github.com/taras/executable.md/issues.`}
+/>
+</Case>
+
+<Case value="download-failed">
+<Fail
+  message={`The command could not completely download the ${selected.tag} binary or checksums.txt. The installed binary was not changed. Check your network connection, then run this command again.`}
+/>
+</Case>
+
+<Case value="replacement-failed">
+<Fail
+  message={`The command could not prepare or atomically replace the installed binary with release ${selected.tag}.\nBinary: ${props.installation.executablePath}\nThe installed binary was not changed. Check available disk space, directory permissions, and filesystem support, then run this command again.`}
+/>
+</Case>
+
+<Case default>
+<Fail
+  message={`xmd ${selected.tag.slice(1)} was not installed. The installed binary was not changed.\nReinstall xmd with:\ncurl -fsSL https://executable.md/install.sh | sh\nThen repeat the original upgrade command.`}
+/>
+</Case>
+</Switch>
 </If>
 
 Downloaded binary: {downloadResult.value.asset}
@@ -350,14 +382,44 @@ version.
 
 <Upgrade.Verify candidate={downloadResult.value.candidate} as="verifyResult" />
 
-```ts eval
-const verifyFailure = verifyResult.ok
-  ? null
-  : installationFailure(verifyResult.error.code);
-```
+<If condition={!verifyResult.ok}>
+<Switch value={verifyResult.error.code}>
+<Case value="checksum-entry-missing">
+<Fail
+  message={`checksums.txt for release ${selected.tag} does not include the ${props.installation.target} binary, so it cannot be verified. The installed binary was not changed. Choose another published release, or report it at https://github.com/taras/executable.md/issues.`}
+/>
+</Case>
 
-<If condition={verifyFailure !== null}>
-<Fail message={verifyFailure} />
+<Case value="checksum-entry-duplicate">
+<Fail
+  message={`checksums.txt for release ${selected.tag} includes the ${props.installation.target} binary more than once, so it cannot be verified reliably. The installed binary was not changed. Report the release at https://github.com/taras/executable.md/issues. Do not install it manually.`}
+/>
+</Case>
+
+<Case value="checksum-mismatch">
+<Fail
+  message={`The downloaded ${selected.tag} binary does not match its published SHA-256 checksum. The installed binary was not changed, and the downloaded binary was not run. Try again, or report the release at https://github.com/taras/executable.md/issues.`}
+/>
+</Case>
+
+<Case value="candidate-version-mismatch">
+<Fail
+  message={`The checksum-verified ${selected.tag} binary did not report version ${selected.tag.slice(1)}. The installed binary was not changed. Report the release at https://github.com/taras/executable.md/issues. Do not install the downloaded binary manually.`}
+/>
+</Case>
+
+<Case value="replacement-failed">
+<Fail
+  message={`The command could not prepare or atomically replace the installed binary with release ${selected.tag}.\nBinary: ${props.installation.executablePath}\nThe installed binary was not changed. Check available disk space, directory permissions, and filesystem support, then run this command again.`}
+/>
+</Case>
+
+<Case default>
+<Fail
+  message={`xmd ${selected.tag.slice(1)} was not installed. The installed binary was not changed.\nReinstall xmd with:\ncurl -fsSL https://executable.md/install.sh | sh\nThen repeat the original upgrade command.`}
+/>
+</Case>
+</Switch>
 </If>
 
 Verified: SHA-256 checksum and version {verifyResult.value.version}
@@ -369,14 +431,20 @@ replacement succeeds, the installed binary remains unchanged.
 
 <Upgrade.Replace candidate={verifyResult.value.candidate} as="replacementResult" />
 
-```ts eval
-const replacementFailure = replacementResult.ok
-  ? null
-  : installationFailure(replacementResult.error.code);
-```
+<If condition={!replacementResult.ok}>
+<Switch value={replacementResult.error.code}>
+<Case value="replacement-failed">
+<Fail
+  message={`The command could not prepare or atomically replace the installed binary with release ${selected.tag}.\nBinary: ${props.installation.executablePath}\nThe installed binary was not changed. Check available disk space, directory permissions, and filesystem support, then run this command again.`}
+/>
+</Case>
 
-<If condition={replacementFailure !== null}>
-<Fail message={replacementFailure} />
+<Case default>
+<Fail
+  message={`xmd ${selected.tag.slice(1)} was not installed. The installed binary was not changed.\nReinstall xmd with:\ncurl -fsSL https://executable.md/install.sh | sh\nThen repeat the original upgrade command.`}
+/>
+</Case>
+</Switch>
 </If>
 
 Installed xmd {replacementResult.value.installedVersion} (replaced {replacementResult.value.previousVersion}).
