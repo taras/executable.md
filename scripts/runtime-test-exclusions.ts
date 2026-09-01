@@ -498,6 +498,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/517",
   },
   {
+    path: "packages/cli/tests/compiled-upgrade.test.ts",
+    reason:
+      "the subject is the compiled host's installation lock: a non-blocking exclusive advisory lock taken through the Deno runtime's own `openSync`/`tryLockSync`, raced against a real Deno child that holds it and is then killed so the kernel releases it. No other runtime exposes that primitive, so the acquisition refuses there and every case that depends on owning the installation would be asserting about a lock nothing took. The portable half — the whole of the policy the document owns — is packages/cli/tests/upgrade-command-document.test.ts, which runs under all three",
+    issue: "https://github.com/taras/executable.md/issues/681",
+  },
+  {
     path: "packages/cli/tests/workflow-installation.test.ts",
     reason:
       "opens a real node:sqlite run store through @executablemd/workflow/deno to drive runWorkflow() directly; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",

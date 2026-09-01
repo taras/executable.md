@@ -5,6 +5,7 @@
  *   xmd run <document-reference> [options]
  *   xmd <document-reference> [options]   (run is the default command)
  *   xmd plan "<request>" [options]
+ *   xmd upgrade [<tag>] [--status] [--allow-downgrade] [--allow-prerelease] [--journal <path>]
  *   xmd workflow start <document.md> [options]
  *   xmd workflow resume <run-id>
  *   xmd workflow status|history <run-id> [--json]
@@ -125,6 +126,8 @@ import {
 import type { PlanScan } from "./plan-args.ts";
 import { runPlan } from "./plan.ts";
 import type { PlanExecution } from "./plan.ts";
+import { runUpgrade } from "./upgrade.ts";
+import type { UpgradeAssembly } from "./upgrade.ts";
 import { componentSearchPath, resolveTestTarget } from "./test-target.ts";
 import { renderSyntaxJson, renderSyntaxMarkdown, syntaxCatalog } from "./syntax.ts";
 import { testingExecutionHost } from "./testing-host.ts";
@@ -338,21 +341,188 @@ const testAgentConfig = object({
   },
 });
 
+/** What `xmd --help` says the upgrade command is for. */
+const UPGRADE_DESCRIPTION =
+  "Upgrade the standalone xmd binary to the latest stable or a specified release.";
+
+/**
+ * `xmd upgrade` — one optional tag and three switches, and nothing else.
+ *
+ * Every option a run configures is deliberately absent. This command executes
+ * no caller's document, writes no journal, starts no agent and installs no
+ * permission mode, so an option describing any of those would be answered by a
+ * command that does none of it. The values are read from argv by
+ * {@link scanUpgradeArgs} rather than from this parse; what is declared here is
+ * what `xmd upgrade --help` lists.
+ */
+const upgradeConfig = object({
+  tag: {
+    description: "exact release tag to install, such as v1.2.3 (default: the latest stable)",
+    ...field(z.string().optional(), cli.argument()),
+  },
+  status: {
+    description: "report how the selected release compares, and change nothing",
+    ...field(z.boolean(), field.default(false)),
+  },
+  allowDowngrade: {
+    description: "consent to installing a release older than the installed one",
+    ...field(z.boolean(), field.default(false)),
+  },
+  allowPrerelease: {
+    description: "consent to installing the exact prerelease tag named",
+    ...field(z.boolean(), field.default(false)),
+  },
+  journal: {
+    description: "write a diagnostic JSONL trace (path must not exist)",
+    aliases: ["-j"],
+    ...field(z.string().optional()),
+  },
+});
+
+/** The version this build reports, from the manifest it was built with. */
+export const XMD_VERSION: string = denoJson.version;
+
 const xmd = program({
   name: "xmd",
-  version: denoJson.version,
+  version: XMD_VERSION,
   config: commands(
     {
       run: runConfig,
       plan: { ...planConfig, description: PLAN_DESCRIPTION },
       test: testConfig,
       syntax: syntaxConfig,
+      upgrade: { ...upgradeConfig, description: UPGRADE_DESCRIPTION },
       "test-agent": testAgentConfig,
       workflow: workflowConfig,
     },
     { default: "run" },
   ),
 });
+
+/** The switches `xmd upgrade` defines, and the whole of what it accepts. */
+const UPGRADE_SWITCHES: readonly string[] = ["--status", "--allow-downgrade", "--allow-prerelease"];
+
+/** The one option that takes a value, and its alias. */
+const UPGRADE_JOURNAL = "--journal";
+const UPGRADE_JOURNAL_ALIAS = "-j";
+
+/** Everything the command accepts, as help and refusals name it. */
+const UPGRADE_OPTIONS: readonly string[] = [...UPGRADE_SWITCHES, UPGRADE_JOURNAL];
+
+/** What fixed grammar establishes about one `xmd upgrade` command line. */
+interface UpgradeScan {
+  /** The exact tag the caller named, or `null` for the latest stable release. */
+  tag: string | null;
+  status: boolean;
+  allowDowngrade: boolean;
+  allowPrerelease: boolean;
+  /** Where a diagnostic trace goes, when the caller asked for one. */
+  journal?: string;
+  /** Why fixed grammar refuses this command line. */
+  error?: string;
+}
+
+/**
+ * Read `xmd upgrade`'s command line, and refuse what the parser would swallow.
+ *
+ * Three things the parser cannot report are decided here. It stops at the first
+ * option it does not define and drops the rest, so an option nobody defines
+ * would otherwise be accepted in silence by a command that ignored it. It
+ * resolves `--status=false` to the field's default, so an `=` form on a switch
+ * would read as the opposite of what was written. And it takes a second
+ * positional without comment, where this command installs exactly one release.
+ *
+ * A pure function over argv: it reads nothing, so a malformed command line is
+ * refused before the host is asked for release metadata, a lock or a file.
+ */
+function scanUpgradeArgs(args: readonly string[]): UpgradeScan {
+  const scan: UpgradeScan = {
+    tag: null,
+    status: false,
+    allowDowngrade: false,
+    allowPrerelease: false,
+  };
+  let parsingOptions = true;
+  const rest = args.slice(1);
+
+  for (let index = 0; index < rest.length; index += 1) {
+    const token = rest[index];
+    if (parsingOptions && token === "--") {
+      parsingOptions = false;
+      continue;
+    }
+    if (parsingOptions && token.startsWith("-") && token !== "-") {
+      const equals = token.indexOf("=");
+      const name = equals === -1 ? token : token.slice(0, equals);
+
+      if (name === UPGRADE_JOURNAL || name === UPGRADE_JOURNAL_ALIAS) {
+        const value = equals === -1 ? rest[index + 1] : token.slice(equals + 1);
+        // Read here rather than after parsing, because an option the parser
+        // reads as absent falls back to the default: a caller who asked for a
+        // trace and named none would otherwise get a run that writes nothing.
+        if (
+          value === undefined ||
+          value.length === 0 ||
+          (equals === -1 && isUpgradeOption(value))
+        ) {
+          return {
+            ...scan,
+            error:
+              `${name} needs a path — write \`${UPGRADE_JOURNAL} <path>\`, and the path must ` +
+              "not already exist",
+          };
+        }
+        scan.journal = value;
+        index += equals === -1 ? 1 : 0;
+        continue;
+      }
+
+      if (!UPGRADE_SWITCHES.includes(name)) {
+        return {
+          ...scan,
+          error:
+            `xmd upgrade does not recognize ${name}. It accepts one optional release tag ` +
+            `and these options: ${UPGRADE_OPTIONS.join(", ")}.`,
+        };
+      }
+      if (equals !== -1) {
+        return {
+          ...scan,
+          error: `${name} does not take a value. Use ${name} by itself or omit it.`,
+        };
+      }
+      if (name === "--status") {
+        scan.status = true;
+      }
+      if (name === "--allow-downgrade") {
+        scan.allowDowngrade = true;
+      }
+      if (name === "--allow-prerelease") {
+        scan.allowPrerelease = true;
+      }
+      continue;
+    }
+    if (scan.tag !== null) {
+      return {
+        ...scan,
+        error: `xmd upgrade accepts at most one release tag. ${token} is an extra argument.`,
+      };
+    }
+    scan.tag = token;
+  }
+
+  return scan;
+}
+
+/** Whether this token is an option this command defines rather than a value. */
+function isUpgradeOption(token: string): boolean {
+  if (!token.startsWith("-") || token === "-") {
+    return false;
+  }
+  const equals = token.indexOf("=");
+  const name = equals === -1 ? token : token.slice(0, equals);
+  return UPGRADE_OPTIONS.includes(name) || name === UPGRADE_JOURNAL_ALIAS;
+}
 
 const pretty = (value: unknown): string =>
   inspect(value, {
@@ -1695,7 +1865,60 @@ function workflowPositionals(
   return { action, target, argument, value };
 }
 
-const COMMAND_NAMES = ["run", "plan", "test", "syntax", "test-agent", "workflow"];
+/**
+ * What `xmd upgrade --help` says beyond its option list.
+ *
+ * It reads nothing to say any of it. Which release is latest, how this
+ * installation compares with it and whether it can replace itself are questions
+ * the command answers by asking GitHub and opening the binary, and help asks
+ * neither — a caller reading about a command has not run it.
+ */
+const UPGRADE_HELP = [
+  "With no tag, xmd upgrade installs the latest published stable release. Name",
+  "an exact tag instead to select one release and only that release:",
+  "  xmd upgrade",
+  "  xmd upgrade v1.2.3",
+  "  xmd upgrade v1.3.0-rc.1 --allow-prerelease",
+  "",
+  "  --status",
+  "      Report the installed version, the selected release, how the two",
+  "      compare and the exact release URL. It downloads no binary, locks",
+  "      nothing and changes no files, and it accepts any published exact tag",
+  "      without consent — so neither consent option may be written with it.",
+  "",
+  "  --allow-downgrade",
+  "      Consent to installing a release older than the installed one. It is",
+  "      refused when the selected release is not older.",
+  "",
+  "  --allow-prerelease",
+  "      Consent to installing the exact prerelease tag named. It is refused",
+  "      without one, because no implicit selection ever chooses a prerelease.",
+  "",
+  "  --journal <path>, -j <path>",
+  "      Write a diagnostic JSONL trace of this run to a new file. The path",
+  "      must not exist. The trace is evidence only: it is never read back, it",
+  "      resumes nothing, and it changes no output, release choice or consent.",
+  "      With --status it is the one file the command writes.",
+  "",
+  "Only a compiled xmd on macOS or Linux can replace itself:",
+  "",
+  "  compiled binary            macOS or Linux: self-upgrade",
+  "                             Windows: use the installer or a release asset",
+  "  npm or Node                update with npm",
+  "  Bun                        update with Bun",
+  "  Deno or repository source  update the package version or the checkout",
+  "",
+  "Every other combination stops with instructions for that installation before",
+  "the command reads release metadata or changes any files.",
+  "",
+  "An install downloads the release binary for this platform, checks it against",
+  "the published SHA-256 checksum, runs the verified candidate and requires it",
+  "to report the selected version, and only then replaces the binary that ran",
+  "this command with one atomic rename. Anything that fails before that rename",
+  "leaves the installed xmd exactly as it was.",
+].join("\n");
+
+const COMMAND_NAMES = ["run", "plan", "test", "syntax", "upgrade", "test-agent", "workflow"];
 
 /**
  * What a caller has to know to write a filename that contains reference
@@ -1793,7 +2016,13 @@ function renderHelp(phase: PropsPhase): string {
   const help = xmd.parse({ args: [command, "--help"] });
   const base = help.ok && help.value.config.help ? help.value.config.text : xmd.help({ args: [] });
   const epilogue =
-    command === "run" ? RUN_SOURCE_HELP : command === "plan" ? PLAN_REQUEST_HELP : "";
+    command === "run"
+      ? RUN_SOURCE_HELP
+      : command === "plan"
+        ? PLAN_REQUEST_HELP
+        : command === "upgrade"
+          ? UPGRADE_HELP
+          : "";
   const withSource = epilogue === "" ? base : `${base}\n\n${epilogue}`;
 
   if (!phase.root) {
@@ -1875,6 +2104,7 @@ function* dispatch(
   evalFlags: EvalFlags,
   helpRequest: { requested: boolean; args: string[] },
   installService: HostServiceInstaller,
+  upgrade: UpgradeAssembly,
   workflowHost: WorkflowHost | undefined,
   sessions: MachineSessionAssembly | undefined,
 ): Operation<void> {
@@ -2041,6 +2271,67 @@ function* dispatch(
       }
       break;
     }
+    case "upgrade": {
+      // Fixed grammar first, and it reads nothing: a command line this command
+      // does not define is answered before the packaged policy exists, before
+      // the installation is opened and before GitHub is asked anything.
+      const scan = scanUpgradeArgs(helpRequest.args);
+      if (scan.error !== undefined) {
+        console.error(scan.error);
+        yield* exit(1);
+        break;
+      }
+
+      // The caller owns the trace and its exclusive creation, exactly as
+      // `xmd run --journal` does. Created before the command begins, so a path
+      // that already exists costs nothing but a message.
+      let stream: DurableStream;
+      if (scan.journal === undefined) {
+        stream = new InMemoryStream();
+      } else {
+        try {
+          yield* createJournalFile(scan.journal);
+        } catch (error) {
+          console.error(describeError(error));
+          yield* exit(1);
+          break;
+        }
+        stream = new FileStream(scan.journal);
+      }
+
+      // A terminal shows the transcript as it is made; a pipe receives it in
+      // one piece. Both drain the same stream — the difference is only when the
+      // bytes are handed on, which is this process's business and not the
+      // document's.
+      const piped: string[] = [];
+      const interactive = process.stdout.isTTY === true;
+      const upgraded = yield* runUpgrade({
+        command: {
+          requestedTag: scan.tag,
+          status: scan.status,
+          allowDowngrade: scan.allowDowngrade,
+          allowPrerelease: scan.allowPrerelease,
+        },
+        assembly: upgrade,
+        stream,
+        // deno-lint-ignore require-yield
+        *consume(chunk) {
+          if (interactive) {
+            process.stdout.write(chunk);
+            return;
+          }
+          piped.push(chunk);
+        },
+      });
+      if (!interactive) {
+        process.stdout.write(piped.join(""));
+      }
+      if (!upgraded.ok) {
+        reportFailure(upgraded.error);
+        yield* exit(1);
+      }
+      break;
+    }
     case "test": {
       const strayTimeout = findTimeoutFlag(evalFlags.rest);
       if (strayTimeout) {
@@ -2190,6 +2481,11 @@ function* dispatch(
 export function* runXmd(
   args: string[],
   installService: HostServiceInstaller,
+  // What this xmd is, stated by the entrypoint that knows. Only an eligible
+  // compiled macOS or Linux host carries the four phases an upgrade needs, so a
+  // command run under any other one refuses with that installation's own remedy
+  // rather than reaching for a release, a lock or a file.
+  upgrade: UpgradeAssembly,
   // Defaults to the host that refuses. A caller driving this without naming a
   // workflow host has no run store, and inheriting one by omission is the
   // failure mode the whole boundary exists to prevent — so the default is the
@@ -2260,7 +2556,7 @@ export function* runXmd(
     (selected.name === "run" || selected.name === "plan");
 
   if (!executes) {
-    return yield* dispatch(evalFlags, helpRequest, installService, workflowHost, sessions);
+    return yield* dispatch(evalFlags, helpRequest, installService, upgrade, workflowHost, sessions);
   }
 
   const timeouts = resolveRunTimeouts(evalFlags.rest);
@@ -2271,6 +2567,6 @@ export function* runXmd(
   }
 
   yield* underRunDeadline(timeouts, () =>
-    dispatch(evalFlags, helpRequest, installService, workflowHost, sessions),
+    dispatch(evalFlags, helpRequest, installService, upgrade, workflowHost, sessions),
   );
 }

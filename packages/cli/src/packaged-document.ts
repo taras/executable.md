@@ -23,6 +23,9 @@ import type { Operation } from "effection";
 /** The document `xmd plan` executes to turn a request into a Plan. */
 export const PLAN_COMMAND_DOCUMENT = "plan-command.md";
 
+/** The document `xmd upgrade` executes to select and install a release. */
+export const UPGRADE_COMMAND_DOCUMENT = "upgrade-command.md";
+
 /**
  * The packaged `<Plan>` Component, which owns the workflow that writes a Plan
  * wherever a Plan is written.

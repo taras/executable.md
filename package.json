@@ -44,6 +44,7 @@
     "marked-terminal": "^7.3.0",
     "remark": "15",
     "remend": "^1.2.2",
+    "semver": "^7.8.5",
     "zod": "^4.3.6",
     "unist-util-select": "^5",
     "mdast-util-to-string": "^4"
@@ -61,6 +62,7 @@
     "@executablemd/testing": "workspace:*",
     "@executablemd/workflow": "workspace:*",
     "@types/node": "^22.0.0",
+    "@types/semver": "^7.7.0",
     "expect": "^30.0.0",
     "oxfmt": "^0.41.0",
     "oxlint": "1.74.0",

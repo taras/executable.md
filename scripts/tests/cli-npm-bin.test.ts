@@ -38,6 +38,7 @@ const TIMEOUT = 600_000;
 
 interface Manifest {
   version?: string;
+  dependencies?: Record<string, string>;
 }
 
 function* readManifest(...segments: string[]): Operation<Manifest> {
@@ -65,6 +66,11 @@ function* buildCliPackage(version: string): Operation<ProcessResult> {
       DNT_LOCAL_SIBLINGS: "1",
     },
   }).join();
+}
+
+/** The manifest dnt emitted for the published package. */
+function* readEmittedManifest(): Operation<Manifest> {
+  return JSON.parse(yield* readTextFile(path.join(OUT_DIR, "package.json")));
 }
 
 /** Run the built bin under Node, the way an `npm i -g @executablemd/cli` user would. */
@@ -171,5 +177,33 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     for (const name of ["PlanInputs", "PlanAuthorship", "CheckDraft", "AdmitPlan"]) {
       expect(entries.map((entry: { name?: string }) => entry?.name)).not.toContain(name);
     }
+    // The same for the upgrade command's program. The npm build discovers the
+    // directory rather than listing files, so this is the check that the
+    // discovery really covered the second document too.
+    expect(yield* readTextFile(path.join(OUT_DIR, "esm/src/documents/upgrade-command.md"))).toBe(
+      yield* readTextFile(path.join(ROOT, PKG_DIR, "src/documents/upgrade-command.md")),
+    );
+
+    // `semver` is imported by the upgrade document's eval block, which nothing
+    // in the emitted module graph references. A transitive copy that happens to
+    // be installed alongside is not a dependency this package may resolve
+    // through: it is declared, so npm installs it.
+    expect((yield* readEmittedManifest()).dependencies?.semver).toBeDefined();
+
+    // And on this host the command refuses before any of that matters. The
+    // provenance refusal runs ahead of the block that imports semver, ahead of
+    // any release lookup, and ahead of touching a file — which is what makes
+    // the npm package safe to publish without the eval block ever resolving.
+    const refused = yield* runEmittedBin(["upgrade", "--status"]);
+    expect(refused.code).toBe(1);
+    // The document is the output, so even a refused host renders its heading.
+    // What matters is that the npm package answered at all: the transcript
+    // arrived through the same streaming path a compiled binary uses.
+    expect(refused.stdout.trim()).toBe("# Upgrade XMD");
+    expect(refused.stderr).toContain(
+      "npm manages this xmd installation. Run npm install -g @executablemd/cli@latest, or " +
+        "replace latest with an exact package version. No release was read, and the binary was " +
+        "not changed.",
+    );
   });
 });

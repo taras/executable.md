@@ -20,6 +20,7 @@ import * as path from "node:path";
 import { API, Service, useHostFiles } from "@executablemd/runtime";
 import { runCli } from "@executablemd/test-support/launch";
 import { runXmd } from "../src/cli.ts";
+import { SOURCE_UPGRADE } from "./support/upgrade-assembly.ts";
 
 function* useFixture<T>(
   files: Record<string, string>,
@@ -574,15 +575,19 @@ function* replacingRun(
     // `<File>` read in the replacement really does reach the recorder above.
     yield* useHostFiles();
 
-    yield* runXmd(args, function* () {
-      serviceInstalled = true;
-      yield* Service.around({
-        *start() {
-          serviceStarted = true;
-          throw new Error("the run started a service");
-        },
-      });
-    });
+    yield* runXmd(
+      args,
+      function* () {
+        serviceInstalled = true;
+        yield* Service.around({
+          *start() {
+            serviceStarted = true;
+            throw new Error("the run started a service");
+          },
+        });
+      },
+      SOURCE_UPGRADE,
+    );
 
     return { status, stderr, serviceInstalled, serviceStarted, documentReads, reads };
   });
@@ -750,9 +755,13 @@ function* helpRun(args: string[], cwd: string): Operation<HelpRun> {
     });
     yield* useHostFiles();
 
-    yield* runXmd(args, function* () {
-      serviceInstalled = true;
-    });
+    yield* runXmd(
+      args,
+      function* () {
+        serviceInstalled = true;
+      },
+      SOURCE_UPGRADE,
+    );
 
     return { status, stdout, stderr, serviceInstalled };
   });

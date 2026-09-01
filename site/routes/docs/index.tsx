@@ -93,6 +93,43 @@ export default define.page(function GettingStarted({ url }) {
         </a>. The binary is self-contained — no Node or Deno needed to run it.
       </p>
 
+      <h3>Keeping it up to date</h3>
+      <p>
+        A standalone binary on macOS or Linux replaces itself. This installs the
+        latest published stable release, verifies its checksum, and swaps the
+        binary you just ran:
+      </p>
+      <CodeBlock command>{"xmd upgrade"}</CodeBlock>
+      <p>
+        To see what would change without downloading or replacing anything:
+      </p>
+      <CodeBlock command>{"xmd upgrade --status"}</CodeBlock>
+      <p>
+        The command prints what it is doing as it goes: the release it selected,
+        the binary it downloaded, what it verified, and the replacement itself.
+        Add <code>--journal &lt;path&gt;</code>{" "}
+        to also write a diagnostic JSONL trace to a new file.
+      </p>
+      <p>
+        Name an exact tag — <code>xmd upgrade v1.2.3</code>{" "}
+        — to install one specific release. Installing an older version needs
+        {" "}
+        <code>--allow-downgrade</code>, and a prerelease tag needs{" "}
+        <code>--allow-prerelease</code>.
+      </p>
+      <p>
+        Every other installation is updated by whatever installed it, and{" "}
+        <code>xmd upgrade</code>{" "}
+        says so rather than replacing files it does not own: npm installs with
+        {" "}
+        <code>npm install -g @executablemd/cli@latest</code>, Bun with{" "}
+        <code>bun add -g @executablemd/cli@latest</code>, Deno by naming a newer
+        {" "}
+        <code>jsr:@executablemd/cli</code>{" "}
+        version, and a Windows binary by running the installer again or
+        downloading the release asset.
+      </p>
+
       <h3>From npm</h3>
       <p>
         <code>xmd</code> is published to npm as <code>@executablemd/cli</code>:

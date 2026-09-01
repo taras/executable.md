@@ -102,6 +102,18 @@ describe("Tier ADD — embedded adapters across distributions", () => {
     expect(graph).toContain("vendor/adapters/generated/snapshots.ts");
   });
 
+  it("ADD6: the compiled entrypoint keeps semver despite --exclude-unused-npm", function* () {
+    // `xmd upgrade` compares versions inside a packaged Markdown eval block,
+    // and `deno compile` walks TypeScript — it never parses that asset. So the
+    // Markdown's own `import … from "semver"` is invisible to the compiler, and
+    // without the static anchor in the CLI's upgrade module `--exclude-unused-npm`
+    // prunes the package from the binary. The document being in the build is
+    // not evidence of this: only the module graph is.
+    const graph = yield* moduleGraph(["--node-modules-dir=none"], "packages/cli/src/compiled.ts");
+
+    expect(graph).toContain("npm:/semver@");
+  });
+
   it("ADD5: the generated module is the manifest's bytes, not a stale copy", function* () {
     const source = yield* until(readFile(GENERATED, "utf8"));
     const manifest: unknown = JSON.parse(

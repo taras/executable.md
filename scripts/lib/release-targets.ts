@@ -9,26 +9,30 @@
  * matrix job prepares its own target's graph first, and every release compile
  * keeps `--cached-only --frozen` (#279).
  *
- * This module owns the executable half of that: which OS and architecture each
- * target maps to, and the exact argv preparation runs. `release.yml` keeps the
- * matrix list GitHub fans out over, and
+ * Which targets exist, what each one runs on and what its artifact is called
+ * belong to `packages/cli/src/release-targets.ts`, because the shipped binary
+ * needs the same answers to upgrade itself. This module owns what only the
+ * release tooling needs on top of that table: the representative target, the
+ * compile entrypoint, and the exact argv preparation runs. `release.yml` keeps
+ * the matrix list GitHub fans out over, and
  * `scripts/tests/publish-workflow-membership.test.ts` holds the two to exact set
  * equality, so a target can never be added in one place alone.
  */
+
+import { RELEASE_TARGETS as PUBLISHED_TARGETS } from "../../packages/cli/src/release-targets.ts";
 
 export interface Platform {
   os: string;
   arch: string;
 }
 
-/** Contractual: every release matrix member, and nothing else. */
-export const RELEASE_TARGETS: Record<string, Platform> = {
-  "aarch64-apple-darwin": { os: "darwin", arch: "arm64" },
-  "x86_64-apple-darwin": { os: "darwin", arch: "x64" },
-  "x86_64-unknown-linux-gnu": { os: "linux", arch: "x64" },
-  "aarch64-unknown-linux-gnu": { os: "linux", arch: "arm64" },
-  "x86_64-pc-windows-msvc": { os: "win32", arch: "x64" },
-};
+/**
+ * Every release matrix member and the platform it compiles for, derived from
+ * the shipped table rather than restated beside it.
+ */
+export const RELEASE_TARGETS: Record<string, Platform> = Object.fromEntries(
+  PUBLISHED_TARGETS.map((row) => [row.target, { os: row.platform, arch: row.architecture }]),
+);
 
 /**
  * The one `verify:clean` compiles for. Cross-compiled from every developer

@@ -22,6 +22,7 @@ import {
   PLAN_COMMAND_DOCUMENT,
   PLAN_DOCUMENT,
   readPackagedDocument,
+  UPGRADE_COMMAND_DOCUMENT,
 } from "../src/packaged-document.ts";
 import { useWorkingDirectory } from "./support/plan-harness.ts";
 
@@ -176,6 +177,50 @@ describe("packaged documents", () => {
     expect(source).not.toContain('"revise"');
     expect(source).not.toContain('"abort"');
     expect(source).not.toContain('<Let as="problems">');
+  });
+
+  it("reads the upgrade command document from beside its module too", function* () {
+    // The same package-relative lookup, and the same thing it must refuse to
+    // do: a file of this name in the directory a person is standing in must not
+    // become the program that decides whether their binary is replaced.
+    const source = yield* useWorkingDirectory(function* (dir) {
+      yield* writeTextFile(
+        join(dir, UPGRADE_COMMAND_DOCUMENT),
+        "# not the shipped program\n<Return value={`replaced`} />\n",
+      );
+      return yield* readPackagedDocument(UPGRADE_COMMAND_DOCUMENT);
+    });
+
+    const committed = yield* readTextFile(
+      fileURLToPath(packagedDocumentUrl(UPGRADE_COMMAND_DOCUMENT)),
+    );
+    expect(source).toBe(committed);
+
+    // The command is an ordinary streaming text root: its rendered body is the
+    // terminal experience, not a hidden program that synthesizes one string.
+    for (const absent of ["<Return", "<Output", "\nreturns:"]) {
+      expect({ absent, present: source.includes(absent) }).toEqual({ absent, present: false });
+    }
+    // The entrypoint matrix, in the words the product settled on. "Unix" was
+    // ruled out as ambiguous, and the two named platforms are the contract.
+    expect(source).not.toContain("Unix");
+    // The four phases the private profile declares, and nothing else.
+    expect([...source.matchAll(/<Upgrade\.[A-Za-z]+/g)].map((match) => match[0]).sort()).toEqual([
+      "<Upgrade.Download",
+      "<Upgrade.Releases",
+      "<Upgrade.Replace",
+      "<Upgrade.Verify",
+    ]);
+    // Precedence comes from the package, and the exact spelling policy stays
+    // here: a handwritten numeric comparison is what this refuses to become.
+    expect(source).toContain('from "semver"');
+    expect(source).not.toContain("Number(");
+    expect(source).not.toContain("parseInt");
+    // Nothing in this program touches the caller's machine. Every act that
+    // does belongs to the four phases above.
+    for (const absent of ["```bash", "```sh", "<File", "<Fetch", "<Agent", "<Elicit"]) {
+      expect({ absent, present: source.includes(absent) }).toEqual({ absent, present: false });
+    }
   });
 
   it("says which build is missing a document rather than behaving differently", function* () {

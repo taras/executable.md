@@ -545,6 +545,29 @@ inclusion of `generated/client-bundle.ts` in both published artifacts. The
 configuration elements change atomically; the package is never published
 without its browser asset and never published while private.
 
+### What a release must publish for `xmd upgrade`
+
+`xmd upgrade` installs a published release into a standalone binary
+([`xmd upgrade`](./upgrade-command-spec.md)), so what a release publishes is
+also what a self-upgrade depends on:
+
+- `packages/cli/src/release-targets.ts` owns the platform, architecture, target
+  triple and exact artifact name of every published target. `release.yml`'s
+  matrix and `scripts/lib/release-targets.ts` are held to that one table by
+  `scripts/tests/release-targets.test.ts`, so the release and a self-upgrade can
+  never choose different artifacts.
+- Every published target has exactly one artifact, named exactly as that table
+  names it, `.exe` included for Windows.
+- `checksums.txt` carries exactly one SHA-256 entry per artifact, in GNU
+  `sha256sum` format, whose filename is the artifact's exact basename.
+- A release is not a valid self-upgrade source until every artifact and the
+  checksum set are published. `release.yml` generates the checksums and
+  publishes them with the binaries in the same step, and `fail_on_unmatched_files`
+  refuses a partial set.
+- A missing artifact for the current target, or a checksum set that does not
+  name it exactly once, fails the upgrade closed. There is no fallback to
+  another target, another release, or an unverified download.
+
 ## 9. Packaged documents (`@executablemd/cli`)
 
 A document-backed command executes first-party Markdown through the ordinary XMD
@@ -567,6 +590,11 @@ of one.
 There is one Component source, and neither a generated TypeScript copy of it nor
 a second Markdown implementation exists. That is what makes "the same workflow, whichever surface
 asked" a fact about the file rather than a claim about two of them.
+
+`xmd upgrade` is the second such command, and
+`packages/cli/src/documents/upgrade-command.md` is the streaming text root it
+executes. It ships through the same directory-wide mechanism and is read through
+the same package-relative lookup; nothing about it is special-cased.
 
 The command locates it from its own module URL — never from the contextual
 working directory, and never through the component search path. Both are
