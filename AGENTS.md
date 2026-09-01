@@ -479,6 +479,21 @@ reader has no reason to ask. Before adding or changing a description, read
 [the component description guide](.agents/component-descriptions.md). Use its
 refinement interview when reviewing a set of descriptions.
 
+### Issue titles
+
+Write an issue title for a reader scanning open work without its body. Name the
+lasting outcome and the most specific recognizable product surface; keep
+implementation mechanisms, dependencies, acceptance constraints, delivery
+status and classification in the body or labels. Use `Add` for new
+functionality, `Make` for a changed property and `Require` for an obligation;
+do not use permission language when adding a capability. Use no decorative
+emoji. A coordinating story uses both the `Quest:` prefix and `quest` label.
+Before creating any issue, or adding or changing a Story or Quest title, read
+[the issue title guide](.agents/issue-titles.md) and follow its title and
+metadata rules. This applies to one-off issue creation as well as corpus work.
+Use its refinement interview when reviewing a set of titles, including its
+completion and overlap check.
+
 ## Executable.md Style Guide
 
 An executable document is read twice: as source, by someone deciding whether to
