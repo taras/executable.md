@@ -9,7 +9,7 @@
  *
  * The include list is empty on purpose. Repository component search must not be
  * able to supply `Loop`, `If`, `Return`, `Fail`, `CodeBlock` or the validator:
- * the policy under test is the one in the packaged document, resolved against
+ * the workflow under test is the one the packaged Component owns, resolved against
  * first-party declarations only.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -44,7 +44,7 @@ import { AGENT, planDeclarationHarness, useWorkingDirectory } from "./support/pl
  * point: frontmatter is only frontmatter when it is the first thing in the
  * file, so a candidate that opens with a blank line and then declares `returns`
  * declares nothing and its `<Return>` has no schema to satisfy. The structural
- * admission inside the policy says so now, where the command's own gate used to
+ * admission inside the Component says so now, where the command's own gate used to
  * be the first thing to see these bytes.
  */
 const CANDIDATE = [
@@ -91,7 +91,7 @@ function* runDocument(): Operation<CommandRun> {
   yield* scoped(function* () {
     // The agent words and this execution's prompt bookkeeping, as the command
     // installs them. No root provider: the ceiling the Plan is written under is
-    // the one the policy installs around its own content.
+    // the one the Component installs around its own content.
     yield* installAgentComponents({ defaultAgent: AGENT, permissionMode: "deny-all" });
     try {
       value = yield* collect(

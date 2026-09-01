@@ -26,8 +26,9 @@
  *
  * What a person is asked, how many drafts may be repaired, how many may be
  * reviewed and what happens when nobody approves anything are not here. They are
- * in `src/documents/plan-command.md`, written in the open, where they can be
- * read and argued with. This module is what a policy cannot be trusted to do for
+ * in `src/documents/Plan.md`, the packaged `<Plan>` Component, written in the
+ * open where they can be read and argued with. This module is what an authored
+ * workflow cannot be trusted to do for
  * itself: settle the command line, build the ceiling the assistant runs under,
  * answer honestly about a draft, and hold the boundary between text an agent
  * wrote and a Plan this host will hand over or run.
@@ -37,7 +38,7 @@
  * command document is told the facts and may ask for another draft. A *caller*
  * failure is something the command line or the environment said, so it raises
  * out of the validator and ends that execution: no draft the agent could write
- * would fix it, and a policy that could catch it could call it feedback.
+ * would fix it, and a workflow that could catch it could call it feedback.
  */
 
 import { Err, Ok, scoped, until, useScope } from "effection";
@@ -90,7 +91,7 @@ import type { OptionSignature, PlanScan } from "./plan-args.ts";
 /**
  * The identity approved text runs under.
  *
- * Owned by the policy module, because the structural admission inside `<Plan>`
+ * Owned by the Component module, because the structural admission inside `<Plan>`
  * reads the same bytes under the same identity: a position reading
  * `(<plan>:5:1)` means the same thing whichever gate produced it.
  */
@@ -221,14 +222,14 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
   let authored: Result<string>;
   try {
     // Taken before the execution, because two of the things this command does
-    // are the host's rather than the policy's — putting this build's adapter on
+    // are the host's rather than the Component's — putting this build's adapter on
     // disk, and opening the review form — and both run a command, which the
-    // ceiling the policy installs refuses to everything inside it.
+    // ceiling the Component installs refuses to everything inside it.
     const host = yield* useScope();
     const declaration = yield* planComponentDeclaration({
       surface: "command",
       // The adapter root resolves no repository component, and neither does the
-      // policy it invokes. A Plan's own components are the caller's business,
+      // Component it invokes. A Plan's own components are the caller's business,
       // and the final gate below is where they are resolved.
       includes: command.include,
       stack: command.stack,

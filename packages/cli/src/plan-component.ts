@@ -2,13 +2,13 @@
  * `<Plan>` — how this host declares the component, and the four private
  * capabilities only its own bytes may write.
  *
- * The component's body is the *standard Plan policy*, and that is
- * `src/documents/Plan.md` rather than anything here: `xmd plan` and a `<Plan>`
- * written in an ordinary run both expand those exact bytes. What this module
- * contributes is the declaration around them — the public name, the origin that
- * identifies the packaged asset rather than a path, the digest of what this
- * build actually shipped, the paired-only form, and the private closure the
- * policy's own phases need.
+ * The Component itself is `src/documents/Plan.md` rather than anything here:
+ * `xmd plan` and a `<Plan>` written in an ordinary run both expand those exact
+ * bytes, and the authorship workflow they carry out belongs to them. What this
+ * module contributes is the declaration around them — the public name, the
+ * origin that identifies the packaged asset rather than a path, the digest of
+ * what this build actually shipped, the paired-only form, and the private
+ * closure the Component's own phases need.
  *
  * ## What the host contributes, and what it does not
  *
@@ -22,15 +22,15 @@
  * What the host does not contribute is prose or a branch. Every sentence a
  * person reads — every Prompt, every choice, every ending — is in `Plan.md`,
  * where it can be read and argued with. The one thing that crosses is a sealed
- * `surface` discriminator, and the policy decides for itself what each surface
- * calls things.
+ * `surface` discriminator, and the Component decides for itself what each
+ * surface calls things.
  *
  * ## Why the capabilities are private
  *
  * `<PlanInputs>`, `<PlanAuthorship>`, `<CheckDraft>` and `<AdmitPlan>` are the
  * phases of one invocation, not components anyone composes with. Freezing the
  * inputs, installing a constrained Agent frame, answering about a draft and
- * admitting the approved bytes are each meaningless outside the policy that
+ * admitting the approved bytes are each meaningless outside the workflow that
  * orders them — and each carries authority the enclosing document does not have.
  * So they resolve only while canonical core is expanding these exact bytes:
  * not from the caller's root, not from the Prompt the caller projected, not from
@@ -74,12 +74,12 @@ import { useRunProfileRegistry } from "./syntax.ts";
  *
  * It names the packaged asset, not a file path: the source checkout, the
  * published npm package and the compiled binary all ship the same bytes at the
- * same package-relative location, and a reader asking where the policy came
+ * same package-relative location, and a reader asking where the Component came
  * from is owed the answer that is true in all three.
  */
 export const PLAN_ORIGIN = "@executablemd/cli/Plan.md";
 
-/** The public name of the standard Plan authorship policy. */
+/** The public name of the packaged Component that owns Plan authorship. */
 export const PLAN_COMPONENT = "Plan";
 
 /**
@@ -91,7 +91,7 @@ export const PLAN_COMPONENT = "Plan";
  */
 export const PLAN_IDENTITY = "<plan>";
 
-/** Which surface reached the policy. Sealed: it is never a public prop. */
+/** Which surface reached the Component. Sealed: it is never a public prop. */
 export type PlanSurface = "command" | "component";
 
 /** Everything the host settles before a `<Plan>` invocation can exist. */
@@ -112,7 +112,7 @@ export interface PlanComponentAssembly {
    *
    * Absent is a host that has no run stack — `xmd test` drives agents through
    * the deterministic TestAgent stack — and it is not a reason to withhold the
-   * policy. A document that writes `<Plan>` there resolves the same protected
+   * Component. A document that writes `<Plan>` there resolves the same protected
    * bytes and is refused at the ceiling, before any placement, rather than told
    * the component does not exist.
    */
@@ -151,8 +151,8 @@ export interface PlanComponentAssembly {
    * The host's answer about one draft.
    *
    * A candidate-authored failure comes back as `valid: false` and is repairable.
-   * A caller-source failure raises, which ends the invocation: the policy has no
-   * way to catch it and no way to recategorize it as feedback for an agent that
+   * A caller-source failure raises, which ends the invocation: the Component has
+   * no way to catch it and no way to recategorize it as feedback for an agent that
    * could not have caused it.
    *
    * Omitted is the structural answer the final admission gives, which is what a
@@ -224,7 +224,7 @@ export function* planComponentDeclaration(
   // profile now contains `<Plan>` — the catalog the agent was shown says so. So
   // the declaration has to be able to describe itself, which is why it is
   // assigned back rather than rebuilt: a second copy of these bytes would be a
-  // second policy identity.
+  // second Component identity.
   const declared: DeclaredMarkdownComponent[] = [];
   const declaration: DeclaredMarkdownComponent = {
     name: PLAN_COMPONENT,
@@ -232,7 +232,7 @@ export function* planComponentDeclaration(
     source,
     digest: sourceDigest(source),
     // Paired only. A Prompt is what a caller writes between the tags, and a
-    // self-closing invocation has written none — the policy fails it on the
+    // self-closing invocation has written none — the Component fails it on the
     // empty rendering rather than on the spelling, which is the same answer for
     // a body that rendered to nothing.
     forms: ["paired"],
@@ -259,7 +259,8 @@ export function* planComponentDeclaration(
  *
  * What they do report is the identity: the same name, the same origin, the same
  * digest and the same contract the run would expand, read from the same packaged
- * bytes. That is what makes `xmd syntax` a check on which policy a build ships.
+ * bytes. That is what makes `xmd syntax` a check on which Component a build
+ * ships.
  */
 export function* planComponentDescription(): Operation<DeclaredMarkdownComponent> {
   const source = yield* readPackagedDocument(PLAN_DOCUMENT);
@@ -404,13 +405,13 @@ function placementFor(
 }
 
 /**
- * Install the constrained authorship frame, project the policy inside it, and
+ * Install the constrained authorship frame, project the workflow inside it, and
  * do not return until every part of it has finished tearing down.
  *
  * The frame is this invocation's own scope, so the provider, the authorship
  * directory, the Prompt tasks, the Elicitation resources and the host acts
  * started for this Plan all end when the projection does. What follows in the
- * policy — the structural admission and the return — is therefore written after
+ * Component — the structural admission and the return — is therefore written after
  * teardown by construction rather than by a rule somebody has to remember.
  */
 function planAuthorship(assembly: PlanComponentAssembly): IdentityComponent {
@@ -462,7 +463,7 @@ function planAuthorship(assembly: PlanComponentAssembly): IdentityComponent {
           installElicitation: assembly.installElicitation,
         });
 
-        // The policy's own phases, projected inside everything installed above.
+        // The Component's own phases, projected inside everything installed above.
         // The content scope descends from this body's, so the ceiling covers the
         // turns and the review and nothing outside them.
         yield* content();
@@ -538,8 +539,8 @@ function* structurally(
   candidate: string,
 ): Operation<DocumentValidation> {
   // The registry is installed around the question rather than around the
-  // policy: what a Plan may write is the run profile's whole vocabulary —
-  // `<Testing>`, `<Test>` and the assertions included — and the policy itself
+  // Component: what a Plan may write is the run profile's whole vocabulary —
+  // `<Testing>`, `<Test>` and the assertions included — and the Component itself
   // has no business reaching a vocabulary it only describes.
   return yield* scoped(function* (): Operation<DocumentValidation> {
     yield* useRunProfileRegistry();
@@ -603,7 +604,7 @@ function admitPlan(
 }
 
 /**
- * One durable operation of this policy's, named so that a reader of the journal
+ * One durable operation of this Component's, named so that a reader of the journal
  * can tell which phase it was without any of it being in the record.
  *
  * The description carries the expansion identity and, where two calls at one

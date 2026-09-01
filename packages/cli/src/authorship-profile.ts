@@ -115,7 +115,7 @@ export interface AuthorshipProfile {
   /**
    * The `<Plan>` declaration this command runs under.
    *
-   * Built by the command, from the packaged policy bytes, before the adapter
+   * Built by the command, from the packaged Component's bytes, before the adapter
    * root is imported. It carries the sealed surface, the precomputed catalog and
    * the ceiling this invocation settled — none of which is a prop the adapter
    * could supply or a document could reach.
@@ -190,10 +190,10 @@ export function* installAuthorshipFrame(frame: AuthorshipFrame): Operation<void>
   });
   // A candidate comes from a turn's complete successful close value or from
   // nowhere. `<Prompt>` ordinarily renders whatever a failed turn managed to
-  // emit and carries on, which for a policy that reviews source would mean
+  // emit and carries on, which for a workflow that reviews source would mean
   // showing a person half a program; the host decides otherwise here, so a
   // failed, cancelled or protocol-invalid turn ends authorship before anything
-  // is presented. The policy cannot opt out of it.
+  // is presented. The Component cannot opt out of it.
   yield* installPromptFailurePolicy(function* () {
     return true;
   });
@@ -223,8 +223,8 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
 
   return yield* scoped(function* (): Operation<Result<string>> {
     // The agent words and this execution's prompt bookkeeping, with no root
-    // provider: what writes the Plan is the ceiling the policy installs around
-    // its own content, and a root provider here would be one the policy's
+    // provider: what writes the Plan is the ceiling the Component installs around
+    // its own content, and a root provider here would be one the Component's
     // regional install had to shadow rather than one it owns.
     yield* installAgentComponents({
       defaultAgent: profile.stack.defaultAgent,
@@ -235,7 +235,7 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
       // The command root is a thin adapter: it projects the request into
       // `<Plan>` and returns what comes back. Everything that used to be
       // installed around it — the directory, the provider, the Elicitation, the
-      // refusals — is installed by the policy itself, inside the invocation that
+      // refusals — is installed by the Component itself, inside the invocation that
       // owns it, so the command and an ordinary document run one workflow rather
       // than two arrangements of one.
       const approved = yield* collect(

@@ -749,7 +749,7 @@ function* runDocument(
     stream = new InMemoryStream();
   }
 
-  // The standard Plan policy, declared to this execution before the root is
+  // The packaged `<Plan>` Component, declared to this execution before the root is
   // imported. The run profile is where `<Plan>` belongs — a document that writes
   // one is asking for the same workflow `xmd plan` runs — and the surface is
   // fixed here, so the thin command adapter cannot supply or derive it and a
@@ -758,7 +758,7 @@ function* runDocument(
   //
   // Built whether or not this command settled an Agent stack. A host with none —
   // `xmd test` drives agents through the deterministic TestAgent stack — still
-  // declares the policy, so a document that writes `<Plan>` there resolves the
+  // declares the Component, so a document that writes `<Plan>` there resolves the
   // same protected bytes and is refused at the ceiling rather than told the
   // component does not exist.
   const plan = yield* planComponentDeclaration({
@@ -769,7 +769,7 @@ function* runDocument(
     ...(mode.planAuthorshipRoot === undefined ? {} : { authorshipRoot: mode.planAuthorshipRoot }),
     // Captured before the document exists, so the two acts that are this host's
     // — putting this build's adapter on disk, and opening the review form — run
-    // outside the ceiling the policy installs around itself.
+    // outside the ceiling the Component installs around itself.
     host: yield* useScope(),
     installElicitation: installWebElicitation,
     // Rendered when a `<Plan>` first asks, not before: an ordinary run that

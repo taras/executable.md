@@ -59,7 +59,7 @@ export function* syntaxCatalog(includes: readonly string[]): Operation<SyntaxCat
       components: agentIdentityComponents(),
       // `<Plan>` is part of the run profile, so a catalog that left it out would
       // describe a vocabulary no run has. Described from the packaged bytes:
-      // inspection mints nothing, so it reports the policy's identity and
+      // inspection mints nothing, so it reports the Component's identity and
       // contract without building the capabilities only a run can build.
       declarations: [yield* planComponentDescription()],
     });

@@ -548,14 +548,15 @@ without its browser asset and never published while private.
 ## 9. Packaged documents (`@executablemd/cli`)
 
 A document-backed command executes first-party Markdown through the ordinary XMD
-engine rather than a TypeScript policy. A package declares which Markdown it
+engine rather than a TypeScript implementation. A package declares which Markdown it
 ships by putting it in `src/documents/`; every other Markdown under `src/` —
 test documents, scenario fixtures — stays out of the product. `xmd plan` is
 the first such command, and it ships two: the checked-in Markdown is the
 deployed artifact and the single source of truth, not a generated string mirror
 of one.
 
-- `packages/cli/src/documents/Plan.md` is the standard Plan authorship policy —
+- `packages/cli/src/documents/Plan.md` is the packaged `<Plan>` Component, which
+  owns the Plan authorship workflow —
   every Prompt, the checking and repair loop, the review, the revisions, the
   approval and every ending. It is the public `<Plan>` component, so an ordinary
   document reaches the same bytes the command does.
@@ -563,13 +564,13 @@ of one.
   its adapter: it projects the request into `<Plan>` and returns what comes
   back.
 
-There is one policy, and neither a generated TypeScript copy of it nor a second
-Markdown one exists. That is what makes "the same workflow, whichever surface
+There is one Component source, and neither a generated TypeScript copy of it nor
+a second Markdown implementation exists. That is what makes "the same workflow, whichever surface
 asked" a fact about the file rather than a claim about two of them.
 
 The command locates it from its own module URL — never from the contextual
 working directory, and never through the component search path. Both are
-answerable by whatever directory a person is standing in, and which policy the
+answerable by whatever directory a person is standing in, and which Component the
 command runs is not a thing a repository file may decide.
 
 Every build therefore keeps the asset beside its module, at the same relative
@@ -596,8 +597,8 @@ The checks that hold this together, each proving a different build:
 - `scripts/tests/cli-npm-bin.test.ts` builds the real package, asserts every
   emitted `esm/src/documents/` asset is byte-identical to the source, and then
   asks the built bin — from a directory that is not the package — which Plan
-  policy it would let a document write. The answer carries the origin and the
-  SHA-256 of the bytes, so a build that shipped different ones, or none,
+  `<Plan>` Component source it would let a document write. The answer carries the
+  origin and the SHA-256 of those bytes, so a build that shipped different ones, or none,
   answers differently here rather than at a person's first `xmd plan`.
 - `scripts/tests/plan-component-compiled.test.ts` asks the same question of the
   compiled binary, which has no checkout to fall back to. It runs in the `smoke`

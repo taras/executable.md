@@ -1,7 +1,7 @@
 /**
  * Tier PC — `<Plan>` written in an ordinary document.
  *
- * The same packaged policy `xmd plan` runs, reached the other way: a document
+ * The same packaged Component `xmd plan` runs, reached the other way: a document
  * writes `<Plan>`, its body renders the Prompt, and the approved source arrives
  * under `as`. What this tier is about is everything that differs from the
  * command — the caller's Prompt, the caller's journal, the caller's authority —
@@ -68,12 +68,12 @@ function* authorshipRoot(): Operation<string> {
 }
 
 /**
- * One ordinary document, run against the declared policy.
+ * One ordinary document, run against the declared Component.
  *
  * The assembly is `xmd run`'s: the agent words and this execution's prompt
  * bookkeeping, and the `<Plan>` declaration. What it deliberately does not
  * install is a constrained anything — the ceiling under which a Plan is written
- * is the policy's own, and a case that installed one here would be proving its
+ * is the Component's own, and a case that installed one here would be proving its
  * own arrangement rather than the product's.
  */
 function* runDocument(options: {
@@ -193,7 +193,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       });
 
       expect(run.failure).toBe(undefined);
-      // The body rendered into the Prompt and nowhere else, and the policy's own
+      // The body rendered into the Prompt and nowhere else, and the Component's own
       // presentation is interaction rather than output.
       expect(run.output).not.toContain("Write a program.");
       expect(run.output).not.toContain("# Say hello");
@@ -282,7 +282,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       expect(plan?.forms).toEqual(["paired"]);
       expect(plan?.returnMode).toBe("value");
       expect(Reflect.get(Object(plan?.origin), "origin")).toBe(PLAN_ORIGIN);
-      // The description a document author reads is the packaged policy's own
+      // The description a document author reads is the packaged Component's own
       // frontmatter, so the asset and the entry describing it are one text.
       expect(plan?.description).toContain("Create and review an executable Plan from a Prompt.");
 
@@ -451,7 +451,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     });
   });
 
-  it("PC13: stopping is the policy's own ending, in the component's words", function* () {
+  it("PC13: stopping is the Component's own ending, in its component words", function* () {
     yield* useWorkingDirectory(function* () {
       const run = yield* runDocument({
         source: ['<Plan as="approved">Write a program.</Plan>', ""].join("\n"),
@@ -551,7 +551,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     });
   });
 
-  it("PC14: nothing the policy does reaches the caller's filesystem", function* () {
+  it("PC14: nothing the Component does reaches the caller's filesystem", function* () {
     yield* useWorkingDirectory(function* (dir) {
       const run = yield* runDocument({
         source: ['<Plan as="approved">Write a program.</Plan>', ""].join("\n"),

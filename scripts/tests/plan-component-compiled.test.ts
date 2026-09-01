@@ -1,5 +1,5 @@
 /**
- * The one Plan policy, as the compiled binary reports it.
+ * The packaged `<Plan>` Component, as the compiled binary reports it.
  *
  * A compiled `xmd` has no checkout to read from and no module graph to lose an
  * asset out of — it has whatever `deno compile --include` embedded. `<Plan>` is
@@ -33,21 +33,21 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const BINARY = path.join(ROOT, "dist", "xmd");
-const POLICY = path.join(ROOT, "packages/cli/src/documents/Plan.md");
+const COMPONENT = path.join(ROOT, "packages/cli/src/documents/Plan.md");
 const TIMEOUT = 60_000;
 
 describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () => {
-  it("carries the same Plan policy the source tree ships", function* () {
+  it("carries the same <Plan> Component the source tree ships", function* () {
     if (!(yield* exists(BINARY))) {
       throw new Error(`${BINARY} is missing — run \`deno task build\` before this case`);
     }
 
-    const source = yield* readTextFile(POLICY);
+    const source = yield* readTextFile(COMPONENT);
     const digest = createHash("sha256").update(source, "utf8").digest("hex");
 
     // Somewhere that is not the checkout, with an include of its own: a lookup
     // that reached for the working directory or the component search path would
-    // find nothing here, and neither may decide which policy this build runs.
+    // find nothing here, and neither may decide which Component this build runs.
     const elsewhere = yield* until(mkdtemp(path.join(tmpdir(), "xmd-compiled-plan-")));
     yield* ensure(() => rm(elsewhere, { recursive: true, force: true }));
 

@@ -123,12 +123,12 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
   });
 
   /**
-   * The one Plan policy, as the published package reports it.
+   * The packaged `<Plan>` Component, as the published package reports it.
    *
    * `<Plan>` is packaged Markdown rather than a module, so what a build ships
    * under that name is exactly the kind of thing a module-graph emitter can
    * lose. Asking the built bin what it would let a document write is what makes
-   * "the same policy in every distribution" a checked claim: the origin names
+   * "the same Component in every distribution" a checked claim: the origin names
    * the asset, the digest names the bytes, and a build that shipped different
    * ones — or none — answers differently here rather than at a person's first
    * `xmd plan`.
@@ -136,7 +136,7 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
    * Run from a directory that is not the package, because the lookup must be
    * beside the module and never beside the caller.
    */
-  it("reports the same Plan policy identity the source tree ships", function* () {
+  it("reports the same <Plan> Component identity the source tree ships", function* () {
     yield* ensure(removeNpmOutput);
     const { version } = yield* readManifest(PKG_DIR, "deno.json");
     const built = yield* buildCliPackage(version ?? "0.0.0-dev");

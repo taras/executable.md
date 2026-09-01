@@ -81,7 +81,7 @@ function installingAdapters(prepared: string[]): EmbeddedAdapters {
  *
  * The Agent stack is the whole of it. Everything a Plan invocation also needs —
  * the request, the catalog, the session, who checks a draft — belongs to the
- * policy rather than to the provider this case is about, so naming it here would
+ * Component rather than to the provider this case is about, so naming it here would
  * be describing an arrangement the ceiling never reads.
  */
 function ceilingFrom(stack: AgentStack): AuthorshipCeilingInputs {

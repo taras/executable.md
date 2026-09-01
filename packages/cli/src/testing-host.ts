@@ -55,7 +55,7 @@ export interface TestingHostSettings {
   /** The component search path this run resolves names through. */
   readonly includes: string[];
   /**
-   * The standard Plan policy this run profile declares.
+   * The packaged `<Plan>` Component this run profile declares.
    *
    * A child of the run profile writes `<Plan>` and means what a `<Plan>` in the
    * parent means, so the declaration crosses as the value the parent built

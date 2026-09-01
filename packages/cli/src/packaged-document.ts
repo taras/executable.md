@@ -1,7 +1,7 @@
 /**
  * The Markdown documents this CLI ships and executes itself.
  *
- * `xmd plan` runs a first-party document rather than a TypeScript policy, so
+ * `xmd plan` runs a first-party document rather than a TypeScript implementation, so
  * that document has to be present wherever the command is: a source checkout, a
  * published npm package, and a compiled binary with no checkout at all. It is
  * located from this module's own URL, never from the working directory and never
@@ -24,12 +24,14 @@ import type { Operation } from "effection";
 export const PLAN_COMMAND_DOCUMENT = "plan-command.md";
 
 /**
- * The one policy that writes a Plan, wherever a Plan is written.
+ * The packaged `<Plan>` Component, which owns the workflow that writes a Plan
+ * wherever a Plan is written.
  *
  * `xmd plan` reaches it through the thin root above and an ordinary run reaches
  * it by writing `<Plan>`, and both expand these exact bytes. There is no
- * generated TypeScript copy and no second Markdown policy, which is what makes
- * "the same policy" a fact about the file rather than a claim about two of them.
+ * generated TypeScript copy and no second Markdown implementation, which is what
+ * makes "the same workflow" a fact about the file rather than a claim about two
+ * of them.
  */
 export const PLAN_DOCUMENT = "Plan.md";
 

@@ -68,7 +68,7 @@ export function runMarkdownTier(document: string): Operation<MarkdownTierRun> {
       testAgentWorker: Ok([...cliBase(), "test-agent"]),
       // The run profile's own `<Plan>`, so a child assembled here has the
       // vocabulary a child assembled by `xmd run` has. This harness settles no
-      // Agent stack, so a document that writes one resolves the packaged policy
+      // Agent stack, so a document that writes one resolves the packaged Component
       // and is refused at the ceiling — which is what a host with no coding
       // agent should say, rather than that the component does not exist.
       plan: yield* planComponentDeclaration({

@@ -89,11 +89,11 @@ describe("packaged documents", () => {
     // and the only place the command explains itself, so its wording and its
     // punctuation are part of the contract rather than a paraphrase.
     expect(source).toContain(INTRODUCTION);
-    // And it is an adapter rather than a second policy: it hands the request to
+    // And it is an adapter rather than a second implementation: it hands the request to
     // `<Plan>` and returns what comes back. Every phase of authorship — the
-    // turns, the checking, the review, the endings — is in the one policy the
+    // turns, the checking, the review, the endings — is in the one Component the
     // next case reads, so a second copy of any of it here would be exactly the
-    // drift having one policy exists to prevent.
+    // drift having one Component source exists to prevent.
     expect(source).toContain('<Plan session={props.session} as="approved">{props.request}</Plan>');
     expect(source).toContain("<Return value={approved} />");
     for (const authored of [
@@ -108,12 +108,12 @@ describe("packaged documents", () => {
     }
   });
 
-  it("reads the one Plan policy from beside its module, whatever the cwd is", function* () {
+  it("reads the packaged <Plan> Component from beside its module, whatever the cwd is", function* () {
     const source = yield* useWorkingDirectory(function* (dir) {
       // The same substitution attempt as above, against the asset that now
-      // holds the policy: a repository `Plan.md` beside the caller must not be
+      // holds the Component: a repository `Plan.md` beside the caller must not be
       // able to answer for the program this build ships.
-      yield* writeTextFile(join(dir, PLAN_DOCUMENT), "# not the shipped policy\n");
+      yield* writeTextFile(join(dir, PLAN_DOCUMENT), "# not the shipped Component\n");
       return yield* readPackagedDocument(PLAN_DOCUMENT);
     });
 

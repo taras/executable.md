@@ -253,7 +253,7 @@ export function* useAuthorshipRoot<T>(body: (root: string) => Operation<T>): Ope
 /** What one case declares `<Plan>` with, and what it recorded. */
 export interface PlanDeclarationHarness {
   fake: FakeAcp;
-  /** Every candidate the policy asked about, in order. */
+  /** Every candidate the Component asked about, in order. */
   checked: string[];
   /** Every review request a provider was asked, in order. */
   reviews: ElicitationRequest[];
@@ -266,9 +266,9 @@ export interface PlanDeclarationHarness {
 /**
  * The `<Plan>` declaration a case runs a document against.
  *
- * The same policy bytes production ships, with the seams a case owns: the
+ * The same Component bytes production ships, with the seams a case owns: the
  * scriptable ACPX runtime, a scripted review, a recorded draft answer, and an
- * authorship root the case created. Nothing here is a second policy — the
+ * authorship root the case created. Nothing here is a second implementation — the
  * declaration reads `Plan.md` through the packaged loader, exactly as the
  * command and an ordinary run do.
  */
@@ -344,7 +344,7 @@ export function* planDeclarationHarness(options: {
       ? {
           // The deterministic seam standing where production's answer goes. It
           // records what it was asked about and says yes, so what a case reading
-          // it observes is the policy's control flow rather than validation's
+          // it observes is the Component's control flow rather than validation's
           // answers.
           assess: function* (source: string): Operation<CandidateAssessment> {
             checked.push(source);

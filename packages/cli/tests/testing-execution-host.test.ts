@@ -149,13 +149,13 @@ describe("nested execution under the production run host", () => {
    * have `<Plan>`, and what a child of `xmd test` actually lacks is a coding
    * agent to write one with.
    *
-   * The Prompt is deliberately empty, because that is the phase the policy
+   * The Prompt is deliberately empty, because that is the phase the Component
    * refuses before any of the authorship it could not perform here: the body
-   * renders to nothing, and the failure comes from the policy's own `<Fail>`.
+   * renders to nothing, and the failure comes from the Component's own `<Fail>`.
    * So this proves the exact protected bytes resolved and expanded in the child,
    * with no catalog, no session, no directory and no Agent turn behind it.
    */
-  it("resolves the packaged Plan policy in a run child, and fails at its own first phase", function* () {
+  it("resolves the packaged <Plan> Component in a run child, and fails at its own first phase", function* () {
     const project = yield* useProject({
       "README.md": doc(
         '<Test name="the run profile has Plan">',
@@ -174,7 +174,7 @@ describe("nested execution under the production run host", () => {
     });
     const result = yield* runCli(["test", "README.md"], { cwd: project }).join();
     expect(result.code).toBe(0);
-    // The failure the child reported is the policy's, not resolution's. Naming
+    // The failure the child reported is the Component's, not resolution's. Naming
     // both is what keeps this case from passing on a child that simply failed.
     const printed = result.stdout + result.stderr;
     expect(printed).not.toContain("Cannot resolve component: Plan");
@@ -502,7 +502,7 @@ describe("deterministic dependencies declared for a nested run", () => {
       // deno-lint-ignore require-yield
       installService: function* (): Operation<void> {},
       testAgentWorker: Err(new Error("xmd command not installed")),
-      // The run profile's own policy travels to every child, and this case is
+      // The run profile's own Component travels to every child, and this case is
       // about the relaunch it cannot perform rather than about `<Plan>`.
       plan: yield* planComponentDescription(),
     });
