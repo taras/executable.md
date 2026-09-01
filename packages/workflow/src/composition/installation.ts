@@ -243,7 +243,7 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
       description:
         "Say which tracker the issues in its content are filed in. " +
         "`<IssueTracker url={props.tracker}>…</IssueTracker>` names the container new issues " +
-        "are created in — a GitHub repository's issues, an Atlassian project. `provider` " +
+        "are created in — one repository's issues, one project. `provider` " +
         "names the only adapter allowed to act on it, for a url nobody recognizes. A nested " +
         "tracker replaces the whole target for its own content rather than merging with it.",
       as: null,
