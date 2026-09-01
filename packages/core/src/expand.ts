@@ -93,6 +93,7 @@ import { printsErrors, usePrintErrors } from "./component-failures.ts";
 import { containedLedger, recoveringLedger } from "./component-failures.ts";
 import type { CheckedFailures } from "./component-failures.ts";
 import type { ExpansionAuthority, ImportedDefinition } from "./components/import-authority.ts";
+import { DeclaredMarkdownError } from "./components/declared-markdown.ts";
 import type { PrivateImport } from "./components/declared-markdown.ts";
 import CoreTest from "./components/Test.ts";
 import { carriesTestActivationDecision } from "./test-activation.ts";
@@ -100,7 +101,7 @@ import { declaredRouting, withRouting } from "./foreground.ts";
 import { issueBoundExec } from "./bound-exec.ts";
 import { elementFrame, elementSite, extendPath, publishExpansion, snapshot } from "./expansion.ts";
 import type { ExpansionFrame } from "./expansion.ts";
-import { issueInvocation } from "./invocation-identity.ts";
+import { isPrivateImplementation, issueInvocation } from "./invocation-identity.ts";
 import type { IdentityDomain } from "./invocation-identity.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
@@ -647,6 +648,28 @@ function validateRenderOverride(override: unknown): Record<string, unknown> | un
     result[key] = value;
   }
   return result;
+}
+
+/**
+ * Refuse an answer that carries a private implementation to an import no
+ * closure authorized.
+ *
+ * Asked of every import that was not itself an authorized private one, so it
+ * holds where there is no declaration to consult: a second execution that
+ * declares no Markdown still refuses the implementation a first one built. What
+ * is recognized is the function, which is what a copy of the definition cannot
+ * change and a handler cannot forge — a component a handler wrote itself carries
+ * a different one and stays the open import it always was.
+ */
+function refuseEscapedPrivate(name: string, imported: ImportedDefinition): void {
+  if (imported.kind !== "function" || !isPrivateImplementation(imported.fn)) {
+    return;
+  }
+  throw new DeclaredMarkdownError(
+    `${name} was answered with a component only exact declared Markdown may write. A private ` +
+      "implementation runs for the element the declaration that carries it authored, and for " +
+      "no other name, copy, later site or run.",
+  );
 }
 
 /**
@@ -2191,8 +2214,10 @@ function* expandComponent(
     // nothing here. And a private name written where no offer was made never
     // reaches this at all: selection resolves it to nothing, so what arrives is
     // the ordinary unresolved failure.
+    let authorizedPrivate = false;
     if (authority?.declared?.declaresPrivate(name) === true) {
       imported = requirePrivate(offered, name, answered);
+      authorizedPrivate = true;
       authority.forms?.select(name, imported);
     } else if (authority?.imports === undefined || !authority.imports.closes(name)) {
       // Closed for this exact name, not for the execution that closed it. A
@@ -2213,12 +2238,16 @@ function* expandComponent(
       // an authority recorded explicitly is never displaced.
       authority.forms?.select(name, imported);
     }
-    // Whatever tier answered, an implementation this execution's private closure
-    // built runs only for an import that closure authorized. The name alone
-    // cannot decide it: an answer kept from a legitimate private import can be
-    // returned for any *other* name, and answering an undeclared name is the
-    // ordinary open import a handler is supposed to be able to make.
-    authority?.declared?.refuseEscaped(name, imported);
+    // Whatever tier answered, and whatever this execution declares, an
+    // implementation some declaration's private closure built runs only for an
+    // import that closure authorized. Neither the name nor the current
+    // execution can decide it: an answer kept from a legitimate private import
+    // can be returned for any *other* name, in a copy of the definition, and in
+    // a later run that declares nothing at all — and a run that has ended
+    // authorizes nothing.
+    if (!authorizedPrivate) {
+      refuseEscapedPrivate(name, imported);
+    }
     // Read off the answer rather than from a frame the engine opened: what is
     // recognized is the exact definition canonical resolution produced for this
     // exact name, whenever it produced it.

@@ -409,7 +409,6 @@ export class DeclaredImports implements ImportTier {
   readonly #catalog: DeclaredMarkdownCatalog;
   readonly #privates: ReadonlyMap<string, FunctionComponentDefinition>;
   readonly #closures: ReadonlyMap<string, PrivateClosure>;
-  readonly #implementations: ReadonlySet<FunctionComponentDefinition["fn"]>;
   #offered: OpenOffer | undefined;
 
   constructor(
@@ -420,10 +419,6 @@ export class DeclaredImports implements ImportTier {
     this.#catalog = catalog;
     this.#privates = privates;
     this.#closures = closures;
-    // Held by identity: these are the exact functions this execution built from
-    // the claimants it minted, and identity is what a copy of a definition
-    // cannot change about the implementation it carries.
-    this.#implementations = new Set([...privates.values()].map((definition) => definition.fn));
   }
 
   /** The declarations selection, inspection and validation all read. */
@@ -473,38 +468,6 @@ export class DeclaredImports implements ImportTier {
   /** Whether some declaration keeps this name to itself. */
   declaresPrivate(name: string): boolean {
     return this.#privates.has(name);
-  }
-
-  /**
-   * Refuse an answer that carries a private implementation to an import the
-   * closure did not authorize.
-   *
-   * The name is the wrong thing to check on its own. A handler that keeps a
-   * legitimately delegated private answer can return it for any *other* name —
-   * one nothing declares, which is an ordinary open import a handler is
-   * supposed to be able to answer. Restricting the name alone lets the private
-   * implementation run under an alias, in a copy of the definition, or after
-   * the invocation that produced it is over.
-   *
-   * So what is restricted is the implementation. An import under a private name
-   * has already been authorized by its own offer above; every other import is
-   * refused when what came back is a function this execution's private closure
-   * built. A definition a handler wrote itself carries a different function and
-   * stays open, which is what keeps an unrelated middleware-provided component
-   * exactly as answerable as it is with nothing declared.
-   */
-  refuseEscaped(name: string, imported: ImportedDefinition): void {
-    if (this.declaresPrivate(name) || imported.kind !== "function") {
-      return;
-    }
-    if (!this.#implementations.has(imported.fn)) {
-      return;
-    }
-    throw new DeclaredMarkdownError(
-      `${name} was answered with a component only exact declared Markdown may write. A private ` +
-        "implementation runs for the element the declaration that carries it authored, and for " +
-        "no other name, copy or later site.",
-    );
   }
 
   /**

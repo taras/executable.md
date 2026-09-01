@@ -155,6 +155,54 @@ function aliasing(
   };
 }
 
+/** Somewhere a handler can put what it kept, and read it back in a later run. */
+interface Kept {
+  definition?: ImportedDefinition;
+}
+
+/** A handler that delegates the private import and keeps exactly what came back. */
+function retaining(kept: Kept): ExecutionInstallation {
+  return {
+    *install() {
+      yield* Component.around(
+        {
+          *importComponent([name, position], next) {
+            const answer = yield* next(name, position);
+            if (name === "Secret") {
+              kept.definition = answer;
+            }
+            return answer;
+          },
+        },
+        { at: "max" },
+      );
+    },
+  };
+}
+
+/** The same handler, later, answering an open name with what it kept. */
+function answering(
+  kept: Kept,
+  through: (definition: ImportedDefinition) => ImportedDefinition = (definition) => definition,
+): ExecutionInstallation {
+  return {
+    *install() {
+      yield* Component.around(
+        {
+          *importComponent([name, position], next) {
+            const stale = kept.definition;
+            if (name === "Virtual" && stale !== undefined) {
+              return through(stale);
+            }
+            return yield* next(name, position);
+          },
+        },
+        { at: "max" },
+      );
+    },
+  };
+}
+
 /** A private component that names its own durable work, to prove the claimant works. */
 function claiming(seen: string[], name = "Claiming"): IdentityComponent {
   return {
@@ -918,6 +966,86 @@ describe("Tier DM — the private closure is lexical", () => {
     );
 
     expect(message).toContain("Virtual");
+    expect(entered).toEqual(["policy"]);
+  });
+
+  it("DM46: a private implementation cannot be presented in a later execution", function* () {
+    // The reach this closes outlives the execution that opened it. A reusable
+    // installation delegates and keeps `Secret` while the declaration is being
+    // expanded; that execution then ends completely. A second execution — one
+    // that declares no Markdown at all, and so has no closure to consult —
+    // answers the open name `Virtual` with exactly what was kept.
+    const entered: string[] = [];
+    const kept: Kept = {};
+
+    const first = yield* run(
+      "<Policy />\n",
+      [declared(WITH_PRIVATE, { privates: [watching(entered)] })],
+      [retaining(kept)],
+    );
+    expect(String(first)).toContain("policy says the private answer");
+    expect(entered).toEqual(["policy"]);
+    expect(kept.definition).toBeDefined();
+
+    // The first execution is over: `run()` leaves its scope, so every provider,
+    // domain and closure it had is gone. What the handler is holding is an
+    // answer from a run that has ended, and a run that has ended authorizes
+    // nothing.
+    const message = yield* refusal(run('<Virtual as="aliased" />\n', [], [answering(kept)]));
+
+    expect(message).toContain("Virtual");
+    expect(entered).toEqual(["policy"]);
+  });
+
+  it("DM47: nor can a copy of it made after that execution ended", function* () {
+    const entered: string[] = [];
+    const kept: Kept = {};
+
+    yield* run(
+      "<Policy />\n",
+      [declared(WITH_PRIVATE, { privates: [watching(entered)] })],
+      [retaining(kept)],
+    );
+    expect(entered).toEqual(["policy"]);
+
+    const message = yield* refusal(
+      run(
+        '<Virtual as="aliased" />\n',
+        [],
+        [answering(kept, (definition) => ({ ...definition, name: "Virtual" }))],
+      ),
+    );
+
+    expect(message).toContain("Virtual");
+    expect(entered).toEqual(["policy"]);
+  });
+
+  it("DM48: the later execution still resolves the private name to nothing", function* () {
+    // The other half of the same run: a document in an execution that declares
+    // nothing cannot reach the name either, and describing and validating that
+    // document agree with running it.
+    const entered: string[] = [];
+    const kept: Kept = {};
+    yield* run(
+      "<Policy />\n",
+      [declared(WITH_PRIVATE, { privates: [watching(entered)] })],
+      [retaining(kept)],
+    );
+
+    const message = yield* refusal(run('<Secret as="answer" />\n', [], [answering(kept)]));
+    expect(message).toContain("Cannot resolve component: Secret");
+
+    const info = yield* inspectComponent({ name: "Secret", includes: [] });
+    expect(info.kind).toBe("unresolved");
+
+    const validation = yield* validateDocument({
+      ...retainedSource(ROOT_PATH, '<Secret as="answer" />\n'),
+      includes: [],
+    });
+    expect(validation.outcome).toBe("invalid");
+    expect(validation.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      "component-unresolved",
+    );
     expect(entered).toEqual(["policy"]);
   });
 

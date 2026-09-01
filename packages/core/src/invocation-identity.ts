@@ -719,6 +719,59 @@ export function assertDistinctIdentityNames(components: readonly IdentityCompone
   }
 }
 
+/**
+ * The mark a private implementation carries, for as long as it exists.
+ *
+ * Carried *on the function* rather than in a table, because what makes a private
+ * implementation private outlives the execution that built it: an execution that
+ * has ended authorizes nothing, so an answer carrying one is refused wherever it
+ * is later presented — under another name, inside a copy of the definition, and
+ * in a run that declares no Markdown at all and has no closure left to ask. A
+ * per-execution table cannot say that, and a process-lifetime registry is a
+ * registry every run shares.
+ *
+ * A stable namespaced symbol, so a separately loaded copy of core refuses the
+ * same functions this one does. It is non-configurable and non-writable: a
+ * holder cannot take the mark off. Putting one *on* a function of its own is
+ * possible and harmless — it refuses that holder's own component, which is the
+ * safe direction.
+ */
+const PRIVATE_IMPLEMENTATION = Symbol.for("executablemd.core.private-implementation");
+
+/** Mark one implementation as a private declaration's, permanently. */
+function markPrivateImplementation(fn: FunctionComponent): void {
+  Object.defineProperty(fn, PRIVATE_IMPLEMENTATION, {
+    value: true,
+    configurable: false,
+    writable: false,
+    enumerable: false,
+  });
+}
+
+/**
+ * Whether this is an implementation some declaration's private closure built.
+ *
+ * Asked at the one place an answer becomes something the engine will invoke, so
+ * a private implementation returned through component resolution is refused
+ * whatever name it arrives under and whatever execution is running. It says
+ * nothing about a handler that calls a function value it is holding, or that
+ * wraps one in a component of its own: that is not resolution, and nothing here
+ * pretends to be a defence against it.
+ */
+export function isPrivateImplementation(fn: unknown): boolean {
+  if (typeof fn !== "function") {
+    return false;
+  }
+  try {
+    return Reflect.get(fn, PRIVATE_IMPLEMENTATION) === true;
+  } catch {
+    // Reading it runs whatever the value is made of. One that refuses to answer
+    // is one this cannot clear, and an answer the engine would invoke is not
+    // something to give the benefit of the doubt to.
+    return true;
+  }
+}
+
 /** One built implementation, ready for core's own registration path. */
 export interface IdentityRegistration extends ComponentDocumentation {
   readonly name: string;
@@ -777,6 +830,10 @@ export function installIdentities(
     minted.set(component.name, domain);
     const implementation = component.factory(domain.claim);
     domain.implementation = implementation;
+    // Marked where it is built, not where it is installed: what this records is
+    // that the function exists because a declaration asked for one, and that
+    // stays true after this execution is gone.
+    markPrivateImplementation(implementation);
     privates.set(component.name, {
       kind: "function",
       name: component.name,
