@@ -7,14 +7,12 @@
  * reserved and not structural — so a repository-local component may shadow one
  * for its own scope.
  *
- * One array, three consumers, because three descriptions of one vocabulary
- * would drift. `useCompositionComponents()` registers it inside a workflow
- * attachment; `useRunProfileRegistry()` registers it for `xmd syntax` and for
- * `xmd plan`'s validation and generation; `installDocumentComponents()`
- * registers it for an ordinary run. Registering it installs no provider,
- * performs no repository discovery, acquires no lock and reaches no network:
- * what a name *does* is the installed provider's, and describing the
- * environment mints none.
+ * One array rather than a list per caller, because two descriptions of one
+ * vocabulary would drift. `useCompositionComponents()` registers it inside a
+ * workflow attachment. Registering it installs no provider, performs no
+ * repository discovery, acquires no lock and reaches no network: what a name
+ * *does* is the installed provider's, and describing the environment mints
+ * none.
  *
  * A completed root replay attaches no provider and registers nothing, so a
  * document that already ran through completion re-registers none of these.
