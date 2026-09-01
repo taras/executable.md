@@ -10,6 +10,7 @@ import {
   RELEASE_TARGET,
   RELEASE_TARGETS,
 } from "../lib/release-targets.ts";
+import { RELEASE_TARGETS as PUBLISHED_TARGETS } from "../../packages/cli/src/release-targets.ts";
 
 const RELEASE_WORKFLOW = new URL("../../.github/workflows/release.yml", import.meta.url);
 
@@ -25,6 +26,12 @@ const ATTEST_ACTION = "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6";
 function* matrixTargets(): Operation<string[]> {
   const workflow = yield* readTextFile(RELEASE_WORKFLOW);
   return [...workflow.matchAll(/^\s+- target:\s*(\S+)/gm)].map((match) => match[1] ?? "");
+}
+
+/** Each matrix member's `artifact:`, as `release.yml` names the file it uploads. */
+function* matrixArtifacts(): Operation<string[]> {
+  const workflow = yield* readTextFile(RELEASE_WORKFLOW);
+  return [...workflow.matchAll(/^\s+artifact:\s*(\S+)/gm)].map((match) => match[1] ?? "");
 }
 
 /** Executable lines only: a comment naming a command runs nothing. */
@@ -149,6 +156,52 @@ describe("the release matrix and its mapping", () => {
 
   it("compiles its representative target as one of the matrix members", function* () {
     expect(yield* matrixTargets()).toContain(RELEASE_TARGET);
+  });
+});
+
+/**
+ * The shipped table is the one map, and `release.yml` is held to it.
+ *
+ * `xmd upgrade` asks that table which artifact this machine's binary is called;
+ * `release.yml` names the file each job uploads. Two maps would let a release
+ * publish `xmd-aarch64-apple-darwin` while a self-upgrade asked for something
+ * else, and the failure would appear only on the platform nobody tested on.
+ */
+describe("the shipped release-target table", () => {
+  it("carries every matrix target with the platform it runs on", function* () {
+    expect(
+      PUBLISHED_TARGETS.map((row) => `${row.target} ${row.platform}/${row.architecture}`),
+    ).toEqual([
+      "aarch64-apple-darwin darwin/arm64",
+      "x86_64-apple-darwin darwin/x64",
+      "x86_64-unknown-linux-gnu linux/x64",
+      "aarch64-unknown-linux-gnu linux/arm64",
+      "x86_64-pc-windows-msvc win32/x64",
+    ]);
+  });
+
+  it("names exactly the artifacts release.yml uploads, Windows suffix included", function* () {
+    const published = PUBLISHED_TARGETS.map((row) => row.artifact).sort();
+    expect(published).toEqual([...(yield* matrixArtifacts())].sort());
+    expect(published).toContain("xmd-x86_64-pc-windows-msvc.exe");
+    // One `.exe`, and it is the Windows one: a suffix on any other row would
+    // make a macOS or Linux upgrade ask for a file no job ever produced.
+    expect(published.filter((artifact) => artifact.endsWith(".exe"))).toEqual([
+      "xmd-x86_64-pc-windows-msvc.exe",
+    ]);
+  });
+
+  it("is the table the preparation flags are derived from", function* () {
+    // Not a second copy held equal by test: `scripts/lib/release-targets.ts`
+    // builds its record from this one, and this asserts what that derivation
+    // produces rather than a list somebody typed twice.
+    expect(Object.keys(RELEASE_TARGETS)).toEqual(PUBLISHED_TARGETS.map((row) => row.target));
+    for (const row of PUBLISHED_TARGETS) {
+      expect({ target: row.target, platform: RELEASE_TARGETS[row.target] }).toEqual({
+        target: row.target,
+        platform: { os: row.platform, arch: row.architecture },
+      });
+    }
   });
 });
 

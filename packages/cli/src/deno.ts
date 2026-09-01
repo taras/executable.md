@@ -12,7 +12,8 @@ import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { compileDataUri } from "@executablemd/core";
-import { runXmd } from "./cli.ts";
+import { runXmd, XMD_VERSION } from "./cli.ts";
+import type { UpgradeAssembly } from "./upgrade.ts";
 import { useMachineSessions } from "./session-coordinator.ts";
 import { useDenoWorkflowHost } from "./deno-workflow.ts";
 import {
@@ -41,6 +42,23 @@ const HELPER: HelperAssembly = {
       .map((name) => [name, process.env[name]])
       .filter(([, value]) => value !== undefined && value !== ""),
   ) as Record<string, string>,
+};
+
+/**
+ * What `xmd upgrade` may do here: read what this is, and say so.
+ *
+ * One refusal covers both readings, because this entrypoint cannot honestly
+ * tell them apart. `deno run jsr:@executablemd/cli` and a repository checkout
+ * both arrive here as the same module under the same executable, so the answer
+ * names both remedies rather than inventing a provenance to choose between
+ * them.
+ */
+const UPGRADE: UpgradeAssembly = {
+  provenance: "deno-source",
+  currentVersion: XMD_VERSION,
+  executablePath: process.execPath,
+  platform: process.platform,
+  architecture: process.arch,
 };
 
 // The internal helper mode runs before anything public is parsed. It is not a
@@ -78,6 +96,12 @@ if (isCredentialHelperMode(process.argv.slice(2))) {
     // two owners of one conversation.
     // Helper mode receives neither this nor the workflow host: it is not the
     // public CLI and assembles none of it.
-    yield* runXmd(args, useDenoService, () => useDenoWorkflowHost(HELPER), useMachineSessions());
+    yield* runXmd(
+      args,
+      useDenoService,
+      UPGRADE,
+      () => useDenoWorkflowHost(HELPER),
+      useMachineSessions(),
+    );
   });
 }

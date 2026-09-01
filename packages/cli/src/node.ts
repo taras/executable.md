@@ -16,12 +16,28 @@ import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { compileTempFile } from "@executablemd/core";
-import { runXmd } from "./cli.ts";
+import { runXmd, XMD_VERSION } from "./cli.ts";
+import type { UpgradeAssembly } from "./upgrade.ts";
 import { unassembledMachineSessions } from "./session-coordinator.ts";
 import { unsupportedWorkflowHost } from "./workflow.ts";
 import { useNodeService } from "./node-service.ts";
 
 const ENTRYPOINT = fileURLToPath(import.meta.url);
+
+/**
+ * What `xmd upgrade` may do here: nothing but explain who owns this copy.
+ *
+ * This module is what the published `xmd` bin runs, so the files belong to npm
+ * and replacing them behind npm's back would leave its record describing a
+ * version that is no longer installed.
+ */
+const UPGRADE: UpgradeAssembly = {
+  provenance: "npm-node",
+  currentVersion: XMD_VERSION,
+  executablePath: process.execPath,
+  platform: process.platform,
+  architecture: process.arch,
+};
 
 await main(function* (args) {
   // The base providers for this host. `at: "min"` puts them beneath ordinary
@@ -51,5 +67,11 @@ await main(function* (args) {
   // build either. Advertising the same names is what makes the refusal say so:
   // every advertised operation stops before provider work, while ordinary ACP
   // work is unaffected.
-  yield* runXmd(args, useNodeService, unsupportedWorkflowHost, unassembledMachineSessions());
+  yield* runXmd(
+    args,
+    useNodeService,
+    UPGRADE,
+    unsupportedWorkflowHost,
+    unassembledMachineSessions(),
+  );
 });

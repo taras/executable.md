@@ -9,7 +9,8 @@ import { main } from "effection";
 import process from "node:process";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { compileDataUri } from "@executablemd/core";
-import { runXmd } from "./cli.ts";
+import { runXmd, XMD_VERSION } from "./cli.ts";
+import { compiledUpgradeAssembly } from "./compiled-upgrade.ts";
 import { useMachineSessions } from "./session-coordinator.ts";
 import { useDenoWorkflowHost } from "./deno-workflow.ts";
 import {
@@ -30,6 +31,21 @@ const HELPER: HelperAssembly = {
   platform: process.platform === "win32" ? "windows" : "unix",
   execPath: process.execPath,
 };
+
+/**
+ * What `xmd upgrade` may do here, from what this process can observe.
+ *
+ * `process.execPath` is the spelling this binary was invoked as, and it is the
+ * exact file an upgrade replaces — never a resolved one. A compiled binary
+ * reached through a symbolic link reports the link, and the command refuses it
+ * rather than following it to choose what to overwrite.
+ */
+const UPGRADE = compiledUpgradeAssembly({
+  executablePath: process.execPath,
+  platform: process.platform,
+  architecture: process.arch,
+  currentVersion: XMD_VERSION,
+});
 
 // Before anything public is parsed, and absent from every public surface.
 if (isCredentialHelperMode(process.argv.slice(2))) {
@@ -67,6 +83,7 @@ if (isCredentialHelperMode(process.argv.slice(2))) {
     yield* runXmd(
       args,
       useCompiledService,
+      UPGRADE,
       () => useDenoWorkflowHost(HELPER),
       useMachineSessions(),
     );

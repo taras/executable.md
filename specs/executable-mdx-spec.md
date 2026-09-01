@@ -8592,6 +8592,20 @@ generation, repair or approval is journaled or replayed, and the two executions
 share no scope. The command's complete contract is
 [`xmd plan`](./plan-command-spec.md).
 
+`xmd upgrade` executes the second packaged root under the stable internal
+identity `<upgrade-command>`. It is an ordinary streaming text root: it declares
+no `returns`, uses no `<Output>` and no `<Return>`, and its rendered body *is*
+the command's output, delivered segment by segment as each completes. Which
+release is selected, how two versions compare, which consent an install needs,
+and what every refusal says are Markdown; the four phases it may reach —
+`<Upgrade.Releases>`, `<Upgrade.Download>`, `<Upgrade.Verify>` and
+`<Upgrade.Replace>` — are declared to canonical execution by an eligible
+compiled macOS or Linux host, appear in no `xmd run` profile, repository lookup
+or public catalog, and carry no contextual authority. An installation that
+cannot replace itself therefore has no component to reach rather than a check it
+could forget. The command's complete contract is
+[`xmd upgrade`](./upgrade-command-spec.md).
+
 `inspectDocument(root)` loads and validates the root definition and returns
 what it declares — without executing the document or creating a journal:
 
@@ -9073,7 +9087,8 @@ how an eval block compiles, how a service process is hosted, or which runtime
 it is on**. A runtime-named
 entrypoint — `deno.ts`, `node.ts`, `bun.ts`, `compiled.ts` — installs its
 `API.Env` providers with `{ at: "min" }` and passes the matching service
-installer to `runXmd(args, installService)`:
+installer and its own upgrade assembly to
+`runXmd(args, installService, upgrade)`:
 
 ```typescript
 yield* API.Env.around(
@@ -9088,8 +9103,16 @@ yield* API.Env.around(
   },
   { at: "min" },
 );
-yield* runXmd(args, useDenoService);
+yield* runXmd(args, useDenoService, UPGRADE);
 ```
+
+The upgrade assembly is a required parameter rather than an optional one. It
+states how this `xmd` is running — never how its files arrived — and only an
+eligible compiled macOS or Linux host states the four phase components an
+upgrade needs. So a host with no installation authority hands the packaged upgrade
+document nothing through which a release could be read, downloaded or replaced,
+and inheriting that authority by omission is impossible. The complete contract
+is [`xmd upgrade`](./upgrade-command-spec.md).
 
 The installer is invoked only for `xmd run` and `xmd test`, immediately before
 `execute()`. Help, inspection and agent-worker paths never install or attach a
@@ -10397,6 +10420,20 @@ every refusal is proven by the phase tripwires that stayed at zero.
 | C7–C9 | Classification, bounds and presentation | Draft defects return structured facts and caller defects escape the checker; one base draft plus three repairs, and ten presentations with no revision on the last; arbitrary source cannot close `<CodeBlock>`, the review schemas expose exactly the friendly choices for each round and state, and stopping, exhaustion and the explanation ending each reach their own authored `<Fail>` |
 | C10–C13 | Admission and lifetime | The host revalidates after the command document has completely torn down and resolves props for the exact returned bytes; those bytes reach exactly one of stdout, an exclusively created `--output` file, a run, or a file and then a run; a journal exists only when `--run` begins and holds only the Plan's events; cancellation and teardown failure settle before anything later begins |
 | C14–C15 | Result | The shipped generation, repair and revision instructions each carry the complete titled-Plan rule, and a titled Plan of prose interleaved with components survives approval byte for byte into stdout, a file and a run alike; a run reports `<plan>` and behaves as `xmd run` does |
+
+### Tier UG — The `xmd upgrade` command
+
+One root execution on every invocation — the packaged upgrade command document,
+which owns selection, comparison, consent, every refusal and every report — and
+four phase components an eligible compiled macOS or Linux host declares to
+canonical execution beside it. The document is an ordinary streaming text root,
+so its transcript is the command's output; Tier UO covers how that transcript
+reaches a reader. Defined in [`xmd upgrade`](./upgrade-command-spec.md),
+whose acceptance table this points at rather than restating. Tier UG itself runs
+the exact packaged document under every runtime with deterministic components
+and host tripwires; Tier UC shells out under each runtime for that entrypoint's
+own refusal; Tier UH drives the real host against a real file and a real
+advisory lock under Deno.
 
 ### Tier WB — The workflow component bundle in core
 

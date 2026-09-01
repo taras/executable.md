@@ -117,6 +117,31 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     expect(test.stdout).not.toContain("version-1 JSON");
   });
 
+  it("CH14: program help lists upgrade, and its help performs no upgrade", function* () {
+    const program = yield* runCli(["--help"]).expect();
+    expect(program.stdout).toContain("upgrade");
+    expect(program.stdout).toContain(
+      "Upgrade the standalone xmd binary to the latest stable or a specified release.",
+    );
+
+    const { code, stdout, stderr } = yield* runCli(["upgrade", "--help"]).join();
+    expect(code).toBe(0);
+    expect(stderr).toBe("");
+    expect(stdout).toContain("Usage: xmd upgrade [OPTIONS] [tag]");
+    // Help describes the command; it does not run it. Every answer the packaged
+    // policy gives ends by saying nothing was read and nothing changed, and on
+    // this host that answer is a refusal — so its absence here is what says the
+    // policy, the host assembly and the release lookup were never entered.
+    expect(stdout).not.toContain("xmd was not changed");
+    // Nothing a run configures is offered, because nothing here runs a document.
+    // `--journal` is offered, and deliberately: a diagnostic trace is the one
+    // run option this command carries. Everything else a run configures is not.
+    expect(stdout).toContain("--journal <path>, -j <path>");
+    for (const absent of ["--raw", "--timeout", "--include", "--secret-detection"]) {
+      expect({ absent, listed: stdout.includes(absent) }).toEqual({ absent, listed: false });
+    }
+  });
+
   it("CH4: --version prints the version", function* () {
     const { stdout } = yield* runCli(["--version"]).expect();
     expect(stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);

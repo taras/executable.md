@@ -23,6 +23,7 @@
     "@standard-schema/spec": "^1.0.0",
     "configliere": "^0.4.0",
     "effection": "4.1.0",
+    "semver": "^7.8.5",
     "zod": "^4.3.6"
   }
 }
