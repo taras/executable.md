@@ -251,7 +251,14 @@ function createEvaluate(
   const reads: GeneratedObservation[] = [pinnedFileRead(), ...(options.reads ?? [])];
   const writes: GeneratedMutation[] = [
     pinnedFileWrite(),
-    pinnedMutation(dir.name, `${COMPOSITION_ORIGIN}#Dir`, dir, "paired"),
+    // Versioned, because what this entry authorizes changed. The former
+    // `@executablemd/workflow/composition#Dir` authorized placement that created
+    // nothing; `<Dir>` now recursively creates the directory it names, and that
+    // is persistent mutation of the run's Workspace. A continuation granted
+    // under the old identity was granted something narrower than this, so it
+    // must not silently receive the wider authority — the retained comparison
+    // sees a different identity and refuses before generated execution.
+    pinnedMutation(dir.name, `${COMPOSITION_ORIGIN}/dir-v2#Dir`, dir, "paired"),
     pinnedFileDelete(),
     ...(options.writes ?? []),
   ];

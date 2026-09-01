@@ -116,12 +116,19 @@ const REASONS: readonly FilesReason[] = [
 ];
 
 /** The operations whose failure carries no commit outcome. */
-export type FilesOperation = "check-file-path" | "read" | "delete" | "glob" | "temporary-directory";
+export type FilesOperation =
+  | "check-file-path"
+  | "read"
+  | "delete"
+  | "ensure-directory"
+  | "glob"
+  | "temporary-directory";
 
 const OPERATIONS: readonly FilesOperation[] = [
   "check-file-path",
   "read",
   "delete",
+  "ensure-directory",
   "glob",
   "temporary-directory",
 ];
@@ -244,6 +251,20 @@ export interface FilesHandler {
    * that same success.
    */
   deleteFile(input: FilePathInput): Operation<Result<void>>;
+  /**
+   * Make this path name a directory, and answer with nothing.
+   *
+   * Recursively creates the target and any missing parent. An existing
+   * directory is already the answer, so it succeeds without replacing it,
+   * clearing it or touching what is in it; a file or another non-directory, at
+   * the target or anywhere on the way to it, is a refusal.
+   *
+   * Mandatory like the rest, and Unit for the same reason `deleteFile` is: a
+   * document that asked for a directory to exist has been answered by its
+   * existence. Nothing comes back to branch on — no path, no handle, and no
+   * word on whether this call is what created it.
+   */
+  ensureDirectory(input: FilePathInput): Operation<Result<void>>;
   /** Sorted, deduplicated, POSIX-separated paths of the regular files that match. */
   globFiles(input: GlobInput): Operation<Result<string[]>>;
   /**
@@ -824,6 +845,10 @@ export const Files: Api<FilesHandler> = createApi<FilesHandler>("executablemd.ru
   },
   // deno-lint-ignore require-yield
   *deleteFile(_input: FilePathInput): Operation<Result<void>> {
+    throw new FilesProviderUnavailableError();
+  },
+  // deno-lint-ignore require-yield
+  *ensureDirectory(_input: FilePathInput): Operation<Result<void>> {
     throw new FilesProviderUnavailableError();
   },
   // deno-lint-ignore require-yield

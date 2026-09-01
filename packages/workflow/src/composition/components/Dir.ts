@@ -21,7 +21,8 @@
  */
 
 import { API, cwd } from "@executablemd/runtime";
-import { content } from "@executablemd/core";
+import { content, ensureDirectory } from "@executablemd/core";
+import { parseFilesFailure } from "@executablemd/runtime";
 import type { FormDeclaration, InvocationForm } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
@@ -39,6 +40,27 @@ export class DirInvocationError extends Error {
   override name = "DirInvocationError";
 }
 
+/** What a refusal means, in the document's terms rather than the platform's. */
+function reason(value: string): string {
+  switch (value) {
+    case "not-directory":
+      return "something that is not a directory is already there, or is on the way to it";
+    case "missing":
+      return "part of the path is not there and could not be created";
+    case "permission-denied":
+      return "this run is not allowed to create or enter it";
+    case "read-only":
+      return "the filesystem it would be created on is read-only";
+    case "lexical-escape":
+    case "resolved-escape":
+      return "it is outside the directory this run is working in";
+    case "empty-path":
+      return "the path is empty";
+    default:
+      return "the directory operation did not succeed";
+  }
+}
+
 function* Dir(props: Record<string, Json>): Operation<string> {
   const path = props.path;
   if (typeof path !== "string" || path === "") {
@@ -54,6 +76,25 @@ function* Dir(props: Record<string, Json>): Operation<string> {
   const target = path.startsWith("/")
     ? path
     : `${enclosing.endsWith("/") ? enclosing.slice(0, -1) : enclosing}/${path}`;
+
+  // Before the working directory is installed and before any content expands.
+  // A document that names a directory has asked for it to exist, and content
+  // that ran in a directory the ensure was going to refuse would be content run
+  // somewhere nobody chose.
+  //
+  // One provider-neutral call, and nothing else: which filesystem this reaches
+  // — the caller's own or a workflow run's logical one — is the installed
+  // provider's business, and a component that asked would be a component that
+  // behaves differently under the two profiles.
+  const refusal = yield* ensureDirectory({ cwd: enclosing, path });
+  if (!refusal.ok) {
+    const failure = parseFilesFailure(refusal.error);
+    throw new DirInvocationError(
+      `<Dir path=${JSON.stringify(path)}> could not be used: ${
+        failure === undefined ? "the directory operation failed" : reason(failure.reason)
+      }`,
+    );
+  }
 
   yield* API.Env.around(
     {

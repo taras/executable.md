@@ -23,8 +23,9 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
 import { API, Service, useHostFiles } from "@executablemd/runtime";
 import type { RuntimeFetchResponse } from "@executablemd/runtime";
-import { exists, readdir } from "@effectionx/fs";
+import { exists, readdir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { useTempDirectory } from "@executablemd/test-support/temp";
+import { join } from "node:path";
 import { COMPOSITION_REGISTRATIONS } from "@executablemd/workflow";
 import { syntaxCatalog, useRunProfileRegistry } from "../src/syntax.ts";
 import { DEFAULT_REPOSITORY_ROOT, unsupportedRepositories } from "../src/run-repositories.ts";
@@ -212,6 +213,50 @@ describe("ORC2 — one language, described everywhere and operated somewhere", (
       ".",
     );
     expect(String(rendered)).toContain("inside");
+  });
+});
+
+describe("ORC2 — Dir is operational where the repository provider is not", () => {
+  // The one composition element that needs no repository provider. Every other
+  // name here reports an absent provider on this runtime; `<Dir>` reaches the
+  // host `API.Files` provider instead, which all four entrypoints install — so
+  // it creates its directory and runs its content on Deno, Node and Bun alike.
+  //
+  // This runs in the portable suite deliberately: the operation is the same one
+  // the tier suites drive under Deno, and the claim being made here is that
+  // nothing about it is Deno's.
+  it("creates the directory and runs its content with no repository provider", function* () {
+    const workspace = yield* useTempDirectory("xmd-orc2-dir-");
+
+    const rendered = String(
+      yield* ordinaryWithoutProvider(
+        '<Dir path="made/deep">\n\n<File path="inside.md">landed</File>\n\nINSIDE\n\n</Dir>\n',
+        workspace,
+      ),
+    );
+
+    expect(rendered).toContain("INSIDE");
+    expect(yield* exists(join(workspace, "made", "deep"))).toBe(true);
+    expect(yield* readTextFile(join(workspace, "made", "deep", "inside.md"))).toBe("landed");
+  });
+
+  // And the refusal half, on the same runtime: a non-directory is refused
+  // rather than answered, so `<Dir>` being operational is not `<Dir>` being
+  // permissive.
+  it("refuses a non-directory target without a repository provider", function* () {
+    const workspace = yield* useTempDirectory("xmd-orc2-dir-refusal-");
+    yield* writeTextFile(join(workspace, "occupied"), "a file");
+
+    const rendered = String(
+      yield* ordinaryWithoutProvider(
+        '<PrintErrors>\n<Dir path="occupied">\n\nINSIDE\n\n</Dir>\n</PrintErrors>\n',
+        workspace,
+      ),
+    );
+
+    expect(rendered).toContain("not a directory");
+    expect(rendered).not.toContain("INSIDE");
+    expect(yield* readTextFile(join(workspace, "occupied"))).toBe("a file");
   });
 });
 

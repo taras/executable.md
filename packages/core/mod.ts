@@ -348,6 +348,17 @@ export { createSecretScanner } from "./src/secrets/scanner.ts";
 export type { SecretScanner } from "./src/secrets/scanner.ts";
 export { SecretDetectedError, SecretScannerError } from "./src/secrets/findings.ts";
 export type { SecretFinding } from "./src/secrets/findings.ts";
+/**
+ * The engine's `API.Files` door, for a component that does not live in core.
+ *
+ * `<Dir>` is the composition package's, and it performs a document filesystem
+ * act like any other component. It must reach the Api the same way core's own
+ * components do — through the call that converts an illegal throw into a
+ * failure the engine can fence — rather than by holding the Api itself, which
+ * is what "a provider may fail and may not throw" means in practice.
+ */
+export { ensureDirectory } from "./src/files.ts";
+
 export { scanFiles } from "./src/secrets/files.ts";
 export type { FileSecretFinding } from "./src/secrets/files.ts";
 

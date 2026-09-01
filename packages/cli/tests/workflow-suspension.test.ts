@@ -192,6 +192,47 @@ interface Retained {
   readonly rootCloses: number;
 }
 
+/** Every journal record, as stored. */
+function readRecords(path: string): string[] {
+  const database = new DatabaseSync(path, { readOnly: true });
+  try {
+    return database
+      .prepare("SELECT record FROM journal_events ORDER BY sequence")
+      .all()
+      .map((row) => String(row["record"]));
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Rewrite every retained record through `edit`.
+ *
+ * A continuation admitted under a previous release cannot be produced by
+ * running this one, so the retained history is edited into the shape that
+ * release left behind. Nothing else about the run changes — the same source,
+ * roots and selection — so the identity is the only thing a resume can
+ * disagree about.
+ */
+function rewriteRecords(path: string, edit: (record: string) => string): void {
+  const database = new DatabaseSync(path);
+  try {
+    const rows = database
+      .prepare("SELECT event_id AS id, record FROM journal_events")
+      .all()
+      .map((row) => ({ id: String(row["id"]), record: String(row["record"]) }));
+    const update = database.prepare("UPDATE journal_events SET record = ? WHERE event_id = ?");
+    for (const row of rows) {
+      const edited = edit(row.record);
+      if (edited !== row.record) {
+        update.run(edited, row.id);
+      }
+    }
+  } finally {
+    database.close();
+  }
+}
+
 function retained(path: string): Retained {
   const database = new DatabaseSync(path, { readOnly: true });
   try {
@@ -1467,6 +1508,80 @@ the retained note
       expect(answers(path)[0]?.state).toBe("consumed");
     });
   }
+
+  // WGAC17: `allow={["write"]}` admits the versioned paired `<Dir>`, and that
+  // entry now authorizes persistent recursive creation. The former identity
+  // authorized placement that created nothing, so a run admitted under it must
+  // not silently receive the wider authority.
+  //
+  // The continuation is constructed the only way it can be: the retained
+  // admission is rewritten to carry the former identity, which is exactly what
+  // a run admitted before this change holds. Nothing else about the run is
+  // touched — same source, same roots, same selection — so the identity is the
+  // single thing the resume disagrees about.
+  it("WGAC17: a continuation retaining the former Dir identity refuses before generated execution and mutation", function* () {
+    const store = yield* useRunStore();
+    const fixture = yield* useCheckpointFixture(bundledRoot("", "Propose"), {
+      Propose: `<Evaluate source={"<Dir path=\\"generated\\">\\n\\n<File path=\\"inside.md\\">from the fragment</File>\\n\\n</Dir>"} allow={["write"]} as="observed" />\n`,
+    });
+    yield* useRepositoryGit(fixture.repository);
+
+    const calls: AgentCalls = { prompts: [] };
+    const rendered: string[] = [];
+    const started = yield* invoke(
+      { ...REQUEST, action: "start" },
+      yield* startFor(fixture),
+      productionHost(store, calls),
+      pinnedBody(rendered),
+    );
+    expect(started.exitCode).toBe(2);
+    const runId = String(started.written.err.find((line) => line.startsWith("workflow run: ")))
+      .slice("workflow run: ".length)
+      .trim();
+    const path = workflowRunPath(store, runId);
+
+    // The admission carries the versioned identity, and the generated Dir made
+    // its directory. This is the baseline the continuation is held to.
+    const suspended = retained(path);
+    expect(suspended.status).toBe("suspended");
+    const atSuspension = counts(path);
+    const rootsAtSuspension = workspaceRootState(path);
+    expect(readRecords(path).some((record) => record.includes("dir-v2#Dir"))).toBe(true);
+
+    const suspensionId = suspended.requests[0] ?? "";
+    yield* manage(
+      { action: "answer", runId, suspensionId, value: { proceed: true }, secretDetection: true },
+      productionHost(store, calls),
+    );
+
+    // The run becomes one admitted under the former identity.
+    rewriteRecords(path, (record) =>
+      record.replaceAll(
+        "@executablemd/workflow/composition/dir-v2#Dir",
+        "@executablemd/workflow/composition#Dir",
+      ),
+    );
+    const beforeResume = counts(path);
+    const rootsBeforeResume = workspaceRootState(path);
+
+    const resumed = yield* invoke(
+      { ...REQUEST, action: "resume", target: runId },
+      undefined,
+      productionHost(store, calls),
+      pinnedBody(rendered),
+    );
+
+    // Refused, and before anything generated ran: no further effect of any
+    // kind was committed and no Workspace root was published.
+    expect(resumed.exitCode).not.toBe(0);
+    expect(counts(path)).toEqual(beforeResume);
+    expect(workspaceRootState(path)).toEqual(rootsBeforeResume);
+    // Nothing after the wait reached the document either.
+    expect(rendered).toEqual([]);
+    // And the refusal does not publish which identity moved.
+    const reported = resumed.written.err.join("\n");
+    expect(reported).not.toContain("dir-v2");
+  });
 });
 
 /**

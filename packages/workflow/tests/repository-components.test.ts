@@ -10,6 +10,11 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
+import { exists } from "@effectionx/fs";
+import { join } from "node:path";
+import process from "node:process";
+import { API } from "@executablemd/runtime";
+import { parseFilesFatal } from "@executablemd/runtime";
 import type { Operation } from "effection";
 import {
   collect,
@@ -718,5 +723,107 @@ describe("workflow Dir under a lying content chain", () => {
         "without the invocation the engine issued",
       );
     });
+  });
+});
+
+/**
+ * The shipped `<Dir>` against no Files provider at all.
+ *
+ * Core's `FF2` proves the fail-closed boundary of `ensureDirectory` itself,
+ * through a stand-in that makes exactly that one call — it has to, because core
+ * cannot import the package this component lives in. This is the other half:
+ * that the component shipped here really does make that call, first, and that a
+ * document stops at it.
+ *
+ * Together they are the whole claim. Neither is sufficient alone: the stand-in
+ * could pass while `<Dir>` called something else or called nothing, and this
+ * could pass while the operation quietly answered instead of refusing.
+ */
+/** The first Files infrastructure failure in a thrown graph. */
+function fatalCause(error: unknown, seen = new Set<unknown>()): unknown {
+  if (parseFilesFatal(error) !== undefined) {
+    return error;
+  }
+  if (typeof error !== "object" || error === null || seen.has(error)) {
+    return undefined;
+  }
+  seen.add(error);
+  const causes =
+    error instanceof AggregateError
+      ? error.errors
+      : error instanceof Error && error.cause !== undefined
+        ? [error.cause]
+        : [];
+  for (const cause of causes) {
+    const found = fatalCause(cause, seen);
+    if (found !== undefined) {
+      return found;
+    }
+  }
+  return undefined;
+}
+
+describe("Dir without a Files provider", () => {
+  it("stops at ensureDirectory, and no directory, content or sibling follows", function* () {
+    const calls: string[] = [];
+    const failure = yield* raised(
+      scoped(function* () {
+        yield* useCompositionComponents();
+        // Middleware that records and delegates. Delegation is what keeps this
+        // fail-closed: the absent-provider terminal is still what answers, so
+        // recording the call cannot be what makes the document stop.
+        yield* API.Files.around({
+          *checkFilePath([input], next) {
+            calls.push("check-file-path");
+            return yield* next(input);
+          },
+          *readTextFile([input], next) {
+            calls.push("read");
+            return yield* next(input);
+          },
+          *writeTextFile([input], next) {
+            calls.push("write");
+            return yield* next(input);
+          },
+          *deleteFile([input], next) {
+            calls.push("delete");
+            return yield* next(input);
+          },
+          *ensureDirectory([input], next) {
+            calls.push("ensure-directory");
+            return yield* next(input);
+          },
+          *globFiles([input], next) {
+            calls.push("glob");
+            return yield* next(input);
+          },
+          *temporaryDirectory([], next) {
+            calls.push("temporary-directory");
+            return yield* next();
+          },
+        });
+        return yield* collect(
+          yield* execute({
+            ...inlineSource(`<Dir path="made/here">\n\nINSIDE\n\n</Dir>\n\nAFTER\n`),
+            stream: new InMemoryStream(),
+          }),
+        );
+      }),
+    );
+
+    // The first Files call the component makes, and the only one it reaches.
+    expect(calls[0]).toBe("ensure-directory");
+    expect(calls).toEqual(["ensure-directory"]);
+    // Absence is not a refusal the document can print: what escapes is the
+    // provider-unavailable failure itself.
+    expect(parseFilesFatal(fatalCause(failure))?.kind).toBe("provider-unavailable");
+    // Nothing inside the component ran after the call, and no later sibling
+    // expanded. Read off the collected output, which is empty because the
+    // execution never produced any.
+    expect(String(failure)).not.toContain("INSIDE");
+    expect(String(failure)).not.toContain("AFTER");
+    // And nothing was made. The path is relative, so a provider that had
+    // answered would have created it beneath the process directory.
+    expect(yield* exists(join(process.cwd(), "made"))).toBe(false);
   });
 });

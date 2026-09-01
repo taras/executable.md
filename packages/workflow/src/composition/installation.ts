@@ -61,14 +61,7 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
     props: repositoryProps,
     fn: Repository,
     ...documented({
-      description:
-        "Work in a Git repository by name and url. " +
-        '`<Repository name="project" url={props.repository}>…</Repository>` clones it once, ' +
-        "then expands its content with that checkout as the working directory. Written " +
-        '`<Repository name="project" url={..} as="project" />` it renders nothing and binds ' +
-        "the checkout path instead. A second invocation naming the same repository and url " +
-        "reuses the same checkout, keeping the commits, branches and uncommitted work the " +
-        "first one left there.",
+      description: `Clone or use a repository. \`<Repository name="project" url={props.repository}>…</Repository>\` expands its content in the specified checkout.`,
       as: "Optional. The path of the selected checkout.",
       context: "The Markdown expanded in that checkout.",
     }),
@@ -79,13 +72,7 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
     props: worktreeProps,
     fn: Worktree,
     ...documented({
-      description:
-        "Work on a branch in a linked checkout of its own. " +
-        '`<Worktree name="review" branch="issue-643" as="review" />` creates the branch when ' +
-        "it is missing and checks it out beside the repository, so several branches are open " +
-        "at once without one switch disturbing another. `branch` is required and `name` never " +
-        "selects one. Written outside a `<Repository>` it belongs to the repository the " +
-        "command was run in, where the host has one.",
+      description: `Create or use a worktree. \`<Worktree name="review" branch="issue-643">…</Worktree>\` expands its content in the worktree.`,
       as: "Optional. The path of the linked checkout.",
       context: "The Markdown expanded in that checkout.",
     }),
@@ -96,12 +83,7 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
     props: dir.props,
     fn: dir.fn,
     ...documented({
-      description:
-        "Run its content in another directory. " +
-        "`<Dir path={worktree}>…</Dir>` expands the Markdown inside with `path` as the " +
-        "working directory, and restores the enclosing one afterwards. A relative path is " +
-        "read against the directory already in effect. It selects no repository: Git " +
-        "elements inside still belong to the enclosing `<Repository>`.",
+      description: `Create or use a directory. \`<Dir path={worktree}>…</Dir>\` changes the working directory for its content.`,
       as: null,
       context: "The Markdown expanded in that directory.",
     }),
@@ -112,11 +94,7 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
     props: gitSwitchProps,
     fn: GitSwitch,
     ...documented({
-      description:
-        "Put the checkout on a named branch. " +
-        '`<Git.Switch branch="release/1.4" base="main" />` switches to the branch, creating ' +
-        "it at `base` when it does not exist yet. A branch another checkout already holds, " +
-        "and local changes the switch would overwrite, are both refused rather than forced.",
+      description: `Switch or create a branch. \`<Git.Switch branch="release/1.4" base="main" />\` starts a missing branch at the specified base.`,
       as: null,
       context: null,
     }),
@@ -127,11 +105,7 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
     props: gitAddProps,
     fn: GitAdd,
     ...documented({
-      description:
-        "Stage exactly the paths you name. " +
-        '`<Git.Add paths={["packages/core", "deno.lock"]} />` stages them as written, from ' +
-        "the directory the element appears in. `paths` is a Git pathspec and is required; " +
-        '`"."` is how a document says everything here.',
+      description: `Stage paths for commit. \`<Git.Add paths={["packages/core", "deno.lock"]} />\` resolves Git pathspecs from the working directory.`,
       as: null,
       context: null,
     }),
@@ -143,12 +117,7 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
     returns: gitCommitReturns,
     fn: GitCommit,
     ...documented({
-      description:
-        "Commit what is staged, and hand back the commit. " +
-        '`<Git.Commit message="Prepare 1.4" as="commit">…</Git.Commit>` commits the index ' +
-        "alone — nothing is staged for it and nothing is amended. Content expands first and " +
-        "becomes the message body, so a `<Git.Add>` written inside stages before the commit " +
-        "exists. An index that already matches HEAD is refused rather than committed empty.",
+      description: `Commit staged changes. \`<Git.Commit>Prepare 1.4</Git.Commit>\` uses its expanded content as the commit message.`,
       as: "Optional. The full object id of the commit.",
       context: "The message body, expanded before the commit is made.",
     }),
@@ -159,12 +128,7 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
     props: gitPushProps,
     fn: GitPush,
     ...documented({
-      description:
-        "Publish the checkout's current branch to its origin. " +
-        "`<Git.Push />` takes no props: the remote is the repository's `origin`, the branch " +
-        "is the one the checkout is on, and the commit is the one that branch points at. It " +
-        "never force-pushes and changes no upstream tracking; a destination naming a commit " +
-        "this run did not publish from is refused.",
+      description: `Publish the current branch. \`<Git.Push />\` pushes its current commit to the same branch on \`origin\` without forcing.`,
       as: null,
       context: null,
     }),
@@ -176,13 +140,7 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
     returns: pullRequestReturns,
     fn: PullRequest,
     ...documented({
-      description:
-        "Open a pull request for the branch this run published, or bring one up to date. " +
-        '`<PullRequest title="Prepare 1.4" as="pullRequest">…</PullRequest>` asks for one ' +
-        "pull request from the checkout's branch to `base` to exist; with `number` it updates " +
-        "that pull request instead. The content is the body. It publishes nothing itself: " +
-        "write `<Git.Push />` first, and this run must hold that push's own successful " +
-        "result for the same branch and commit.",
+      description: `Open or update a pull request. \`<PullRequest title="Prepare 1.4">…</PullRequest>\` uses its content as the body after \`<Git.Push />\`.`,
       as: "Optional. The pull request's repository, number, url, state and head and base commits.",
       context: "The pull request's body.",
     }),
@@ -194,12 +152,7 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
     returns: reviewsReturns,
     fn: formDispatcher(reviewsForm),
     ...documented({
-      description:
-        "Read the reviews a pull request holds. " +
-        '`<PullRequest.Reviews url={pullRequest.url} as="reviews" />` binds one array to ' +
-        "iterate with `<Each>`, so an objection reaches an agent's prompt. The url is the " +
-        "identity — there is no repository or number prop, and no `<Repository>` to be " +
-        "inside of. `as` is required.",
+      description: `Read pull request reviews. \`<PullRequest.Reviews url={pullRequest.url} as="reviews" />\` reads reviews from the specified pull request.`,
       as: "Required. Each review's author, state, body, submission time, commit and url.",
       context: null,
     }),
@@ -211,11 +164,7 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
     returns: commentsReturns,
     fn: formDispatcher(commentsForm),
     ...documented({
-      description:
-        "Read the comments a pull request holds. " +
-        '`<PullRequest.Comments url={pullRequest.url} as="comments" />` binds one array of ' +
-        "both conversation comments and review comments, each saying which kind it is. The " +
-        "url is the identity. `as` is required.",
+      description: `Read pull request comments. \`<PullRequest.Comments url={pullRequest.url} as="comments" />\` reads both conversation and review comments.`,
       as: "Required. Each comment's kind, author, body, timestamps and url, and a review comment's file, hunk and line.",
       context: null,
     }),
@@ -227,11 +176,7 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
     returns: checksReturns,
     fn: formDispatcher(checksForm),
     ...documented({
-      description:
-        "Read the checks reported against a pull request's head. " +
-        '`<PullRequest.Checks url={pullRequest.url} as="checks" />` binds one array of both ' +
-        "check runs and commit statuses, each saying which kind it is. The url is the " +
-        "identity. `as` is required.",
+      description: `Read pull request checks. \`<PullRequest.Checks url={pullRequest.url} as="checks" />\` reads check runs and commit statuses for its head.`,
       as: "Required. Each check's kind, name, head commit and outcome.",
       context: null,
     }),
@@ -242,12 +187,7 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
     props: issueTrackerProps,
     fn: IssueTracker,
     ...documented({
-      description:
-        "Say which tracker the issues in its content are filed in. " +
-        "`<IssueTracker url={props.tracker}>…</IssueTracker>` names the container new issues " +
-        "are created in — one repository's issues, one project. `provider` " +
-        "names the only adapter allowed to act on it, for a url nobody recognizes. A nested " +
-        "tracker replaces the whole target for its own content rather than merging with it.",
+      description: `Select an issue tracker. \`<IssueTracker url={props.tracker}>…</IssueTracker>\` expands its content with the specified tracker in scope.`,
       as: null,
       context: "The Markdown whose issues are filed there.",
     }),
@@ -259,13 +199,7 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
     returns: issueReturns,
     fn: Issue,
     ...documented({
-      description:
-        "Read an issue by url, or file one in the tracker in scope. " +
-        '`<Issue url={finding.issueUrl} as="found" />` reads the one that url names and needs ' +
-        'no tracker. `<Issue title="Retry the publish step" as="filed">…</Issue>` inside an ' +
-        "`<IssueTracker>` files an issue whose content is its description, creating it once " +
-        "and bringing it up to date afterwards. Which of the two it is, is decided by the " +
-        "spelling: a url reads, a title files.",
+      description: `Read or file an issue. \`<Issue url={finding.issueUrl} as="found" />\` reads one. \`<Issue title="Retry the publish step">…</Issue>\` files its content in the issue tracker in scope.`,
       as: "Required for a read, which binds url, title, description, tags and assignee. A file binds the url alone.",
       context: "The issue's description, for the form that files one.",
     }),
