@@ -532,22 +532,14 @@ describe("ORC19 — a nested run profile", () => {
 
     // Both sides are children, and both reach the *same* repository — the
     // ambient one, which they discover from the `<Dir>` this `<Execution>` is
-    // written in.
+    // written in. Sequential sharing is what makes that work: caller-owned
+    // ambient Git is nobody's managed slot, so it carries no lease, and one
+    // execution can hand it to the next.
     //
-    // Two things force that shape, and both are worth stating because they
-    // bound what this proves. A managed checkout stays leased for the whole run
-    // of whoever touched it, so a parent and a child cannot share one: the
-    // child would be refused for want of the slot and never reach
-    // `<PullRequest>`. And a run discovers its ambient repository once, when
-    // its provider is installed, from the directory the *process* stands in —
-    // which here is deliberately not a repository at all. So the parent has no
-    // repository of its own to publish from, and the publishing side has to be
-    // a child too.
-    //
-    // What that leaves is the same boundary asked of two siblings: each
-    // execution gets a provider of its own, so evidence one earns does not
-    // authorize the next. The parent's side of the isolation is the lease test
-    // below, where a parent's hold survives its child's teardown.
+    // The claim is that each execution gets a provider of its own, so evidence
+    // one earns does not authorize the next. The parent/child direction of the
+    // same boundary is asked separately, from a process standing in a
+    // repository.
     const publishes = child(
       [
         '<Git.Switch branch="pushed-by-first" />',
@@ -645,6 +637,135 @@ describe("ORC19 — a nested run profile", () => {
         "",
       ].join("\n"),
       fixture,
+    );
+  });
+
+  /**
+   * The same fixture, with the process standing *inside* a disposable checkout.
+   *
+   * The escape argument is different here and still holds: a regression in
+   * contextual-directory propagation reaches the process directory, and the
+   * process directory is a temporary clone this fixture made and owns. There is
+   * nothing shared to reach. The non-Git case above keeps the other half of the
+   * argument — that the propagation is real rather than incidentally agreeing
+   * with where the process happens to stand.
+   */
+  function* useInRepository(): Operation<Nested & { readonly remote: string }> {
+    const remote = yield* useRemote();
+    const fixture = yield* useNested(remote);
+    // The process stands in the caller's own checkout, which is what an
+    // ordinary `xmd run` stands in. Nothing here is a managed slot, so nothing
+    // here is leased, and two executions can use it one after the other.
+    return { ...fixture, remote, outside: fixture.checkout };
+  }
+
+  /** One branch, published once, asked about from both directions. */
+  const PUBLISHES = [
+    '<Git.Switch branch="shared-head" />',
+    '<File path="published.md">published</File>',
+    '<Git.Add paths="published.md" />',
+    '<Git.Commit message="Published" as="commit" />',
+    "<Git.Push />",
+  ];
+
+  /**
+   * `<PullRequest>` reaches its Git host through `source.open()`, and the
+   * evidence gate runs ahead of it. The refusal says so itself — "Nothing was
+   * observed at the Git host, and no pull request was created" — so that
+   * sentence is the claim rather than an inference from it.
+   *
+   * The second assertion is the corroborating one: a local file origin is not
+   * a Git host, so an execution that had got past the gate would have failed
+   * with "no usable origin" instead. Its absence and the sentence's presence
+   * are two independent readings of the same ordering.
+   */
+  const REFUSED_BEFORE_HOST_ACCESS = "Nothing was observed at the Git host";
+
+  function refusedBeforeHostAccess(binding: string): string[] {
+    return [
+      `<AssertEquals actual={${binding}.result.ok} expected={false} />`,
+      `<AssertStringIncludes actual={String(${binding}.result.error)} expected="holds no successful" />`,
+      `<AssertStringIncludes actual={String(${binding}.result.error)} expected="${REFUSED_BEFORE_HOST_ACCESS}" />`,
+      `<AssertNotMatch actual={String(${binding}.result.error)} expected={/no usable origin/} />`,
+    ];
+  }
+
+  it("does not let a parent's Push authorize its child", function* () {
+    const fixture = yield* useInRepository();
+
+    // The parent publishes in the ambient checkout the process is standing in;
+    // the child, immediately after, asks for a pull request from that same
+    // checkout, origin, branch and head. Everything about the repository is
+    // identical between them. The only thing that differs is which provider
+    // holds the Push evidence.
+    yield* runNested(
+      [
+        ...PUBLISHES,
+        "",
+        "<Testing>",
+        "",
+        '<Test name="a child cannot use its parent\'s publication">',
+        "",
+        `<Execution host="run" source={${child('<PullRequest title="child" as="pr" />\n')}} as="opened">`,
+        ...refusedBeforeHostAccess("opened"),
+        "</Execution>",
+        "",
+        "</Test>",
+        "",
+        "</Testing>",
+        "",
+      ].join("\n"),
+      fixture,
+    );
+
+    // The parent's publication was real, so what the child lacked is evidence.
+    expect(git(["rev-parse", "shared-head"], fixture.remote, fixture.home)).toBe(
+      git(["rev-parse", "HEAD"], fixture.checkout, fixture.home),
+    );
+  });
+
+  it("does not let a child's Push authorize its parent", function* () {
+    const fixture = yield* useInRepository();
+
+    // The other direction, in the same checkout. The child publishes and tears
+    // down; the parent — whose provider has been installed the whole time —
+    // then asks for a pull request from the head its own child just pushed.
+    //
+    // The parent's refusal ends the document, which is what a refusal at
+    // document level is supposed to do, so this run is expected to fail and the
+    // refusal is read out of what it reported. The child's test block runs
+    // first and is reported before it.
+    const reported = yield* runNested(
+      [
+        "<Testing>",
+        "",
+        '<Test name="a child publishes for itself alone">',
+        "",
+        `<Execution host="run" source={${child(PUBLISHES.join("\n") + "\n")}} as="published">`,
+        "<AssertEquals actual={published.result.ok} expected={true} />",
+        "</Execution>",
+        "",
+        "</Test>",
+        "",
+        "</Testing>",
+        "",
+        '<PullRequest title="parent" as="pr" />',
+        "",
+      ].join("\n"),
+      fixture,
+      "fails",
+    );
+
+    // The parent is refused for want of evidence, and before its Git host is
+    // reached.
+    expect(reported).toContain("holds no successful");
+    expect(reported).toContain(REFUSED_BEFORE_HOST_ACCESS);
+    expect(reported).not.toContain("no usable origin");
+    // The child's assertions passed, so the publication it was refused credit
+    // for really happened.
+    expect(reported).not.toContain("❌");
+    expect(git(["rev-parse", "shared-head"], fixture.remote, fixture.home)).toBe(
+      git(["rev-parse", "HEAD"], fixture.checkout, fixture.home),
     );
   });
 
