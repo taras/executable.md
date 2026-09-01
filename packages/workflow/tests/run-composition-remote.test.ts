@@ -719,9 +719,15 @@ describe("ORC17 — live PullRequests", () => {
  * Repository in scope is still reachable, so the comparison is of identities
  * and not of checkout paths or worktree names.
  */
-/** Every ref the bare remote holds, as one comparable value. */
+/**
+ * Every ref the bare remote holds, as one comparable value.
+ *
+ * `sort()` rather than `toSorted()`: the Node typecheck targets ES2022, where
+ * the latter does not exist, and the array being sorted is the one `map` just
+ * made — so there is nothing of anyone else's to mutate.
+ */
 function refsOf(remote: BareRemote): string[] {
-  return [...remoteRefs(remote)].map(([name, commit]) => `${name} ${commit}`).toSorted();
+  return [...remoteRefs(remote)].map(([name, commit]) => `${name} ${commit}`).sort();
 }
 
 describe("checkout authority is the whole repository identity", () => {

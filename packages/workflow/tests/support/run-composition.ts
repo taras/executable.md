@@ -162,6 +162,9 @@ export function subcommands(counters: OrdinaryCounters): string[] {
   return counters.commands.map((args) => args.find((arg) => !arg.startsWith("-")) ?? "");
 }
 
+/** The identity this tier commits under when a case does not choose one. */
+export const TIER_COMMIT_IDENT = "Tester <tester@example.test> 0 +0000";
+
 /**
  * An identity reader that answers whatever a suite says this host knows.
  *
@@ -211,6 +214,15 @@ export interface RunOptions extends Omit<RunCompositionOptions, "root" | "cwd"> 
  * The contextual working directory is installed to `cwd` first, exactly as a
  * runtime entrypoint's host filesystem provider would leave it, so a document's
  * root-level element is written "in" that directory.
+ *
+ * ## Who a commit is by, unless a case says
+ *
+ * A fixed identity, because the production default reads the *host's* Git
+ * configuration — and a machine with no `user.name` set makes `<Git.Commit>`
+ * refuse. Every CI runner is such a machine, so leaving it to the host turns
+ * "this document committed" into a claim about who ran the suite: green on a
+ * developer's laptop, red on every shard. A case that is *about* identity
+ * resolution passes its own `identity` and overrides this.
  */
 export function runOrdinaryDocument(source: string, options: RunOptions): Operation<Json> {
   return scoped(function* () {
@@ -229,7 +241,8 @@ export function runOrdinaryDocument(source: string, options: RunOptions): Operat
     yield* useHostFiles();
     yield* useCompositionComponents();
     const { root, cwd, props: _props, components, contextualRepository, ...rest } = options;
-    yield* useRunComposition({ root, cwd, ...rest });
+    // Spread last, so a case that supplies its own reader still wins.
+    yield* useRunComposition({ root, cwd, identity: statedIdentity(TIER_COMMIT_IDENT), ...rest });
     if (components !== undefined) {
       yield* registerComponents([...components]);
     }
