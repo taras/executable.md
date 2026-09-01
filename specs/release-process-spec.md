@@ -92,7 +92,8 @@ documents at the revision it checks.
   prerelease marker — so a forgotten bump is visible where the release was
   made, then refuses to build. On a valid tag it compiles
   `packages/cli/src/compiled.ts` per target with
-  `--include packages/code-review-agent --include packages/cli/src/documents/plan-command.md`
+  `--include packages/code-review-agent --include packages/cli/src/documents/plan-command.md
+  --include packages/cli/src/documents/Plan.md`
   and attaches the binaries and
   sha256 checksums to the tag's GitHub Release. That module is the
   compiled-binary entrypoint: it installs the `API.Env.command` adapter that
@@ -551,9 +552,21 @@ A document-backed command executes first-party Markdown through the ordinary XMD
 engine rather than a TypeScript policy. A package declares which Markdown it
 ships by putting it in `src/documents/`; every other Markdown under `src/` —
 test documents, scenario fixtures — stays out of the product. `xmd plan` is
-the first such command, and `packages/cli/src/documents/plan-command.md` is
-the document that implements it: the checked-in Markdown is the deployed
-artifact and the single source of truth, not a generated string mirror of one.
+the first such command, and it ships two: the checked-in Markdown is the
+deployed artifact and the single source of truth, not a generated string mirror
+of one.
+
+- `packages/cli/src/documents/Plan.md` is the standard Plan authorship policy —
+  every Prompt, the checking and repair loop, the review, the revisions, the
+  approval and every ending. It is the public `<Plan>` component, so an ordinary
+  document reaches the same bytes the command does.
+- `packages/cli/src/documents/plan-command.md` is the command's root, and only
+  its adapter: it projects the request into `<Plan>` and returns what comes
+  back.
+
+There is one policy, and neither a generated TypeScript copy of it nor a second
+Markdown one exists. That is what makes "the same workflow, whichever surface
+asked" a fact about the file rather than a claim about two of them.
 
 The command locates it from its own module URL — never from the contextual
 working directory, and never through the component search path. Both are
@@ -564,8 +577,8 @@ Every build therefore keeps the asset beside its module, at the same relative
 path:
 
 - **source checkout** — the file as committed;
-- **`deno compile`** — embedded by `--include packages/cli/src/documents/plan-command.md`,
-  in `deno task build` and in `release.yml`'s matrix compile;
+- **`deno compile`** — embedded by an `--include` per document, in `deno task
+  build` and in `release.yml`'s matrix compile;
 - **npm (dnt)** — copied by `scripts/build-npm.ts`, which copies each package's
   `src/documents/` into `esm/src/documents/`, preserving relative location. dnt
   emits the module graph and nothing else, so an asset no TypeScript imports is
@@ -581,8 +594,15 @@ The checks that hold this together, each proving a different build:
   temporary working directory and compares it to the committed bytes. It runs
   under Deno, Node and Bun, which is what makes it evidence rather than one
   runtime's opinion.
-- `scripts/tests/cli-npm-bin.test.ts` builds the real package and asserts
-  `esm/src/documents/plan-command.md` is byte-identical to the source.
+- `scripts/tests/cli-npm-bin.test.ts` builds the real package, asserts every
+  emitted `esm/src/documents/` asset is byte-identical to the source, and then
+  asks the built bin — from a directory that is not the package — which Plan
+  policy it would let a document write. The answer carries the origin and the
+  SHA-256 of the bytes, so a build that shipped different ones, or none,
+  answers differently here rather than at a person's first `xmd plan`.
+- `scripts/tests/plan-component-compiled.test.ts` asks the same question of the
+  compiled binary, which has no checkout to fall back to. It runs in the `smoke`
+  job, beside the other suites whose subject is `dist/xmd`.
 - `scripts/tests/packaged-document.test.ts` holds the two `deno compile` sites
   to the documents that exist, because that list is the one thing no build
   discovers for itself.

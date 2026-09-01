@@ -14,25 +14,24 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped } from "effection";
+import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
+import { ensureDir, rm } from "@effectionx/fs";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   agentIdentityComponents,
   collect,
-  Elicitation,
   installAgentComponents,
-  registerAgentProvider,
   retainedSource,
 } from "@executablemd/core";
 import type { ElicitationRequest, Json } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { createAcpxProvider } from "@executablemd/acp";
-
 import { PLAN_COMMAND_DOCUMENT, readPackagedDocument } from "../src/packaged-document.ts";
 import { PLAN_COMMAND_IDENTITY } from "../src/authorship-profile.ts";
-import { AGENT, useWorkingDirectory } from "./support/plan-harness.ts";
-import { createFakeAcp, makeRegistry, makeStore } from "./support/fake-acp.ts";
+import { AGENT, planDeclarationHarness, useWorkingDirectory } from "./support/plan-harness.ts";
 
 /**
  * A candidate whose exact bytes are worth preserving.
@@ -40,12 +39,15 @@ import { createFakeAcp, makeRegistry, makeStore } from "./support/fake-acp.ts";
  * Leading and trailing blank lines, interior indentation, and a five-backtick
  * run: enough that trimming, re-fencing, or reconstructing it through the
  * presentation would all be visible in the assertion.
+ *
+ * A text Plan rather than a value one, because the leading blank line is the
+ * point: frontmatter is only frontmatter when it is the first thing in the
+ * file, so a candidate that opens with a blank line and then declares `returns`
+ * declares nothing and its `<Return>` has no schema to satisfy. The structural
+ * admission inside the policy says so now, where the command's own gate used to
+ * be the first thing to see these bytes.
  */
 const CANDIDATE = [
-  "",
-  "---",
-  "returns: { type: string }",
-  "---",
   "",
   "# A greeting",
   "",
@@ -55,7 +57,7 @@ const CANDIDATE = [
   "  <Return value={`nested fence`} />",
   "`````",
   "",
-  '<Return value="hello" />',
+  "That fence is shown, not run.",
   "",
 ].join("\n");
 
@@ -70,38 +72,27 @@ interface CommandRun {
 
 function* runDocument(): Operation<CommandRun> {
   const source = yield* readPackagedDocument(PLAN_COMMAND_DOCUMENT);
-  const fake = createFakeAcp();
-  fake.script({ reply: CANDIDATE });
 
-  const validated: string[] = [];
-  const reviews: ElicitationRequest[] = [];
   let value: Json | undefined;
   let failure: string | undefined;
 
+  const harness = yield* scoped(function* () {
+    return yield* planDeclarationHarness({
+      surface: "command",
+      authorshipRoot: yield* authorshipRoot(),
+      session: SESSION,
+      explicitSession: true,
+      syntax: "## Built-in components\n\n### `<File>`\n",
+    });
+  });
+  harness.fake.script({ reply: CANDIDATE });
+  harness.script({ decision: "Approve" });
+
   yield* scoped(function* () {
-    const acpx = createAcpxProvider({
-      createRuntime: fake.create,
-      sessionStore: makeStore(),
-      agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
-    });
-    yield* registerAgentProvider("acpx", acpx);
-    yield* installAgentComponents({
-      defaultAgent: AGENT,
-      permissionMode: "deny-all",
-      rootProvider: { factory: acpx, options: { defaultAgent: AGENT, permissionMode: "deny-all" } },
-    });
-
-    yield* Elicitation.around(
-      {
-        // deno-lint-ignore require-yield
-        *elicit([request], _next) {
-          reviews.push(request);
-          return { decision: "Approve" };
-        },
-      },
-      { at: "min" },
-    );
-
+    // The agent words and this execution's prompt bookkeeping, as the command
+    // installs them. No root provider: the ceiling the Plan is written under is
+    // the one the policy installs around its own content.
+    yield* installAgentComponents({ defaultAgent: AGENT, permissionMode: "deny-all" });
     try {
       value = yield* collect(
         yield* executeInstalled(
@@ -110,46 +101,15 @@ function* runDocument(): Operation<CommandRun> {
             stream: new InMemoryStream(),
             includes: [],
             props: {
-              request: "ask me for my age and write the result to a file",
+              request: REQUEST,
               syntax: "## Built-in components\n\n### `<File>`\n",
-              session: "plan-command-regression",
+              session: SESSION,
             },
           },
           [
             {
-              components: [
-                ...agentIdentityComponents(),
-                {
-                  name: "CheckDraft",
-                  origin: "test",
-                  forms: ["self-closing"] as const,
-                  props: {
-                    type: "object",
-                    properties: { source: { type: "string" } },
-                    required: ["source"],
-                    additionalProperties: false,
-                  },
-                  returns: {
-                    type: "object",
-                    properties: {
-                      valid: { type: "boolean" },
-                      diagnostics: { type: "object" },
-                    },
-                    required: ["valid", "diagnostics"],
-                    additionalProperties: false,
-                  },
-                  // The deterministic seam only, standing where the command
-                  // declares its own validator. It records what it was asked
-                  // about and says yes, so what this case observes is the
-                  // program's control flow rather than validation's answers.
-                  factory: () =>
-                    // deno-lint-ignore require-yield
-                    function* checkDraft(props: Record<string, Json>) {
-                      validated.push(String(props.source));
-                      return { valid: true, diagnostics: {} };
-                    },
-                },
-              ],
+              components: agentIdentityComponents(),
+              declarations: [harness.declaration],
             },
           ],
         ),
@@ -159,7 +119,25 @@ function* runDocument(): Operation<CommandRun> {
     }
   });
 
-  return { validated, reviews, prompts: fake.prompts, value, failure };
+  return {
+    validated: harness.checked,
+    reviews: harness.reviews,
+    prompts: harness.fake.prompts,
+    value,
+    failure,
+  };
+}
+
+/** The request the adapter projects into `<Plan>`, and the session it names. */
+const REQUEST = "ask me for my age and write the result to a file";
+const SESSION = "plan-command-regression";
+
+/** A profile root this file owns, removed when the case's scope ends. */
+function* authorshipRoot(): Operation<string> {
+  const root = join(tmpdir(), `xmd-plan-command-${randomUUID()}`);
+  yield* ensureDir(root);
+  yield* ensure(() => rm(root, { recursive: true, force: true }));
+  return root;
 }
 
 describe("the packaged plan command document", () => {
@@ -179,7 +157,7 @@ describe("the packaged plan command document", () => {
     expect(run.prompts).toHaveLength(1);
     expect(run.reviews).toHaveLength(1);
 
-    // The validator saw the Agent's complete close value, once, unaltered.
+    // The checker saw the Agent's complete close value, once, unaltered.
     expect(run.validated).toEqual([CANDIDATE]);
 
     // The document settled with a value rather than an authored failure. Before

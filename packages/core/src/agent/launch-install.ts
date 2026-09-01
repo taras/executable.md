@@ -21,6 +21,8 @@ import { createLaunchAuthority } from "./launch-authority.ts";
 import type { AgentProviderAuthority } from "./launch-authority.ts";
 import { createLaunchRegistry, launchSession } from "./launch-owner.ts";
 import type { LaunchRegistry } from "./launch-owner.ts";
+import { AgentInternal } from "./internal.ts";
+import { installPermissionMode } from "./permission.ts";
 import { installAgentProvider } from "./provider-api.ts";
 import type { AgentProviderOptions } from "./provider-api.ts";
 
@@ -79,6 +81,30 @@ export function* launchAgentSession(
  * through the terminal the installation opens — so a handler that answers the
  * install request itself installs nothing.
  */
+/**
+ * Install one registered Agent provider for the current invocation, as
+ * `<AgentProvider>` does for the content it projects.
+ *
+ * A trusted host component that establishes a constrained ceiling around the
+ * content it projects needs exactly this and nothing else: the provider is
+ * installed in the invocation rather than in a frame nested inside it, so the
+ * content the ceiling was selected for can see it. The default agent and the
+ * permission mode travel with it, because a ceiling that left either to be
+ * inherited would be a ceiling the enclosing document could widen.
+ *
+ * It is a host capability rather than a document one: nothing reachable by
+ * importing `@executablemd/core` can install a provider for a region it did not
+ * author, and no prop, binding or middleware return value supplies one.
+ */
+export function* installInvocationAgentProvider(
+  name: string,
+  options: AgentProviderOptions,
+): Operation<void> {
+  yield* AgentInternal.around({ defaultAgentName: () => options.defaultAgent }, { at: "min" });
+  yield* installPermissionMode(options.permissionMode);
+  yield* useProviderInstallation(name, options);
+}
+
 export function* useProviderInstallation(
   name: string,
   options: AgentProviderOptions,

@@ -24,6 +24,16 @@ import type { Operation } from "effection";
 export const PLAN_COMMAND_DOCUMENT = "plan-command.md";
 
 /**
+ * The one policy that writes a Plan, wherever a Plan is written.
+ *
+ * `xmd plan` reaches it through the thin root above and an ordinary run reaches
+ * it by writing `<Plan>`, and both expand these exact bytes. There is no
+ * generated TypeScript copy and no second Markdown policy, which is what makes
+ * "the same policy" a fact about the file rather than a claim about two of them.
+ */
+export const PLAN_DOCUMENT = "Plan.md";
+
+/**
  * Where a packaged document lives, as a URL beside this module.
  *
  * One directory rather than "any Markdown under `src/`": packages keep test

@@ -1287,11 +1287,14 @@ describe(
         expect(harness.reviews).toHaveLength(1);
         expect(harness.reviews[0].message).toContain("<Widget />");
 
-        // The gate is effective on its own: the same bytes now fail, because the
-        // host validates them again rather than trusting what the document
-        // concluded while its own scope was still standing.
+        // The gate is effective on its own: the same bytes now fail, because they
+        // are structurally admitted again rather than being trusted for what the
+        // policy concluded while its own scope was still standing. The veto is
+        // the policy's own `<AdmitPlan>`, which is the first of the two gates to
+        // see these bytes after teardown; the command's property-aware gate
+        // still stands behind it and never gets to run.
         expect(code).toBe(1);
-        expect(lines.join("\n")).toContain("the approved document does not validate");
+        expect(lines.join("\n")).toContain("the approved Plan does not validate");
         expect(lines.join("\n")).toContain("component-unresolved");
         expect(lines.join("\n")).toContain("Widget");
 

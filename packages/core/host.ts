@@ -104,6 +104,21 @@ export type { WorkflowBundleComponent, WorkflowComponentBundle } from "./src/com
  */
 export { DeclaredMarkdownError, sourceDigest } from "./src/components/declared-markdown.ts";
 export type { DeclaredMarkdownComponent } from "./src/components/declared-markdown.ts";
+
+/**
+ * Installing one Agent provider for the invocation that projects the content it
+ * covers.
+ *
+ * The sixth act of infrastructure, and the narrowest: a trusted host component
+ * that establishes a constrained ceiling around content it projects installs the
+ * provider *in* that invocation, exactly as `<AgentProvider>` does, because a
+ * provider installed in a frame nested inside it would be invisible to the very
+ * content it was selected for. Kept here for the reason the rest of this module
+ * is: nothing a document, a component or a middleware package reaches by
+ * importing `@executablemd/core` can install a provider for a region it did not
+ * author.
+ */
+export { installInvocationAgentProvider } from "./src/agent/launch-install.ts";
 export {
   evaluateGeneratedXmd,
   GeneratedXmdError,

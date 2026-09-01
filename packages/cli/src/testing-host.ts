@@ -22,6 +22,7 @@
  * installed reaches the child.
  */
 
+import type { DeclaredMarkdownComponent } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { forEach } from "@effectionx/stream-helpers";
@@ -53,6 +54,17 @@ import type { HostServiceInstaller } from "./cli.ts";
 export interface TestingHostSettings {
   /** The component search path this run resolves names through. */
   readonly includes: string[];
+  /**
+   * The standard Plan policy this run profile declares, when the entrypoint
+   * settled an Agent stack to build one from.
+   *
+   * A child of the run profile writes `<Plan>` and means what a `<Plan>` in the
+   * parent means, so the declaration crosses as the value the parent built
+   * rather than being rebuilt here from state a child cannot see. An entrypoint
+   * with no stack — `xmd test` drives agents through the deterministic
+   * TestAgent stack — declares none, and a child of it has no `<Plan>` either.
+   */
+  readonly plan?: DeclaredMarkdownComponent;
   /** Whether durable events are scanned for credentials before they persist. */
   readonly secretDetection: boolean;
   /** The native service adapter this entrypoint supplies. */
@@ -165,6 +177,9 @@ function* runProfileChild(
       yield* installChildTestAgent(testAgent, { workerCommand: worker.value }),
     );
     installations.push({ components: agentIdentityComponents() });
+  }
+  if (settings.plan !== undefined) {
+    installations.push({ declarations: [settings.plan] });
   }
   // A child gets what `xmd run` gets, and the browser form is part of that.
   // Installed here rather than inherited: this scope is isolated from the

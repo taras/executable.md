@@ -2737,6 +2737,16 @@ or that declares different bytes under it, refuses rather than continuing
 somebody else's Markdown, and a recorded private import refuses unless the
 element asking is inside the same declaration.
 
+**`<Plan>` is the one of these the `run` profile has.** The CLI declares
+`packages/cli/src/documents/Plan.md` to every ordinary run under the origin
+`@executablemd/cli/Plan.md`, paired-only, returning a string. Its body is the
+Prompt, rendered once with the capabilities the calling document already has;
+its `as` receives the exact approved Plan source after the authorship frame has
+been dismantled and the bytes have been structurally admitted. Its four private
+capabilities — `<PlanInputs>`, `<PlanAuthorship>`, `<CheckDraft>` and
+`<AdmitPlan>` — are the closure those exact bytes carry, and are syntax no
+document may write. [The plan command](./plan-command-spec.md) is the contract.
+
 Two registrations for one name and kind at the same scope are a configuration
 error naming both origins. Installation order is not a resolution mechanism —
 reserved and default registrations are held apart, so which one wins is decided

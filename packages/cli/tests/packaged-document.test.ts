@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import {
   packagedDocumentUrl,
   PLAN_COMMAND_DOCUMENT,
+  PLAN_DOCUMENT,
   readPackagedDocument,
 } from "../src/packaged-document.ts";
 import { useWorkingDirectory } from "./support/plan-harness.ts";
@@ -84,12 +85,49 @@ describe("packaged documents", () => {
     expect(source).toBe(committed);
     // It is the plan command document, not merely some file that exists.
     expect(source).toContain("returns:");
-    expect(source).toContain("<CheckDraft");
-    expect(source).toContain("<Fail");
     // The approved introduction, pinned whole. It is what a reader meets first
     // and the only place the command explains itself, so its wording and its
     // punctuation are part of the contract rather than a paraphrase.
     expect(source).toContain(INTRODUCTION);
+    // And it is an adapter rather than a second policy: it hands the request to
+    // `<Plan>` and returns what comes back. Every phase of authorship — the
+    // turns, the checking, the review, the endings — is in the one policy the
+    // next case reads, so a second copy of any of it here would be exactly the
+    // drift having one policy exists to prevent.
+    expect(source).toContain('<Plan session={props.session} as="approved">{props.request}</Plan>');
+    expect(source).toContain("<Return value={approved} />");
+    for (const authored of [
+      "<CheckDraft",
+      "<Prompt",
+      "<Elicit",
+      "<Session",
+      "<Loop",
+      PLAN_REQUIREMENTS,
+    ]) {
+      expect(source).not.toContain(authored);
+    }
+  });
+
+  it("reads the one Plan policy from beside its module, whatever the cwd is", function* () {
+    const source = yield* useWorkingDirectory(function* (dir) {
+      // The same substitution attempt as above, against the asset that now
+      // holds the policy: a repository `Plan.md` beside the caller must not be
+      // able to answer for the program this build ships.
+      yield* writeTextFile(join(dir, PLAN_DOCUMENT), "# not the shipped policy\n");
+      return yield* readPackagedDocument(PLAN_DOCUMENT);
+    });
+
+    const committed = yield* readTextFile(fileURLToPath(packagedDocumentUrl(PLAN_DOCUMENT)));
+    expect(source).toBe(committed);
+
+    // It is a Markdown value component a document invokes, not a root a command
+    // runs: one optional `session` prop, and a string return.
+    expect(source).toContain("returns:");
+    expect(source).toContain("session: { type: string, minLength: 1 }");
+    expect(source).toContain("<CheckDraft");
+    expect(source).toContain("<Fail");
+    // The caller's Prompt is projected once, before anything is prepared.
+    expect(source).toContain('<Let as="prompt"><Content /></Let>');
     // And it holds the authorship rule that makes what the coding agent returns
     // a Plan rather than a script — stated once per turn that asks for a Plan,
     // which is the initial draft, the repair and the revision.
@@ -107,7 +145,6 @@ describe("packaged documents", () => {
     );
     // Every visible stage of the workflow is a heading somebody can audit.
     for (const heading of [
-      "# `xmd plan` turns steps into a program",
       "## Create the first draft",
       "## Check and repair the draft",
       "## Review the draft",
@@ -116,17 +153,22 @@ describe("packaged documents", () => {
     ]) {
       expect(source).toContain(`${heading}\n`);
     }
-    // It captures the serialized problems with `<Json as>` directly. The
-    // single-child `<Let>` wrapper existed only because the component refused a
-    // literal `as`, and main supplies that now.
+    // It captures the serialized problems with `<Json as>` directly.
     expect(source).toContain('<Json value={check.diagnostics} as="problems" />');
+    // Both surfaces' endings are here, in Markdown, and each is written once.
+    // A branch decided in TypeScript would put half of what a person reads
+    // somewhere a person reading the workflow cannot see it.
+    expect(source).toContain(
+      '<Let as="unresolved" value="xmd plan ended without an approved Plan. Nothing was output or run." />',
+    );
+    expect(source).toContain(
+      '<Let as="unresolved" value="Plan authorship ended without an approved Plan. No Plan was returned." />',
+    );
+    expect(source.split("reviewed ten drafts without an approved Plan").length - 1).toBe(4);
     // The closing branch is an unexpected-no-decision fallback, not a second
     // copy of exhaustion: exhaustion is decided inside review, and saying it
     // twice would make the two endings indistinguishable to a reader.
-    expect(source).toContain(
-      '<Fail message="xmd plan ended without an approved Plan. Nothing was output or run." />',
-    );
-    expect(source.split("reviewed ten drafts without an approved Plan").length - 1).toBe(2);
+    expect(source).toContain("<Fail message={unresolved} />");
     // The choices are the words a person reads, with no internal spelling
     // behind them.
     expect(source).toContain('["Approve", "Request changes", "Stop"]');

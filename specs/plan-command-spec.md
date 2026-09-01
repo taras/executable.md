@@ -246,30 +246,70 @@ The host supplies three fixed internal inputs as that root's props:
 They are not Plan root props and consume none of the approved Plan's property
 sources.
 
-The document contains one enclosing `<Session>` expansion whose body holds every
+**The root is an adapter, not a policy.** It projects `props.request` into
+`<Plan>` without adding whitespace, supplies `props.session`, binds the returned
+string and returns it. It contains no Prompt, no check, no review, no revision
+and no ending of its own. `props.syntax` is sealed by the host rather than
+forwarded: the catalog the agent is shown is the one this command rendered, and
+no prop on the adapter could supply another.
+
+## The standard Plan policy
+
+Everything the command used to hold is `packages/cli/src/documents/Plan.md`, the
+one packaged Markdown value component the public `<Plan>` name resolves to
+([executable MDX](./executable-mdx-spec.md) §5.3). The command and an ordinary
+document invoking `<Plan>` expand the same bytes, under the same origin
+`@executablemd/cli/Plan.md` and the same digest, in every distribution. There is
+no generated TypeScript copy and no second Markdown policy.
+
+The policy contains one enclosing `<Session>` expansion whose body holds every
 initial, repair and human-revision `<Prompt>`. A loop inside that one Session
 creates no second placement; sibling Sessions are not used, because sibling
 placements stay distinct even when their authored names match.
 
 The host owns the provider instruction layer and the Agent ceiling. The Markdown
-document owns the text of each generation, repair and revision request: the
-initial prompt preserves the Prompt, includes the host's catalog, and asks for
-one complete replacement root as source only — written as a Plan, with every
-requested outcome kept as reader-facing prose and each component placed
-immediately after the sentences describing the action it performs. That
-authorship rule is repeated in every repair and revision request, so the
-narrative survives a draft being replaced.
+owns the text of each generation, repair and revision request: the initial prompt
+preserves the Prompt, includes the host's catalog, and asks for one complete
+replacement root as source only — written as a Plan, with every requested outcome
+kept as reader-facing prose and each component placed immediately after the
+sentences describing the action it performs. That authorship rule is repeated in
+every repair and revision request, so the narrative survives a draft being
+replaced.
 
 `<Prompt>` remains one Agent turn. It gains no hidden repair, retry, review or
 approval behaviour.
 
+**One sealed discriminator, and no host prose.** The only thing the host adds to
+the policy's language is which surface asked, as the closed value `command` or
+`component`. Every sentence a person reads is in the Markdown, including both
+surfaces' endings, each written once. The command's wording is unchanged; the
+component's says that no Plan was returned rather than that nothing was output or
+run. TypeScript supplies neither the words nor the choice between them.
+
+**The four private capabilities.** The policy's phases are components only these
+exact bytes may write, declared by the host with the definition and revoked with
+the execution: `<PlanInputs>` freezes the catalog, the session placement and the
+surface; paired `<PlanAuthorship>` installs the constrained frame and does not
+return until every part of it has torn down; `<CheckDraft>` answers about one
+draft without executing it; and `<AdmitPlan>` structurally admits the approved
+bytes after that teardown. None of them is syntax any document may write — not
+the caller's root, not the Prompt the caller projected, not a sibling `<Plan>`,
+not an imported component, and nothing middleware can answer.
+
 ## The authorship profile
 
-The authorship profile is the trusted-host assembly used only for that exact root. It
-supplies the document's inputs, a constrained Agent provider, Elicitation, the
-fixed first-party components and the host-declared draft validator. It uses no
-repository component search — that execution's include list is empty — and
-exposes no custom root.
+The authorship profile is the trusted-host assembly the policy runs its authored
+turns under. It supplies the frozen inputs, a constrained Agent provider,
+Elicitation, the fixed first-party components and the host-declared draft check.
+The command's own execution uses no repository component search — that
+execution's include list is empty — and exposes no custom root.
+
+The frame is installed by `<PlanAuthorship>`, inside the invocation that owns it,
+rather than around the execution. That is what makes it the same ceiling on both
+surfaces: an ordinary document has an execution of its own, with its own
+provider and its own capabilities, and a Plan written inside it is still written
+under this one. Broader authority in the calling document widens nothing, and the
+constrained provider reaches nothing outside the content the policy projects.
 
 ### Agent authority under the authorship profile
 
@@ -388,7 +428,8 @@ may those exact bytes enter ordinary execution.
 
 ## Host-declared draft validation
 
-The authorship profile declares one internal value component to the execution:
+The policy's own private closure declares one value component only these bytes
+may write:
 
 ```md
 <CheckDraft source={draft} as="check" />
@@ -483,11 +524,11 @@ terminal failure and no way to recategorize it as draft feedback.
 An opaque `not-statically-checkable` invocation is not a diagnostic and does not
 by itself make a candidate invalid.
 
-## The policy the plan command document owns
+## The policy the packaged Plan document owns
 
 The following is the shipped program's behaviour, not the host's. It is stated
-here because it is what a caller sees; it is changed by editing
-`plan-command.md`, and nothing in TypeScript decides it. Prose quality is that
+here because it is what a caller sees; it is changed by editing `Plan.md`, and
+nothing in TypeScript decides it. Prose quality is that
 document's instructions and your review, never a hidden TypeScript validation
 rule: `<CheckDraft>` reports structural facts and executes nothing.
 

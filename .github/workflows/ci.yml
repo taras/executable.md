@@ -215,6 +215,13 @@ jobs:
       - name: Form dispatch across the compiled binary's loaded copies
         run: deno test --allow-all --frozen scripts/tests/component-form-dispatch.test.ts
 
+      # `<Plan>` is packaged Markdown rather than a module, so it is exactly the
+      # kind of thing `deno compile` ships only because an `--include` names it.
+      # Asking the binary which policy it carries is what catches a forgotten
+      # include here rather than at a person's first `xmd plan`.
+      - name: The Plan policy the compiled binary carries
+        run: deno test --allow-all --frozen scripts/tests/plan-component-compiled.test.ts
+
       # `<Fetch>` resolves from core's registry, requests through the contextual
       # Fetch adapter, and detaches the response before binding it. All three
       # live in the module graph, so only the binary shows they survived

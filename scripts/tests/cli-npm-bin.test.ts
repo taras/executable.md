@@ -14,8 +14,11 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure } from "effection";
-import { readTextFile } from "@effectionx/fs";
+import { ensure, until } from "effection";
+import { readTextFile, rm } from "@effectionx/fs";
+import { createHash } from "node:crypto";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import type { Operation } from "effection";
 import { exec, Stdio } from "@effectionx/process";
 import type { ProcessResult } from "@effectionx/process";
@@ -65,11 +68,16 @@ function* buildCliPackage(version: string): Operation<ProcessResult> {
 }
 
 /** Run the built bin under Node, the way an `npm i -g @executablemd/cli` user would. */
-function* runEmittedBin(args: string[]): Operation<ProcessResult> {
+function runEmittedBin(args: string[]): Operation<ProcessResult> {
+  return runEmittedBinIn(ROOT, args);
+}
+
+/** The same, from a working directory the caller chooses. */
+function* runEmittedBinIn(cwd: string, args: string[]): Operation<ProcessResult> {
   const result = yield* timebox<ProcessResult>(TIMEOUT, function* () {
     return yield* exec("node", {
       arguments: [BIN, ...args],
-      cwd: ROOT,
+      cwd,
       env: Deno.env.toObject(),
     }).join();
   });
@@ -107,8 +115,61 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     // absent from the package unless the build copies it — and the command
     // would then find no program to run, on Node and Bun while Deno stayed
     // green.
-    expect(yield* readTextFile(path.join(OUT_DIR, "esm/src/documents/plan-command.md"))).toBe(
-      yield* readTextFile(path.join(ROOT, PKG_DIR, "src/documents/plan-command.md")),
+    for (const asset of ["plan-command.md", "Plan.md"]) {
+      expect(yield* readTextFile(path.join(OUT_DIR, "esm/src/documents", asset))).toBe(
+        yield* readTextFile(path.join(ROOT, PKG_DIR, "src/documents", asset)),
+      );
+    }
+  });
+
+  /**
+   * The one Plan policy, as the published package reports it.
+   *
+   * `<Plan>` is packaged Markdown rather than a module, so what a build ships
+   * under that name is exactly the kind of thing a module-graph emitter can
+   * lose. Asking the built bin what it would let a document write is what makes
+   * "the same policy in every distribution" a checked claim: the origin names
+   * the asset, the digest names the bytes, and a build that shipped different
+   * ones — or none — answers differently here rather than at a person's first
+   * `xmd plan`.
+   *
+   * Run from a directory that is not the package, because the lookup must be
+   * beside the module and never beside the caller.
+   */
+  it("reports the same Plan policy identity the source tree ships", function* () {
+    yield* ensure(removeNpmOutput);
+    const { version } = yield* readManifest(PKG_DIR, "deno.json");
+    const built = yield* buildCliPackage(version ?? "0.0.0-dev");
+    if (built.code !== 0) {
+      throw new Error(`build-npm.ts exited ${built.code}\n${built.stderr}`);
+    }
+
+    const source = yield* readTextFile(path.join(ROOT, PKG_DIR, "src/documents/Plan.md"));
+    const digest = createHash("sha256").update(source, "utf8").digest("hex");
+
+    const elsewhere = yield* until(mkdtemp(path.join(tmpdir(), "xmd-npm-plan-")));
+    yield* ensure(() => rm(elsewhere, { recursive: true, force: true }));
+    const run = yield* runEmittedBinIn(elsewhere, ["syntax", "--json", "--include", elsewhere]);
+    if (run.code !== 0) {
+      throw new Error(`the emitted npm bin exited ${run.code}\n${run.stderr}`);
+    }
+
+    const catalog = JSON.parse(run.stdout);
+    const entries = catalog.categories.flatMap(
+      (category: { entries: unknown[] }) => category.entries,
     );
+    const plan = entries.find((entry: { name?: string }) => entry?.name === "Plan");
+    expect(plan).toBeDefined();
+    expect(plan.sourceKind).toBe("declared-markdown");
+    expect(plan.origin).toEqual({
+      kind: "declared-markdown",
+      origin: "@executablemd/cli/Plan.md",
+      digest,
+    });
+    expect(plan.forms).toEqual(["paired"]);
+    // And no private capability is syntax a document may write, in any build.
+    for (const name of ["PlanInputs", "PlanAuthorship", "CheckDraft", "AdmitPlan"]) {
+      expect(entries.map((entry: { name?: string }) => entry?.name)).not.toContain(name);
+    }
   });
 });

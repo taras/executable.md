@@ -43,8 +43,8 @@ import {
   retainedSource,
 } from "@executablemd/core";
 import type { Json } from "@executablemd/core";
-import type { IdentityComponent } from "@executablemd/core/host";
-import { executeInstalled } from "@executablemd/core/host";
+import type { DeclaredMarkdownComponent } from "@executablemd/core/host";
+import { executeInstalled, installInvocationAgentProvider } from "@executablemd/core/host";
 import { createAcpxProvider } from "@executablemd/acp";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -113,6 +113,15 @@ export interface AuthorshipProfile {
   /** Who answers the review question. */
   installElicitation(): Operation<void>;
   /**
+   * The `<Plan>` declaration this command runs under.
+   *
+   * Built by the command, from the packaged policy bytes, before the adapter
+   * root is imported. It carries the sealed surface, the precomputed catalog and
+   * the ceiling this invocation settled — none of which is a prop the adapter
+   * could supply or a document could reach.
+   */
+  declaration: DeclaredMarkdownComponent;
+  /**
    * The host's assessment of one candidate.
    *
    * A candidate-authored failure comes back as `valid: false` and is repairable.
@@ -121,6 +130,74 @@ export interface AuthorshipProfile {
    * for an agent that could not have caused it.
    */
   assess(source: string): Operation<CandidateAssessment>;
+}
+
+/** What building the constrained provider needs, and nothing more. */
+export interface AuthorshipCeilingInputs {
+  readonly stack: AgentStack;
+  readonly acp?: AcpxProviderDependencies;
+}
+
+/** What claiming one conversation's directory needs, and nothing more. */
+export interface AuthorshipPlacement {
+  /** Where this host keeps its authorship session directories. */
+  readonly root: string;
+  /** The logical name this conversation belongs to. */
+  readonly session: string;
+  /** Whether that name is one a caller can ask for again. */
+  readonly explicitSession: boolean;
+}
+
+/** Everything the constrained authorship frame is built from. */
+export interface AuthorshipFrame extends AuthorshipCeilingInputs {
+  /** This conversation's directory, already established and proven empty. */
+  readonly workdir: string;
+  /** The scope the two host acts run in, captured before this frame exists. */
+  readonly host: Scope;
+  installElicitation(): Operation<void>;
+}
+
+/**
+ * Install the constrained authorship frame on the current scope.
+ *
+ * One function for both surfaces, because the ceiling a Plan is written under is
+ * not a property of who asked for it. What leaving this scope tears down is the
+ * provider, the Elicitation resources, the Prompt tasks and the capability
+ * refusals — so whoever installs it decides what the ceiling covers by choosing
+ * the scope, and nothing else has to be remembered.
+ *
+ * The refusals go last, over whatever the entrypoint provided, so the document
+ * is refused rather than served. They are ambient, and a ceiling cannot tell the
+ * host's own act from the document's — which is why the two acts that are the
+ * host's run in the scope captured before this one (src/host-acts.ts).
+ */
+export function* installAuthorshipFrame(frame: AuthorshipFrame): Operation<void> {
+  yield* openFormsThroughHost(frame.host);
+  yield* frame.installElicitation();
+
+  // Registered here, so the name resolves to *this* ceiling and not to whatever
+  // the enclosing document registered under it, and installed in this
+  // invocation rather than in a frame nested inside it — the content this
+  // ceiling was selected for is projected into the invocation, and a provider
+  // installed anywhere else would be invisible to it. The default agent and the
+  // permission mode travel with the installation, so an enclosing document
+  // cannot widen either by inheritance.
+  const acpx = createAcpxProvider(authorshipCeiling(frame, frame.workdir, frame.host));
+  yield* registerAgentProvider("acpx", acpx);
+  yield* installInvocationAgentProvider("acpx", {
+    defaultAgent: frame.stack.defaultAgent,
+    permissionMode: AUTHORSHIP_PERMISSION_MODE,
+  });
+  // A candidate comes from a turn's complete successful close value or from
+  // nowhere. `<Prompt>` ordinarily renders whatever a failed turn managed to
+  // emit and carries on, which for a policy that reviews source would mean
+  // showing a person half a program; the host decides otherwise here, so a
+  // failed, cancelled or protocol-invalid turn ends authorship before anything
+  // is presented. The policy cannot opt out of it.
+  yield* installPromptFailurePolicy(function* () {
+    return true;
+  });
+  yield* refuseDocumentCapabilities();
 }
 
 /**
@@ -144,81 +221,51 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
     );
   }
 
-  // Taken before the profile's own scope, because two of the things this command
-  // does are the host's rather than the document's — putting this build's adapter
-  // on disk, and opening the review form — and both run a command, which the
-  // profile refuses to everything inside it. The refusals are installed on the
-  // scope below, so this one still answers with the capabilities the entrypoint
-  // gave this invocation.
-  const host = yield* useScope();
-
   return yield* scoped(function* (): Operation<Result<string>> {
-    // First, and before anything is built: this session's directory is claimed,
-    // established and proven empty, or the command stops here. Nothing has been
-    // installed yet, so a refusal reaches no provider, no session and no turn —
-    // and because the claim is taken before the directory is made, an ending of
-    // any kind, including a cancellation, still hands it back.
-    const established = yield* useSessionDirectory(profile);
-    if (!established.ok) {
-      return established;
-    }
-    const workdir = established.value;
-
-    yield* openFormsThroughHost(host);
-    yield* profile.installElicitation();
-
-    const acpx = createAcpxProvider(authorshipCeiling(profile, workdir, host));
-    yield* registerAgentProvider("acpx", acpx);
-    const options = {
+    // The agent words and this execution's prompt bookkeeping, with no root
+    // provider: what writes the Plan is the ceiling the policy installs around
+    // its own content, and a root provider here would be one the policy's
+    // regional install had to shadow rather than one it owns.
+    yield* installAgentComponents({
       defaultAgent: profile.stack.defaultAgent,
       permissionMode: AUTHORSHIP_PERMISSION_MODE,
-    } as const;
-    yield* installAgentComponents({ ...options, rootProvider: { factory: acpx, options } });
-    yield* installPermissionMode(AUTHORSHIP_PERMISSION_MODE);
-    // A candidate comes from a turn's complete successful close value or from
-    // nowhere. `<Prompt>` ordinarily renders whatever a failed turn managed to
-    // emit and carries on, which for a policy that reviews source would mean
-    // showing a person half a program; the host decides otherwise here, so a
-    // failed, cancelled or protocol-invalid turn ends the command before anything
-    // is presented. The document cannot opt out of it.
-    yield* installPromptFailurePolicy(function* () {
-      return true;
     });
-
     const source = yield* readPackagedDocument(PLAN_COMMAND_DOCUMENT);
     try {
-      // The refusals go on a scope holding the document and nothing else, so
-      // what the ceiling covers is what it says it covers. It cannot separate
-      // the host's own acts from the document's on its own — a provider's work
-      // happens inside this execution, and `API.Process.exec` looks the same
-      // whichever party reached it — which is why those acts are stated above
-      // and run in the host's scope (src/host-acts.ts).
-      const approved = yield* scoped(function* (): Operation<Json> {
-        yield* refuseDocumentCapabilities();
-        return yield* collect(
-          yield* executeInstalled(
-            {
-              ...retainedSource(PLAN_COMMAND_IDENTITY, source),
-              // Invocation-owned and thrown away with the scope. Ordinary
-              // document and Prompt semantics need a durable stream; nothing
-              // about writing a Plan needs a durable one, and `--journal`
-              // belongs to the Plan you approved rather than to the
-              // conversation that wrote it.
-              stream: new InMemoryStream(),
-              // No repository component search. What the document may name is
-              // what this profile declares, so a file in the caller's tree
-              // cannot answer for `<CheckDraft>`, `<Prompt>` or anything else.
-              includes: [],
-              props: {
-                request: profile.request,
-                syntax: profile.syntax,
-                session: profile.session,
-              },
+      // The command root is a thin adapter: it projects the request into
+      // `<Plan>` and returns what comes back. Everything that used to be
+      // installed around it — the directory, the provider, the Elicitation, the
+      // refusals — is installed by the policy itself, inside the invocation that
+      // owns it, so the command and an ordinary document run one workflow rather
+      // than two arrangements of one.
+      const approved = yield* collect(
+        yield* executeInstalled(
+          {
+            ...retainedSource(PLAN_COMMAND_IDENTITY, source),
+            // Invocation-owned and thrown away with the scope. Ordinary
+            // document and Prompt semantics need a durable stream; nothing
+            // about writing a Plan needs a durable one, and `--journal`
+            // belongs to the Plan you approved rather than to the
+            // conversation that wrote it.
+            stream: new InMemoryStream(),
+            // No repository component search. What the adapter may name is
+            // what this command declares, so a file in the caller's tree
+            // cannot answer for `<Plan>` or anything else.
+            includes: [],
+            props: {
+              request: profile.request,
+              syntax: profile.syntax,
+              session: profile.session,
             },
-            [{ components: [...agentIdentityComponents(), validator(profile)] }],
-          ),
-        );
-      });
+          },
+          [
+            {
+              components: agentIdentityComponents(),
+              declarations: [profile.declaration],
+            },
+          ],
+        ),
+      );
       if (typeof approved !== "string") {
         return Err(new Error("the plan command document returned something that is not a Plan"));
       }
@@ -227,39 +274,6 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
       return Err(error instanceof Error ? error : new Error(String(error)));
     }
   });
-}
-
-/**
- * The host-declared draft checker, as an internal value component.
- *
- * Declared to the execution, so canonical execution supplies its invocation
- * identity and repository resolution cannot replace it. It executes nothing it
- * is given: a draft is a string here, and stays one until a person has approved
- * it and the host has validated it again.
- */
-function validator(profile: AuthorshipProfile): IdentityComponent {
-  return {
-    name: "CheckDraft",
-    origin: "xmd plan",
-    forms: ["self-closing"] as const,
-    props: {
-      type: "object",
-      properties: { source: { type: "string" } },
-      required: ["source"],
-      additionalProperties: false,
-    },
-    returns: {
-      type: "object",
-      properties: { valid: { type: "boolean" }, diagnostics: { type: "object" } },
-      required: ["valid", "diagnostics"],
-      additionalProperties: false,
-    },
-    factory: () =>
-      function* checkDraft(props: Record<string, Json>) {
-        const assessment = yield* profile.assess(String(props.source));
-        return { valid: assessment.valid, diagnostics: assessment.diagnostics };
-      },
-  };
 }
 
 /**
@@ -292,7 +306,7 @@ function validator(profile: AuthorshipProfile): IdentityComponent {
  * fail would be reading a live agent's machine rather than this host's decision.
  */
 export function authorshipCeiling(
-  profile: AuthorshipProfile,
+  profile: AuthorshipCeilingInputs,
   workdir: string,
   host: Scope,
 ): AcpxProviderDependencies {
@@ -419,7 +433,7 @@ export function authorshipDirectoryFor(root: string, session: string): string {
  * the first thing registered in the scope is also what puts it last in teardown,
  * after every provider, Prompt task and Elicitation resource has gone.
  */
-function* useSessionDirectory(profile: AuthorshipProfile): Operation<Result<string>> {
+export function* useSessionDirectory(profile: AuthorshipPlacement): Operation<Result<string>> {
   const directory = authorshipDirectoryFor(profile.root, profile.session);
   if (profile.explicitSession) {
     return yield* establishDirectory(directory);

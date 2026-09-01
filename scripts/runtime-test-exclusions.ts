@@ -524,6 +524,12 @@ const COMPILED_BINARY: RuntimeExclusion[] = [
       "drives the compiled `dist/xmd`, which only `deno compile` produces and which no test shard builds — the subject is the binary's two loaded copies of core, a shape no Node or Bun run can build or exercise, and one the Deno shards saw only while an unrelated Deno-only build test happened to share a shard and leave the binary behind. The `smoke` job builds through README.md#Build and runs it there, beside the other suites whose subject is the binary",
     issue: "https://github.com/taras/executable.md/issues/567",
   },
+  {
+    path: "scripts/tests/plan-component-compiled.test.ts",
+    reason:
+      "asks the compiled `dist/xmd` which Plan policy it carries, and only `deno compile --include` embeds that asset — no test shard builds the binary, so the suite belongs beside the other compiled-binary evidence the `smoke` job builds for through README.md#Build",
+    issue: "https://github.com/taras/executable.md/issues/567",
+  },
 ];
 
 /**

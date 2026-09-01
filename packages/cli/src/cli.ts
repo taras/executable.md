@@ -34,6 +34,7 @@ import {
   createSignal,
   scoped,
   until,
+  useScope,
   type Operation,
   type Result,
 } from "effection";
@@ -92,6 +93,7 @@ import { installWebComponents, installWebElicitation } from "@executablemd/web";
 import { timebox } from "@effectionx/timebox";
 import { timeout as runTimeout } from "@executablemd/runtime";
 import { installRunAgentStack, resolveAgentStack } from "./agent-stack.ts";
+import { planPolicyDeclaration } from "./plan-policy.ts";
 import type { AgentStack } from "./agent-stack.ts";
 import { reportFailure } from "./report.ts";
 import { TIMEOUT_FLAGS, resolveRunTimeouts } from "./timeouts.ts";
@@ -648,6 +650,15 @@ export interface DocumentMode {
   machineSessions?: MachineSessionAssembly;
   props?: Record<string, Json>;
   /**
+   * Where this host keeps the authorship session directories `<Plan>` uses.
+   *
+   * A host dependency, not a caller's: no flag, environment variable, document
+   * prop or replaceable context reaches it. Production leaves it at the default;
+   * a harness that owns a temporary tree names that tree, so a test never reads,
+   * creates or removes anything under a real one.
+   */
+  planAuthorshipRoot?: string;
+  /**
    * What a trusted host attaches to this one execution.
    *
    * Values passed straight to `executeInstalled()`, so canonical core captures
@@ -738,6 +749,40 @@ function* runDocument(
     stream = new InMemoryStream();
   }
 
+  // The standard Plan policy, declared to this execution before the root is
+  // imported. The run profile is where `<Plan>` belongs — a document that writes
+  // one is asking for the same workflow `xmd plan` runs — and the surface is
+  // fixed here, so the thin command adapter cannot supply or derive it and a
+  // Plan later executed by `--run` is a new ordinary run that receives
+  // `component` from its own declaration.
+  //
+  // Only where an Agent stack was settled. `xmd test` drives agents through the
+  // deterministic TestAgent stack and has none, so it has no `<Plan>` either
+  // rather than one that could not establish a ceiling.
+  const stack = mode.agent;
+  const plan =
+    stack === undefined
+      ? undefined
+      : yield* planPolicyDeclaration({
+          surface: "component",
+          includes: include,
+          stack,
+          ...(mode.machineSessions === undefined ? {} : { sessions: mode.machineSessions }),
+          ...(mode.planAuthorshipRoot === undefined
+            ? {}
+            : { authorshipRoot: mode.planAuthorshipRoot }),
+          // Captured before the document exists, so the two acts that are this
+          // host's — putting this build's adapter on disk, and opening the review
+          // form — run outside the ceiling the policy installs around itself.
+          host: yield* useScope(),
+          installElicitation: installWebElicitation,
+          // Rendered when a `<Plan>` first asks, not before: an ordinary run that
+          // writes none never builds a catalog it has no reader for.
+          *catalog() {
+            return renderSyntaxMarkdown(yield* syntaxCatalog(include));
+          },
+        });
+
   // Wire --verbose observability via Signal.
   // FileStream.onAppend fires after each persist; the signal fans out
   // to the stderr writer below. Persistence is handled by FileStream
@@ -812,6 +857,7 @@ function* runDocument(
     secretDetection,
     installService,
     testAgentWorker: yield* readWorkerCommand(),
+    ...(plan === undefined ? {} : { plan }),
   });
 
   // One authoritative execution, and only one. What a host attaches travels as
@@ -838,7 +884,10 @@ function* runDocument(
     // anything else is installed — and builds it from the claimant it mints.
     [
       ...(mode.installations ?? []),
-      { components: agentIdentityComponents() },
+      {
+        components: agentIdentityComponents(),
+        ...(plan === undefined ? {} : { declarations: [plan] }),
+      },
       // The declarations a nested execution may configure a child with, named
       // by the exact definitions this command installed. Recognizing one is
       // recognizing a definition, and only the host knows which package's copy
