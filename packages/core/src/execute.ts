@@ -2723,13 +2723,31 @@ function retainedIdentityComponent(component: IdentityComponent): IdentityCompon
   return Object.freeze({
     name: component.name,
     origin: component.origin,
-    props: component.props,
-    ...(component.returns === undefined ? {} : { returns: component.returns }),
+    props: detachedSchema(component.props),
+    ...(component.returns === undefined ? {} : { returns: detachedSchema(component.returns) }),
     ...(component.captures === undefined ? {} : { captures: [...component.captures] }),
     ...(component.forms === undefined ? {} : { forms: [...component.forms] }),
     ...documentationOf(component),
     factory: component.factory.bind(component),
   });
+}
+
+/**
+ * A schema this execution owns, copied out of the object the host handed over.
+ *
+ * A schema is the one member of a declaration that is a whole object graph
+ * rather than a value, so copying the reference copies nothing: an installation
+ * hook — or anything else still holding the caller's object — could reach into
+ * it after the capture and change the contract admission compiles, registration
+ * publishes and expansion validates every invocation against. The copy is
+ * structural, so a `__proto__` key stays an ordinary own property instead of
+ * reaching `Object.prototype`'s setter the way an assignment would.
+ *
+ * A value that will not copy is not a JSON Schema, and refusing here is the
+ * first place that can say so.
+ */
+function detachedSchema<Schema extends PropsSchema | ReturnsSchema>(schema: Schema): Schema {
+  return structuredClone(schema);
 }
 
 function* invoke(
@@ -2811,8 +2829,10 @@ function* invoke(
           source: declaration.source,
           digest: declaration.digest,
           ...(declaration.forms === undefined ? {} : { forms: [...declaration.forms] }),
-          ...(declaration.props === undefined ? {} : { props: declaration.props }),
-          ...(declaration.returns === undefined ? {} : { returns: declaration.returns }),
+          ...(declaration.props === undefined ? {} : { props: detachedSchema(declaration.props) }),
+          ...(declaration.returns === undefined
+            ? {}
+            : { returns: detachedSchema(declaration.returns) }),
           ...(declaration.privates === undefined
             ? {}
             : { privates: [...declaration.privates].map(retainedIdentityComponent) }),

@@ -53,6 +53,7 @@ import { validateDocument, validateDocumentStructure } from "../src/document-val
 import { registerComponents } from "../src/components/registration.ts";
 import { retainedSource } from "../src/root-source.ts";
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
+import type { PropsSchema } from "../src/types.ts";
 
 const ROOT_PATH = "documents/root.md";
 const ORIGIN = "@executablemd/test/Policy.md";
@@ -666,6 +667,48 @@ describe("Tier DM — the private closure is lexical", () => {
 
     expect(output).toContain("policy says the private answer");
     expect(String(output)).not.toContain("the replacement answer");
+  });
+
+  it("DM39: a schema mutated after capture is not the contract an invocation is held to", function* () {
+    // The schema is the one member of a declaration that is a whole object
+    // graph, so holding the caller's object rather than a copy of it would let
+    // a hook loosen the contract after the invocation captured the declaration
+    // and before admission compiled it.
+    const entered: string[] = [];
+    const strict: PropsSchema = { type: "object", properties: {}, additionalProperties: false };
+    const original: IdentityComponent = {
+      name: "Secret",
+      origin: `${ORIGIN}#Secret`,
+      props: strict,
+      returns: { type: "string" },
+      forms: ["self-closing"],
+      // deno-lint-ignore require-yield
+      factory: () =>
+        function* Secret(): Operation<string> {
+          entered.push("body");
+          return "the private answer";
+        },
+    };
+    const source = ['<Secret extra="x" as="answer" />', "", "policy says {answer}", ""].join("\n");
+
+    const message = yield* refusal(
+      run(
+        "<Policy />\n",
+        [declared(source, { privates: [original] })],
+        [
+          {
+            // deno-lint-ignore require-yield
+            *install() {
+              Reflect.set(strict, "additionalProperties", true);
+            },
+          },
+        ],
+      ),
+    );
+
+    expect(message).toContain("Secret");
+    // The refusal is the contract's, so the body it guards never ran.
+    expect(entered).toHaveLength(0);
   });
 
   it("DM21: a private name a registration also claims refuses the declaration", function* () {

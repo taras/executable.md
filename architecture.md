@@ -26,7 +26,7 @@ Existing documents and code get aligned to this section retroactively.
 | document execution | one evaluation of a root document initiated through `execute()`, producing one output stream and one completion result while reading and appending a durable journal; its ongoing effects belong to the Effection scope in which the evaluation runs |
 | workflow definition | what a workflow run is a run of: a versioned descriptor naming an immutable object — its format and object ID — together with the repository-relative path of the root document inside it, the exact canonical document target when one is selected, and the component bundle it is closed over when it declares one. A repository locator is not part of it, and it is distinct from every Repository created inside the run's Workspace |
 | workflow component bundle | the closed set of authored Markdown components a workflow root declares, each named, located by a canonical repository-relative path inside the pinned commit, and identified by that blob's object ID. It is both definition identity and execution authority: the names it declares resolve to its exact pinned sources and to nothing else |
-| declared Markdown component | exact first-party Markdown a trusted host declares to one document execution, read once and held by the invocation before any installation runs, as immutable data on an `ExecutionInstallation`: the public name, the reported origin, the bytes, the SHA-256 of those bytes, the accepted forms, the contract parsed from them, and any private component closure only those bytes may write. The host claims the name rather than offering a default for it, so it resolves ahead of a repository file, a workflow component bundle and every registration; a second claim on one name is a configuration failure. It is a composition mechanism and not a policy loader: no caller-facing option selects one, adds one, or names its source |
+| declared Markdown component | exact first-party Markdown a trusted host declares to one document execution, read once and held by the invocation — schemas copied, not referenced — before any installation runs, as immutable data on an `ExecutionInstallation`: the public name, the reported origin, the bytes, the SHA-256 of those bytes, the accepted forms, the contract parsed from them, and any private component closure only those bytes may write. The host claims the name rather than offering a default for it, so it resolves ahead of a repository file, a workflow component bundle and every registration; a second claim on one name is a configuration failure. It is a composition mechanism and not a policy loader: no caller-facing option selects one, adds one, or names its source |
 | private component closure | the components one declared Markdown component carries that only its own bytes may write. Each is minted like any other invocation-identity component and registered nowhere, so it resolves while canonical core is expanding that declaration's body and nowhere else — not from the caller's root, the content the caller projected through it, a sibling declaration, an imported component, middleware, or an implementation kept past teardown. It is lexical availability, not authority: every private component still takes its operation from the invocation that carries it |
 | retrieval metadata | replaceable, credential-free information about where a workflow definition can be fetched from now; it takes no part in run identity and is reauthorized by the host before use |
 | stop reason | why a workflow run or a document execution stopped: a categorical host code, or a reference to an already-filtered journal event |
@@ -3413,10 +3413,13 @@ Declaring one asset does not take component substitution away from every
 document the host runs.
 
 **Every declaration is read once, before any installation runs.** Name, origin,
-source, digest, forms, stated schemas and each private declaration — factory
-bound, arrays copied, schemas and prose read — are captured by the invocation
-and held by it, on the same terms as the admissions and the bundle. A host that
-hands one over and then replaces a member of it has replaced nothing.
+source, digest, forms, prose and each private declaration are captured by the
+invocation and held by it — factory bound, arrays and schemas copied — on the
+same terms as the admissions and the bundle. A schema is copied rather than
+referenced because it is a whole object graph, and holding the caller's object
+would leave the contract mutable after capture. A host that hands a declaration
+over and then replaces a member of it, or mutates a schema it still holds, has
+replaced nothing.
 
 **The private closure is lexical and expansion-scoped.** A declaration's private
 components are minted exactly like the identity components a host declares —

@@ -2681,11 +2681,15 @@ any other name: an unrelated import in the same execution is the ordinary open
 import it has always been.
 
 **Every declaration is read once, before any installation runs.** The name,
-origin, source, digest, forms, stated schemas and each private declaration —
-its factory bound, its arrays copied, its schemas and prose read — are captured
-by the invocation and held by it. A host that hands over a declaration and then
-replaces a member of it has replaced nothing: what is admitted, registered and
-executed is what it declared at the moment of capture.
+origin, source, digest, forms, prose and each private declaration are captured
+by the invocation and held by it, with the factory bound and every array and
+schema copied. A schema is copied rather than referenced because it is a whole
+object graph: holding the caller's object would let a hook reach into it after
+capture and change the contract admission compiles, registration publishes and
+expansion validates each invocation against. So a host that hands over a
+declaration and then replaces a member of it — or mutates a schema it still
+holds — has replaced nothing: what is admitted, registered and executed is what
+it declared at the moment of capture.
 
 **The journal records the asset.** A declared import records exactly
 `{ kind: "declared-markdown", origin, digest, content }` and a private one
