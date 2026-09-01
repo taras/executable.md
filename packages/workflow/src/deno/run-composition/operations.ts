@@ -73,9 +73,13 @@ import type { GitSession } from "../composition/git.ts";
 import { checkoutState, type GitCheckout } from "../composition/operations.ts";
 import { performSwitch } from "../composition/switch.ts";
 import { gitCommitMessageEvidence, performCommit } from "../composition/commit.ts";
-import { useGitAuthentication, type RepositoryHost } from "../composition/host.ts";
+import {
+  useGitAuthentication,
+  type GitCommitIdentity,
+  type RepositoryHost,
+} from "../composition/host.ts";
 import { gitRefused } from "../composition/refusals.ts";
-import { LivePushEvidenceError } from "./errors.ts";
+import { LivePushEvidenceError, UnresolvedGitIdentityError } from "./errors.ts";
 
 /**
  * One checkout this execution may act in.
@@ -198,10 +202,18 @@ export function* liveCommit(
   checkout: GitCheckout,
   message: string,
   messageSource: GitCommitMessageSource,
+  identity: GitCommitIdentity | undefined,
 ): Operation<GitCommitResult> {
+  // Before the index is read and long before an object is written: a host that
+  // cannot say who a commit is by cannot make one, and saying so first means
+  // nothing was staged, moved or written for a commit that was never going to
+  // exist.
+  if (identity === undefined) {
+    throw new UnresolvedGitIdentityError();
+  }
   const evidence = gitCommitMessageEvidence(message);
   const before: GitCheckoutState = yield* checkoutState(checkout.git, checkout.directory, COMMIT);
-  const performed = yield* performCommit(checkout, before, message, evidence);
+  const performed = yield* performCommit(checkout, before, message, evidence, identity);
   const after = yield* checkoutState(checkout.git, checkout.directory, COMMIT);
   return Object.freeze({
     checkout: checkout.identity,

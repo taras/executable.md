@@ -92,6 +92,7 @@ import {
 import { useGitHubIssues, type GitHubIssuesOptions } from "../issue/github.ts";
 import { selectionRegistry } from "../selections.ts";
 import { discoverAmbientRepository, type AmbientRepository } from "./ambient.ts";
+import { captureCommitIdentity, denoIdentityReader, type IdentityReader } from "./identity.ts";
 import { selectManagedRepository, selectManagedWorktree } from "./checkouts.ts";
 import { NoAmbientRepositoryError } from "./errors.ts";
 import { useLeases } from "./leases.ts";
@@ -108,6 +109,18 @@ import {
   type RegisteredCheckout,
 } from "./operations.ts";
 import { repositorySlot, worktreeSlot } from "./placement.ts";
+import { realpath } from "node:fs/promises";
+import { ensureDir } from "@effectionx/fs";
+import { until } from "effection";
+
+/** The canonical directory this path resolves to, or the path as written. */
+function* canonicalPath(path: string): Operation<string> {
+  try {
+    return yield* until(realpath(path));
+  } catch {
+    return path;
+  }
+}
 
 export interface RunCompositionOptions {
   /** Where managed checkouts live. Production passes `~/.xmd/repositories`. */
@@ -117,6 +130,14 @@ export interface RunCompositionOptions {
   readonly host?: RepositoryHost;
   readonly authentication?: GitAuthentication;
   readonly helper?: HelperAssembly;
+  /**
+   * How this host reads the invoking user's effective Git identity.
+   *
+   * Absent uses native Git with the caller's own environment and starting
+   * directory, which is the whole question. A suite substitutes it to say what
+   * this host knows — including that it knows nothing.
+   */
+  readonly identity?: IdentityReader;
   /** What GitHub issue handling this host installs, and what it may reach. */
   readonly gitHubIssues?: GitHubIssuesOptions;
   /** The pull-request destinations this host allows a document to read. */
@@ -152,13 +173,27 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
   const home = yield* host.useDirectory();
   const git: GitSession = gitSession(host, home);
 
-  const leases = yield* useLeases(options.root);
+  // Created before it is canonicalized, and canonicalized once. A path that
+  // does not exist yet resolves to itself, so a root canonicalized before it
+  // was made would be one spelling on the execution that created it and another
+  // on every execution afterwards — two spellings, two digests, two slots for
+  // one Repository, and no lock between them.
+  yield* ensureDir(options.root);
+  const root = yield* canonicalPath(options.root);
+  const leases = yield* useLeases(root);
   const selections = selectionRegistry<SelectedRepository>();
   const registered: RegisteredCheckout[] = [];
   const evidence: PushEvidence[] = [];
   // Fresh, opaque and never derived from anything a document wrote. It names
   // this execution to a service; it is not addressable, reusable or observable.
   const invocation = randomUUID();
+
+  // Once, before root expansion, from the trusted host: the four strings a
+  // commit records about who made it. A host that cannot say is remembered as
+  // not saying, and only `<Git.Commit>` refuses.
+  const identity = yield* captureCommitIdentity(
+    options.identity ?? denoIdentityReader(options.cwd),
+  );
 
   // Once, before root expansion. A repository this command was not run inside
   // is remembered as absent rather than refused, so a document that never asks
@@ -170,7 +205,7 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
   yield* RepositoryComposition.around(
     {
       *selectRepository([request]: [RepositoryRequest]): Operation<RepositorySelection> {
-        const slot = repositorySlot(options.root, request.locator, request.name);
+        const slot = repositorySlot(root, request.locator, request.name);
         yield* leases.hold("repository", slot, `repository ${JSON.stringify(request.name)}`);
         const managed = yield* selectManagedRepository(git, host, slot, request);
         const identity: RepositoryIdentity = Object.freeze({
@@ -204,7 +239,7 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
           repository,
           () => new RepositorySelectionError("<Worktree>"),
         );
-        const slot = worktreeSlot(options.root, owner.commonDirectory, request.name);
+        const slot = worktreeSlot(root, owner.commonDirectory, request.name);
         yield* leases.hold("worktree", slot, `worktree ${JSON.stringify(request.name)}`);
         const managed = yield* selectManagedWorktree(git, slot, {
           name: request.name,
@@ -245,11 +280,11 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
     { at: "min" },
   );
 
-  function place(
+  function* place(
     invocationRepository: RepositorySelection,
     workingDirectory: string,
     operation: string,
-  ): RegisteredCheckout {
+  ): Operation<RegisteredCheckout> {
     const selected = selections.authenticate(
       invocationRepository,
       () =>
@@ -258,13 +293,23 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
           "the Repository in scope is not one this execution selected, so it names no checkout",
         ),
     );
-    return selectCheckout(registered, selected.checkout.identity, workingDirectory, operation);
+    // Canonicalized before it is matched. A checkout root is the path Git
+    // resolved, and a working directory reached through a symbolic link — a
+    // temporary directory under macOS `/var`, a home directory somebody linked
+    // — is the same place under another name. Comparing the two as written
+    // would report a document standing in its own checkout as standing in none.
+    return selectCheckout(
+      registered,
+      selected.checkout.identity,
+      yield* canonicalPath(workingDirectory),
+      operation,
+    );
   }
 
   yield* GitComposition.around(
     {
       *switchBranch([invocation_]: [GitSwitchInvocation]): Operation<GitSwitchResult> {
-        const checkout = place(
+        const checkout = yield* place(
           invocation_.repository,
           invocation_.workingDirectory,
           "<Git.Switch>",
@@ -277,7 +322,11 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
       },
 
       *addPaths([invocation_]: [GitAddInvocation]): Operation<GitAddResult> {
-        const checkout = place(invocation_.repository, invocation_.workingDirectory, "<Git.Add>");
+        const checkout = yield* place(
+          invocation_.repository,
+          invocation_.workingDirectory,
+          "<Git.Add>",
+        );
         // Admitted where a request enters, exactly as the retained provider
         // admits it: the Api is public, and a caller reaching it directly is
         // subject to the same boundary.
@@ -288,7 +337,7 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
       },
 
       *commitIndex([invocation_]: [GitCommitInvocation]): Operation<GitCommitResult> {
-        const checkout = place(
+        const checkout = yield* place(
           invocation_.repository,
           invocation_.workingDirectory,
           "<Git.Commit>",
@@ -297,11 +346,16 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
           liveCheckout(git, checkout, invocation_.workingDirectory),
           admitCommitMessage(invocation_.message),
           invocation_.messageSource,
+          identity,
         );
       },
 
       *pushCurrentBranch([invocation_]: [GitPushInvocation]): Operation<GitPushOutcome> {
-        const checkout = place(invocation_.repository, invocation_.workingDirectory, "<Git.Push>");
+        const checkout = yield* place(
+          invocation_.repository,
+          invocation_.workingDirectory,
+          "<Git.Push>",
+        );
         const published = yield* livePush(host, git, checkout);
         // Only after the provider has verified a performed or adopted
         // publication. A refused or unreadable one leaves no entry, so nothing
@@ -382,7 +436,11 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
       },
 
       *upsert([request]: [PullRequestUpsertInvocation]): Operation<PullRequestResult> {
-        const checkout = place(request.repository, request.workingDirectory, PULL_REQUEST_ELEMENT);
+        const checkout = yield* place(
+          request.repository,
+          request.workingDirectory,
+          PULL_REQUEST_ELEMENT,
+        );
         if (checkout.origin === undefined) {
           throw new PullRequestAuthorityError(
             "no-repository-context",

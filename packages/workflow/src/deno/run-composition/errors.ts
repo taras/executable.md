@@ -67,6 +67,34 @@ export class NoAmbientRepositoryError extends StaleInputError {
 }
 
 /**
+ * This host cannot say who a commit would be by.
+ *
+ * A refusal a document can act on, in the same vocabulary `<Git.Commit>`
+ * already speaks: it names the two commands that fix it. Substituting the
+ * workflow identity instead would write a name nobody in this repository
+ * recognizes, which is exactly what an ordinary run must not do — and it would
+ * do it silently.
+ *
+ * It reaches `<Git.Commit>` alone. Repository, Worktree, Dir, Switch, Add,
+ * Push, Issue and PullRequest write no commit object and are unaffected.
+ */
+export class UnresolvedGitIdentityError extends Error {
+  override name = "UnresolvedGitIdentityError";
+
+  readonly reason = "unresolved-identity";
+
+  constructor() {
+    super(
+      "<Git.Commit> cannot record who this commit is by: this host's Git reports no author or " +
+        'committer identity. Set one with `git config --global user.name "Your Name"` and ' +
+        "`git config --global user.email you@example.com`, or export GIT_AUTHOR_NAME, " +
+        "GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL. Nothing was committed, " +
+        "and no other identity was substituted for yours.",
+    );
+  }
+}
+
+/**
  * A branch this run has not published, or has published somewhere else.
  *
  * The ordinary run's counterpart to the journal scan a workflow run performs.

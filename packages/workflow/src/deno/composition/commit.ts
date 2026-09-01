@@ -43,7 +43,7 @@ import {
 } from "../../composition/components/GitCommit.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { commitIndex, readCommit, readCommitMessage, resolveCommit } from "./git.ts";
-import type { RepositoryHost } from "./host.ts";
+import type { GitCommitIdentity, RepositoryHost } from "./host.ts";
 import { settled, type CompositionOutcome, type MutationContext } from "./effects.ts";
 import { gitRefused } from "./refusals.ts";
 import {
@@ -141,6 +141,14 @@ export function* performCommit(
   before: GitCheckoutState,
   message: string,
   evidence: GitCommitMessageEvidence,
+  /**
+   * Who this commit is by, when it is not the fixed workflow identity.
+   *
+   * Absent for a workflow run, whose retained Git state must not depend on
+   * whose machine it was made on. Present for an ordinary run, where the commit
+   * lands in the caller's own checkout.
+   */
+  identity?: GitCommitIdentity,
 ): Operation<Committed> {
   // Nothing staged is not a failure of native Git; it is the state of the
   // checkout, and a document can act on it. Deciding it here means no command
@@ -156,6 +164,7 @@ export function* performCommit(
     workingDirectory,
     message,
     committedAt,
+    ...(identity === undefined ? {} : { identity }),
   });
 
   const commit = yield* resolveCommit(git, directory, "HEAD");
@@ -179,6 +188,19 @@ export function* performCommit(
   }
   if (facts.authoredAt !== committedAt || facts.committedAt !== committedAt) {
     unexpected("the commit it wrote is not stamped with the instant this operation captured");
+  }
+  // Read back rather than assumed. The identity is the one thing about a commit
+  // this provider borrows from outside itself, so the object is held to it: a
+  // host that ignored the variables would otherwise write somebody else's name
+  // and this operation would report success.
+  if (
+    identity !== undefined &&
+    (facts.authorName !== identity.authorName ||
+      facts.authorEmail !== identity.authorEmail ||
+      facts.committerName !== identity.committerName ||
+      facts.committerEmail !== identity.committerEmail)
+  ) {
+    unexpected("the commit it wrote does not record the identity this operation was given");
   }
 
   const written = yield* readCommitMessage(git, directory, commit);

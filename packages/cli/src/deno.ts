@@ -15,7 +15,7 @@ import { compileDataUri } from "@executablemd/core";
 import { runXmd } from "./cli.ts";
 import { useMachineSessions } from "./session-coordinator.ts";
 import { useDenoWorkflowHost } from "./deno-workflow.ts";
-import { denoRunRepositories } from "./run-repositories.ts";
+import { denoRunRepositories } from "./deno-repositories.ts";
 import {
   isCredentialHelperMode,
   runCredentialHelper,

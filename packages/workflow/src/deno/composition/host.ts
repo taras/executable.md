@@ -86,6 +86,17 @@ export interface GitInvocation {
    */
   readonly committedAt?: number;
   /**
+   * Who this command records as author and committer, when it is not the
+   * workflow identity below.
+   *
+   * Absent on every command a workflow run issues, and on every command that
+   * writes no object. An ordinary run supplies the invoking user's own
+   * effective identity for its one commit, because that commit lands in that
+   * person's checkout — and everything else about the environment stays exactly
+   * as fixed as it is for a workflow.
+   */
+  readonly identity?: GitCommitIdentity;
+  /**
    * What this command's provider invocation borrowed from the host.
    *
    * Handed down rather than acquired here. One invocation opens one session,
@@ -145,8 +156,20 @@ const CONFIGURATION: readonly string[] = [
 const IDENTITY_NAME = "Executable.md workflow";
 const IDENTITY_EMAIL = "workflow@executable.md.invalid";
 
+/** Who a run's Git state is written by, when it is not the fixed identity. */
+export interface GitCommitIdentity {
+  readonly authorName: string;
+  readonly authorEmail: string;
+  readonly committerName: string;
+  readonly committerEmail: string;
+}
+
 /** The variables Git may see, and nothing else. */
-function environment(home: string, committedAt: number | undefined): Record<string, string> {
+function environment(
+  home: string,
+  committedAt: number | undefined,
+  identity: GitCommitIdentity | undefined,
+): Record<string, string> {
   const path = process.env.PATH;
   return {
     // A fixed offset beside the second, so the instant a commit records is the
@@ -171,10 +194,15 @@ function environment(home: string, committedAt: number | undefined): Record<stri
     // derives a name and an address from the operating-system user and the
     // machine's hostname and writes them into every reflog it touches, which
     // would put whoever ran the host into the run's own retained Git state.
-    GIT_AUTHOR_NAME: IDENTITY_NAME,
-    GIT_AUTHOR_EMAIL: IDENTITY_EMAIL,
-    GIT_COMMITTER_NAME: IDENTITY_NAME,
-    GIT_COMMITTER_EMAIL: IDENTITY_EMAIL,
+    //
+    // An ordinary run supplies one instead, because the opposite is true there:
+    // the commit lands in the caller's own checkout, and the fixed identity
+    // would put a name in their history that nobody recognizes. Only these four
+    // variables move — every protection above and below stays.
+    GIT_AUTHOR_NAME: identity?.authorName ?? IDENTITY_NAME,
+    GIT_AUTHOR_EMAIL: identity?.authorEmail ?? IDENTITY_EMAIL,
+    GIT_COMMITTER_NAME: identity?.committerName ?? IDENTITY_NAME,
+    GIT_COMMITTER_EMAIL: identity?.committerEmail ?? IDENTITY_EMAIL,
     // Stable message text, so a refusal is selected by exit status and by the
     // conditions this provider tests for rather than by a translated sentence.
     LC_ALL: "C",
@@ -199,7 +227,15 @@ export function denoRepositoryHost(options: RepositoryHostOptions = {}): Reposit
     options.authentication ??
     denoGitAuthentication(options.helper === undefined ? {} : { assembly: options.helper });
   return {
-    git({ args, cwd, home, input, committedAt, attachment }: GitInvocation): Operation<GitOutcome> {
+    git({
+      args,
+      cwd,
+      home,
+      input,
+      committedAt,
+      identity,
+      attachment,
+    }: GitInvocation): Operation<GitOutcome> {
       // A command with no attachment reaches no authentication mechanism. That
       // is what makes a completed replay reach none: replay performs no remote
       // operation, so no invocation ever opens a session to attach.
@@ -207,7 +243,10 @@ export function denoRepositoryHost(options: RepositoryHostOptions = {}): Reposit
         command: "git",
         args: [...CONFIGURATION, ...(attachment?.configuration ?? []), ...args],
         cwd,
-        env: { ...environment(home, committedAt), ...(attachment?.environment ?? {}) },
+        env: {
+          ...environment(home, committedAt, identity),
+          ...(attachment?.environment ?? {}),
+        },
         ...(input === undefined ? {} : { input }),
       });
     },

@@ -75,7 +75,14 @@ components a workflow run has, over the caller's own filesystem:
   Repository is in scope. Both survive every execution and are held for one
   document execution by an exclusive non-blocking advisory lock.
 - Local Git operations happen directly against the selected checkout. There is
-  no transaction, no rollback and no replay, and none is claimed.
+  no transaction, no rollback and no replay, and none is claimed. A commit is
+  made under the invoking user's own effective Git identity, captured once from
+  the trusted host before the document expands; a host where Git can name no
+  identity refuses `<Git.Commit>` and names the two commands that fix it, and
+  every other component stays usable. Nothing else is borrowed from the caller's
+  environment: hooks, file-system monitors, signing programs and
+  repository-supplied credential helpers stay disabled exactly as they are for a
+  workflow run.
 - `<Git.Push>` keeps the observe/adopt/fast-forward/refuse rules and stores
   private evidence of what it published. `<PullRequest>` is authorized by that
   evidence and by nothing else, so a new run must publish again.
@@ -1043,7 +1050,12 @@ Under a workflow run each is a durable Workspace effect, or — for Push — a
 reconciled Git-host effect, and that is what the rest of this section
 describes. Under an ordinary `xmd run` the same authored transitions happen
 directly against the selected checkout: no transaction encloses them, nothing
-rolls back, nothing replays, and no such claim is made. Push keeps the
+rolls back, nothing replays, and no such claim is made. Section 7.3's fixed
+Git identity is a workflow run's, for a reason that inverts here — a workflow's
+retained state must not depend on whose machine made it, and an ordinary run's
+commit lands in that person's own checkout. So an ordinary commit records the
+invoking user's own effective identity, and a host that can name none refuses
+rather than substituting one. Push keeps the
 observe/adopt/fast-forward/refuse rules and, instead of a reconciliation
 record, leaves private evidence in the provider instance that verified it.
 
@@ -3354,7 +3366,7 @@ fetch operation requires its own language and durability contract.
 | `<Repository>`, `<Worktree>` and `<Dir>` composition under a workflow run | built by #293, Deno provider only |
 | the same thirteen declarations under every runtime | built by #643: one shadowable array consumed by the workflow attachment, `xmd syntax`, `xmd plan` and an ordinary document execution |
 | `<Repository>`, `<Worktree>` and the ambient Repository under an ordinary run | built by #643, Deno and compiled only: managed checkouts under `~/.xmd/repositories` with version 1 sidecars and execution-owned non-blocking locks, and the checkout the command was run in as the default Repository. Node and Bun install no operational provider |
-| local Git operations and `Git.Push` evidence under an ordinary run | built by #643, Deno and compiled only: the same authored transitions with no transaction and no replay, and a private per-execution Push evidence entry that authorizes `<PullRequest>` and crosses no run |
+| local Git operations and `Git.Push` evidence under an ordinary run | built by #643, Deno and compiled only: the same authored transitions with no transaction and no replay, commits recorded under the invoking user's own captured Git identity with an actionable refusal when the host can name none, and a private per-execution Push evidence entry that authorizes `<PullRequest>` and crosses no run |
 | `<Issue>` and pull-request reads under an ordinary run | built by #643, Deno and compiled only: the same transports and ceilings with no durable envelope, keyed by this execution's own invocation identity |
 | transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | built by #294, Deno provider only |
 | `<Issue>` read and upsert, and the `issue_effect` boundary (§10.3) | built by #296; GitHub middleware, Deno host |

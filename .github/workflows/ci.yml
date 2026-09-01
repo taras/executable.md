@@ -222,6 +222,13 @@ jobs:
       - name: The <Plan> Component the compiled binary carries
         run: deno test --allow-all --frozen scripts/tests/plan-component-compiled.test.ts
 
+      # The ordinary repository provider is assembled at a runtime-named
+      # entrypoint and holds managed checkouts with a kernel-released advisory
+      # lock, so only the binary shows both surviving `deno compile`. The script
+      # runs two of them at once against a managed root of its own.
+      - name: Smoke test repository composition with the compiled binary
+        run: deno run --allow-all --frozen scripts/smoke-run-composition.ts
+
       # `<Fetch>` resolves from core's registry, requests through the contextual
       # Fetch adapter, and detaches the response before binding it. All three
       # live in the module graph, so only the binary shows they survived

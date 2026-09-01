@@ -8336,6 +8336,13 @@ that one execution:
   locally recorded admitted `origin` when there is one, and the recorded default
   branch. Being outside a Git checkout is not a startup failure — only an
   element that needs a repository refuses, and it names how to run inside one.
+- **The Git identity** an ordinary commit records is the invoking user's own,
+  read once from the trusted host's environment and configuration. It is used
+  for `<Git.Commit>` alone and is not otherwise observable; a host that can name
+  no identity refuses that one component and leaves every other one usable.
+  Nothing else crosses from the caller's environment: hooks, file-system
+  monitors, signing programs and repository-supplied credential helpers stay
+  disabled.
 - **The invocation identity** names this execution to a service. It is not a
   prop, a Context value, a component result, a middleware answer or a journal
   event; it is neither addressable nor reusable, and the engine's own
@@ -11541,7 +11548,7 @@ user's own `~/.xmd/repositories`.
 | ORC10 | Conflict is non-mutating | A changed base, Worktree branch or base, metadata, origin, common directory, object format or owner relationship refuses, and the slot's entries and sidecar are identical before and after |
 | ORC11 | Partial creation | A metadata-free slot in exactly the pre-exposure state is adopted and receives its sidecar; an incompatible or non-empty one refuses and remains byte-identical |
 | ORC12 | Exclusive ownership | A second process selecting the same slot is refused while the first holds it; another slot succeeds concurrently; normal release permits a later owner and the checkout remains |
-| ORC13 | Live local Git | Switch, Add and Commit keep their authored semantics and make real, non-transactional changes; a failure claims neither rollback nor replay |
+| ORC13 | Live local Git | Switch, Add and Commit keep their authored semantics and make real, non-transactional changes; a failure or a cancellation claims neither rollback nor replay; a commit records the invoking user's own identity, an unresolvable one refuses that component alone, and hooks, monitors, signing and repository helpers stay disabled |
 | ORC14 | Live Push evidence | A performed or already-equal Push stores exact private evidence; a Push of another branch, checkout, origin, destination or commit does not authorize a PullRequest; the latest publication of a destination decides |
 | ORC15 | Evidence cannot cross runs | A PullRequest succeeds only after an exact Push in the same execution; a new run must publish again, and copying a Context value, a result or a previous trace grants nothing |
 | ORC16 | Live Issues | Configured reads and upserts use the existing normalized contracts and this execution's own identity; absent or out-of-ceiling configuration sends no credential and no request |

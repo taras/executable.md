@@ -32,8 +32,9 @@
  * still held, so the sidecar is created if absent and then left, empty.
  */
 
-import { until, useScope, type Operation, type Scope } from "effection";
+import { race, suspend, useScope, withResolvers, type Operation, type Scope } from "effection";
 import { useAdvisoryLock } from "../advisory-lock.ts";
+import type { AdvisoryLockFile } from "../advisory-lock.ts";
 import { ManagedCheckoutError } from "./errors.ts";
 import { lockOf } from "./placement.ts";
 
@@ -63,7 +64,32 @@ export function* useLeases(root: string): Operation<Leases> {
       if (held.has(path)) {
         return;
       }
-      const file = yield* until(owner.run(() => useAdvisoryLock(path)));
+      // The acquisition runs in the provider's scope and then *suspends*, which
+      // is what makes the hold last as long as the provider does. A task that
+      // returned the handle would complete, and completing releases everything
+      // the task acquired — so the lock would be gone the moment the element
+      // that asked for it finished, and a second process could take the slot
+      // out from under an interactive Session still working in it.
+      const acquired = withResolvers<AdvisoryLockFile | undefined>();
+      const failed = withResolvers<never>();
+      owner.run(function* () {
+        let file: AdvisoryLockFile | undefined;
+        try {
+          file = yield* useAdvisoryLock(path);
+        } catch (error) {
+          failed.reject(error instanceof Error ? error : new Error(String(error)));
+          return;
+        }
+        acquired.resolve(file);
+        if (file === undefined) {
+          // Refused. There is nothing to hold open, so this task ends rather
+          // than suspending for the rest of the execution over a lock it never
+          // took.
+          return;
+        }
+        yield* suspend();
+      });
+      const file = yield* race([acquired.operation, failed.operation]);
       if (file === undefined) {
         throw new ManagedCheckoutError(
           "in-use",

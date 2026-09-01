@@ -552,6 +552,30 @@ const COMPILED_BINARY: RuntimeExclusion[] = [
  * unflagged and Bun has not, so folding these into the shared list would drop
  * coverage Node is currently giving.
  */
+/**
+ * Tests whose subject is the ordinary repository provider.
+ *
+ * It holds a managed checkout with a kernel-released exclusive advisory lock,
+ * which this repository reaches through the Deno runtime and which Node and Bun
+ * expose no equivalent of. The declarations it installs, and the fact that a
+ * runtime without the provider refuses every operation, are covered portably by
+ * `packages/cli/tests/run-composition.test.ts`, which runs everywhere.
+ */
+const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
+  {
+    path: "packages/workflow/tests/run-composition.test.ts",
+    reason:
+      "the subject is the ordinary run's repository provider, which holds managed checkouts under a kernel-released exclusive advisory lock taken through the Deno runtime; Node and Bun expose no equivalent, and the declaration and provider-absence halves are covered portably by packages/cli/tests/run-composition.test.ts",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/cli/tests/run-composition-deno.test.ts",
+    reason:
+      "the same provider, asked the three questions only a runtime that operates repositories can answer: managed-Worktree session placement, diagnostic-trace non-authority, and a nested execution's own provider instance",
+    issue: DERIVED_SCOPE,
+  },
+];
+
 const BUN_MISSING_NODE_SQLITE: RuntimeExclusion[] = [
   {
     path: "packages/workflow/tests/xmd-artifact.test.ts",
@@ -563,6 +587,11 @@ const BUN_MISSING_NODE_SQLITE: RuntimeExclusion[] = [
 
 export const exclusions: Record<Runtime, RuntimeExclusion[]> = {
   deno: COMPILED_BINARY,
-  node: [...DENO_ONLY_TOOLING, ...COMPILED_BINARY],
-  bun: [...DENO_ONLY_TOOLING, ...COMPILED_BINARY, ...BUN_MISSING_NODE_SQLITE],
+  node: [...DENO_ONLY_TOOLING, ...DENO_ONLY_REPOSITORY_PROVIDER, ...COMPILED_BINARY],
+  bun: [
+    ...DENO_ONLY_TOOLING,
+    ...DENO_ONLY_REPOSITORY_PROVIDER,
+    ...COMPILED_BINARY,
+    ...BUN_MISSING_NODE_SQLITE,
+  ],
 };

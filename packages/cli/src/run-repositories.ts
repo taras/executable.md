@@ -18,16 +18,17 @@
  * declarations, so `xmd syntax` describes one language and a document resolves
  * the same names everywhere, and every operation then reaches a clear
  * provider-absence error before anything local or remote is touched.
+ *
+ * Nothing here imports the Deno adapter. This module is on the shared command
+ * path, and the adapter's module graph reaches `node:sqlite` — a built-in Bun
+ * does not have — so a static import of it here would stop `xmd` loading there
+ * at all. The live installer lives beside the entrypoints that can use it, in
+ * `deno-repositories.ts`.
  */
 
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Operation } from "effection";
-import { cwd } from "@executablemd/runtime";
-import { useRunComposition } from "@executablemd/workflow/deno";
-import type { HelperAssembly } from "@executablemd/workflow/credential-helper";
-import { gitHubIssuesConfiguration } from "./github-issues-config.ts";
-import { gitHubPullRequestsConfiguration } from "./github-pull-requests-config.ts";
 
 /** Where managed repositories and worktrees live. */
 export const DEFAULT_REPOSITORY_ROOT: string = join(homedir(), ".xmd", "repositories");
@@ -57,31 +58,3 @@ export function unsupportedRepositories(): Operation<void> {
 
 // deno-lint-ignore require-yield
 function* noRepositories(): Operation<void> {}
-
-/**
- * The live provider Deno and the compiled binary install.
- *
- * The two GitHub configurations are read once, when the installer is built, so
- * an operator who wrote something this host cannot use learns it before a
- * document runs rather than in the middle of one.
- */
-export function denoRunRepositories(
-  helper: HelperAssembly,
-  root: string = DEFAULT_REPOSITORY_ROOT,
-): RepositoryInstaller {
-  return function* (): Operation<void> {
-    const gitHubIssues = yield* gitHubIssuesConfiguration();
-    const gitHubPullRequests = yield* gitHubPullRequestsConfiguration();
-    yield* useRunComposition({
-      root,
-      // The directory this execution starts in, which is where the ambient
-      // repository is discovered from. Read through the contextual Api rather
-      // than from the process, so a nested execution that composed its own
-      // working directory is discovered from that one.
-      cwd: yield* cwd(),
-      helper,
-      ...(gitHubIssues === undefined ? {} : { gitHubIssues }),
-      ...(gitHubPullRequests === undefined ? {} : { gitHubPullRequests }),
-    });
-  };
-}
