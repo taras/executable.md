@@ -479,20 +479,21 @@ reader has no reason to ask. Before adding or changing a description, read
 [the component description guide](.agents/component-descriptions.md). Use its
 refinement interview when reviewing a set of descriptions.
 
-### Issue titles
+### Issue writing
 
-Write an issue title for a reader scanning open work without its body. Name the
-lasting outcome and the most specific recognizable product surface; keep
-implementation mechanisms, dependencies, acceptance constraints, delivery
-status and classification in the body or labels. Use `Add` for new
-functionality, `Make` for a changed property and `Require` for an obligation;
-do not use permission language when adding a capability. Use no decorative
-emoji. A coordinating story uses both the `Quest:` prefix and `quest` label.
-Before creating any issue, or adding or changing a Story or Quest title, read
-[the issue title guide](.agents/issue-titles.md) and follow its title and
-metadata rules. This applies to one-off issue creation as well as corpus work.
-Use its refinement interview when reviewing a set of titles, including its
-completion and overlap check.
+Write an issue for an unfamiliar reader. Its title names the lasting outcome and
+the most specific recognizable product surface. Its description leads with that
+observable outcome and a concrete example or common path, explains the current
+gap, and introduces architecture terms only after the practical experience is
+clear. Keep implementation mechanisms, dependencies, acceptance constraints,
+delivery status, and classification out of the title; make them understandable
+and observable in the description. A coordinating story uses both the `Quest:`
+prefix and `quest` label. Preserve an accepted description while its
+implementation is active unless the contract itself must change. Before
+creating an issue or changing a Story or Quest title, description, or
+classification, read [the issue-writing guide](.agents/issue-writing.md). This
+applies to one-off issue creation as well as corpus work. Use its refinement
+interview and status audit when reviewing a set of issues.
 
 ## Executable.md Style Guide
 
