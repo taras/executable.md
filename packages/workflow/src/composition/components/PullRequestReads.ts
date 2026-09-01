@@ -71,7 +71,7 @@ import { PullRequestReadError } from "../errors.ts";
 import { pullRequestReadResultJson } from "../pull-request-read-records.ts";
 import { canonicalPullRequestUrl, pullRequestProviderName } from "../pull-request-target.ts";
 import type { PullRequestReadKind } from "../pull-request-read-records.ts";
-import { PullRequestAPI } from "../pull-request-api.ts";
+import { PullRequestOperations } from "../pull-request-operations.ts";
 
 /** The component names, as a document writes them and a refusal names them. */
 export const REVIEWS_ELEMENT = "<PullRequest.Reviews>";
@@ -228,10 +228,7 @@ function read(kind: PullRequestReadKind, element: string) {
       );
     }
 
-    const result = yield* PullRequestAPI.operations.read(url, {
-      kind,
-      ...(provider === undefined ? {} : { provider }),
-    });
+    const result = yield* PullRequestOperations.operations.read({ url, kind, provider });
     if (result.kind !== kind) {
       throw new PullRequestReadError(
         "protocol",

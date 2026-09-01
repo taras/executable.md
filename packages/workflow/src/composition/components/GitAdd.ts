@@ -39,7 +39,7 @@ import type { PropsSchema } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { GitComposition } from "../git-api.ts";
-import { currentRepository } from "../context.ts";
+import { selectedRepository } from "../context.ts";
 import { GitOperationAuthorityError, GitOperationError } from "../errors.ts";
 import { wellFormedText } from "../parse.ts";
 
@@ -132,7 +132,7 @@ export default function* GitAdd(props: Record<string, Json>): Operation<string> 
     invalid("renders nothing, so it takes no content. Write it as <Git.Add paths=… />.");
   }
 
-  const repository = yield* currentRepository();
+  const repository = yield* selectedRepository();
   if (repository === undefined) {
     throw new GitOperationAuthorityError(
       ADD,

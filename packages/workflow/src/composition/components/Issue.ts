@@ -78,7 +78,7 @@ import {
   issueProviderName,
   resolveIssueDestination,
 } from "../../issue/tracker.ts";
-import { readIssue, upsertIssue } from "../../issue/effect.ts";
+import { IssueOperations } from "../../issue/operations.ts";
 import type { IssueInput } from "../../issue/api.ts";
 import { normalizedTags } from "../../issue/records.ts";
 import { IssueContentError, IssueProtocolError, IssueTrackerError } from "../../issue/errors.ts";
@@ -230,7 +230,7 @@ function* read(props: Record<string, Json>): Operation<Json> {
   const provider = named(props.provider);
   // No tracker is consulted. The URL is the identity, so a tracker written
   // around a read has nothing to add to it and changes nothing about it.
-  const details = yield* readIssue({ url, provider });
+  const details = yield* IssueOperations.operations.read({ url, provider });
   return {
     url: details.url,
     title: details.title,
@@ -266,7 +266,7 @@ function* upsert(props: Record<string, Json>): Operation<Json> {
     assignee: typeof props.assignee === "string" && props.assignee !== "" ? props.assignee : null,
   });
 
-  const reference = yield* upsertIssue({
+  const reference = yield* IssueOperations.operations.upsert({
     target: destination.target,
     provider: destination.provider,
     issue,

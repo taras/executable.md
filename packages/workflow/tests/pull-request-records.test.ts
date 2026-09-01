@@ -23,7 +23,7 @@ import {
   parseGitPushNaturalKey,
   PUSH_REMOTE,
 } from "../src/composition/git-push-records.ts";
-import type { GitPushRepositoryIdentity } from "../src/composition/git-push-records.ts";
+
 import {
   parsePullRequestInputs,
   pullRequestMode,
@@ -44,11 +44,12 @@ import type {
 } from "../src/composition/pull-request-records.ts";
 import { admitPushEvidence } from "../src/composition/push-evidence.ts";
 
+import type { RepositoryIdentity } from "../src/composition/selection.ts";
 const HEAD = "a".repeat(40);
 const BASE = "b".repeat(40);
 const OTHER = "c".repeat(40);
 
-const IDENTITY: GitPushRepositoryIdentity = Object.freeze({
+const IDENTITY: RepositoryIdentity = Object.freeze({
   name: "project",
   locatorFingerprint: "0".repeat(64),
   requestedBase: null,
@@ -57,7 +58,7 @@ const IDENTITY: GitPushRepositoryIdentity = Object.freeze({
   objectFormat: "sha1",
 });
 
-const OTHER_IDENTITY: GitPushRepositoryIdentity = Object.freeze({ ...IDENTITY, name: "other" });
+const OTHER_IDENTITY: RepositoryIdentity = Object.freeze({ ...IDENTITY, name: "other" });
 
 const INPUTS: PullRequestInputs = Object.freeze({
   repository: IDENTITY,
@@ -115,7 +116,7 @@ function record(overrides: Partial<GitHostReconciliationRecord> = {}): GitHostRe
 
 /** A complete, well-formed Push reconciliation record, as the journal holds it. */
 function pushRecord(options: {
-  identity?: GitPushRepositoryIdentity;
+  identity?: RepositoryIdentity;
   branch?: string;
   commit?: string;
 }): Json {

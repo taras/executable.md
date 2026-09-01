@@ -56,7 +56,6 @@ import { PUSH } from "../../composition/components/GitPush.ts";
 import {
   ANCESTOR,
   destinationRefFor,
-  filteredRepositoryIdentity,
   GIT_PUSH,
   gitPushInputsJson,
   gitPushNaturalKeyJson,
@@ -68,10 +67,8 @@ import {
   pushExpectation,
   PUSH_REMOTE,
   refspecFor,
-  sameRepositoryIdentity,
   type GitPushInputs,
   type GitPushOutcome,
-  type GitPushRepositoryIdentity,
   type GitPushRequest,
   type GitPushResult,
 } from "../../composition/git-push-records.ts";
@@ -110,6 +107,8 @@ import {
 } from "./operations.ts";
 import { gitRefusal } from "./refusals.ts";
 
+import { filteredRepositoryIdentity, sameRepositoryIdentity } from "../../composition/selection.ts";
+import type { RepositoryIdentity } from "../../composition/selection.ts";
 function unusable(reason: string): never {
   throw new GitOperationInfrastructureError(PUSH, reason);
 }
@@ -184,7 +183,7 @@ function* provenAncestor(
 function* retainedPushRoot(
   database: WorkflowRunDatabase,
   expansionId: string,
-  repository: GitPushRepositoryIdentity,
+  repository: RepositoryIdentity,
 ): Operation<string | undefined> {
   const entries = yield* database.readJournalEntries();
   if (!entries.ok) {

@@ -76,11 +76,11 @@ function* describeSwitch(admitted: GitSwitchRequest): Operation<EffectDescriptio
   };
 }
 
-interface Switched {
+export interface Switched {
   readonly resolvedBase: string | null;
 }
 
-function* performSwitch(
+export function* performSwitch(
   checkout: GitCheckout,
   branch: string,
   base: string | undefined,

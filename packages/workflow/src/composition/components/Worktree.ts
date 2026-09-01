@@ -1,11 +1,23 @@
 /**
- * `<Worktree>` — a named linked checkout inside the contextual Repository
+ * `<Worktree>` — a named linked checkout of the Repository in scope
  * (specs/workflow-workspace-spec.md §6.2).
  *
- * Invalid without an enclosing lexical `<Repository>`. A Worktree exists inside
- * a Repository, and the Repository's name is half of what makes its identity
- * durable across replay; threading that name through props would let a document
- * name a Repository that is not in scope.
+ * The Repository is the enclosing lexical `<Repository>`, or — under a host
+ * that has one — the ambient Repository the invocation started in. Either way it
+ * is never a prop: a Worktree exists inside a Repository, the Repository's
+ * identity is half of what makes the Worktree's own, and threading that name
+ * through props would let a document name a Repository that is not in scope.
+ *
+ * An ordinary `xmd run` from a Git checkout therefore takes a root-level
+ * Worktree to mean a linked checkout of the repository the person running it is
+ * standing in:
+ *
+ * ```md
+ * <Worktree name="issue-643" branch="issue-643">…</Worktree>
+ * ```
+ *
+ * A workflow run has no ambient Repository, so the same element written outside
+ * a `<Repository>` there is invalid.
  *
  * Its two forms match Repository's. The self-closing form is the one the
  * adversarial workflow uses, because it is the spelling that both binds a path
@@ -35,7 +47,7 @@ import { content, hasContent } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { RepositoryComposition } from "../api.ts";
-import { RepositoryContext } from "../context.ts";
+import { selectedRepository } from "../context.ts";
 import { WorktreeCompositionError } from "../errors.ts";
 
 export const props = {
@@ -66,7 +78,7 @@ export default function* Worktree(props: Record<string, Json>): Operation<string
   const branch = required(props, "branch");
   const base = typeof props.base === "string" && props.base !== "" ? props.base : undefined;
 
-  const repository = yield* RepositoryContext.operations.current;
+  const repository = yield* selectedRepository();
   if (repository === undefined) {
     throw new WorktreeCompositionError(
       name,
@@ -76,23 +88,21 @@ export default function* Worktree(props: Record<string, Json>): Operation<string
     );
   }
 
-  const record = yield* RepositoryComposition.operations.createWorktree({
-    repositoryName: repository.name,
+  const selection = yield* RepositoryComposition.operations.selectWorktree(repository, {
     name,
     branch,
     base,
   });
-  yield* RepositoryComposition.operations.attachWorktree(record);
 
   if (!(yield* hasContent())) {
-    return record.checkoutPath;
+    return selection.checkoutPath;
   }
 
   yield* API.Env.around(
     {
       // deno-lint-ignore require-yield
       *cwd(): Operation<string> {
-        return record.checkoutPath;
+        return selection.checkoutPath;
       },
     },
     { at: "min" },

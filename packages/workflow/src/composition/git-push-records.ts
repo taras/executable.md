@@ -10,13 +10,13 @@
  *
  * ## The Repository travels filtered
  *
- * The whole retained `RepositoryRecord` is what the provider authenticates a
- * live invocation against, and it carries `checkoutPath` — a place inside the
- * run's own Workspace. A Git host has no business holding one, and the journal
- * has no reason to repeat it under a second name, so the identity that reaches
- * durable JSON is the record without it. Omitting it weakens nothing: the live
- * check still compares the complete record member for member, and the six
- * members that remain already discriminate every Repository this run can hold.
+ * The whole retained `RepositoryRecord` carries `checkoutPath` — a place inside
+ * the run's own Workspace. A Git host has no business holding one, and the
+ * journal has no reason to repeat it under a second name, so what reaches
+ * durable JSON is the `RepositoryIdentity` a selection already carries.
+ * Omitting the path weakens nothing: the live check still compares the complete
+ * record member for member, and the six members that remain already
+ * discriminate every Repository this run can hold.
  *
  * ## The source commit is not part of the natural key
  *
@@ -30,8 +30,14 @@
 
 import type { Json } from "@executablemd/durable-streams";
 import type { GitHostDecision, GitHostReconciliationRecord } from "../git-host/records.ts";
-import { members, optionalText, text } from "./parse.ts";
-import { parseObjectFormat, type GitObjectFormat, type RepositoryRecord } from "./records.ts";
+import { members, text } from "./parse.ts";
+import type { GitObjectFormat, RepositoryRecord } from "./records.ts";
+import {
+  parseRepositoryIdentity,
+  repositoryIdentityJson,
+  sameRepositoryIdentity,
+  type RepositoryIdentity,
+} from "./selection.ts";
 
 /** The Git-host effect kind one branch publication is reconciled under. */
 export const GIT_PUSH = "git-push";
@@ -49,20 +55,6 @@ export function refspecFor(sourceCommit: string, destinationRef: string): string
   return `${sourceCommit}:${destinationRef}`;
 }
 
-/**
- * The Repository identity durable Push JSON carries.
- *
- * The retained creation record without its Workspace checkout path.
- */
-export interface GitPushRepositoryIdentity {
-  readonly name: string;
-  readonly locatorFingerprint: string;
-  readonly requestedBase: string | null;
-  readonly creationCommit: string;
-  readonly primaryBranch: string;
-  readonly objectFormat: GitObjectFormat;
-}
-
 /** What a `<Git.Push>` invocation asks the provider to do. */
 export interface GitPushRequest {
   /** The whole Repository record the component observed, to be compared. */
@@ -73,7 +65,7 @@ export interface GitPushRequest {
 
 /** The filtered inputs one Push reconciliation acts on. */
 export interface GitPushInputs {
-  readonly repository: GitPushRepositoryIdentity;
+  readonly repository: RepositoryIdentity;
   readonly remote: string;
   readonly branch: string;
   readonly destinationRef: string;
@@ -82,7 +74,7 @@ export interface GitPushInputs {
 
 /** What the provider looks a Push up by: the branch on the remote, and nothing else. */
 export interface GitPushNaturalKey {
-  readonly repository: GitPushRepositoryIdentity;
+  readonly repository: RepositoryIdentity;
   readonly remote: string;
   readonly destinationRef: string;
 }
@@ -114,7 +106,7 @@ export interface GitPushObservations {
 
 /** What a reconciled Push retains. */
 export interface GitPushResult {
-  readonly repository: GitPushRepositoryIdentity;
+  readonly repository: RepositoryIdentity;
   readonly remote: string;
   readonly branch: string;
   readonly destinationRef: string;
@@ -128,15 +120,6 @@ export interface GitPushOutcome {
   readonly decision: GitHostDecision;
   readonly result: GitPushResult;
 }
-
-const IDENTITY_MEMBERS = [
-  "name",
-  "locatorFingerprint",
-  "requestedBase",
-  "creationCommit",
-  "primaryBranch",
-  "objectFormat",
-] as const;
 
 const INPUT_MEMBERS = ["repository", "remote", "branch", "destinationRef", "sourceCommit"] as const;
 
@@ -173,32 +156,9 @@ export function gitObjectId(value: unknown, format: GitObjectFormat): string | u
     : undefined;
 }
 
-/** The retained record, filtered to what durable Push JSON may carry. */
-export function filteredRepositoryIdentity(record: RepositoryRecord): GitPushRepositoryIdentity {
-  return Object.freeze({
-    name: record.name,
-    locatorFingerprint: record.locatorFingerprint,
-    requestedBase: record.requestedBase,
-    creationCommit: record.creationCommit,
-    primaryBranch: record.primaryBranch,
-    objectFormat: record.objectFormat,
-  });
-}
-
-export function gitPushRepositoryIdentityJson(identity: GitPushRepositoryIdentity): Json {
-  return {
-    name: identity.name,
-    locatorFingerprint: identity.locatorFingerprint,
-    requestedBase: identity.requestedBase,
-    creationCommit: identity.creationCommit,
-    primaryBranch: identity.primaryBranch,
-    objectFormat: identity.objectFormat,
-  };
-}
-
 export function gitPushInputsJson(inputs: GitPushInputs): Json {
   return {
-    repository: gitPushRepositoryIdentityJson(inputs.repository),
+    repository: repositoryIdentityJson(inputs.repository),
     remote: inputs.remote,
     branch: inputs.branch,
     destinationRef: inputs.destinationRef,
@@ -208,7 +168,7 @@ export function gitPushInputsJson(inputs: GitPushInputs): Json {
 
 export function gitPushNaturalKeyJson(key: GitPushNaturalKey): Json {
   return {
-    repository: gitPushRepositoryIdentityJson(key.repository),
+    repository: repositoryIdentityJson(key.repository),
     remote: key.remote,
     destinationRef: key.destinationRef,
   };
@@ -229,7 +189,7 @@ export function gitPushObservationsJson(observations: GitPushObservations): Json
 
 export function gitPushResultJson(result: GitPushResult): Json {
   return {
-    repository: gitPushRepositoryIdentityJson(result.repository),
+    repository: repositoryIdentityJson(result.repository),
     remote: result.remote,
     branch: result.branch,
     destinationRef: result.destinationRef,
@@ -237,49 +197,6 @@ export function gitPushResultJson(result: GitPushResult): Json {
     sourceCommit: result.sourceCommit,
     observedRemoteCommit: result.observedRemoteCommit,
   };
-}
-
-/** The filtered Repository identity this value describes, or `undefined`. */
-export function parseGitPushRepositoryIdentity(
-  value: unknown,
-): GitPushRepositoryIdentity | undefined {
-  const record = members(value, IDENTITY_MEMBERS);
-  if (record === undefined) {
-    return undefined;
-  }
-  const name = text(record.name);
-  const locatorFingerprint = text(record.locatorFingerprint);
-  const requestedBase = optionalText(record.requestedBase);
-  const creationCommit = text(record.creationCommit);
-  const primaryBranch = text(record.primaryBranch);
-  const objectFormat = parseObjectFormat(record.objectFormat);
-  if (
-    name === undefined ||
-    locatorFingerprint === undefined ||
-    !/^[0-9a-f]{64}$/.test(locatorFingerprint) ||
-    requestedBase === undefined ||
-    creationCommit === undefined ||
-    primaryBranch === undefined ||
-    objectFormat === undefined
-  ) {
-    return undefined;
-  }
-  return Object.freeze({
-    name,
-    locatorFingerprint,
-    requestedBase,
-    creationCommit,
-    primaryBranch,
-    objectFormat,
-  });
-}
-
-/** Whether two filtered identities name the same Repository. */
-export function sameRepositoryIdentity(
-  left: GitPushRepositoryIdentity,
-  right: GitPushRepositoryIdentity,
-): boolean {
-  return IDENTITY_MEMBERS.every((member) => left[member] === right[member]);
 }
 
 /**
@@ -290,7 +207,7 @@ export function sameRepositoryIdentity(
  * could be called without one would be checking a value against itself.
  */
 export interface GitPushExpectation {
-  readonly repository: GitPushRepositoryIdentity;
+  readonly repository: RepositoryIdentity;
   readonly branch: string;
   readonly destinationRef: string;
   readonly sourceCommit: string;
@@ -312,7 +229,7 @@ export function parseGitPushInputs(value: unknown): GitPushInputs | undefined {
   if (record === undefined) {
     return undefined;
   }
-  const repository = parseGitPushRepositoryIdentity(record.repository);
+  const repository = parseRepositoryIdentity(record.repository);
   const remote = text(record.remote);
   const branch = text(record.branch);
   const destinationRef = text(record.destinationRef);
@@ -336,7 +253,7 @@ export function parseGitPushNaturalKey(value: unknown): GitPushNaturalKey | unde
   if (record === undefined) {
     return undefined;
   }
-  const repository = parseGitPushRepositoryIdentity(record.repository);
+  const repository = parseRepositoryIdentity(record.repository);
   const remote = text(record.remote);
   const destinationRef = text(record.destinationRef);
   if (
@@ -414,7 +331,7 @@ export function parseGitPushResult(
     return undefined;
   }
   const format = expected.repository.objectFormat;
-  const repository = parseGitPushRepositoryIdentity(record.repository);
+  const repository = parseRepositoryIdentity(record.repository);
   const remote = text(record.remote);
   const branch = text(record.branch);
   const destinationRef = text(record.destinationRef);

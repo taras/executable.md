@@ -44,7 +44,7 @@ import { hasContent } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { GitComposition } from "../git-api.ts";
-import { currentRepository } from "../context.ts";
+import { selectedRepository } from "../context.ts";
 import { GitOperationAuthorityError, GitOperationError } from "../errors.ts";
 
 /** The component name, as a document writes it and as a refusal names it. */
@@ -88,7 +88,7 @@ export default function* GitSwitch(props: Record<string, Json>): Operation<strin
     );
   }
 
-  const repository = yield* currentRepository();
+  const repository = yield* selectedRepository();
   if (repository === undefined) {
     throw new GitOperationAuthorityError(
       SWITCH,

@@ -68,6 +68,7 @@ import {
 } from "./support/composition.ts";
 import { dropRootClose } from "./support/replay.ts";
 
+import type { RepositorySelection } from "../src/composition/selection.ts";
 /** One tracked file at the root and one in a subdirectory. */
 const REMOTE = {
   commits: [
@@ -81,13 +82,17 @@ const REMOTE = {
   ],
 } as const;
 
-const FORGED = Object.freeze({
+const FORGED: RepositorySelection = Object.freeze({
+  selection: "forged",
   name: "ghost",
-  locatorFingerprint: "0".repeat(64),
-  requestedBase: null,
-  creationCommit: "0".repeat(40),
-  primaryBranch: "main",
-  objectFormat: "sha1" as const,
+  identity: Object.freeze({
+    name: "ghost",
+    locatorFingerprint: "0".repeat(64),
+    requestedBase: null,
+    creationCommit: "0".repeat(40),
+    primaryBranch: "main",
+    objectFormat: "sha1" as const,
+  }),
   checkoutPath: "/repositories/ghost",
 });
 
@@ -160,7 +165,7 @@ function* checkout(database: WorkflowRunDatabase): Operation<string> {
 /** One `<Git.Commit>` under a Repository context the run did not install. */
 function runForged(
   database: WorkflowRunDatabase,
-  record: RepositoryRecord,
+  record: RepositorySelection,
   source: string,
   options: WorkflowWorkspaceOptions,
 ): Operation<Json> {

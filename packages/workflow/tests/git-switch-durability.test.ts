@@ -21,15 +21,22 @@ import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { GitOperationError, GitOperationProtocolError } from "../src/composition/errors.ts";
+import {
+  GitOperationAuthorityError,
+  GitOperationError,
+  GitOperationProtocolError,
+} from "../src/composition/errors.ts";
 import { DivergenceError } from "@executablemd/durable-streams";
-import { RepositoryContext } from "../src/composition/context.ts";
-import type { RepositoryRecord } from "../src/composition/records.ts";
+import { RepositoryComposition } from "../src/composition/api.ts";
+import { GitComposition } from "../src/composition/git-api.ts";
+import type { RepositorySelection } from "../src/composition/selection.ts";
 import { gitOperationFingerprint } from "../src/deno/composition/operations.ts";
 import { withWorkflowWorkspace } from "../src/deno/workspace/host.ts";
 import type { WorkflowWorkspaceOptions } from "../src/deno/workspace/host.ts";
 import type { WorkflowRunDatabase } from "../src/storage/api.ts";
-import { collect, execute, inlineSource } from "@executablemd/core";
+import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
+import { cwd } from "@executablemd/runtime";
+import type { ComponentRegistration } from "@executablemd/core";
 import type { Json } from "@executablemd/durable-streams";
 import { WORKSPACE_GIT_SWITCH } from "../src/deno/composition/provider.ts";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
@@ -105,6 +112,10 @@ function isProtocolFailure(value: unknown): value is GitOperationProtocolError {
   return value instanceof GitOperationProtocolError;
 }
 
+function isAuthorityFailure(value: unknown): value is GitOperationAuthorityError {
+  return value instanceof GitOperationAuthorityError;
+}
+
 function isDivergence(value: unknown): value is DivergenceError {
   return value instanceof DivergenceError;
 }
@@ -156,25 +167,50 @@ function damageSwitchResult(path: string, damage: (record: Record<string, unknow
 }
 
 /**
- * One `<Git.Switch>` inside the checkout, under a supplied Repository context.
+ * One `<Git.Switch>` inside the checkout, on a selection a caller may edit.
  *
- * A self-closing `<Repository>` retains a checkout and installs no context, so
- * the record the component observes is exactly the one a caller supplies here —
- * which is what a replaced context is, and what makes the two runs below differ
- * by nothing but that record.
+ * The probe selects the Repository through the Api the way `<Repository>` does,
+ * hands what it got to `observe`, and switches on the answer. Two runs of this
+ * document therefore reach the same durable positions and differ by nothing but
+ * what `observe` did to the selection — which is what a replaced context is.
  */
 function observedSource(locator: string): string {
   return [
     `<Repository name="project" url="${locator}" as="repository" />`,
     "<Dir path={repository}>",
-    `<Git.Switch branch="release" />`,
+    `<Observed />`,
     "</Dir>",
   ].join("\n");
 }
 
+function observedComponent(
+  locator: string,
+  observe: (selection: RepositorySelection) => RepositorySelection,
+): ComponentRegistration {
+  return {
+    name: "Observed",
+    origin: "test",
+    props: { type: "object", additionalProperties: false },
+    *fn(): Operation<string> {
+      const selection = yield* RepositoryComposition.operations.selectRepository({
+        name: "project",
+        locator,
+        base: undefined,
+      });
+      yield* GitComposition.operations.switchBranch({
+        repository: observe(selection),
+        workingDirectory: yield* cwd(),
+        branch: "release",
+        base: undefined,
+      });
+      return "";
+    },
+  };
+}
+
 function runObserved(
   database: WorkflowRunDatabase,
-  record: RepositoryRecord,
+  observe: (selection: RepositorySelection) => RepositorySelection,
   locator: string,
   options: WorkflowWorkspaceOptions,
 ): Operation<Json> {
@@ -182,7 +218,7 @@ function runObserved(
     return yield* withWorkflowWorkspace(
       database,
       scoped(function* () {
-        yield* RepositoryContext.around({ current: () => record }, { at: "min" });
+        yield* registerComponents([observedComponent(locator, observe)]);
         return yield* collect(
           yield* execute({ ...inlineSource(observedSource(locator)), stream: database.journal }),
         );
@@ -406,35 +442,40 @@ describe("workflow Git.Switch durability", () => {
   /**
    * A recorded transition belongs to the observation it was authorized for.
    *
-   * Durable identity is type and name, and the name is where the observation
-   * lives, so the encoding behind it has to be injective: two records that
-   * digested alike would let a replay hand back a transition authorized for one
-   * of them to the other, on the path where nothing is authenticated because
-   * nothing is executed.
+   * The Repository a Git operation acts on is the one this provider selected,
+   * looked up privately from the opaque identifier a selection carries. So a
+   * context differing in one member of the identity is not a second observation
+   * of the same Repository — it is a value this provider never made, and it is
+   * refused before a durable name is computed and before Git exists in the
+   * story.
    *
-   * `requestedBase` is the demonstration. A record that never supplied a base
-   * retains `null`; a replaced context can supply the string a sentinel-based
-   * encoding used for absence, and the two must still be different effects.
+   * `requestedBase` is the demonstration, for the same reason it always was. A
+   * Repository that never supplied a base carries `null`; a replaced context can
+   * supply the string a sentinel-based encoding would use for absence. The
+   * encoding's own injectivity is proved directly below; what this proves is
+   * that a replaced context cannot reach the encoding at all.
    */
-  it("refuses to replay a transition recorded for a different Repository record", function* () {
+  it("refuses a Repository context differing from the selection it was handed", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
     const path = runPath(root, "release-1.4");
 
     yield* withStorage(root, function* () {
-      // What this fixture retains, learned from a run of its own: creation
-      // identity is a function of the name, the url and the base.
-      const learning = yield* createRun({ runId: "learning" });
-      yield* runDocument(learning, `<Repository name="project" url="${remote.locator}" as="r" />`);
-      const [learned] = yield* retainedRepositories(learning);
-      const record = learned?.record;
-      if (record === undefined || record.requestedBase !== null) {
-        throw new Error("the fixture did not retain a Repository with no requested base");
-      }
-
       const database = yield* createRun();
       const first = countingHost();
-      yield* runObserved(database, record, remote.locator, countingOptions(first));
+      let observed: RepositorySelection | undefined;
+      yield* runObserved(
+        database,
+        (selection) => {
+          observed = selection;
+          return selection;
+        },
+        remote.locator,
+        countingOptions(first),
+      );
+      if (observed === undefined || observed.identity.requestedBase !== null) {
+        throw new Error("the fixture did not select a Repository with no requested base");
+      }
       expect(subcommands(first.counters)).toContain("switch");
       const recorded = yield* gitEvents(database);
       expect(recorded).toHaveLength(1);
@@ -442,23 +483,21 @@ describe("workflow Git.Switch durability", () => {
 
       dropRootClose(path);
 
-      // The same expansion, under a context differing in one member only.
+      // The same expansion, on a selection differing in one member only.
       const second = countingHost();
       const failure = yield* raised(
         runObserved(
           database,
-          { ...record, requestedBase: "\u0000" },
+          (selection) => ({
+            ...selection,
+            identity: { ...selection.identity, requestedBase: "\u0000" },
+          }),
           remote.locator,
           countingOptions(second),
         ),
       );
 
-      // Two different effects, so the recorded one is not this one's to take:
-      // the journal says so at the position it reaches, before anything runs.
-      // A collision would instead have handed this observation a transition
-      // recorded for another, on the path where nothing is authenticated
-      // because nothing is executed.
-      expect(causedBy(failure, isDivergence)).toBeInstanceOf(DivergenceError);
+      expect(causedBy(failure, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
       expect(causedBy(failure, isGitFailure)).toBe(undefined);
       expect(subcommands(second.counters)).not.toContain("switch");
       expect(yield* gitEvents(database)).toHaveLength(recorded.length);
