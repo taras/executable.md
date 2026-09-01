@@ -55,16 +55,16 @@ export interface TestingHostSettings {
   /** The component search path this run resolves names through. */
   readonly includes: string[];
   /**
-   * The standard Plan policy this run profile declares, when the entrypoint
-   * settled an Agent stack to build one from.
+   * The standard Plan policy this run profile declares.
    *
    * A child of the run profile writes `<Plan>` and means what a `<Plan>` in the
    * parent means, so the declaration crosses as the value the parent built
-   * rather than being rebuilt here from state a child cannot see. An entrypoint
-   * with no stack — `xmd test` drives agents through the deterministic
-   * TestAgent stack — declares none, and a child of it has no `<Plan>` either.
+   * rather than being rebuilt here from state a child cannot see. It crosses
+   * even from an entrypoint that settled no Agent stack: the child is the
+   * production run profile whatever launched it, and a `<Plan>` there is refused
+   * at the ceiling rather than reported as a component nothing supplies.
    */
-  readonly plan?: DeclaredMarkdownComponent;
+  readonly plan: DeclaredMarkdownComponent;
   /** Whether durable events are scanned for credentials before they persist. */
   readonly secretDetection: boolean;
   /** The native service adapter this entrypoint supplies. */
@@ -178,9 +178,10 @@ function* runProfileChild(
     );
     installations.push({ components: agentIdentityComponents() });
   }
-  if (settings.plan !== undefined) {
-    installations.push({ declarations: [settings.plan] });
-  }
+  // The production run profile's own vocabulary, whichever command launched the
+  // child: `<Execution host="run">` means the run profile, and a child that
+  // could not resolve `<Plan>` would be a different one.
+  installations.push({ declarations: [settings.plan] });
   // A child gets what `xmd run` gets, and the browser form is part of that.
   // Installed here rather than inherited: this scope is isolated from the
   // command that started it, so the run profile's provider reaches a child only

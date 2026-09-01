@@ -288,11 +288,30 @@ run. TypeScript supplies neither the words nor the choice between them.
 
 **The four private capabilities.** The policy's phases are components only these
 exact bytes may write, declared by the host with the definition and revoked with
-the execution: `<PlanInputs>` freezes the catalog, the session placement and the
-surface; paired `<PlanAuthorship>` installs the constrained frame and does not
-return until every part of it has torn down; `<CheckDraft>` answers about one
-draft without executing it; and `<AdmitPlan>` structurally admits the approved
-bytes after that teardown. None of them is syntax any document may write — not
+the execution: `<PlanInputs>` freezes the catalog, the session placement, the
+surface and whether that placement outlives the invocation; paired
+`<PlanAuthorship>` installs the constrained frame and does not return until every
+part of it has torn down; `<CheckDraft>` answers about one draft without
+executing it; and `<AdmitPlan>` structurally admits the approved bytes after that
+teardown.
+
+Whether the placement is durable is carried across that boundary rather than
+re-derived, because `<PlanInputs>` is the last thing that sees the public
+`session` prop: a placement cannot be asked whether somebody wrote it. An
+authored name gets the existing durable named-directory lifetime — the same name
+at the same site reaches the same directory next time — and an omitted one gets
+an expansion-owned placement that is site- and iteration-unique, replay-stable,
+and handed back non-recursively after complete teardown. Sibling sites stay
+distinct even when they write one name, and the name never becomes a path: the
+directory is keyed by the digest of the placement.
+
+**A host with no coding agent still has the policy.** `<Plan>` is declared to
+every ordinary run profile, including the `<Execution host="run">` child an
+`xmd test` document launches. A host that cannot establish the ACPX ceiling
+refuses there — before any placement, directory or turn — rather than reporting
+a component nothing supplies, because the profile does have `<Plan>` and what is
+missing is an agent to write one with. The `xmd test` root itself is a different
+profile and does not gain the component. None of them is syntax any document may write — not
 the caller's root, not the Prompt the caller projected, not a sibling `<Plan>`,
 not an imported component, and nothing middleware can answer.
 

@@ -25,6 +25,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runCli } from "@executablemd/test-support/launch";
 import { testingExecutionHost } from "../src/testing-host.ts";
+import { planPolicyDescription } from "../src/plan-policy.ts";
 
 function doc(...lines: string[]): string {
   return `${lines.join("\n")}\n`;
@@ -136,6 +137,47 @@ describe("nested execution under the production run host", () => {
     // seeing them here is the child running production assembly and this
     // document displaying what it produced.
     expect(result.stdout + result.stderr).toContain("from a command");
+  });
+
+  /**
+   * The production run profile's own vocabulary reaches a child.
+   *
+   * `<Plan>` is packaged Markdown the host declares, not a registration a child
+   * inherits — so a child assembled without the declaration resolves the name to
+   * nothing and reports a missing component, which reads exactly like a document
+   * that wrote a typo. That is the wrong answer twice over: the profile *does*
+   * have `<Plan>`, and what a child of `xmd test` actually lacks is a coding
+   * agent to write one with.
+   *
+   * The Prompt is deliberately empty, because that is the phase the policy
+   * refuses before any of the authorship it could not perform here: the body
+   * renders to nothing, and the failure comes from the policy's own `<Fail>`.
+   * So this proves the exact protected bytes resolved and expanded in the child,
+   * with no catalog, no session, no directory and no Agent turn behind it.
+   */
+  it("resolves the packaged Plan policy in a run child, and fails at its own first phase", function* () {
+    const project = yield* useProject({
+      "README.md": doc(
+        '<Test name="the run profile has Plan">',
+        '<Execution host="run" source={"<Plan as=\\"approved\\">   </Plan>\\n"} as="child">',
+        '<CollectOutput as="output" />',
+        "",
+        '<AssertEquals actual={child.kind} expected="settled" />',
+        "<AssertEquals actual={child.result.ok} expected={false} />",
+        "<AssertStringIncludes",
+        "  actual={child.result.error.message}",
+        '  expected="<Plan> requires its body to render a non-empty Prompt."',
+        "/>",
+        "</Execution>",
+        "</Test>",
+      ),
+    });
+    const result = yield* runCli(["test", "README.md"], { cwd: project }).join();
+    expect(result.code).toBe(0);
+    // The failure the child reported is the policy's, not resolution's. Naming
+    // both is what keeps this case from passing on a child that simply failed.
+    const printed = result.stdout + result.stderr;
+    expect(printed).not.toContain("Cannot resolve component: Plan");
   });
 
   it("creates no authored file for an inline child", function* () {
@@ -460,6 +502,9 @@ describe("deterministic dependencies declared for a nested run", () => {
       // deno-lint-ignore require-yield
       installService: function* (): Operation<void> {},
       testAgentWorker: Err(new Error("xmd command not installed")),
+      // The run profile's own policy travels to every child, and this case is
+      // about the relaunch it cannot perform rather than about `<Plan>`.
+      plan: yield* planPolicyDescription(),
     });
     const refusal = yield* scoped(function* () {
       try {

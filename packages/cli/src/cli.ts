@@ -756,32 +756,28 @@ function* runDocument(
   // Plan later executed by `--run` is a new ordinary run that receives
   // `component` from its own declaration.
   //
-  // Only where an Agent stack was settled. `xmd test` drives agents through the
-  // deterministic TestAgent stack and has none, so it has no `<Plan>` either
-  // rather than one that could not establish a ceiling.
-  const stack = mode.agent;
-  const plan =
-    stack === undefined
-      ? undefined
-      : yield* planPolicyDeclaration({
-          surface: "component",
-          includes: include,
-          stack,
-          ...(mode.machineSessions === undefined ? {} : { sessions: mode.machineSessions }),
-          ...(mode.planAuthorshipRoot === undefined
-            ? {}
-            : { authorshipRoot: mode.planAuthorshipRoot }),
-          // Captured before the document exists, so the two acts that are this
-          // host's — putting this build's adapter on disk, and opening the review
-          // form — run outside the ceiling the policy installs around itself.
-          host: yield* useScope(),
-          installElicitation: installWebElicitation,
-          // Rendered when a `<Plan>` first asks, not before: an ordinary run that
-          // writes none never builds a catalog it has no reader for.
-          *catalog() {
-            return renderSyntaxMarkdown(yield* syntaxCatalog(include));
-          },
-        });
+  // Built whether or not this command settled an Agent stack. A host with none —
+  // `xmd test` drives agents through the deterministic TestAgent stack — still
+  // declares the policy, so a document that writes `<Plan>` there resolves the
+  // same protected bytes and is refused at the ceiling rather than told the
+  // component does not exist.
+  const plan = yield* planPolicyDeclaration({
+    surface: "component",
+    includes: include,
+    ...(mode.agent === undefined ? {} : { stack: mode.agent }),
+    ...(mode.machineSessions === undefined ? {} : { sessions: mode.machineSessions }),
+    ...(mode.planAuthorshipRoot === undefined ? {} : { authorshipRoot: mode.planAuthorshipRoot }),
+    // Captured before the document exists, so the two acts that are this host's
+    // — putting this build's adapter on disk, and opening the review form — run
+    // outside the ceiling the policy installs around itself.
+    host: yield* useScope(),
+    installElicitation: installWebElicitation,
+    // Rendered when a `<Plan>` first asks, not before: an ordinary run that
+    // writes none never builds a catalog it has no reader for.
+    *catalog() {
+      return renderSyntaxMarkdown(yield* syntaxCatalog(include));
+    },
+  });
 
   // Wire --verbose observability via Signal.
   // FileStream.onAppend fires after each persist; the signal fans out
@@ -857,7 +853,7 @@ function* runDocument(
     secretDetection,
     installService,
     testAgentWorker: yield* readWorkerCommand(),
-    ...(plan === undefined ? {} : { plan }),
+    plan,
   });
 
   // One authoritative execution, and only one. What a host attaches travels as
@@ -886,7 +882,10 @@ function* runDocument(
       ...(mode.installations ?? []),
       {
         components: agentIdentityComponents(),
-        ...(plan === undefined ? {} : { declarations: [plan] }),
+        // The `run` profile's own vocabulary. `xmd test` is a different profile
+        // and does not gain `<Plan>` at its root — but the production run child
+        // it can launch is the run profile, and gets it below.
+        ...(mode.testing ? {} : { declarations: [plan] }),
       },
       // The declarations a nested execution may configure a child with, named
       // by the exact definitions this command installed. Recognizing one is

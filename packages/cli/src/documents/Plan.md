@@ -67,7 +67,7 @@ of them is raised.
 <Let as="round" value={0} />
 <Let as="approved" value={null} />
 
-<PlanAuthorship session={inputs.session}>
+<PlanAuthorship session={inputs.session} durable={inputs.durable}>
 <Session name={inputs.session}>
 
 ## Create the first draft

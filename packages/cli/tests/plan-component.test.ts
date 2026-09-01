@@ -88,7 +88,7 @@ function* runDocument(options: {
     defaultAgent: string;
     permissionMode: "deny-all";
     adapters: typeof ADAPTERS;
-  };
+  } | null;
   assess?: (source: string) => Operation<{ valid: boolean; diagnostics: Json }>;
   session?: string;
 }): Operation<Run> {
@@ -429,6 +429,91 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       // Nothing was bound, and the conversation's directory went back.
       expect(run.output).not.toContain("# Say hello");
       expect(run.leftover).toEqual([]);
+    });
+  });
+
+  it("PC15: an omitted session's directory is handed back after teardown", function* () {
+    yield* useWorkingDirectory(function* () {
+      const root = yield* authorshipRoot();
+      const run = yield* runDocument({
+        // No `session` prop: the placement is this expansion's own, and belongs
+        // to it.
+        source: ['<Plan as="approved">Write a program.</Plan>', ""].join("\n"),
+        root,
+        reply: PLAN,
+      });
+
+      expect(run.failure).toBe(undefined);
+      // Handed back non-recursively after the whole authorship frame went, which
+      // is the only reason the root is empty rather than holding one leaf.
+      expect(run.leftover).toEqual([]);
+    });
+  });
+
+  it("PC16: an authored session's directory is still there afterwards", function* () {
+    yield* useWorkingDirectory(function* () {
+      const root = yield* authorshipRoot();
+      const run = yield* runDocument({
+        source: ['<Plan session="review" as="approved">Write a program.</Plan>', ""].join("\n"),
+        root,
+        reply: PLAN,
+      });
+
+      expect(run.failure).toBe(undefined);
+      // A name a caller can write again needs a directory that is still there
+      // next time, so nothing removes it. One leaf, and its name is a digest —
+      // the authored name never becomes a path.
+      expect(run.leftover).toHaveLength(1);
+      expect(run.leftover[0]).toMatch(/^[0-9a-f]{64}$/);
+      expect(run.leftover[0]).not.toContain("review");
+    });
+  });
+
+  it("PC17: the same site and name continue the same placement", function* () {
+    yield* useWorkingDirectory(function* () {
+      const root = yield* authorshipRoot();
+      const source = ['<Plan session="review" as="approved">Write a program.</Plan>', ""].join(
+        "\n",
+      );
+
+      const one = yield* runDocument({ source, root, reply: PLAN });
+      expect(one.failure).toBe(undefined);
+      expect(one.leftover).toHaveLength(1);
+
+      // A second run of the same document, against the same root. The
+      // continuation contract is that the same site writing the same name
+      // reaches the same placement — so the root still holds exactly the one
+      // directory, and it is the same one. A placement derived per run would
+      // leave a second beside it, because both are durable.
+      const two = yield* runDocument({ source, root, reply: PLAN });
+
+      expect(two.failure).toBe(undefined);
+      expect(two.leftover).toEqual(one.leftover);
+    });
+  });
+
+  it("PC18: two sites writing one name are two conversations", function* () {
+    yield* useWorkingDirectory(function* () {
+      const root = yield* authorshipRoot();
+      const run = yield* runDocument({
+        // The same authored name at two sites. Sibling placements stay distinct,
+        // exactly as sibling `<Session>` elements do, so neither answers for the
+        // other and neither refuses the other's directory as occupied.
+        source: [
+          '<Plan session="review" as="first">Write the first program.</Plan>',
+          '<Plan session="review" as="second">Write the second program.</Plan>',
+          "",
+        ].join("\n"),
+        root,
+        reply: PLAN,
+        reviews: ["Approve", "Approve"],
+      });
+
+      expect(run.failure).toBe(undefined);
+      expect(run.harness.fake.prompts).toHaveLength(2);
+      // Two durable placements, not one shared and not one refused.
+      expect(run.leftover).toHaveLength(2);
+      expect(new Set(run.leftover).size).toBe(2);
     });
   });
 

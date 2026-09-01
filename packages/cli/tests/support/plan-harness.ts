@@ -283,7 +283,8 @@ export function* planDeclarationHarness(options: {
   /** The logical name the command surface fixes. */
   session?: string;
   explicitSession?: boolean;
-  stack?: AgentStack;
+  /** Absent leaves the harness with no stack at all, as `xmd test` has none. */
+  stack?: AgentStack | null;
   store?: FakeStore;
 }): Operation<PlanDeclarationHarness> {
   const fake = createFakeAcp();
@@ -294,12 +295,16 @@ export function* planDeclarationHarness(options: {
   const declaration = yield* planPolicyDeclaration({
     surface: options.surface,
     includes: options.includes ?? [],
-    stack: options.stack ?? {
-      provider: "acpx",
-      defaultAgent: AGENT,
-      permissionMode: "deny-all",
-      adapters: ADAPTERS,
-    },
+    ...(options.stack === null
+      ? {}
+      : {
+          stack: options.stack ?? {
+            provider: "acpx",
+            defaultAgent: AGENT,
+            permissionMode: "deny-all",
+            adapters: ADAPTERS,
+          },
+        }),
     acp: {
       createRuntime: fake.create,
       sessionStore: options.store ?? makeStore(),

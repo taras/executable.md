@@ -106,8 +106,16 @@ export interface PlanPolicyAssembly {
   readonly surface: PlanSurface;
   /** The component search path a Plan's own components resolve against. */
   readonly includes: readonly string[];
-  /** The one Agent configuration this invocation settled. */
-  readonly stack: AgentStack;
+  /**
+   * The one Agent configuration this invocation settled, when it settled one.
+   *
+   * Absent is a host that has no run stack — `xmd test` drives agents through
+   * the deterministic TestAgent stack — and it is not a reason to withhold the
+   * policy. A document that writes `<Plan>` there resolves the same protected
+   * bytes and is refused at the ceiling, before any placement, rather than told
+   * the component does not exist.
+   */
+  readonly stack?: AgentStack;
   /** What this host states about machine-wide agent sessions, if anything. */
   readonly sessions?: MachineSessionAssembly;
   /** What the constrained provider is built on, beyond the host's assembly. */
@@ -161,8 +169,9 @@ const INPUTS_RETURNS = {
     syntax: { type: "string" },
     session: { type: "string" },
     surface: { type: "string" },
+    durable: { type: "boolean" },
   },
-  required: ["syntax", "session", "surface"],
+  required: ["syntax", "session", "surface", "durable"],
   additionalProperties: false,
 };
 
@@ -172,10 +181,13 @@ const OPTIONAL_SESSION = {
   additionalProperties: false,
 };
 
-const REQUIRED_SESSION = {
+const AUTHORSHIP_PROPS = {
   type: "object",
-  properties: { session: { type: "string", minLength: 1 } },
-  required: ["session"],
+  properties: {
+    session: { type: "string", minLength: 1 },
+    durable: { type: "boolean" },
+  },
+  required: ["session", "durable"],
   additionalProperties: false,
 };
 
@@ -291,7 +303,12 @@ function planInputs(assembly: PlanPolicyAssembly): IdentityComponent {
 
         const syntax = yield* durablePlanOperation<string>(`plan:inputs:${id}`, assembly.catalog);
 
-        return { syntax, session, surface: assembly.surface };
+        return {
+          syntax,
+          session,
+          surface: assembly.surface,
+          durable: durability(assembly, authored),
+        };
       },
   };
 }
@@ -307,6 +324,26 @@ function planInputs(assembly: PlanPolicyAssembly): IdentityComponent {
  * one name stay two conversations. The name never becomes a path in either
  * case; the directory below is keyed by the digest of whatever this returns.
  */
+/**
+ * Whether this placement's directory outlives the invocation.
+ *
+ * The public `session` prop is the whole of the question on the component
+ * surface, and it is answered here — inside the frozen inputs — because this is
+ * the last place that can see it. `<PlanAuthorship>` receives a placement rather
+ * than a prop, and a placement cannot be asked whether somebody wrote it: a name
+ * a caller can write again needs a directory that is still there next time, and
+ * one this expansion derived belongs to this expansion and goes back with it.
+ *
+ * `xmd plan` settles its own answer before the document exists, from whether
+ * `--session` was written, and that answer is used exactly as given.
+ */
+function durability(assembly: PlanPolicyAssembly, authored: string | undefined): boolean {
+  if (assembly.session !== undefined) {
+    return assembly.explicitSession === true;
+  }
+  return authored !== undefined;
+}
+
 function placementFor(
   assembly: PlanPolicyAssembly,
   id: string,
@@ -337,7 +374,7 @@ function planAuthorship(assembly: PlanPolicyAssembly): IdentityComponent {
     name: "PlanAuthorship",
     origin: `${PLAN_ORIGIN}#PlanAuthorship`,
     forms: ["paired"],
-    props: REQUIRED_SESSION,
+    props: AUTHORSHIP_PROPS,
     factory: () =>
       function* PlanAuthorship(props: Record<string, Json>): Operation<string> {
         // Before a directory exists, before a provider exists, and therefore
@@ -345,10 +382,17 @@ function planAuthorship(assembly: PlanPolicyAssembly): IdentityComponent {
         // cannot establish this ceiling refuses rather than writing a Plan under
         // a weaker one, and broader authority in the calling document cannot
         // widen it.
-        if (assembly.stack.provider !== "acpx") {
+        const stack = assembly.stack;
+        if (stack === undefined) {
           throw new Error(
-            `the ${assembly.stack.provider} provider cannot establish the Plan authorship ` +
-              "ceiling — no Plan was returned",
+            "this host establishes no coding-agent ceiling, so no Plan can be written here — " +
+              "no Plan was returned",
+          );
+        }
+        if (stack.provider !== "acpx") {
+          throw new Error(
+            `the ${stack.provider} provider cannot establish the Plan authorship ceiling — ` +
+              "no Plan was returned",
           );
         }
 
@@ -356,10 +400,11 @@ function planAuthorship(assembly: PlanPolicyAssembly): IdentityComponent {
         const established = yield* useSessionDirectory({
           root: assembly.authorshipRoot ?? DEFAULT_AUTHORSHIP_ROOT,
           session,
-          // A placement an ordinary run derived belongs to that expansion, so
-          // its directory is handed back; a name `xmd plan`'s caller wrote is
-          // one they can write again, so its directory outlives the invocation.
-          explicitSession: assembly.explicitSession === true,
+          // A placement this expansion derived belongs to it and goes back with
+          // it; a name a caller wrote is one they can write again, so its
+          // directory is still there next time. The frozen inputs decided which
+          // this is, because they are the last thing that saw the public prop.
+          explicitSession: props.durable === true,
         });
         if (!established.ok) {
           throw established.error;
@@ -367,7 +412,7 @@ function planAuthorship(assembly: PlanPolicyAssembly): IdentityComponent {
 
         yield* installAuthorshipFrame({
           workdir: established.value,
-          stack: assembly.stack,
+          stack,
           ...(assembly.acp === undefined ? {} : { acp: assembly.acp }),
           host: assembly.host,
           installElicitation: assembly.installElicitation,
