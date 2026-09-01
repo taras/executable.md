@@ -256,22 +256,14 @@ function parseOutcome<Phase extends string>(
 }
 
 /**
- * How one file effect is identified, deterministically.
- *
- * The expansion is what makes two `<File>` elements different effects and one
- * element the same effect across replays; the operation separates a read from a
- * write performed by the same element; and the resolved logical target is what
- * a changed authored path or a changed working directory moves. A document
- * edited to name another file therefore diverges rather than quietly replaying
- * the previous file's recorded bytes.
- */
-/**
  * The logical path an authored relative path names, or the refusal to report.
  *
  * Returns the failure itself rather than a discriminated wrapper, because the
- * one caller that needs it has exactly two things to do with the answer.
+ * one caller that needs it has exactly two things to do with the answer. It
+ * reaches no filesystem and no Api, so it is an ordinary function rather than
+ * an Operation that would only ever have yielded nothing.
  */
-function* logicalTarget(input: FilePathInput): Operation<string | Result<void>> {
+function logicalTarget(input: FilePathInput): string | Result<void> {
   const resolved = resolveLogicalPath(input.cwd, input.path);
   if (!resolved.ok) {
     return Err(
@@ -285,6 +277,16 @@ function* logicalTarget(input: FilePathInput): Operation<string | Result<void>> 
   return resolved.value;
 }
 
+/**
+ * How one file effect is identified, deterministically.
+ *
+ * The expansion is what makes two `<File>` elements different effects and one
+ * element the same effect across replays; the operation separates a read from a
+ * write performed by the same element; and the resolved logical target is what
+ * a changed authored path or a changed working directory moves. A document
+ * edited to name another file therefore diverges rather than quietly replaying
+ * the previous file's recorded bytes.
+ */
 function* describeFileEffect(
   operation: string,
   target: string,
@@ -752,9 +754,7 @@ export function workflowFilesHandler(database: WorkflowRunDatabase): WorkflowFil
       // uses one as written. Every other operation refuses an absolute path,
       // so the resolution is chosen here rather than by relaxing the shared
       // rule that keeps authored paths inside the working directory.
-      const path = input.path.startsWith("/")
-        ? logicalDirectory(input.path)
-        : yield* logicalTarget(input);
+      const path = input.path.startsWith("/") ? logicalDirectory(input.path) : logicalTarget(input);
       if (typeof path !== "string") {
         return path;
       }

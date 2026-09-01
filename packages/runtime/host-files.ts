@@ -583,15 +583,6 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
   }
 
   /**
-   * The regular files under `cwd` that `include` selects and `exclude` does not.
-   *
-   * Traversal is `API.Fs`'s: it reports directories and symbolic links too, and
-   * never follows one, which is what keeps the walk inside `cwd` and free of
-   * cycles. What this adds is the document-facing shape — regular files only,
-   * deduplicated, and sorted, so a document that branches on a listing branches
-   * the same way on every host.
-   */
-  /**
    * Make the named path a directory, creating what is missing.
    *
    * Three answers, and the order between them is the contract. An existing
@@ -644,6 +635,15 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
     return Ok(undefined);
   }
 
+  /**
+   * The regular files under `cwd` that `include` selects and `exclude` does not.
+   *
+   * Traversal is `API.Fs`'s: it reports directories and symbolic links too, and
+   * never follows one, which is what keeps the walk inside `cwd` and free of
+   * cycles. What this adds is the document-facing shape — regular files only,
+   * deduplicated, and sorted, so a document that branches on a listing branches
+   * the same way on every host.
+   */
   function* globFiles(input: GlobInput): Operation<Result<string[]>> {
     try {
       const info = yield* API.Fs.operations.stat(input.cwd);

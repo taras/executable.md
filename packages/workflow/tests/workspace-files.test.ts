@@ -277,12 +277,6 @@ function suspendingRemove(
 }
 
 /**
- * A Workspace filesystem that stops one creation after it has happened.
- *
- * The suspension sits between the mutation and the transaction's commit, which
- * is the one window where a Workspace holds a change nothing has published yet.
- */
-/**
  * A creation that makes a parent and then refuses.
  *
  * The refusal a document can be told about arrives *after* part of the path
@@ -329,6 +323,12 @@ function suspendingWrite(
   });
 }
 
+/**
+ * A Workspace filesystem that stops one creation after it has happened.
+ *
+ * The suspension sits between the mutation and the transaction's commit, which
+ * is the one window where a Workspace holds a change nothing has published yet.
+ */
 function suspendingMkdir(
   target: string,
   reached: { resolve(): void },
@@ -1533,10 +1533,10 @@ describe("Tier WF — the run's own directories", () => {
   });
 
   // WF23: the mutation, its outcome and the resulting root are one commit, and
-  // the content runs after it. Ordering is asserted from inside the document —
-  // a `<File>` written in the directory can only land if the directory was
-  // already there — rather than from the record, which would only say the two
-  // effects exist.
+  // the content runs after it. Ordering is read off the retained effects, in
+  // the order they committed — the nested `<File>` landing proves nothing on
+  // its own, because a write creates its own parents recursively and would land
+  // either way.
   it("WF23: recursive creation, its effect and the resulting root commit before content", function* () {
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {

@@ -24,7 +24,7 @@ import {
   inlineSource,
   registerComponents,
 } from "@executablemd/core";
-import type { ComponentInvocation } from "@executablemd/core";
+import type { ComponentInvocation, ComponentRegistration } from "@executablemd/core";
 import type { Json } from "@executablemd/durable-streams";
 import type { WorkflowRunDatabase } from "../mod.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
@@ -726,19 +726,6 @@ describe("workflow Dir under a lying content chain", () => {
   });
 });
 
-/**
- * The shipped `<Dir>` against no Files provider at all.
- *
- * Core's `FF2` proves the fail-closed boundary of `ensureDirectory` itself,
- * through a stand-in that makes exactly that one call — it has to, because core
- * cannot import the package this component lives in. This is the other half:
- * that the component shipped here really does make that call, first, and that a
- * document stops at it.
- *
- * Together they are the whole claim. Neither is sufficient alone: the stand-in
- * could pass while `<Dir>` called something else or called nothing, and this
- * could pass while the operation quietly answered instead of refusing.
- */
 /** The first Files infrastructure failure in a thrown graph. */
 function fatalCause(error: unknown, seen = new Set<unknown>()): unknown {
   if (parseFilesFatal(error) !== undefined) {
@@ -763,12 +750,43 @@ function fatalCause(error: unknown, seen = new Set<unknown>()): unknown {
   return undefined;
 }
 
+/**
+ * The shipped `<Dir>` against no Files provider at all.
+ *
+ * Core's `FF2` proves the fail-closed boundary of `ensureDirectory` itself,
+ * through a stand-in that makes exactly that one call — it has to, because core
+ * cannot import the package this component lives in. This is the other half:
+ * that the component shipped here really does make that call, first, and that a
+ * document stops at it.
+ *
+ * Together they are the whole claim. Neither is sufficient alone: the stand-in
+ * could pass while `<Dir>` called something else or called nothing, and this
+ * could pass while the operation quietly answered instead of refusing.
+ */
 describe("Dir without a Files provider", () => {
   it("stops at ensureDirectory, and no directory, content or sibling follows", function* () {
     const calls: string[] = [];
+    // Sentinel components rather than rendered text. What escapes a failed
+    // execution is an error, and searching an error's string for a marker
+    // cannot tell "the content never expanded" from "the content expanded and
+    // its text is simply not in this message". A component that ran leaves a
+    // record here whether or not anything was rendered or collected.
+    const expanded: string[] = [];
+    const marker = (name: string): ComponentRegistration => ({
+      name,
+      origin: "test://marker",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      // deno-lint-ignore require-yield
+      *fn(): Operation<string> {
+        expanded.push(name);
+        return name;
+      },
+    });
+
     const failure = yield* raised(
       scoped(function* () {
         yield* useCompositionComponents();
+        yield* registerComponents([marker("Inside"), marker("After")]);
         // Middleware that records and delegates. Delegation is what keeps this
         // fail-closed: the absent-provider terminal is still what answers, so
         // recording the call cannot be what makes the document stop.
@@ -804,7 +822,7 @@ describe("Dir without a Files provider", () => {
         });
         return yield* collect(
           yield* execute({
-            ...inlineSource(`<Dir path="made/here">\n\nINSIDE\n\n</Dir>\n\nAFTER\n`),
+            ...inlineSource('<Dir path="made/here">\n\n<Inside />\n\n</Dir>\n\n<After />\n'),
             stream: new InMemoryStream(),
           }),
         );
@@ -817,11 +835,9 @@ describe("Dir without a Files provider", () => {
     // Absence is not a refusal the document can print: what escapes is the
     // provider-unavailable failure itself.
     expect(parseFilesFatal(fatalCause(failure))?.kind).toBe("provider-unavailable");
-    // Nothing inside the component ran after the call, and no later sibling
-    // expanded. Read off the collected output, which is empty because the
-    // execution never produced any.
-    expect(String(failure)).not.toContain("INSIDE");
-    expect(String(failure)).not.toContain("AFTER");
+    // Neither the content inside the region nor the sibling after it ran. This
+    // is the assertion the failure's message could not make.
+    expect(expanded).toEqual([]);
     // And nothing was made. The path is relative, so a provider that had
     // answered would have created it beneath the process directory.
     expect(yield* exists(join(process.cwd(), "made"))).toBe(false);

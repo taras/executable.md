@@ -2,16 +2,26 @@
  * `<Dir path="..">` — lexical working directory
  * (specs/workflow-workspace-spec.md §6.3).
  *
- * One meaning and one effect on the world: the content expands with `path` as
- * the contextual working directory, and the enclosing one is restored when the
- * invocation ends — on success, failure and cancellation alike, because the
- * installation lives on the invocation's own scope.
+ * Two acts, in this order. First the directory named by `path` is made to
+ * exist: it is created recursively when it is missing, used as it stands when
+ * it is already a directory, and refused when something that is not a directory
+ * is there or on the way to it. Only then does the content expand, with `path`
+ * as the contextual working directory. Content never begins on the far side of
+ * a refusal, because a document that named a directory asked for that directory
+ * and not for whatever it would otherwise have run in.
  *
- * It creates nothing and retains nothing. A `<Dir>` inside a `<Repository>`
- * leaves that Repository contextual, which is what lets the self-closing
- * Worktree spelling work: the path is bound by `as`, `<Dir>` moves the working
- * directory to it, and the Repository a later Git component would act on is
- * still the enclosing one.
+ * The enclosing working directory is restored when the invocation ends — on
+ * success, failure and cancellation alike, because the installation lives on
+ * the invocation's own scope. Restoring it removes nothing: a directory this
+ * element created stays, and a later failure of the content inside it says
+ * nothing about whether the directory should exist. There is no rollback here
+ * and no teardown deletion.
+ *
+ * It retains nothing of its own. A `<Dir>` inside a `<Repository>` leaves that
+ * Repository contextual, which is what lets the self-closing Worktree spelling
+ * work: the path is bound by `as`, `<Dir>` moves the working directory to it,
+ * and the Repository a later Git component would act on is still the enclosing
+ * one. Neither the selection nor any member of its identity is touched.
  *
  * Self-closing `<Dir />` is invalid. A working directory installed for no
  * content is a directory nothing runs in, and silently rendering nothing would

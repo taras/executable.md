@@ -1231,37 +1231,61 @@ describe("host Files — making a directory exist", () => {
   // intermediate on the way to it — because they refuse through different code:
   // the target is classified here, the intermediate is the platform's ENOTDIR
   // carried into the shared vocabulary.
-  it("HF26: a non-directory at the target or on the way refuses, sanitized", function* () {
+  // HF26: a non-directory is a mistake to report, never a thing to remove. The
+  // matrix is four cases, not two: the entry may be a regular file or a
+  // supported special one, and it may stand at the target or on the way to it.
+  // Those refuse through different code — the target is classified here, an
+  // intermediate is the platform's `ENOTDIR` carried into the shared
+  // vocabulary — so a pair that covered only one position would leave the other
+  // untested.
+  //
+  // A symbolic link is this repository's portable special entry, and it points
+  // at a regular file: a link to a *directory* is a directory to enter, which
+  // is the parity decision both providers make.
+  it("HF26: a file or a special entry, at the target or on the way, refuses", function* () {
     const fixture = yield* useFixture();
     const files = handler();
     yield* writeTextFile(join(fixture.workspace, "occupied"), "a file, not a directory");
+    yield* writeTextFile(join(fixture.workspace, "pointee"), "what the link names");
+    yield* until(symlink(join(fixture.workspace, "pointee"), join(fixture.workspace, "linked")));
 
-    const atTarget = yield* files.ensureDirectory({ cwd: fixture.workspace, path: "occupied" });
-    expect(parseFilesFailure(failed(atTarget))).toEqual({
-      type: FILES_ERROR,
-      operation: "ensure-directory",
-      phase: "target",
-      reason: "not-directory",
-    });
-    // The file is still a file: a refusal changed nothing.
+    const cases = [
+      { what: "a regular file at the target", path: "occupied", phase: "target" },
+      { what: "a regular file on the way", path: "occupied/below/here", phase: undefined },
+      { what: "a special entry at the target", path: "linked", phase: "target" },
+      { what: "a special entry on the way", path: "linked/below/here", phase: undefined },
+    ] as const;
+
+    for (const entry of cases) {
+      const refused = yield* files.ensureDirectory({ cwd: fixture.workspace, path: entry.path });
+      const failure = parseFilesFailure(failed(refused));
+      // The `what` travels with the assertion, so a failure names which of the
+      // four reported something else.
+      expect(`${entry.what}: ${failure?.operation}`).toBe(`${entry.what}: ensure-directory`);
+      expect(`${entry.what}: ${failure?.reason}`).toBe(`${entry.what}: not-directory`);
+      if (entry.phase !== undefined) {
+        expect(`${entry.what}: ${failure?.phase}`).toBe(`${entry.what}: ${entry.phase}`);
+      }
+      // Nothing resolved crosses back: no host path, no errno, no platform
+      // text. Asserted on the whole serialized failure, so a member added later
+      // that carried one of them would fail here rather than pass unnoticed.
+      const serialized = JSON.stringify(failed(refused));
+      expect(`${entry.what}: ${serialized.includes(fixture.workspace)}`).toBe(
+        `${entry.what}: false`,
+      );
+      expect(`${entry.what}: ${serialized.includes(fixture.root)}`).toBe(`${entry.what}: false`);
+      expect(`${entry.what}: ${/ENOTDIR|ENOENT|errno/i.test(serialized)}`).toBe(
+        `${entry.what}: false`,
+      );
+    }
+
+    // Every refusal changed nothing: the file is still a file, the link is
+    // still a link, and its target still holds its bytes.
     expect(yield* readTextFile(join(fixture.workspace, "occupied"))).toBe(
       "a file, not a directory",
     );
-
-    const through = yield* files.ensureDirectory({
-      cwd: fixture.workspace,
-      path: "occupied/below/here",
-    });
-    const failure = parseFilesFailure(failed(through));
-    expect(failure?.operation).toBe("ensure-directory");
-    expect(failure?.reason).toBe("not-directory");
-    // Nothing resolved crosses back: no host path, no errno, no platform text.
-    // Asserted on the whole serialized failure, so a member added later that
-    // carried one of them would fail here rather than pass unnoticed.
-    const serialized = JSON.stringify(failed(through));
-    expect(serialized).not.toContain(fixture.workspace);
-    expect(serialized).not.toContain(fixture.root);
-    expect(serialized).not.toMatch(/ENOTDIR|ENOENT|errno/i);
+    expect((yield* until(lstat(join(fixture.workspace, "linked")))).isSymbolicLink()).toBe(true);
+    expect(yield* readTextFile(join(fixture.workspace, "pointee"))).toBe("what the link names");
   });
 
   // HF27: creation is direct and persists. The operation has no rollback and no

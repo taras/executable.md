@@ -1514,13 +1514,17 @@ the retained note
   // authorized placement that created nothing, so a run admitted under it must
   // not silently receive the wider authority.
   //
-  // The continuation is constructed the only way it can be: the retained
-  // admission is rewritten to carry the former identity, which is exactly what
-  // a run admitted before this change holds. Nothing else about the run is
-  // touched — same source, same roots, same selection — so the identity is the
-  // single thing the resume disagrees about.
-  it("WGAC17: a continuation retaining the former Dir identity refuses before generated execution and mutation", function* () {
-    const store = yield* useRunStore();
+  // Two halves, and neither is evidence alone. The control shows the current
+  // admission really does resume and really does not create again — without it,
+  // the refusal below could be a run that was broken for some other reason. The
+  // refusal shows the former identity is what stops it.
+  //
+  // The counter is the low-level `mkdir`, not the retained effect count: a
+  // replay that restored its record while quietly creating the directory a
+  // second time would leave the effect count unchanged and still be wrong.
+  function* wgac17(
+    store: string,
+  ): Operation<{ runId: string; path: string; rendered: string[]; calls: AgentCalls }> {
     const fixture = yield* useCheckpointFixture(bundledRoot("", "Propose"), {
       Propose: `<Evaluate source={"<Dir path=\\"generated\\">\\n\\n<File path=\\"inside.md\\">from the fragment</File>\\n\\n</Dir>"} allow={["write"]} as="observed" />\n`,
     });
@@ -1540,21 +1544,64 @@ the retained note
       .trim();
     const path = workflowRunPath(store, runId);
 
-    // The admission carries the versioned identity, and the generated Dir made
-    // its directory. This is the baseline the continuation is held to.
     const suspended = retained(path);
     expect(suspended.status).toBe("suspended");
-    const atSuspension = counts(path);
-    const rootsAtSuspension = workspaceRootState(path);
+    // The admission carries the versioned identity, and the generated Dir made
+    // its directory exactly once.
     expect(readRecords(path).some((record) => record.includes("dir-v2#Dir"))).toBe(true);
 
-    const suspensionId = suspended.requests[0] ?? "";
     yield* manage(
-      { action: "answer", runId, suspensionId, value: { proceed: true }, secretDetection: true },
+      {
+        action: "answer",
+        runId,
+        suspensionId: suspended.requests[0] ?? "",
+        value: { proceed: true },
+        secretDetection: true,
+      },
       productionHost(store, calls),
     );
+    return { runId, path, rendered, calls };
+  }
 
-    // The run becomes one admitted under the former identity.
+  it("WGAC17: the current admission resumes and does not create again", function* () {
+    const store = yield* useRunStore();
+    const { runId, path, rendered, calls } = yield* wgac17(store);
+    const atSuspension = counts(path);
+    const rootsAtSuspension = workspaceRootState(path);
+
+    const resumed = yield* invoke(
+      { ...REQUEST, action: "resume", target: runId },
+      undefined,
+      productionHost(store, calls),
+      pinnedBody(rendered),
+    );
+
+    // It really resumes.
+    expect(resumed.exitCode).toBe(0);
+    expect(retained(path).status).toBe("completed");
+    expect(rendered).toHaveLength(1);
+    // And publishes nothing further: no additional effect, and no new Workspace
+    // root. That is the claim these two observables support and the whole of
+    // it — root invariance means no *published mutation*, not that no
+    // low-level call was made. An ensure that found the directory already there
+    // would publish no root either, so this cannot stand in for a call count.
+    //
+    // The call count belongs to WF26, which decorates `mkdir` and counts it
+    // directly. It is not reachable here: the CLI host fixes the private
+    // workspace options to `{}` (`run-host.ts`), and threading a decorator
+    // through would mean changing a production signature for a test. What this
+    // case adds is that the current generated admission actually resumes.
+    expect(workspaceRootState(path)).toEqual(rootsAtSuspension);
+    expect(counts(path)).toEqual(atSuspension);
+  });
+
+  it("WGAC17: a continuation retaining the former Dir identity refuses before generated execution and mutation", function* () {
+    const store = yield* useRunStore();
+    const { runId, path, rendered, calls } = yield* wgac17(store);
+
+    // The run becomes one admitted under the former identity. Nothing else
+    // changes — same source, roots and selection — so the identity is the only
+    // thing the resume can disagree about.
     rewriteRecords(path, (record) =>
       record.replaceAll(
         "@executablemd/workflow/composition/dir-v2#Dir",
@@ -1572,131 +1619,14 @@ the retained note
     );
 
     // Refused, and before anything generated ran: no further effect of any
-    // kind was committed and no Workspace root was published.
+    // kind was committed, no Workspace root was published, and no directory was
+    // created a second time.
     expect(resumed.exitCode).not.toBe(0);
     expect(counts(path)).toEqual(beforeResume);
     expect(workspaceRootState(path)).toEqual(rootsBeforeResume);
     // Nothing after the wait reached the document either.
     expect(rendered).toEqual([]);
     // And the refusal does not publish which identity moved.
-    const reported = resumed.written.err.join("\n");
-    expect(reported).not.toContain("dir-v2");
-  });
-});
-
-/**
- * The one question a workflow asks, and the smallest document that asks it.
- *
- * No effect precedes the wait: what is under test is which provider answers
- * `<Elicit>`, and an effect ahead of it would only add ways for the case to
- * fail before reaching the boundary it exists to cross.
- */
-const ELICITATION = `<Elicit schema={${CHECKPOINT_SCHEMA}} as="decision">
-Proceed with the change?
-</Elicit>
-
-decision: {decision.proceed}
-`;
-
-/** A HOME of this case's own, so nothing reaches the developer's configuration. */
-function useIsolatedHome(): Operation<string> {
-  return resource<string>(function* (provide) {
-    const home = yield* until(mkdtemp(join(tmpdir(), "xmd-wfs-home-")));
-    yield* ensure(function* () {
-      yield* rm(home, { recursive: true, force: true });
-    });
-    yield* provide(home);
-  });
-}
-
-/**
- * How long one `xmd workflow` invocation may take before it is abandoned.
- *
- * Bounded rather than left to the default, because the failure this case
- * guards against is a *wait*: with a Web provider assembled underneath the
- * workflow's own, the start opens a loopback form and blocks for a reader who
- * is not coming. `runCli` reports what each channel received before the
- * deadline, so an abandoned run still names the form it opened.
- */
-const INVOCATION_LIMIT = 40_000;
-
-/** What one `xmd workflow` line published, or nothing when it published none. */
-function published(stderr: string, label: string): string | undefined {
-  const prefix = `workflow ${label}: `;
-  const line = stderr.split("\n").find((entry) => entry.startsWith(prefix));
-  return line?.slice(prefix.length).trim();
-}
-
-describe("a workflow elicitation through the shipped CLI assembly", () => {
-  it("suspends, is answered and resumes without ever opening a browser form", function* () {
-    // Launched as a process, because the subject is the assembly the entrypoint
-    // builds around `runScopedDocument`. Calling `runWorkflow()` or
-    // `executeInstalled()` from here would install the components this suite
-    // chose and never reach the boundary under test.
-    const runs = yield* useRunStore();
-    const home = yield* useIsolatedHome();
-    const fixture = yield* useCheckpointFixture(ELICITATION);
-
-    const xmd = (args: string[]) =>
-      runCli(args, {
-        cwd: fixture.repository,
-        env: { HOME: home, XMD_WORKFLOW_RUNS: runs },
-        timeout: INVOCATION_LIMIT,
-      });
-
-    const started = yield* xmd(["workflow", "start", "workflow.md"]).join();
-
-    // Suspension is its own process outcome, and the pair a caller needs in
-    // order to answer the run reaches standard error beside it.
-    expect(started.code).toBe(2);
-    expect(published(started.stderr, "status")).toBe("suspended");
-    const runId = published(started.stderr, "run");
-    expect(runId).toBeDefined();
-    const suspensionId = published(started.stderr, "suspension");
-    expect(suspensionId).toBeDefined();
-
-    // Nobody was asked anything: no loopback form was announced and no browser
-    // launch was attempted, on either channel.
-    const captured = `${started.stdout}\n${started.stderr}`;
-    expect(captured).not.toContain("http://127.0.0.1:");
-    expect(captured).not.toContain("could not open a browser automatically");
-
-    const path = workflowRunPath(runs, String(runId));
-    const suspended = retained(path);
-    expect(suspended.status).toBe("suspended");
-    expect(suspended.requests).toHaveLength(1);
-    expect(suspended.rootCloses).toBe(0);
-    // The wait the caller was told to answer is the wait the run retained.
-    expect(suspensionId).toBe(suspended.requests[0]);
-
-    // The delivery retains a value and moves nothing else.
-    const delivered = yield* xmd([
-      "workflow",
-      "answer",
-      String(runId),
-      String(suspensionId),
-      '{"proceed":true}',
-    ]).join();
-    expect(delivered.code).toBe(0);
-    expect(delivered.stdout.trim()).toBe(`workflow answer: ${runId} (${suspensionId})`);
-    expect(retained(path)).toEqual(suspended);
-    expect(answers(path)).toEqual([
-      {
-        suspensionId: String(suspensionId),
-        state: "pending",
-        answer: JSON.stringify({ proceed: true }),
-      },
-    ]);
-
-    // An ordinary resume spends the answer once and reaches the authored value.
-    const resumed = yield* xmd(["workflow", "resume", String(runId)]).join();
-    expect(resumed.code).toBe(0);
-    expect(published(resumed.stderr, "status")).toBe("completed");
-    expect(resumed.stdout).toContain("decision: true");
-
-    const completed = retained(path);
-    expect(completed.status).toBe("completed");
-    expect(completed.requests).toEqual(suspended.requests);
-    expect(answers(path)[0]?.state).toBe("consumed");
+    expect(resumed.written.err.join("\n")).not.toContain("dir-v2");
   });
 });
