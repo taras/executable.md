@@ -2737,6 +2737,16 @@ or that declares different bytes under it, refuses rather than continuing
 somebody else's Markdown, and a recorded private import refuses unless the
 element asking is inside the same declaration.
 
+**`<Plan>` is the one of these the `run` profile has.** The CLI declares
+`packages/cli/src/documents/Plan.md` to every ordinary run under the origin
+`@executablemd/cli/Plan.md`, paired-only, returning a string. Its body is the
+Prompt, rendered once with the capabilities the calling document already has;
+its `as` receives the exact approved Plan source after the authorship frame has
+been dismantled and the bytes have been structurally admitted. Its four private
+capabilities — `<PlanInputs>`, `<PlanAuthorship>`, `<CheckDraft>` and
+`<AdmitPlan>` — are the closure those exact bytes carry, and are syntax no
+document may write. [The plan command](./plan-command-spec.md) is the contract.
+
 Two registrations for one name and kind at the same scope are a configuration
 error naming both origins. Installation order is not a resolution mechanism —
 reserved and default registrations are held apart, so which one wins is decided
@@ -10189,8 +10199,9 @@ One checked-in Markdown suite runs the real command against a fixture directory.
 ### Tier PR — The `xmd plan` command
 
 One root execution on every invocation — the packaged plan command document,
-which owns the visible generation, repair, review and failure policy — and a
-second only under `--run`: the Plan it returned, which runs as any supplied root
+an adapter that invokes the packaged `<Plan>` Component, which owns the visible
+generation, repair, review and failure workflow — and a second only under
+`--run`: the Plan it returned, which runs as any supplied root
 does, behind a complete scope boundary. Without `--run` the approved Plan is the
 result rather than a second execution: stdout by default, or an exclusively
 created `--output` file. Defined in
@@ -10203,7 +10214,7 @@ every refusal is proven by the phase tripwires that stayed at zero.
 | # | Test | Verify |
 |---|------|--------|
 | C1 | Fixed grammar and help | One Prompt preserved byte for byte; missing, repeated, empty and whitespace-only Prompts refused; individual options after the Prompt and aggregate props before it; a built-in option never read as a generated property's value; `--session` named or refused; every run-only flag refused without `--run` before any effect; a first token of `prompt` refused in preflight rather than read as a document path, with `xmd run ./prompt` still executing a document of that name; generic help with no effects, explaining `--output` and `--run` |
-| C2–C3 | The packaged document is the policy | The command executes the checked-in Markdown value root under `<plan-command>`, and the turn text is that document's own words; generation, repair, review, revision, approval, stopping, exhaustion and the final explanation are Markdown under visible headings, every Plan-producing turn states the complete Plan requirements for itself, `<Prompt>` stays one turn, and what a person reads says each thing once however many rounds it took |
+| C2–C3 | The packaged adapter and Component | The command executes the checked-in Markdown value root under `<plan-command>`, which invokes the packaged `<Plan>` Component, and the turn text is that Component's own words; generation, repair, review, revision, approval, stopping, exhaustion and the final explanation are Markdown under visible headings, every Plan-producing turn states the complete Plan requirements for itself, `<Prompt>` stays one turn, and what a person reads says each thing once however many rounds it took |
 | C4–C6 | Session and ceiling | One enclosing Session carries every turn, defaults differ per invocation and `--session` supplies the exact override; the authorship profile gives the assistant an empty host-owned directory, no MCP servers, no native tools and a private strict denial no permission flag widens; a draft is data until the approved Plan is delivered, and no draft effect happens before that |
 | C7–C9 | Classification, bounds and presentation | Draft defects return structured facts and caller defects escape the checker; one base draft plus three repairs, and ten presentations with no revision on the last; arbitrary source cannot close `<CodeBlock>`, the review schemas expose exactly the friendly choices for each round and state, and stopping, exhaustion and the explanation ending each reach their own authored `<Fail>` |
 | C10–C13 | Admission and lifetime | The host revalidates after the command document has completely torn down and resolves props for the exact returned bytes; those bytes reach exactly one of stdout, an exclusively created `--output` file, a run, or a file and then a run; a journal exists only when `--run` begins and holds only the Plan's events; cancellation and teardown failure settle before anything later begins |

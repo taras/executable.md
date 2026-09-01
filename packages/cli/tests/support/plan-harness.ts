@@ -16,7 +16,7 @@ import { Elicitation } from "@executablemd/core";
 import type { ElicitationRequest, SyntaxCatalog } from "@executablemd/core";
 import { Ok } from "effection";
 import type { Operation, Result } from "effection";
-import { ensure, scoped } from "effection";
+import { ensure, scoped, useScope } from "effection";
 import { ensureDir, rm } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -25,6 +25,11 @@ import { API, useHostFiles } from "@executablemd/runtime";
 import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import { syntaxCatalog } from "../../src/syntax.ts";
+import { planComponentDeclaration } from "../../src/plan-component.ts";
+import type { PlanSurface } from "../../src/plan-component.ts";
+import type { CandidateAssessment } from "../../src/authorship-profile.ts";
+import type { AgentStack } from "../../src/agent-stack.ts";
+import type { DeclaredMarkdownComponent } from "@executablemd/core/host";
 import type { PlanDependencies, PlanExecution } from "../../src/plan.ts";
 import { createFakeAcp, makeRegistry, makeStore } from "./fake-acp.ts";
 import type { FakeAcp, FakeStore } from "./fake-acp.ts";
@@ -243,4 +248,124 @@ export function* useAuthorshipRoot<T>(body: (root: string) => Operation<T>): Ope
     yield* ensure(() => rm(root, { recursive: true, force: true }));
     return yield* body(root);
   });
+}
+
+/** What one case declares `<Plan>` with, and what it recorded. */
+export interface PlanDeclarationHarness {
+  fake: FakeAcp;
+  /** Every candidate the Component asked about, in order. */
+  checked: string[];
+  /** Every review request a provider was asked, in order. */
+  reviews: ElicitationRequest[];
+  /** The declaration to attach to an execution. */
+  declaration: DeclaredMarkdownComponent;
+  /** Review answers, taken in order. Running out is a test defect, not a case. */
+  script(review: ScriptedReview): void;
+}
+
+/**
+ * The `<Plan>` declaration a case runs a document against.
+ *
+ * The same Component bytes production ships, with the seams a case owns: the
+ * scriptable ACPX runtime, a scripted review, a recorded draft answer, and an
+ * authorship root the case created. Nothing here is a second implementation — the
+ * declaration reads `Plan.md` through the packaged loader, exactly as the
+ * command and an ordinary run do.
+ */
+export function* planDeclarationHarness(options: {
+  surface: PlanSurface;
+  authorshipRoot: string;
+  includes?: readonly string[];
+  /** The catalog the first turn is built from. */
+  syntax?: string;
+  /** What the host says about each draft. The default finds every draft sound. */
+  assess?: (source: string) => Operation<CandidateAssessment>;
+  /** The logical name the command surface fixes. */
+  session?: string;
+  explicitSession?: boolean;
+  /** Absent leaves the harness with no stack at all, as `xmd test` has none. */
+  stack?: AgentStack | null;
+  store?: FakeStore;
+}): Operation<PlanDeclarationHarness> {
+  const fake = createFakeAcp();
+  const checked: string[] = [];
+  const reviews: ElicitationRequest[] = [];
+  const answers: ScriptedReview[] = [];
+
+  const declaration = yield* planComponentDeclaration({
+    surface: options.surface,
+    includes: options.includes ?? [],
+    ...(options.stack === null
+      ? {}
+      : {
+          stack: options.stack ?? {
+            provider: "acpx",
+            defaultAgent: AGENT,
+            permissionMode: "deny-all",
+            adapters: ADAPTERS,
+          },
+        }),
+    acp: {
+      createRuntime: fake.create,
+      sessionStore: options.store ?? makeStore(),
+      agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
+    },
+    authorshipRoot: options.authorshipRoot,
+    ...(options.session === undefined ? {} : { session: options.session }),
+    ...(options.explicitSession === undefined ? {} : { explicitSession: options.explicitSession }),
+    host: yield* useScope(),
+    *installElicitation() {
+      yield* Elicitation.around(
+        {
+          // deno-lint-ignore require-yield
+          *elicit([request], _next) {
+            reviews.push(request);
+            const answer = answers.shift();
+            if (answer === undefined) {
+              throw new Error("the case scripted no answer for this review");
+            }
+            if (answer.raw !== undefined) {
+              return answer.raw;
+            }
+            return {
+              decision: answer.decision,
+              ...(answer.feedback === undefined ? {} : { feedback: answer.feedback }),
+            };
+          },
+        },
+        { at: "min" },
+      );
+    },
+    // deno-lint-ignore require-yield
+    *catalog() {
+      return options.syntax ?? "## Built-in components\n\n### `<File>`\n";
+    },
+    ...(options.assess === undefined
+      ? {
+          // The deterministic seam standing where production's answer goes. It
+          // records what it was asked about and says yes, so what a case reading
+          // it observes is the Component's control flow rather than validation's
+          // answers.
+          assess: function* (source: string): Operation<CandidateAssessment> {
+            checked.push(source);
+            return { valid: true, diagnostics: {} };
+          },
+        }
+      : {
+          assess: function* (source: string): Operation<CandidateAssessment> {
+            checked.push(source);
+            return yield* options.assess!(source);
+          },
+        }),
+  });
+
+  return {
+    fake,
+    checked,
+    reviews,
+    declaration,
+    script(review) {
+      answers.push(review);
+    },
+  };
 }

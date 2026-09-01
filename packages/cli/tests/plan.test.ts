@@ -2,7 +2,8 @@
  * Tier PR — `xmd plan` writing a Plan, as the host and the packaged plan
  * command document perform it together (specs/plan-command-spec.md).
  *
- * The policy under test is `src/documents/plan-command.md`, reached the way
+ * The authorship workflow under test is the packaged `<Plan>` Component,
+ * reached the way
  * the command reaches it: `runPlan` builds the authorship profile, the packaged
  * document runs inside it, and every observation here is of that document's
  * behaviour rather than of a TypeScript loop standing in for it.
@@ -279,7 +280,7 @@ describe(
         expect(harness.catalogCalls).toEqual([[dir]]);
 
         // The turn is the shipped Markdown's, word for word: the sentences below
-        // exist nowhere in TypeScript, so a host that chose its own policy could
+        // exist nowhere in TypeScript, so a host that wrote its own workflow could
         // not produce them.
         const turn = harness.fake.prompts[0];
         expect(turn).toContain("Create one complete XMD Plan from this Prompt");
@@ -1087,7 +1088,7 @@ describe(
       });
 
       // Stop reaches the command document's own `<Fail>`, with the message the
-      // shipped Markdown wrote. Nothing about it is host policy.
+      // shipped Markdown wrote. None of that wording is the host's.
       yield* useWorkingDirectory(function* (dir, authorshipRoot) {
         const harness = createPlanHarness({ authorshipRoot });
         harness.fake.script({ reply: VALID });
@@ -1287,11 +1288,14 @@ describe(
         expect(harness.reviews).toHaveLength(1);
         expect(harness.reviews[0].message).toContain("<Widget />");
 
-        // The gate is effective on its own: the same bytes now fail, because the
-        // host validates them again rather than trusting what the document
-        // concluded while its own scope was still standing.
+        // The gate is effective on its own: the same bytes now fail, because they
+        // are structurally admitted again rather than being trusted for what the
+        // Component concluded while its own scope was still standing. The veto is
+        // the Component's own `<AdmitPlan>`, which is the first of the two gates to
+        // see these bytes after teardown; the command's property-aware gate
+        // still stands behind it and never gets to run.
         expect(code).toBe(1);
-        expect(lines.join("\n")).toContain("the approved document does not validate");
+        expect(lines.join("\n")).toContain("the approved Plan does not validate");
         expect(lines.join("\n")).toContain("component-unresolved");
         expect(lines.join("\n")).toContain("Widget");
 

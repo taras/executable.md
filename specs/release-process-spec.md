@@ -92,7 +92,7 @@ documents at the revision it checks.
   prerelease marker — so a forgotten bump is visible where the release was
   made, then refuses to build. On a valid tag it compiles
   `packages/cli/src/compiled.ts` per target with
-  `--include packages/code-review-agent --include packages/cli/src/documents/plan-command.md`
+  `--include packages/code-review-agent --include packages/cli/src/documents`
   and attaches the binaries and
   sha256 checksums to the tag's GitHub Release. That module is the
   compiled-binary entrypoint: it installs the `API.Env.command` adapter that
@@ -548,24 +548,37 @@ without its browser asset and never published while private.
 ## 9. Packaged documents (`@executablemd/cli`)
 
 A document-backed command executes first-party Markdown through the ordinary XMD
-engine rather than a TypeScript policy. A package declares which Markdown it
+engine rather than a TypeScript implementation. A package declares which Markdown it
 ships by putting it in `src/documents/`; every other Markdown under `src/` —
 test documents, scenario fixtures — stays out of the product. `xmd plan` is
-the first such command, and `packages/cli/src/documents/plan-command.md` is
-the document that implements it: the checked-in Markdown is the deployed
-artifact and the single source of truth, not a generated string mirror of one.
+the first such command, and it ships two: the checked-in Markdown is the
+deployed artifact and the single source of truth, not a generated string mirror
+of one.
+
+- `packages/cli/src/documents/Plan.md` is the packaged `<Plan>` Component, which
+  owns the Plan authorship workflow —
+  every Prompt, the checking and repair loop, the review, the revisions, the
+  approval and every ending. It is the public `<Plan>` component, so an ordinary
+  document reaches the same bytes the command does.
+- `packages/cli/src/documents/plan-command.md` is the command's root, and only
+  its adapter: it projects the request into `<Plan>` and returns what comes
+  back.
+
+There is one Component source, and neither a generated TypeScript copy of it nor
+a second Markdown implementation exists. That is what makes "the same workflow, whichever surface
+asked" a fact about the file rather than a claim about two of them.
 
 The command locates it from its own module URL — never from the contextual
 working directory, and never through the component search path. Both are
-answerable by whatever directory a person is standing in, and which policy the
+answerable by whatever directory a person is standing in, and which Component the
 command runs is not a thing a repository file may decide.
 
 Every build therefore keeps the asset beside its module, at the same relative
 path:
 
 - **source checkout** — the file as committed;
-- **`deno compile`** — embedded by `--include packages/cli/src/documents/plan-command.md`,
-  in `deno task build` and in `release.yml`'s matrix compile;
+- **`deno compile`** — embedded by one `--include packages/<name>/src/documents`
+  per package, in `deno task build` and in `release.yml`'s matrix compile;
 - **npm (dnt)** — copied by `scripts/build-npm.ts`, which copies each package's
   `src/documents/` into `esm/src/documents/`, preserving relative location. dnt
   emits the module graph and nothing else, so an asset no TypeScript imports is
@@ -581,13 +594,21 @@ The checks that hold this together, each proving a different build:
   temporary working directory and compares it to the committed bytes. It runs
   under Deno, Node and Bun, which is what makes it evidence rather than one
   runtime's opinion.
-- `scripts/tests/cli-npm-bin.test.ts` builds the real package and asserts
-  `esm/src/documents/plan-command.md` is byte-identical to the source.
+- `scripts/tests/cli-npm-bin.test.ts` builds the real package, asserts every
+  emitted `esm/src/documents/` asset is byte-identical to the source, and then
+  asks the built bin — from a directory that is not the package — which Plan
+  `<Plan>` Component source it would let a document write. The answer carries the
+  origin and the SHA-256 of those bytes, so a build that shipped different ones, or none,
+  answers differently here rather than at a person's first `xmd plan`.
+- `scripts/tests/plan-component-compiled.test.ts` asks the same question of the
+  compiled binary, which has no checkout to fall back to. It runs in the `smoke`
+  job, beside the other suites whose subject is `dist/xmd`.
 - `scripts/tests/packaged-document.test.ts` holds the two `deno compile` sites
-  to the documents that exist, because that list is the one thing no build
-  discovers for itself.
+  to the document *directories* that exist and are not empty, because which
+  packages ship documents is the one thing no build discovers for itself.
 
-Adding another packaged document needs no npm-build change — `build-npm.ts`
-copies the directory. Only `deno compile` names files individually, so a new
-document must be added to `deno task build` and to `release.yml`, which
+Adding another packaged document to a package that already ships one needs no
+build change at all: `build-npm.ts` copies the directory and each `deno compile`
+site names it. A package that ships its *first* document adds one `--include` to
+`deno task build` and to `release.yml`, which
 `scripts/tests/packaged-document.test.ts` enforces.

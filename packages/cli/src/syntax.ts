@@ -12,6 +12,7 @@
  * and says so when a schema is richer than a table can summarize honestly.
  */
 
+import { planComponentDescription } from "./plan-component.ts";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import {
@@ -53,7 +54,15 @@ import { WEB_REGISTRATIONS } from "@executablemd/web";
 export function* syntaxCatalog(includes: readonly string[]): Operation<SyntaxCatalog> {
   return yield* scoped(function* () {
     yield* useRunProfileRegistry();
-    return yield* inspectSyntax({ includes, components: agentIdentityComponents() });
+    return yield* inspectSyntax({
+      includes,
+      components: agentIdentityComponents(),
+      // `<Plan>` is part of the run profile, so a catalog that left it out would
+      // describe a vocabulary no run has. Described from the packaged bytes:
+      // inspection mints nothing, so it reports the Component's identity and
+      // contract without building the capabilities only a run can build.
+      declarations: [yield* planComponentDescription()],
+    });
   });
 }
 

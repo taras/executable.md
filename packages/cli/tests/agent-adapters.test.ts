@@ -33,7 +33,7 @@ import {
 } from "../src/agent-stack.ts";
 import type { AgentStack } from "../src/agent-stack.ts";
 import { authorshipCeiling } from "../src/authorship-profile.ts";
-import type { AuthorshipProfile, CandidateAssessment } from "../src/authorship-profile.ts";
+import type { AuthorshipCeilingInputs } from "../src/authorship-profile.ts";
 import { runPlan } from "../src/plan.ts";
 import { scanPlanArgs } from "../src/plan-args.ts";
 import { AGENT, createPlanHarness, useWorkingDirectory } from "./support/plan-harness.ts";
@@ -76,22 +76,16 @@ function installingAdapters(prepared: string[]): EmbeddedAdapters {
   };
 }
 
-/** The profile `xmd plan` builds its ceiling from, with nothing else supplied. */
-function profileWith(stack: AgentStack): AuthorshipProfile {
-  return {
-    request: "write a greeting",
-    syntax: "",
-    session: "xmd-plan:case",
-    explicitSession: false,
-    root: adapterRoot(),
-    stack,
-    // deno-lint-ignore require-yield
-    *installElicitation(): Operation<void> {},
-    // deno-lint-ignore require-yield
-    *assess(): Operation<CandidateAssessment> {
-      return { valid: true, diagnostics: {} };
-    },
-  };
+/**
+ * What the ceiling is built from, and nothing else.
+ *
+ * The Agent stack is the whole of it. Everything a Plan invocation also needs —
+ * the request, the catalog, the session, who checks a draft — belongs to the
+ * Component rather than to the provider this case is about, so naming it here would
+ * be describing an arrangement the ceiling never reads.
+ */
+function ceilingFrom(stack: AgentStack): AuthorshipCeilingInputs {
+  return { stack };
 }
 
 describe("Tier AE — embedded adapters on the run and plan paths", () => {
@@ -135,7 +129,7 @@ describe("Tier AE — embedded adapters on the run and plan paths", () => {
     const root = adapterRoot();
     const adapters = createEmbeddedAdapters(root);
     const stack = stackWith(adapters);
-    const ceiling = authorshipCeiling(profileWith(stack), join(root, "workdir"), yield* useScope());
+    const ceiling = authorshipCeiling(ceilingFrom(stack), join(root, "workdir"), yield* useScope());
     const registry = ceiling.agentRegistry;
     if (registry === undefined) {
       throw new Error("the plan path handed its provider no agent registry");

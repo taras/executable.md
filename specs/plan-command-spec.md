@@ -39,11 +39,13 @@ That command prints the approved Plan and runs nothing. `--output` writes it to 
 file instead, `--run` executes it, and the two together write it and then run
 it.
 
-The command writes no policy of its own. It always executes one root document:
-the **plan command document**, a checked-in first-party Markdown value root
-that implements this conversion and its review workflow — what the coding agent
-is asked, how many drafts may be repaired, what you are shown, and what happens
-when you approve nothing. It executes a second root only under `--run`: the Plan
+The command implements no authorship workflow of its own. It always executes
+one root document: the **plan command document**, a checked-in first-party
+Markdown value root that is an adapter — it projects the request into the
+packaged `<Plan>` Component and returns the source that Component approved. The
+workflow itself — what the coding agent is asked, how many drafts may be
+repaired, what you are shown, and what happens when you approve nothing —
+belongs to `<Plan>`. It executes a second root only under `--run`: the Plan
 that document returned, through the same path `xmd run` uses for a supplied one,
 with a complete scope boundary between the two. The plan command document is
 not itself a Plan. There is no second execution model, no second props model and
@@ -54,10 +56,12 @@ no second journal.
 ```text
 fixed command preflight
   -> build the run-profile syntax catalog
-  -> execute the exact packaged plan command document
-       -> one Session
-       -> generate, check, repair, review, revise, approve, explain or fail
-       -> Return the exact approved Plan source
+  -> execute the exact packaged plan command document, which is an adapter
+       -> <Plan>, the packaged Component, with the request as its Prompt
+            -> the authorship frame, and one Session inside it
+            -> generate, check, repair, review, revise, approve, explain or fail
+            -> teardown, then structural admission of the exact approved bytes
+       -> Return what <Plan> approved
   -> await that execution and provider teardown
   -> validate the returned source again
   -> --output: exclusively create the file with the exact bytes
@@ -233,8 +237,8 @@ The host executes one immutable packaged Markdown value root,
 identity `<plan-command>`. Its declared return schema is exactly
 `{ type: "string" }`. It is located from the CLI module's own URL — never from
 the working directory and never through the component search path — so the same
-policy is found whatever directory a person stands in, and no repository file can
-answer for it ([release process](./release-process-spec.md)).
+document is found whatever directory a person stands in, and no repository file
+can answer for it ([release process](./release-process-spec.md)).
 
 The host supplies three fixed internal inputs as that root's props:
 
@@ -246,30 +250,89 @@ The host supplies three fixed internal inputs as that root's props:
 They are not Plan root props and consume none of the approved Plan's property
 sources.
 
-The document contains one enclosing `<Session>` expansion whose body holds every
+**The root is an adapter, not the workflow.** It projects `props.request` into
+`<Plan>` without adding whitespace, supplies `props.session`, binds the returned
+string and returns it. It contains no Prompt, no check, no review, no revision
+and no ending of its own. `props.syntax` is sealed by the host rather than
+forwarded: the catalog the agent is shown is the one this command rendered, and
+no prop on the adapter could supply another.
+
+## The packaged `<Plan>` Component
+
+Everything the command used to hold is `packages/cli/src/documents/Plan.md`, the
+one packaged Markdown value component the public `<Plan>` name resolves to
+([executable MDX](./executable-mdx-spec.md) §5.3). The command and an ordinary
+document invoking `<Plan>` expand the same bytes, under the same origin
+`@executablemd/cli/Plan.md` and the same digest, in every distribution. There is
+no generated TypeScript copy and no second Markdown implementation.
+
+The Component contains one enclosing `<Session>` expansion whose body holds every
 initial, repair and human-revision `<Prompt>`. A loop inside that one Session
 creates no second placement; sibling Sessions are not used, because sibling
 placements stay distinct even when their authored names match.
 
 The host owns the provider instruction layer and the Agent ceiling. The Markdown
-document owns the text of each generation, repair and revision request: the
-initial prompt preserves the Prompt, includes the host's catalog, and asks for
-one complete replacement root as source only — written as a Plan, with every
-requested outcome kept as reader-facing prose and each component placed
-immediately after the sentences describing the action it performs. That
-authorship rule is repeated in every repair and revision request, so the
-narrative survives a draft being replaced.
+owns the text of each generation, repair and revision request: the initial prompt
+preserves the Prompt, includes the host's catalog, and asks for one complete
+replacement root as source only — written as a Plan, with every requested outcome
+kept as reader-facing prose and each component placed immediately after the
+sentences describing the action it performs. That authorship rule is repeated in
+every repair and revision request, so the narrative survives a draft being
+replaced.
 
 `<Prompt>` remains one Agent turn. It gains no hidden repair, retry, review or
 approval behaviour.
 
+**One sealed discriminator, and no host prose.** The only thing the host adds to
+the Component's own language is which surface asked, as the closed value `command` or
+`component`. Every sentence a person reads is in the Markdown, including both
+surfaces' endings, each written once. The command's wording is unchanged; the
+component's says that no Plan was returned rather than that nothing was output or
+run. TypeScript supplies neither the words nor the choice between them.
+
+**The four private capabilities.** The Component's phases are components only these
+exact bytes may write, declared by the host with the definition and revoked with
+the execution: `<PlanInputs>` freezes the catalog, the session placement, the
+surface and whether that placement outlives the invocation; paired
+`<PlanAuthorship>` installs the constrained frame and does not return until every
+part of it has torn down; `<CheckDraft>` answers about one draft without
+executing it; and `<AdmitPlan>` structurally admits the approved bytes after that
+teardown.
+
+Whether the placement is durable is carried across that boundary rather than
+re-derived, because `<PlanInputs>` is the last thing that sees the public
+`session` prop: a placement cannot be asked whether somebody wrote it. An
+authored name gets the existing durable named-directory lifetime — the same name
+at the same site reaches the same directory next time — and an omitted one gets
+an expansion-owned placement that is site- and iteration-unique, replay-stable,
+and handed back non-recursively after complete teardown. Sibling sites stay
+distinct even when they write one name, and the name never becomes a path: the
+directory is keyed by the digest of the placement.
+
+**A host with no coding agent still has the Component.** `<Plan>` is declared to
+every ordinary run profile, including the `<Execution host="run">` child an
+`xmd test` document launches. A host that cannot establish the ACPX ceiling
+refuses there — before any placement, directory or turn — rather than reporting
+a component nothing supplies, because the profile does have `<Plan>` and what is
+missing is an agent to write one with. The `xmd test` root itself is a different
+profile and does not gain the component. None of them is syntax any document may write — not
+the caller's root, not the Prompt the caller projected, not a sibling `<Plan>`,
+not an imported component, and nothing middleware can answer.
+
 ## The authorship profile
 
-The authorship profile is the trusted-host assembly used only for that exact root. It
-supplies the document's inputs, a constrained Agent provider, Elicitation, the
-fixed first-party components and the host-declared draft validator. It uses no
-repository component search — that execution's include list is empty — and
-exposes no custom root.
+The authorship profile is the trusted-host assembly the packaged `<Plan>`
+Component runs its authored turns under. It supplies the frozen inputs, a constrained Agent provider,
+Elicitation, the fixed first-party components and the host-declared draft check.
+The command's own execution uses no repository component search — that
+execution's include list is empty — and exposes no custom root.
+
+The frame is installed by `<PlanAuthorship>`, inside the invocation that owns it,
+rather than around the execution. That is what makes it the same ceiling on both
+surfaces: an ordinary document has an execution of its own, with its own
+provider and its own capabilities, and a Plan written inside it is still written
+under this one. Broader authority in the calling document widens nothing, and the
+constrained provider reaches nothing outside the content the Component projects.
 
 ### Agent authority under the authorship profile
 
@@ -388,7 +451,8 @@ may those exact bytes enter ordinary execution.
 
 ## Host-declared draft validation
 
-The authorship profile declares one internal value component to the execution:
+The Component's own private closure declares one value component only these
+bytes may write:
 
 ```md
 <CheckDraft source={draft} as="check" />
@@ -483,11 +547,11 @@ terminal failure and no way to recategorize it as draft feedback.
 An opaque `not-statically-checkable` invocation is not a diagnostic and does not
 by itself make a candidate invalid.
 
-## The policy the plan command document owns
+## The authorship workflow the `<Plan>` Component owns
 
 The following is the shipped program's behaviour, not the host's. It is stated
-here because it is what a caller sees; it is changed by editing
-`plan-command.md`, and nothing in TypeScript decides it. Prose quality is that
+here because it is what a caller sees; it is changed by editing `Plan.md`, and
+nothing in TypeScript decides it. Prose quality is that
 document's instructions and your review, never a hidden TypeScript validation
 rule: `<CheckDraft>` reports structural facts and executes nothing.
 
@@ -648,8 +712,8 @@ produced.
 | # | Criterion | Required observation |
 | --- | --- | --- |
 | C1 | Fixed grammar and help | Prompt cardinality, individual-property ordering, aggregate props before the Prompt, `--session` including its empty-value refusal, run-only flags refused without `--run` before any authorship or filesystem effect, a first token of `prompt` refused in preflight rather than read as a document path — leaving `xmd run ./prompt` still able to execute a document of that name — and effect-free generic help that explains `--output` and `--run` |
-| C2 | Exact packaged root | The command executes the checked-in Markdown value root under `<plan-command>`; the turn text is that document's own words, and no TypeScript authorship loop or custom root chooses policy |
-| C3 | Visible policy | Generation, three-turn repair, ten-round review, revision, approval, stopping, exhaustion and the explanation turn are present in Markdown under visible headings; the generation, repair and revision instructions each require the descriptive title and the steps-beside-components structure; `<Prompt>` remains one turn |
+| C2 | Exact packaged adapter and Component | The command executes the checked-in Markdown value root under `<plan-command>`, and that root only projects the request into the packaged `<Plan>` Component and returns what it approved; the turn text is that Component's own words, and no TypeScript authorship loop or custom root supplies them |
+| C3 | Visible authorship workflow | Generation, three-turn repair, ten-round review, revision, approval, stopping, exhaustion and the explanation turn are present in the Component's Markdown under visible headings; the generation, repair and revision instructions each require the descriptive title and the steps-beside-components structure; `<Prompt>` remains one turn |
 | C4 | One Session | One enclosing Session expansion carries every turn; two default invocations get different profile directories and session keys, two `--session` invocations get the same directory and key with the raw name absent from the path, and two named invocations sharing one ACPX store continue the established record rather than placing a second |
 | C5 | Authorship profile ceiling | This session's own host-owned directory, empty while the command document runs, no MCP servers, no native tools, strict private denial, no Files/command/network capability for the command document, and final-run permission flags that cannot widen any of it; pre-existing content in that directory refuses before any provider, session, turn, review, result or execution and is left untouched |
 | C6 | Draft inertness | A draft is only data while the Plan is written, and no draft effect occurs before the final execution |
