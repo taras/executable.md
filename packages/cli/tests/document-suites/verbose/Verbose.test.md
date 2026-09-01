@@ -68,3 +68,31 @@ runtime-specific entrypoint differs across the corpus.
 <AssertEquals actual={plain.stdout.includes("Ignored")} expected={false} />
 </TempDir>
 </Test>
+
+<Test name="VB5: run-host children retain the built-in Verbose">
+<Execution host="run" source={"Before\n\n<Verbose>\n<Missing />\n</Verbose>\n\nAfter\n"} as="child">
+<CollectOutput as="output" />
+
+<AssertEquals actual={child.kind} expected="settled" />
+<AssertEquals actual={child.result.ok} expected={true} />
+<AssertStringIncludes actual={output} expected="Before" />
+<AssertStringIncludes actual={output} expected="After" />
+<AssertEquals actual={output.includes("Missing")} expected={false} />
+</Execution>
+</Test>
+
+<Test name="VB6: direct xmd test roots receive no built-in Verbose">
+<TempDir>
+<Let as="source" value={"<Test name=\"direct boundary\">\n<Verbose>\ntest-profile verbose body executed\n<Fail message=\"verbose sentinel executed\" />\n</Verbose>\n</Test>\n"} />
+<File path="direct.test.md">{source}</File>
+```bash exec as="testProfile"
+"$XMD_VERBOSE_BIN" test direct.test.md --verbose
+```
+
+<Let as="combined" value={testProfile.stdout + testProfile.stderr} />
+<AssertEquals actual={testProfile.exitCode === 0} expected={false} />
+<AssertStringIncludes actual={combined} expected="Verbose" />
+<AssertEquals actual={combined.includes("test-profile verbose body executed")} expected={false} />
+<AssertEquals actual={combined.includes("verbose sentinel executed")} expected={false} />
+</TempDir>
+</Test>

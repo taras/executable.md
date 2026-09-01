@@ -684,8 +684,6 @@ export type HostServiceInstaller = () => Operation<void>;
  * value root's stdout — stays with the command that owns those streams.
  */
 export function* installDocumentComponents(mode: DocumentMode, verbose: boolean): Operation<void> {
-  yield* registerComponents([verboseComponentRegistration(verbose)]);
-
   // Compose testing around the single core execution entrypoint: both
   // commands register the components (assertions work in regular documents,
   // explicit <Testing> boundaries affect the outcome), while `xmd test`
@@ -697,6 +695,7 @@ export function* installDocumentComponents(mode: DocumentMode, verbose: boolean)
     yield* installTestAgentComponents();
     yield* installAgentComponents();
   } else {
+    yield* registerComponents([verboseComponentRegistration(verbose)]);
     yield* installTestingComponents({ verbose });
   }
 

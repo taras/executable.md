@@ -63,6 +63,18 @@ const GREETER = [
   "",
 ].join("\n");
 
+/** An approved Plan proving that `--run --verbose` receives the run-profile default. */
+const VERBOSE_PLAN = [
+  "ordinary before",
+  "",
+  "<Verbose>",
+  "plan verbose body executed",
+  "</Verbose>",
+  "",
+  "ordinary after",
+  "",
+].join("\n");
+
 /**
  * A document that validates and then fails at run time.
  *
@@ -153,11 +165,12 @@ function executor(
   dir: string,
   journal?: string,
   stack?: AgentStack,
+  verbose = false,
 ): (approved: PlanExecution) => Operation<Result<void>> {
   return planExecutor(
     {
       include: [dir],
-      verbose: false,
+      verbose,
       journal,
       raw: true,
       secretDetection: true,
@@ -723,6 +736,33 @@ describe(
         expect(written.join("")).not.toContain("props:");
         // The document ran, and did what it says.
         expect(yield* readTextFile(join(dir, "greeting.txt"))).toBe("name=Ada loud=false count=");
+      });
+
+      // `--run --verbose`: the approved Plan receives the production
+      // run-profile `<Verbose>` component.
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const harness = createPlanHarness({ authorshipRoot });
+        harness.deps.execute = executor(dir, undefined, undefined, true);
+        harness.fake.script({ reply: VERBOSE_PLAN });
+        harness.script({ decision: "Approve" });
+
+        const written: string[] = [];
+        const original = process.stdout.write.bind(process.stdout);
+        const code = yield* scoped(function* (): Operation<number> {
+          yield* ensure(() => {
+            process.stdout.write = original;
+          });
+          process.stdout.write = ((chunk: string | Uint8Array) => {
+            written.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
+            return true;
+          }) as typeof process.stdout.write;
+          return yield* runPlan(command(dir, [REQUEST, "--verbose"]), harness.deps);
+        });
+
+        expect(code).toBe(0);
+        expect(written.join("")).toContain("ordinary before");
+        expect(written.join("")).toContain("plan verbose body executed");
+        expect(written.join("")).toContain("ordinary after");
       });
     });
 
