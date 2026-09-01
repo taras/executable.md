@@ -34,6 +34,10 @@ Existing documents and code get aligned to this section retroactively.
 | definition base | the Git revision supplied to choose a workflow definition's pinned commit |
 | Repository base | the optional Git revision from which one named Repository initializes its primary checkout |
 | Repository selection | plain structural composition data naming the repository one component invocation acts on: an opaque provider-minted selection identifier, the display name, the credential-free repository identity, and the selected checkout path. It carries no credential, provider handle, lock, database, run ID or authority — the installed provider authenticates every selection against private state before it touches Git or a service, so a copied, replaced or rebuilt one can misname a target and be refused but can never reach one |
+| ambient Repository | the repository an ordinary document execution was started inside, discovered once before root expansion from the invocation's starting directory. Its identity is the canonical common Git directory and its selected checkout is the canonical checkout root, so starting in a linked worktree names the same repository as starting in the primary checkout while Git operations still act on the worktree. A workflow run has none |
+| managed checkout | a Repository or Worktree an ordinary document execution created under the host root `~/.xmd/repositories`, addressed by a digest of its whole identity, described by a closed version 1 sidecar written beside it, and held for one document execution by an exclusive non-blocking advisory lock. It survives every execution: nothing deletes, resets, cleans, fetches or repairs one |
+| ordinary Git identity | the invoking user's effective Git author and committer name and email, captured once from the trusted host's own environment and configuration before a document expands and kept in the provider's closure. It is used for an ordinary `<Git.Commit>` and nothing else, because that commit lands in the caller's own checkout; a workflow run keeps its one fixed identity, whose whole purpose is that retained Git state does not depend on whose machine made it. It is not a prop, a Context value, a component result or a middleware answer, and nothing else about the environment is borrowed with it — hooks, file-system monitors, signing programs and repository-supplied credential helpers stay disabled by the same fixed command-line configuration. A host where Git can name no identity refuses `<Git.Commit>` with an actionable sentence rather than substituting the workflow one; every other component is unaffected |
+| ordinary invocation identity | a fresh opaque random value an ordinary document execution's repository provider mints for itself and keeps in its own closure. It is not a prop, a Context value, a component result, a middleware answer, a lifecycle ID or a retained record, and it is neither addressable nor reusable; live Issue and pull-request idempotency and reconciliation keys are derived from it together with the engine's own expansion identity |
 | pinned commit | the commit obtained by resolving a base once; it remains the workflow run's starting repository state even as the run creates descendant commits |
 | document target | an addressable static heading in a root document's own Markdown flow, named by the canonical path of heading labels that reaches it; selecting one executes the preamble, each ancestor's own content, and that heading's complete subtree |
 | Prompt | a person's original request, in ordinary natural language. `xmd plan` takes exactly one |
@@ -2384,9 +2388,10 @@ A Repository selection is composition data and is therefore replaceable: a
 document may bind one, render one, hand one to a child, and construct one that
 looks exactly like it. Nothing a repository provider does is authorized by the
 value it was handed. What stays provider-owned, in the provider's own closure,
-is everything a selection is *not*: the canonical Git identity each selection
-resolves to, the retained rows behind it, and the credentials and locators used
-to reach a service. A selection that the provider did not mint, or one whose
+is everything a selection is *not*: the advisory locks on managed checkouts,
+the canonical Git identity each selection resolves to, an ordinary run's live
+Push evidence, its invocation identity, and every reconciliation key derived
+from them. A selection that the provider did not mint, or one whose
 name, checkout path or identity was edited after it did, is refused before Git
 or a service is touched.
 

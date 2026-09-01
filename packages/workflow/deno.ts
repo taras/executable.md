@@ -141,3 +141,14 @@ export type {
   SuspensionControllerOptions,
   SuspensionNotice,
 } from "./src/deno/suspension.ts";
+/**
+ * The ordinary run's repository provider.
+ *
+ * The installer alone, and the options a trusted entrypoint supplies to it.
+ * What the provider holds — the leases, the credential assembly, the selection
+ * registry, the live Push evidence and the metadata writer — stays inside it:
+ * a package that could reach one of those could authorize a publication this
+ * execution never made.
+ */
+export { useRunComposition } from "./src/deno/run-composition/provider.ts";
+export type { RunCompositionOptions } from "./src/deno/run-composition/provider.ts";

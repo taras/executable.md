@@ -558,6 +558,35 @@ const COMPILED_BINARY: RuntimeExclusion[] = [
  * unflagged and Bun has not, so folding these into the shared list would drop
  * coverage Node is currently giving.
  */
+/**
+ * Tests whose subject is the ordinary repository provider.
+ *
+ * It holds a managed checkout with a kernel-released exclusive advisory lock,
+ * which this repository reaches through the Deno runtime and which Node and Bun
+ * expose no equivalent of. The provider is not reachable from any entrypoint
+ * yet — these suites install it themselves through the trusted test installer.
+ */
+const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
+  {
+    path: "packages/workflow/tests/run-composition-ambient.test.ts",
+    reason:
+      "the subject is the ordinary run's repository provider, installed directly by the suite; it discovers an ambient repository and writes to a real checkout through the Deno runtime",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/workflow/tests/run-composition-managed.test.ts",
+    reason:
+      "the same provider, holding managed checkouts under a kernel-released exclusive advisory lock taken through the Deno runtime; Node and Bun expose no equivalent",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/workflow/tests/run-composition-remote.test.ts",
+    reason:
+      "the same provider, publishing and reconciling against a modeled Git host; the transport and its evidence are Deno-only for the same reason the rest of the provider is",
+    issue: DERIVED_SCOPE,
+  },
+];
+
 const BUN_MISSING_NODE_SQLITE: RuntimeExclusion[] = [
   {
     path: "packages/workflow/tests/xmd-artifact.test.ts",
@@ -569,6 +598,11 @@ const BUN_MISSING_NODE_SQLITE: RuntimeExclusion[] = [
 
 export const exclusions: Record<Runtime, RuntimeExclusion[]> = {
   deno: COMPILED_BINARY,
-  node: [...DENO_ONLY_TOOLING, ...COMPILED_BINARY],
-  bun: [...DENO_ONLY_TOOLING, ...COMPILED_BINARY, ...BUN_MISSING_NODE_SQLITE],
+  node: [...DENO_ONLY_TOOLING, ...DENO_ONLY_REPOSITORY_PROVIDER, ...COMPILED_BINARY],
+  bun: [
+    ...DENO_ONLY_TOOLING,
+    ...DENO_ONLY_REPOSITORY_PROVIDER,
+    ...COMPILED_BINARY,
+    ...BUN_MISSING_NODE_SQLITE,
+  ],
 };
