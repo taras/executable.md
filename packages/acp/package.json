@@ -1,6 +1,6 @@
 {
   "name": "@executablemd/acp",
-  "version": "0.10.2",
+  "version": "0.11.0",
   "description": "ACPX agent provider for executable.md documents: drives coding agents over the Agent Client Protocol.",
   "type": "module",
   "exports": {
