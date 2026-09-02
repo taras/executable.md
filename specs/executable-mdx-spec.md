@@ -12026,7 +12026,7 @@ empty rather than by absent output.
 | ES1 | Immediate expansion | An invocation without `as` performs the program's effect exactly once, between the markers surrounding the element, and emits the program's output rather than its source |
 | ES2 | The document's own environment | One program uses ambient props through its root schema, its own frontmatter metadata, a caller binding, a component on the caller's include path, and top-level `<Output>` |
 | ES3 | Capture | The same source under `as` binds byte for byte while the effect in it does not happen |
-| ES4 | No return, no expansion | A component that fails before returning expands nothing and binds nothing |
+| ES4 | No return, no expansion | A component that selects no value expands nothing, and the capture its site named is still unset afterwards; an authored refusal is the run's own outcome and expands nothing either |
 | ES5 | Root preflight | A root `returns` declaration and a root-props mismatch each refuse before a negative-control effect |
 | ES6 | Replay | A partial journal resumes inside the source, does not repeat the completed effect, and produces the same output |
 | ES6b | Its own flow | A stray `<Break />` in the source is reported there rather than ending the loop the element was written in |

@@ -697,11 +697,6 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     }[] = [
       { name: "stopping", reviews: ["Stop"], expect: "stopped at your request" },
       {
-        name: "repeated rejection",
-        reviews: ["Request changes", "Request changes", "Stop"],
-        expect: "stopped at your request",
-      },
-      {
         name: "a failed turn",
         reviews: [],
         turns: [{ reply: "", stopReason: "refusal" }],
@@ -748,6 +743,41 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         expect(run.output).not.toContain("the program ran.");
       });
     }
+  });
+
+  it("PC22b: ten drafts nobody could approve end in exhaustion, having run nothing", function* () {
+    yield* useWorkingDirectory(function* (dir) {
+      const log = join(dir, "log.txt");
+      // Every draft and every repair attempt answers with the same candidate,
+      // and the host finds each of them unsound. That is what drives the
+      // Component through its three repairs a round and its ten rounds, and
+      // what makes the tenth round the one with nothing left to revise into.
+      const candidate = programAppending(log);
+      const run = yield* runDocument({
+        source: ["<Plan>Write a program.</Plan>", "", "after", ""].join("\n"),
+        turns: Array.from({ length: 60 }, () => ({ reply: candidate })),
+        // deno-lint-ignore require-yield
+        assess: function* () {
+          return { valid: false, diagnostics: { problem: "the draft is unsound" } };
+        },
+        reviews: [...Array.from({ length: 9 }, () => "Request changes" as const), "Stop" as const],
+      });
+
+      // The exhaustion ending, not the ordinary one a person choosing Stop
+      // earlier would have reached.
+      expect(run.failure).toBe(
+        "Plan authorship reviewed ten drafts without an approved Plan. No Plan was returned.",
+      );
+      // Ten drafts is what the workflow reviewed, and each was checked once and
+      // then repaired three times.
+      expect(run.harness.reviews).toHaveLength(10);
+      expect(run.harness.checked).toHaveLength(40);
+      // The candidate carried a program effect through every round of this and
+      // never performed it.
+      expect(yield* timesRun(log)).toBe(0);
+      expect(run.output).not.toContain("the program ran.");
+      expect(run.leftover).toEqual([]);
+    });
   });
 
   it("PC23: cancelling authorship leaves no program effect", function* () {

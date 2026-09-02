@@ -336,9 +336,78 @@ describe("Tier ES — executable source returns", () => {
   });
 
   it("ES4: a return that never arrives expands nothing and binds nothing", function* () {
+    const source = ["# The program", "", "the program ran.", "", '<Effect name="four" />', ""].join(
+      "\n",
+    );
+
+    // The declaration ends without selecting a value, which is what every
+    // unsuccessful authorship ending is from the engine's side: the workflow
+    // finished and there is no approved source to hand back.
+    const unresolved = [
+      "---",
+      "props:",
+      "  type: object",
+      "  properties:",
+      "    source: { type: string }",
+      "  required: [source]",
+      "  additionalProperties: false",
+      "returns:",
+      "  type: string",
+      "---",
+      "",
+      "the workflow approved nothing, so it selects no value.",
+      "",
+    ].join("\n");
+
+    // Written with `as`, and inside `<PrintErrors>` so the refusal is printed
+    // rather than ending the run: what this case is about is what the document
+    // holds *afterwards*, and a run that stopped at the element could not be
+    // asked.
+    const asking = [
+      `<Let as="src" value={${JSON.stringify(source)}} />`,
+      "<PrintErrors>",
+      '<Program source={src} as="approved" />',
+      "</PrintErrors>",
+      "",
+      '<If condition={typeof approved === "undefined"}>',
+      "the capture is unset.",
+      "<Else>",
+      "the capture holds {approved}",
+      "</Else>",
+      "</If>",
+      "",
+    ].join("\n");
+
+    // The same document against a declaration that does return, so the question
+    // the `<If>` asks is one this document can answer either way.
+    const control: string[] = [];
+    const answered = yield* runDocument({
+      source: asking,
+      declarations: [expanding()],
+      performed: control,
+    });
+    expect(answered.output).toContain("the capture holds # The program");
+    expect(control).toEqual([]);
+
+    const captured: string[] = [];
+    const capturing = yield* runDocument({
+      source: asking,
+      declarations: [expanding({ source: unresolved, digest: sourceDigest(unresolved) })],
+      performed: captured,
+    });
+
+    // The refusal was reported where the element was written.
+    expect(capturing.output).toContain("no <Return>");
+    // And the binding that site named was never written — not to the source,
+    // and not to anything else.
+    expect(capturing.output).toContain("the capture is unset.");
+    expect(capturing.output).not.toContain("the capture holds");
+    expect(captured).toEqual([]);
+    expect(capturing.output).not.toContain("the program ran.");
+
+    // The same refusal at a site that captures nothing: an authored ending this
+    // time, which the run settles on rather than recovering.
     const performed: string[] = [];
-    // The declaration fails before its `<Return>`, which is what every
-    // unsuccessful authorship ending is from the engine's side.
     const refusing = [
       "---",
       "props:",
@@ -357,7 +426,6 @@ describe("Tier ES — executable source returns", () => {
       "",
     ].join("\n");
 
-    const source = ["# The program", "", '<Effect name="four" />', ""].join("\n");
     const run = yield* runDocument({
       source: invoking(source),
       declarations: [expanding({ source: refusing, digest: sourceDigest(refusing) })],
@@ -366,7 +434,7 @@ describe("Tier ES — executable source returns", () => {
 
     expect(run.failure).toContain("nothing was approved");
     expect(performed).toEqual([]);
-    expect(run.output).not.toContain("# The program");
+    expect(run.output).not.toContain("the program ran.");
   });
 
   it("ES5: a root `returns` and a root-props mismatch each refuse before an effect", function* () {
