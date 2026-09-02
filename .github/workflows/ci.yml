@@ -82,11 +82,11 @@ jobs:
   # an artifact-and-dependency boundary between jobs that #279 spent its length
   # removing.
   test-deno:
-    name: test-deno (${{ matrix.shard }}/9)
+    name: test-deno (${{ matrix.shard }}/13)
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -121,7 +121,7 @@ jobs:
         run: deno task build:web
 
       - name: Test
-        run: deno run --allow-all --frozen scripts/runtime-tests.ts deno ${{ matrix.shard }}/9
+        run: deno run --allow-all --frozen scripts/runtime-tests.ts deno ${{ matrix.shard }}/13
 
   # The same command the release publishes with, minus --dry-run. Catches slow
   # types and unresolvable specifiers before they reach a tag.
@@ -573,11 +573,11 @@ jobs:
         working-directory: site
 
   test-node:
-    name: test-node (${{ matrix.shard }}/5)
+    name: test-node (${{ matrix.shard }}/7)
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5]
+        shard: [1, 2, 3, 4, 5, 6, 7]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -615,14 +615,14 @@ jobs:
         run: pnpm exec tsc --project tsconfig.node.json --noEmit
 
       - name: Test
-        run: pnpm test:node ${{ matrix.shard }}/5
+        run: pnpm test:node ${{ matrix.shard }}/7
 
   test-bun:
-    name: test-bun (${{ matrix.shard }}/2)
+    name: test-bun (${{ matrix.shard }}/4)
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -634,7 +634,7 @@ jobs:
       - run: bun install
 
       - name: Test
-        run: bun run test:bun ${{ matrix.shard }}/2
+        run: bun run test:bun ${{ matrix.shard }}/4
 
       # test:bun never loads packages/cli/src/bun.ts, so it cannot tell whether
       # the Bun entrypoint's API.Env providers work. This document drives a
