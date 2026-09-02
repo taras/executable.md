@@ -12,12 +12,12 @@ process can name without operating-system containment.
 
 | | |
 |---|---|
-| evidence commit | `b0fcee9f` (this branch, `spike/tmux-pane-workers`, base `a7f60c02` on `main`) |
+| evidence commit | `650510b5` (this branch, `spike/tmux-pane-workers`, base `a7f60c02` on `main`) |
 | host | macOS `darwin 25.5.0`, `arm64` |
 | tmux | 3.6a |
 | Deno | 2.9.5 (stable, release, aarch64-apple-darwin) |
 | command | `deno task proof:tmux-pane-workers --out <dir>` from a prepared checkout |
-| result | 8/8 checks, 115 claims, `plans/tmux-pane-workers-evidence.json` (IPC tokens redacted; the pane ids, tty names, pids and socket paths in it belong to that one run and to nothing durable) |
+| result | 9/9 checks, 127 claims, `plans/tmux-pane-workers-evidence.json` (IPC tokens redacted; the pane ids, tty names, pids and socket paths in it belong to that one run and to nothing durable) |
 
 The proof is `scripts/proofs/tmux-pane-workers/`. It ships nothing in the
 binary. Run it unattended (it starts a throwaway outer tmux session of its own
@@ -68,7 +68,7 @@ Observed relationships (journey check, `hellos` and child evidence files):
 | missing executable never acknowledges readiness; `exit 1` acknowledges then reports 1 | readiness-boundary | holds | `/definitely/missing` → `startup-failed`, no `ready` in the pane's event log; `--mode exit1` → `ready` then `exited {exitCode: 1}`, in that order; the pane and worker pid unchanged across both |
 | argv bytes unchanged | journey | holds | `["a b", "\"quoted\"", "$HOME", "x;y", "`z`", "new\nline", "it's", "#{pane_id}"]` sent over IPC, read back byte-identical from the child's evidence file |
 | pane text before and after a child, not as its input; child bytes never through the parent | journey | holds | prelude/epilogue `displayed` acks; child's recorded stdin holds only the typed lines; the control client received no `%output` line (it attaches `-f no-output`); the parent reads pane content only through `capture-pane`, as evidence |
-| two sequential children in one pane; concurrent second refused; distinct panes concurrent | journey | holds | child A exits 3, epilogue, child A2 `ready` on the same `#{pane_id}` and worker pid; `A-dup` → `refused busy`; A and B typed into concurrently |
+| two sequential children in one pane; concurrent second refused; distinct panes concurrent | journey, sequential-handoff | holds | child A exits 3, epilogue, child A2 `ready` on the same `#{pane_id}` and worker pid; `A-dup` → `refused busy`; A and B typed into concurrently; the handoff regression below |
 | 2×2 and 5-pane `columns={2}` row-major at different sizes; no `tiled` | layout-geometry | holds | 4@2, 5@2, 8@3 at 80×24 and 200×60; `list-panes` geometry checked pairwise (below / right-of); the last short row spans its width; `tiled` recorded beside each for contrast |
 | attach only after every pane is ready; startup failure exposes no grid and tears everything down | journey, startup-failure-atomic | holds | attach issued after all four `ready`; with pane 2 launching a missing executable, no attach, and the three started children, four workers and the server are all unreachable afterwards |
 | detach ≠ control loss ≠ server stop; none ends pane work | signals-distinct | holds | `%client-detached <tty>` names the visible client, children keep running; detaching the control client ends its stream with `%exit` while `has-session` still answers and workers stay connected; `kill-server` closes every worker link and SIGHUPs workers and children |
@@ -79,20 +79,22 @@ Observed relationships (journey check, `hellos` and child evidence files):
 
 ## What teardown can and cannot prove
 
-The interactive-process resource escalates SIGINT → 2 s → SIGKILL on the
-child, then reaches what the child left behind from a snapshot taken _before_
-the first signal: the child's descendants by parent links, plus every member
-of the pane's process group other than the worker. At shutdown the worker
-additionally lists every process still holding the pane's terminal (`lsof -t
-/dev/ttysN`) and kills it. Outcomes, with ground truth from the children's own
-records of the pids they forked:
+A child's **settlement** is two sweeps in order, run by its worker after every
+exit — natural, cancelled or at shutdown — and `exited` is reported only after
+both, because `exited` is what frees the pane. First the interactive-process
+resource escalates SIGINT → 2 s → SIGKILL on the child, then reaches what the
+child left behind from a snapshot taken _before_ the first signal: the child's
+descendants by parent links, plus every member of the pane's process group
+other than the worker. Then the worker lists every process still holding the
+pane's terminal (`lsof -t /dev/ttysN`) and kills it. Outcomes, with ground
+truth from the children's own records of the pids they forked:
 
 | descendant | found by | stopped |
 |---|---|---|
 | in the inherited process group, parent ignoring SIGINT (`sh -c "trap '' INT; exec sleep 600"`) | ancestry and group snapshot | yes (`method: killed`) |
 | `setsid()` away, terminal still open, parent alive at cancel | ancestry snapshot | yes |
 | `setsid()` away, terminal closed, parent alive at cancel | ancestry snapshot | yes |
-| `setsid()` away, terminal still open, **parent already exited** (reparented to launchd) | worker's shutdown terminal sweep | yes |
+| `setsid()` away, terminal still open, **parent already exited** (reparented to launchd) | the parent's settlement terminal sweep, before `exited` | yes |
 | `setsid()` away, terminal closed, **parent already exited** | nothing | **no** — recorded, then killed by the check from the child's own record |
 
 Two facts fix where each sweep has to live:
@@ -100,12 +102,22 @@ Two facts fix where each sweep has to live:
 - once the worker exits, tmux marks the pane dead and closes the pty master,
   and macOS revokes the slave; after that `lsof` names nobody. A provider-level
   sweep before `kill-server` found nothing. The terminal sweep is the
-  worker's, at its own shutdown, while it still holds the pane open;
+  worker's, while it still holds the pane open — at every settlement, so an
+  orphan left by one child never meets the next, and once more at shutdown;
 - a descendant's parent link is gone the moment the parent exits, so the
   ancestry snapshot must precede the first signal, and a child that exits on
   its own is swept then, before `exited` is reported — `exited` is what makes
   the pane free, and a sweep running beside a new child would reach that child
   too (they share the group).
+
+The `sequential-handoff` regression is the case those facts protect: the first
+child forks a descendant that `setsid()`s, keeps the pane terminal open and
+outlives its parent; a second launch is sent the instant the parent is told
+to exit. Observed: the launch is `refused busy` before `exited`; `exited`
+arrives with the descendant absent from the ancestry snapshot but named and
+gone in `terminalHolders`; the descendant is unreachable; a third launch is
+admitted, and `lsof` then names only the worker and the new child on that
+terminal. Removing the settlement sweep fails exactly those claims.
 
 So the contract #717 can carry is: **teardown proves that nothing remains in
 any pane's process group, nothing is a descendant of any child that was alive
@@ -124,15 +136,17 @@ tested.
 
 ## Measurements
 
-Medians with (min–max) over 20 runs per pane count, milliseconds, on the host above. Each run is one complete lifecycle: hidden server and layout, workers connected, every child's `spawn` event, visible attach, `detach-client` issued and `%client-detached` observed, then cancel, shutdown, `kill-server`, and every pid proven unreachable.
+Medians with (min–max) over 20 runs per pane count, milliseconds, on the host above. Each run is one complete lifecycle: hidden server and layout, workers connected, every child's `spawn` event, visible attach, `detach-client` issued and `%client-detached` observed, one sequential handoff on pane 0, then cancel, shutdown, `kill-server`, and every pid proven unreachable.
 
-| panes | server + layout | workers connected | all children ready | attach | reader-close detected | teardown |
-|---|---|---|---|---|---|---|
-| 2 | 322 (269–1858) | 439 (371–2046) | 442 (374–2054) | 46 (33–163) | 34 (27–50) | 895 (826–1098) |
-| 4 | 624 (451–1519) | 762 (526–1637) | 767 (529–1641) | 86 (44–215) | 41 (28–129) | 1835 (1578–3239) |
-| 8 | 1053 (840–3225) | 1153 (969–3225) | 1159 (975–3253) | 106 (68–848) | 44 (30–220) | 3889 (3342–5045) |
+| panes | server + layout | workers connected | all children ready | attach | reader-close detected | handoff | relaunch | teardown |
+|---|---|---|---|---|---|---|---|---|
+| 2 | 338 (248–1461) | 465 (361–1922) | 468 (364–1927) | 57 (30–287) | 35 (27–145) | 616 (559–954) | 2 (1–5) | 1232 (1069–1662) |
+| 4 | 591 (436–1587) | 655 (544–1587) | 659 (548–1693) | 72 (35–700) | 34 (26–70) | 814 (699–1169) | 2 (1–2) | 2000 (1830–2409) |
+| 8 | 1249 (805–2634) | 1249 (968–2634) | 1299 (984–2654) | 126 (78–669) | 68 (29–273) | 1500 (1227–2106) | 2 (1–13) | 4405 (4105–5068) |
 
-The first three columns are cumulative from the start of the run; attach, reader-close detection and teardown are each measured from their own trigger. Startup is Deno starting one worker per pane (the child `spawn` event follows the workers by tens of milliseconds, because readiness is the spawn, not the child's own startup). Teardown is dominated by the worker's terminal-holder sweep — `lsof -t` costs about 0.4 s per pane on this host and contends when eight run at once — plus the 500 ms settle window after SIGKILL; the interactive children here exit on SIGINT at once. No pass threshold is proposed; these are the numbers.
+The first three columns are cumulative from the start of the run; the others are each measured from their own trigger. Startup is Deno starting one worker per pane (the child `spawn` event follows the workers by tens of milliseconds, because readiness is the spawn, not the child's own startup).
+
+**Handoff** is the sequential-reuse latency the settlement sweep introduces: from `exit 0` typed into pane 0's child to the worker's `exited`, which follows the escalation's process-table snapshot (~0.1 s) and the terminal-holder sweep — `lsof -t` costs ~0.4 s on this host and grows with the number of processes holding files, hence 0.6 s at 2 panes and 1.5 s at 8. **Relaunch**, from the next `launch` to its `ready`, is a couple of milliseconds: the pane is already free. Teardown is the same sweep once per pane, run concurrently and contending, plus the 500 ms settle window after SIGKILL. No pass threshold is proposed; these are the numbers.
 
 ## Findings a Planner should not have to rediscover
 
@@ -169,6 +183,10 @@ The first three columns are cumulative from the start of the run; attach, reader
    losing its terminal while a grid is up.
 10. The default shell needs ~1.5 s to read its rc files; readiness is the
     shell process, not its prompt.
+11. **`lsof` is the cost of the terminal sweep**: ~0.4 s per call here,
+    scaling with the processes on the host, paid once per settlement and once
+    more per pane at shutdown. It is what a sequential handoff waits for; a
+    cheaper way to name a pty's holders would take that latency out.
 
 ## Resource ownership
 
@@ -189,7 +207,8 @@ worker (tmux pane process, own program)
 └─ run()
    └─ per launch: spawned task
         └─ interactive-process resource ── ensure: SIGINT → SIGKILL → snapshot sweep
-   shutdown: quiesce → terminal-holder sweep → bye → exit
+   per settlement (exit, cancel, shutdown): escalation → terminal-holder sweep → `exited`
+   shutdown: settle → one more terminal-holder sweep → bye → exit
 ```
 
 ## The smallest interfaces the evidence supports
@@ -207,7 +226,7 @@ type FromWorker =
   | { type: "ready"; id: string; pid: number }            // the spawn event, nothing earlier
   | { type: "startup-failed"; id: string; reason: string } // the error event; never after ready
   | { type: "refused"; id: string; reason: "busy" }
-  | { type: "exited"; id: string; exitCode?: number; signal?: string } // after the pane's sweep
+  | { type: "exited"; id: string; exitCode?: number; signal?: string; proof: QuiescenceProof } // after settlement
   | { type: "quiescent"; id?: string; proof: QuiescenceProof }
   | { type: "bye"; ttyHolders: { pid: number; gone: boolean }[] };
 
@@ -222,6 +241,7 @@ interface QuiescenceProof {
   childGone: boolean;
   descendants: { pid: number; inGroup: boolean; delivery: "delivered" | "absent" | "refused"; gone: boolean }[];
   survivors: number[];
+  terminalHolders: { pid: number; gone: boolean }[]; // the worker's sweep, after the escalation
 }
 
 // The provider seam core would own.
