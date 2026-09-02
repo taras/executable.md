@@ -472,6 +472,44 @@ owning the same run lifecycle remotely. `export` produces the immutable portable
 evidence contract in `specs/xmd-artifact-spec.md`; it does not expose the live
 run database.
 
+A remote host owns that surface unchanged. One durable owner is selected from
+the public run ID by the same arithmetic local discovery uses, and it holds the
+run record, the filtered journal, the immutable Workspace roots and their
+content-addressed bytes, the Agent-session mappings, the retained delivery state
+and executor ownership.
+
+**Executor ownership is the lifetime of one authenticated connection.** A remote
+start or resume opens that connection, and the acquisition lives and dies with
+it: the owner registers the exact acquisition on admission and invalidates it on
+close, which is the staleness proof that replaces an operating system releasing
+a file lock. It is not a time lease, and closing it rolls back nothing already
+committed. Every request that advances the run — start, resume, stale recovery,
+document execution, Workspace mutation, provider attachment, native execution
+against a materialized root, lifecycle transition, accepted-outcome publication
+and terminal settlement — validates that exact live acquisition and the expected
+Workspace root inside its own mutating transaction.
+
+**Delivery and inspection are the exceptions, and they stay exceptions.** A
+delivery retains one externally supplied value for one exact retained subject
+under §3.5's rules — no acquisition, no execution, no attachment, no journal
+event, no status change — whether the subject is a suspension request or a
+terminal decision. Inspection is read-only and returns immutable snapshots. A
+remote host that let either one advance a lifecycle would have built a second
+state machine beside the journal.
+
+**A remote host admits its executor before it trusts it.** Where the connection
+comes from an ephemeral CI runner, admission validates that runner's OIDC claims
+— issuer, configured audience, repository ID, repository-owner ID, event name,
+workflow ref and SHA, and the configured immutable workflow identity — before an
+acquisition exists. Repository names are mutable and are not what is checked.
+
+**An ephemeral runner recovers like any interrupted executor.** It materializes
+one selected retained root, works in it, and submits content-addressed changes
+that the owner validates and publishes atomically with the filtered journal
+result, so a runner that dies mid-flight exposes only a prior or a new complete
+transaction. The next acquisition performs the ordinary stale-execution recovery
+of §3.3 and resumes from the exact committed run and Workspace frontier.
+
 ### 3.9 What is shipped
 
 The lifecycle above is the whole design, including §3.7's rule that a status
@@ -1603,6 +1641,133 @@ not name its own number and repository are all refused. A well-formed answer to
 another question is still the wrong answer.
 
 
+### 7.8 Ordered merge: `Git.Merge`
+
+A merge is Workspace-local. It runs inside the retained checkout, against exact
+commits the document names, and it publishes through the ordinary effect
+transaction of §10.1 rather than through a Git host.
+
+```md
+<Git.Merge
+  firstParent={implementation.headSha}
+  secondParent={target.baseSha}
+  mergeBase={observed.mergeBase}
+  purpose="synchronize"
+  as="merge"
+/>
+```
+
+The props are closed and all five are required: two exact parent commits, the
+exact merge base, a `purpose` of `"synchronize"` or `"publish"`, and `as`. Which
+Repository and checkout the merge runs in is decided the way §7.1 decides it,
+and the repository, checkout, Workspace root and executor acquisition are
+authenticated provider state rather than props. Form validation runs first: a
+missing prop, an unknown prop, a `purpose` outside the enum and a missing `as`
+each fail before a Repository is observed or a provider is reached.
+
+**The parent order is the caller's, and the two purposes are opposite
+operations.** `purpose="synchronize"` brings a target into an implementation and
+is authored `[implementationHead, targetBase]`. `purpose="publish"` brings a
+reviewed implementation onto a target and is authored `[reviewedBase,
+reviewedHead]`. The component does not infer the order from the purpose and does
+not reorder what it was given; the purpose is retained so the record says which
+operation the run believed it was performing.
+
+**The result is closed and has exactly two shapes.** A clean merge binds the new
+commit and the Workspace root that followed it, and its mutation, root
+publication and filtered result commit together — a crash before the commit
+leaves the checkout, the current root and the effect history the ones the run
+had. A conflicted merge restores the pre-merge Workspace root, publishes
+normalized conflict evidence against that unchanged root, and binds the
+conflicted result; it offers no file mutation under that evidence and adopts no
+partial merge state. Both are successful effects with different outcomes, not a
+success and a failure.
+
+Conflict evidence is normalized before it is retained: the repository-relative
+path, the classification, the base, ours and theirs object identities and modes
+where Git supplies them, and the stage numbers of entries in the unmerged index.
+Rendered conflict markers alone are not the record, because a later reader has
+to be able to tell a stale conflict from the one it is looking at without
+reparsing text.
+
+A merge never contacts a Git host, never pushes, and never rewrites a published
+identity. Rebase, force, force-with-lease and reset-based replacement are absent
+from this component and from every other one in this specification.
+
+### 7.9 Publishing a reviewed merge: `Git.PublishTarget`
+
+Publishing to a protected target branch is a Git-host effect and a different
+question from advancing a branch this run owns.
+
+```md
+<Git.PublishTarget
+  expectedRemoteCommit={reviewed.baseSha}
+  sourceCommit={merge.commit}
+  reviewedHead={reviewed.headSha}
+  as="publication"
+/>
+```
+
+All four props are required and the set is closed. The remote, the target ref,
+the credential and the non-force policy are host-owned: they are not props, and
+no authored value widens them. Form validation runs before the host's ceiling is
+read and before any credential exists.
+
+**It is a compare-and-swap.** One non-force ref update happens only after
+observing the target equal to `expectedRemoteCommit`. A target already equal to
+the exact `sourceCommit` is adopted with nothing performed. Every other
+observation refuses without mutating: a target at some third commit is a
+conflict, an incomplete observation is unavailability rather than absence, and a
+permanent ambiguity is a refusal. A race that moves the target before or during
+publication therefore cannot publish over it.
+
+The bound result is stable evidence of what the effect settled on — the target
+ref identity, the expected commit, the published commit and the reviewed head —
+and not a live branch snapshot. `reviewedHead` is carried so the record says
+what the publication was authorized against, which is what lets an
+exact-revision review be invalidated by a target that moved.
+
+**Three operations stay distinct.** `Git.Push` (§7.4) advances a branch this run
+published, from an ancestry relation proved inside the authenticated object
+source. `Git.PublishTarget` updates a ref it does not own, from an exact
+expected pre-state. A Git host's own pull-request merge endpoint is neither, and
+this specification defines no component for one: a squash or a rebase performed
+by the host would publish a commit no reviewer saw, under parents the review
+never named.
+
+### 7.10 Pull-request comments, readiness and closure
+
+Three more Git-host effects act on a pull request a canonical URL names. Each
+requires `as`, validates its form before any provider or credential is reached,
+and reconciles under §10.2: observe, adopt a compatible completion, perform a
+proven absence once, refuse conflict and ambiguity.
+
+```md
+<PullRequest.Comment url={pullRequest.url} as="comment">
+The Architect accepted {revision.headSha} against {revision.baseSha}.
+</PullRequest.Comment>
+
+<PullRequest.Ready url={pullRequest.url} as="ready" />
+<PullRequest.Close url={pullRequest.url} as="closed" />
+```
+
+`PullRequest.Comment` is paired and its rendered content is the body, verbatim.
+Its natural key is the canonical pull-request URL plus the engine-derived effect
+identity of [Workflow runs](./workflow-spec.md) §8 — never the body — so an
+edited sentence is the same comment and a re-rendered body is not a second one.
+It binds `{ url }`.
+
+`PullRequest.Ready` takes a pull request out of draft and binds normalized ready
+evidence. `PullRequest.Close` closes one unmerged and binds exactly
+`{ url, state: "closed", merged: false }`. Both are self-closing, both are keyed
+by their exact subject, and neither reopens, merges or comments on anything.
+Observing a pull request already ready is an adoption; observing one that has
+been merged, or that belongs to another repository, is a conflict.
+
+None of the three pushes, and none of them derives authority from what it
+observes. Which of them a document may invoke, and what authorizes the
+invocation, is authored control flow above them.
+
 ## 8. Agents inspect; XMD mutates
 
 ### 8.1 No directory registration
@@ -1653,6 +1818,14 @@ document cannot reach.
 This is what the host asks for and what it refuses. It is not a claim that every
 ACP adapter exposes no tool when asked for none; that portable proof is tracked
 by #496 and does not widen this ceiling.
+
+Constructs added for a trusted host do not reach the Agent either, and they do
+not reach it for a different reason than the tool set: an Agent never expands a
+document. Merging, publishing a target, commenting, changing draft state,
+closing an issue or a pull request, moving a Project item and running evidence
+are authored XMD the trusted host expands under its own acquisition. What an
+Agent may return is text, and a fragment it returns is admitted only against the
+tables §8.4 states — which name none of them.
 
 `Session.Launch` is unsupported by this profile. The trusted workflow host states
 both ordinary-run native capability sets empty and installs no native
@@ -1973,8 +2146,15 @@ The write table is authority, not prompting guidance. Generated source cannot
 grant itself Push, PullRequest, an issue upsert, a repository, a process, an
 eval or exec block, a native command, a credential or an arbitrary network write
 merely by naming a component; the table excludes local Git even though those
-effects are also Workspace-local. Trusted reusable Markdown components may be
-admitted explicitly; generated XMD admits none of them.
+effects are also Workspace-local. The constructs §§7.8-7.10, §10.5 and §10.6 add
+change nothing about that: `Git.Merge`, `Git.PublishTarget`,
+`PullRequest.Comment`, `PullRequest.Ready`, `PullRequest.Close`,
+`Issue.Comment`, `Issue.Close`, `Project.Status` and `Evidence.Run` appear in no
+table this specification states, so a fragment naming one is refused in the
+preflight before any generated effect, exactly as `<Git.Push>` is. Adding a
+construct to a table is a host act, and a factory host adds none of them.
+Trusted reusable Markdown components may be admitted explicitly; generated XMD
+admits none of them.
 
 **Approval is authored, and it is ordinary.** `<Evaluate>` neither prompts nor
 approves. A workflow that requires approval reaches a branch, an elicitation, a
@@ -2653,6 +2833,35 @@ used. With no configuration there is no Issue provider, so every request reaches
 `NoIssueProvider` — absence of configuration is fail-closed, never an open
 default.
 
+#### Commenting on and closing an issue
+
+Two more Issue-provider effects act on an issue a canonical URL names. Both
+require `as`, both validate their form before any provider, ceiling or
+credential is reached, and both reconcile the way an upsert does — observe,
+adopt a compatible completion, perform a proven absence once, refuse conflict
+and ambiguity — inside the provider rather than through the Git host's shared
+state machine.
+
+```md
+<Issue.Comment url={issue.url} as="comment">
+The Planner accepted the plan at {plan.revision}.
+</Issue.Comment>
+
+<Issue.Close url={issue.url} reason="completed" as="closed" />
+```
+
+`Issue.Comment` is paired and its rendered content is the body, verbatim. Its
+natural key is the canonical issue URL plus the engine-derived effect identity,
+never the body, so an edited sentence is the same comment. It binds `{ url }`.
+
+`Issue.Close` is self-closing and its `reason` is a closed enum of `"completed"`
+and `"not_planned"`. It binds the normalized URL, state and reason. The reason
+is part of what the effect means rather than a label on it: a host that retained
+one terminal intent refuses a close naming the other. An issue already closed
+with the same reason is adopted; one closed with the other reason is a conflict.
+
+Neither reopens an issue, and neither derives authority from what it observes.
+
 ### 10.4 Worker Shell
 
 Worker Shell means Cloudflare's Workspace Shell capability implemented by
@@ -2681,6 +2890,86 @@ The capability exposes no host PATH, native execution or host filesystem.
 Network is denied unless explicitly authorized. A committed result restores
 without starting a Worker; an effect interrupted before commit executes again
 against its pre-effect Workspace root.
+
+### 10.5 Trusted evidence execution
+
+Some evidence can only be produced by running the project's own commands with
+the project's own tools. That is not Worker Shell, and it is not a capability a
+document may reach for by itself.
+
+```md
+<Evidence.Run commands={plan.evidenceCommands} as="evidence" />
+```
+
+`commands` is an authored **structured argv list** — an ordered list of argument
+vectors, each a non-empty list of strings — and never a shell string. There is
+no interpreter, no quoting layer and no string to mis-split, which is what makes
+the record of what ran the same thing as what ran. `as` is required, the prop
+set is closed, and the form is validated before the host's ceilings are read.
+
+The host owns everything else. Which executables may run, what environment they
+see, how long they may take, and how much output is retained are host ceilings
+rather than props. The commands run against one exact retained Workspace root
+that the host materialized, on the trusted runner where the native toolchain
+lives — never inside the run's durable owner, which has no toolchain and must
+not acquire one.
+
+The bound result is an ordered list of bounded results, one per command: the
+argv it ran, its exit status, and its truncated captured output. That is an
+ordinary durable record, so a completed replay produces it without running
+anything at all.
+
+`Evidence.Run` is not Worker Shell (§10.4) and does not replace it: Worker Shell
+is a contained interpreter over the Workspace filesystem, while this is native
+execution of an authored list under a trusted host's ceiling. It is absent from
+the workflow Agent's capabilities (§8.3) and from every generated-XMD table
+(§8.4), so neither an Agent nor a fragment it wrote can reach it.
+
+### 10.6 Project effects
+
+A **Project provider** is an external service that owns project boards and the
+status of the items on them. GitHub Projects V2 is one adapter.
+
+This is a boundary of its own for the reason §10.3 gives about issues: a project
+board need own neither a Git repository nor an issue collection, so a Project
+status cannot truthfully execute or persist as a `git_host_effect` or as an
+`issue_effect`. `Project.Status` therefore reaches its own contextual operation
+and journals its own durable effect type, and it reuses the shape of the
+reconciliation rather than the Git host's state machine.
+
+```md
+<Project.Status item={itemId} field={fieldId} option={optionId} as="status" />
+```
+
+The component is self-closing, its four props are required and the set is
+closed, and it binds the normalized `{ item, field, option }`. Its natural key
+is the exact item plus the exact field. Its compatible pre-state is the option
+that item currently holds: an item already at the requested option is adopted
+with nothing performed, an item at another allowed option is performed once, and
+an unreadable board, an unavailable field, an ambiguous item and a partial
+permission read are **unavailable** rather than absent — reading an unreadable
+board as an empty one is how an unauthorized item would be moved.
+
+Which project, item, field and options may be reached at all is a host ceiling
+installed beside the credential. An authored prop selects within that ceiling
+and can never widen it, which is the same rule §10.3's tracker follows.
+
+**A board is a projection.** The status it shows is published from the run's own
+journaled lifecycle, never read as it. A board ahead of the journal is drift the
+next execution reconciles, and it is not evidence that a transition happened.
+
+### 10.7 What never crosses these boundaries
+
+Every effect in §10.2, §10.3, §10.5 and §10.6 reaches its provider the same way,
+and the same things stay out of the record. Credentials are not inputs: an
+application private key, a webhook secret, an issued installation token, an
+OIDC verification configuration, a provider endpoint, a raw provider payload, a
+pagination cursor and a host path stay in the selected provider's own closure.
+None of them enters a component prop, context composition data, a durable
+request, a natural key, a retained result, a comment body, document output or a
+diagnostic. What a durable record holds is the normalized request, the natural
+key, the observed pre-state and the normalized result — enough to reconcile the
+effect, and nothing that would make the journal a place to read a secret from.
 
 ## 11. History forks
 
@@ -3146,6 +3435,42 @@ There is no public `Git.Fetch` here. The shipped Git scope is Repository clone
 and its remote reads, plus `Git.Push` observation and mutation; a future public
 fetch operation requires its own language and durability contract.
 
+### 13.2 Remote topology
+
+A remote host runs the same contracts with the durable state and the native
+tools in two different places.
+
+One SQLite-backed Cloudflare Durable Object per run is the durable owner,
+selected from the public run ID by the same arithmetic §9.3 of the workflow
+specification uses. It holds the run record and filtered journal, the immutable
+Workspace roots and their content-addressed bytes, the Repository and Worktree
+records, the Agent-session mappings, the retained delivery state and the
+authenticated intake records, and it owns executor admission. It is a
+runtime-named adapter beside the Deno one: shared modules reach it through the
+same contextual storage, lifecycle and Workspace APIs, detect no runtime, and
+import nothing Cloudflare-specific.
+
+Executor ownership is one authenticated WebSocket connection whose lifetime is
+the acquisition. The owner registers the exact acquisition on admission and
+invalidates it on close; there is no duration, expiry, renewal, heartbeat,
+generation record or liveness poll, and a close rolls back nothing already
+committed. Every mutating transaction validates that exact acquisition and the
+expected Workspace root together.
+
+Native Git, evidence processes and Agent clients run on the ephemeral runner and
+nowhere else. The runner materializes one selected retained root, works in it,
+and submits content-addressed changes; the owner validates acquisition, root and
+content and then atomically publishes the new root with the filtered journal
+result. That is §10.1's effect transaction with the mutation performed where the
+tools are and the publication performed where the authority is, so a runner
+crash exposes only a prior or a new complete transaction and the next
+acquisition resumes from the exact committed frontier.
+
+Delivery and inspection reach the owner without an acquisition, under §3.8. A
+completed run replays there as it does locally: it attaches no remote storage
+session, Workspace, Agent, process, Git, Git-host, Issue, Project or credential
+provider.
+
 ## 14. Contract inventory
 
 | Contract | Status at this design revision |
@@ -3174,5 +3499,13 @@ fetch operation requires its own language and durability contract.
 | generated-XMD mutation-proposal admission | built by #369 and #567: the standard Deno profile's write table is core's paired `File:write`, this package's lexical `Dir` and core's self-closing `File.Delete`, in that retained order and followed by any host extension; admitted mutations run as the ordinary components they are through the run's effect transactions, a generated deletion publishing the same `workspace_file` effect an authored one does; the evaluator adds no receipt or result entry, so a write-only fragment still binds `{ observations: [], output: "" }`; and approval is authored control flow before the element. Local Git, Git-host, issue, process, execution, credential and external-write effects are outside the class |
 | Deno-local DOFS persistence | POC proven by #349 / PR #350 |
 | scoped Deno Worker Shell | containment proven by #351 / PR #353 and transactions by #357 / PR #362; production integration unbuilt |
+| `Git.Merge` ordered Workspace-local merge (§7.8) | specified by #710; implementation unbuilt |
+| `Git.PublishTarget` compare-and-swap target publication (§7.9) | specified by #710; implementation unbuilt |
+| `PullRequest.Comment`, `PullRequest.Ready`, `PullRequest.Close` (§7.10) | specified by #710; implementation unbuilt |
+| `Issue.Comment` and `Issue.Close` (§10.3) | specified by #710; implementation unbuilt |
+| `Evidence.Run` trusted native evidence execution (§10.5) | specified by #710; implementation unbuilt |
+| `Project.Status` and the Project-provider boundary (§10.6) | specified by #710; implementation unbuilt |
+| remote lifecycle host, executor connection and remote topology (§3.8, §13.2) | specified by #710; implementation unbuilt |
+| terminal-decision delivery on the delivery plane (§3.8) | specified by #710; implementation unbuilt |
 | Worker JavaScript | deferred |
 | bundled workerd local host | omitted; POC #347 / PR #348 retained as provider evidence |
