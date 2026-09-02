@@ -103,6 +103,17 @@ export interface TerminalComposite {
    */
   update(ordinal: number, state: TerminalPaneState): Operation<void>;
   /**
+   * Show text a pane's own content rendered.
+   *
+   * This is where a paired pane's output goes, and the only place it goes: it
+   * is never copied into the root document output or into a capture written
+   * around the grid, because the reader is looking at the pane. Terminal bytes
+   * an interactive child exchanges with the reader never come through here at
+   * all — those belong to the pane's terminal and are neither captured nor
+   * journaled.
+   */
+  display(ordinal: number, text: string): Operation<void>;
+  /**
    * Start the host's default interactive shell in one pane and report how it
    * ended.
    *
@@ -183,6 +194,13 @@ export function prepareTerminalGrid(request: TerminalGridRequest): Operation<Ter
  */
 export interface TerminalProviderLog {
   readonly events: string[];
+  /**
+   * What each pane displayed, by ordinal.
+   *
+   * A suite reads this to prove where a pane's output went — and reads the root
+   * document output to prove where it did not.
+   */
+  readonly shown: Map<number, string>;
 }
 
 /**
@@ -200,6 +218,13 @@ export interface ControlledTerminalProviderOptions {
   onPrepare?: (request: TerminalGridRequest) => Operation<void>;
   onAttach?: () => Operation<void>;
   onDestroy?: () => Operation<void>;
+  /**
+   * Called as each pane state is displayed.
+   *
+   * A suite watches it to react to something the grid decided — a pane that
+   * failed, a pane that became runnable — instead of waiting a while and hoping.
+   */
+  onUpdate?: (ordinal: number, state: TerminalPaneState) => void;
   /**
    * What a pane's shell did.
    *
@@ -221,7 +246,8 @@ export interface ControlledTerminalProviderOptions {
 export function* installControlledTerminalProvider(
   options: ControlledTerminalProviderOptions = {},
 ): Operation<void> {
-  const log = options.log ?? { events: [] };
+  const log = options.log ?? { events: [], shown: new Map<number, string>() };
+  const shown = log.shown;
   let prepared = 0;
 
   yield* TerminalProvider.around(
@@ -243,6 +269,12 @@ export function* installControlledTerminalProvider(
           // deno-lint-ignore require-yield
           *update(ordinal, state) {
             log.events.push(`state:${generation}:${ordinal}:${state}`);
+            options.onUpdate?.(ordinal, state);
+          },
+          // deno-lint-ignore require-yield
+          *display(ordinal, text) {
+            const pane = shown.get(ordinal) ?? "";
+            shown.set(ordinal, pane + text);
           },
           *shell(ordinal, spawned) {
             log.events.push(`shell:${generation}:${ordinal}`);
