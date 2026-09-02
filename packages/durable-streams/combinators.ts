@@ -329,37 +329,51 @@ function createSpawnEffect<T>(
     description: "durable-spawn",
     effectDescription: { type: "ephemeral", name: "durable-spawn" },
     enter(resolve, routine) {
-      resolve({ ok: true, value: observingHalt(routine.scope.run(child), evidence) });
+      resolve({ ok: true, value: observingDisposal(routine.scope.run(child), evidence) });
       return (exit) => exit({ ok: true, value: undefined as undefined });
     },
   };
 }
 
 /**
- * The same task, with a deliberate `halt()` recorded as it happens.
+ * The same task, with a deliberate stop recorded as it happens.
  *
  * The caller receives every member the task defines — `then`, `catch`,
- * `finally`, the async dispose, the iterator — copied from the task itself
- * along with its prototype, so the public surface is the one `Task` has always
- * had. Only `halt` is replaced, and only to note that someone stopped the child
- * on purpose before stopping it.
+ * `finally`, the iterator — copied from the task itself along with its
+ * prototype, so the public surface is the one `Task` has always had.
+ *
+ * **Every** way a caller can stop the task is observed, not just the obvious
+ * one. `halt()` and `await using` — which reaches `Symbol.asyncDispose` and
+ * never touches `halt` — are the same decision spelled two ways, and a stop
+ * recorded as involuntary through either of them would be resumed on the next
+ * run as work nobody asked to redo. Awaiting the task is not a stop and is left
+ * exactly as it was.
  *
  * Copied rather than proxied: a task's members are read-only and
  * non-configurable, and a proxy is required to hand back exactly what the
- * target holds — so a `get` trap cannot substitute `halt` at all. Each copied
+ * target holds — so a `get` trap cannot substitute either of them. Each copied
  * member is the task's own closure and keeps working on the copy.
  */
-function observingHalt<T>(task: Task<T>, evidence: CancellationEvidence): Task<T> {
+function observingDisposal<T>(task: Task<T>, evidence: CancellationEvidence): Task<T> {
   const members = Object.getOwnPropertyDescriptors(task);
   // Replaced in the descriptor map rather than on the finished object: the
   // task's own members are non-configurable, so redefining one afterwards
   // throws.
-  members.halt = {
-    value: () => {
+  const deliberate = <R>(stop: () => R): (() => R) => {
+    return () => {
       evidence.deliberate = true;
-      return task.halt();
-    },
+      return stop();
+    };
+  };
+  members.halt = {
+    value: deliberate(() => task.halt()),
     enumerable: true,
+    configurable: false,
+    writable: false,
+  };
+  members[Symbol.asyncDispose] = {
+    value: deliberate(() => task[Symbol.asyncDispose]()),
+    enumerable: false,
     configurable: false,
     writable: false,
   };
