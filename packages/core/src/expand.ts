@@ -2166,11 +2166,10 @@ function* expandTerminalGrid(
   // The grid renders nothing into the document: what a pane shows belongs to
   // that pane, and the sibling after `</Terminal.Grid>` renders to the root
   // again only once the provider has restored it.
-  const work = structure.panes.map((pane, index) =>
-    paneWork(pane, layout.cells[index]!.title, site, segment),
-  );
-
   try {
+    const work = structure.panes.map((pane, index) =>
+      paneWork(pane, layout.cells[index]!.title, site),
+    );
     const result = yield* runTerminalGrid(layout, work);
     if (result.failure !== undefined) {
       owner.push(yield* raise(terminalGridError(segment, result.failure.message)));
@@ -2195,12 +2194,7 @@ function* expandTerminalGrid(
  * enclosing body, and a checked failure settles the pane rather than poisoning
  * the root or a sibling.
  */
-function paneWork(
-  pane: TerminalPane,
-  title: string,
-  site: GridSite,
-  grid: ComponentElement,
-): PaneWork {
+function paneWork(pane: TerminalPane, title: string, site: GridSite): PaneWork {
   if (pane.form === "self-closing") {
     return {
       ordinal: pane.ordinal,
