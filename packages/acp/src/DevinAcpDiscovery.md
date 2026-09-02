@@ -85,7 +85,9 @@ deno run --allow-all --frozen packages/acp/tests/fixtures/devin-acp-discovery.ts
   "required": [
     "schema", "verdict", "authorized", "ran", "refusal", "detail",
     "devinVersion", "platform", "architecture", "modelTurns",
-    "runtimeStatus", "stopReason", "replyExact",
+    "runtimeStatus", "failureStage", "runtimeErrorCode",
+    "runtimeErrorDetailCode", "runtimeErrorClassification",
+    "relayTraceWritten", "stopReason", "replyExact",
     "agentSessionIdentityReported", "journalSufficient", "trace",
     "privateContentReported"
   ],
@@ -103,6 +105,11 @@ deno run --allow-all --frozen packages/acp/tests/fixtures/devin-acp-discovery.ts
     "architecture": { "type": "string" },
     "modelTurns": { "type": "integer", "minimum": 0, "maximum": 1 },
     "runtimeStatus": { "type": "string" },
+    "failureStage": { "type": "string" },
+    "runtimeErrorCode": { "type": "string" },
+    "runtimeErrorDetailCode": { "type": "string" },
+    "runtimeErrorClassification": { "type": "string" },
+    "relayTraceWritten": { "type": "boolean" },
     "stopReason": { "type": "string" },
     "replyExact": { "type": "boolean" },
     "agentSessionIdentityReported": { "type": "boolean" },
@@ -111,9 +118,12 @@ deno run --allow-all --frozen packages/acp/tests/fixtures/devin-acp-discovery.ts
     "trace": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema", "entries", "nonJsonLines", "agentStderr", "agentExit"],
+      "required": [
+        "schema", "complete", "entries", "nonJsonLines", "agentStderr", "agentExit"
+      ],
       "properties": {
         "schema": { "const": "devin-acp-wire.v1" },
+        "complete": { "type": "boolean" },
         "entries": {
           "type": "array",
           "items": {
@@ -211,13 +221,27 @@ stderr is represented only by byte count and a broad classification.
 <Fail message="The discovery report crossed its private-content disclosure boundary." />
 </If>
 
+<If condition={proof.verdict === "PRODUCT_FAILED"}>
+
+<Let value={proof.failureStage || "probe-evaluation"} as="reportedFailureStage" />
+<Let value={proof.runtimeErrorCode || "unreported"} as="reportedRuntimeCode" />
+<Let value={proof.runtimeErrorDetailCode || "unreported"} as="reportedDetailCode" />
+<Let value={proof.relayTraceWritten ? "written" : "not written"} as="reportedRelayState" />
+
+The failure occurred during `{reportedFailureStage}`. Its safe runtime
+classification is `{proof.runtimeErrorClassification}`; the runtime code is
+`{reportedRuntimeCode}` and its detail code is `{reportedDetailCode}`. The relay
+trace file was {reportedRelayState}.
+
+</If>
+
 <If condition={proof.ran}>
 
 The probe contacted Devin and captured {proof.trace.entries.length} filtered ACP
-messages while spending exactly {proof.modelTurns} turn.
+messages while attempting {proof.modelTurns} turn.
 
-<If condition={proof.modelTurns !== 1}>
-<Fail message="A live discovery must spend exactly one authorized model turn." />
+<If condition={proof.verdict === "PASS" && proof.modelTurns !== 1}>
+<Fail message="A successful discovery must spend exactly one authorized model turn." />
 </If>
 
 <Else>

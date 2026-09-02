@@ -61,6 +61,7 @@ const TraceEntrySchema = z.object({
 
 const WireTraceSchema = z.object({
   schema: z.literal("devin-acp-wire.v1"),
+  complete: z.boolean(),
   entries: z.array(TraceEntrySchema),
   nonJsonLines: z.object({ clientToAgent: z.number().int(), agentToClient: z.number().int() }),
   agentStderr: z.object({ bytes: z.number().int(), classification: z.string() }),
@@ -82,6 +83,11 @@ interface DiscoveryVerdict {
   architecture: string;
   modelTurns: number;
   runtimeStatus: string;
+  failureStage: string;
+  runtimeErrorCode: string;
+  runtimeErrorDetailCode: string;
+  runtimeErrorClassification: string;
+  relayTraceWritten: boolean;
   stopReason: string;
   replyExact: boolean;
   agentSessionIdentityReported: boolean;
@@ -93,6 +99,7 @@ interface DiscoveryVerdict {
 function emptyTrace(): WireTrace {
   return {
     schema: "devin-acp-wire.v1",
+    complete: false,
     entries: [],
     nonJsonLines: { clientToAgent: 0, agentToClient: 0 },
     agentStderr: { bytes: 0, classification: "none" },
@@ -113,6 +120,11 @@ function baseVerdict(): DiscoveryVerdict {
     architecture: process.arch,
     modelTurns: 0,
     runtimeStatus: "",
+    failureStage: "",
+    runtimeErrorCode: "",
+    runtimeErrorDetailCode: "",
+    runtimeErrorClassification: "none",
+    relayTraceWritten: false,
     stopReason: "",
     replyExact: false,
     agentSessionIdentityReported: false,
@@ -149,6 +161,18 @@ function classifyStderr(value: string): string {
   if (value.length === 0) {
     return "none";
   }
+  if (/enoent|not found|spawn/i.test(value)) {
+    return "executable-launch-failed";
+  }
+  if (/eacces|permission denied|notcapable|requires.*permission/i.test(value)) {
+    return "permission-denied";
+  }
+  if (/lockfile.*out of date|frozen/i.test(value)) {
+    return "dependency-state-invalid";
+  }
+  if (/cannot find (module|package)|module not found/i.test(value)) {
+    return "dependency-resolution-failed";
+  }
   if (/resource.?exhausted|quota|acu/i.test(value)) {
     return "quota-exhausted";
   }
@@ -158,7 +182,17 @@ function classifyStderr(value: string): string {
   if (/windsurf.*out.?of.?date|failed_precondition/i.test(value)) {
     return "client-compatibility-refused";
   }
+  if (/timed? ?out|timeout/i.test(value)) {
+    return "timeout";
+  }
+  if (/protocol|json.?rpc|initialize|connection closed|transport/i.test(value)) {
+    return "protocol-initialization-failed";
+  }
   return "unclassified";
+}
+
+function safeErrorCode(value: unknown): string {
+  return typeof value === "string" && /^[A-Za-z0-9_.:-]{1,100}$/.test(value) ? value : "";
 }
 
 function tokenFor(value: string, tokens: Map<string, string>, prefix: string): string {
@@ -355,6 +389,23 @@ function textFrom(events: AcpRuntimeEvent[]): string {
     .join("");
 }
 
+function traceSnapshot(
+  entries: TraceEntry[],
+  nonJson: { clientToAgent: number; agentToClient: number },
+  stderr: string,
+  outcome: { code: number; signal: string },
+  complete: boolean,
+): WireTrace {
+  return {
+    schema: "devin-acp-wire.v1",
+    complete,
+    entries,
+    nonJsonLines: nonJson,
+    agentStderr: { bytes: Buffer.byteLength(stderr), classification: classifyStderr(stderr) },
+    agentExit: outcome,
+  };
+}
+
 function* runRelay(): Operation<void> {
   const executable = process.env[REAL_DEVIN_ENV];
   const tracePath = process.env[TRACE_ENV];
@@ -406,14 +457,27 @@ function* runRelay(): Operation<void> {
     }
   });
 
-  const outcome = yield* settled.operation;
-  const trace: WireTrace = {
-    schema: "devin-acp-wire.v1",
-    entries,
-    nonJsonLines: nonJson,
-    agentStderr: { bytes: Buffer.byteLength(stderr), classification: classifyStderr(stderr) },
-    agentExit: outcome,
-  };
+  yield* writeTextFile(
+    tracePath,
+    `${JSON.stringify(traceSnapshot(entries, nonJson, stderr, { code: -1, signal: "" }, false), null, 2)}\n`,
+  );
+
+  let outcome: { code: number; signal: string };
+  try {
+    outcome = yield* settled.operation;
+  } catch (error) {
+    const classified = error instanceof Error ? error.message : "unclassified";
+    const failed = traceSnapshot(
+      entries,
+      nonJson,
+      `${stderr}\n${classified}`,
+      { code: -1, signal: "SPAWN_ERROR" },
+      true,
+    );
+    yield* writeTextFile(tracePath, `${JSON.stringify(failed, null, 2)}\n`);
+    throw error;
+  }
+  const trace = traceSnapshot(entries, nonJson, stderr, outcome, true);
   yield* writeTextFile(tracePath, `${JSON.stringify(trace, null, 2)}\n`);
   if (outcome.code !== 0) {
     yield* exit(outcome.code);
@@ -484,6 +548,7 @@ function* runDiscovery(): Operation<DiscoveryVerdict> {
     agentProcessEnv: { [REAL_DEVIN_ENV]: executable, [TRACE_ENV]: tracePath },
   });
 
+  let activeStage = "session-initialization";
   try {
     yield* scoped(function* () {
       const handle = yield* until(
@@ -501,6 +566,7 @@ function* runDiscovery(): Operation<DiscoveryVerdict> {
         }
       });
       verdict.agentSessionIdentityReported = handle.agentSessionId !== undefined;
+      activeStage = "turn-start";
       verdict.modelTurns = 1;
       const turn = runtime.startTurn({
         handle,
@@ -509,6 +575,7 @@ function* runDiscovery(): Operation<DiscoveryVerdict> {
         requestId: randomUUID(),
         timeoutMs: TIMEOUT_MS,
       });
+      activeStage = "turn-stream";
       const events: AcpRuntimeEvent[] = [];
       const iterator = turn.events[Symbol.asyncIterator]();
       let next = yield* until(iterator.next());
@@ -518,25 +585,53 @@ function* runDiscovery(): Operation<DiscoveryVerdict> {
       }
       const result = yield* until(turn.result);
       verdict.runtimeStatus = result.status;
+      if (result.status === "failed") {
+        verdict.failureStage = "turn-result";
+        verdict.runtimeErrorCode = safeErrorCode(result.error.code);
+        verdict.runtimeErrorDetailCode = safeErrorCode(result.error.detailCode);
+        verdict.runtimeErrorClassification = classifyStderr(result.error.message);
+      } else if (result.status === "cancelled") {
+        verdict.failureStage = "turn-result";
+        verdict.runtimeErrorClassification = "cancelled";
+      }
       verdict.stopReason = result.status === "completed" ? (result.stopReason ?? "") : "";
       verdict.replyExact = textFrom(events).trim() === EXPECTED_REPLY;
+      activeStage = "session-close";
       yield* until(runtime.close({ handle, reason: "Devin ACP discovery completed" }));
       closed = true;
+      if (result.status === "completed") {
+        verdict.failureStage = "";
+      }
     });
   } catch (error) {
     verdict.verdict = "PRODUCT_FAILED";
     verdict.refusal = "the Devin ACP journey did not complete";
-    verdict.detail = error instanceof Error ? classifyStderr(error.message) : "unclassified";
+    verdict.failureStage = activeStage;
+    verdict.runtimeErrorCode = safeErrorCode(field(error, "code"));
+    verdict.runtimeErrorDetailCode = safeErrorCode(field(error, "detailCode"));
+    verdict.runtimeErrorClassification =
+      error instanceof Error ? classifyStderr(error.message) : "unclassified";
+    verdict.detail = "inspect the safe runtime failure fields and relay trace";
   }
 
   if (yield* exists(tracePath)) {
-    const parsed: unknown = JSON.parse(yield* readTextFile(tracePath));
-    const trace = WireTraceSchema.safeParse(parsed);
-    if (trace.success) {
-      verdict.trace = trace.data;
+    verdict.relayTraceWritten = true;
+    try {
+      const parsed: unknown = JSON.parse(yield* readTextFile(tracePath));
+      const trace = WireTraceSchema.safeParse(parsed);
+      if (trace.success) {
+        verdict.trace = trace.data;
+      } else {
+        verdict.failureStage = "trace-validation";
+        verdict.runtimeErrorClassification = "invalid-relay-trace";
+      }
+    } catch {
+      verdict.failureStage = "trace-read";
+      verdict.runtimeErrorClassification = "invalid-relay-trace";
     }
   }
-  verdict.ran = verdict.trace.entries.length > 0;
+  verdict.ran =
+    verdict.modelTurns === 1 || verdict.relayTraceWritten || verdict.trace.entries.length > 0;
   if (verdict.verdict !== "PRODUCT_FAILED") {
     const windsurf = verdict.trace.entries.some(
       (entry) => entry.method === "initialize" && entry.clientInfo?.name === "windsurf",
