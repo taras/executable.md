@@ -8,6 +8,7 @@
 
 // Protocol types
 export type {
+  Cancellation,
   Close,
   CoroutineId,
   CoroutineView,
