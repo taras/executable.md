@@ -29,7 +29,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped, until } from "effection";
+import { createContext, ensure, scoped, until } from "effection";
 import type { Operation } from "effection";
 import { rm, writeTextFile } from "@effectionx/fs";
 import { API } from "@executablemd/runtime";
@@ -55,7 +55,7 @@ import { retainedSource } from "../src/root-source.ts";
 import { DocumentOutput } from "../src/api.ts";
 import { useNormalizedOutput } from "../src/output/normalize.ts";
 import { useTerminalOutput } from "../src/output/terminal.ts";
-import { isExactSource, useExactSource } from "../src/output/exact-source.ts";
+import { createExactSource, isExactSource } from "../src/output/exact-source.ts";
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
 import type { ImportedDefinition } from "../src/components/import-authority.ts";
 import type { PropsSchema, Segment } from "../src/types.ts";
@@ -1465,6 +1465,48 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
     expect(output).not.toContain("**these**");
   });
 
+  it("DM53: a component that reaches for the record by context name gets prose", function* () {
+    // Effection contexts resolve by name, so a name is not a secret: anything
+    // that can run code can build a context with the same one. This is the
+    // attack that closes — a function component nobody trusts asks for the
+    // record, corrupts whatever it finds, and then returns prose that would be
+    // published unpresented if the corruption had worked.
+    let reached = false;
+
+    const output = yield* published(
+      "<Virtual />\n",
+      [declared(POLICY_SOURCE)],
+      [
+        answeringOpenName({
+          kind: "function",
+          name: "Virtual",
+          path: "Virtual.ts",
+          props: NO_PROPS,
+          *fn() {
+            const stolen = createContext<{ has?: unknown } | undefined>(
+              "xmd.exact-source",
+              undefined,
+            );
+            const record = yield* stolen.get();
+            if (record !== undefined) {
+              reached = true;
+              // Every segment is exact, if anything asks this object.
+              record.has = () => true;
+            }
+            return PRESENTABLE;
+          },
+        } as unknown as ImportedDefinition),
+      ],
+    );
+
+    // The record is not reachable by name at all, which is the property under
+    // test; the assertion below holds either way, because reaching it would
+    // still decide nothing.
+    expect(reached).toBe(false);
+    expect(unpresented(output)).toBe(false);
+    expect(output).not.toContain("**these**");
+  });
+
   it("DM52: a segment this engine did not mark is prose, whatever it carries", function* () {
     // The other half of the same attack: not the definition claiming the
     // disposition, but segments arriving already wearing the mark. Two
@@ -1475,21 +1517,17 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
     // carrying any field at all — including the one an earlier design used —
     // answers false. This is the assertion that discriminates: a marker that
     // consulted a field would pass it back.
-    yield* scoped(function* () {
-      // The record belongs to the scope that made it, so the questions are
-      // asked inside that scope rather than by carrying it out.
-      const record = yield* useExactSource();
-      expect(
-        isExactSource(record, {
-          type: "text",
-          content: PRESENTABLE,
-          exact: true,
-        } as unknown as Segment),
-      ).toBe(false);
-      expect(
-        isExactSource(record, { type: "text", content: PRESENTABLE } as unknown as Segment),
-      ).toBe(false);
-    });
+    const record = createExactSource();
+    expect(
+      isExactSource(record, {
+        type: "text",
+        content: PRESENTABLE,
+        exact: true,
+      } as unknown as Segment),
+    ).toBe(false);
+    expect(
+      isExactSource(record, { type: "text", content: PRESENTABLE } as unknown as Segment),
+    ).toBe(false);
 
     // Then the end-to-end shape, which records a second fact worth keeping:
     // expansion rebuilds text segments, so a field a definition wrote onto its

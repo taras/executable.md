@@ -96,7 +96,7 @@ import {
 import { Component, importComponent, raise } from "./component-api.ts";
 import { sourceDescription } from "./source-position.ts";
 import { renderSegment } from "./render.ts";
-import { ExactSource, useExactSource } from "./output/exact-source.ts";
+import { createExactSource } from "./output/exact-source.ts";
 import type { ExactSource as ExactSourceRecord } from "./output/exact-source.ts";
 import { DocumentOutput } from "./api.ts";
 import {
@@ -1762,7 +1762,7 @@ function* runValueRoot(
         authority,
         ownBody,
       );
-      const exactRecord = yield* ExactSource.get();
+      const exactRecord = authority.exact;
       for (const resolved of expanded) {
         const text = renderSegment(resolved);
         if (text) {
@@ -1875,10 +1875,10 @@ function* documentWorkflow(
   // per-segment expansion calls (see spec §6.1).
   const counter = createBlockCounter();
 
-  // Which segments this run produced as source, read once: the emission paths
-  // below include the durable workflow's own, where an ordinary context read is
-  // not what `yield*` means.
-  const exactRecord = yield* ephemeral(ExactSource.get());
+  // Which segments this run produced as source. Read off the private authority
+  // this execution built, so the emission paths below reach it without a
+  // context — there is nothing here for a document to name.
+  const exactRecord = authority.exact;
 
   // What the document rendered before it stopped, held outside the expansion
   // scope so a failure still leaves it here (§6.9 Partial output). The buffered
@@ -2188,9 +2188,6 @@ function* executeDocument(
       // failure from. All created here and reclaimed with this task, so nothing
       // a run decided outlives it.
       yield* useSegmentCauses();
-      // Which segments this run produced as source. Scope-owned like the rest:
-      // reclaimed with the run, and answering nothing during the next.
-      yield* useExactSource();
       yield* usePropsCompiler();
       yield* useParseCompiler();
       const liveFailure: LiveFailureSlot = {};
@@ -2272,6 +2269,10 @@ function* executeDocument(
         ...(declaredImports === undefined ? {} : { declared: declaredImports }),
         identities: identity.identities,
         forms,
+        // Created here, held here, and reclaimed with this execution. Nothing a
+        // document, a component, middleware or a separately loaded copy can
+        // name reaches this object.
+        exact: createExactSource(),
       };
 
       // Install the document's runtime Component providers before durableRun

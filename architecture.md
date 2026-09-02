@@ -3583,6 +3583,13 @@ from somewhere, so none of them decides it — an ordinary
 claiming the disposition publishes prose, exactly as a repository file of that
 name does.
 
+The record of which segments an expansion produced as source belongs to the
+execution that made it and is handed down **by value** on canonical core's
+private expansion authority. Not through a context: a context resolves by name,
+and a name is not a secret, so a component could build one, reach the record and
+answer that everything is exact. It is reclaimed with its execution, reaches no
+public entrypoint, and marks nothing on the segments themselves.
+
 ## The syntax catalog boundary
 
 `xmd syntax` answers what a document may write here, and answering must cost

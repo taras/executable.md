@@ -11,51 +11,46 @@
  * field.
  *
  * So the record is kept beside the segments rather than on them, keyed by the
- * identity of the objects canonical expansion marked, and written only where
- * that expansion has already decided the provenance. A segment scanned from a
+ * identity of the objects canonical expansion marked. A segment scanned from a
  * document, parsed from a journal, or built by a handler is simply not in it —
  * where a field could be supplied, membership cannot be.
  *
- * It belongs to the run that made it. The table is created inside the execution
- * that owns it and handed down through context, so what one document decided is
- * reclaimed with it and answers nothing during the next.
+ * ## It is passed, never published
+ *
+ * The record belongs to one execution, which creates it and hands it down by
+ * value on the private `ExpansionAuthority` canonical core already carries its
+ * import authority on. It is deliberately not in a context: an Effection
+ * context resolves by *name*, and a name is not a secret — anything that can
+ * run code can build a context with the same one and reach whatever is stored
+ * under it. A component doing that to this record could replace its `has` and
+ * have its own prose published as source.
+ *
+ * There is no module-scoped table either, so nothing outlives the run that made
+ * it, and no brand on the segments, because a property is exactly what an
+ * untrusted object can carry.
  */
-
-import { createContext } from "effection";
-import type { Context, Operation } from "effection";
 
 import type { Segment } from "../types.ts";
 
 /** The segments one execution produced from exact-source components. */
 export type ExactSource = WeakSet<Segment>;
 
-/**
- * Where this execution keeps that record.
- *
- * Module-private: it is exported for the two core modules that produce and
- * consume the mark, and reaches neither public package entrypoint, so nothing a
- * document or a package can load is able to read or replace it.
- */
-export const ExactSource: Context<ExactSource | undefined> = createContext<ExactSource | undefined>(
-  "xmd.exact-source",
-  undefined,
-);
-
-/** Install this execution's own record, and hand it back. */
-export function* useExactSource(): Operation<ExactSource> {
-  const exact: ExactSource = new WeakSet();
-  yield* ExactSource.set(exact);
-  return exact;
+/** A record for one execution, created where that execution begins. */
+export function createExactSource(): ExactSource {
+  return new WeakSet<Segment>();
 }
 
 /**
  * Record that canonical expansion produced these segments as source.
  *
- * With no run installed there is nothing to record into, and nothing is
- * published as source — which is the safe answer rather than a lost one.
+ * An expansion with no record — anything running outside an execution that made
+ * one — marks nothing, and nothing is published as source. That is the safe
+ * answer rather than a lost one.
  */
-export function* markExactSource(segments: readonly Segment[]): Operation<void> {
-  const exact = yield* ExactSource.get();
+export function markExactSource(
+  exact: ExactSource | undefined,
+  segments: readonly Segment[],
+): void {
   if (exact === undefined) {
     return;
   }

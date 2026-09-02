@@ -2792,9 +2792,16 @@ a `TextSegment` arriving already marked, a frontmatter key, a prop and a
 middleware answer are each data that reached the engine from somewhere, and none
 of them decides anything — an ordinary `Component.importComponent` handler that
 answers an open name with a definition claiming the disposition gets prose, and
-so does a repository file of the same name. Which segments an expansion produced
-as source is recorded against those segment objects' identity, where nothing a
-document or a package can supply is able to write.
+so does a repository file of the same name.
+
+Which segments an expansion produced as source is recorded against those segment
+objects' identity, in a record **the execution creates and hands down by value**
+on the same private authority it carries its import authority on. It is reached
+by no name: a context resolves by one, and a name is not a secret, so a record
+stored in a context is one any component can build a context for, retrieve and
+answer differently from. The record is reclaimed with the execution that made
+it, appears in neither public package entrypoint, and is not a brand on the
+segments — a property is exactly what an untrusted object can carry.
 
 **Every declaration is read once, before any installation runs.** The name,
 origin, source, digest, forms, prose, whether it renders exact source, and each

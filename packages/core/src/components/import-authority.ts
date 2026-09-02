@@ -21,6 +21,7 @@
 import type { ComponentDefinition, FunctionComponentDefinition } from "../types.ts";
 import type { FormSelections, InvocationIdentities } from "../invocation-identity.ts";
 import type { DeclaredImports, PrivateClosure } from "./declared-markdown.ts";
+import type { ExactSource } from "../output/exact-source.ts";
 
 /** A definition an import may answer with. */
 export type ImportedDefinition = ComponentDefinition | FunctionComponentDefinition;
@@ -82,6 +83,15 @@ export interface ExpansionAuthority {
   readonly privates?: PrivateClosure;
   /** The domains this execution minted, for the components it gave one. */
   readonly identities?: InvocationIdentities;
+  /**
+   * Which segments this execution produced as a program's source.
+   *
+   * Held by the execution and handed here by value, like everything else on
+   * this object. It is on the private authority rather than in a context
+   * because a context resolves by name, and a name is not a secret: a component
+   * could build one, reach the record and answer that everything is exact.
+   */
+  readonly exact?: ExactSource;
   /**
    * What canonical resolution selected for each import, for the components
    * whose authored form selects an effect.

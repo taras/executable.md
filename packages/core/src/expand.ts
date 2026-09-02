@@ -2760,7 +2760,10 @@ function* expandComponent(
   // after it produced them — is what carries the fact to the emission loop,
   // which is outside every scope the invocation owned.
   if (authorizedCanonically && authority?.declared?.declaresExact(name) === true) {
-    yield* markExactSource(bodyOwner === undefined ? expanded : bodyOwner.slice(renderedFrom));
+    markExactSource(
+      authority?.exact,
+      bodyOwner === undefined ? expanded : bodyOwner.slice(renderedFrom),
+    );
   }
 
   if (asBinding) {
