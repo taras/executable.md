@@ -1673,26 +1673,67 @@ reviewedHead]`. The component does not infer the order from the purpose and does
 not reorder what it was given; the purpose is retained so the record says which
 operation the run believed it was performing.
 
-**The result is closed and has exactly two shapes.** A clean merge binds the new
-commit and the Workspace root that followed it, and its mutation, root
-publication and filtered result commit together — a crash before the commit
-leaves the checkout, the current root and the effect history the ones the run
-had. A conflicted merge restores the pre-merge Workspace root, publishes
-normalized conflict evidence against that unchanged root, and binds the
-conflicted result; it offers no file mutation under that evidence and adopts no
-partial merge state. Both are successful effects with different outcomes, not a
-success and a failure.
+**The request is the four authored inputs plus what the provider authenticates.** The durable request carries `firstParent`, `secondParent`, `mergeBase` and `purpose` exactly as authored, together with the Repository identity, the checkout, the pre-merge Workspace root and the executor acquisition the provider validated. Those four are provider-authenticated state and never authored props, and the effect is named by the run and the expansion like every other one.
 
-Conflict evidence is normalized before it is retained: the repository-relative
-path, the classification, the base, ours and theirs object identities and modes
-where Git supplies them, and the stage numbers of entries in the unmerged index.
-Rendered conflict markers alone are not the record, because a later reader has
-to be able to tell a stale conflict from the one it is looking at without
-reparsing text.
+**The result is a closed discriminated union of exactly two shapes**, keyed on `outcome`:
 
-A merge never contacts a Git host, never pushes, and never rewrites a published
-identity. Rebase, force, force-with-lease and reset-based replacement are absent
-from this component and from every other one in this specification.
+```ts
+type GitMergeResult =
+  | {
+    readonly outcome: "clean";
+    readonly purpose: "synchronize" | "publish";
+    readonly firstParent: string;
+    readonly secondParent: string;
+    readonly mergeBase: string;
+    readonly commit: string;
+    readonly workspaceRoot: string;
+  }
+  | {
+    readonly outcome: "conflicted";
+    readonly purpose: "synchronize" | "publish";
+    readonly firstParent: string;
+    readonly secondParent: string;
+    readonly mergeBase: string;
+    readonly workspaceRoot: string;
+    readonly conflicts: readonly GitMergeConflict[];
+  };
+
+interface GitMergeConflict {
+  readonly path: string;
+  readonly classification:
+    | "content"
+    | "add/add"
+    | "modify/delete"
+    | "delete/modify"
+    | "rename"
+    | "mode"
+    | "binary"
+    | "submodule"
+    | "symlink"
+    | "unrecognized";
+  readonly stages: readonly (1 | 2 | 3)[];
+  readonly base?: GitMergeSide;
+  readonly ours?: GitMergeSide;
+  readonly theirs?: GitMergeSide;
+}
+
+interface GitMergeSide {
+  readonly objectId: string;
+  readonly mode: string;
+}
+```
+
+Every member is required unless the declaration marks it optional, every commit and object identity is a lowercase hexadecimal object ID of the repository's own object format, `mode` is the six-digit octal Git records, and `path` is an already-normalized repository-relative POSIX path under the same rules §9.1 of [Workflow runs](./workflow-spec.md) states for a root document path. `classification` is the closed enum above and `unrecognized` is its own value rather than an absent one, because a class this build cannot name is a fact about the merge and not a gap in the record. An unknown member and an unknown classification each refuse the record rather than being ignored.
+
+A **clean** result names the exact merge commit and the Workspace root published with it. Its mutation, root publication and filtered result commit together, so a crash before the commit leaves the checkout, the current root and the effect history the ones the run had. A **conflicted** result names the *unchanged* pre-merge root it restored and the complete conflict set; it offers no file mutation under that evidence and adopts no partial merge state. Both are successful effects with different outcomes, not a success and a failure.
+
+The conflict set is complete and ordered. Entries sort by `path` in UTF-8 byte order, and two entries for one path refuse the record rather than being merged or deduplicated. `stages` is the ascending list of unmerged-index stage numbers Git retained for that path, and side presence agrees with it exactly: stage 1 is `base`, 2 is `ours`, 3 is `theirs`, a stage the index does not hold has its member absent rather than null, empty or zeroed, and a side present without its stage — or a stage without its side — refuses. A set mixing classifications is retained whole and unaltered: every conflict suspends, so there is no partial handling for a mixed set to select. Rendered conflict markers alone are never the record, because a later reader has to tell a stale conflict from the one it is looking at without reparsing text.
+
+**Restoration is part of the conflicted outcome, not cleanup after it.** If the pre-merge root cannot be restored, the effect publishes no conflicted result and no new root: it is an infrastructure failure that activates the durable fail-stop fence, because a conflicted result naming a root the Workspace is not actually at would be evidence of a state nothing holds.
+
+Cancellation between the merge and the commit rolls the outer transaction back and publishes no completion at all. A completed record of either outcome replays without running Git.
+
+A merge never contacts a Git host, never pushes, and never rewrites a published identity. Rebase, force, force-with-lease and reset-based replacement are absent from this component and from every other one in this specification.
 
 ### 7.9 Publishing a reviewed merge: `Git.PublishTarget`
 
@@ -1713,34 +1754,60 @@ the credential and the non-force policy are host-owned: they are not props, and
 no authored value widens them. Form validation runs before the host's ceiling is
 read and before any credential exists.
 
-**It is a compare-and-swap.** One non-force ref update happens only after
-observing the target equal to `expectedRemoteCommit`. A target already equal to
-the exact `sourceCommit` is adopted with nothing performed. Every other
-observation refuses without mutating: a target at some third commit is a
-conflict, an incomplete observation is unavailability rather than absence, and a
-permanent ambiguity is a refusal. A race that moves the target before or during
-publication therefore cannot publish over it.
+**The request names the target the host chose and the commits the document did.** Its natural key is the target identity alone — the retained Repository, the configured remote and the configured target ref — because one ref has one publication at a time whoever is asking:
 
-The bound result is stable evidence of what the effect settled on — the target
-ref identity, the expected commit, the published commit and the reviewed head —
-and not a live branch snapshot. `reviewedHead` is carried so the record says
-what the publication was authorized against, which is what lets an
-exact-revision review be invalidated by a target that moved.
+```ts
+interface GitPublishTargetRequest {
+  readonly kind: "git-publish-target";
+  readonly target: GitPublishTarget;
+  readonly expectedRemoteCommit: string;
+  readonly sourceCommit: string;
+  readonly reviewedHead: string;
+}
 
-**Three operations stay distinct.** `Git.Push` (§7.4) advances a branch this run
-published, from an ancestry relation proved inside the authenticated object
-source. `Git.PublishTarget` updates a ref it does not own, from an exact
-expected pre-state. A Git host's own pull-request merge endpoint is neither, and
-this specification defines no component for one: a squash or a rebase performed
-by the host would publish a commit no reviewer saw, under parents the review
-never named.
+interface GitPublishTarget {
+  readonly repository: string;
+  readonly remote: string;
+  readonly ref: string;
+}
+```
+
+`repository` is the Workspace-local Repository name, `remote` is the configured remote's name, and `ref` is the fully qualified destination ref. The credential, the locator behind the remote and the non-force policy are provider closure state and appear in neither the request nor the result. The three commits are lowercase hexadecimal object IDs of the repository's object format.
+
+**It is a compare-and-swap**, and its five observed pre-states are exhaustive:
+
+| Observation | Decision |
+| --- | --- |
+| the target equals `expectedRemoteCommit` | perform one non-force update, once |
+| the target equals `sourceCommit` | adopt; nothing is performed |
+| the target equals some third commit | conflict; refuse without mutating |
+| the observation did not complete | incomplete observation; refuse as itself, adopt nothing, perform nothing |
+| the observation cannot be decided, or the host is temporarily unreachable | permanent ambiguity and temporary unavailability respectively; each refuses as itself and never performs |
+
+A race that moves the target before or during publication therefore cannot publish over it, and an interrupted attempt is reobserved rather than repeated: a target that now equals `sourceCommit` is the adoption, and one that does not is not silently published over.
+
+**The result is one closed record**, and the binding is that record:
+
+```ts
+interface GitPublishTargetResult {
+  readonly target: GitPublishTarget;
+  readonly expectedRemoteCommit: string;
+  readonly reviewedHead: string;
+  readonly sourceCommit: string;
+  readonly observedCommit: string;
+  readonly decision: "performed" | "adopted";
+}
+```
+
+`observedCommit` is what the target held when this attempt looked, so the record says what the publication moved from or found already done; `decision` is the closed pair above and no third value exists. `reviewedHead` is carried so the record says what the publication was authorized against, which is what lets an exact-revision review be invalidated by a target that moved. It is stable evidence of what the effect settled on, not a live branch snapshot. Every member is required, and an unknown member or an unknown `decision` refuses the record.
+
+Cancellation tears the provider call down and publishes no completion. A completed record replays without contacting a Git host.
+
+**Three operations stay distinct.** `Git.Push` (§7.4) advances a branch this run published, from an ancestry relation proved inside the authenticated object source. `Git.PublishTarget` updates a ref it does not own, from an exact expected pre-state. A Git host's own pull-request merge endpoint is neither, and this specification defines no component for one: a squash or a rebase performed by the host would publish a commit no reviewer saw, under parents the review never named. Whether the host has *noticed* that its pull request is now merged is a fourth question, and §7.11 owns it.
 
 ### 7.10 Pull-request comments, readiness and closure
 
-Three more Git-host effects act on a pull request a canonical URL names. Each
-requires `as`, validates its form before any provider or credential is reached,
-and reconciles under §10.2: observe, adopt a compatible completion, perform a
-proven absence once, refuse conflict and ambiguity.
+Three more Git-host effects act on a pull request a canonical URL names. Each requires `as`, validates its form before any provider, ceiling or credential is reached, and reconciles under §10.2: observe, adopt a compatible completion, perform a proven absence once, refuse conflict, permanent ambiguity, incomplete observation and temporary unavailability. Every identity below is a canonical URL or a lowercase hexadecimal object ID; no credential, endpoint, raw payload, cursor or host path appears in any request, natural key or result.
 
 ```md
 <PullRequest.Comment url={pullRequest.url} as="comment">
@@ -1751,22 +1818,104 @@ The Architect accepted {revision.headSha} against {revision.baseSha}.
 <PullRequest.Close url={pullRequest.url} as="closed" />
 ```
 
-`PullRequest.Comment` is paired and its rendered content is the body, verbatim.
-Its natural key is the canonical pull-request URL plus the engine-derived effect
-identity of [Workflow runs](./workflow-spec.md) §8 — never the body — so an
-edited sentence is the same comment and a re-rendered body is not a second one.
-It binds `{ url }`.
+#### `PullRequest.Comment`
 
-`PullRequest.Ready` takes a pull request out of draft and binds normalized ready
-evidence. `PullRequest.Close` closes one unmerged and binds exactly
-`{ url, state: "closed", merged: false }`. Both are self-closing, both are keyed
-by their exact subject, and neither reopens, merges or comments on anything.
-Observing a pull request already ready is an adoption; observing one that has
-been merged, or that belongs to another repository, is a conflict.
+The component is paired, takes one required `url` and one required `as`, and its rendered content is the body verbatim. `url` is the **canonical pull-request URL** — the normalized single spelling of one pull request, on the terms §10.3 already states for a canonical target URL — and the durable request is exactly that URL, the engine-derived effect identity and the rendered body:
 
-None of the three pushes, and none of them derives authority from what it
-observes. Which of them a document may invoke, and what authorizes the
-invocation, is authored control flow above them.
+```ts
+interface PullRequestCommentRequest {
+  readonly kind: "pull-request-comment";
+  readonly subject: string;
+  readonly effect: string;
+  readonly body: string;
+}
+
+interface PullRequestCommentResult {
+  readonly subject: string;
+  readonly url: string;
+  readonly decision: "performed" | "adopted";
+}
+```
+
+`subject` is the canonical pull-request URL, `effect` is the engine-derived effect identity of [Workflow runs](./workflow-spec.md) §8, and `url` is the canonical URL of the comment this effect settled on. The binding is `{ url }`: that comment's own URL, which is the only fact the effect produces — the subject was already in hand at the call site.
+
+**The natural key is `subject` plus `effect`, and the body is never part of it.** A Git host issues no client-supplied idempotency key for a comment, so the effect identity has to be observable on the host for an interrupted creation to be found again. The adapter makes it observable by appending one fixed, presentation-neutral trailer to the body it sends — an HTML comment carrying the effect identity and nothing else — and observation matches that trailer alone. The trailer is adapter-owned rather than authored: a document does not write it, the rendered body it wrote is not searched for it, and a person editing the comment's prose afterwards leaves the identity untouched. That is what makes an edited sentence the same comment and a re-rendered body not a second one.
+
+Observation is complete or it is not an observation: a comment list the adapter could not finish reading is an incomplete observation and refuses, because an unfinished search would report absence and create a duplicate. Exactly one comment carrying the trailer is a compatible completion and is adopted with nothing performed; none is a proven absence and is performed once; more than one is permanent ambiguity and refuses. Temporary unavailability refuses as itself and performs nothing.
+
+#### `PullRequest.Ready` and `PullRequest.Close`
+
+Both are self-closing, take one required `url` and one required `as`, and are keyed by that exact canonical pull-request URL — one readiness and one closure per pull request, so neither carries an effect identity in its key. Their bindings are the closed records below, and each durable result is its binding plus the observation the attempt made:
+
+```ts
+interface PullRequestReadyBinding {
+  readonly url: string;
+  readonly state: "open";
+  readonly draft: false;
+}
+
+interface PullRequestCloseBinding {
+  readonly url: string;
+  readonly state: "closed";
+  readonly merged: false;
+}
+
+interface PullRequestReadyResult extends PullRequestReadyBinding {
+  readonly observed: PullRequestObservation;
+  readonly decision: "performed" | "adopted";
+}
+
+interface PullRequestCloseResult extends PullRequestCloseBinding {
+  readonly observed: PullRequestObservation;
+  readonly decision: "performed" | "adopted";
+}
+
+interface PullRequestObservation {
+  readonly state: "open" | "closed";
+  readonly draft: boolean;
+  readonly merged: boolean;
+}
+```
+
+`state`, `draft` and `merged` are literal in each binding rather than observed values copied through, because a binding that could say `draft: true` would be a component reporting that it did not do what it is for.
+
+`PullRequest.Ready` performs once from an observed `{ state: "open", draft: true, merged: false }`, adopts an observed `{ state: "open", draft: false, merged: false }` with nothing performed, and refuses every other observation as a conflict — a merged or closed pull request among them, since readiness is not a thing to restore. `PullRequest.Close` performs once from an observed `{ state: "open", merged: false }` at either draft state, adopts an observed `{ state: "closed", merged: false }`, and conflicts with an observed `merged: true`, which is a completion of a different kind that closing must not overwrite. A pull request belonging to another repository, or one the URL names but the host does not hold, is a conflict for both. An incomplete observation, a permanent ambiguity and a temporary unavailability each refuse as themselves and perform nothing.
+
+Neither reopens, merges, comments on or pushes anything. Cancellation tears the provider call down and publishes no completion; a completed record of any of the three replays without contacting a Git host. Which of them a document may invoke, and what authorizes the invocation, is authored control flow above them.
+
+### 7.11 Observing that a pull request merged: `PullRequest.Merged`
+
+Publishing a merge commit to a target ref and a Git host recording that pull request as merged are two different facts, and the second one is not implied by the first. A host observes its own ref moving and closes the pull request on its own schedule, so a run that needs the merged state in its history has to observe it — and has to observe it as its own retained step rather than as a side effect of something else.
+
+```md
+<PullRequest.Merged url={pullRequest.url} expectedMergeCommit={publication.sourceCommit} as="merged" />
+```
+
+The component is self-closing, its three props are required and the set is closed, and it is a Git-host effect of its own. It is not `PullRequest.Ready`, not `PullRequest.Close`, not a pull-request upsert and not `Git.PublishTarget`: overloading any of them would make one record answer two questions, and the two can disagree.
+
+**It mutates nothing.** It is a reconciled observation: adoption is its only completion, and there is no `performed` decision for it to reach. What it reconciles is *when* the fact becomes true, because a host that has not yet noticed the ref move is not a host that refused.
+
+```ts
+interface PullRequestMergedRequest {
+  readonly kind: "pull-request-merged";
+  readonly subject: string;
+  readonly expectedMergeCommit: string;
+}
+
+interface PullRequestMergedResult {
+  readonly subject: string;
+  readonly state: "closed";
+  readonly merged: true;
+  readonly mergeCommit: string;
+  readonly decision: "adopted";
+}
+```
+
+`subject` is the canonical pull-request URL and is the whole natural key. The binding is the result record.
+
+The observation is complete or it is nothing. A pull request the host reports as `merged` with a merge commit equal to `expectedMergeCommit` is the compatible completion and is adopted. One reported merged at a *different* commit is a conflict: the target carries somebody else's merge, and the exact-revision reviews invalidate rather than this step succeeding. One still open, or closed unmerged, is temporary unavailability rather than absence or conflict — the host has not caught up, and a later attempt starts again at observation. An incomplete read and an undecidable one are incomplete observation and permanent ambiguity, each refusing as itself.
+
+Cancellation publishes no completion, and a completed record replays without contacting a Git host. Where this step sits in the terminal sequence — after `Git.PublishTarget` and before the issue is closed — belongs to [the software factory](./github-actions-software-factory-spec.md) §10.3.
 
 ## 8. Agents inspect; XMD mutates
 
@@ -1821,8 +1970,9 @@ by #496 and does not widen this ceiling.
 
 Constructs added for a trusted host do not reach the Agent either, and they do
 not reach it for a different reason than the tool set: an Agent never expands a
-document. Merging, publishing a target, commenting, changing draft state,
-closing an issue or a pull request, moving a Project item and running evidence
+document. Merging, publishing a target, observing that a pull request merged,
+commenting, changing draft state, closing an issue or a pull request, moving a
+Project item and running evidence
 are authored XMD the trusted host expands under its own acquisition. What an
 Agent may return is text, and a fragment it returns is admitted only against the
 tables §8.4 states — which name none of them.
@@ -2149,7 +2299,8 @@ merely by naming a component; the table excludes local Git even though those
 effects are also Workspace-local. The constructs §§7.8-7.10, §10.5 and §10.6 add
 change nothing about that: `Git.Merge`, `Git.PublishTarget`,
 `PullRequest.Comment`, `PullRequest.Ready`, `PullRequest.Close`,
-`Issue.Comment`, `Issue.Close`, `Project.Status` and `Evidence.Run` appear in no
+`PullRequest.Merged`, `Issue.Comment`, `Issue.Close`, `Project.Status` and
+`Evidence.Run` appear in no
 table this specification states, so a fragment naming one is refused in the
 preflight before any generated effect, exactly as `<Git.Push>` is. Adding a
 construct to a table is a host act, and a factory host adds none of them.
@@ -2850,17 +3001,53 @@ The Planner accepted the plan at {plan.revision}.
 <Issue.Close url={issue.url} reason="completed" as="closed" />
 ```
 
-`Issue.Comment` is paired and its rendered content is the body, verbatim. Its
-natural key is the canonical issue URL plus the engine-derived effect identity,
-never the body, so an edited sentence is the same comment. It binds `{ url }`.
+`Issue.Comment` is paired, takes one required `url` and one required `as`, and its rendered content is the body verbatim. Its records mirror the pull-request comment of §7.10 exactly, under this boundary instead of the Git host's:
 
-`Issue.Close` is self-closing and its `reason` is a closed enum of `"completed"`
-and `"not_planned"`. It binds the normalized URL, state and reason. The reason
-is part of what the effect means rather than a label on it: a host that retained
-one terminal intent refuses a close naming the other. An issue already closed
-with the same reason is adopted; one closed with the other reason is a conflict.
+```ts
+interface IssueCommentRequest {
+  readonly kind: "issue-comment";
+  readonly subject: string;
+  readonly effect: string;
+  readonly body: string;
+}
 
-Neither reopens an issue, and neither derives authority from what it observes.
+interface IssueCommentResult {
+  readonly subject: string;
+  readonly url: string;
+  readonly decision: "performed" | "adopted";
+}
+```
+
+`subject` is the canonical issue URL — the normalized single spelling this section already requires of a target — `effect` is the engine-derived effect identity, and `url` is the canonical URL of the comment the effect settled on. The binding is `{ url }`, that comment's own URL.
+
+**The natural key is `subject` plus `effect`, and the body is never part of it.** As with a pull-request comment, the effect identity is made remotely observable by one fixed presentation-neutral trailer the adapter appends to the body it sends, and observation matches that trailer alone. Exactly one comment carrying it is adopted, none is performed once, more than one is permanent ambiguity, and a comment list the adapter could not finish reading is an incomplete observation — never absence.
+
+`Issue.Close` is self-closing and takes one required `url`, one required `reason` from the closed enum `"completed" | "not_planned"`, and one required `as`. Its natural key is the canonical issue URL alone:
+
+```ts
+interface IssueCloseRequest {
+  readonly kind: "issue-close";
+  readonly subject: string;
+  readonly reason: "completed" | "not_planned";
+}
+
+interface IssueCloseBinding {
+  readonly url: string;
+  readonly state: "closed";
+  readonly reason: "completed" | "not_planned";
+}
+
+interface IssueCloseResult extends IssueCloseBinding {
+  readonly observed: { readonly state: "open" | "closed"; readonly reason?: "completed" | "not_planned" };
+  readonly decision: "performed" | "adopted";
+}
+```
+
+`state` is literal in the binding: a component for closing an issue does not report that the issue is open. The observed `reason` is absent rather than null when the issue is open or when the host records no reason for a closure it holds.
+
+The reason is part of what the effect means rather than a label on it, so a host that retained one terminal intent refuses a close naming the other. An observed open issue is performed once. An observed issue closed with the same reason is adopted with nothing performed. An observed issue closed with the other reason is a conflict, and so is one closed with no reason the host will state, because adopting it would let a `not_planned` closure stand as a `completed` one. An incomplete observation, a permanent ambiguity and a temporary unavailability each refuse as themselves.
+
+Neither reopens an issue, and neither derives authority from what it observes. Cancellation publishes no completion, and a completed record of either replays without contacting a provider.
 
 ### 10.4 Worker Shell
 
@@ -2901,29 +3088,59 @@ document may reach for by itself.
 <Evidence.Run commands={plan.evidenceCommands} as="evidence" />
 ```
 
-`commands` is an authored **structured argv list** — an ordered list of argument
-vectors, each a non-empty list of strings — and never a shell string. There is
-no interpreter, no quoting layer and no string to mis-split, which is what makes
-the record of what ran the same thing as what ran. `as` is required, the prop
-set is closed, and the form is validated before the host's ceilings are read.
+`commands` is an authored **structured argv list**: an ordered, non-empty list whose every member is a non-empty list of strings. There is no interpreter, no quoting layer and no string to mis-split, which is what makes the record of what ran the same thing as what ran. `as` is required, the prop set is closed, and the form is validated before the host's ceilings are read — an empty list, an empty vector, a member that is not a list of strings, an unknown prop and a missing `as` each fail before any child exists.
 
-The host owns everything else. Which executables may run, what environment they
-see, how long they may take, and how much output is retained are host ceilings
-rather than props. The commands run against one exact retained Workspace root
-that the host materialized, on the trusted runner where the native toolchain
-lives — never inside the run's durable owner, which has no toolchain and must
-not acquire one.
+**The whole list runs.** Each command runs exactly once, in authored order, and a command that ends unsuccessfully does not stop the ones after it. Running the list is how a reader learns what is broken, and a list that stopped at the first defect would hide the rest — the same reason this repository's own test shards run their files to the end. Each command is charged its own duration ceiling, so one command timing out does not consume another's.
 
-The bound result is an ordered list of bounded results, one per command: the
-argv it ran, its exit status, and its truncated captured output. That is an
-ordinary durable record, so a completed replay produces it without running
-anything at all.
+The host owns everything else. Which executables may run, what environment they see, the logical working root, how long each command may take, how much output is retained, and what happens to a process tree are host ceilings rather than props. No host path, shell string, ambient environment or command authority enters an authored prop. The commands run against one exact retained Workspace root the host materialized, on the trusted runner where the native toolchain lives — never inside the run's durable owner, which has no toolchain and must not acquire one.
 
-`Evidence.Run` is not Worker Shell (§10.4) and does not replace it: Worker Shell
-is a contained interpreter over the Workspace filesystem, while this is native
-execution of an authored list under a trusted host's ceiling. It is absent from
-the workflow Agent's capabilities (§8.3) and from every generated-XMD table
-(§8.4), so neither an Agent nor a fragment it wrote can reach it.
+**The result is one record per command, in authored order:**
+
+```ts
+interface EvidenceRunResult {
+  readonly commands: readonly EvidenceCommandResult[];
+}
+
+interface EvidenceCommandResult {
+  readonly argv: readonly string[];
+  readonly outcome: "exited" | "signalled" | "timeout";
+  readonly status?: number;
+  readonly signal?: string;
+  readonly stdout: EvidenceChannel;
+  readonly stderr: EvidenceChannel;
+}
+
+interface EvidenceChannel {
+  readonly text: string;
+  readonly retainedBytes: number;
+  readonly producedBytes: number;
+  readonly truncated: boolean;
+}
+```
+
+`commands` has exactly one entry per authored command, in the order they were authored, and `argv` repeats the vector that ran. `status` is present exactly when `outcome` is `"exited"` and is the numeric exit status; `signal` is present exactly when `outcome` is `"signalled"` and names the signal; `outcome: "timeout"` carries neither, because a child the host terminated for exceeding its ceiling did not choose how it ended. An unknown member, an unknown `outcome`, and a `status` or `signal` beside the wrong outcome each refuse the record.
+
+Both channels are retained separately and neither is folded into the other: `text` is the retained UTF-8 prefix, `retainedBytes` is its length in bytes, `producedBytes` is what the child actually produced, and `truncated` is `producedBytes > retainedBytes`. Truncation is stated rather than inferred from a length, so a reader never has to guess whether a command was quiet or cut off.
+
+**Which cases bind, which fail, and which commit nothing.**
+
+| Case | Outcome |
+| --- | --- |
+| a command exits, at any status | an ordinary result; the list continues |
+| a command is terminated by a signal | an ordinary result; the list continues |
+| a command exceeds its duration ceiling and the host terminates it | an ordinary `"timeout"` result; the list continues |
+| the executable or environment ceiling refuses a command, or the child cannot be created | **launch failure**: the effect fails with an `Error`, binds nothing and commits no result |
+| the host cannot read a channel it promised to bound | **output-pump failure**: the effect fails with an `Error`, binds nothing and commits no result |
+| the host cannot reap a child or its process tree | **teardown failure**: the effect fails with an `Error`, binds nothing and commits no result |
+| the effect is cancelled | nothing is committed at all: the running child is terminated, the remaining commands do not run, and no result and no failure record is published |
+
+A non-zero status is evidence, not an infrastructure failure — it is the answer the evidence exists to obtain. An infrastructure failure is the host being unable to say what happened, which is why it publishes no partial list: half an answer read as a whole one is worse than no answer.
+
+**Precedence is fixed.** Cancellation wins over everything, and invents no completion. Otherwise the first infrastructure failure raised wins, and a teardown failure with no earlier infrastructure failure fails the effect even when every command produced an ordinary outcome — a host that cannot prove it stopped what it started cannot state what the run produced. This is the same rule the workflow lifecycle applies to settlement: teardown is part of the evidence, not work performed after the outcome.
+
+A completed record replays without running anything at all.
+
+`Evidence.Run` is not Worker Shell (§10.4) and does not replace it: Worker Shell is a contained interpreter over the Workspace filesystem, while this is native execution of an authored list under a trusted host's ceiling. It is absent from the workflow Agent's capabilities (§8.3) and from every generated-XMD table (§8.4), so neither an Agent nor a fragment it wrote can reach it.
 
 ### 10.6 Project effects
 
@@ -2941,14 +3158,31 @@ reconciliation rather than the Git host's state machine.
 <Project.Status item={itemId} field={fieldId} option={optionId} as="status" />
 ```
 
-The component is self-closing, its four props are required and the set is
-closed, and it binds the normalized `{ item, field, option }`. Its natural key
-is the exact item plus the exact field. Its compatible pre-state is the option
-that item currently holds: an item already at the requested option is adopted
-with nothing performed, an item at another allowed option is performed once, and
-an unreadable board, an unavailable field, an ambiguous item and a partial
-permission read are **unavailable** rather than absent — reading an unreadable
-board as an empty one is how an unauthorized item would be moved.
+The component is self-closing, its four props are required and the set is closed, and it binds the normalized `{ item, field, option }`. Its natural key is the exact item plus the exact field — one item has one value of one field, whoever is asking — and its request and result are these:
+
+```ts
+interface ProjectStatusRequest {
+  readonly kind: "project-status";
+  readonly item: string;
+  readonly field: string;
+  readonly option: string;
+}
+
+interface ProjectStatusBinding {
+  readonly item: string;
+  readonly field: string;
+  readonly option: string;
+}
+
+interface ProjectStatusResult extends ProjectStatusBinding {
+  readonly observedOption?: string;
+  readonly decision: "performed" | "adopted";
+}
+```
+
+`item`, `field` and `option` are the provider's own opaque identities, compared byte for byte and never normalized, decoded or repaired — they are provider identities on the same terms an issue node ID is. `option` in the binding is the requested one, which after a successful effect is the one the item holds. `observedOption` is what the field held when this attempt looked, and it is absent rather than null when the field held no option at all. An unknown member and an unknown `decision` refuse the record.
+
+Its compatible pre-state is the option that item currently holds. An item already at the requested option is adopted with nothing performed; an item at another option the host's ceiling allows is performed once; an item at an option outside that ceiling is a conflict, because moving it would be publishing through a status this factory does not own. An unreadable board, an unavailable field, an ambiguous item and a partial permission read are **unavailable** rather than absent — reading an unreadable board as an empty one is how an unauthorized item would be moved — and a temporary unreachability refuses as itself. Cancellation publishes no completion, and a completed record replays without contacting a provider.
 
 Which project, item, field and options may be reached at all is a host ceiling
 installed beside the credential. An authored prop selects within that ceiling
@@ -3450,26 +3684,48 @@ runtime-named adapter beside the Deno one: shared modules reach it through the
 same contextual storage, lifecycle and Workspace APIs, detect no runtime, and
 import nothing Cloudflare-specific.
 
-Executor ownership is one authenticated WebSocket connection whose lifetime is
-the acquisition. The owner registers the exact acquisition on admission and
-invalidates it on close; there is no duration, expiry, renewal, heartbeat,
-generation record or liveness poll, and a close rolls back nothing already
-committed. Every mutating transaction validates that exact acquisition and the
-expected Workspace root together.
+**The host assembly contract does not change.** `WorkflowHost` keeps its four methods — `useRunHost()`, `useLifecycle()`, `useDelivery()` and `attach()` — and the Cloudflare adapter is one more implementation of them beside the Deno one. Starting, looking up, executing, delivering into and inspecting a run are lifecycle operations reached *through* that boundary, exactly as they are locally; they are not replacement method names, and no fifth method appears. What a remote adapter changes is where each of those four reaches, not what the shared CLI asks for.
 
-Native Git, evidence processes and Agent clients run on the ephemeral runner and
-nowhere else. The runner materializes one selected retained root, works in it,
-and submits content-addressed changes; the owner validates acquisition, root and
-content and then atomically publishes the new root with the filtered journal
-result. That is §10.1's effect transaction with the mutation performed where the
-tools are and the publication performed where the authority is, so a runner
-crash exposes only a prior or a new complete transaction and the next
-acquisition resumes from the exact committed frontier.
+Executor ownership is one authenticated WebSocket connection whose lifetime is the acquisition. The owner registers the exact acquisition on admission and invalidates it on close; there is no duration, expiry, renewal, heartbeat, generation record or liveness poll, and a close rolls back nothing already committed. Every mutating transaction validates that exact acquisition and the expected Workspace root together.
 
-Delivery and inspection reach the owner without an acquisition, under §3.8. A
-completed run replays there as it does locally: it attaches no remote storage
-session, Workspace, Agent, process, Git, Git-host, Issue, Project or credential
-provider.
+Native Git, evidence processes and Agent clients run on the ephemeral runner and nowhere else. The runner materializes one selected retained root, works in it, and submits content-addressed changes; the owner validates acquisition, root and content and then atomically publishes the new root with the filtered journal result. That is §10.1's effect transaction with the mutation performed where the tools are and the publication performed where the authority is, so a runner crash exposes only a prior or a new complete transaction and the next acquisition resumes from the exact committed frontier.
+
+#### The transport between them is versioned
+
+A runner and its durable owner deploy separately, so the connection between them carries records that outlive one deployment and has to be treated as a compatibility boundary rather than as an internal calling convention. It is a closed, versioned, discriminated envelope:
+
+```ts
+interface RunnerRequest {
+  readonly protocol: 1;
+  readonly operation: "acquire" | "frontier" | "materialize" | "commit" | "settle";
+  readonly runId: string;
+  readonly acquisition?: string;
+  readonly payload: Json;
+}
+```
+
+`acquire` presents the runner's admission assertion and asks for the executor acquisition. `frontier` reads the committed run record and current Workspace root. `materialize` asks for the content-addressed bytes of one retained root. `commit` submits one mutation — the expected root, the content-addressed additions and the already-filtered journal result to append — for the owner to validate and publish atomically. `settle` publishes the run's resulting status. `acquisition` is absent only on `acquire` and required on the other four. There is no operation for delivery or inspection on this connection: those reach the owner on their own authenticated paths and take no acquisition.
+
+Compatibility is refusal, never adaptation. A request whose `protocol` this owner does not implement is refused with a fixed protocol-version refusal before any other member is read; an unknown `operation`, an unknown member, and an `acquisition` present or absent against the rule above each refuse without effect. The owner never reads an older shape charitably and the runner never downgrades to one, because a transport that guessed would let two deployments disagree about what was committed.
+
+#### Which side owns what
+
+| Concern | Owner |
+| --- | --- |
+| connection admission, including OIDC claim validation and acquisition registration | the durable owner |
+| parsing every request | the durable owner; the runner parses only responses |
+| opening, committing and rolling back transactions | the durable owner |
+| content-addressed transfer | the runner produces content and names it; the owner validates and stores it |
+| attaching Workspace, Agent, process, Git, Git-host, Issue and Project providers | the runner |
+| cancellation | whichever side owns the scope being cancelled: the runner cancels its own document execution, and the owner cancels nothing on its behalf |
+| closing the connection | either side; the owner invalidates the acquisition when it closes |
+| stale-execution recovery | the durable owner, at the next acquisition |
+
+Delivery and inspection reach the owner without an acquisition, under §3.8, on authenticated paths of their own.
+
+#### What completed replay does and does not reach
+
+A completed run replays there as it does locally: it attaches no Workspace, Agent, process, Git, Git-host, Issue, Project or credential provider and performs no effect a second time. It does reach the run's durable owner, because that is where the retained result is; an ephemeral client holds nothing of its own to replay from. Reading retained completion from the owner that holds it is not attaching a provider, and the distinction is the whole point of the rule: what a completed replay must not do is contact an *external* service or repeat an effect, not refrain from reading its own history.
 
 ## 14. Contract inventory
 
@@ -3502,10 +3758,11 @@ provider.
 | `Git.Merge` ordered Workspace-local merge (§7.8) | specified by #710; implementation unbuilt |
 | `Git.PublishTarget` compare-and-swap target publication (§7.9) | specified by #710; implementation unbuilt |
 | `PullRequest.Comment`, `PullRequest.Ready`, `PullRequest.Close` (§7.10) | specified by #710; implementation unbuilt |
+| `PullRequest.Merged` reconciled merged observation (§7.11) | specified by #710; implementation unbuilt |
 | `Issue.Comment` and `Issue.Close` (§10.3) | specified by #710; implementation unbuilt |
 | `Evidence.Run` trusted native evidence execution (§10.5) | specified by #710; implementation unbuilt |
 | `Project.Status` and the Project-provider boundary (§10.6) | specified by #710; implementation unbuilt |
-| remote lifecycle host, executor connection and remote topology (§3.8, §13.2) | specified by #710; implementation unbuilt |
+| remote lifecycle host, executor connection, versioned runner transport and remote topology (§3.8, §13.2) — the existing four-method `WorkflowHost` boundary, with a Cloudflare implementation beside the Deno one | specified by #710; implementation unbuilt |
 | terminal-decision delivery on the delivery plane (§3.8) | specified by #710; implementation unbuilt |
 | Worker JavaScript | deferred |
 | bundled workerd local host | omitted; POC #347 / PR #348 retained as provider evidence |

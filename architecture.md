@@ -104,7 +104,7 @@ Existing documents and code get aligned to this section retroactively.
 | recovery tombstone | an ownership record left active because its owner never proved it stopped. A crash releases the kernel lock and not this, and no pid, elapsed time, released lock or empty transcript clears it |
 | provider partition | one complete, independently owned agent-provider state — runtime, store, managed sessions, queues, coordinator, teardown — selected by the one installed factory at each dispatch. Production is the single-partition case of the same path; holding a partition grants work, never permission |
 | `JournalProvenance` | a non-operational, equality-only witness that a live publication stream descends from the exact journal backend a provider selected for one workflow run; it grants no append, read, execution, publication or reconciliation capability, and is meaningful only because the provider retains the witness it established and later requires exact equality |
-| factory run identity | the run ID a software-factory run is addressed by: the lowercase unpadded RFC 4648 Base32 encoding of the SHA-256 digest of `github-issue-v1`, NUL, the canonical Issue-provider authority, NUL and the exact issue node ID. It is one host-selected public run ID, derived once from immutable provider identity, and it is distinct from the workflow definition SHA, the implementation revision, the Workspace root, the expansion identity and every delivery identity |
+| factory run identity | the run ID a software-factory run is addressed by: the lowercase unpadded RFC 4648 Base32 encoding of the full SHA-256 digest of the UTF-8 bytes `github-issue-v1`, NUL, the canonical GitHub authority, NUL and the exact GitHub issue GraphQL node ID. The canonical GitHub authority and the node ID are the ones `specs/github-actions-software-factory-spec.md` §1.1 defines, byte for byte; there is no more general Issue-provider spelling of this hash. It is one host-selected public run ID, derived once from immutable provider identity, and it is distinct from the workflow definition SHA, the implementation revision, the Workspace root, the expansion identity and every delivery identity |
 | authenticated intake | one bounded record a trusted host retains for an externally delivered request — a verified webhook, or an authenticated human form submission — keyed by the provider's own delivery or submission identity and holding only typed bounded fields. It is what a later execution reads; it is never a stage, an outcome, a transition or a credential, and receiving one authorizes nothing beyond finding the run it names |
 | Project provider | an external service that owns project boards and the status of the items on them. GitHub Projects V2 is one adapter. It is a separate boundary from a Git host and from an Issue provider, because a project board need own neither a repository nor an issue collection |
 | Project projection | the human-facing status a Project provider holds for one item, published from the journaled lifecycle rather than read as it. A projection ahead of the journal is drift to reconcile; it is never evidence that a lifecycle transition happened |
@@ -1507,18 +1507,9 @@ reconciles, and it is not evidence that a stage was passed.
 
 ### Comments, readiness and closure
 
-Three more reconciled effects join the same boundary, each keyed by its own
-subject. `Issue.Comment` is an Issue-provider effect keyed by the canonical
-issue URL plus the engine-derived effect identity; `PullRequest.Comment` is a
-Git-host effect keyed by the canonical pull-request URL plus that identity. The
-body is presentation in both: keying a comment by its text would make an edited
-sentence a different comment. `PullRequest.Ready` and `PullRequest.Close` are
-Git-host effects keyed by their exact pull-request subject, and `Issue.Close` is
-an Issue-provider effect keyed by its exact issue subject and carrying a closed
-`reason` enum that has to match the retained terminal intent. Each observes
-before it mutates, adopts a compatible completion, performs once from proven
-absence or an exact compatible pre-state, and refuses conflict, permanent
-ambiguity, incomplete observation and temporary unavailability.
+Four more reconciled effects join the same boundary, each keyed by its own subject. `Issue.Comment` is an Issue-provider effect keyed by the canonical issue URL plus the engine-derived effect identity; `PullRequest.Comment` is a Git-host effect keyed by the canonical pull-request URL plus that identity. The body is presentation in both: keying a comment by its text would make an edited sentence a different comment. A Git host issues no idempotency key for a comment, so the effect identity is made remotely observable by one fixed presentation-neutral trailer the adapter appends and matches on — adapter-owned, never authored, and untouched when a person edits the prose around it. `PullRequest.Ready` and `PullRequest.Close` are Git-host effects keyed by their exact pull-request subject, and `Issue.Close` is an Issue-provider effect keyed by its exact issue subject and carrying a closed `reason` enum that has to match the retained terminal intent. Each observes before it mutates, adopts a compatible completion, performs once from proven absence or an exact compatible pre-state, and refuses conflict, permanent ambiguity, incomplete observation and temporary unavailability.
+
+`PullRequest.Merged` is the fourth, and it is the one that never mutates. A Git host records a pull request as merged when it notices its own ref move, which is not the same event as a target publication succeeding, so the fact has to be observed as its own retained step rather than inferred from the step before it. Adoption is its only completion: the host reporting the pull request merged at the exact published commit is the fact, a merge at another commit is a conflict, and a pull request still open or closed unmerged is temporary unavailability — the host has not caught up, which is a different thing from refusing.
 
 ### Ordered merge, and publishing a target
 
@@ -1543,29 +1534,23 @@ publication was authorized against.
 
 ### Trusted evidence execution
 
-`Evidence.Run` executes an authored structured argv list natively, on the
-trusted runner, against one exact retained Workspace root, under host-owned
-executable, environment, time and output ceilings. It is not Worker Shell and
-not a document's own process capability: it runs where the tools are, and it is
-absent from the workflow Agent's capabilities and from every generated-XMD write
-table. Its ordered bounded results are an ordinary durable record, so a
-completed replay runs nothing.
+`Evidence.Run` executes an authored structured argv list natively, on the trusted runner, against one exact retained Workspace root, under host-owned executable, environment, working-root, duration, output and process-tree ceilings. It is not Worker Shell and not a document's own process capability: it runs where the tools are, and it is absent from the workflow Agent's capabilities and from every generated-XMD write table.
+
+Its record is one entry per authored command, in authored order, each naming the argv that ran, how it ended, and its stdout and stderr as separate bounded channels that state their own truncation. The whole list runs: a command ending unsuccessfully does not stop the ones after it, because running the list is how a reader learns what is broken. A non-zero status is evidence rather than an infrastructure failure — the answer the effect exists to obtain. Being unable to say what happened is the failure: a launch the ceiling refused, a channel the host could not read, and a child it could not reap each fail the effect and bind nothing, so no partial list is ever read as a whole one. A teardown failure outranks an otherwise ordinary result on the same terms lifecycle settlement applies, and cancellation commits nothing at all. A completed record replays running nothing.
 
 ### Terminal settlement follows its projections
 
-An outcome whose completion requires external projections retains the decision
-first and settles last. The accepted terminal decision is journaled before any
-effect is attempted; the required projections — a constructed merge, a target
-publication, the observation that the pull request is merged, the issue closure,
-the Project move — are then separate reconciled steps; and only after all of
-them complete is the terminal run state published.
+An outcome whose completion requires external projections retains the decision first and settles last: the accepted decision is journaled before any effect is attempted, the required projections are separate reconciled steps, and only after all of them complete is the terminal run state published.
 
-The ordering is not preference. A completed run replays without contacting a
-provider, so a terminal state published before its projections would leave the
-repair to exactly the replay that is forbidden to reach a provider. No
-distributed transaction is claimed across the run's storage, native Git and
-processes, and the external services; retaining the decision before the
-projections, and settling after them, is what reconciliation has instead.
+There are two terminal paths, and they do not share a step list. Reading one general sequence for both would require merge effects during an abandonment, or pull-request closure during a merge.
+
+**The merged path** retains the authenticated exact-revision merge decision, then constructs the trusted merge commit, publishes the target, retains the merged pull-request observation, closes the issue as completed, projects the Project item to its closed option, and publishes terminal kind `merged` carrying the actor, the exact revision, the merge commit, the resulting provider identities and the retained history.
+
+**The abandoned path** retains the authenticated exact-revision abandonment decision together with its required reason, then closes the pull request unmerged, closes the issue as not planned, projects the Project item to its closed option, and publishes terminal kind `abandoned` carrying the actor, the exact revision, the reason, the resulting provider identities and the retained history. It constructs no merge and publishes no target — there is nothing it reviewed that it is publishing.
+
+A third decision is not terminal at all. A change decision names the earliest stage it invalidates and a reason, and returns the run to that stage; it settles nothing and projects no closure.
+
+Every step on either path is a separate reconciled external effect or a separate retained transition, and no distributed transaction is claimed across the run's storage, native Git and processes, and the external services. An interruption resumes at the first uncommitted or unreconciled step. Terminal settlement is last on both paths for one reason: a completed run replays without contacting a provider, so a terminal state published before its projections would leave the repair to exactly the replay that is forbidden to reach a provider.
 
 Every committed journal event references the current logical Workspace root.
 Only committed event boundaries are checkpoints. A history fork copies the
@@ -3516,9 +3501,10 @@ Status is measured against main.
 | `<Issue.Close url reason as />` | closes one issue as `completed` or `not_planned`, as an Issue-provider effect keyed by its exact subject, with the reason a closed enum that must match the retained terminal intent | specified by #710; implementation unbuilt |
 | `<Git.Merge firstParent secondParent mergeBase purpose as />` | merges two exact commits inside the retained Workspace, observing and fixing both parents and the merge base first; a clean result publishes commit, root and filtered result in one effect transaction, a conflicted one restores the pre-merge root and publishes normalized conflict evidence, and the parent order is the caller's because synchronizing a target into an implementation and publishing an implementation onto a target are opposite operations | specified by #710; implementation unbuilt |
 | `<Git.PublishTarget expectedRemoteCommit sourceCommit reviewedHead as />` | updates a protected target ref by compare-and-swap: one non-force update after observing the target equal to the expected commit, adoption of a target already equal to the exact source commit, and refusal of everything else without mutation; remote, ref, credential and non-force policy are host-owned. Not a spelling of `Git.Push`, which advances a branch this run published from a proved ancestry relation | specified by #710; implementation unbuilt |
-| `<Evidence.Run commands as />` | runs an authored structured argv list natively on the trusted runner against one exact retained Workspace root, under host-owned executable, environment, time and output ceilings; absent from the workflow Agent's capabilities and from every generated-XMD write table, and a completed replay runs nothing | specified by #710; implementation unbuilt |
-| remote `WorkflowHost` | starts, looks up, executes, answers and inspects one run against a remote owner through the provider-neutral lifecycle surfaces, with a Cloudflare runtime-named implementation: one SQLite-backed Durable Object per run selected from the public run ID, executor acquisition as an authenticated connection lifetime, and content-addressed root transfer from an ephemeral runner | specified by #710; implementation unbuilt |
-| factory protocol records | closed parsers and immutable values for the stage, frontier, implementation revision, role outcome, invalidation, conflict, terminal decision and terminal settlement one issue-driven run retains — provider-neutral durable protocol, neither an XMD component nor a TypeScript lifecycle controller | specified by #710; implementation unbuilt |
+| `<Evidence.Run commands as />` | runs an authored structured argv list natively on the trusted runner against one exact retained Workspace root, under host-owned executable, environment, working-root, duration, output and process-tree ceilings; the whole list runs and binds one record per command carrying argv, how it ended, and separately bounded stdout and stderr that state their own truncation; a launch, output-pump or teardown failure binds nothing and cancellation commits nothing; absent from the workflow Agent's capabilities and from every generated-XMD write table, and a completed replay runs nothing | specified by #710; implementation unbuilt |
+| `<PullRequest.Merged url expectedMergeCommit as />` | observes that a Git host now records one pull request as merged, at the exact commit a target publication published; a reconciled Git-host observation that mutates nothing, whose only completion is adoption, keyed by the canonical pull-request URL — a merge at another commit conflicts, a pull request still open or closed unmerged is temporary unavailability rather than absence, and publication does not imply it | specified by #710; implementation unbuilt |
+| remote `WorkflowHost` implementation | keeps the existing four-method host boundary — `useRunHost()`, `useLifecycle()`, `useDelivery()`, `attach()` — and adds a Cloudflare runtime-named implementation of it beside the Deno one; start, lookup, execute, deliver and inspect stay lifecycle operations reached through those four rather than becoming method names. One SQLite-backed Durable Object per run is selected from the public run ID, executor acquisition is an authenticated connection lifetime, and the runner-to-owner transport is a closed versioned envelope that refuses an unknown protocol version, operation or member rather than adapting to it | specified by #710; implementation unbuilt |
+| factory protocol records | the closed versioned schemas `specs/github-actions-software-factory-spec.md` §11.2 defines for the subject, stage, implementation revision, handoff, actor, role outcome, invalidation, evidence reference, Planner and Architect verdicts, conflict suspension, Stage 7 decision, active frontier and the two terminal settlements one issue-driven run retains. Each carries a schema discriminant and a version, and an unknown schema, version, member or enum value refuses rather than being ignored — provider-neutral durable protocol, neither an XMD component nor a TypeScript lifecycle controller | specified by #710; implementation unbuilt |
 | workflow scheduling (watchers, unattended iteration, remote host selection) | — | #300 |
 | `<Result as>` | binds `{ok: true, value}` or `{ok: false, error}`; a failure becomes a bound value, not a raise | defined, unbuilt |
 | error middleware (JS api) | retry · suspend · decline | defined, unbuilt |

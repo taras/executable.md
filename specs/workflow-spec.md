@@ -429,15 +429,11 @@ non-empty string containing no NUL, and it has to be the same string every time
 the same subject is admitted. Nothing else about it is constrained, and nothing
 here narrows the ids an ordinary caller may choose.
 
-The software factory derives its ids that way. A factory run id is the lowercase
-unpadded RFC 4648 Base32 encoding of the SHA-256 digest of the UTF-8 bytes
-`github-issue-v1`, a NUL, the canonical Issue-provider authority, a NUL, and the
-exact issue node ID — 52 characters of `a`-`z` and `2`-`7`, so the storage rule
-above is satisfied by construction. Because every input is immutable, admitting
-one issue twice derives one id and reaches one run through ordinary compatible
-reuse, and no separate idempotency concept appears. The derivation itself, and
-what a changed provider identity means, belong to
-[the software factory](./github-actions-software-factory-spec.md) §1.1.
+The software factory derives its ids that way. A factory run id is the lowercase unpadded RFC 4648 Base32 encoding of the full SHA-256 digest of the UTF-8 bytes `github-issue-v1`, a NUL, the canonical GitHub authority, a NUL, and the exact GitHub issue GraphQL node ID — 52 characters of `a`-`z` and `2`-`7`, so the storage rule above is satisfied by construction.
+
+Those two inputs are the ones [the software factory](./github-actions-software-factory-spec.md) §1.1 defines, byte for byte, and this paragraph restates rather than generalizes them: the authority is the lowercase DNS hostname plus a non-default port, with no scheme, path, query, fragment, user information or trailing separator, and the node ID is GitHub's exact returned string with no case folding and no Unicode normalization. There is no broader Issue-provider authority in this hash — a hash whose inputs two documents spell differently is two hashes.
+
+Because every input is immutable, admitting one issue twice derives one id and reaches one run through ordinary compatible reuse, and no separate idempotency concept appears. Two independent implementations given the same authority and node ID therefore produce the same id. A changed authority or node ID for a subject the host already retains is unsupported provider-identity drift, refused under §1.1 of that specification rather than derived into a second run.
 
 ### 9.2 Creating a run is also how it is found
 

@@ -7499,7 +7499,7 @@ component grants that admission, and a repository component that takes the name
 
 ### 6.19 Software-factory constructs
 
-An issue-driven software factory adds nine authored constructs. They belong to
+An issue-driven software factory adds ten authored constructs. They belong to
 the workflow host rather than to core: nothing registers them under `xmd run`,
 and a document executed without that host has none of them. Their exact forms
 are listed here so the public surface is readable in one place; the contract
@@ -7518,21 +7518,18 @@ engine-derived from the run and the expansion and is never a prop.
 | --- | --- | --- |
 | `Issue.Comment` | `<Issue.Comment url={issue.url} as="comment">…</Issue.Comment>` — paired; the content is the body; binds `{ url }` | [Workflow workspaces](./workflow-workspace-spec.md) §10.3 |
 | `PullRequest.Comment` | `<PullRequest.Comment url={pr.url} as="comment">…</PullRequest.Comment>` — paired; the content is the body; binds `{ url }` | [Workflow workspaces](./workflow-workspace-spec.md) §7.10 |
-| `PullRequest.Ready` | `<PullRequest.Ready url={pr.url} as="ready" />` — binds normalized ready evidence | [Workflow workspaces](./workflow-workspace-spec.md) §7.10 |
+| `PullRequest.Ready` | `<PullRequest.Ready url={pr.url} as="ready" />` — binds `{ url, state: "open", draft: false }` | [Workflow workspaces](./workflow-workspace-spec.md) §7.10 |
 | `PullRequest.Close` | `<PullRequest.Close url={pr.url} as="closed" />` — binds `{ url, state: "closed", merged: false }` | [Workflow workspaces](./workflow-workspace-spec.md) §7.10 |
-| `Issue.Close` | `<Issue.Close url={issue.url} reason="completed" as="closed" />`, or the same form with `reason="not_planned"` — binds the normalized URL, state and reason | [Workflow workspaces](./workflow-workspace-spec.md) §10.3 |
+| `PullRequest.Merged` | `<PullRequest.Merged url={pr.url} expectedMergeCommit={sha} as="merged" />` — binds `{ subject, state: "closed", merged: true, mergeCommit, decision: "adopted" }` | [Workflow workspaces](./workflow-workspace-spec.md) §7.11 |
+| `Issue.Close` | `<Issue.Close url={issue.url} reason="completed" as="closed" />`, or the same form with `reason="not_planned"` — binds `{ url, state: "closed", reason }` | [Workflow workspaces](./workflow-workspace-spec.md) §10.3 |
 | `Project.Status` | `<Project.Status item={itemId} field={fieldId} option={optionId} as="status" />` — binds the normalized `{ item, field, option }` | [Workflow workspaces](./workflow-workspace-spec.md) §10.6 |
-| `Git.Merge` | `<Git.Merge firstParent={sha} secondParent={sha} mergeBase={sha} purpose="synchronize" as="merge" />`, or the same form with `purpose="publish"` — binds a closed clean-or-conflicted result | [Workflow workspaces](./workflow-workspace-spec.md) §7.8 |
-| `Git.PublishTarget` | `<Git.PublishTarget expectedRemoteCommit={baseSha} sourceCommit={merge.commit} reviewedHead={headSha} as="publication" />` — binds normalized target, expected and published evidence | [Workflow workspaces](./workflow-workspace-spec.md) §7.9 |
-| `Evidence.Run` | `<Evidence.Run commands={commands} as="evidence" />`, where `commands` is a structured argv list — binds ordered bounded results | [Workflow workspaces](./workflow-workspace-spec.md) §10.5 |
+| `Git.Merge` | `<Git.Merge firstParent={sha} secondParent={sha} mergeBase={sha} purpose="synchronize" as="merge" />`, or the same form with `purpose="publish"` — binds `{ outcome: "clean", purpose, firstParent, secondParent, mergeBase, commit, workspaceRoot }` or `{ outcome: "conflicted", purpose, firstParent, secondParent, mergeBase, workspaceRoot, conflicts }` | [Workflow workspaces](./workflow-workspace-spec.md) §7.8 |
+| `Git.PublishTarget` | `<Git.PublishTarget expectedRemoteCommit={baseSha} sourceCommit={merge.commit} reviewedHead={headSha} as="publication" />` — binds `{ target, expectedRemoteCommit, reviewedHead, sourceCommit, observedCommit, decision }` | [Workflow workspaces](./workflow-workspace-spec.md) §7.9 |
+| `Evidence.Run` | `<Evidence.Run commands={commands} as="evidence" />`, where `commands` is an ordered non-empty list of non-empty argv vectors — binds `{ commands: [{ argv, outcome, status?, signal?, stdout, stderr }] }` in authored order, each channel `{ text, retainedBytes, producedBytes, truncated }` | [Workflow workspaces](./workflow-workspace-spec.md) §10.5 |
 
-Two things a reader looking for a component will not find here. The remote
-`WorkflowHost` is a host API — start, lookup, execute, answer and inspect — and
-not an element a document writes. The factory's protocol records — stage,
-frontier, implementation revision, role outcome, invalidation, conflict,
-terminal decision and terminal settlement — are closed parsers over immutable
-values, not components and not a lifecycle controller beside the journal.
-[The software factory](./github-actions-software-factory-spec.md) §11 owns both.
+Every binding above is the exact closed record its contract section defines; a member outside those shapes, an unknown member and a value outside a closed enum each refuse rather than being carried.
+
+Two things a reader looking for a component will not find here. The remote `WorkflowHost` is a host assembly contract — the existing `useRunHost()`, `useLifecycle()`, `useDelivery()` and `attach()`, with a Cloudflare implementation beside the Deno one — and not an element a document writes; its runner-to-owner transport is the versioned envelope of [Workflow workspaces](./workflow-workspace-spec.md) §13.2. The factory's protocol records — subject, stage, implementation revision, handoff, role outcome, invalidation, verdict, conflict suspension, Stage 7 decision, active frontier and terminal settlement — are the closed versioned schemas of [the software factory](./github-actions-software-factory-spec.md) §11.2, not components and not a lifecycle controller beside the journal.
 
 None of these constructs is available to a workflow Agent, and none appears in
 any generated-XMD read or write table
@@ -10046,8 +10043,8 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.
 The seven tiers below are the frozen evidence names for the software factory
 specified by
 [the software factory](./github-actions-software-factory-spec.md) and by
-[Workflow workspaces](./workflow-workspace-spec.md) §§3.8, 7.8-7.10, 10.5-10.7
-and 13.2. Every construct and host they name is **specified; implementation
+[Workflow workspaces](./workflow-workspace-spec.md) §§3.8, 7.8-7.11, 10.3, 10.5-10.7
+and 13.2, and by [the software factory](./github-actions-software-factory-spec.md) §11.2. Every construct and host they name is **specified; implementation
 unbuilt**, so these tiers name the scenarios an implementation is accepted
 against rather than tests that exist. Each lists the finite structural
 scenarios — success, refusal, stale authority, interruption and cancellation,
@@ -10074,6 +10071,9 @@ and [Workflow runs](./workflow-spec.md) §9.8.
 | WRH11 | Teardown | Closing the connection releases executor ownership and rolls back nothing already committed |
 | WRH12 | Completed replay | A completed run replays attaching no remote storage session, Workspace, Agent, process, Git, Git-host, Issue, Project or credential provider |
 | WRH13 | Host neutrality | Shared WorkflowRun modules import nothing Cloudflare-specific and detect no runtime; the runtime-named entrypoint is the only place the topology appears |
+| WRH14 | The host boundary is unchanged | The Cloudflare adapter satisfies the existing `useRunHost()`, `useLifecycle()`, `useDelivery()` and `attach()`; no fifth method appears, and the shared CLI asks the same four questions it asks the Deno host |
+| WRH15 | Versioned transport | A `RunnerRequest` whose protocol version this owner does not implement is refused before any other member is read; an unknown operation, an unknown member, and an acquisition present on `acquire` or absent on the other four each refuse without effect, and neither side adapts to the other's shape |
+| WRH16 | Ownership split | Connection admission, request parsing, transaction lifetime and stale recovery belong to the owner; provider attachment and cancellation of its own execution belong to the runner; content is produced by the runner and validated by the owner |
 
 ### Tier WGI — Authenticated GitHub ingress
 
@@ -10102,7 +10102,9 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §7.10, §10.3 an
 | # | Test | Verify |
 |---|------|--------|
 | WGE1 | Comment identity | A comment's natural key is its subject plus the engine-derived effect identity; a re-rendered or edited body is the same comment and produces no second one |
-| WGE2 | Ready and close | `PullRequest.Ready` and `PullRequest.Close` are keyed by their exact subject; an already-ready pull request is adopted and a merged one conflicts |
+| WGE2 | Ready and close | `PullRequest.Ready` and `PullRequest.Close` are keyed by their exact subject; an already-ready pull request is adopted, a merged one conflicts for both, and each binds its literal closed record rather than an observed one |
+| WGE2b | Comment identity is observable | An interrupted comment creation is found again by the adapter's fixed presentation-neutral trailer alone; exactly one match adopts, none performs once, more than one is ambiguity, and a comment list the adapter could not finish reading is an incomplete observation rather than absence |
+| WGE2c | Merged observation | `PullRequest.Merged` mutates nothing and only adopts: a host reporting merged at the exact published commit is the completion, a merge at another commit conflicts, and a pull request still open or closed unmerged is temporary unavailability rather than absence |
 | WGE3 | Issue closure | `Issue.Close` adopts an issue already closed with the same reason and conflicts with one closed under the other reason |
 | WGE4 | Project pre-state | `Project.Status` is keyed by exact item plus field, adopts an item already at the requested option, and performs once from another allowed option |
 | WGE5 | Project unavailability | An unreadable board, unavailable field, ambiguous item and partial permission read are unavailable rather than absent, and none of them mutates |
@@ -10130,8 +10132,11 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §7.8 and §7.9.
 | WGM7 | Adoption | A target already equal to the exact source commit is adopted with nothing performed |
 | WGM8 | Race | A target moved to a third commit refuses without mutating, and the exact-revision reviews invalidate rather than the publication proceeding |
 | WGM9 | Ceilings | Remote, ref, credential and non-force policy are host-owned; no authored prop sets or widens them |
-| WGM10 | Distinct operations | `Git.Push`, `Git.PublishTarget`, pull-request upsert, ready, close and the trusted merge are six operations; no force, force-with-lease, rebase, reset or host squash appears in any command trace or retained configuration |
+| WGM10 | Distinct operations | `Git.Push`, `Git.PublishTarget`, `Git.Merge`, pull-request upsert, ready, close and merged observation are seven operations with distinct subjects and records; no force, force-with-lease, rebase, reset or host squash appears in any command trace or retained configuration |
 | WGM11 | Replay | Completed merge and publication records replay without running Git and without contacting a Git host |
+| WGM13 | Exact merge records | A clean result names the merge commit and published root; a conflicted one names the restored pre-merge root and the complete conflict set sorted by path in UTF-8 byte order, with stage numbers and side presence agreeing exactly, duplicate paths refused, and an absent side absent rather than null |
+| WGM14 | Restoration failure | A pre-merge root that cannot be restored publishes no conflicted result and no new root, and activates the durable fail-stop fence |
+| WGM15 | Exhaustive pre-states | Expected base performs once, the exact source commit adopts, a third commit conflicts, and incomplete observation, ambiguity and temporary unavailability each refuse as themselves |
 | WGM12 | Denied to the Agent | Neither construct is reachable by a workflow Agent or by an admitted generated fragment |
 
 ### Tier WER — Trusted evidence execution
@@ -10147,6 +10152,11 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §10.5.
 | WER5 | Location | The execution happens on the trusted runner; the durable owner runs no native process |
 | WER6 | Cancellation and teardown | A cancelled run terminates its child before publishing, and no child outlives the effect |
 | WER7 | Replay | A completed record replays running nothing |
+| WER4b | The whole list runs | A command ending unsuccessfully does not stop the ones after it; the bound list has one entry per authored command, in authored order, and each command is charged its own duration ceiling |
+| WER4c | Channels and truncation | stdout and stderr are retained separately, each stating its retained bytes, the bytes the child produced, and whether it was truncated; truncation is stated rather than inferred |
+| WER4d | Outcome discriminants | `status` is present exactly for `exited`, `signal` exactly for `signalled`, and `timeout` carries neither; either member beside the wrong outcome refuses the record |
+| WER6b | What binds and what fails | Any exit status, a signal and a timeout each bind an ordinary result; a launch failure, an output-pump failure and a teardown failure each fail the effect and bind nothing; cancellation commits neither a result nor a failure |
+| WER6c | Precedence | Cancellation outranks everything, the first infrastructure failure otherwise wins, and a teardown failure fails the effect even when every command produced an ordinary outcome |
 | WER8 | Denied authority | `Evidence.Run` appears in no Agent capability and in no generated-XMD read or write table; a fragment naming it is refused before any generated effect |
 
 ### Tier WFP — Factory protocol and frontier
@@ -10156,7 +10166,8 @@ Defined in [the software factory](./github-actions-software-factory-spec.md)
 
 | # | Test | Verify |
 |---|------|--------|
-| WFP1 | Run identity | The run ID equals the §1.1 derivation for its issue; a changed repository name, issue number, Project identity, comment, branch, revision, definition SHA, delivery ID or actor changes it not at all |
+| WFP1 | Run identity | The run ID equals the §1.1 derivation for its issue: the same canonical GitHub authority and the same issue node ID produce the same 52-character id in two independent implementations, and a changed repository name, issue number, Project identity, comment, branch, revision, definition SHA, delivery ID or actor changes it not at all |
+| WFP1b | Identity drift | A reread returning a different canonical GitHub authority or node ID for a subject the host already retains refuses as unsupported provider-identity drift and derives no second run |
 | WFP2 | Adjacency | An outcome advancing more than one stage is rejected, and the current stage's handoff commits before the next role is invoked |
 | WFP3 | Same-stage amendment | A later accepted same-stage output replaces the frontier while the superseded output stays readable in the journal |
 | WFP4 | Backward destinations | Each of the six destinations in §2.2 deactivates exactly the downstream handoffs its row names and requires every later stage again |
@@ -10164,7 +10175,9 @@ Defined in [the software factory](./github-actions-software-factory-spec.md)
 | WFP6 | Base invalidation | A base-only move places the frontier at Stage 5, and a base move requiring synchronization or implementation work places it at Stage 4 |
 | WFP7 | Exact subjects | Stage 6 accepts only a Planner verdict naming the same revision, and Stage 7 only a review chain naming the current one |
 | WFP8 | Ready authority | Only an accepted Stage 6 verdict for the current revision takes the pull request out of draft; observed ready state manufactures no verdict |
-| WFP9 | Closed parsers | Stage, frontier, revision, outcome, invalidation, conflict, decision and terminal records parse as closed immutable values, and an unrecognized shape refuses rather than being read loosely |
+| WFP9 | Closed parsers | Every §11.2 record carries its schema discriminant and version; an unknown schema, an unknown version, an unknown member, a missing required member and a value outside a closed enum each refuse, and a refusal names the member path and never the value |
+| WFP9b | Frontier reduction | Each reduction input of §11.2 — advance, amend, invalidate, head change, base-only change, base-needs-work, and a terminal decision on an already-terminal run — produces exactly the stated frontier, and a reduction leaving a stage out of range, two entries for one stage, or an advance past an unaccepted stage refuses |
+| WFP9c | Decision shapes | `merge` carries revision, actor and delivery identity; `abandon` adds a required reason; `change` adds a reason and the earliest invalidated stage; a decision naming a revision that is not the current frontier revision refuses |
 | WFP10 | Definition identity | Definition incompatibility is a workflow lifecycle refusal and never an implementation correction |
 | WFP11 | Journal is authority | A Project status, comment or pull-request state ahead of the journal is drift and authorizes no stage |
 
@@ -10176,11 +10189,12 @@ Defined in [the software factory](./github-actions-software-factory-spec.md)
 | # | Test | Verify |
 |---|------|--------|
 | WFL1 | Clean synchronization | Observe, merge, record the revision, remain at Stage 4, run evidence, push the descendant, offer the new pair to Stage 5 — as separate durable effects, resuming from the first uncommitted one |
-| WFL2 | Conflict suspension | Every conflict returns a closed conflicted result, restores the pre-merge root, retains normalized evidence, publishes a handoff and suspends |
+| WFL2 | Conflict suspension | Every conflict returns the conflicted shape of the `GitMergeResult` union, restores the pre-merge root, retains the complete conflict set that shape defines, publishes a handoff and suspends |
 | WFL3 | No automatic resolution | No generated fragment, structured text-conflict capability, rebase, force, force-with-lease or reset resolves a conflict |
 | WFL4 | Manual resolution | A pushed resolution is observed as a new Stage 4 revision, receives new evidence, and inherits no Stage 5-7 conclusion |
 | WFL5 | Merge decision first | A merged decision is retained before any effect is attempted |
-| WFL6 | Merge ordering | Merge construction, target publication, the merged observation, issue completion, the Project move and terminal settlement are separate reconciled steps in that order |
+| WFL6 | Merge ordering | Merge construction, target publication, `PullRequest.Merged`, issue completion as `completed`, the Project move and terminal settlement are separate reconciled steps in that order |
+| WFL6b | Paths do not borrow steps | The merged path closes no pull request and the abandoned path constructs no merge, publishes no target and observes no merged state; a `FactoryTerminal` naming a step from the other path refuses |
 | WFL7 | Terminal is last | The run becomes terminal `merged` only after every required projection completes |
 | WFL8 | Abandonment | An exact-revision authenticated abandonment carrying a reason is retained first, then pull-request close unmerged, issue close as `not_planned`, the Project move and settlement; terminal `abandoned` follows all of them |
 | WFL9 | Retention | Both terminal kinds retain the actor, exact revision, resulting provider identities and required reason, and retain the Project item, branch, comments, journal, Workspace roots and Agent evidence |

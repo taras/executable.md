@@ -338,9 +338,10 @@ retained intent; a completed replay contacts no provider at all.
 
 The natural keys are exact. A comment uses its subject plus the engine-derived
 effect identity, so the body and title are presentation rather than identity. A
-Project status uses the exact Project item plus field. Ready and close use their
-exact issue or pull-request subject. Target publication uses the retained
-repository plus the configured remote and target ref. Accepted outcomes are
+Project status uses the exact Project item plus field. Ready, close and the
+merged observation use their exact issue or pull-request subject. Target
+publication uses the retained repository plus the configured remote and target
+ref. Accepted outcomes are
 retained before their projections are attempted, and reconciliation completes
 each intended projection.
 
@@ -597,37 +598,41 @@ publish over it. Because the reviews name exact revisions, that race invalidates
 them: the item returns to Stage 5 when only rereview is required, and to Stage 4
 when synchronization or implementation work is required.
 
-`Git.Push`, `Git.PublishTarget`, pull-request upsert, `PullRequest.Ready`,
-`PullRequest.Close` and the trusted merge are six distinct operations with
-distinct subjects, ceilings and reconciliation. None is a spelling of another.
+`Git.Push`, `Git.PublishTarget`, `Git.Merge`, pull-request upsert, `PullRequest.Ready`, `PullRequest.Close` and `PullRequest.Merged` are seven distinct operations with distinct subjects, ceilings and reconciliation. None is a spelling of another, and in particular publishing a target and observing that a pull request merged are two facts a Git host can hold separately.
 
 ### 10.3 Terminal ordering
 
-A merged decision is retained **before** any effect is attempted. Then merge
-construction, target publication, the merged observation of the pull request,
-issue completion, the Project move to `Closed`, and terminal settlement are
-separate reconciled steps in that order. The run becomes terminal `merged` only
-after every required remote projection is complete.
+There are two terminal paths and they share no step list. Each begins by retaining its authenticated exact-revision decision **before** any effect is attempted, and each ends with terminal settlement after every step before it has completed. A `change` decision is on neither path: it is not terminal, and it returns the run to the earliest stage it names.
 
-That order exists for one reason: a completed run replays without contacting a
-provider. If terminal completion preceded a projection, the replay that was
-supposed to repair GitHub would be exactly the replay that is forbidden to reach
-it.
+**The merged path**, in this order:
 
-An abandonment decision is exact-revision, authenticated under §5.4, and carries
-a required reason. It is retained first as well, and then pull-request close
-unmerged, issue close as `not_planned`, the Project move to `Closed`, and
-terminal settlement follow as separate reconciled steps. The run becomes
-terminal `abandoned` only after all required projections complete.
+1. Retain the `merge` decision of §11.2, bound to the exact reviewed revision and the authenticated actor.
+2. Construct the trusted merge commit — `<Git.Merge purpose="publish" />` with parents `[reviewedBase, reviewedHead]`.
+3. Publish the target — `<Git.PublishTarget />` under §10.2.
+4. Observe that the pull request merged — `<PullRequest.Merged />`, the reconciled Git-host observation of [Workflow workspaces](./workflow-workspace-spec.md) §7.11, against the published merge commit. A Git host records a pull request as merged on its own schedule, so this is its own retained step and not something publication implies.
+5. Close the issue — `<Issue.Close reason="completed" />`.
+6. Move the Project item to `Closed` — `<Project.Status />`.
+7. Publish terminal kind `merged`.
 
-Both terminal kinds retain the authorizing actor, the exact reviewed revision,
-the resulting provider identities, and the reason where one is required. Both
-retain the Project item, the implementation branch, the issue and pull-request
-comments, the journal, the Workspace roots and the Agent evidence. Reopening the
-issue afterwards does not reopen the completed run; continuing that work
-requires a new linked issue, and therefore a new run.
+**The abandoned path**, in this order:
 
-## 11. Exact public contract inventory
+1. Retain the `abandon` decision of §11.2, bound to the exact reviewed revision, the authenticated actor and its required reason.
+2. Close the pull request unmerged — `<PullRequest.Close />`.
+3. Close the issue — `<Issue.Close reason="not_planned" />`.
+4. Move the Project item to `Closed` — `<Project.Status />`.
+5. Publish terminal kind `abandoned`.
+
+An abandonment constructs no merge, publishes no target and observes no merged state; there is nothing it reviewed that it is publishing. A merge closes no pull request; the Git host closes it when the target moves, which is what step 4 observes rather than performs.
+
+Every step on either path is a separate reconciled effect or a separate retained transition, and no distributed transaction is claimed across the Durable Object, native Git and processes, GitHub and Project V2. An interruption resumes at the first uncommitted or unreconciled step.
+
+Terminal settlement is last on both paths for one reason: a completed run replays without contacting a provider. If terminal completion preceded a projection, the replay that was supposed to repair GitHub would be exactly the replay that is forbidden to reach it.
+
+Both terminal kinds retain the authorizing actor, the exact reviewed revision, the resulting provider identities, and the reason where one is required, in the `FactoryTerminal` record of §11.2 — whose two shapes differ exactly as these two paths do. Both retain the Project item, the implementation branch, the issue and pull-request comments, the journal, the Workspace roots and the Agent evidence. Reopening the issue afterwards does not reopen the completed run; continuing that work requires a new linked issue, and therefore a new run.
+
+## 11. Exact public contracts
+
+### 11.1 Authored construct inventory
 
 These are the authored public forms. `as` is mandatory wherever a result is
 bound, and form validation runs before any context, provider or credential
@@ -642,19 +647,191 @@ expansion; it is never a document prop.
 | `PullRequest.Ready` | Self-closing `<PullRequest.Ready url={pr.url} as="ready" />`; binds normalized ready pull-request evidence | Git-host effect; only an accepted Stage 6 outcome authorizes invocation |
 | `PullRequest.Close` | Self-closing `<PullRequest.Close url={pr.url} as="closed" />`; binds normalized `{ url, state: "closed", merged: false }` | Git-host effect; used only by a retained abandonment |
 | `Issue.Close` | Self-closing `<Issue.Close url={issue.url} reason="completed" as="closed" />`, or the same form with `reason="not_planned"`; binds the normalized URL, state and reason | Issue-provider effect; `reason` is a closed enum and must match the retained terminal intent |
-| `Git.Merge` | Self-closing `<Git.Merge firstParent={sha} secondParent={sha} mergeBase={sha} purpose="synchronize" as="merge" />`, or the same form with `purpose="publish"`; binds a closed clean-or-conflicted result | Workspace-local Git effect; repository, checkout, root and acquisition are authenticated provider state; a clean publication is atomic and a conflict restores before the result is published |
+| `Git.Merge` | Self-closing `<Git.Merge firstParent={sha} secondParent={sha} mergeBase={sha} purpose="synchronize" as="merge" />`, or the same form with `purpose="publish"`; binds the `GitMergeResult` union of [Workflow workspaces](./workflow-workspace-spec.md) §7.8 — `{ outcome: "clean", purpose, firstParent, secondParent, mergeBase, commit, workspaceRoot }` or `{ outcome: "conflicted", purpose, firstParent, secondParent, mergeBase, workspaceRoot, conflicts }` | Workspace-local Git effect; repository, checkout, root and acquisition are authenticated provider state; a clean publication is atomic and a conflict restores before the result is published |
 | `Git.PublishTarget` | Self-closing `<Git.PublishTarget expectedRemoteCommit={baseSha} sourceCommit={merge.commit} reviewedHead={headSha} as="publication" />`; binds normalized target, expected and published evidence | Git-host effect; remote, ref, credential and non-force ceiling are host-owned; exact compare-and-swap reconciliation |
-| `Evidence.Run` | Self-closing `<Evidence.Run commands={commands} as="evidence" />`, where `commands` is an authored structured argv list; binds ordered bounded results | Trusted runner-host effect; the exact retained root and the executable, environment, time and output ceilings; absent from Agent and generated-XMD capabilities; a completed replay runs nothing |
-| Remote `WorkflowHost` | A provider-neutral start, lookup, execute, answer and inspect contract, with a Cloudflare runtime-named implementation | A host API rather than an XMD component; the execution and delivery planes stay distinct across it |
-| Factory protocol records | Closed stage, frontier, revision, outcome, invalidation, conflict, decision and terminal parsers over immutable values | A provider-neutral durable protocol; neither an XMD component nor a TypeScript lifecycle controller |
+| `Evidence.Run` | Self-closing `<Evidence.Run commands={commands} as="evidence" />`, where `commands` is an ordered non-empty list of non-empty argv vectors; binds the `EvidenceRunResult` of [Workflow workspaces](./workflow-workspace-spec.md) §10.5 — one `{ argv, outcome, status?, signal?, stdout, stderr }` per command, in authored order, each channel `{ text, retainedBytes, producedBytes, truncated }` | Trusted runner-host effect; the exact retained root and the executable, environment, working-root, duration, output and process-tree ceilings; the whole list runs, launch/output-pump/teardown failures bind nothing, cancellation commits nothing; absent from Agent and generated-XMD capabilities; a completed replay runs nothing |
+| `PullRequest.Merged` | Self-closing `<PullRequest.Merged url={pr.url} expectedMergeCommit={publication.sourceCommit} as="merged" />`; binds `{ subject, state: "closed", merged: true, mergeCommit, decision: "adopted" }` | Git-host reconciled observation, [Workflow workspaces](./workflow-workspace-spec.md) §7.11; it mutates nothing and adoption is its only completion; keyed by the canonical pull-request URL |
+| Remote `WorkflowHost` | The existing four-method host boundary — `useRunHost()`, `useLifecycle()`, `useDelivery()`, `attach()` — with a Cloudflare runtime-named implementation beside the Deno one; start, lookup, execute, deliver and inspect are lifecycle operations reached through it rather than method names of their own. The runner-to-owner transport is the versioned `RunnerRequest` envelope of [Workflow workspaces](./workflow-workspace-spec.md) §13.2 | A host assembly contract rather than an XMD component; the execution, delivery and inspection planes stay distinct across it |
+| Factory protocol records | The closed versioned schemas of §11.2 | A provider-neutral durable protocol; neither an XMD component nor a TypeScript lifecycle controller |
 
-Each construct's closed props, form, binding, request, natural key, compatible
-pre-state, normalized result, refusal and unavailability behavior, cancellation,
-replay, provider ownership, credential boundary, and whether it is
-Workspace-local or an external reconciled effect are stated in
-`specs/workflow-workspace-spec.md` §§7, 8 and 10, which those documents own. A
-later implementation may choose ordinary private function and module names; it
-may not change these public forms or their ownership.
+Each construct's closed props, form, binding, request, natural key, compatible pre-state, normalized result, refusal and unavailability behavior, cancellation, replay, provider ownership, credential boundary, and whether it is Workspace-local or an external reconciled effect are defined normatively in [Workflow workspaces](./workflow-workspace-spec.md): §7.8 `Git.Merge`, §7.9 `Git.PublishTarget`, §7.10 `PullRequest.Comment`, `PullRequest.Ready` and `PullRequest.Close`, §7.11 `PullRequest.Merged`, §10.3 `Issue.Comment` and `Issue.Close`, §10.5 `Evidence.Run`, §10.6 `Project.Status`, §10.7 the credential boundary they share, and §13.2 the remote host and its transport. A later implementation may choose ordinary private function and module names; it may not change these public forms, their records or their ownership.
+
+### 11.2 Factory protocol records
+
+The factory's lifecycle is journaled as closed immutable records, not held in a controller. These are the schemas the journal retains and every role outcome is parsed into. They are provider-neutral data and parsers; nothing here becomes a TypeScript state machine beside the journal, and nothing here is an XMD component.
+
+Every record carries `schema`, its discriminant, and `version`, which is `1` for all of them. Parsing is strict in both directions: an unknown `schema`, an unknown `version`, an unknown member, a missing required member, and a value outside a closed enum each refuse the record rather than being ignored or defaulted. A refusal names the member path and never the value behind it, on the same terms retained props and journal payloads are described.
+
+#### Identities and subjects
+
+```ts
+type FactoryStage = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+
+type FactoryRole = "user" | "architect" | "planner" | "implementor";
+
+interface FactorySubject {
+  readonly schema: "factory-subject";
+  readonly version: 1;
+  readonly runId: string;
+  readonly authority: string;
+  readonly issueNodeId: string;
+  readonly issueUrl: string;
+  readonly repositoryId: string;
+  readonly projectItemId: string;
+  readonly statusFieldId: string;
+}
+
+interface ImplementationRevision {
+  readonly schema: "implementation-revision";
+  readonly version: 1;
+  readonly headSha: string;
+  readonly baseSha: string;
+}
+```
+
+`FactoryStage` is the numeric stage; the nine status strings of §2 are its projection and are never parsed back into it. `runId` is the §1.1 derivation, and `authority` and `issueNodeId` are the exact bytes it was derived from, retained so drift is detectable without re-deriving. `repositoryId`, `projectItemId` and `statusFieldId` are provider identities compared byte for byte. `headSha` and `baseSha` are lowercase hexadecimal commit IDs. A revision is compared as the whole pair: two revisions are equal only when both halves are.
+
+#### Evidence and role outcomes
+
+```ts
+interface EvidenceReference {
+  readonly schema: "evidence-reference";
+  readonly version: 1;
+  readonly effectId: string;
+  readonly revision: ImplementationRevision;
+  readonly passed: boolean;
+}
+
+interface FactoryHandoff {
+  readonly schema: "factory-handoff";
+  readonly version: 1;
+  readonly stage: FactoryStage;
+  readonly role: FactoryRole;
+  readonly actor: FactoryActor;
+  readonly summary: string;
+  readonly revision?: ImplementationRevision;
+  readonly evidence?: readonly EvidenceReference[];
+}
+
+interface FactoryActor {
+  readonly schema: "factory-actor";
+  readonly version: 1;
+  readonly kind: "human" | "agent";
+  readonly id: string;
+}
+
+type FactoryOutcome =
+  | { readonly schema: "factory-outcome"; readonly version: 1; readonly kind: "advance"; readonly from: FactoryStage; readonly to: FactoryStage; readonly handoff: FactoryHandoff }
+  | { readonly schema: "factory-outcome"; readonly version: 1; readonly kind: "amend"; readonly stage: FactoryStage; readonly handoff: FactoryHandoff; readonly supersedes: string }
+  | { readonly schema: "factory-outcome"; readonly version: 1; readonly kind: "invalidate"; readonly invalidation: FactoryInvalidation }
+  | { readonly schema: "factory-outcome"; readonly version: 1; readonly kind: "verdict"; readonly verdict: FactoryVerdict }
+  | { readonly schema: "factory-outcome"; readonly version: 1; readonly kind: "suspend"; readonly suspension: ConflictSuspension };
+
+interface FactoryInvalidation {
+  readonly schema: "factory-invalidation";
+  readonly version: 1;
+  readonly from: FactoryStage;
+  readonly earliestInvalidated: FactoryStage;
+  readonly reason: string;
+  readonly actor: FactoryActor;
+}
+
+type FactoryVerdict =
+  | { readonly schema: "factory-verdict"; readonly version: 1; readonly stage: 5; readonly role: "planner"; readonly revision: ImplementationRevision; readonly decision: "pass" | "changes"; readonly reason: string; readonly evidence: readonly EvidenceReference[] }
+  | { readonly schema: "factory-verdict"; readonly version: 1; readonly stage: 6; readonly role: "architect"; readonly revision: ImplementationRevision; readonly decision: "pass" | "changes"; readonly reason: string; readonly plannerVerdict: string };
+```
+
+`summary` and `reason` are the only presentation fields, and both are bounded: they are what a comment renders, never what identity compares. `supersedes`, `effectId` and `plannerVerdict` are journal event identities, so a record points at the history it replaces or depends on instead of copying it. An `advance` whose `to` is not `from + 1` refuses, and so does an `amend` whose `stage` is not the current frontier stage. A Stage 6 verdict whose `plannerVerdict` names a verdict for another revision refuses.
+
+#### Conflict suspension
+
+```ts
+interface ConflictSuspension {
+  readonly schema: "conflict-suspension";
+  readonly version: 1;
+  readonly revision: ImplementationRevision;
+  readonly mergeBase: string;
+  readonly workspaceRoot: string;
+  readonly conflictIdentity: string;
+  readonly mergeEffectId: string;
+  readonly suspensionId: string;
+}
+```
+
+`workspaceRoot` is the *restored* pre-merge root, `mergeEffectId` names the `Git.Merge` event whose conflicted result holds the normalized conflict set of [Workflow workspaces](./workflow-workspace-spec.md) §7.8, and `conflictIdentity` is derived from the checkpointed identities and that normalized set. The conflict set is not copied here: one account of it, in the effect that produced it.
+
+#### Stage 7 decisions
+
+```ts
+type Stage7Decision =
+  | { readonly schema: "stage-7-decision"; readonly version: 1; readonly kind: "merge"; readonly revision: ImplementationRevision; readonly actor: FactoryActor; readonly deliveryId: string }
+  | { readonly schema: "stage-7-decision"; readonly version: 1; readonly kind: "abandon"; readonly revision: ImplementationRevision; readonly actor: FactoryActor; readonly deliveryId: string; readonly reason: string }
+  | { readonly schema: "stage-7-decision"; readonly version: 1; readonly kind: "change"; readonly revision: ImplementationRevision; readonly actor: FactoryActor; readonly deliveryId: string; readonly earliestInvalidated: FactoryStage; readonly reason: string };
+```
+
+All three bind the exact revision they were made against and the authenticated actor who made them, and all three name the delivery identity they arrived under. `abandon` requires a reason and `change` requires both a reason and the earliest stage it invalidates; `merge` takes neither, because approving what two reviews already passed adds no new claim. A decision whose `revision` is not the current frontier revision refuses. `merge` and `abandon` are terminal intents that §10.3 orders; `change` is not terminal and reduces to an invalidation.
+
+#### The active frontier and its reduction
+
+```ts
+interface FactoryFrontier {
+  readonly schema: "factory-frontier";
+  readonly version: 1;
+  readonly stage: FactoryStage;
+  readonly revision?: ImplementationRevision;
+  readonly accepted: readonly string[];
+  readonly terminal?: FactoryTerminal;
+}
+```
+
+`accepted` is the ordered list of journal event identities forming the active chain, oldest first, one per stage that has been passed. `revision` is absent before Stage 4 produces one. `terminal` is present only on a settled run.
+
+The frontier is a reduction over the retained outcomes, and its inputs and outputs are exactly these:
+
+| Input | Resulting frontier |
+| --- | --- |
+| `advance` from stage *n* to *n + 1* | `stage` becomes *n + 1*; the handoff's event is appended to `accepted` |
+| `amend` at the current stage | `stage` is unchanged; the superseded event is replaced in `accepted` by the amending one, and the superseded event stays in the journal |
+| `invalidate` naming earliest stage *e* | `stage` becomes *e*; every entry in `accepted` for a stage at or after *e* is dropped from the active chain and kept in the journal |
+| a head change: a new `headSha` | `stage` becomes 4, `revision` becomes the new pair, and the Stage 5, 6 and 7 entries drop |
+| a base-only change requiring no work | `stage` becomes 5, `revision` becomes the new pair, and the Stage 5, 6 and 7 entries drop |
+| a base change requiring synchronization or implementation work | `stage` becomes 4 on the same terms as a head change |
+| a `merge` or `abandon` decision on a run whose `terminal` is already present | refused; the frontier is unchanged |
+
+A reduction that would leave `stage` outside `0`-`8`, leave `accepted` holding two entries for one stage, or advance past a stage with no accepted entry refuses rather than producing a frontier.
+
+#### Terminal settlement
+
+```ts
+type FactoryTerminal =
+  | {
+    readonly schema: "factory-terminal";
+    readonly version: 1;
+    readonly kind: "merged";
+    readonly revision: ImplementationRevision;
+    readonly actor: FactoryActor;
+    readonly decisionId: string;
+    readonly mergeCommit: string;
+    readonly publication: string;
+    readonly mergedObservation: string;
+    readonly issueClosure: string;
+    readonly projectClosure: string;
+  }
+  | {
+    readonly schema: "factory-terminal";
+    readonly version: 1;
+    readonly kind: "abandoned";
+    readonly revision: ImplementationRevision;
+    readonly actor: FactoryActor;
+    readonly decisionId: string;
+    readonly reason: string;
+    readonly pullRequestClosure: string;
+    readonly issueClosure: string;
+    readonly projectClosure: string;
+  };
+```
+
+The two kinds do not share a member list, and that asymmetry is the contract: a `merged` terminal names a merge commit, a target publication and a merged observation, and an `abandoned` terminal names a pull-request closure and a reason and can name none of the first three. Every member ending in `Id` or naming a step is a journal event identity, so the terminal record points at the reconciled effects that completed rather than restating their results. A terminal record whose named events are not all present and complete refuses, which is what makes §10.3's ordering checkable from the record alone.
 
 ## 12. Structural consequences
 
@@ -750,5 +927,15 @@ A factory implementation satisfies this specification when every item holds:
     Stage 7 order is `[reviewedBase, reviewedHead]`.
 20. Target publication updates the ref only from an observed `baseSha`, adopts
     only the exact merge commit, and never force-updates.
-21. A terminal `merged` or `abandoned` state is published only after every
-    required projection completes, and a completed replay attaches no provider.
+21. The merged state of the pull request is observed as its own retained step
+    after publication and before issue closure, and is adopted only at the exact
+    published merge commit.
+22. The merged and abandoned paths of §10.3 run in their stated orders, and
+    neither borrows a step from the other.
+23. A terminal `merged` or `abandoned` state is published only after every
+    required projection completes, and a completed replay attaches no external
+    provider.
+24. Every authored construct binds the exact record
+    [Workflow workspaces](./workflow-workspace-spec.md) defines for it, and
+    every factory protocol record parses under §11.2 with strict refusal of an
+    unknown schema, version or member.
