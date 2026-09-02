@@ -39,7 +39,7 @@
 
 import { createHash } from "node:crypto";
 import { scoped } from "effection";
-import type { Operation, Scope } from "effection";
+import type { Operation, Result, Scope } from "effection";
 import { createDurableOperation } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import {
@@ -55,15 +55,14 @@ import type {
   IdentityComponent,
 } from "@executablemd/core/host";
 import type { DocumentValidation } from "@executablemd/core";
-import type { AcpxProviderDependencies } from "@executablemd/acp";
 import type { ComponentInvocation } from "@executablemd/core";
 
-import type { AgentStack } from "./agent-stack.ts";
 import {
   DEFAULT_AUTHORSHIP_ROOT,
   installAuthorshipFrame,
   useSessionDirectory,
 } from "./authorship-profile.ts";
+import type { PlanAuthorship, PlanAuthorshipObservation } from "./authorship-profile.ts";
 import type { CandidateAssessment } from "./authorship-profile.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import { PLAN_DOCUMENT, readPackagedDocument } from "./packaged-document.ts";
@@ -108,26 +107,28 @@ export interface PlanComponentAssembly {
   /** The component search path a Plan's own components resolve against. */
   readonly includes: readonly string[];
   /**
-   * The one Agent configuration this invocation settled, when it settled one.
+   * The Agent context this host can give a Plan, or why it can give none.
    *
-   * Absent is a host that has no run stack — `xmd test` drives agents through
-   * the deterministic TestAgent stack — and it is not a reason to withhold the
-   * Component. A document that writes `<Plan>` there resolves the same protected
-   * bytes and is refused at the ceiling, before any placement, rather than told
-   * the component does not exist.
+   * A host that establishes none — `xmd test` at its own root, or an
+   * unconfigured run child — still declares the Component. A document that
+   * writes `<Plan>` there resolves the same protected bytes and is refused at
+   * the frame, before any placement, rather than told the component does not
+   * exist.
+   *
+   * The capability is a closure the host supplied before this declaration
+   * existed. No prop, binding, registration, middleware answer or separately
+   * loaded copy can supply or replace one.
    */
-  readonly stack?: AgentStack;
+  readonly context: Result<PlanAuthorship>;
   /** What this host states about machine-wide agent sessions, if anything. */
   readonly sessions?: MachineSessionAssembly;
-  /** What the constrained provider is built on, beyond the host's assembly. */
-  readonly acp?: AcpxProviderDependencies;
   /**
    * Where this host keeps its authorship session directories.
    *
    * Absent is the ordinary host default. A harness that owns a temporary tree
    * names that tree here, which is the only way anything but production selects
    * one — there is no flag, no environment variable and no contextual Api to
-   * reach, so a document cannot move where the ceiling lives.
+   * reach, so a document cannot move where authorship directories live.
    */
   readonly authorshipRoot?: string;
   /**
@@ -141,8 +142,10 @@ export interface PlanComponentAssembly {
   readonly session?: string;
   /** Whether that fixed name was one a caller asked for and can ask for again. */
   readonly explicitSession?: boolean;
-  /** The scope the two host acts run in, captured before the ceiling exists. */
+  /** The scope the two host acts run in, captured before the frame exists. */
   readonly host: Scope;
+  /** A trusted host-only observation after the whole frame is installed. */
+  observeAuthorship?(observation: PlanAuthorshipObservation): Operation<void>;
   /** Who answers the review question. */
   installElicitation(): Operation<void>;
   /** The run profile's rendered vocabulary, as the first Agent turn receives it. */
@@ -171,6 +174,7 @@ const INPUTS_RETURNS = {
     session: { type: "string" },
     surface: { type: "string" },
     durable: { type: "boolean" },
+    authoredSession: { type: "string" },
   },
   required: ["syntax", "session", "surface", "durable"],
   additionalProperties: false,
@@ -187,6 +191,7 @@ const AUTHORSHIP_PROPS = {
   properties: {
     session: { type: "string", minLength: 1 },
     durable: { type: "boolean" },
+    authoredSession: { type: "string", minLength: 1 },
   },
   required: ["session", "durable"],
   additionalProperties: false,
@@ -253,7 +258,7 @@ export function* planComponentDeclaration(
  *
  * Inspection and validation answer about what a document may write. They mint no
  * execution, so there is no claimant to build a private capability from and no
- * ceiling to establish — and none of that is describable anyway: a private name
+ * frame to install — and none of that is describable anyway: a private name
  * is not syntax a document may write, so a catalog listing one would describe an
  * environment that does not exist.
  *
@@ -353,6 +358,7 @@ function planInputs(assembly: PlanComponentAssembly): IdentityComponent {
           session,
           surface: assembly.surface,
           durable: durability(assembly, authored),
+          ...(authored === undefined ? {} : { authoredSession: authored }),
         };
       },
   };
@@ -424,21 +430,12 @@ function planAuthorship(assembly: PlanComponentAssembly): IdentityComponent {
       function* PlanAuthorship(props: Record<string, Json>): Operation<string> {
         // Before a directory exists, before a provider exists, and therefore
         // before any session could be placed or any turn started. A host that
-        // cannot establish this ceiling refuses rather than writing a Plan under
+        // supplies no Agent context refuses rather than writing a Plan under
         // a weaker one, and broader authority in the calling document cannot
         // widen it.
-        const stack = assembly.stack;
-        if (stack === undefined) {
-          throw new Error(
-            "this host establishes no coding-agent ceiling, so no Plan can be written here — " +
-              "no Plan was returned",
-          );
-        }
-        if (stack.provider !== "acpx") {
-          throw new Error(
-            `the ${stack.provider} provider cannot establish the Plan authorship ceiling — ` +
-              "no Plan was returned",
-          );
+        const context = assembly.context;
+        if (!context.ok) {
+          throw context.error;
         }
 
         const session = String(props.session);
@@ -457,14 +454,20 @@ function planAuthorship(assembly: PlanComponentAssembly): IdentityComponent {
 
         yield* installAuthorshipFrame({
           workdir: established.value,
-          stack,
-          ...(assembly.acp === undefined ? {} : { acp: assembly.acp }),
+          authorship: context.value,
           host: assembly.host,
+          session,
+          ...(typeof props.authoredSession === "string"
+            ? { authoredSession: props.authoredSession }
+            : {}),
+          ...(assembly.observeAuthorship === undefined
+            ? {}
+            : { observe: assembly.observeAuthorship }),
           installElicitation: assembly.installElicitation,
         });
 
         // The Component's own phases, projected inside everything installed above.
-        // The content scope descends from this body's, so the ceiling covers the
+        // The content scope descends from this body's, so the frame covers the
         // turns and the review and nothing outside them.
         yield* content();
         return "";

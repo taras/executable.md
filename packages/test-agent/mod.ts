@@ -56,3 +56,5 @@ export { runTestAgentWorker } from "./src/worker/run.ts";
  * by the first crosses into the second.
  */
 export { installChildTestAgent, testAgentChildDeclaration } from "./src/child-configuration.ts";
+export type { PlanProviderAssembly, PlanProviderPolicy } from "./src/child-configuration.ts";
+export type { ChildTestAgentInstallation } from "./src/child-configuration.ts";

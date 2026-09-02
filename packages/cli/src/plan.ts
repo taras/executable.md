@@ -67,7 +67,11 @@ import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { cwd } from "@executablemd/runtime";
 
 import type { AgentStack } from "./agent-stack.ts";
-import { DEFAULT_AUTHORSHIP_ROOT, runPlanCommandDocument } from "./authorship-profile.ts";
+import {
+  DEFAULT_AUTHORSHIP_ROOT,
+  planAgentContext,
+  runPlanCommandDocument,
+} from "./authorship-profile.ts";
 import type { CandidateAssessment } from "./authorship-profile.ts";
 import { PLAN_IDENTITY, planComponentDeclaration } from "./plan-component.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
@@ -226,14 +230,16 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
     // disk, and opening the review form — and both run a command, which the
     // ceiling the Component installs refuses to everything inside it.
     const host = yield* useScope();
+    // The one Agent context this invocation can supply, settled before the
+    // declaration exists so nothing the document does can reach or replace it.
+    const context = planAgentContext(command.stack, deps.acp);
     const declaration = yield* planComponentDeclaration({
       surface: "command",
       // The adapter root resolves no repository component, and neither does the
       // Component it invokes. A Plan's own components are the caller's business,
       // and the final gate below is where they are resolved.
       includes: command.include,
-      stack: command.stack,
-      ...(deps.acp === undefined ? {} : { acp: deps.acp }),
+      context,
       authorshipRoot: root,
       session,
       explicitSession,
@@ -255,8 +261,7 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
       session,
       explicitSession,
       root,
-      stack: command.stack,
-      ...(deps.acp === undefined ? {} : { acp: deps.acp }),
+      context,
       installElicitation: deps.installElicitation,
       declaration,
       assess: assessOne,

@@ -73,6 +73,14 @@ export interface TestAgentProviderOptions {
   /** Which build this partition observes. Its own controlled one. */
   executableObserver?: ExecutableObserver;
   dependencies?: AcpxProviderDependencies;
+  /**
+   * The narrower configuration a trusted child Plan host assembled.
+   *
+   * Spread whole into what this provider is built from, and handed back as part
+   * of the effective dependencies, so what a trusted host reports is what the
+   * provider actually holds rather than what it asked for.
+   */
+  planConfiguration?: { readonly dependencies: AcpxProviderDependencies };
 }
 
 /**
@@ -134,9 +142,12 @@ export const TEST_AGENT_CLIENT_NATIVE_ADAPTER: NativeAdapter = {
   resume: (nativeSessionId) => ["xmd-test-agent-ui", "--resume", nativeSessionId],
 };
 
-export function* useTestAgentProvider(options: TestAgentProviderOptions): Operation<AcpxProvider> {
+export function* useTestAgentProvider(
+  options: TestAgentProviderOptions,
+): Operation<TestAgentPartition> {
   let pendingRoute: string | undefined;
   const routeSlot = yield* useRouteSlot();
+  const planConfiguration = options.planConfiguration;
 
   // ACPX tokenizes the command on whitespace with quote support, so
   // command segments containing spaces (e.g. a binary path) are quoted.
@@ -151,49 +162,61 @@ export function* useTestAgentProvider(options: TestAgentProviderOptions): Operat
     },
   };
 
-  return yield* useAcpxProvider(
+  // Assembled once and then both used and returned. The provider is created
+  // from this exact object, so a trusted host reporting it reports what runs —
+  // a provider built from anything else would be reported by nothing.
+  const dependencies: AcpxProviderDependencies = {
+    sessionStore: createMemorySessionStore(),
+    agentRegistry: registry,
+    advertiseNativeLaunch: options.agents,
+    // Both gates, stated separately, because they are separate capabilities.
+    // This partition proves them the same way — deterministically — so it
+    // advertises the same names for each.
+    advertiseClientNativeAttachment: options.agents,
+    // Every agent this partition serves gets the provider-returned adapter,
+    // except the one name reserved for the client-allocated contract.
+    nativeAdapters: Object.fromEntries(
+      options.agents.map((name) => [
+        name,
+        name === TEST_AGENT_CLIENT_NATIVE
+          ? TEST_AGENT_CLIENT_NATIVE_ADAPTER
+          : TEST_AGENT_NATIVE_ADAPTER,
+      ]),
+    ),
+    // withSlot bounds the route mutex to the hook's op without a scope
+    // of its own — op's acquisitions (turn resources) belong to the
+    // provider's subscriber scope and outlive the critical section.
+    withSessionRoute: (context, op) =>
+      routeSlot.withSlot(function* () {
+        const routing = yield* options.routeFor(context);
+        pendingRoute = routing.route;
+        try {
+          const value = yield* op();
+          // Reported before the slot advances, so the next operation to pin a
+          // route already sees what this one established.
+          routing.resolved(value);
+          return value;
+        } finally {
+          pendingRoute = undefined;
+        }
+      }),
+    ...(options.coordinator ? { coordinator: options.coordinator } : {}),
+    ...(options.routeStore ? { routeStore: options.routeStore } : {}),
+    ...(options.executableObserver ? { executableObserver: options.executableObserver } : {}),
+    ...(options.dependencies?.createRuntime
+      ? { createRuntime: options.dependencies.createRuntime }
+      : {}),
+    ...(planConfiguration === undefined ? {} : planConfiguration.dependencies),
+  };
+  const provider = yield* useAcpxProvider(
     { defaultAgent: options.defaultAgent, permissionMode: "deny-all" },
-    {
-      sessionStore: createMemorySessionStore(),
-      agentRegistry: registry,
-      advertiseNativeLaunch: options.agents,
-      // Both gates, stated separately, because they are separate capabilities.
-      // This partition proves them the same way — deterministically — so it
-      // advertises the same names for each.
-      advertiseClientNativeAttachment: options.agents,
-      // Every agent this partition serves gets the provider-returned adapter,
-      // except the one name reserved for the client-allocated contract.
-      nativeAdapters: Object.fromEntries(
-        options.agents.map((name) => [
-          name,
-          name === TEST_AGENT_CLIENT_NATIVE
-            ? TEST_AGENT_CLIENT_NATIVE_ADAPTER
-            : TEST_AGENT_NATIVE_ADAPTER,
-        ]),
-      ),
-      // withSlot bounds the route mutex to the hook's op without a scope
-      // of its own — op's acquisitions (turn resources) belong to the
-      // provider's subscriber scope and outlive the critical section.
-      withSessionRoute: (context, op) =>
-        routeSlot.withSlot(function* () {
-          const routing = yield* options.routeFor(context);
-          pendingRoute = routing.route;
-          try {
-            const value = yield* op();
-            // Reported before the slot advances, so the next operation to pin a
-            // route already sees what this one established.
-            routing.resolved(value);
-            return value;
-          } finally {
-            pendingRoute = undefined;
-          }
-        }),
-      ...(options.coordinator ? { coordinator: options.coordinator } : {}),
-      ...(options.routeStore ? { routeStore: options.routeStore } : {}),
-      ...(options.executableObserver ? { executableObserver: options.executableObserver } : {}),
-      ...(options.dependencies?.createRuntime
-        ? { createRuntime: options.dependencies.createRuntime }
-        : {}),
-    },
+    dependencies,
   );
+  return { provider, dependencies };
+}
+
+/** One partition, and the exact dependencies its provider was built from. */
+export interface TestAgentPartition {
+  readonly provider: AcpxProvider;
+  readonly dependencies: AcpxProviderDependencies;
 }

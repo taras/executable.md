@@ -48,6 +48,8 @@ import { NativeLaunchObserver, useTestAgentController } from "./controller.ts";
 import type { ScenarioHandle, TestAgentControllerInternals } from "./controller.ts";
 import { createControlledExecutableObserver } from "./executable-observer.ts";
 import { createDeterministicSessionCoordinator } from "./session-coordinator.ts";
+import type { AcpxProviderDependencies } from "@executablemd/acp";
+import { duplicateScenario, missingScenario } from "./child-configuration.ts";
 import { TEST_AGENT_CLIENT_NATIVE, TEST_AGENT_PROVIDER, useTestAgentProvider } from "./provider.ts";
 import type { SessionRouting } from "./provider.ts";
 
@@ -71,6 +73,8 @@ interface PinnedSession {
 
 export interface BoundaryState {
   provider: AcpxProvider;
+  /** The exact dependencies that provider was built from. */
+  dependencies: AcpxProviderDependencies;
   /** Owns every scenario resource provisioned for this boundary. */
   boundaryScope: Scope;
   scenarios: Map<string, ScenarioHandle>;
@@ -155,9 +159,9 @@ function resolvePinned(
  * reaches its own of each.
  *
  * Shared by both placements of `<TestAgent>`. The wrapper provisions one of
- * these per enclosing `<Test>`; nested-run configuration provisions exactly one,
- * inside the child it configures. What differs is the lifetime the caller
- * acquires it in — the partition itself is the same world either way.
+ * these per enclosing `<Test>`; nested-run configuration provisions one for the
+ * ordinary child and a private one for each controlled Plan invocation. Each is
+ * acquired inside the child it belongs to and remains its own world.
  */
 export function* provisionPartition(options: {
   defaultAgent: string;
@@ -165,8 +169,9 @@ export function* provisionPartition(options: {
   declarations: ReadonlyMap<string, ScenarioDeclaration>;
   /** How to re-invoke this host as the agent worker. */
   workerCommand: string[];
+  planConfiguration?: { readonly dependencies: AcpxProviderDependencies };
 }): Operation<BoundaryState> {
-  const { defaultAgent, controller, declarations, workerCommand } = options;
+  const { defaultAgent, controller, declarations, workerCommand, planConfiguration } = options;
   const scenarios = new Map<string, ScenarioHandle>();
   const pending = new Map<string, Operation<ScenarioHandle>>();
   const bySessionKey = new Map<string, PinnedSession>();
@@ -179,12 +184,10 @@ export function* provisionPartition(options: {
   ): Operation<ScenarioHandle> {
     const declared = declarations.get(declarationKey(agentName, sessionName ?? ""));
     if (!declared) {
-      throw new Error(`no <TestAgent.Scenario> maps ${describeMapping(agentName, sessionName)}`);
+      throw new Error(missingScenario(agentName, sessionName ?? ""));
     }
     if (declared.duplicate) {
-      throw new Error(
-        `duplicate <TestAgent.Scenario> mappings for ${describeMapping(agentName, sessionName)}`,
-      );
+      throw new Error(duplicateScenario(agentName, sessionName ?? ""));
     }
     const key = scenarioKey(agentName, sessionName, dir);
     const existing = scenarios.get(key);
@@ -249,7 +252,7 @@ export function* provisionPartition(options: {
     };
   }
 
-  const provider = yield* useTestAgentProvider({
+  const partition = yield* useTestAgentProvider({
     defaultAgent,
     // Two agents, because the two construction routes are two contracts:
     // the default one's worker asserts its own identity, and the second
@@ -266,8 +269,16 @@ export function* provisionPartition(options: {
     // bound to a build the next does not share.
     executableObserver: createControlledExecutableObserver().observer,
     routeStore: createMemorySessionRouteStore(),
+    ...(planConfiguration === undefined ? {} : { planConfiguration }),
   });
-  return { provider, boundaryScope, scenarios, pending, bySessionKey };
+  return {
+    provider: partition.provider,
+    dependencies: partition.dependencies,
+    boundaryScope,
+    scenarios,
+    pending,
+    bySessionKey,
+  };
 }
 
 /**

@@ -33,8 +33,10 @@
 
 import type { Operation } from "effection";
 import { hasContent, registerAgentProvider, tryContent } from "@executablemd/core";
-import type { AgentComponentsOptions, Json } from "@executablemd/core";
+import type { AgentComponentsOptions, AgentProviderOptions, Json } from "@executablemd/core";
 import { createPartitionedAcpxProvider } from "@executablemd/acp";
+import type { AcpxProviderDependencies } from "@executablemd/acp";
+import { installInvocationAgentProvider } from "@executablemd/core/host";
 import { installControlledLauncher } from "@executablemd/runtime";
 import type {
   ChildDeclaration,
@@ -161,11 +163,11 @@ function open(collect: {
  * Build this package's Agent behavior inside one nested child.
  *
  * Called by the trusted host, in the child's own isolated scope, from the
- * frozen data one declaration produced. Exactly one partition: this child is
- * the isolation boundary, so a sibling execution repeating the same
- * declarations reaches its own controller, its own worker, its own routes and
- * its own logical sessions, and a named session continues only within the
- * child whose declaration created it.
+ * frozen data one declaration produced. This child is the isolation boundary,
+ * so a sibling execution repeating the same declarations reaches its own
+ * controller, workers, routes and logical sessions. The ordinary provider has
+ * one partition; each controlled Plan invocation gets a private partition so
+ * its derived identity and working directory cannot meet a sibling's state.
  *
  * What comes back is what the host passes to `installAgentComponents()`. The
  * wrapper installs its provider from inside a running document, where
@@ -179,13 +181,82 @@ function open(collect: {
  * outcome the `<Execution>` binds — rather than an enclosing `<Test>` the child
  * cannot see.
  */
+
+/** What a Plan's controlled provider is built from, assembled from the policy. */
+function planProviderDependencies(
+  workdir: string,
+  policy: PlanProviderPolicy,
+): AcpxProviderDependencies {
+  return {
+    // deno-lint-ignore require-yield
+    *agentCwd(): Operation<string> {
+      return workdir;
+    },
+    mcpServers: [...policy.mcpServers],
+    permissions: "strict",
+    newSessionOptions: {
+      systemPrompt: policy.systemInstruction,
+      allowedTools: [...policy.allowedTools],
+    },
+  };
+}
+
+/** The fixed policy a trusted host states for one Plan invocation. */
+export interface PlanProviderPolicy {
+  readonly systemInstruction: string;
+  readonly permissionMode: "deny-all";
+  readonly mcpServers: readonly never[];
+  readonly allowedTools: readonly never[];
+}
+
+/**
+ * One installed provider, as the objects it was installed with.
+ *
+ * Not a description built beside the installation but the installation itself:
+ * the same value registers the provider, installs the invocation options, and
+ * is handed to a trusted host as the observation. There is nothing for a report
+ * to disagree with, because there is no second report.
+ */
+export interface PlanProviderAssembly {
+  /** The identity registered and selected for this invocation. */
+  readonly provider: string;
+  /** The dependencies the provider was built from, as the provider holds them. */
+  readonly dependencies: AcpxProviderDependencies;
+  /** The options the invocation provider was installed with. */
+  readonly invocation: AgentProviderOptions;
+}
+
+/** What a Plan whose scenario nobody declared is refused with. */
+export function missingScenario(agent: string, session: string): string {
+  return `No <TestAgent.Scenario> was found for agent "${agent}" and session "${session}".`;
+}
+
+/** What a Plan whose scenario was declared twice is refused with. */
+export function duplicateScenario(agent: string, session: string): string {
+  return (
+    `More than one <TestAgent.Scenario> was declared for agent "${agent}" and ` +
+    `session "${session}".`
+  );
+}
+
+export interface ChildTestAgentInstallation {
+  readonly components: AgentComponentsOptions;
+  installPlanProvider(request: {
+    readonly agent: string;
+    readonly authoredSession?: string;
+    readonly session: string;
+    readonly workdir: string;
+    readonly policy: PlanProviderPolicy;
+  }): Operation<PlanProviderAssembly>;
+}
+
 export function* installChildTestAgent(
   configuration: TestAgentChildConfiguration,
   options: {
     /** How the trusted entrypoint re-invokes itself as the agent worker. */
     readonly workerCommand: readonly string[];
   },
-): Operation<AgentComponentsOptions> {
+): Operation<ChildTestAgentInstallation> {
   const controller = yield* useTestAgentController();
   const declarations = new Map<string, ScenarioDeclaration>();
   for (const scenario of configuration.scenarios) {
@@ -215,11 +286,58 @@ export function* installChildTestAgent(
   yield* installControlledLauncher({});
   const permissionMode = "deny-all";
   return {
-    defaultAgent: configuration.defaultAgent,
-    permissionMode,
-    rootProvider: {
-      factory,
-      options: { defaultAgent: configuration.defaultAgent, permissionMode },
+    components: {
+      defaultAgent: configuration.defaultAgent,
+      permissionMode,
+      rootProvider: {
+        factory,
+        options: { defaultAgent: configuration.defaultAgent, permissionMode },
+      },
+    },
+    *installPlanProvider(request): Operation<PlanProviderAssembly> {
+      const planDeclarations = new Map(declarations);
+      if (request.authoredSession !== undefined) {
+        const declared = declarations.get(mappingKey(request.agent, request.authoredSession));
+        if (declared === undefined) {
+          throw new Error(missingScenario(request.agent, request.authoredSession));
+        }
+        const key = mappingKey(request.agent, request.session);
+        const existing = planDeclarations.get(key);
+        if (existing !== undefined && existing !== declared) {
+          throw new Error(duplicateScenario(request.agent, request.session));
+        }
+        planDeclarations.set(key, declared);
+      }
+      // One assembly, used for every installation and handed back as the
+      // observation. Nothing is reconstructed afterward, so a report cannot
+      // describe an arrangement other than the one installed.
+      const plan = yield* provisionPartition({
+        defaultAgent: configuration.defaultAgent,
+        controller,
+        declarations: planDeclarations,
+        workerCommand: [...options.workerCommand],
+        planConfiguration: {
+          dependencies: planProviderDependencies(request.workdir, request.policy),
+        },
+      });
+      const installed: PlanProviderAssembly = {
+        provider: TEST_AGENT_PROVIDER,
+        // The partition's own account of what its provider holds, so a provider
+        // built from anything but the assembled Plan dependencies reports as
+        // what it actually is rather than as what was asked for.
+        dependencies: plan.dependencies,
+        invocation: {
+          defaultAgent: request.agent,
+          permissionMode: request.policy.permissionMode,
+        },
+      };
+      // deno-lint-ignore require-yield
+      const planFactory = createPartitionedAcpxProvider(function* () {
+        return plan.provider;
+      });
+      yield* registerAgentProvider(installed.provider, planFactory);
+      yield* installInvocationAgentProvider(installed.provider, installed.invocation);
+      return installed;
     },
   };
 }

@@ -176,8 +176,14 @@ describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResou
       ].join("\n"),
     });
     expect(run.results.map((entry) => entry.status)).toEqual(["fail", "fail"]);
-    expect(run.output).toContain("no <TestAgent.Scenario> maps agent");
-    expect(run.output).toContain("duplicate <TestAgent.Scenario> mappings");
+    // Both refusals name the agent and the session they are about, so a reader
+    // of a failing suite knows which mapping to write or remove.
+    expect(run.output).toContain(
+      'No <TestAgent.Scenario> was found for agent "test" and session "unmapped".',
+    );
+    expect(run.output).toContain(
+      'More than one <TestAgent.Scenario> was declared for agent "test" and session "dup".',
+    );
   });
 
   it("TV3: each <Test> gets fresh state; a mismatch fails only its owning test", function* () {
@@ -673,7 +679,7 @@ describe(
             },
             { workerCommand: options.worker },
           );
-          yield* installAgentComponents(agent);
+          yield* installAgentComponents(agent.components);
           if (options.answers) {
             yield* installAnswerProvider(options.answers);
           }

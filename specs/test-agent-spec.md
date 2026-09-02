@@ -82,6 +82,15 @@ wildcard. A named `<Session>` requires an exact named mapping. A missing or
 duplicate mapping fails the owning test before its agent turn starts. An unused
 mapping does not fail the test-agent scope.
 
+The configured-child Plan host has one sealed translation because `<Plan>`
+derives an opaque identity after the declaration was captured. A Plan site may
+author a label such as `session="planner"`; the trusted host selects the exact
+scenario declared under that label and installs it under that invocation's
+opaque identity. Runtime and scenario state stay keyed by the opaque identity
+and child working directory. This is not a TestAgent matcher: ordinary Agent
+use still requires the exact session it opens, a missing authored Plan label is
+refused, and siblings cannot reach one another's mapping or state.
+
 The test runtime does not inject agent, session, cwd, or harness metadata into
 the behavior document. The document sees its own frontmatter and bindings,
 including values captured by prompt matchers.

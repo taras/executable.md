@@ -58,7 +58,7 @@ function nestedRunHost(worker: string[]): ExecutionHostProvider {
         switch (configuration.kind) {
           case "test-agent":
             yield* installAgentComponents(
-              yield* installChildTestAgent(configuration, { workerCommand: worker }),
+              (yield* installChildTestAgent(configuration, { workerCommand: worker })).components,
             );
             installations.push({ components: agentIdentityComponents() });
             break;

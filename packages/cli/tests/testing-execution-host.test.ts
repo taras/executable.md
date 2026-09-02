@@ -16,16 +16,18 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { Err, ensure, resource, scoped } from "effection";
+import { Err, Ok, ensure, resource, scoped, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, readdir, rm, writeTextFile } from "@effectionx/fs";
 import { mkdtemp } from "node:fs/promises";
 import { until } from "effection";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { runCli } from "@executablemd/test-support/launch";
+import { cliBase, runCli } from "@executablemd/test-support/launch";
+import { AUTHORSHIP_INSTRUCTIONS, DEFAULT_AUTHORSHIP_ROOT } from "../src/authorship-profile.ts";
+import type { PlanAuthorshipObservation } from "../src/authorship-profile.ts";
 import { testingExecutionHost } from "../src/testing-host.ts";
-import { planComponentDescription } from "../src/plan-component.ts";
+import { planComponentDeclaration, planComponentDescription } from "../src/plan-component.ts";
 
 import { unsupportedRepositories } from "../src/run-repositories.ts";
 function doc(...lines: string[]): string {
@@ -69,6 +71,93 @@ const CHILD = doc(
 );
 
 const GUIDE = doc("# First", "", "first body", "", "# Second", "", "second body");
+
+/** The one request the Plan workflow sends, answered with a complete program. */
+const PLAN_BEHAVIOR = doc(
+  '<WhenPrompt template="{?lead}Create one complete XMD Plan from this Prompt:{?rest}" />',
+  "",
+  "<Let",
+  '  as="program"',
+  "  value={[",
+  '    "# Approved program",',
+  '    "",',
+  '    "Write the evidence file this program names.",',
+  '    "",',
+  `    '<File path="planned.txt">the approved Plan ran</File>',`,
+  '    "",',
+  '  ].join("\\n")}',
+  "/>",
+  "",
+  "{program}",
+);
+
+/**
+ * A turn that produces part of a candidate and then fails.
+ *
+ * The marker is emitted before the failure, so it is exactly what a `<Prompt>`
+ * that rendered whatever a failed turn managed to emit would hand onward. Under
+ * the authorship policy no such partial reaches the draft check or the review,
+ * and the run ends instead.
+ */
+const PARTIAL_THEN_FAILS = doc(
+  '<WhenPrompt template="{?lead}Create one complete XMD Plan from this Prompt:{?rest}" />',
+  "",
+  "# Half a program",
+  "",
+  "partialcandidatemarker",
+  "",
+  '<Fail message="the scripted turn failed after emitting part of a candidate" />',
+);
+
+/** An ordinary document that writes a Plan and prints what it bound. */
+const PLAN_CHILD = doc(
+  "# A document that writes a Plan",
+  "",
+  '<Plan session="planner" as="approved">Write the release program.</Plan>',
+  "",
+  "Approved source: {approved}",
+);
+
+/**
+ * What a child needs to write one: a scripted agent for the turn, and an
+ * authored approval for the review.
+ *
+ * The trusted child host privately connects the authored `planner` label to
+ * the opaque conversation identity while the provider keeps that identity.
+ */
+const PLAN_DECLARATION = [
+  "<TestAgent>",
+  '<TestAgent.Scenario session="planner" src="./agents/plan.md" />',
+  "</TestAgent>",
+  "",
+  "<Answers>",
+  '<Answer value={{ decision: "Approve" }} />',
+  "</Answers>",
+];
+
+/**
+ * What the two Plan authorship trees hold right now.
+ *
+ * `children` is the temporary directory, filtered to the roots a configured
+ * child makes; `production` is the tree a real `xmd plan` keeps its sessions in,
+ * read and never written. A tree that does not exist yet holds nothing, which is
+ * the ordinary state of the production one on a machine that has never run the
+ * command.
+ */
+function* planRoots(): Operation<{ children: string[]; production: string[] }> {
+  return {
+    children: (yield* listing(tmpdir())).filter((entry) => entry.startsWith("xmd-child-plan-")),
+    production: yield* listing(DEFAULT_AUTHORSHIP_ROOT),
+  };
+}
+
+function* listing(directory: string): Operation<string[]> {
+  try {
+    return (yield* readdir(directory)).sort();
+  } catch {
+    return [];
+  }
+}
 
 /** A declared child relaunches `xmd` as its agent worker, so it needs both. */
 const WORKER = { inheritEnv: true, timeout: 180_000 };
@@ -469,6 +558,279 @@ describe("deterministic dependencies declared for a nested run", () => {
     expect(result.code).toBe(0);
   });
 
+  /**
+   * PMT4 and PMT5 — where a Plan conversation lives, and that none of it stays.
+   *
+   * Where the root goes is a host dependency no caller selects. Production keeps
+   * it under the caller's home; a configured child gets one of its own under the
+   * temporary directory, so a test never reads or removes anything a real
+   * `xmd plan` owns. Both facts are read the same way — what these directories
+   * held before the run against what they hold after — because a child's root
+   * exists only while that child does, and the evidence is the absence.
+   *
+   * The two endings are here together because cleanup that only ran on the happy
+   * path would satisfy a case that checked one of them. The approved sibling and
+   * the stopped sibling also prove the two children are separate: each answers
+   * from its own scenario and its own authored decision.
+   */
+  it("gives each configured child its own Plan root, and keeps none of them", function* () {
+    const before = yield* planRoots();
+    const project = yield* useProject({
+      "agents/plan.md": PLAN_BEHAVIOR,
+      "writes-a-plan.md": PLAN_CHILD,
+      "README.md": doc(
+        '<Test name="an approved sibling and a stopped one" timeout="180s">',
+        '<Execution host="run" target="./writes-a-plan.md" as="approved">',
+        ...PLAN_DECLARATION,
+        "",
+        '<CollectOutput as="output" />',
+        "",
+        "<AssertEquals actual={approved.result.ok} expected={true} />",
+        '<AssertStringIncludes actual={output} expected="# Approved program" />',
+        "</Execution>",
+        "",
+        '<Execution host="run" target="./writes-a-plan.md" as="stopped">',
+        "<TestAgent>",
+        '<TestAgent.Scenario session="planner" src="./agents/plan.md" />',
+        "</TestAgent>",
+        "",
+        "<Answers>",
+        '<Answer value={{ decision: "Stop" }} />',
+        "</Answers>",
+        "",
+        "<AssertEquals actual={stopped.result.ok} expected={false} />",
+        "<AssertStringIncludes",
+        "  actual={stopped.result.error.message}",
+        '  expected="stopped at your request"',
+        "/>",
+        "</Execution>",
+        "</Test>",
+      ),
+    });
+    const result = yield* runCli(["test", "README.md"], { cwd: project, ...WORKER }).join();
+    expect(result.stdout + result.stderr).not.toContain("❌");
+    expect(result.code).toBe(0);
+
+    // Both children wrote a Plan — the rows above say so — and neither kept the
+    // root it wrote it under. One that outlived its child would be here, named
+    // for the child that made it.
+    const after = yield* planRoots();
+    expect(after.children.filter((entry) => !before.children.includes(entry))).toEqual([]);
+    // And neither of them reached the tree a production `xmd plan` owns.
+    expect(after.production.filter((entry) => !before.production.includes(entry))).toEqual([]);
+  });
+
+  /**
+   * PMT4 — the configuration a Plan invocation actually runs under.
+   *
+   * Read from what the adapter assembled and the frame installed, after the last
+   * install, rather than from the policy either was handed: a report taken from
+   * the input would agree with the policy however the adapter assembled its
+   * dependencies, and could not tell an assembly that honored it from one that
+   * dropped it. The provider is the name that actually routes a turn rather than
+   * a label authored beside it.
+   *
+   * Cancellation is the ending here because it is the one that has no completion
+   * to hang teardown on: `halt()` returns only once the provider, the
+   * declaration, the session directory and the child root have all gone.
+   */
+  it("installs the controlled Plan configuration and removes its root after cancellation", function* () {
+    const before = yield* planRoots();
+    const observed = withResolvers<PlanAuthorshipObservation>();
+    const hold = withResolvers<void>();
+    const host = testingExecutionHost({
+      includes: [],
+      secretDetection: true,
+      // deno-lint-ignore require-yield
+      installService: function* (): Operation<void> {},
+      installRepositories: unsupportedRepositories,
+      testAgentWorker: Ok([...cliBase(), "test-agent"]),
+      planDeclaration: (request) =>
+        planComponentDeclaration({
+          surface: "component",
+          includes: [],
+          context: request.context,
+          ...(request.authorshipRoot === undefined
+            ? {}
+            : { authorshipRoot: request.authorshipRoot }),
+          host: request.host,
+          ...(request.observeAuthorship === undefined
+            ? {}
+            : { observeAuthorship: request.observeAuthorship }),
+          installElicitation: request.installElicitation,
+          // deno-lint-ignore require-yield
+          *catalog(): Operation<string> {
+            return "";
+          },
+        }),
+      *observePlanAuthorship(observation): Operation<void> {
+        observed.resolve(observation);
+        yield* hold.operation;
+      },
+    });
+    const running = yield* spawn(() =>
+      host.runChild({
+        request: {
+          host: "run",
+          source: '<Plan session="planner" as="approved">Write a program.</Plan>\n',
+          props: {},
+          journal: "transient",
+          collectJournal: false,
+          configuration: [
+            {
+              kind: "test-agent",
+              defaultAgent: "test",
+              scenarios: [
+                {
+                  agent: "test",
+                  session: "planner",
+                  rootDir: tmpdir(),
+                  document: { path: "plan.md", source: PLAN_BEHAVIOR },
+                },
+              ],
+            },
+          ],
+        },
+        run: undefined,
+        cwd: tmpdir(),
+        // deno-lint-ignore require-yield
+        *chunk(): Operation<void> {},
+      }),
+    );
+
+    // What comes back is the installation, not an account of it: the same value
+    // registered the provider and installed the invocation options.
+    const installed = yield* observed.operation;
+
+    // The identity that was registered and selected for this invocation.
+    expect(installed.provider).toBe("test-agent");
+    expect(installed.invocation.permissionMode).toBe("deny-all");
+
+    // And the dependencies the provider actually holds. Read through the
+    // provider's own accessors where it has them, so a provider disconnected
+    // from these dependencies reports what it really has.
+    const dependencies = installed.dependencies;
+    expect(dependencies.newSessionOptions?.systemPrompt).toBe(AUTHORSHIP_INSTRUCTIONS);
+    expect(dependencies.newSessionOptions?.allowedTools).toEqual([]);
+    expect(dependencies.mcpServers).toEqual([]);
+    expect(dependencies.permissions).toBe("strict");
+    const agentCwd = dependencies.agentCwd === undefined ? "" : yield* dependencies.agentCwd();
+    expect(agentCwd.startsWith(join(tmpdir(), "xmd-child-plan-"))).toBe(true);
+    expect(agentCwd.startsWith(DEFAULT_AUTHORSHIP_ROOT)).toBe(false);
+
+    // The observer runs once the authorship frame is installed and before the
+    // Component's content starts, so no Prompt has been sent yet — what is in
+    // flight is the invocation holding the provider, the session directory and
+    // the child root. halt() waits for all of them to finish teardown before it
+    // returns, which is what makes this a structured-cancellation proof rather
+    // than a check that something was deleted eventually.
+    yield* running.halt();
+    const after = yield* planRoots();
+    expect(after.children.filter((entry) => !before.children.includes(entry))).toEqual([]);
+    expect(after.production.filter((entry) => !before.production.includes(entry))).toEqual([]);
+  });
+
+  /**
+   * PMT4 — the prompt-failure rule, proven by a turn rather than by a value.
+   *
+   * `<Prompt>` ordinarily renders whatever a failed turn managed to emit and
+   * carries on. Authorship installs the opposite, and this is the difference
+   * being observed: a turn that emits part of a candidate and then fails must
+   * end authorship before that partial can be checked or reviewed. A report
+   * saying the policy is installed would say so however the middleware behaved.
+   */
+  it("stops authorship when a turn fails after emitting part of a candidate", function* () {
+    const project = yield* useProject({
+      "agents/plan.md": PARTIAL_THEN_FAILS,
+      "writes-a-plan.md": PLAN_CHILD,
+      "README.md": doc(
+        '<Test name="a failed turn ends authorship" timeout="180s">',
+        '<Execution host="run" target="./writes-a-plan.md" as="run">',
+        ...PLAN_DECLARATION,
+        "",
+        '<CollectOutput as="output" />',
+        "",
+        "<AssertEquals actual={run.result.ok} expected={false} />",
+        // The partial never became a draft, so it reached neither the check nor
+        // the review, and no approved source came back.
+        '<AssertEquals actual={output.includes("partialcandidatemarker")} expected={false} />',
+        '<AssertEquals actual={output.includes("Approved source:")} expected={false} />',
+        "</Execution>",
+        "</Test>",
+      ),
+    });
+    const result = yield* runCli(["test", "README.md"], { cwd: project, ...WORKER }).join();
+    expect(result.stdout + result.stderr).not.toContain("❌");
+    expect(result.code).toBe(0);
+    // And the partial reached the person running the suite nowhere either.
+    expect(result.stdout + result.stderr).not.toContain("partialcandidatemarker");
+  });
+
+  /**
+   * PMT6 — only the canonical declaration supplies a Plan Agent context.
+   *
+   * The repository file ends the scan, so what the `<Execution>` prefix holds is
+   * an ordinary component invocation rather than a declaration this host
+   * recognizes. A child whose `<Plan>` found an Agent context anyway would mean the
+   * capability came from the name rather than from the definition ordinary
+   * resolution selected.
+   */
+  it("supplies no Plan Agent context from a repository TestAgent", function* () {
+    const project = yield* useProject({
+      "agents/review.md": BEHAVIOR,
+      // Chosen ahead of the package's, so this is ordinary assertion content.
+      "components/TestAgent.md": doc("a repository component"),
+      "writes-a-plan.md": doc('<Plan session="planner" as="approved">Write a program.</Plan>'),
+      "README.md": doc(
+        '<Test name="a repository TestAgent supplies no Agent context" timeout="120s">',
+        '<Execution host="run" target="./writes-a-plan.md" as="run">',
+        '<TestAgent as="shadowed" />',
+        "",
+        '<AssertStringIncludes actual={shadowed} expected="a repository component" />',
+        "<AssertEquals actual={run.result.ok} expected={false} />",
+        "<AssertEquals",
+        "  actual={run.result.error.message}",
+        '  expected="No Agent context was found. No Plan was returned."',
+        "/>",
+        "</Execution>",
+        "</Test>",
+      ),
+    });
+    const result = yield* runCli(["test", "README.md"], { cwd: project, ...WORKER }).join();
+    expect(result.stdout + result.stderr).not.toContain("❌");
+    expect(result.code).toBe(0);
+  });
+
+  /**
+   * PMT7 — the direct test root is the testing profile, not a Plan host.
+   *
+   * The run profile's vocabulary is installed for a run, and `xmd test` is a
+   * different profile: it declares `<Plan>` to the production run children it
+   * launches and to nothing else, so its own root does not resolve the name at
+   * all (`cli.ts`, where the declaration is withheld under `mode.testing`).
+   *
+   * Either refusal would satisfy "a test root cannot write a Plan". This case
+   * pins which one is delivered, so a later change that quietly gave the test
+   * root the declaration — and therefore an Agent context to be refused for — is a
+   * change somebody has to make deliberately.
+   */
+  it("gives a direct test root no Plan authorship authority", function* () {
+    const project = yield* useProject({
+      "README.md": doc(
+        '<Test name="a test root cannot write a Plan">',
+        '<Plan session="planner" as="approved">Write a program.</Plan>',
+        "</Test>",
+      ),
+    });
+    const result = yield* runCli(["test", "README.md"], { cwd: project, ...WORKER }).join();
+    expect(result.code).toBe(1);
+    const reported = result.stdout + result.stderr;
+    expect(reported).toContain("Cannot resolve component: Plan");
+    // And no Agent context was supplied for it to be refused for, which is the
+    // difference between "not this profile" and "this profile, no agent".
+    expect(reported).not.toContain("No Agent context was found.");
+  });
+
   it("refuses an unreadable behavior document before the child's root is imported", function* () {
     const project = yield* useProject({
       "two-turns.md": doc("the child imported its root"),
@@ -504,9 +866,9 @@ describe("deterministic dependencies declared for a nested run", () => {
       installService: function* (): Operation<void> {},
       installRepositories: unsupportedRepositories,
       testAgentWorker: Err(new Error("xmd command not installed")),
-      // The run profile's own Component travels to every child, and this case is
-      // about the relaunch it cannot perform rather than about `<Plan>`.
-      plan: yield* planComponentDescription(),
+      // The run profile's own Component is built for every child, and this case
+      // is about the relaunch it cannot perform rather than about `<Plan>`.
+      planDeclaration: () => planComponentDescription(),
     });
     const refusal = yield* scoped(function* () {
       try {

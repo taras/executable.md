@@ -30,7 +30,7 @@ describe("Tier TS — test-agent ACPX state", () => {
   it("TS1: withSessionRoute pins the instance route for provider work; probe route otherwise", function* () {
     const harness = createFakeRuntime();
     yield* useFlatWorld("/work");
-    const provider = yield* useTestAgentProvider({
+    const { provider } = yield* useTestAgentProvider({
       defaultAgent: "test",
       agents: ["test"],
       workerCommand: ["xmd", "test-agent"],
@@ -77,7 +77,7 @@ describe("Tier TS — test-agent ACPX state", () => {
     harness.script({ manual: true });
     yield* useFlatWorld("/work");
     const routes: string[] = [];
-    const provider = yield* useTestAgentProvider({
+    const { provider } = yield* useTestAgentProvider({
       defaultAgent: "test",
       agents: ["test"],
       workerCommand: ["xmd", "test-agent"],

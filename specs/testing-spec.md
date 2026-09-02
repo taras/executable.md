@@ -412,6 +412,45 @@ declarations under the same `<Test>`; a named session cannot continue across
 the boundary. The behavior-document path resolves from the outer test document
 under the TestAgent package's existing containment rule.
 
+#### The Agent context a Plan is written with
+
+A configured child can also give `<Plan>` its Agent context, which is the one
+thing about it a document cannot arrange for itself.
+
+Three surfaces, and they stay distinct. A **production run** supplies the
+production ACPX context from the Agent stack the command settled. A **configured
+`<TestAgent>` child** supplies the deterministic one from the controlled provider
+its own declaration produced. A **direct `xmd test` root** and an **unconfigured
+child** supply none: the root does not resolve `<Plan>` at all, because the run
+profile's vocabulary belongs to a run, and an unconfigured child resolves the
+same protected bytes every run resolves and is refused before a directory, a
+provider, an Agent turn or a review exists.
+
+Availability is the only thing that differs. What a Plan then runs under is the
+authorship frame's fixed policy: the Plan system instruction, the deny-all
+permission mode, the empty MCP-server and native-tool sets, the prompt-failure
+policy and the document-capability refusals, installed in one place rather than
+restated by each provider, so a second implementation cannot bring a weaker one.
+The controlled provider is installed *inside* the Plan invocation rather than
+inherited from what the child registered around itself.
+
+A configured child is given a Plan authorship root of its own, created outside
+that frame and removed when the child settles — the Plan sessions underneath it
+included, a named one among them, which production keeps and a test may not. The
+Plan invocation still creates and proves its own empty session directory under
+that root.
+
+Only the canonical declaration this harness recognizes grants any of it. A
+repository component named `TestAgent` ends the scan and configures nothing, so
+a child that reached one is refused exactly as an unconfigured child is.
+
+A scenario reaches the Plan's own turn by its exact authored label. The trusted
+child host privately connects that label to the opaque conversation identity
+`<Plan>` derives for the invocation. Scenario selection uses the label; provider
+and scenario state remain keyed by the opaque identity and working directory.
+This mapping belongs only to the sealed Plan-authorship path, so ordinary Agent
+use keeps exact-session matching and siblings share no state.
+
 Only detached declaration data enters the host-profile request. A test cannot
 send an Agent provider, Elicitation middleware, context, Api handler, execution
 installation, controller or scope to the child. The trusted host consumes the
