@@ -1,5 +1,5 @@
 /**
- * Tier SD — delivering a rendered result to a stream.
+ * Tier SDL — delivering a rendered result to a stream.
  *
  * Tier SX proves what a real pipe receives. These rows prove the *lifetime* of
  * the one listener delivery installs, which a real pipe cannot show: a stream
@@ -93,8 +93,8 @@ function listeners(sink: EventEmitter): number {
   return sink.listenerCount("error");
 }
 
-describe("Tier SD — the listener lives for one delivery", () => {
-  it("SD1: a delivery that succeeds leaves the stream as it found it", function* () {
+describe("Tier SDL — the listener lives for one delivery", () => {
+  it("SDL1: a delivery that succeeds leaves the stream as it found it", function* () {
     const sink = new RecordingSink(ACCEPTS);
     const before = listeners(sink);
 
@@ -105,7 +105,7 @@ describe("Tier SD — the listener lives for one delivery", () => {
     expect(listeners(sink)).toBe(before);
   });
 
-  it("SD2: the trailing event still finds the listener, which is gone after it", function* () {
+  it("SDL2: the trailing event still finds the listener, which is gone after it", function* () {
     const sink = new RecordingSink(CALLBACK_THEN_EVENT);
     // A sentinel, so that detaching too early is this row's assertion rather
     // than an unhandled `error` event thrown from a timer.
@@ -122,7 +122,7 @@ describe("Tier SD — the listener lives for one delivery", () => {
     expect(listeners(sink)).toBe(before);
   });
 
-  it("SD3: the event may arrive first, and the first arrival is the verdict", function* () {
+  it("SDL3: the event may arrive first, and the first arrival is the verdict", function* () {
     const sink = new RecordingSink(EVENT_THEN_CALLBACK);
     const before = listeners(sink);
 
@@ -132,7 +132,7 @@ describe("Tier SD — the listener lives for one delivery", () => {
     expect(listeners(sink)).toBe(before);
   });
 
-  it("SD4: a failure the stream reports once settles without waiting for a second", function* () {
+  it("SDL4: a failure the stream reports once settles without waiting for a second", function* () {
     const sink = new RecordingSink(REPORTED_ONCE);
     const before = listeners(sink);
 
@@ -144,7 +144,7 @@ describe("Tier SD — the listener lives for one delivery", () => {
     expect(listeners(sink)).toBe(before);
   });
 
-  it("SD5: a write that refuses outright detaches too", function* () {
+  it("SDL5: a write that refuses outright detaches too", function* () {
     const sink = new RecordingSink(REFUSES);
     const before = listeners(sink);
 
@@ -154,7 +154,7 @@ describe("Tier SD — the listener lives for one delivery", () => {
     expect(listeners(sink)).toBe(before);
   });
 
-  it("SD6: a delivery that never settles detaches when its scope ends", function* () {
+  it("SDL6: a delivery that never settles detaches when its scope ends", function* () {
     const sink = new RecordingSink(NEVER_ANSWERS);
     const before = listeners(sink);
 
@@ -167,7 +167,7 @@ describe("Tier SD — the listener lives for one delivery", () => {
     expect(listeners(sink)).toBe(before);
   });
 
-  it("SD7: no finished delivery absorbs a later, unrelated failure", function* () {
+  it("SDL7: no finished delivery absorbs a later, unrelated failure", function* () {
     const sink = new RecordingSink(ACCEPTS);
     const seen: Error[] = [];
     sink.on("error", (error: Error) => seen.push(error));
@@ -180,7 +180,7 @@ describe("Tier SD — the listener lives for one delivery", () => {
     expect(seen).toEqual([OTHER]);
   });
 
-  it("SD8: the real process.stdout is left as it was found", function* () {
+  it("SDL8: the real process.stdout is left as it was found", function* () {
     const before = listeners(process.stdout);
 
     // Empty, so this row writes nothing a reporter could mistake for output.
