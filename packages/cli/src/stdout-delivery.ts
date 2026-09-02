@@ -10,7 +10,7 @@
  * finish before anything can exit.
  */
 
-import { Err, Ok, until } from "effection";
+import { Err, Ok, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 
 /**
@@ -44,59 +44,60 @@ export interface DeliverySink {
  * means the event is still coming, while Bun reports the failure once and holds
  * nothing. Every other path — success, cancellation, a `write` that refuses
  * outright — detaches without waiting at all.
+ *
+ * The outcome is bridged with `withResolvers()` rather than `action()`: a file
+ * or a terminal calls the write callback synchronously, inside `write`, and an
+ * `action()` resolved before its executor has returned never runs the cleanup
+ * that executor returns (effection 4.1.0).
  */
 export function* deliverWhole(text: string, sink: DeliverySink): Operation<Result<void>> {
-  let observe: (error: Error) => void = () => {};
+  const outcome = withResolvers<Result<void>>("deliverWhole");
+  let settled = false;
+  let calledBack = false;
+  let observed = false;
+  let failure: Error | undefined;
+
+  const settle = () => {
+    if (settled || !calledBack) {
+      return;
+    }
+    // Identity, not presence: an error the stream was already holding before
+    // this delivery has been emitted already, and waiting for it would wait
+    // forever.
+    if (!observed && failure !== undefined && sink.errored === failure) {
+      return;
+    }
+    settled = true;
+    outcome.resolve(failure === undefined ? Ok() : Err(failure));
+  };
+
+  const record = (error?: Error | null) => {
+    if (error && failure === undefined) {
+      failure = error;
+    }
+  };
+
+  const observe = (error: Error) => {
+    observed = true;
+    record(error);
+    settle();
+  };
+
+  sink.on("error", observe);
   try {
-    return yield* until(
-      new Promise<Result<void>>((resolve) => {
-        let settled = false;
-        let calledBack = false;
-        let observed = false;
-        let failure: Error | undefined;
-
-        const settle = () => {
-          if (settled || !calledBack) {
-            return;
-          }
-          // Identity, not presence: an error the stream was already holding
-          // before this delivery has been emitted already, and waiting for it
-          // would wait forever.
-          if (!observed && failure !== undefined && sink.errored === failure) {
-            return;
-          }
-          settled = true;
-          resolve(failure === undefined ? Ok() : Err(failure));
-        };
-
-        const record = (error?: Error | null) => {
-          if (error && failure === undefined) {
-            failure = error;
-          }
-        };
-
-        observe = (error: Error) => {
-          observed = true;
-          record(error);
-          settle();
-        };
-
-        sink.on("error", observe);
-
-        try {
-          sink.write(text, (error) => {
-            calledBack = true;
-            record(error);
-            settle();
-          });
-        } catch (error) {
-          // A stream that refuses the call outright never calls back, so
-          // nothing else will settle this.
-          settled = true;
-          resolve(Err(error instanceof Error ? error : new Error(String(error))));
-        }
-      }),
-    );
+    try {
+      sink.write(text, (error) => {
+        calledBack = true;
+        record(error);
+        settle();
+      });
+    } catch (error) {
+      // A stream that refuses the call outright never calls back, so nothing
+      // else will settle this.
+      settled = true;
+      outcome.resolve(Err(error instanceof Error ? error : new Error(String(error))));
+    }
+    return yield* outcome.operation;
   } finally {
     sink.off("error", observe);
   }
