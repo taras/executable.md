@@ -57,7 +57,7 @@ export const ADAPTERS: EmbeddedAdapters = createEmbeddedAdapters(
  * with: the workflow keeps no internal spelling behind them.
  */
 export interface ScriptedReview {
-  decision: "Approve" | "Request changes" | "Stop" | "Explain what went wrong";
+  decision: "Approve" | "Request changes" | "Stop";
   feedback?: string;
   /** Answer with this instead, to drive a response the schema rejects. */
   raw?: unknown;
