@@ -32,7 +32,15 @@ const PACKAGE = fileURLToPath(new URL("..", import.meta.url));
  * to these rules like any shared module. `vendor` is pinned upstream source
  * whose drift verifier owns its bytes.
  */
-const RUNTIME_OWNED = ["deno.ts", "cloudflare.ts", "src/deno", "src/cloudflare", "vendor"];
+const RUNTIME_OWNED = [
+  "deno.ts",
+  "cloudflare.ts",
+  "src/deno",
+  "src/cloudflare",
+  "tests/cloudflare",
+  "vitest.config.ts",
+  "vendor",
+];
 
 /** Specifiers only a host adapter may import. */
 const HOST_SPECIFIERS = [

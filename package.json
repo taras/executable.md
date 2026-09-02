@@ -1,7 +1,7 @@
 {
   "private": true,
   "type": "module",
-  "description": "executable.md — treat markdown documents as executable workflows.",
+  "description": "executable.md \u2014 treat markdown documents as executable workflows.",
   "homepage": "https://executable.md",
   "repository": {
     "type": "git",
@@ -62,6 +62,8 @@
     "@executablemd/testing": "workspace:*",
     "@executablemd/workflow": "workspace:*",
     "@types/node": "^22.0.0",
+    "@vitest/runner": "4.1.11",
+    "@vitest/snapshot": "4.1.11",
     "expect": "^30.0.0",
     "oxfmt": "^0.41.0",
     "oxlint": "1.74.0",
@@ -74,7 +76,8 @@
     "test:bun": "bun scripts/runtime-tests.ts bun",
     "test:deno": "deno task test",
     "lint": "oxlint -c .oxlintrc.json --ignore-pattern 'scripts/tests/fixtures/**' --ignore-pattern '**/npm/**' --ignore-pattern 'packages/workflow/vendor/cloudflare-computer-dofs/**' --ignore-pattern 'packages/acp/vendor/acpx/**' packages scripts .reviews/components && oxfmt --check packages scripts .reviews/components/*.ts",
-    "fmt": "oxfmt --write packages scripts .reviews/components/*.ts"
+    "fmt": "oxfmt --write packages scripts .reviews/components/*.ts",
+    "test:cloudflare": "vitest run --config vitest.config.ts"
   },
   "workspaces": [
     "packages/*"
