@@ -2652,11 +2652,11 @@ A component name is resolved in tiers, and the first tier that answers wins:
 
 1. **structural syntax** — `<Content>`, `<Output>`, `<Return>`, `<Let>`,
    `<Each>`, `<If>`/`<Else>`, `<Switch>`/`<Case>`, `<Loop>`/`<Break>`,
-   `<PrintErrors>`, `<Answers>`/`<Answer>`. These are the language's own
-   constructs. They are reserved: a registration cannot claim one, and a
-   repository file named after one never stands in for it. A structural name
-   written where its construct gives it no meaning is a printed error, not a
-   missing component.
+   `<PrintErrors>`, `<Answers>`/`<Answer>`, and
+   `<Terminal.Grid>`/`<Terminal>`. These are the language's own constructs.
+   They are reserved: a registration cannot claim one, and a repository file
+   named after one never stands in for it. A structural name written where its
+   construct gives it no meaning is a printed error, not a missing component.
 2. **a host claiming the name** — a reserved registration protecting a language
    or security invariant, or a *declared Markdown component*: exact first-party
    Markdown a trusted host handed this execution. Both claim the name rather
@@ -8497,6 +8497,297 @@ Its skipped body is absence, not a retained decision. Replay of a completed root
 is unchanged, and a live or partial expansion reads the value that applies to
 that execution.
 
+### 6.21 Opening concurrent terminal panes: `<Terminal.Grid>` and `<Terminal>`
+
+Use a terminal grid when several interactive tools must remain available at the
+same time in one foreground view:
+
+```md
+<Terminal.Grid columns={2}>
+  <Terminal title="Implementor">
+    <Agent name="claude">
+      <Session.Launch session="implementor">
+        Implement the accepted plan.
+      </Session.Launch>
+    </Agent>
+  </Terminal>
+  <Terminal title="Reviewer">
+    <Agent name="codex">
+      <Session.Launch session="reviewer">
+        Review the implementation.
+      </Session.Launch>
+    </Agent>
+  </Terminal>
+  <Terminal title="Tests">
+    <Agent name="claude">
+      <Session.Launch session="tests">
+        Run the focused verification and repair failures.
+      </Session.Launch>
+    </Agent>
+  </Terminal>
+  <Terminal title="Shell" />
+</Terminal.Grid>
+```
+
+The example opens a two-column, two-row foreground grid. The first three panes
+expand their document content concurrently and the fourth runs the host's
+default shell. A `<Session.Launch>` keeps the provider's native Agent UI; the
+grid does not proxy prompts or replace it with an XMD chat surface. Each pane
+can finish while the others keep running, and its final status stays visible
+until the reader closes the grid.
+
+`Terminal` names an interactive terminal endpoint, not tmux. The document asks
+for panes and their authored layout; the host chooses the presentation provider.
+There is no provider, multiplexer, executable, shell, socket, session, window,
+pane-ID, attach-key, or teardown prop. A terminal-native input component may be
+a presentation for `<Elicit>` in its own right; it does not change this process
+terminal contract.
+
+#### Forms and props
+
+`<Terminal.Grid>` has exactly one paired form:
+
+```md
+<Terminal.Grid columns={3}>
+  <Terminal title="One" />
+  <Terminal title="Two" />
+  <Terminal title="Three" />
+</Terminal.Grid>
+```
+
+Its closed props schema contains one required `columns` value, which must
+resolve to a positive integer. The grid requires at least one pane. Columns do
+not have to divide the pane count; rows are derived by placing direct panes in
+authored row-major order and leaving unused positions at the end of the last
+row.
+
+`<Terminal>` has two forms and one required prop:
+
+```md
+<Terminal title="Agent">...</Terminal>
+<Terminal title="Shell" />
+```
+
+`title` must resolve to a non-empty string. It is a display label rather than
+identity, so duplicate titles are allowed. A paired pane expands its content as
+ordinary sequential document flow. A self-closing pane starts the default
+interactive shell configured by the host. The shell choice is live host policy,
+not document data.
+
+Neither element accepts `as`. Neither renders content into the surrounding
+document or returns a value. Text that a paired pane renders is displayed in
+that pane; it is not concatenated into the root's rendered result. Effects
+inside paired content still keep their own ordinary return and durability
+contracts. In particular, an executable block retains the process result its
+execution profile normally retains, while bytes from a native Agent UI or
+default shell are never captured or journaled by the grid.
+
+#### Structural placement
+
+Both names are reserved core structural syntax rather than registered or
+repository-overridable components. A function component receives rendered
+content after its effects have happened and therefore cannot define this
+concurrent direct-child boundary.
+
+Only direct `<Terminal>` children may appear in a grid. Whitespace between panes
+is allowed; ordinary Markdown text and every other direct element are refused.
+A control structure such as `<If>` or `<Each>` cannot dynamically produce the
+direct panes. Put control flow inside a paired pane instead. `<Terminal>` outside
+a grid, a nested `<Terminal.Grid>`, a self-closing grid, paired content on the
+self-closing pane form, and a grid with no pane are invalid.
+
+Syntax validation checks the two names, closed props, authored forms, placement,
+and direct-child structure without opening a terminal, looking for tmux,
+choosing a shell, resolving an Agent, or installing a provider. Runtime resolves
+prop expressions and validates the complete concrete layout before the terminal
+provider is contacted. The syntax catalog includes both structural entries and
+their two distinct forms even on a host that has no operational grid provider;
+catalog inspection performs no availability probe.
+
+#### Pane scope and output
+
+Each pane begins as a deterministic child of the grid, in direct-child order.
+The children are started concurrently. Scheduling order does not change their
+identity or the order in which simultaneous failures are reported.
+
+A paired pane inherits the bindings, contextual providers, configuration,
+working directory, and repository selection visible where the grid is written.
+It then gets its own binding and evaluation overlay. A binding or contextual
+change made by one pane is visible to later work in that pane and not to any
+sibling; all such changes are discarded when the pane settles. Pane content
+cannot `<Break>` a loop outside the pane or `<Return>` from an enclosing
+component. A component invoked inside the pane still sees the pane's inherited
+and local scope through ordinary content projection. Each pane has its own
+checked-failure ledger as well: a checked failure settles that pane and cannot
+poison the root or a sibling. Core reads those isolated outcomes when it applies
+the grid's close rule; no provider or ordinary component can grant that
+containment.
+
+Before the grid opens, root output is flushed. Display produced by pane content
+is routed to that pane and is not copied into the root document output or a
+capture around the grid. The grid itself renders `""`. Only after the provider
+has torn down the composite and restored the root terminal can a following
+sibling render to the root again.
+
+#### Readiness and the visible lifetime
+
+Opening a grid is atomic from the reader's perspective:
+
+1. Core validates the whole layout and acquires the root foreground-terminal
+   lease. Another root native launch or terminal grid cannot hold it at the same
+   time.
+2. The provider validates its live prerequisites and prepares every terminal
+   endpoint in a hidden composite. It presents nothing yet.
+3. All authored pane children begin concurrently. A self-closing pane starts its
+   shell. A paired pane expands until it starts its first interactive child,
+   normally `<Session.Launch>`.
+4. A pane reaches readiness only when that interactive child emits the
+   runtime's child-spawn event. A paired pane that settles without starting one
+   fails startup. Merely allocating an endpoint or process identifier, or
+   receiving the child's first output, is not readiness; an interactive child
+   that starts and immediately exits is both ready and settled.
+5. The provider attaches the complete composite only after every pane is ready.
+
+Successful child start is acknowledged through a private one-use latch held by
+the pane terminal claim. The pane-scoped launcher acknowledges from the
+runtime's spawn event and before waiting for exit; a startup error never
+acknowledges. The self-closing shell does the same. The latch is absent for a
+root launch and appears in no prop, binding, contextual API, public request,
+provider return, process result, or durable record.
+
+When a persistent process owns a pane endpoint, the launcher sends the exact
+argv vector, working directory, and environment over the provider's private
+authenticated channel to that pane owner. The presentation provider's command
+parser never sees those values. The pane owner creates the child with
+stdin/stdout/stderr inherited from the pane terminal, forwards the runtime
+spawn event to the readiness latch, and never reads terminal input itself.
+Provider display text is written to the pane without becoming child input.
+
+A provider preparation failure, or a pane failure before every pane is ready,
+cancels all pane scopes, awaits their finalizers, discards the hidden composite,
+restores the root terminal, and fails without showing a partial grid. Effects
+that finished before an interactive start failed keep their ordinary durable
+records. Grid atomicity is not a transaction that rolls back Agent preparation,
+files, commands, or other completed work.
+
+After attachment, a pane's normal exit or failure changes that pane's visible
+status and does not cancel its siblings. Paired content may continue with later
+sequential work after one interactive child exits, including another launch on
+the same pane. The composite remains visible when all panes have settled. The
+reader closes or leaves it to finish the grid.
+
+The provider receives presentation updates only as `starting`, `running`,
+`succeeded`, `failed`, or `closed`. Readiness selects `running`; final pane flow
+selects success or failure; a live pane cancelled only because the reader
+closed the grid becomes `closed`. These states display core's result and never
+author it.
+
+Close first prevents new pane launches, then cancels live pane scopes, awaits
+every child and provider finalizer, destroys the exact composite, restores the
+root terminal, and releases the foreground lease. Only then does the element
+settle and a later document sibling begin. There is no implicit timeout; parent
+cancellation and an enclosing execution deadline use the same complete teardown.
+
+#### Native launch ownership inside a pane
+
+Each pane receives a pane-scoped native launcher. A `<Session.Launch>` there
+reserves and flushes that pane terminal rather than the root foreground lease.
+Different pane terminals do not contend, so their native UIs may run
+concurrently. Two live interactive launches in one pane contend; sequential
+launches in it are allowed.
+
+A launch releases the pane only after its child and every observable process
+related to that launch have stopped and no other process holds the pane
+terminal. The release precedes the pane's terminal exit status and admission of
+a sequential launch. A failure to establish that quiescence fails teardown and
+keeps the pane unavailable.
+
+Terminal ownership does not grant Agent-session ownership. The native session
+coordinator keeps its natural provider, agent, and logical-session key. If two
+panes launch the same logical Agent session, one owns it and the other is
+refused as busy exactly as it would be outside a grid. Grid placement does not
+change Agent resolution, construction route, retained identity, instruction
+layer, attachment, or cancellation semantics.
+
+#### Failure result
+
+Before attachment, simultaneous pane-start failures are selected in authored
+pane order after every sibling has been cancelled and torn down. After
+attachment, ordinary pane failures are contained as statuses so siblings can
+continue. When the reader closes the grid, the first failed pane in authored
+order fails the element; cancellation caused solely by closing the grid is not
+counted as a failed pane. With no failed pane, close succeeds and the document
+continues.
+
+A provider or host failure cancels the composite and is the grid failure.
+Parent cancellation remains cancellation rather than becoming a pane failure.
+All acquired resources are finalized even when an earlier failure already
+decides the result, and the existing fatal-infrastructure and cleanup precedence
+still applies. Before the first cancellation signal, the provider snapshots
+every observable descendant of a live child and every member of its pane
+process group. It establishes that those processes stopped, and while the pane
+owner still makes its terminal observable it establishes that no other process
+holds the terminal. It also establishes that its pane owners, attachment,
+control client, and multiplexer server stopped. Disappearance of the attach
+client, one process ID, a successful signal delivery, or a bounded amount of
+time is insufficient proof.
+
+On a host that exposes only process ancestry, process groups, and open terminal
+descriptors, this proof has an exact limit: a descendant that creates a new
+session, closes the pane terminal, and outlives its parent has severed every
+observable link. The provider makes no claim to discover or terminate that
+detached daemon. It does prove that no process remains in a pane process group,
+no process remains descended from a child alive when teardown began, and no
+process holds a pane terminal. A provider that cannot establish those bounded
+facts fails teardown.
+
+Diagnostics identify the source grid and a provider-neutral pane ordinal or
+authored title. They contain no provider command, socket, server, session,
+window, pane identifier, executable path, argv, environment, or terminal bytes.
+
+#### Durability and replay
+
+The grid is one structured durable region. Its identity includes the resolved
+column count and ordered pane forms and titles. Each direct pane receives a
+deterministic child-coroutine identity derived from the grid expansion and its
+ordinal, never from its title, scheduling order, or provider layout.
+
+The completed region retains its provider-neutral layout, how it closed, and
+the ordered pane outcomes after the ordinary secret gate. Completed replay
+claims that whole region and restores its result without contacting a terminal
+provider, creating a composite, starting a shell, expanding pane content,
+resolving an Agent, taking session ownership, or launching a native UI.
+
+Partial replay compares the complete resolved layout first and refuses a
+changed column count, title, form, count, or order before provider work. It then
+builds a new live composite. Completed pane children appear as already-settled
+statuses and perform no effects; incomplete children continue from their own
+durable records. An incomplete `<Session.Launch>` keeps the exact
+`prepared`/`detached` replay and logical-session identity rules defined by the
+native launch specification. An incomplete self-closing pane starts the current
+authorized default shell and does not claim continuity of shell process or
+terminal history.
+
+No provider-specific layout identity is retained or reconciled. A tmux-backed
+continuation, for example, creates fresh live tmux identifiers even if the prior
+attempt used tmux too. The first production provider is installed for the Deno
+and compiled foreground hosts when their terminal and tmux prerequisites are
+available. It owns one private tmux server per grid and one persistent worker as
+each pane's initial process. The workers authenticate once over per-pane Unix
+sockets in a short mode-0700 private directory with mode-0600 tokens, run under
+Effection's `run()` so the worker does not consume foreground `SIGINT`, and
+accept only lifecycle, display, and exact launch messages. The provider uses an
+explicit tmux layout and swaps panes into authored row-major order rather than
+trusting layout-leaf pane identifiers. A no-output control-mode client observes
+reader detach, control loss, and server stop independently from the visible
+inherited-stdio attach client. It attaches visibly only after readiness,
+detaches that client before sending cancellation signals, and translates root
+host `SIGHUP` into structured grid cancellation.
+
+Node and Bun accept and validate the same syntax but install no provider and
+therefore refuse before pane start. A controlled provider that is not tmux
+exercises the same core contract in tests.
+
 
 ## 7. Entry point
 
@@ -10438,6 +10729,33 @@ Each row names the derivation it kills.
 | AF24 | A Session pins the exact value it was issued | A fresh `<Session>` calls `session()` once and hands the same object — by identity, not by key — to every `<Prompt>` nested inside it. A provider decides whether a session may be acted on by that identity, so a rebuilt look-alike is a value nobody issued |
 | AF25 | A fresh Session performs no provider effect | A self-closing `<Session />` places one and renders nothing: no prompt is started, and nothing about the placement appears in the document where the element stood |
 
+### Tier TG — Terminal grids (§6.21)
+
+Core lifecycle rows use a controlled provider that is not tmux. Production
+adapter rows use fake tmux processes and exact invocation-private handles; no
+test derives a core result from a provider identifier.
+
+| # | Test | Verify |
+|---|------|--------|
+| TG1 | Frozen grammar | `Terminal.Grid` accepts only paired form with a positive integer `columns`; `Terminal` accepts paired and self-closing forms with a non-empty `title`; both reject unknown props and `as` |
+| TG2 | Structural placement | An empty grid, direct text or non-pane element, a dynamically produced direct pane, a nested grid, and a pane outside a grid are refused before a provider call or body effect; whitespace between direct panes is inert |
+| TG3 | Catalog and validation are inert | Both reserved entries and exact forms appear under structural syntax on every runtime; syntax and document validation contact no terminal provider, tmux, shell, Agent registry, or session coordinator |
+| TG4 | Row-major layout | One through five authored panes under two and three columns produce the exact derived positions, keep duplicate titles, and derive identity from ordinal rather than title or scheduling |
+| TG5 | Representative 2×2 journey | Three controlled native Agent sessions and one controlled default shell all start before the grid attaches, remain concurrently interactive, and use the authored row-major positions |
+| TG6 | Isolated pane scopes | Every pane inherits the grid site's values, cwd, repository selection and providers; one pane's new bindings and contextual changes reach later work in that pane only, and its `Break` or `Return` cannot escape the pane |
+| TG7 | Pane output | Rendered pane text reaches only that pane and the grid renders `""`; a surrounding capture gets no pane display; nested executable effects retain their ordinary results; native UI and shell bytes enter no capture, process journal or transcript |
+| TG8 | Readiness barrier | Endpoint allocation, PID allocation, preparation, route publication, detach and first output are not ready; the runtime child-spawn event is. A paired pane that settles without one fails startup, and a child that spawns then exits immediately is ready and settled |
+| TG9 | Atomic startup failure | Each provider-preparation position and each authored pane start can fail; no composite attaches, all started siblings and finalizers settle, completed earlier effects remain durable, the root terminal is restored, and simultaneous pane failures report the first authored ordinal |
+| TG10 | Independent settlement | After attach, one pane can exit successfully or fail while siblings remain live and usable; its status stays visible. Closing a grid with failed panes reports the first failed authored ordinal, while teardown cancellation itself does not create a pane failure |
+| TG11 | Terminal versus session ownership | Distinct pane leases permit concurrent native launches, one pane refuses overlapping launches, and a sequential launch is admitted only after the previous child, its observable descendants and group members, and every other holder of that pane terminal are gone; two panes naming one logical Agent session still contend through the unchanged non-waiting coordinator |
+| TG12 | Reader close | Close prevents a later launch, cancels every live pane scope, awaits each child, shell and provider finalizer, destroys the exact composite, restores the root terminal, releases the foreground lease, and only then starts the following document sibling |
+| TG13 | Cancellation and provider failure | Parent cancellation during prepare, readiness and active presentation follows complete teardown and remains cancellation; an active provider failure cancels every pane and fails the grid; cleanup is attempted for all resources under existing failure precedence |
+| TG14 | Bounded teardown proof | Before cancellation signals, the provider snapshots the live child's observable descendants and pane process-group members; before pane reuse and again before its worker exits it proves those processes and all other terminal holders gone. Grid teardown also proves every worker, attachment, control client and server gone and removes private paths. An attach exit, one PID, signal delivery or timeout is not proof. A descendant that already started a new session, closed the pane terminal and lost its parent is recorded as outside the host's observable boundary rather than falsely claimed stopped |
+| TG15 | Completed replay | A completed successful or failed grid restores its exact result while contacting no terminal provider, shell, Agent provider, coordinator, pane content or native launcher |
+| TG16 | Partial replay | Exact layout rebuilds a fresh provider composite; completed pane children appear settled without effects, incomplete paired children follow their durable records, incomplete native launches preserve prepared/detached session identity, and an incomplete shell starts current host policy without terminal-history continuity |
+| TG17 | Replay divergence and retained shape | A changed column count, pane count, order, form or title refuses before provider work; retained layout, close kind and pane outcomes contain no provider command, socket, process, session, window or pane identifier, path, argv, environment or terminal bytes |
+| TG18 | Provider neutrality | The controlled non-tmux provider passes TG1–TG17; the tmux adapter prepares one hidden invocation-private server with authenticated persistent pane workers, transmits exact child creation outside tmux parsing, applies explicit row-major layout, distinguishes visible detach from control loss and server stop, attaches only after runtime spawn readiness, and satisfies TG14 without leaking provider identifiers; Node and Bun validate the same document and refuse before pane start with no provider installed |
+
 ### Tier CR — Component registration and resolution
 
 | # | Test | Verify |
@@ -10476,7 +10794,7 @@ so the include-boundary rows are the same on every host. Defined in §5.3.
 | # | Test | Verify |
 |---|------|--------|
 | SY1/SY2 | Versioned shape | `version` is 1, the categories are the fixed tuple, and one structural, one registered and one repository entry appear together |
-| SY3/SY4 | Structural vocabulary | The declarations are exactly the reserved names, each with authored forms and a description; `Let`, `Content`, `Else`, `Break`, `Answers` and `Answer` carry the frozen forms, and `as` applies to `Let` and `Each` alone |
+| SY3/SY4 | Structural vocabulary | The declarations are exactly the reserved names, each with authored forms and a description; `Let`, `Content`, `Else`, `Break`, `Answers`, `Answer`, `Terminal.Grid` and `Terminal` carry the frozen forms, and `as` applies to `Let` and `Each` alone |
 | SY5 | Structural stays structural | A repository file named after a construct never moves it out of the structural category |
 | SY6/SY7 | Repository mapping | Direct `.md`/`.ts`, direct `index`, nested dotted and nested index paths describe names; a lowercase segment, an empty stem, a dotted stem and a dotted directory describe none, and the inversion is held to the single-segment grammar directly |
 | SY7c | Pruning | A lower-case, hidden or dotted directory is never read — at the top level or deeper — while the direct, nested and index candidates beside it stay discoverable; every skipped directory throws if it is read, and the recorded reads name only the ones a name reaches |
