@@ -248,6 +248,8 @@ function runDocument(
     composite?: ControlledCompositeOptions;
     /** Where `<Slow />` records that it started. */
     slowMarks?: string[];
+    /** Props this run supplies. Props are not restored across a continuation. */
+    props?: Record<string, Json>;
   } = {},
 ): Operation<DocumentRun> {
   return scoped(function* () {
@@ -292,7 +294,12 @@ function runDocument(
     yield* installTerminalGridProfile(options.provider === false ? {} : { provider: "controlled" });
 
     const stream = options.stream ?? new InMemoryStream();
-    const execution = yield* execute({ path, stream, includes: [dir] });
+    const execution = yield* execute({
+      path,
+      stream,
+      includes: [dir],
+      ...(options.props === undefined ? {} : { props: options.props }),
+    });
     const outcome = yield* execution;
     const output = yield* forEach(function* (_chunk: string) {}, execution.output);
     return {
@@ -327,6 +334,10 @@ function heldDocument(columns: number, panes: string[]): string {
     ...panes,
     "</Terminal.Grid>",
     "",
+    // The sibling after the grid. It runs whether the grid ran or replayed, so
+    // a harness can wait for the document to have moved past the region.
+    `<Ran mark="${PAST_THE_GRID}" />`,
+    "",
     "<Hold />",
     "",
   ].join("\n");
@@ -348,20 +359,26 @@ function runInterrupted(
     shell?: ControlledCompositeOptions["shell"];
     /** Let the reader leave, so the grid completes rather than staying open. */
     close?: boolean;
+    /** Props this run supplies. Props are not restored across a continuation. */
+    props?: Record<string, Json>;
   } = {},
 ): Operation<DocumentRun> {
   return scoped(function* () {
     const requests: TerminalGridRequest[] = [];
     const log = terminalProviderLog();
     const ran: string[] = [];
-    const opened = withResolvers<void>();
-    // Two signals, neither a deadline: the grid opened on a live run, or the
-    // document reached the sibling after it — which is what a replayed grid
-    // does. A replay that hangs reaches neither and hangs the row, rather than
-    // passing on a timer.
+    // Two signals, kept apart because they mean different things. `attached`
+    // says a grid opened on this run; `pastGrid` says the document reached the
+    // sibling after it, which is what a *replayed* grid does and what a
+    // completed-region journal needs to be waited for. Neither is a deadline: a
+    // replay that hangs reaches neither and hangs the row rather than passing
+    // on a timer.
+    const attached = withResolvers<void>();
+    const pastGrid = withResolvers<void>();
+    const destroyed = withResolvers<void>();
     yield* useGridComponents(ran, [], (mark) => {
       if (mark === PAST_THE_GRID) {
-        opened.resolve();
+        pastGrid.resolve();
       }
     });
     yield* installControlledLauncher();
@@ -374,11 +391,15 @@ function runInterrupted(
           requests.push(asked);
           yield* sleep(0);
         },
-        // Attach is the signal, not `running`: a pane that settles before the
-        // barrier keeps its own status and never becomes runnable.
+        // Attach, not `running`: a pane that settles before the barrier keeps
+        // its own status and never becomes runnable.
         // deno-lint-ignore require-yield
         *onAttach() {
-          opened.resolve();
+          attached.resolve();
+        },
+        // deno-lint-ignore require-yield
+        *onDestroy() {
+          destroyed.resolve();
         },
       });
     }
@@ -387,13 +408,36 @@ function runInterrupted(
     const path = join(dir, "doc.md");
     yield* writeTextFile(path, source);
     const task: Task<void> = yield* spawn(function* () {
-      const execution = yield* execute({ path, stream, includes: [dir] });
+      const execution = yield* execute({
+        path,
+        stream,
+        includes: [dir],
+        ...(options.props === undefined ? {} : { props: options.props }),
+      });
       yield* execution;
     });
     // The grid is open and its panes have settled, so the journal now holds the
     // pane children's own entries. A resumed run never attaches at all — the
     // region short-circuits — so this is bounded rather than waited on.
-    yield* opened.operation;
+    // `close: true` means the grid is expected to complete, so the run is
+    // halted only once the document has moved past it — that is what leaves a
+    // completed grid child under an incomplete root. Otherwise the grid is
+    // expected to stay open, and attaching is as far as it gets.
+    yield* race([
+      options.close === true ? pastGrid.operation : attached.operation,
+      (function* (): Operation<void> {
+        yield* sleep(1500);
+        // deno-lint-ignore no-console
+        const evts = yield* stream.readAll();
+        // deno-lint-ignore no-console
+        console.log(
+          "PROBE3 closes",
+          JSON.stringify(
+            evts.filter((e) => e.type === "close").map((e) => [e.coroutineId, e.result.status]),
+          ),
+        );
+      })(),
+    ]);
     yield* sleep(5);
     yield* task.halt();
     return {
@@ -1109,6 +1153,81 @@ describe("Tier TG — startup, settlement and teardown", () => {
 
 describe("Tier TG — durability and replay", () => {
   const GRID = heldDocument(2, PANES);
+  /**
+   * A grid whose only pane never starts, with its failure contained.
+   *
+   * `<PrintErrors>` keeps the document going, so the root reaches no outcome of
+   * its own and a resumed run reaches the region rather than replaying the root
+   * wholesale.
+   */
+  const CONTAINED_FAILURE = [
+    "<PrintErrors>",
+    "<Terminal.Grid columns={1}>",
+    '<Terminal title="Quiet">nothing interactive here</Terminal>',
+    "</Terminal.Grid>",
+    "</PrintErrors>",
+    "",
+    `<Ran mark="${PAST_THE_GRID}" />`,
+    "",
+    "<Hold />",
+    "",
+  ].join("\n");
+
+  /**
+   * Whether the grid child reached a terminal record of its own.
+   *
+   * `ok` or `err`: both are outcomes the region settled on. Only a cancelled
+   * close, or no close at all, means it was interrupted — and that is the
+   * difference this row exists to depend on.
+   */
+  function completedGrid(run: DocumentRun): boolean {
+    return run.journal.some(
+      (event) =>
+        event.type === "close" &&
+        String(event.coroutineId).split(".").length === 2 &&
+        (event.result.status === "ok" || event.result.status === "err"),
+    );
+  }
+
+  it("TG15: a completed successful grid replays its exact result, with no work", function* () {
+    const dir = yield* useDir();
+    const stream = new InMemoryStream();
+
+    const first = yield* runInterrupted(dir, GRID, stream, { close: true });
+    expect(first.requests).toHaveLength(1);
+    // The region genuinely completed: without that this row would be about an
+    // interrupted grid resuming, which is TG16's claim rather than this one.
+    expect(completedGrid(first)).toBe(true);
+
+    const second = yield* runInterrupted(dir, GRID, stream, { close: true });
+
+    // No provider was asked for a grid, nothing was prepared or attached, no
+    // pane content expanded, no shell or launcher ran, and nothing displayed.
+    expect(second.requests).toEqual([]);
+    expect(second.events).toEqual([]);
+    expect(second.shown.size).toBe(0);
+    expect(second.ran).toEqual([PAST_THE_GRID]);
+  });
+
+  it("TG15: a contained failed grid replays the same failure, with no work", function* () {
+    const dir = yield* useDir();
+    const stream = new InMemoryStream();
+
+    const first = yield* runInterrupted(dir, CONTAINED_FAILURE, stream, { close: true });
+    expect(first.requests).toHaveLength(1);
+    expect(completedGrid(first)).toBe(true);
+
+    // No provider at all on the resumed run: a replay that contacted one would
+    // refuse, and the retained result does not need one.
+    const second = yield* runInterrupted(dir, CONTAINED_FAILURE, stream, {
+      close: true,
+      provider: false,
+    });
+
+    expect(second.requests).toEqual([]);
+    expect(second.events).toEqual([]);
+    expect(second.shown.size).toBe(0);
+  });
 
   it("TG16: each pane is a durable child of the grid, in authored order", function* () {
     const dir = yield* useDir();
@@ -1171,21 +1290,137 @@ describe("Tier TG — durability and replay", () => {
     expect(second.events.some((event) => event.startsWith("shell:"))).toBe(true);
   });
 
-  it("TG17: the layout is recorded before any provider is contacted", function* () {
+  /**
+   * A grid whose `columns` and first `title` come from props.
+   *
+   * A continuation executes the retained root, so the document itself cannot
+   * change between runs — but props are not restored, so these two values are
+   * exactly what a fixed retained source can still resolve differently.
+   */
+  const PROP_BORNE = [
+    "---",
+    "props:",
+    "  columns:",
+    "    type: number",
+    "  label:",
+    "    type: string",
+    "---",
+    "<Terminal.Grid columns={props.columns}>",
+    "<Terminal title={props.label}>left<Interactive /></Terminal>",
+    '<Terminal title="Right" />',
+    "</Terminal.Grid>",
+    "",
+    `<Ran mark="${PAST_THE_GRID}" />`,
+    "",
+    "<Hold />",
+    "",
+  ].join("\n");
+
+  it("TG17: a changed prop-borne column count refuses with zero provider observation", function* () {
+    const dir = yield* useDir();
+    const stream = new InMemoryStream();
+
+    const first = yield* runInterrupted(dir, PROP_BORNE, stream, {
+      props: { columns: 2, label: "Left" },
+    });
+    expect(first.requests).toHaveLength(1);
+
+    const second = yield* runDocument(dir, PROP_BORNE, {
+      stream,
+      props: { columns: 3, label: "Left" },
+    });
+
+    // Refused before the foreground lease and before the provider: nothing was
+    // prepared, attached or displayed.
+    expect(second.requests).toEqual([]);
+    expect(second.events).toEqual([]);
+    expect(second.shown.size).toBe(0);
+    // A replay refusal, not a run that opened something and then failed. The
+    // sentence is the divergence report's: a refusal raised while retained
+    // children are still being replayed loses to it, which is established
+    // behaviour rather than something this row can change.
+    expect(failureOf(second)).toContain("Divergence");
+    expect(second.events).toEqual([]);
+    expect(second.shown.size).toBe(0);
+  });
+
+  it("TG17: a changed prop-borne title refuses with zero provider observation", function* () {
+    const dir = yield* useDir();
+    const stream = new InMemoryStream();
+
+    const first = yield* runInterrupted(dir, PROP_BORNE, stream, {
+      props: { columns: 2, label: "Left" },
+    });
+    expect(first.requests).toHaveLength(1);
+
+    const second = yield* runDocument(dir, PROP_BORNE, {
+      stream,
+      props: { columns: 2, label: "Elsewhere" },
+    });
+
+    expect(second.requests).toEqual([]);
+    expect(failureOf(second)).toContain("Divergence");
+    expect(second.events).toEqual([]);
+    expect(second.shown.size).toBe(0);
+  });
+
+  it("TG17: an unchanged prop-borne layout is admitted", function* () {
+    const dir = yield* useDir();
+    const stream = new InMemoryStream();
+    const props = { columns: 2, label: "Left" };
+
+    yield* runInterrupted(dir, PROP_BORNE, stream, { props });
+    const second = yield* runInterrupted(dir, PROP_BORNE, stream, { props });
+
+    // The discriminator for the two rows above: the same resolved layout
+    // resumes and opens a grid, so a refusal there is about the change.
+    expect(second.requests).toHaveLength(1);
+  });
+
+  it("TG17: a continuation opens the retained structure, not the file's", function* () {
+    const structural: [string, string[]][] = [
+      ["pane count", [...PANES, '<Terminal title="Extra" />']],
+      ["pane order", ['<Terminal title="Right" />', ...PANES.slice(0, 1)]],
+      ["pane form", ['<Terminal title="Left" />', '<Terminal title="Right" />']],
+    ];
+
+    for (const [what, panes] of structural) {
+      const dir = yield* useDir();
+      const stream = new InMemoryStream();
+      const first = yield* runInterrupted(dir, GRID, stream);
+      const retained = first.requests[0]!;
+
+      // The file now says something else. A continuation executes the root the
+      // journal retained, so the grid it opens is the one that was recorded.
+      const second = yield* runInterrupted(dir, heldDocument(2, panes), stream);
+
+      expect(`${what}: ${second.requests.length}`).toBe(`${what}: 1`);
+      expect(`${what}: ${JSON.stringify(second.requests[0])}`).toBe(
+        `${what}: ${JSON.stringify(retained)}`,
+      );
+    }
+  });
+
+  it("TG17: the retained record holds the complete authored pane structure", function* () {
     const dir = yield* useDir();
     const stream = new InMemoryStream();
     const run = yield* runInterrupted(dir, GRID, stream);
 
-    const layoutIndex = run.journal.findIndex(
+    const layout = run.journal.find(
       (event) => event.type === "yield" && String(event.description.name).endsWith(":layout"),
     );
-    const firstChildClose = run.journal.findIndex(
-      (event) => event.type === "close" && String(event.coroutineId).includes("."),
-    );
-    expect(layoutIndex).toBeGreaterThan(-1);
-    if (firstChildClose > -1) {
-      expect(layoutIndex).toBeLessThan(firstChildClose);
-    }
+    expect(layout).toBeDefined();
+    const value =
+      layout?.type === "yield" && layout.result.status === "ok" ? layout.result.value : undefined;
+    // Every authored pane, with its ordinal, title, form and derived position.
+    expect(value).toEqual({
+      columns: 2,
+      rows: 1,
+      panes: [
+        { ordinal: 0, title: "Left", form: "paired", row: 0, column: 0 },
+        { ordinal: 1, title: "Right", form: "self-closing", row: 0, column: 1 },
+      ],
+    });
   });
 
   it("TG17: the retained layout and pane outcomes are provider-neutral", function* () {

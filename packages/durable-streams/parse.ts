@@ -125,8 +125,20 @@ function parseResult(value: unknown, path: string): Result {
       return { status: "err", error: parseSerializedError(members.get("error"), `${path}.error`) };
     }
     case "cancelled": {
-      requireMemberNames(members, ["status"], path);
-      return { status: "cancelled" };
+      requireMemberNames(members, ["status", "cancellation"], path);
+      const cancellation = members.get("cancellation");
+      if (cancellation === undefined) {
+        // A record written before this evidence existed. DEC-040 reads the
+        // absence as a deliberate stop, so nothing it left behind is revived.
+        return { status: "cancelled" };
+      }
+      if (cancellation !== "caller" && cancellation !== "unwound") {
+        throw new MalformedDurableEventError(
+          'expected "caller" or "unwound"',
+          `${path}.cancellation`,
+        );
+      }
+      return { status: "cancelled", cancellation };
     }
     default:
       throw new MalformedDurableEventError('expected "ok", "err" or "cancelled"', `${path}.status`);

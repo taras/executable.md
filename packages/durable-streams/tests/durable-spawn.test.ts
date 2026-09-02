@@ -364,3 +364,205 @@ describe("durableSpawn — the combinators keep their own policy", () => {
     expect(marks).toEqual([]);
   });
 });
+
+describe("durableSpawn — why a child was cancelled (DEC-040)", () => {
+  /** Every cancelled close in a journal, with the reason it recorded. */
+  function* cancellations(stream: InMemoryStream): Operation<string[]> {
+    const events = yield* stream.readAll();
+    return events
+      .filter((event) => event.type === "close" && event.result.status === "cancelled")
+      .map((event) =>
+        event.result.status === "cancelled" ? String(event.result.cancellation) : "",
+      );
+  }
+
+  it("records a deliberate halt as caller", function* () {
+    const stream = new InMemoryStream();
+
+    yield* durableRun(
+      function* (): Workflow<string> {
+        const task = yield* durableSpawn(function* (): Workflow<string> {
+          return yield* ephemeral(
+            (function* (): Operation<string> {
+              yield* suspend();
+              return "never";
+            })(),
+          );
+        });
+        yield* ephemeral(
+          (function* (): Operation<void> {
+            yield* sleep(1);
+            yield* task.halt();
+          })(),
+        );
+        return "done";
+      },
+      { stream },
+    );
+
+    expect(yield* cancellations(stream)).toEqual(["caller"]);
+  });
+
+  it("records a scope unwinding as unwound", function* () {
+    const stream = new InMemoryStream();
+
+    const run = yield* spawn(function* () {
+      yield* durableRun(
+        function* (): Workflow<string> {
+          yield* durableSpawn(function* (): Workflow<string> {
+            return yield* ephemeral(
+              (function* (): Operation<string> {
+                yield* suspend();
+                return "never";
+              })(),
+            );
+          });
+          yield* ephemeral(
+            (function* (): Operation<void> {
+              yield* suspend();
+            })(),
+          );
+          return "never";
+        },
+        { stream },
+      );
+    });
+    yield* sleep(3);
+    yield* run.halt();
+
+    expect(yield* cancellations(stream)).toEqual(["unwound"]);
+  });
+
+  it("does not revive a child the caller deliberately halted", function* () {
+    const marks: string[] = [];
+    const stream = new InMemoryStream();
+    // The caller halts the child, then the run is interrupted before it
+    // completes. Both facts are in the journal; only the first decides.
+    const first = yield* spawn(function* () {
+      yield* durableRun(
+        function* (): Workflow<string> {
+          const task = yield* durableSpawn(function* (): Workflow<string> {
+            return yield* ephemeral(
+              (function* (): Operation<string> {
+                marks.push("first life");
+                yield* suspend();
+                return "never";
+              })(),
+            );
+          });
+          yield* ephemeral(
+            (function* (): Operation<void> {
+              yield* sleep(1);
+              yield* task.halt();
+              yield* suspend();
+            })(),
+          );
+          return "never";
+        },
+        { stream },
+      );
+    });
+    yield* sleep(5);
+    yield* first.halt();
+
+    expect(marks).toEqual(["first life"]);
+    expect(yield* cancellations(stream)).toEqual(["caller"]);
+
+    // The resumed run reaches the same deliberate halt, so the child suspends
+    // until it does rather than performing work nobody asked to redo.
+    const second = yield* spawn(function* () {
+      yield* durableRun(
+        function* (): Workflow<string> {
+          const task = yield* durableSpawn(function* (): Workflow<string> {
+            return yield* ephemeral(
+              (function* (): Operation<string> {
+                marks.push("revived");
+                return "revived";
+              })(),
+            );
+          });
+          yield* ephemeral(
+            (function* (): Operation<void> {
+              yield* sleep(1);
+              yield* task.halt();
+              yield* suspend();
+            })(),
+          );
+          return "never";
+        },
+        { stream },
+      );
+    });
+    yield* sleep(10);
+    yield* second.halt();
+
+    expect(marks).toEqual(["first life"]);
+  });
+
+  it("reads a record with no reason as caller", function* () {
+    const marks: string[] = [];
+    const stream = new InMemoryStream();
+    // A journal written before this evidence existed.
+    yield* stream.append({
+      type: "close",
+      coroutineId: "root.0",
+      result: { status: "cancelled" },
+    });
+
+    const run = yield* spawn(function* () {
+      yield* durableRun(
+        function* (): Workflow<string> {
+          const task = yield* durableSpawn(function* (): Workflow<string> {
+            return yield* ephemeral(
+              (function* (): Operation<string> {
+                marks.push("would revive");
+                return "revived";
+              })(),
+            );
+          });
+          return yield* ephemeral(task);
+        },
+        { stream },
+      );
+    });
+    yield* sleep(10);
+    yield* run.halt();
+
+    // Absent evidence is the safe direction: nothing is revived.
+    expect(marks).toEqual([]);
+  });
+
+  it("keeps combinator children on DEC-024 whatever the reason says", function* () {
+    const marks: string[] = [];
+    const stream = new InMemoryStream();
+    const race = () =>
+      durableRace<string>([
+        function* (): Workflow<string> {
+          return yield* ephemeral(
+            (function* (): Operation<string> {
+              marks.push("winner");
+              return "winner";
+            })(),
+          );
+        },
+        function* (): Workflow<string> {
+          return yield* ephemeral(
+            (function* (): Operation<string> {
+              marks.push("loser");
+              yield* suspend();
+              return "never";
+            })(),
+          );
+        },
+      ]);
+
+    expect(yield* durableRun(race, { stream })).toBe("winner");
+    // The loser's cancellation is involuntary, so it records `unwound` — and a
+    // combinator child suspends regardless of what the reason says.
+    expect(yield* cancellations(stream)).toEqual(["unwound"]);
+
+    marks.length = 0;
+    expect(yield* durableRun(race, { stream })).toBe("winner");
+    expect(marks).toEqual([]);
+  });
+});
