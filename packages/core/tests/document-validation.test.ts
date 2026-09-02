@@ -681,6 +681,160 @@ describe("Tier DV: <Switch> branch selection", () => {
   });
 });
 
+describe("Tier DV: terminal grids", () => {
+  const GRID_DOC = [
+    "<Terminal.Grid columns={2}>",
+    '<Terminal title="Agent">',
+    '<Widget title="briefing" />',
+    "</Terminal>",
+    '<Terminal title="Shell" />',
+    "</Terminal.Grid>",
+    "",
+  ].join("\n");
+
+  it("TG3: a well-formed grid is valid, and nothing beneath it runs", function* () {
+    const { result, seen } = yield* validateText(GRID_DOC, {
+      tree: { "components/Widget.md": WIDGET },
+    });
+
+    expect(result.outcome).toBe("valid");
+    expect(result.diagnostics).toEqual([]);
+    expect(names(result)).toEqual(["Terminal.Grid", "Terminal", "Widget", "Terminal"]);
+    expect(named(result, "Terminal.Grid").origin).toEqual({
+      kind: "structural",
+      construct: "Terminal.Grid",
+    });
+    expect(named(result, "Terminal").origin).toEqual({
+      kind: "structural",
+      construct: "Terminal",
+    });
+    // A pane's body is walked like any other region, and none of it — no
+    // shell, no command, no agent, no terminal — was reached to walk it.
+    expect(seen.effects).toEqual([]);
+    // Reserved means selection never looked for a file that could supply
+    // either construct.
+    expect(seen.reads.some((read) => read.includes("Terminal"))).toBe(false);
+  });
+
+  it("TG3: reports each invalid authored form, with no execution", function* () {
+    const invalid: [string, string, string][] = [
+      [
+        "an unknown prop on the grid",
+        '<Terminal.Grid columns={2} layout="tiled"><Terminal title="A" /></Terminal.Grid>\n',
+        '<Terminal.Grid> only accepts a "columns" prop. Got: "layout".',
+      ],
+      [
+        "a capture on the grid",
+        '<Terminal.Grid columns={2} as="grid"><Terminal title="A" /></Terminal.Grid>\n',
+        '<Terminal.Grid> only accepts a "columns" prop. Got: "as".',
+      ],
+      [
+        "no column count",
+        '<Terminal.Grid><Terminal title="A" /></Terminal.Grid>\n',
+        '<Terminal.Grid> requires a "columns" prop (a positive integer).',
+      ],
+      [
+        "a column count that is not a positive integer",
+        '<Terminal.Grid columns={0}><Terminal title="A" /></Terminal.Grid>\n',
+        'Prop "columns" on <Terminal.Grid> must be a positive integer. Got: 0.',
+      ],
+      [
+        "an unknown prop on a pane",
+        '<Terminal.Grid columns={2}><Terminal title="A" shell="zsh" /></Terminal.Grid>\n',
+        '<Terminal> only accepts a "title" prop. Got: "shell".',
+      ],
+      [
+        "no title on a pane",
+        "<Terminal.Grid columns={2}><Terminal /></Terminal.Grid>\n",
+        '<Terminal> requires a "title" prop (the label the pane displays).',
+      ],
+      [
+        "an empty title",
+        '<Terminal.Grid columns={2}><Terminal title="" /></Terminal.Grid>\n',
+        'Prop "title" on <Terminal> must be a non-empty string. Got: "".',
+      ],
+      [
+        "a self-closing grid",
+        "<Terminal.Grid columns={2} />\n",
+        "<Terminal.Grid> holds the panes it lays out",
+      ],
+      [
+        "a grid with no pane",
+        "<Terminal.Grid columns={2}></Terminal.Grid>\n",
+        "<Terminal.Grid> requires at least one <Terminal> pane.",
+      ],
+      [
+        "text written directly in a grid",
+        '<Terminal.Grid columns={2}>a note<Terminal title="A" /></Terminal.Grid>\n',
+        '<Terminal.Grid> holds only <Terminal> panes. Found text "a note" directly inside it.',
+      ],
+      [
+        "a direct element that is not a pane",
+        '<Terminal.Grid columns={2}><Widget title="x" /><Terminal title="A" /></Terminal.Grid>\n',
+        "<Terminal.Grid> holds only <Terminal> panes. Found <Widget> directly inside it.",
+      ],
+      [
+        "a pane produced by control flow",
+        '<Terminal.Grid columns={2}><If condition={true}><Terminal title="A" /></If></Terminal.Grid>\n',
+        "<Terminal.Grid> holds only <Terminal> panes. Found <If> directly inside it.",
+      ],
+      [
+        "a nested grid",
+        '<Terminal.Grid columns={2}><Terminal title="A"><Terminal.Grid columns={1}>' +
+          '<Terminal title="B" /></Terminal.Grid></Terminal></Terminal.Grid>\n',
+        "<Terminal.Grid> cannot be written inside another <Terminal.Grid>.",
+      ],
+      [
+        "a pane outside every grid",
+        '<Terminal title="A">alone</Terminal>\n',
+        "<Terminal> must be a direct child of <Terminal.Grid>.",
+      ],
+      [
+        "a pane below a grid that is not one of its panes",
+        '<Terminal.Grid columns={2}><Terminal title="A"><Terminal title="B" /></Terminal>' +
+          "</Terminal.Grid>\n",
+        "<Terminal> must be a direct child of <Terminal.Grid>.",
+      ],
+    ];
+
+    for (const [form, source, message] of invalid) {
+      const { result, seen } = yield* validateText(source, {
+        tree: { "components/Widget.md": WIDGET },
+      });
+
+      expect(`${form}: ${result.outcome}`).toBe(`${form}: invalid`);
+      expect(`${form}: ${codes(result).includes("structural-usage-invalid")}`).toBe(
+        `${form}: true`,
+      );
+      const said = result.diagnostics.some((diagnostic) => diagnostic.message.includes(message));
+      expect(`${form}: ${said}`).toBe(`${form}: true`);
+      expect(`${form}: ${JSON.stringify(seen.effects)}`).toBe(`${form}: []`);
+    }
+  });
+
+  it("TG3: answers the same way twice", function* () {
+    const first = yield* validateText("<Terminal.Grid columns={2}><Terminal /></Terminal.Grid>\n");
+    const second = yield* validateText("<Terminal.Grid columns={2}><Terminal /></Terminal.Grid>\n");
+
+    expect(JSON.stringify(second.result)).toBe(JSON.stringify(first.result));
+  });
+
+  it("TG3: a dynamic column count and title are decided by expansion, not here", function* () {
+    const { result, seen } = yield* validateText(
+      ["<Terminal.Grid columns={size}>", "<Terminal title={label} />", "</Terminal.Grid>", ""].join(
+        "\n",
+      ),
+    );
+
+    // Whether those expressions produce a positive integer and a non-empty
+    // string is a value the document computes, and evaluating one is
+    // expansion's alone.
+    expect(result.outcome).toBe("valid");
+    expect(result.diagnostics).toEqual([]);
+    expect(seen.effects).toEqual([]);
+  });
+});
+
 describe("Tier DV: source, target and declaration failures", () => {
   const ROWS: {
     readonly id: string;

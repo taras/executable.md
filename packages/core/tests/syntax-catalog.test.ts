@@ -347,6 +347,82 @@ describe("Tier SY: structural vocabulary", () => {
     expect(find(entries, "Case").as).toBeUndefined();
   });
 
+  it("TG3: freezes the <Terminal.Grid> and <Terminal> entries the catalog publishes", function* () {
+    const catalog = yield* catalogFor({}, []);
+    const entries = structural(catalog);
+
+    expect(catalog.version).toBe(1);
+    expect(find(entries, "Terminal.Grid")).toEqual({
+      kind: "structural",
+      name: "Terminal.Grid",
+      origin: { kind: "structural", construct: "Terminal.Grid" },
+      syntax: ["<Terminal.Grid columns={2}>…</Terminal.Grid>"],
+      description:
+        "Show several interactive terminals at once. " +
+        '`<Terminal.Grid columns={2}><Terminal title="Agent">…</Terminal>' +
+        '<Terminal title="Shell" /></Terminal.Grid>` fills `columns` columns with its panes ' +
+        "in the order they are written, leaving the last row short when the count does not " +
+        "divide. Only `<Terminal>` panes may be written directly inside it.",
+      context: "The `<Terminal>` panes the grid lays out.",
+    });
+    expect(find(entries, "Terminal")).toEqual({
+      kind: "structural",
+      name: "Terminal",
+      origin: { kind: "structural", construct: "Terminal" },
+      syntax: ['<Terminal title="Agent">…</Terminal>', '<Terminal title="Shell" />'],
+      description:
+        "Give one pane of a `<Terminal.Grid>` its work. " +
+        '`<Terminal title="Agent">…</Terminal>` runs that markdown in the pane; ' +
+        '`<Terminal title="Shell" />` runs the host\'s default interactive shell. `title` ' +
+        "labels the pane on screen, so two panes may share one.",
+      context: "Markdown the pane runs, in the paired form.",
+    });
+    // Neither construct binds, so neither carries an `as` sentence at all.
+    expect(find(entries, "Terminal.Grid").as).toBeUndefined();
+    expect(find(entries, "Terminal").as).toBeUndefined();
+  });
+
+  it("TG3: a repository file cannot supply the grid or a pane, and neither can a registration", function* () {
+    const catalog = yield* catalogFor(
+      {
+        components: { kind: "directory" },
+        "components/Terminal.md": markdown("a repository terminal\n"),
+        "components/Terminal": { kind: "directory" },
+        "components/Terminal/Grid.md": markdown("a repository grid\n"),
+      },
+      ["components"],
+    );
+
+    for (const name of ["Terminal.Grid", "Terminal"]) {
+      expect(names(structural(catalog))).toContain(name);
+      expect(names(userProvided(catalog))).not.toContain(name);
+      expect(names(builtIn(catalog))).not.toContain(name);
+    }
+
+    for (const name of ["Terminal.Grid", "Terminal"]) {
+      let refused: unknown;
+      yield* scoped(function* () {
+        try {
+          yield* registerComponents([
+            {
+              name,
+              origin: "tier-tg",
+              props: {},
+              *fn() {
+                return "";
+              },
+            },
+          ]);
+        } catch (error) {
+          refused = error;
+        }
+      });
+      expect(refused instanceof Error ? refused.message : "").toContain(
+        `cannot register "${name}": it is structural syntax the engine owns`,
+      );
+    }
+  });
+
   it("SY5b: a repository file cannot supply <Switch> or <Case>, and neither can a registration", function* () {
     const catalog = yield* catalogFor(
       {

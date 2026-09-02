@@ -266,6 +266,36 @@ describe("Tier SX — the run profile the command describes", () => {
     ]);
   });
 
+  it("TG3: describes both terminal-grid constructs without probing for a terminal", function* () {
+    // Whatever this runtime can or cannot open, the language is the same, so
+    // the one boundary a capability probe would cross is a trap here.
+    const catalog = yield* scoped(function* () {
+      yield* API.Process.around({
+        // deno-lint-ignore require-yield
+        *exec([options]): Operation<never> {
+          throw new Error(`describing the syntax ran ${JSON.stringify(options.command)}`);
+        },
+      });
+      return yield* syntaxCatalog([]);
+    });
+    const [structural, builtIn] = catalog.categories;
+
+    const grid = structural.entries.find((entry) => entry.name === "Terminal.Grid");
+    const pane = structural.entries.find((entry) => entry.name === "Terminal");
+    expect(grid?.origin).toEqual({ kind: "structural", construct: "Terminal.Grid" });
+    expect(pane?.origin).toEqual({ kind: "structural", construct: "Terminal" });
+    expect(grid?.syntax).toEqual(["<Terminal.Grid columns={2}>…</Terminal.Grid>"]);
+    expect(pane?.syntax).toEqual([
+      '<Terminal title="Agent">…</Terminal>',
+      '<Terminal title="Shell" />',
+    ]);
+    expect(grid?.description ?? "").not.toBe("");
+    expect(pane?.description ?? "").not.toBe("");
+    // Reserved syntax, so neither name is a component this profile offers.
+    expect(names(builtIn.entries)).not.toContain("Terminal.Grid");
+    expect(names(builtIn.entries)).not.toContain("Terminal");
+  });
+
   it("SX3: describes <Session> without minting an execution claimant", function* () {
     const catalog = yield* syntaxCatalog([]);
     const session = catalog.categories[1].entries.find((entry) => entry.name === "Session");
@@ -419,6 +449,22 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
       const catalog = parseCatalog(json.stdout);
       expect(catalog.version).toBe(1);
       expect(names(catalog.categories[2].entries)).toEqual(["Shared"]);
+    });
+  });
+
+  it("TG3: prints both terminal-grid constructs, in markdown and in JSON", function* () {
+    yield* useWorkspace(WORKSPACE, function* (cwd) {
+      const markdown = yield* runCli(["syntax"], { cwd }).expect();
+      expect(markdown.stdout).toContain("### `<Terminal.Grid>`");
+      expect(markdown.stdout).toContain("### `<Terminal>`");
+      expect(markdown.stdout).toContain("<Terminal.Grid columns={2}>…</Terminal.Grid>");
+      expect(markdown.stdout).toContain('<Terminal title="Agent">…</Terminal>');
+      expect(markdown.stdout).toContain('<Terminal title="Shell" />');
+
+      const json = yield* runCli(["syntax", "--json"], { cwd }).expect();
+      const structural = parseCatalog(json.stdout).categories[0].entries;
+      expect(names(structural)).toContain("Terminal.Grid");
+      expect(names(structural)).toContain("Terminal");
     });
   });
 
