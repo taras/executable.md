@@ -439,10 +439,12 @@ Given `xmd AGENTS.md#Implementor`:
 3. Target projection excludes sibling roles.
 4. XMD expands the target and renders `Session.Launch` content completely.
 5. File reads, captures, parsing, and deterministic evaluation finish or fail.
-6. `Session.Launch` takes the run's one foreground-terminal lease. A host with
-   no terminal refuses here — before an agent is resolved, so learning that
-   this invocation cannot launch anything costs no availability probe.
-7. The host flushes what the document has produced, so the native UI does not
+6. `Session.Launch` takes its applicable terminal lease. At the document root
+   this is the run's foreground-terminal lease; inside `<Terminal>` it is that
+   pane's lease through the pane-scoped native launcher. A host with no
+   applicable terminal refuses here — before an agent is resolved, so learning
+   that this invocation cannot launch anything costs no availability probe.
+7. The host flushes what that terminal has pending, so the native UI does not
    open over half-written output.
 8. The provider resolves the logical Agent and Session against the contextual
    cwd, and takes exclusive ownership of that session.
@@ -502,25 +504,26 @@ owner to release — what has to be settled first is which conversation this is:
 
 From there both rejoin:
 
-13. The provider spawns the native UI as a foreground child with the terminal
-    inherited — resuming the native session ID for a provider-returned adapter,
-    and for a client-allocated one creating it under the allocated identity from
-    the private file, or resuming it by the same name when the route already
-    named it.
+13. The provider spawns the native UI as an interactive child with the selected
+    root or pane terminal inherited — resuming the native session ID for a
+    provider-returned adapter, and for a client-allocated one creating it under
+    the allocated identity from the private file, or resuming it by the same
+    name when the route already named it.
 14. `Session.Launch` suspends while the child runs.
 15. The child handles prompts, tools, permission dialogs, rendering, and native
     transcript persistence directly.
 16. When the child exits, XMD records its terminal outcome, removes the private
     file and its directory while ownership is still held, and releases the
-    terminal lease. The route and the retained phases stay: they are what the
-    next invocation resumes from.
+    selected terminal lease. The route and the retained phases stay: they are
+    what the next invocation resumes from.
 17. Later Agent work depends on the route again. On an `acp-first` session it
     lazily reattaches through ACP to the same provider session. On a bound
     `client-native` route advertised for attachment, `<Session>` and `<Prompt>`
     follow *ACP attachment on a bound route* below and join the same provider
     conversation. A legacy unbound route or an unavailable attachment
     capability refuses before a turn and creates no substitute conversation.
-18. Document execution continues after `Session.Launch`.
+18. Execution continues after `Session.Launch`: in root document flow outside a
+    grid, or in the sequential flow of its paired pane inside one.
 
 An enclosing `<Agent>` or `<Session>` resolves by its own contract, before
 anything inside it runs, so a document that wraps a launch has already reached
@@ -711,6 +714,88 @@ refuses an advertised agent that names its own sessions, on the same terms and
 before any provider effect; an agent whose provider returns the identity is
 unaffected, because it constructs nothing a route governs.
 
+### Terminal-grid composition
+
+Terminal ownership and Agent-session ownership remain independent when a launch
+is written inside `<Terminal>`:
+
+```text
+grid foreground lease
+  ├─ pane 0 lease ─ native launch for logical session A
+  ├─ pane 1 lease ─ native launch for logical session B
+  └─ pane 2 lease ─ default shell
+
+session coordinator
+  ├─ natural key for logical session A
+  └─ natural key for logical session B
+```
+
+The grid owns the root foreground-terminal lease. The terminal authority mints
+one private one-use claim per authored pane ordinal, and core installs a native
+launcher in each pane scope that closes over that claim. `Session.Launch` uses
+the launcher already in scope; it receives no pane prop, token, identifier, or
+mode. The launcher validates the claim through the host's direct terminal
+authority and reserves that pane for the launch. A claim from another grid,
+provider installation generation, pane ordinal, or completed invocation
+authorizes nothing.
+
+Different pane claims do not contend, so native launches in different panes can
+hold their terminals concurrently. One pane remains exclusive: a second launch
+cannot begin while the first is live there, and sequential launches work after
+the first releases it. Release requires the child, its observable descendants
+and process-group members, and every other holder of that pane terminal to be
+gone; the pane remains busy if the launcher cannot establish those facts. A
+root launch and a terminal grid contend for the root foreground lease, so
+neither can overlap the other.
+
+None of that changes the coordinator key or acquisition. Two panes naming the
+same provider, agent, and logical session still ask for one natural-key owner;
+one succeeds and the other receives `session-busy` without waiting. Two distinct
+sessions may be owned concurrently. A terminal claim grants no permission to
+ensure, detach, create, resume, prompt, or attach to an Agent session, and a
+session lease grants no terminal.
+
+The pane-scoped launcher keeps the same launch request and provider authority
+division as the root launcher. Public middleware can route or refuse a request
+but cannot settle it, replace the pane, or mint a launch. Provider-specific grid
+or pane identities never enter the `AgentLaunchRequest`, terminal result,
+`agent_session_launch` record, construction route, ownership key, diagnostic,
+or private instruction file.
+
+The grid's readiness barrier observes the launch only at the existing successful
+interactive-child start boundary. Session preparation, route publication,
+private-file creation, and detach do not make a pane ready. If spawn fails, the
+launch keeps the durable phases its contract already completed, fails the pane's
+startup, and participates in the grid's atomic hidden teardown. The grid does
+not roll those phases back. A child that successfully starts and exits before
+the other panes become ready has nevertheless crossed readiness and retains its
+ordinary exit outcome.
+
+The pane claim carries a private one-use readiness latch. The native launcher
+acknowledges it from the runtime's child-spawn event and before waiting for
+exit; allocating a PID or observing output is not readiness, and a startup error
+never acknowledges. A root launch carries no such latch. It is not added to
+`AgentLaunchRequest`, `AgentLaunchResult`, the public Agent Api, a retained
+launch phase, or a process handle, so readiness composition changes neither the
+launch's authored nor durable contract.
+
+Under the tmux provider the pane-scoped launcher sends exact argv, cwd, and
+environment values over a private authenticated socket to the persistent pane
+worker. The worker, not a tmux command line, creates the native child with all
+three standard streams inherited from the pane terminal. It forwards the spawn
+event, writes pane display without reading input, and refuses a concurrent
+launch. It uses Effection's `run()` rather than `main()` so Effection does not
+convert terminal `SIGINT` into worker exit 130 while the foreground child is
+handling job control.
+
+After the grid is visible, a nonzero native exit fails its pane flow but does
+not cancel sibling panes. Core keeps that failure as the pane's status and
+selects the first failed pane in authored order when the reader closes the grid.
+Grid-initiated close cancels a still-live launch through the ordinary launch
+cancellation path, awaits session quiescence and native-child teardown, and does
+not reclassify that cancellation as an independent pane failure. Parent
+cancellation remains parent cancellation for the entire grid.
+
 ## Construction route
 
 Ownership and construction answer different questions, and this contract keeps
@@ -822,14 +907,17 @@ key, the route key and provider work. It is never resolved a second time inside
 ownership, because a registry free to answer differently would name a different
 session than the one this operation prepared.
 
-V1 also holds one foreground-terminal lease for the root CLI execution. Two
-native launches cannot concurrently own the same terminal, even when they name
-different sessions. Sequential launches are ordinary document composition.
+At the root, V1 holds the foreground-terminal lease for the CLI execution. In a
+terminal grid, the grid holds that root lease and a launch holds only its current
+pane lease. Two launches cannot concurrently own the same root or pane terminal,
+even when they name different sessions. Launches on distinct panes may run
+concurrently, and sequential launches on one terminal are ordinary composition.
 
-Cancellation interrupts the native foreground process, establishes that it can
-no longer execute or hold the terminal, restores terminal state, and runs every
-provider finalizer. A process that ignores the initial interruption is
-terminated according to the host process adapter's bounded shutdown policy.
+Cancellation interrupts the native interactive process, establishes that it can
+no longer execute or hold its root or pane terminal, restores that terminal's
+state, and runs every provider finalizer. A process that ignores the initial
+interruption is terminated according to the host process adapter's bounded
+shutdown policy.
 The adapter attempts to collect the native exit status, but a runtime-retained
 defunct PID or a lost exit event is not live process ownership. After a fatal
 signal was accepted, or the process was already absent, bounded settlement may
@@ -953,6 +1041,14 @@ reuses the recorded native session, and continues at the first incomplete phase.
 was interrupted reattaches the native UI to that same session; it never creates
 a replacement or reconstructs state from a transcript.
 
+When the launch is a pane child, completed replay of the enclosing completed
+grid claims the whole structured region before this operation is reached, so it
+also contacts nothing. Partial grid replay restores a completed launch as a
+settled pane status. An incomplete launch is reached under a newly created live
+pane terminal and follows the same phase rules above; neither the new provider
+layout nor the pane ordinal changes its retained launch or logical-session
+identity.
+
 Those are operation/runtime replay semantics: they define how an execution
 behaves when an embedder, a test, or a future retained execution host supplies
 the launch's durable history again. They do not create a public continuation
@@ -1037,6 +1133,25 @@ hosts can install a controlled launcher that needs no terminal; a host that
 installs none — `xmd test`, document inspection, an embedder — refuses every
 launch, which is what keeps help and inspection free of any of this.
 
+The Deno source host and compiled binary install the first terminal-grid
+provider for an ordinary foreground run when a TTY and the required tmux
+capability are available. The provider prepares one invocation-private tmux
+server and one persistent initial worker per pane. Its per-pane sockets live in
+a short mode-0700 directory and admit one connection through a mode-0600 token
+that is removed after authentication. It keeps tmux commands, socket paths,
+tokens, session, window, pane, process, and control-client identifiers private.
+It derives an explicit layout and swaps panes into authored row-major order,
+because tmux does not honor pane IDs embedded in layout leaves. Its visible
+inherited-stdio client and no-output control client remain distinct, and loss of
+the root terminal becomes structured cancellation. A missing prerequisite
+refuses the grid before pane start.
+
+Node and Bun validate and catalog the same `<Terminal.Grid>` and `<Terminal>`
+syntax but install no grid provider. Installing a grid provider advertises no
+new Agent, launch adapter, session-construction mechanism, or attachment
+capability; each `<Session.Launch>` still passes the existing independent
+advertisement gates.
+
 `<TestAgent>` installs a controlled launcher for its own body, because a
 scripted agent's native UI does not exist and the terminal a host would hand it
 belongs to whoever is running the tests. That is what lets an authored
@@ -1068,6 +1183,20 @@ The test-agent stack supplies deterministic provider state. A controlled native
 launcher records the request, claims a known provider-native session ID, waits
 on a test-controlled operation, and exits with a selected status. It never
 starts Claude, Codex, or a model.
+
+Terminal-grid tests additionally install a controlled provider that is not
+tmux. It exposes readiness, independent pane settlement, reader close, provider
+failure, parent cancellation, and teardown completion as test-controlled
+operations while using the same core terminal authority and pane-scoped native
+launchers. Separate tmux integration evidence exercises the production adapter;
+core semantics are not inferred from tmux identifiers or process behavior. The
+tmux evidence covers exact argv over private IPC, the runtime spawn boundary,
+display that cannot become child input, real terminal job control, explicit
+layout, atomic attach, independent close signals, cancellation phases, and the
+bounded descendant, process-group, and terminal-holder teardown proof. It also
+exercises pane reuse after terminal-holder quiescence; a process that has
+already started a new session, closed the terminal, and lost its parent is
+recorded as outside the observable host boundary.
 
 Focused tests prove:
 
@@ -1119,7 +1248,12 @@ Focused tests prove:
     what it answers with before acknowledging quiescence, and a close that
     failed releases nothing and withholds quiescence; and
 23. a canonical version parse accepts exactly one matching line, and refuses
-    zero or several without repeating the output.
+    zero or several without repeating the output; and
+24. launches on distinct pane terminals run concurrently while launches in one
+    pane remain exclusive, the same logical Agent session still contends across
+    panes, pane readiness occurs only after successful native-child start, grid
+    close awaits launch cancellation and session quiescence, and completed and
+    partial grid replay preserve the launch's existing identity rules.
 
 The authored half of this is one executable Markdown document,
 `packages/test-agent/src/NativeSessionLaunch.test.md`, run whole. It authors the
@@ -1198,7 +1332,9 @@ in a released unbound form and a bound one; the host-owned executable observer
 and the build binding it produces; ACP attachment to a bound client-native
 session under its exact retained identity, through runtime partitions keyed by
 agent command and build;
-an inherited-terminal foreground child with cancellation and bounded reaping;
+an inherited root- or pane-terminal interactive child with cancellation and
+bounded reaping; composition with the terminal grid's independent pane leases
+without changing session ownership or durable launch identity;
 and the controlled TestAgent fixture that proves all of it without starting a
 model.
 
@@ -1236,9 +1372,10 @@ Additional provider adapters land independently against the same core contract.
 An adapter that cannot prove instruction injection before the first user turn
 stays unsupported rather than weakening `Session.Launch` semantics.
 
-Native UI event mirroring, XMD-rendered interactive chat, simultaneous terminal
-sessions, automatic nested `AGENTS.md` discovery, bootstrap model turns, and
-workflow role scheduling are outside this contract.
+Native UI event mirroring, XMD-rendered interactive chat, simultaneous root
+foreground sessions outside a terminal grid, automatic nested `AGENTS.md`
+discovery, bootstrap model turns, and workflow role scheduling are outside this
+contract.
 
 ## Structural checklist
 
@@ -1294,6 +1431,23 @@ Implementation review checks these frozen invariants:
     moment its handle exists; a cancellation observes and settles an ensure it
     already started before quiescence; quiescence is answered from that account;
     and a close that failed releases nothing and acknowledges none.
+24. A terminal grid holds the root foreground lease while each launch holds only
+    its current pane lease; distinct panes do not contend for terminal ownership,
+    and one pane remains exclusive until observable processes and terminal
+    holders from the prior launch are gone.
+25. Pane terminal ownership never replaces or weakens natural-key Agent-session
+    ownership, so two panes naming one session still contend without waiting.
+26. A pane is ready only at the runtime child-spawn event; preparation, PID
+    allocation, route publication, detach, private-file creation and first
+    output are not readiness, and a failed spawn rolls none of them back.
+27. Grid cancellation reaches every live launch, awaits its child teardown and
+    session quiescence, and exposes no provider-specific layout identity in an
+    authored, durable, result, or diagnostic surface.
+28. The tmux provider creates native children only through authenticated
+    persistent pane workers, preserves byte-exact argv outside tmux parsing,
+    keeps worker display out of child input, distinguishes reader detach from
+    control loss and server stop, and proves the bounded process and terminal
+    teardown before pane reuse and grid settlement.
 
 Item 12 is the 2026-08-20 architecture amendment. ACPX fixes `systemPrompt` at
 session creation, while native turns are not authoritative in its cached
