@@ -7,6 +7,7 @@
  */
 
 export { StorageProbeObject } from "./support/probe-object.ts";
+export { OwnerObject } from "./support/owner-object.ts";
 
 export default {
   fetch(): Response {

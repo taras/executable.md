@@ -4,7 +4,10 @@
   "compatibility_date": "2026-08-01",
   "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {
-    "bindings": [{ "name": "STORAGE_PROBE", "class_name": "StorageProbeObject" }],
+    "bindings": [
+      { "name": "STORAGE_PROBE", "class_name": "StorageProbeObject" },
+      { "name": "OWNER", "class_name": "OwnerObject" },
+    ],
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["StorageProbeObject"] }],
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["StorageProbeObject", "OwnerObject"] }],
 }
