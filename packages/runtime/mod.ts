@@ -162,6 +162,7 @@ export type {
   TerminalPaneRequest,
   TerminalPaneState,
   TerminalProviderLog,
+  TerminalProviderResources,
   TerminalShellOutcome,
 } from "./terminal.ts";
 export { hostFilesHandler, useHostFiles } from "./host-files.ts";
