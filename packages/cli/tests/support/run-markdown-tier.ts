@@ -101,8 +101,7 @@ export function runMarkdownTier(document: string): Operation<MarkdownTierRun> {
             ? {}
             : { authorshipRoot: request.authorshipRoot }),
           host: request.host,
-          // deno-lint-ignore require-yield
-          *installElicitation(): Operation<void> {},
+          installElicitation: request.installElicitation,
           *catalog(): Operation<string> {
             return renderSyntaxMarkdown(yield* syntaxCatalog(["components", "."]));
           },

@@ -979,7 +979,7 @@ function* runDocument(
       // host's — putting this build's adapter on disk, and opening the review
       // form — run outside the ceiling the Component installs around itself.
       host: request.host,
-      installElicitation: installWebElicitation,
+      installElicitation: request.installElicitation,
       // Rendered when a `<Plan>` first asks, not before: an ordinary run that
       // writes none never builds a catalog it has no reader for.
       *catalog() {
@@ -990,6 +990,9 @@ function* runDocument(
   const plan = yield* planDeclaration({
     ceiling: planAuthorshipCeiling(mode.agent),
     host: yield* useScope(),
+    // This command's own root: the browser form is how a person reviews a Plan
+    // written by an ordinary run.
+    installElicitation: installWebElicitation,
   });
 
   // Wire --verbose observability via Signal.

@@ -71,6 +71,16 @@ export interface ChildPlanDeclaration {
   readonly authorshipRoot?: string;
   /** The scope this child's own host acts run in. */
   readonly host: Scope;
+  /**
+   * Who answers this child's Plan review.
+   *
+   * The ceiling installs it inside the Plan invocation, which is nearer than
+   * anything installed around the child — so a host that installed the browser
+   * form here would put it in front of a configured child's `<Answers>`, and the
+   * review would wait for a person no test can supply. A configured child
+   * therefore installs nothing and lets its own matcher provider answer.
+   */
+  installElicitation(): Operation<void>;
 }
 
 /** What the entrypoint already decided, and a child must not decide again. */
@@ -311,6 +321,11 @@ function* runProfileChild(
         ceiling,
         ...(authorshipRoot === undefined ? {} : { authorshipRoot }),
         host: yield* useScope(),
+        // Nothing, so the review is answered by whatever this child already
+        // has: the `<Answers>` matcher provider installed above when the test
+        // declared one, and the browser form installed for the child otherwise.
+        // deno-lint-ignore require-yield
+        *installElicitation(): Operation<void> {},
       }),
     ],
   });

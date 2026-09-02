@@ -24,6 +24,7 @@ import { until } from "effection";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runCli } from "@executablemd/test-support/launch";
+import { DEFAULT_AUTHORSHIP_ROOT } from "../src/authorship-profile.ts";
 import { testingExecutionHost } from "../src/testing-host.ts";
 import { planComponentDescription } from "../src/plan-component.ts";
 
@@ -69,6 +70,75 @@ const CHILD = doc(
 );
 
 const GUIDE = doc("# First", "", "first body", "", "# Second", "", "second body");
+
+/** The one request the Plan workflow sends, answered with a complete program. */
+const PLAN_BEHAVIOR = doc(
+  '<WhenPrompt template="{?lead}Create one complete XMD Plan from this Prompt:{?rest}" />',
+  "",
+  "<Let",
+  '  as="program"',
+  "  value={[",
+  '    "# Approved program",',
+  '    "",',
+  '    "Write the evidence file this program names.",',
+  '    "",',
+  `    '<File path="planned.txt">the approved Plan ran</File>',`,
+  '    "",',
+  '  ].join("\\n")}',
+  "/>",
+  "",
+  "{program}",
+);
+
+/** An ordinary document that writes a Plan and prints what it bound. */
+const PLAN_CHILD = doc(
+  "# A document that writes a Plan",
+  "",
+  '<Plan as="approved">Write the release program.</Plan>',
+  "",
+  "Approved source: {approved}",
+);
+
+/**
+ * What a child needs to write one: a scripted agent for the turn, and an
+ * authored approval for the review.
+ *
+ * `anySession` because `<Plan>` derives the conversation it opens from the
+ * expansion that asked, so there is no session name to write here.
+ */
+const PLAN_DECLARATION = [
+  "<TestAgent>",
+  '<TestAgent.Scenario anySession={true} src="./agents/plan.md" />',
+  "</TestAgent>",
+  "",
+  "<Answers>",
+  '<Answer value={{ decision: "Approve" }} />',
+  "</Answers>",
+];
+
+/**
+ * What the two Plan authorship trees hold right now.
+ *
+ * `children` is the temporary directory, filtered to the roots a configured
+ * child makes; `production` is the tree a real `xmd plan` keeps its sessions in,
+ * read and never written. A tree that does not exist yet holds nothing, which is
+ * the ordinary state of the production one on a machine that has never run the
+ * command.
+ */
+function* planRoots(): Operation<{ children: string[]; production: string[] }> {
+  return {
+    children: (yield* listing(tmpdir())).filter((entry) => entry.startsWith("xmd-child-plan-")),
+    production: yield* listing(DEFAULT_AUTHORSHIP_ROOT),
+  };
+}
+
+function* listing(directory: string): Operation<string[]> {
+  try {
+    return (yield* readdir(directory)).sort();
+  } catch {
+    return [];
+  }
+}
 
 /** A declared child relaunches `xmd` as its agent worker, so it needs both. */
 const WORKER = { inheritEnv: true, timeout: 180_000 };
@@ -467,6 +537,68 @@ describe("deterministic dependencies declared for a nested run", () => {
     const result = yield* runCli(["test", "README.md"], { cwd: project, ...WORKER }).join();
     expect(result.stdout + result.stderr).not.toContain("❌");
     expect(result.code).toBe(0);
+  });
+
+  /**
+   * PMT4 and PMT5 — where a Plan conversation lives, and that none of it stays.
+   *
+   * Where the root goes is a host dependency no caller selects. Production keeps
+   * it under the caller's home; a configured child gets one of its own under the
+   * temporary directory, so a test never reads or removes anything a real
+   * `xmd plan` owns. Both facts are read the same way — what these directories
+   * held before the run against what they hold after — because a child's root
+   * exists only while that child does, and the evidence is the absence.
+   *
+   * The two endings are here together because cleanup that only ran on the happy
+   * path would satisfy a case that checked one of them. The approved sibling and
+   * the stopped sibling also prove the two children are separate: each answers
+   * from its own scenario and its own authored decision.
+   */
+  it("gives each configured child its own Plan root, and keeps none of them", function* () {
+    const before = yield* planRoots();
+    const project = yield* useProject({
+      "agents/plan.md": PLAN_BEHAVIOR,
+      "writes-a-plan.md": PLAN_CHILD,
+      "README.md": doc(
+        '<Test name="an approved sibling and a stopped one" timeout="180s">',
+        '<Execution host="run" target="./writes-a-plan.md" as="approved">',
+        ...PLAN_DECLARATION,
+        "",
+        '<CollectOutput as="output" />',
+        "",
+        "<AssertEquals actual={approved.result.ok} expected={true} />",
+        '<AssertStringIncludes actual={output} expected="# Approved program" />',
+        "</Execution>",
+        "",
+        '<Execution host="run" target="./writes-a-plan.md" as="stopped">',
+        "<TestAgent>",
+        '<TestAgent.Scenario anySession={true} src="./agents/plan.md" />',
+        "</TestAgent>",
+        "",
+        "<Answers>",
+        '<Answer value={{ decision: "Stop" }} />',
+        "</Answers>",
+        "",
+        "<AssertEquals actual={stopped.result.ok} expected={false} />",
+        "<AssertStringIncludes",
+        "  actual={stopped.result.error.message}",
+        '  expected="stopped at your request"',
+        "/>",
+        "</Execution>",
+        "</Test>",
+      ),
+    });
+    const result = yield* runCli(["test", "README.md"], { cwd: project, ...WORKER }).join();
+    expect(result.stdout + result.stderr).not.toContain("❌");
+    expect(result.code).toBe(0);
+
+    // Both children wrote a Plan — the rows above say so — and neither kept the
+    // root it wrote it under. One that outlived its child would be here, named
+    // for the child that made it.
+    const after = yield* planRoots();
+    expect(after.children.filter((entry) => !before.children.includes(entry))).toEqual([]);
+    // And neither of them reached the tree a production `xmd plan` owns.
+    expect(after.production.filter((entry) => !before.production.includes(entry))).toEqual([]);
   });
 
   /**
