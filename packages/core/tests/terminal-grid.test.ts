@@ -117,6 +117,7 @@ function useGridComponents(
   slowMarks: string[] = [],
   onMark: (mark: string) => void = () => {},
   afterAttach: () => Operation<void> = function* () {},
+  teardownHeld: () => Operation<void> = function* () {},
 ): Operation<void> {
   return registerComponents([
     {
@@ -165,6 +166,20 @@ function useGridComponents(
           slowMarks.push("ready:slow");
           spawned();
         });
+        return "";
+      },
+    },
+    {
+      // Holds the pane open, and blocks its own teardown until released — so a
+      // row can interrupt a run while reader-close teardown is in progress.
+      name: "SlowTeardown",
+      origin: "tier-tg",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn() {
+        yield* ensure(function* () {
+          yield* teardownHeld();
+        });
+        yield* suspend();
         return "";
       },
     },
@@ -395,6 +410,21 @@ function runInterrupted(
     closeAfterFailure?: boolean;
     /** Ordinal of a shell that starts, waits for attachment, then exits badly. */
     shellFailsAfterAttach?: number;
+    /** Holds a `<SlowTeardown />` pane's finalizer until this settles. */
+    holdTeardown?: () => Operation<void>;
+    /** Resolved once a pane's finalizer has been entered and is blocked. */
+    onTeardownEntered?: () => void;
+    /** Interrupt the run when this settles rather than at a lifecycle signal. */
+    interruptWhen?: Operation<void>;
+    /**
+     * Called once cancellation has begun but before it is awaited.
+     *
+     * A row that blocks a finalizer has to release it *after* the parent is
+     * cancelled, or the cancellation would be waiting on the very thing the row
+     * is holding. Awaiting the halt afterwards is what proves teardown
+     * completed rather than merely started.
+     */
+    releaseOnInterrupt?: () => void;
     /**
      * How many panes must have settled before the run is interrupted.
      *
@@ -446,6 +476,12 @@ function runInterrupted(
         }
       },
       () => attached.operation,
+      function* () {
+        options.onTeardownEntered?.();
+        if (options.holdTeardown) {
+          yield* options.holdTeardown();
+        }
+      },
     );
     yield* installControlledLauncher();
     if (options.provider !== false) {
@@ -514,13 +550,22 @@ function runInterrupted(
     // grid child under an incomplete root. Otherwise the grid is expected to
     // stay open, and the run is interrupted once it has opened and the pane
     // records the row reads are durable.
-    if (options.close === true || options.closeAfterFailure === true) {
+    if (options.interruptWhen !== undefined) {
+      yield* options.interruptWhen;
+    } else if (options.close === true || options.closeAfterFailure === true) {
       yield* pastGrid.operation;
     } else {
       yield* attached.operation;
       yield* panesSettled.operation;
     }
-    yield* task.halt();
+    // Cancellation is begun, then released, then awaited. A row that blocks a
+    // finalizer has to release it after the parent is cancelled, or the
+    // cancellation would be waiting on the very thing the row is holding; and
+    // awaiting the halt afterwards is what proves teardown completed rather
+    // than merely started.
+    const halting = yield* spawn(() => task.halt());
+    options.releaseOnInterrupt?.();
+    yield* halting;
     return {
       outcome: { ok: false, error: new Error("interrupted") } as Result<Json>,
       output: "",

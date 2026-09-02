@@ -8758,11 +8758,25 @@ claims that whole region and restores its result without contacting a terminal
 provider, creating a composite, starting a shell, expanding pane content,
 resolving an Agent, taking session ownership, or launching a native UI.
 
-Partial replay compares the complete resolved layout first and refuses a
-changed column count, title, form, count, or order before provider work. It then
-builds a new live composite. Completed pane children appear as already-settled
-statuses and perform no effects; incomplete children continue from their own
-durable records. An incomplete `<Session.Launch>` keeps the exact
+Partial replay compares the **resolved** layout first — the column count and
+each pane's title — and refuses a change before the foreground lease is taken
+and before any provider is contacted. It then builds a new live composite.
+Completed pane children appear as already-settled statuses and perform no
+effects; incomplete children continue from their own durable records.
+
+Pane count, order and form are not compared, because they cannot differ. A
+continuation executes the root document the journal retained: the source the new
+invocation supplies is not read, not compared and not refused, so a grid's
+authored structure is fixed for the life of a journal and comparing it would
+compare a value with itself. A supplied file that says something else is
+ignored in favour of the retained structure, and the grid a continuation opens
+is the one that was recorded. What a fixed retained document can still resolve
+differently is `columns` and each `title` — props are not restored across a
+continuation — and those are exactly what the comparison covers.
+
+Refusing a changed authored structure is a root-definition compatibility
+question rather than a grid one, and belongs to a versioned root boundary this
+specification does not yet define. An incomplete `<Session.Launch>` keeps the exact
 `prepared`/`detached` replay and logical-session identity rules defined by the
 native launch specification. An incomplete self-closing pane starts the current
 authorized default shell and does not claim continuity of shell process or

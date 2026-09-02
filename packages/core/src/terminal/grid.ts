@@ -224,6 +224,11 @@ function presentGrid(
 
     const outcomes: (RetainedPaneOutcome | undefined)[] = work.map(() => undefined);
     const startupFailed = withResolvers<never>();
+    // Reader close asks the panes to stop; it does not halt them. A pane that
+    // is asked settles as `closed` and records that outcome as its own, so a
+    // resumed run restores a pane the reader closed rather than finding a
+    // cancelled child it must either re-enter or wait on forever.
+    const closing = withResolvers<void>();
     let attached = false;
 
     for (const pane of work) {
@@ -242,7 +247,15 @@ function presentGrid(
       const readiness = grid.readiness[index]!;
       panes.push(
         yield* paneChild(function* (): Operation<RetainedPaneOutcome> {
-          return yield* runPane(pane, claim, composite, readiness, request, index);
+          return yield* runPane(
+            pane,
+            claim,
+            composite,
+            readiness,
+            request,
+            index,
+            closing.operation,
+          );
         }),
       );
     }
@@ -298,12 +311,20 @@ function presentGrid(
     // lease released and the following sibling started only once nothing a pane
     // acquired can still act.
     grid.seal();
+    closing.resolve();
+    // Published before anything is awaited: once the reader has left, a pane
+    // that had not settled is closed, and that is true whether or not its own
+    // finalizers are quick about it.
     for (const [index, pane] of work.entries()) {
       if (outcomes[index] === undefined) {
         yield* composite.update(pane.ordinal, "closed");
-        outcomes[index] = { status: "closed", reason: "" };
       }
-      yield* panes[index]!.halt();
+    }
+    for (const [index] of work.entries()) {
+      // Awaited, not halted. Each pane settles on the close signal and records
+      // the outcome it reached, which is what a resumed run reads.
+      const outcome = yield* panes[index]!;
+      outcomes[index] ??= outcome;
     }
 
     const settled = outcomes.map((outcome) => outcome ?? { status: "closed" as const, reason: "" });
@@ -324,10 +345,29 @@ function runPane(
   readiness: { readonly acknowledged: boolean },
   request: TerminalGridRequest,
   index: number,
+  closing: Operation<void>,
 ): Operation<RetainedPaneOutcome> {
   return (function* (): Operation<RetainedPaneOutcome> {
     try {
-      yield* pane.run(claim, composite);
+      // The pane's work runs beside the close signal rather than under it. When
+      // the reader leaves, this settles as `closed` straight away and the work
+      // comes down in the enclosing scope's own teardown — so a pane whose
+      // finalizers are slow cannot hold up the outcome the grid already knows,
+      // and the record a resumed run reads is written either way.
+      const running = yield* spawn(() => pane.run(claim, composite));
+      const closed = yield* race([
+        (function* (): Operation<boolean> {
+          yield* running;
+          return false;
+        })(),
+        (function* (): Operation<boolean> {
+          yield* closing;
+          return true;
+        })(),
+      ]);
+      if (closed) {
+        return { status: "closed", reason: "" };
+      }
       if (!readiness.acknowledged) {
         // Settled without ever starting: a startup failure even though the work
         // itself raised nothing.
