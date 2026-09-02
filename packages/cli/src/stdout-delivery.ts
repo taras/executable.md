@@ -10,7 +10,7 @@
  * finish before anything can exit.
  */
 
-import { Err, Ok, withResolvers } from "effection";
+import { Err, Ok, resource, scoped, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 
 /**
@@ -29,6 +29,27 @@ export interface DeliverySink {
 }
 
 /**
+ * The sink's `error` events, observed for exactly as long as the enclosing
+ * scope lives.
+ *
+ * The listener's lifetime is the scope's and nothing else's: it is not removed
+ * by the event firing, and it does not survive the scope whether the event
+ * fired, never fired, or the scope was halted first. A stream is a
+ * process-global object, so a listener bound to anything looser would
+ * accumulate across deliveries and absorb a later, unrelated failure.
+ */
+function useErrorObserver(sink: DeliverySink, observe: (error: Error) => void): Operation<void> {
+  return resource(function* (provide) {
+    sink.on("error", observe);
+    try {
+      yield* provide();
+    } finally {
+      sink.off("error", observe);
+    }
+  });
+}
+
+/**
  * Deliver `text`, and report whether the stream took all of it.
  *
  * A broken pipe can arrive twice: at the write callback, and again as an
@@ -43,48 +64,45 @@ export interface DeliverySink {
  * error they are about to emit, so finding this delivery's own failure there
  * means the event is still coming, while Bun reports the failure once and holds
  * nothing. Every other path — success, cancellation, a `write` that refuses
- * outright — detaches without waiting at all.
+ * outright — ends the scope, and the observer with it, without waiting at all.
  *
  * The outcome is bridged with `withResolvers()` rather than `action()`: a file
  * or a terminal calls the write callback synchronously, inside `write`, and an
  * `action()` resolved before its executor has returned never runs the cleanup
  * that executor returns (effection 4.1.0).
  */
-export function* deliverWhole(text: string, sink: DeliverySink): Operation<Result<void>> {
-  const outcome = withResolvers<Result<void>>("deliverWhole");
-  let settled = false;
-  let calledBack = false;
-  let observed = false;
-  let failure: Error | undefined;
+export function deliverWhole(text: string, sink: DeliverySink): Operation<Result<void>> {
+  return scoped(function* () {
+    const outcome = withResolvers<Result<void>>("deliverWhole");
+    let calledBack = false;
+    let observed = false;
+    let failure: Error | undefined;
 
-  const settle = () => {
-    if (settled || !calledBack) {
-      return;
-    }
-    // Identity, not presence: an error the stream was already holding before
-    // this delivery has been emitted already, and waiting for it would wait
-    // forever.
-    if (!observed && failure !== undefined && sink.errored === failure) {
-      return;
-    }
-    settled = true;
-    outcome.resolve(failure === undefined ? Ok() : Err(failure));
-  };
+    const settle = () => {
+      if (!calledBack) {
+        return;
+      }
+      // Identity, not presence: an error the stream was already holding before
+      // this delivery has been emitted already, and waiting for it would wait
+      // forever.
+      if (!observed && failure !== undefined && sink.errored === failure) {
+        return;
+      }
+      outcome.resolve(failure === undefined ? Ok() : Err(failure));
+    };
 
-  const record = (error?: Error | null) => {
-    if (error && failure === undefined) {
-      failure = error;
-    }
-  };
+    const record = (error?: Error | null) => {
+      if (error && failure === undefined) {
+        failure = error;
+      }
+    };
 
-  const observe = (error: Error) => {
-    observed = true;
-    record(error);
-    settle();
-  };
+    yield* useErrorObserver(sink, (error) => {
+      observed = true;
+      record(error);
+      settle();
+    });
 
-  sink.on("error", observe);
-  try {
     try {
       sink.write(text, (error) => {
         calledBack = true;
@@ -93,12 +111,10 @@ export function* deliverWhole(text: string, sink: DeliverySink): Operation<Resul
       });
     } catch (error) {
       // A stream that refuses the call outright never calls back, so nothing
-      // else will settle this.
-      settled = true;
-      outcome.resolve(Err(error instanceof Error ? error : new Error(String(error))));
+      // else would settle this.
+      return Err(error instanceof Error ? error : new Error(String(error)));
     }
+
     return yield* outcome.operation;
-  } finally {
-    sink.off("error", observe);
-  }
+  });
 }
