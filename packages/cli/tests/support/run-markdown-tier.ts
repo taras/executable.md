@@ -86,17 +86,17 @@ export function runMarkdownTier(document: string): Operation<MarkdownTierRun> {
       // ask.
       testAgentWorker: Ok([...cliBase(), "test-agent"]),
       // The run profile's own `<Plan>`, so a child assembled here has the
-      // vocabulary a child assembled by `xmd run` has. What ceiling it can
-      // establish is the child's own answer, settled after that child's
-      // configuration has been read: a configured `<TestAgent>` child gets the
-      // controlled one, and every other child gets none and is refused at the
-      // ceiling — which is what a host with no coding agent should say, rather
-      // than that the component does not exist.
+      // vocabulary a child assembled by `xmd run` has. What Agent context it
+      // has is the child's own answer, settled after that child's configuration
+      // has been read: a configured `<TestAgent>` child gets the controlled one,
+      // and every other child gets none and is refused — which is what a host
+      // with no coding agent should say, rather than that the component does
+      // not exist.
       planDeclaration: (request) =>
         planComponentDeclaration({
           surface: "component",
           includes: ["components", "."],
-          ceiling: request.ceiling,
+          context: request.context,
           ...(request.authorshipRoot === undefined
             ? {}
             : { authorshipRoot: request.authorshipRoot }),

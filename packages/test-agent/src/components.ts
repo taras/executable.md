@@ -48,6 +48,8 @@ import { NativeLaunchObserver, useTestAgentController } from "./controller.ts";
 import type { ScenarioHandle, TestAgentControllerInternals } from "./controller.ts";
 import { createControlledExecutableObserver } from "./executable-observer.ts";
 import { createDeterministicSessionCoordinator } from "./session-coordinator.ts";
+import type { AcpxProviderDependencies } from "@executablemd/acp";
+import { duplicateScenario, missingScenario } from "./child-configuration.ts";
 import { TEST_AGENT_CLIENT_NATIVE, TEST_AGENT_PROVIDER, useTestAgentProvider } from "./provider.ts";
 import type { SessionRouting } from "./provider.ts";
 
@@ -165,16 +167,7 @@ export function* provisionPartition(options: {
   declarations: ReadonlyMap<string, ScenarioDeclaration>;
   /** How to re-invoke this host as the agent worker. */
   workerCommand: string[];
-  planCeiling?: {
-    readonly workdir: string;
-    readonly policy: {
-      readonly systemInstruction: string;
-      readonly permissionMode: "deny-all";
-      readonly mcpServers: readonly never[];
-      readonly allowedTools: readonly never[];
-    };
-    observeTurn?(): Operation<void>;
-  };
+  planCeiling?: { readonly dependencies: AcpxProviderDependencies };
 }): Operation<BoundaryState> {
   const { defaultAgent, controller, declarations, workerCommand, planCeiling } = options;
   const scenarios = new Map<string, ScenarioHandle>();
@@ -189,12 +182,10 @@ export function* provisionPartition(options: {
   ): Operation<ScenarioHandle> {
     const declared = declarations.get(declarationKey(agentName, sessionName ?? ""));
     if (!declared) {
-      throw new Error(`no <TestAgent.Scenario> maps ${describeMapping(agentName, sessionName)}`);
+      throw new Error(missingScenario(agentName, sessionName ?? ""));
     }
     if (declared.duplicate) {
-      throw new Error(
-        `duplicate <TestAgent.Scenario> mappings for ${describeMapping(agentName, sessionName)}`,
-      );
+      throw new Error(duplicateScenario(agentName, sessionName ?? ""));
     }
     const key = scenarioKey(agentName, sessionName, dir);
     const existing = scenarios.get(key);
@@ -248,9 +239,6 @@ export function* provisionPartition(options: {
       return { route: pinned.scenario.route, resolved: () => {} };
     }
     const scenario = yield* provision(context.agentName, context.session, context.cwd);
-    if (planCeiling?.observeTurn !== undefined) {
-      yield* planCeiling.observeTurn();
-    }
     return {
       route: scenario.route,
       resolved(value) {

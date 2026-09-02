@@ -412,34 +412,33 @@ declarations under the same `<Test>`; a named session cannot continue across
 the boundary. The behavior-document path resolves from the outer test document
 under the TestAgent package's existing containment rule.
 
-#### The Plan authorship ceiling
+#### The Agent context a Plan is written with
 
-A configured child can also establish the ceiling `<Plan>` writes under, which
-is the one thing about it a document cannot arrange for itself.
+A configured child can also give `<Plan>` its Agent context, which is the one
+thing about it a document cannot arrange for itself.
 
-Three surfaces, and they stay distinct. A **production run** establishes the
-production ACPX ceiling from the Agent stack the command settled. A **configured
-`<TestAgent>` child** establishes the deterministic test ceiling from the
-controlled provider its own declaration produced. A **direct `xmd test` root**
-and an **unconfigured child** establish none: the root does not resolve `<Plan>`
-at all, because the run profile's vocabulary belongs to a run, and an
-unconfigured child resolves the same protected bytes every run resolves and is
-refused at the ceiling before a directory, a provider, an Agent turn or a review
-exists.
+Three surfaces, and they stay distinct. A **production run** supplies the
+production ACPX context from the Agent stack the command settled. A **configured
+`<TestAgent>` child** supplies the deterministic one from the controlled provider
+its own declaration produced. A **direct `xmd test` root** and an **unconfigured
+child** supply none: the root does not resolve `<Plan>` at all, because the run
+profile's vocabulary belongs to a run, and an unconfigured child resolves the
+same protected bytes every run resolves and is refused before a directory, a
+provider, an Agent turn or a review exists.
 
-Which provider is underneath is the only thing that differs. The Plan system
-instruction, the deny-all permission mode, the empty MCP-server and native-tool
-sets, the prompt-failure policy and the document-capability refusals are the
-same for both established ceilings, installed in one place rather than restated
-by each provider, so a second implementation cannot bring a weaker ceiling with
-it. The controlled provider is installed *inside* the Plan invocation rather
-than inherited from what the child registered around itself.
+Availability is the only thing that differs. What a Plan then runs under is the
+authorship frame's fixed policy: the Plan system instruction, the deny-all
+permission mode, the empty MCP-server and native-tool sets, the prompt-failure
+policy and the document-capability refusals, installed in one place rather than
+restated by each provider, so a second implementation cannot bring a weaker one.
+The controlled provider is installed *inside* the Plan invocation rather than
+inherited from what the child registered around itself.
 
 A configured child is given a Plan authorship root of its own, created outside
-that ceiling and removed when the child settles — the Plan sessions underneath
-it included, a named one among them, which production keeps and a test may not.
-The Plan invocation still creates and proves its own empty session directory
-under that root.
+that frame and removed when the child settles — the Plan sessions underneath it
+included, a named one among them, which production keeps and a test may not. The
+Plan invocation still creates and proves its own empty session directory under
+that root.
 
 Only the canonical declaration this harness recognizes grants any of it. A
 repository component named `TestAgent` ends the scan and configures nothing, so

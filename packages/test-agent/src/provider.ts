@@ -73,16 +73,13 @@ export interface TestAgentProviderOptions {
   /** Which build this partition observes. Its own controlled one. */
   executableObserver?: ExecutableObserver;
   dependencies?: AcpxProviderDependencies;
-  /** The fixed, narrower ceiling used only by a trusted child Plan host. */
-  planCeiling?: {
-    readonly workdir: string;
-    readonly policy: {
-      readonly systemInstruction: string;
-      readonly permissionMode: "deny-all";
-      readonly mcpServers: readonly never[];
-      readonly allowedTools: readonly never[];
-    };
-  };
+  /**
+   * The narrower configuration a trusted child Plan host assembled.
+   *
+   * Assembled by the caller and spread whole, so the caller holds the exact
+   * object this provider was built from and can report it.
+   */
+  planCeiling?: { readonly dependencies: AcpxProviderDependencies };
 }
 
 /**
@@ -205,20 +202,10 @@ export function* useTestAgentProvider(options: TestAgentProviderOptions): Operat
       ...(options.dependencies?.createRuntime
         ? { createRuntime: options.dependencies.createRuntime }
         : {}),
-      ...(planCeiling === undefined
-        ? {}
-        : {
-            // deno-lint-ignore require-yield
-            *agentCwd(): Operation<string> {
-              return planCeiling.workdir;
-            },
-            mcpServers: [...planCeiling.policy.mcpServers],
-            permissions: "strict",
-            newSessionOptions: {
-              systemPrompt: planCeiling.policy.systemInstruction,
-              allowedTools: [...planCeiling.policy.allowedTools],
-            },
-          }),
+      // Spread whole, so what the provider is built from is the one object the
+      // caller assembled and can therefore report. Restating the policy here
+      // would give a report that agrees with the policy however this assembled.
+      ...(planCeiling === undefined ? {} : planCeiling.dependencies),
     },
   );
 }

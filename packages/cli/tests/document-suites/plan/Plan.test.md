@@ -73,21 +73,21 @@ it here.
 <AssertEquals actual={written.length} expected={0} />
 </Test>
 
-## Without a scripted agent there is no ceiling to write under
+## Without a scripted agent there is no Agent to write with
 
-`<Plan>` establishes an agent ceiling before it makes a directory, starts a
-conversation or asks anybody anything. A child nobody configured has no agent to
-put under one, so it is refused there — not given a live coding agent, and not
-told the component does not exist.
+`<Plan>` asks its host for an Agent context before it makes a directory, starts a
+conversation or asks anybody anything. A child nobody configured has none to
+give, so it is refused there — not given a live coding agent, and not told the
+component does not exist.
 
-<Test name="an unconfigured child is refused at the Plan ceiling" timeout="120s">
+<Test name="an unconfigured child is refused before anything is prepared" timeout="120s">
 <Execution host="run" target="packages/cli/tests/document-suites/plan/uses-plan.md" as="run">
 <CollectOutput as="output" />
 
 <AssertEquals actual={run.result.ok} expected={false} />
-<AssertStringIncludes
+<AssertEquals
   actual={run.result.error.message}
-  expected="establishes no coding-agent ceiling"
+  expected="No Agent context was found. No Plan was returned."
 />
 <AssertEquals actual={output.includes("# Approved program")} expected={false} />
 </Execution>

@@ -237,7 +237,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     });
   });
 
-  it("PC5: a host that cannot establish the ceiling refuses before placement", function* () {
+  it("PC5: a host whose provider gives no Agent context refuses before placement", function* () {
     yield* useWorkingDirectory(function* () {
       const root = yield* authorshipRoot();
       const run = yield* runDocument({
@@ -252,7 +252,11 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         },
       });
 
-      expect(run.failure).toContain("cannot establish the Plan authorship ceiling");
+      // Named, so the person reads which provider had nothing to give rather
+      // than that something unspecified went wrong.
+      expect(run.failure).toBe(
+        "The not-acpx provider did not provide an Agent context for <Plan>. No Plan was returned.",
+      );
       // Before placement: no directory was made, and no turn was taken.
       expect(run.leftover).toEqual([]);
       expect(run.harness.fake.prompts).toEqual([]);

@@ -602,7 +602,21 @@ describe("deterministic dependencies declared for a nested run", () => {
     expect(after.production.filter((entry) => !before.production.includes(entry))).toEqual([]);
   });
 
-  it("installs the controlled Plan policy and removes its root after cancellation", function* () {
+  /**
+   * PMT4 — the configuration a Plan invocation actually runs under.
+   *
+   * Read from what the adapter assembled and the frame installed, after the last
+   * install, rather than from the policy either was handed: a report taken from
+   * the input would agree with the policy however the adapter assembled its
+   * dependencies, and could not tell an assembly that honored it from one that
+   * dropped it. The provider is the name that actually routes a turn rather than
+   * a label authored beside it.
+   *
+   * Cancellation is the ending here because it is the one that has no completion
+   * to hang teardown on: `halt()` returns only once the provider, the
+   * declaration, the session directory and the child root have all gone.
+   */
+  it("installs the controlled Plan configuration and removes its root after cancellation", function* () {
     const before = yield* planRoots();
     const observed = withResolvers<PlanAuthorshipObservation>();
     const hold = withResolvers<void>();
@@ -617,7 +631,7 @@ describe("deterministic dependencies declared for a nested run", () => {
         planComponentDeclaration({
           surface: "component",
           includes: [],
-          ceiling: request.ceiling,
+          context: request.context,
           ...(request.authorshipRoot === undefined
             ? {}
             : { authorshipRoot: request.authorshipRoot }),
@@ -666,15 +680,19 @@ describe("deterministic dependencies declared for a nested run", () => {
       }),
     );
 
-    const ceiling = yield* observed.operation;
-    expect(ceiling.providerOrigin).toBe("controlled-test-agent");
-    expect(ceiling.policy.systemInstruction).toBe(AUTHORSHIP_INSTRUCTIONS);
-    expect(ceiling.policy.permissionMode).toBe("deny-all");
-    expect(ceiling.policy.promptFailures).toBe("fail");
-    expect(ceiling.policy.mcpServers).toEqual([]);
-    expect(ceiling.policy.allowedTools).toEqual([]);
-    expect(ceiling.workdir.startsWith(join(tmpdir(), "xmd-child-plan-"))).toBe(true);
-    expect(ceiling.workdir.startsWith(DEFAULT_AUTHORSHIP_ROOT)).toBe(false);
+    const installed = yield* observed.operation;
+    // The provider that routes this Plan's turns is the controlled one, named by
+    // the registration rather than by anything authored beside it.
+    expect(installed.provider).toBe("test-agent");
+    // And every term of the fixed policy, as the assembled dependencies carry it.
+    expect(installed.systemInstruction).toBe(AUTHORSHIP_INSTRUCTIONS);
+    expect(installed.permissionMode).toBe("deny-all");
+    expect(installed.promptFailures).toBe("fail");
+    expect(installed.mcpServers).toBe(0);
+    expect(installed.allowedTools).toEqual([]);
+    expect(installed.permissions).toBe("strict");
+    expect(installed.agentCwd.startsWith(join(tmpdir(), "xmd-child-plan-"))).toBe(true);
+    expect(installed.agentCwd.startsWith(DEFAULT_AUTHORSHIP_ROOT)).toBe(false);
 
     // The observer runs from controlled turn routing after its scenario exists,
     // so the child's Prompt is in flight here. halt() waits for the provider,
@@ -708,9 +726,9 @@ describe("deterministic dependencies declared for a nested run", () => {
         "",
         '<AssertStringIncludes actual={shadowed} expected="a repository component" />',
         "<AssertEquals actual={run.result.ok} expected={false} />",
-        "<AssertStringIncludes",
+        "<AssertEquals",
         "  actual={run.result.error.message}",
-        '  expected="establishes no coding-agent ceiling"',
+        '  expected="No Agent context was found. No Plan was returned."',
         "/>",
         "</Execution>",
         "</Test>",
@@ -748,7 +766,7 @@ describe("deterministic dependencies declared for a nested run", () => {
     expect(reported).toContain("Cannot resolve component: Plan");
     // And no ceiling was established for it to be refused at, which is the
     // difference between "not this profile" and "this profile, no agent".
-    expect(reported).not.toContain("establishes no coding-agent ceiling");
+    expect(reported).not.toContain("No Agent context was found.");
   });
 
   it("refuses an unreadable behavior document before the child's root is imported", function* () {

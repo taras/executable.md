@@ -56,15 +56,5 @@ export { runTestAgentWorker } from "./src/worker/run.ts";
  * by the first crosses into the second.
  */
 export { installChildTestAgent, testAgentChildDeclaration } from "./src/child-configuration.ts";
+export type { PlanProviderAssembly, PlanProviderPolicy } from "./src/child-configuration.ts";
 export type { ChildTestAgentInstallation } from "./src/child-configuration.ts";
-
-/**
- * The provider name a controlled child registers its Agent under.
- *
- * Published so a trusted host can install that same provider again where it
- * needs one — under the Plan authorship ceiling, which registers its own
- * provider for the invocation rather than inheriting whatever surrounds it.
- * Holding the name grants nothing: what it resolves to is the partition the
- * host provisioned for that child.
- */
-export { TEST_AGENT_PROVIDER } from "./src/provider.ts";

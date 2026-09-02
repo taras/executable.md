@@ -32,8 +32,8 @@ import {
   resolveAgentStack,
 } from "../src/agent-stack.ts";
 import type { AgentStack } from "../src/agent-stack.ts";
-import { authorshipCeiling } from "../src/authorship-profile.ts";
-import type { AuthorshipCeilingInputs } from "../src/authorship-profile.ts";
+import { authorshipDependencies } from "../src/authorship-profile.ts";
+import type { AuthorshipProviderInputs } from "../src/authorship-profile.ts";
 import { runPlan } from "../src/plan.ts";
 import { scanPlanArgs } from "../src/plan-args.ts";
 import { AGENT, createPlanHarness, useWorkingDirectory } from "./support/plan-harness.ts";
@@ -84,7 +84,7 @@ function installingAdapters(prepared: string[]): EmbeddedAdapters {
  * Component rather than to the provider this case is about, so naming it here would
  * be describing an arrangement the ceiling never reads.
  */
-function ceilingFrom(stack: AgentStack): AuthorshipCeilingInputs {
+function dependenciesFrom(stack: AgentStack): AuthorshipProviderInputs {
   return { stack };
 }
 
@@ -129,7 +129,11 @@ describe("Tier AE — embedded adapters on the run and plan paths", () => {
     const root = adapterRoot();
     const adapters = createEmbeddedAdapters(root);
     const stack = stackWith(adapters);
-    const ceiling = authorshipCeiling(ceilingFrom(stack), join(root, "workdir"), yield* useScope());
+    const ceiling = authorshipDependencies(
+      dependenciesFrom(stack),
+      join(root, "workdir"),
+      yield* useScope(),
+    );
     const registry = ceiling.agentRegistry;
     if (registry === undefined) {
       throw new Error("the plan path handed its provider no agent registry");

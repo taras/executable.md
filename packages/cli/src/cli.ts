@@ -96,7 +96,7 @@ import { timebox } from "@effectionx/timebox";
 import { timeout as runTimeout } from "@executablemd/runtime";
 import { installRunAgentStack, resolveAgentStack } from "./agent-stack.ts";
 import { planComponentDeclaration } from "./plan-component.ts";
-import { planAuthorshipCeiling } from "./authorship-profile.ts";
+import { planAgentContext } from "./authorship-profile.ts";
 import { VERBOSE_REGISTRATION } from "./verbose-component.ts";
 import type { AgentStack } from "./agent-stack.ts";
 import { reportFailure } from "./report.ts";
@@ -954,13 +954,13 @@ function* runDocument(
   // Built whether or not this command settled an Agent stack. A host with none —
   // `xmd test` drives agents through the deterministic TestAgent stack — still
   // declares the Component, so a document that writes `<Plan>` there resolves the
-  // same protected bytes and is refused at the ceiling rather than told the
+  // same protected bytes and is refused for want of an Agent rather than told the
   // component does not exist.
   //
   // A factory rather than a value, because a nested `<Execution host="run">`
-  // learns what ceiling it can establish only after its own configuration has
+  // learns what Agent context it has only after its own configuration has
   // been read — and a declaration built out here would have closed over the
-  // absence of one before that child existed. Each caller supplies the ceiling
+  // absence of one before that child existed. Each caller supplies the context
   // it settled, the authorship root it owns and the scope its host acts run in;
   // everything else about the Component is this entrypoint's and identical for
   // all of them.
@@ -968,7 +968,7 @@ function* runDocument(
     planComponentDeclaration({
       surface: "component",
       includes: include,
-      ceiling: request.ceiling,
+      context: request.context,
       ...(mode.machineSessions === undefined ? {} : { sessions: mode.machineSessions }),
       ...(request.authorshipRoot !== undefined
         ? { authorshipRoot: request.authorshipRoot }
@@ -977,7 +977,7 @@ function* runDocument(
           : { authorshipRoot: mode.planAuthorshipRoot }),
       // Captured before the document exists, so the two acts that are this
       // host's — putting this build's adapter on disk, and opening the review
-      // form — run outside the ceiling the Component installs around itself.
+      // form — run outside the frame the Component installs around itself.
       host: request.host,
       ...(request.observeAuthorship === undefined
         ? {}
@@ -991,7 +991,7 @@ function* runDocument(
     });
 
   const plan = yield* planDeclaration({
-    ceiling: planAuthorshipCeiling(mode.agent),
+    context: planAgentContext(mode.agent),
     host: yield* useScope(),
     // This command's own root: the browser form is how a person reviews a Plan
     // written by an ordinary run.

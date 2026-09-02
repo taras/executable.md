@@ -10,7 +10,7 @@
  * the host-declared draft checker, and it exposes no custom root and no
  * repository component search: the document it runs is the one the CLI ships.
  *
- * The Agent ceiling is assembled here rather than read from the command line,
+ * The Agent context is assembled here rather than read from the command line,
  * because it is not the caller's to choose. Writing a Plan is a conversation
  * about text; it never lets an agent touch anything. So the provider gets a
  * host-owned directory dedicated to this logical session — created empty, and
@@ -18,7 +18,7 @@
  * MCP servers, an empty native-tool allowlist and a private strict denial of
  * every native
  * permission request — one that answers inside the provider and consults no
- * authored approval scope, so nothing composed around it can widen a ceiling
+ * authored approval scope, so nothing composed around it can widen a policy
  * with nothing in it. `--approve-all`, `--approve-reads` and `--deny-all`
  * configure the approved document, later, and reach none of this.
  *
@@ -106,8 +106,8 @@ export interface AuthorshipProfile {
    * test never reads, creates or removes anything under a real one.
    */
   root: string;
-  /** Whether this host can put an Agent under the Plan ceiling, and why not. */
-  ceiling: PlanAuthorshipCeiling;
+  /** The Agent context this host can give a Plan, or why it can give none. */
+  context: Result<PlanAuthorship>;
   /** Who answers the review question. */
   installElicitation(): Operation<void>;
   /**
@@ -115,7 +115,7 @@ export interface AuthorshipProfile {
    *
    * Built by the command, from the packaged Component's bytes, before the adapter
    * root is imported. It carries the sealed surface, the precomputed catalog and
-   * the ceiling this invocation settled — none of which is a prop the adapter
+   * the Agent context this invocation settled — none of which is a prop the adapter
    * could supply or a document could reach.
    */
   declaration: DeclaredMarkdownComponent;
@@ -131,13 +131,13 @@ export interface AuthorshipProfile {
 }
 
 /** What building the constrained provider needs, and nothing more. */
-export interface AuthorshipCeilingInputs {
+export interface AuthorshipProviderInputs {
   readonly stack: AgentStack;
   readonly acp?: AcpxProviderDependencies;
 }
 
 /**
- * The trusted host's ability to put an Agent under the Plan ceiling.
+ * The trusted host's ability to give one Plan invocation an Agent.
  *
  * A closure the host supplies before any Plan invocation exists, and the only
  * thing that decides whether a Plan can be written here. It is never a prop, a
@@ -145,26 +145,23 @@ export interface AuthorshipCeilingInputs {
  * middleware can reach or replace — which is what keeps "who may write a Plan"
  * a question about the host rather than about what a document arranged.
  *
- * What it does not decide is the rest of the ceiling. The permission mode, the
- * prompt-failure policy, the capability refusals and the session directory are
- * {@link installAuthorshipFrame}'s, identically for every provider, so a second
- * implementation cannot quietly bring a weaker ceiling with it.
+ * Availability is all it decides. What the Plan then runs under — the permission
+ * mode, the prompt-failure policy, the capability refusals and the session
+ * directory — is {@link installAuthorshipFrame}'s fixed policy, identical for
+ * every provider, so a second implementation cannot quietly bring a weaker one.
  */
 export interface PlanAuthorship {
   /** The agent this Plan conversation defaults to. */
   readonly defaultAgent: string;
-  /** The trusted adapter that supplies this invocation's provider. */
-  readonly origin: "production-acpx" | "controlled-test-agent";
   /**
-   * Install this invocation's Agent provider, inside the Plan ceiling.
+   * Install this invocation's Agent provider under the fixed policy.
    *
    * Called within `<PlanAuthorship>`, so what it registers belongs to that one
-   * invocation and goes when the invocation does.
-   *
-   * @param workdir This conversation's directory, established and proven empty.
-   * @param host The scope captured before the ceiling existed, for host acts.
+   * invocation and goes when the invocation does. What comes back is what the
+   * adapter actually assembled, so the frame can report the configuration that
+   * is installed rather than the one it asked for.
    */
-  installProvider(invocation: PlanAuthorshipInvocation): Operation<void>;
+  installProvider(invocation: PlanAuthorshipInvocation): Operation<PlanProviderAssembly>;
 }
 
 export interface PlanAuthorshipInvocation {
@@ -173,9 +170,9 @@ export interface PlanAuthorshipInvocation {
   readonly session: string;
   readonly authoredSession?: string;
   readonly policy: PlanAuthorshipPolicy;
-  observe?(observation: PlanAuthorshipObservation): Operation<void>;
 }
 
+/** The fixed policy every Plan runs under, whoever supplies the Agent. */
 export interface PlanAuthorshipPolicy {
   readonly systemInstruction: string;
   readonly permissionMode: "deny-all";
@@ -184,73 +181,109 @@ export interface PlanAuthorshipPolicy {
   readonly allowedTools: readonly never[];
 }
 
-export interface PlanAuthorshipObservation {
-  readonly providerOrigin: PlanAuthorship["origin"];
-  readonly policy: PlanAuthorshipPolicy;
-  readonly workdir: string;
+/**
+ * What one adapter actually assembled, read off the values it handed the
+ * provider rather than off the policy it was given.
+ *
+ * The difference is the whole point. A report built from the policy input would
+ * say the same thing however the adapter assembled its dependencies, so it
+ * could not tell an assembly that honored the policy from one that dropped it.
+ */
+export interface PlanProviderAssembly {
+  /** The provider name this adapter registered, which is what routes a turn. */
+  readonly provider: string;
+  /** The working directory the assembled dependencies actually carry. */
+  readonly agentCwd: string;
+  /** The system instruction a new session is actually opened with. */
+  readonly systemInstruction: string | undefined;
+  /** The native tools a fresh session is actually allowed. */
+  readonly allowedTools: readonly string[] | undefined;
+  /** The MCP servers actually configured. */
+  readonly mcpServers: number | undefined;
+  /** The native permission answer actually configured. */
+  readonly permissions: string | undefined;
+  /** The permission mode actually installed for the invocation. */
+  readonly permissionMode: string;
+}
+
+/** Everything a Plan's configuration turned out to be, once it is installed. */
+export interface PlanAuthorshipObservation extends PlanProviderAssembly {
+  /** Whether the frame installed the policy that ends authorship on a failed turn. */
+  readonly promptFailures: PlanAuthorshipPolicy["promptFailures"];
+}
+
+/** What a host that supplies no Agent at all refuses a Plan with. */
+export const NO_AGENT_CONTEXT = "No Agent context was found. No Plan was returned.";
+
+/** What a host whose provider supplies no Agent for `<Plan>` refuses it with. */
+export function noAgentContextFrom(provider: string): string {
+  return (
+    `The ${provider} provider did not provide an Agent context for <Plan>. ` +
+    "No Plan was returned."
+  );
 }
 
 /**
- * Whether this host can put an Agent under the Plan ceiling, and why not.
+ * The production Agent context: ACPX, built from the stack this run settled.
  *
- * One value rather than an absent capability beside a reason, because the two
- * must agree: a host that cannot establish the ceiling owes the person a
- * sentence saying so, and a host that can owes no sentence at all.
+ * One concrete implementation of {@link PlanAuthorship}, and the only one
+ * production has. Its ACPX construction, embedded adapters, machine-session
+ * assembly, system instruction, strict permission policy, empty MCP servers,
+ * empty allowed tools and controlled working directory are exactly what they
+ * were when this was the only way to supply one.
  */
-export type PlanAuthorshipCeiling =
-  | { readonly established: true; readonly authorship: PlanAuthorship }
-  | { readonly established: false; readonly refusal: string };
-
-/** What a host with no coding-agent ceiling at all refuses a Plan with. */
-export const NO_CEILING =
-  "this host establishes no coding-agent ceiling, so no Plan can be written here — " +
-  "no Plan was returned";
-
-/**
- * The production ceiling: ACPX, built from the Agent stack this run settled.
- *
- * One concrete provider of {@link PlanAuthorship}, and the only one production
- * has. Its ACPX construction, embedded adapters, machine-session assembly,
- * system instruction, strict permission policy, empty MCP servers, empty
- * allowed tools and controlled working directory are exactly what they were
- * when this was the only way to establish a ceiling.
- */
-export function planAuthorshipCeiling(
+export function planAgentContext(
   stack: AgentStack | undefined,
   acp?: AcpxProviderDependencies,
-): PlanAuthorshipCeiling {
+): Result<PlanAuthorship> {
   if (stack === undefined) {
-    return { established: false, refusal: NO_CEILING };
+    return Err(new Error(NO_AGENT_CONTEXT));
   }
   if (stack.provider !== "acpx") {
-    return {
-      established: false,
-      refusal:
-        `the ${stack.provider} provider cannot establish the Plan authorship ceiling — ` +
-        "no Plan was returned",
-    };
+    return Err(new Error(noAgentContextFrom(stack.provider)));
   }
-  return {
-    established: true,
-    authorship: {
-      defaultAgent: stack.defaultAgent,
-      origin: "production-acpx",
-      *installProvider(invocation: PlanAuthorshipInvocation): Operation<void> {
-        const acpx = createAcpxProvider(
-          authorshipCeiling(
-            { stack, ...(acp === undefined ? {} : { acp }) },
-            invocation.workdir,
-            invocation.host,
-            invocation.policy,
-          ),
-        );
-        yield* registerAgentProvider("acpx", acpx);
-        yield* installInvocationAgentProvider("acpx", {
-          defaultAgent: stack.defaultAgent,
-          permissionMode: invocation.policy.permissionMode,
-        });
-      },
+  return Ok({
+    defaultAgent: stack.defaultAgent,
+    *installProvider(invocation: PlanAuthorshipInvocation): Operation<PlanProviderAssembly> {
+      // Assembled once and then read, so what is reported is what the provider
+      // was built from rather than what this adapter was asked for.
+      const dependencies = authorshipDependencies(
+        { stack, ...(acp === undefined ? {} : { acp }) },
+        invocation.workdir,
+        invocation.host,
+        invocation.policy,
+      );
+      yield* registerAgentProvider("acpx", createAcpxProvider(dependencies));
+      yield* installInvocationAgentProvider("acpx", {
+        defaultAgent: stack.defaultAgent,
+        permissionMode: invocation.policy.permissionMode,
+      });
+      return yield* describeAssembly("acpx", dependencies, invocation.policy.permissionMode);
     },
+  });
+}
+
+/**
+ * One assembled provider, as the values it was actually built from.
+ *
+ * `agentCwd` is an operation on the dependencies rather than a field, so it is
+ * asked the way the provider asks it.
+ */
+export function* describeAssembly(
+  provider: string,
+  dependencies: AcpxProviderDependencies,
+  permissionMode: string,
+): Operation<PlanProviderAssembly> {
+  const session = dependencies.newSessionOptions;
+  return {
+    provider,
+    agentCwd: dependencies.agentCwd === undefined ? "" : yield* dependencies.agentCwd(),
+    systemInstruction: typeof session?.systemPrompt === "string" ? session.systemPrompt : undefined,
+    allowedTools: session?.allowedTools,
+    mcpServers: dependencies.mcpServers?.length,
+    permissions:
+      typeof dependencies.permissions === "string" ? dependencies.permissions : undefined,
+    permissionMode,
   };
 }
 
@@ -270,7 +303,7 @@ export interface AuthorshipFrame {
   readonly workdir: string;
   /** The scope the two host acts run in, captured before this frame exists. */
   readonly host: Scope;
-  /** The host's ability to put an Agent under this ceiling. */
+  /** The host's ability to give this invocation an Agent. */
   readonly authorship: PlanAuthorship;
   /** The opaque conversation identity the provider must preserve. */
   readonly session: string;
@@ -283,14 +316,14 @@ export interface AuthorshipFrame {
 /**
  * Install the constrained authorship frame on the current scope.
  *
- * One function for both surfaces, because the ceiling a Plan is written under is
- * not a property of who asked for it. What leaving this scope tears down is the
+ * One function for both surfaces, because what a Plan is written under is not a
+ * property of who asked for it. What leaving this scope tears down is the
  * provider, the Elicitation resources, the Prompt tasks and the capability
- * refusals — so whoever installs it decides what the ceiling covers by choosing
+ * refusals — so whoever installs it decides what the frame covers by choosing
  * the scope, and nothing else has to be remembered.
  *
  * The refusals go last, over whatever the entrypoint provided, so the document
- * is refused rather than served. They are ambient, and a ceiling cannot tell the
+ * is refused rather than served. They are ambient, and the frame cannot tell the
  * host's own act from the document's — which is why the two acts that are the
  * host's run in the scope captured before this one (src/host-acts.ts).
  */
@@ -298,34 +331,52 @@ export function* installAuthorshipFrame(frame: AuthorshipFrame): Operation<void>
   yield* openFormsThroughHost(frame.host);
   yield* frame.installElicitation();
 
-  // Installed here, so the provider resolves to *this* ceiling and not to
+  // Installed here, so the provider resolves for *this* invocation and not for
   // whatever the enclosing document registered, and in this invocation rather
-  // than in a frame nested inside it — the content this ceiling was selected for
+  // than in a frame nested inside it — the content this frame was selected for
   // is projected into the invocation, and a provider installed anywhere else
   // would be invisible to it. The default agent and the permission mode travel
   // with the installation, so an enclosing document cannot widen either by
   // inheritance.
   //
   // Which provider it is belongs to the host that supplied the capability. What
-  // does not is everything below: one ceiling, whoever is underneath it.
-  yield* frame.authorship.installProvider({
+  // does not is everything below: one policy, whoever is underneath it.
+  const assembly = yield* frame.authorship.installProvider({
     workdir: frame.workdir,
     host: frame.host,
     session: frame.session,
     ...(frame.authoredSession === undefined ? {} : { authoredSession: frame.authoredSession }),
     policy: PLAN_AUTHORSHIP_POLICY,
-    ...(frame.observe === undefined ? {} : { observe: frame.observe }),
   });
-  // A candidate comes from a turn's complete successful close value or from
-  // nowhere. `<Prompt>` ordinarily renders whatever a failed turn managed to
-  // emit and carries on, which for a workflow that reviews source would mean
-  // showing a person half a program; the host decides otherwise here, so a
-  // failed, cancelled or protocol-invalid turn ends authorship before anything
-  // is presented. The Component cannot opt out of it.
+  const promptFailures = yield* installPlanPromptFailurePolicy();
+  yield* refuseDocumentCapabilities();
+  // After everything, and from what everything turned out to be. A report built
+  // before the last install would describe an arrangement that does not exist
+  // yet, which is the one thing a trusted observer must not be given.
+  if (frame.observe !== undefined) {
+    yield* frame.observe({ ...assembly, promptFailures });
+  }
+}
+
+/**
+ * End authorship on a failed turn, and say that it was installed.
+ *
+ * A candidate comes from a turn's complete successful close value or from
+ * nowhere. `<Prompt>` ordinarily renders whatever a failed turn managed to emit
+ * and carries on, which for a workflow that reviews source would mean showing a
+ * person half a program; the host decides otherwise here, so a failed, cancelled
+ * or protocol-invalid turn ends authorship before anything is presented. The
+ * Component cannot opt out of it.
+ *
+ * The answer is returned rather than assumed by the caller, so removing this
+ * installation removes the fact an observer reports rather than leaving one that
+ * describes an install that no longer happens.
+ */
+function* installPlanPromptFailurePolicy(): Operation<PlanAuthorshipPolicy["promptFailures"]> {
   yield* installPromptFailurePolicy(function* () {
     return PLAN_AUTHORSHIP_POLICY.promptFailures === "fail";
   });
-  yield* refuseDocumentCapabilities();
+  return PLAN_AUTHORSHIP_POLICY.promptFailures;
 }
 
 /**
@@ -339,19 +390,19 @@ export function* installAuthorshipFrame(frame: AuthorshipFrame): Operation<void>
 export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<Result<string>> {
   // Before a directory exists, before a provider exists, and therefore before
   // any session could be placed or any turn started. A host that cannot
-  // establish this ceiling refuses rather than writing a Plan under a weaker one.
-  const ceiling = profile.ceiling;
-  if (!ceiling.established) {
-    return Err(new Error(`${ceiling.refusal} — nothing was written or run`));
+  // supplies no Agent context refuses rather than writing a Plan under a weaker one.
+  const context = profile.context;
+  if (!context.ok) {
+    return Err(new Error(`${context.error.message} Nothing was output or run.`));
   }
 
   return yield* scoped(function* (): Operation<Result<string>> {
     // The agent words and this execution's prompt bookkeeping, with no root
-    // provider: what writes the Plan is the ceiling the Component installs around
+    // provider: what writes the Plan is the frame the Component installs around
     // its own content, and a root provider here would be one the Component's
     // regional install had to shadow rather than one it owns.
     yield* installAgentComponents({
-      defaultAgent: ceiling.authorship.defaultAgent,
+      defaultAgent: context.value.defaultAgent,
       permissionMode: PLAN_AUTHORSHIP_POLICY.permissionMode,
     });
     const source = yield* readPackagedDocument(PLAN_COMMAND_DOCUMENT);
@@ -401,7 +452,7 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
 }
 
 /**
- * The Agent ceiling, stated as the dependencies the provider is built from.
+ * The fixed policy, stated as the dependencies the provider is built from.
  *
  * Each entry is the whole of one clause: the directory the agent runs in — this
  * session's own, proven empty above — the MCP servers it configures, the native
@@ -416,7 +467,7 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
  *
  * That assembly is also where this build's own ACP adapters enter, so the
  * assistant that writes a Plan is launched from the same snapshot as the run of
- * the approved Plan. A ceiling built without them resolved Codex and Claude
+ * the approved Plan. An assembly built without them resolved Codex and Claude
  * through ACPX's published pins and could reach neither (#672).
  *
  * Putting one on disk runs `npm install`, which is the one thing this profile
@@ -429,8 +480,8 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
  * is not observable through a provider, and a case that could only watch a turn
  * fail would be reading a live agent's machine rather than this host's decision.
  */
-export function authorshipCeiling(
-  profile: AuthorshipCeilingInputs,
+export function authorshipDependencies(
+  profile: AuthorshipProviderInputs,
   workdir: string,
   host: Scope,
   policy: PlanAuthorshipPolicy = PLAN_AUTHORSHIP_POLICY,
@@ -459,7 +510,7 @@ export function authorshipCeiling(
 /**
  * Open this host's own review form the way this host opens anything.
  *
- * A ceiling refuses *ambiently*: the middleware sits on a scope, and a call
+ * The frame refuses *ambiently*: the middleware sits on a scope, and a call
  * carries no mark saying who made it — `API.Process.exec` looks the same whether
  * an `exec` fence reached it or this host did. So showing a person the review,
  * which runs `open`, `xdg-open` or `start`, was refused as though the document
@@ -532,8 +583,8 @@ export const PLAN_AUTHORSHIP_POLICY: PlanAuthorshipPolicy = Object.freeze({
  * Where this host keeps its profile session directories by default.
  *
  * Under its own state directory rather than the caller's tree: an agent writing
- * a document has no reason to read the checkout it will run in, and a ceiling
- * that starts there is not a ceiling.
+ * a document has no reason to read the checkout it will run in, and a policy
+ * that starts there is not one.
  */
 export const DEFAULT_AUTHORSHIP_ROOT: string = join(homedir(), ".xmd", "plan", "sessions");
 
@@ -592,7 +643,7 @@ interface DirectoryClaim {
  *
  * Created empty, and required to be empty every time — not cleaned. Whatever is
  * in there was put there by something this host did not authorize, and deleting
- * a stranger's files to get on with the work is the opposite of what a ceiling
+ * a stranger's files to get on with the work is the opposite of what this policy
  * is for. So the command says what it found and where, and stops.
  */
 function* establishDirectory(directory: string): Operation<Result<string>> {

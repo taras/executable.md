@@ -35,6 +35,7 @@ import type { Operation } from "effection";
 import { hasContent, registerAgentProvider, tryContent } from "@executablemd/core";
 import type { AgentComponentsOptions, Json } from "@executablemd/core";
 import { createPartitionedAcpxProvider } from "@executablemd/acp";
+import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { installInvocationAgentProvider } from "@executablemd/core/host";
 import { installControlledLauncher } from "@executablemd/runtime";
 import type {
@@ -180,6 +181,58 @@ function open(collect: {
  * outcome the `<Execution>` binds — rather than an enclosing `<Test>` the child
  * cannot see.
  */
+
+/** What a Plan's controlled provider is built from, assembled from the policy. */
+function planProviderDependencies(
+  workdir: string,
+  policy: PlanProviderPolicy,
+): AcpxProviderDependencies {
+  return {
+    // deno-lint-ignore require-yield
+    *agentCwd(): Operation<string> {
+      return workdir;
+    },
+    mcpServers: [...policy.mcpServers],
+    permissions: "strict",
+    newSessionOptions: {
+      systemPrompt: policy.systemInstruction,
+      allowedTools: [...policy.allowedTools],
+    },
+  };
+}
+
+/** The fixed policy a trusted host states for one Plan invocation. */
+export interface PlanProviderPolicy {
+  readonly systemInstruction: string;
+  readonly permissionMode: "deny-all";
+  readonly mcpServers: readonly never[];
+  readonly allowedTools: readonly never[];
+}
+
+/** What one adapter actually assembled, read off the values it handed over. */
+export interface PlanProviderAssembly {
+  readonly provider: string;
+  readonly agentCwd: string;
+  readonly systemInstruction: string | undefined;
+  readonly allowedTools: readonly string[] | undefined;
+  readonly mcpServers: number | undefined;
+  readonly permissions: string | undefined;
+  readonly permissionMode: string;
+}
+
+/** What a Plan whose scenario nobody declared is refused with. */
+export function missingScenario(agent: string, session: string): string {
+  return `No <TestAgent.Scenario> was found for agent "${agent}" and session "${session}".`;
+}
+
+/** What a Plan whose scenario was declared twice is refused with. */
+export function duplicateScenario(agent: string, session: string): string {
+  return (
+    `More than one <TestAgent.Scenario> was declared for agent "${agent}" and ` +
+    `session "${session}".`
+  );
+}
+
 export interface ChildTestAgentInstallation {
   readonly components: AgentComponentsOptions;
   installPlanProvider(request: {
@@ -187,14 +240,8 @@ export interface ChildTestAgentInstallation {
     readonly authoredSession?: string;
     readonly session: string;
     readonly workdir: string;
-    readonly policy: {
-      readonly systemInstruction: string;
-      readonly permissionMode: "deny-all";
-      readonly mcpServers: readonly never[];
-      readonly allowedTools: readonly never[];
-    };
-    observeTurn?(): Operation<void>;
-  }): Operation<void>;
+    readonly policy: PlanProviderPolicy;
+  }): Operation<PlanProviderAssembly>;
 }
 
 export function* installChildTestAgent(
@@ -241,34 +288,30 @@ export function* installChildTestAgent(
         options: { defaultAgent: configuration.defaultAgent, permissionMode },
       },
     },
-    *installPlanProvider(request): Operation<void> {
+    *installPlanProvider(request): Operation<PlanProviderAssembly> {
       const planDeclarations = new Map(declarations);
       if (request.authoredSession !== undefined) {
         const declared = declarations.get(mappingKey(request.agent, request.authoredSession));
         if (declared === undefined) {
-          throw new Error(
-            `no <TestAgent.Scenario> maps ${describeMapping(request.agent, request.authoredSession)}`,
-          );
+          throw new Error(missingScenario(request.agent, request.authoredSession));
         }
         const key = mappingKey(request.agent, request.session);
         const existing = planDeclarations.get(key);
         if (existing !== undefined && existing !== declared) {
-          throw new Error(
-            `duplicate <TestAgent.Scenario> mappings for ${describeMapping(request.agent, request.session)}`,
-          );
+          throw new Error(duplicateScenario(request.agent, request.session));
         }
         planDeclarations.set(key, declared);
       }
+      // Assembled once, here, and then both used and described. The provider is
+      // built by spreading this exact object, so a report taken from it is a
+      // report of what runs rather than of what was asked for.
+      const dependencies = planProviderDependencies(request.workdir, request.policy);
       const plan = yield* provisionPartition({
         defaultAgent: configuration.defaultAgent,
         controller,
         declarations: planDeclarations,
         workerCommand: [...options.workerCommand],
-        planCeiling: {
-          workdir: request.workdir,
-          policy: request.policy,
-          ...(request.observeTurn === undefined ? {} : { observeTurn: request.observeTurn }),
-        },
+        planCeiling: { dependencies },
       });
       // deno-lint-ignore require-yield
       const planFactory = createPartitionedAcpxProvider(function* () {
@@ -279,6 +322,19 @@ export function* installChildTestAgent(
         defaultAgent: request.agent,
         permissionMode: request.policy.permissionMode,
       });
+      return {
+        provider: TEST_AGENT_PROVIDER,
+        agentCwd: dependencies.agentCwd === undefined ? "" : yield* dependencies.agentCwd(),
+        systemInstruction:
+          typeof dependencies.newSessionOptions?.systemPrompt === "string"
+            ? dependencies.newSessionOptions.systemPrompt
+            : undefined,
+        allowedTools: dependencies.newSessionOptions?.allowedTools,
+        mcpServers: dependencies.mcpServers?.length,
+        permissions:
+          typeof dependencies.permissions === "string" ? dependencies.permissions : undefined,
+        permissionMode: request.policy.permissionMode,
+      };
     },
   };
 }

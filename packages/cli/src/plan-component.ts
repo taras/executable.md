@@ -39,7 +39,7 @@
 
 import { createHash } from "node:crypto";
 import { scoped } from "effection";
-import type { Operation, Scope } from "effection";
+import type { Operation, Result, Scope } from "effection";
 import { createDurableOperation } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import {
@@ -62,7 +62,7 @@ import {
   installAuthorshipFrame,
   useSessionDirectory,
 } from "./authorship-profile.ts";
-import type { PlanAuthorshipCeiling, PlanAuthorshipObservation } from "./authorship-profile.ts";
+import type { PlanAuthorship, PlanAuthorshipObservation } from "./authorship-profile.ts";
 import type { CandidateAssessment } from "./authorship-profile.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import { PLAN_DOCUMENT, readPackagedDocument } from "./packaged-document.ts";
@@ -107,19 +107,19 @@ export interface PlanComponentAssembly {
   /** The component search path a Plan's own components resolve against. */
   readonly includes: readonly string[];
   /**
-   * Whether this host can put an Agent under the Plan ceiling, and why not.
+   * The Agent context this host can give a Plan, or why it can give none.
    *
    * A host that establishes none — `xmd test` at its own root, or an
    * unconfigured run child — still declares the Component. A document that
    * writes `<Plan>` there resolves the same protected bytes and is refused at
-   * the ceiling, before any placement, rather than told the component does not
+   * the frame, before any placement, rather than told the component does not
    * exist.
    *
    * The capability is a closure the host supplied before this declaration
    * existed. No prop, binding, registration, middleware answer or separately
    * loaded copy can supply or replace one.
    */
-  readonly ceiling: PlanAuthorshipCeiling;
+  readonly context: Result<PlanAuthorship>;
   /** What this host states about machine-wide agent sessions, if anything. */
   readonly sessions?: MachineSessionAssembly;
   /**
@@ -128,7 +128,7 @@ export interface PlanComponentAssembly {
    * Absent is the ordinary host default. A harness that owns a temporary tree
    * names that tree here, which is the only way anything but production selects
    * one — there is no flag, no environment variable and no contextual Api to
-   * reach, so a document cannot move where the ceiling lives.
+   * reach, so a document cannot move where authorship directories live.
    */
   readonly authorshipRoot?: string;
   /**
@@ -142,9 +142,9 @@ export interface PlanComponentAssembly {
   readonly session?: string;
   /** Whether that fixed name was one a caller asked for and can ask for again. */
   readonly explicitSession?: boolean;
-  /** The scope the two host acts run in, captured before the ceiling exists. */
+  /** The scope the two host acts run in, captured before the frame exists. */
   readonly host: Scope;
-  /** A trusted host-only observation after the complete ceiling is installed. */
+  /** A trusted host-only observation after the whole frame is installed. */
   observeAuthorship?(observation: PlanAuthorshipObservation): Operation<void>;
   /** Who answers the review question. */
   installElicitation(): Operation<void>;
@@ -258,7 +258,7 @@ export function* planComponentDeclaration(
  *
  * Inspection and validation answer about what a document may write. They mint no
  * execution, so there is no claimant to build a private capability from and no
- * ceiling to establish — and none of that is describable anyway: a private name
+ * frame to install — and none of that is describable anyway: a private name
  * is not syntax a document may write, so a catalog listing one would describe an
  * environment that does not exist.
  *
@@ -430,12 +430,12 @@ function planAuthorship(assembly: PlanComponentAssembly): IdentityComponent {
       function* PlanAuthorship(props: Record<string, Json>): Operation<string> {
         // Before a directory exists, before a provider exists, and therefore
         // before any session could be placed or any turn started. A host that
-        // cannot establish this ceiling refuses rather than writing a Plan under
+        // supplies no Agent context refuses rather than writing a Plan under
         // a weaker one, and broader authority in the calling document cannot
         // widen it.
-        const ceiling = assembly.ceiling;
-        if (!ceiling.established) {
-          throw new Error(ceiling.refusal);
+        const context = assembly.context;
+        if (!context.ok) {
+          throw context.error;
         }
 
         const session = String(props.session);
@@ -454,7 +454,7 @@ function planAuthorship(assembly: PlanComponentAssembly): IdentityComponent {
 
         yield* installAuthorshipFrame({
           workdir: established.value,
-          authorship: ceiling.authorship,
+          authorship: context.value,
           host: assembly.host,
           session,
           ...(typeof props.authoredSession === "string"
@@ -467,7 +467,7 @@ function planAuthorship(assembly: PlanComponentAssembly): IdentityComponent {
         });
 
         // The Component's own phases, projected inside everything installed above.
-        // The content scope descends from this body's, so the ceiling covers the
+        // The content scope descends from this body's, so the frame covers the
         // turns and the review and nothing outside them.
         yield* content();
         return "";
