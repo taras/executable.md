@@ -567,11 +567,13 @@ Updated before completion of every phase and committed at the end of each phase.
   *awaits* a task it previously halted has diverged, and divergence is the
   honest answer there rather than a silent revival.
 - **Consequences:** Terminal grids get what they need without reviving anything
-  deliberately stopped. A grid halts each pane task when the reader closes, so
-  those panes retain `"caller"` — and the grid child completes, so a resumed run
-  short-circuits the whole region and never reaches them. The case that must
-  resume — the run interrupted while the grid is open — unwinds the grid and
-  pane children, retains `"unwound"`, and continues.
+  deliberately stopped. Reader close cooperatively closes each pane inside its
+  durable child and waits for that child to retain `closed`; it does not halt
+  the durable pane task. Once reader close takes effect, later parent
+  cancellation is deferred through pane and grid completion, so a resumed run
+  short-circuits the completed grid and never reaches those panes. The case that
+  must resume — the run interrupted while the grid is still active — unwinds
+  the grid and pane children, retains `"unwound"`, and continues.
 - **Scope:** The reason is retained evidence, not authority. Nothing reads it
   from outside `runDurableChild`, no public API exposes it, and no caller
   chooses a policy: the policy stays fixed at each combinator's call site.
