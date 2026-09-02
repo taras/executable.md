@@ -14,9 +14,17 @@
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
+import { join } from "node:path";
+import { symlink } from "node:fs/promises";
+import { API, cwd } from "@executablemd/runtime";
+import { spawn, suspend, withResolvers } from "effection";
+import type { Operation } from "effection";
+import { selectedRepository } from "../src/composition/context.ts";
+import type { RepositorySelection } from "../src/composition/selection.ts";
+import type { ComponentRegistration } from "@executablemd/core";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
-import { ensureDir, exists, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, readdir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { chmod } from "node:fs/promises";
 import { until } from "effection";
 import { useTempDirectory } from "@executablemd/test-support/temp";
@@ -526,5 +534,303 @@ describe("ORC13 — live local Git", () => {
       runOrdinaryDocument(`<Git.Switch branch="held" />`, { root, cwd: checkout.root }),
     );
     expect(String(failure)).toContain("branch-checked-out-elsewhere");
+  });
+});
+
+/** A component that records the whole Repository selection in scope. */
+function selectionProbe(seen: (RepositorySelection | undefined)[]): ComponentRegistration {
+  return {
+    name: "Stated",
+    origin: "test",
+    props: { type: "object", additionalProperties: false },
+    *fn(): Operation<string> {
+      seen.push(yield* selectedRepository());
+      return "";
+    },
+  };
+}
+
+describe("ORC6 — Dir makes the directory it names", () => {
+  // ORC6: the ordering claim and the two path rules, in one document.
+  it("ORC6: creates missing parents, keeps an absolute path, and finishes before content", function* () {
+    const root = yield* useManagedRoot();
+    const checkout = (yield* useOriginlessCheckout()).root;
+    const elsewhere = yield* useTempDirectory("xmd-orc6-absolute-");
+
+    // The ordering probe. A nested `<File>` proves nothing about ordering,
+    // because a write creates its own parents recursively — it would land
+    // whether or not the ensure had finished. This runs *first* inside the
+    // region and records what it finds: whether the directory is already there,
+    // and what the contextual working directory is at that moment.
+    const observed: { exists: boolean; cwd: string }[] = [];
+    const probe: ComponentRegistration = {
+      name: "Observes",
+      origin: "test://observes",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn(): Operation<string> {
+        const here = yield* cwd();
+        observed.push({ exists: yield* exists(here), cwd: here });
+        return "";
+      },
+    };
+
+    yield* runOrdinaryDocument(
+      [
+        '<Dir path="made/deep">',
+        "",
+        "<Observes />",
+        "",
+        '<File path="inside.md">landed</File>',
+        "",
+        "</Dir>",
+        "",
+        `<Dir path="${join(elsewhere, "written", "here")}">`,
+        "",
+        "<Observes />",
+        "",
+        '<File path="outside.md">also landed</File>',
+        "",
+        "</Dir>",
+        "",
+      ].join("\n"),
+      { root, cwd: checkout, components: [probe] },
+    );
+
+    // Before any other content ran, the directory already existed and was the
+    // contextual working directory. That is the ordering claim, observed rather
+    // than inferred.
+    expect(observed).toHaveLength(2);
+    expect(observed[0]).toEqual({ exists: true, cwd: join(checkout, "made", "deep") });
+    expect(observed[1]).toEqual({
+      exists: true,
+      cwd: join(elsewhere, "written", "here"),
+    });
+
+    // Every missing parent, and the file that landed after them.
+    expect(yield* readTextFile(join(checkout, "made", "deep", "inside.md"))).toBe("landed");
+    // The absolute target names exactly that place — not a rebase beneath cwd.
+    expect(yield* readTextFile(join(elsewhere, "written", "here", "outside.md"))).toBe(
+      "also landed",
+    );
+    expect(yield* exists(join(checkout, elsewhere.replace(/^\//, "")))).toBe(false);
+  });
+
+  // ORC6a: an existing directory is adopted. Asserted on the bytes and on the
+  // entry list, because a provider that removed and recreated it would pass a
+  // test that only checked the directory exists.
+  it("ORC6a: an existing directory keeps its contents", function* () {
+    const root = yield* useManagedRoot();
+    const checkout = (yield* useOriginlessCheckout()).root;
+    yield* ensureDir(join(checkout, "kept", "sub"));
+    yield* writeTextFile(join(checkout, "kept", "planted.txt"), "the bytes that were here");
+
+    yield* runOrdinaryDocument(
+      '<Dir path="kept">\n\n<File path="added.md">added</File>\n\n</Dir>\n',
+      { root, cwd: checkout },
+    );
+
+    expect(yield* readTextFile(join(checkout, "kept", "planted.txt"))).toBe(
+      "the bytes that were here",
+    );
+    expect((yield* readdir(join(checkout, "kept"))).sort()).toEqual([
+      "added.md",
+      "planted.txt",
+      "sub",
+    ]);
+  });
+
+  // ORC6b: a non-directory refuses before content, at the target and on the way
+  // to it, and what the document is told carries no host path or platform code.
+  it("ORC6b: a file or a special entry, at the target or on the way, refuses", function* () {
+    const root = yield* useManagedRoot();
+    const checkout = (yield* useOriginlessCheckout()).root;
+    yield* writeTextFile(join(checkout, "occupied"), "a file");
+    yield* writeTextFile(join(checkout, "pointee"), "what the link names");
+    yield* until(symlink(join(checkout, "pointee"), join(checkout, "linked")));
+
+    // The same four positions the host contract covers, asked of the shipped
+    // element: a regular file and a supported special entry, each at the target
+    // and each on the way to it.
+    for (const path of ["occupied", "occupied/below", "linked", "linked/below"]) {
+      const printed = String(
+        yield* runOrdinaryDocument(
+          `<PrintErrors>\n<Dir path="${path}">\n\nINSIDE\n\n</Dir>\n</PrintErrors>\n`,
+          { root, cwd: checkout },
+        ),
+      );
+      expect(`${path}: ${printed.includes("not a directory")}`).toBe(`${path}: true`);
+      expect(`${path}: ${printed.includes("INSIDE")}`).toBe(`${path}: false`);
+      expect(`${path}: ${printed.includes(checkout)}`).toBe(`${path}: false`);
+      expect(`${path}: ${/ENOTDIR|ENOENT|errno/i.test(printed)}`).toBe(`${path}: false`);
+    }
+
+    // Nothing the refusals touched changed.
+    expect(yield* readTextFile(join(checkout, "occupied"))).toBe("a file");
+    expect(yield* readTextFile(join(checkout, "pointee"))).toBe("what the link names");
+  });
+
+  // ORC6c: the enclosing directory comes back, on each of the three ways out.
+  // A `<File>` written after the region is what says where the document is
+  // standing — the path is relative, so it lands wherever cwd points.
+  it("ORC6c: the enclosing directory is restored after success, failure and cancellation", function* () {
+    const root = yield* useManagedRoot();
+    const checkout = (yield* useOriginlessCheckout()).root;
+
+    yield* runOrdinaryDocument(
+      [
+        '<Dir path="inner">',
+        "",
+        '<File path="within.md">within</File>',
+        "",
+        "</Dir>",
+        "",
+        '<File path="after-success.md">after</File>',
+        "",
+      ].join("\n"),
+      { root, cwd: checkout },
+    );
+    expect(yield* exists(join(checkout, "inner", "within.md"))).toBe(true);
+    expect(yield* exists(join(checkout, "after-success.md"))).toBe(true);
+
+    yield* runOrdinaryDocument(
+      [
+        "<PrintErrors>",
+        '<Dir path="inner">',
+        "",
+        '<File path="../../escape.md">no</File>',
+        "",
+        "</Dir>",
+        "</PrintErrors>",
+        "",
+        '<File path="after-failure.md">after</File>',
+        "",
+      ].join("\n"),
+      { root, cwd: checkout },
+    );
+    // Beside the checkout root, not beside `inner`: the region restored cwd on
+    // its way out even though the content inside it failed.
+    expect(yield* exists(join(checkout, "after-failure.md"))).toBe(true);
+    expect(yield* exists(join(checkout, "inner", "after-failure.md"))).toBe(false);
+
+    // And after cancellation. This one is observed rather than inferred from a
+    // later run: a fresh execution is handed its cwd explicitly, so where its
+    // files land says nothing about what the cancelled one restored.
+    //
+    // The gate is inside the region, so the halt lands with `<Dir>`'s cwd
+    // installed. What the enclosing scope reads afterwards is the restoration.
+    const reached = withResolvers<void>();
+    const seen: string[] = [];
+    yield* scoped(function* () {
+      yield* API.Env.around(
+        {
+          // deno-lint-ignore require-yield
+          *cwd(): Operation<string> {
+            return checkout;
+          },
+        },
+        { at: "min" },
+      );
+      const halted = yield* spawn(() =>
+        runOrdinaryDocument('<Dir path="inner">\n\n<Gate />\n\n</Dir>\n', {
+          root,
+          cwd: checkout,
+          components: [
+            {
+              name: "Gate",
+              origin: "test",
+              props: { type: "object", additionalProperties: false },
+              *fn(): Operation<string> {
+                // Read from inside the region, so the pair below is
+                // "installed" then "restored" rather than one reading.
+                seen.push(yield* cwd());
+                reached.resolve();
+                yield* suspend();
+                return "";
+              },
+            },
+          ],
+        }),
+      );
+      yield* reached.operation;
+      yield* halted.halt();
+      seen.push(yield* cwd());
+    });
+
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toBe(join(checkout, "inner"));
+    expect(seen[1]).toBe(checkout);
+  });
+
+  // ORC6d: the operation is about a directory. The Repository selection in
+  // scope, and every member of its identity, is the same inside the region and
+  // after it.
+  it("ORC6d: Repository selection and identity are unchanged by Dir", function* () {
+    const root = yield* useManagedRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    const checkout = (yield* useHostCheckout(remote.locator)).root;
+    const seen: (RepositorySelection | undefined)[] = [];
+
+    yield* runOrdinaryDocument(
+      [
+        '<Stated as="before" />',
+        '<Dir path="within">',
+        "",
+        '<Stated as="inside" />',
+        "",
+        "</Dir>",
+        "",
+        '<Stated as="after" />',
+        "",
+      ].join("\n"),
+      { root, cwd: checkout, components: [selectionProbe(seen)] },
+    );
+
+    expect(seen).toHaveLength(3);
+    // The whole selection, member by member: identifier, name, checkout path
+    // and every member of the identity. A Dir that had re-selected anything
+    // would differ in one of them.
+    expect(seen[0]).toBeDefined();
+    expect(seen[1]).toEqual(seen[0]);
+    expect(seen[2]).toEqual(seen[0]);
+  });
+
+  // ORC6e: creation is persistent. A directory made inside a region whose
+  // content then fails is still there, and so is one made in a run that was
+  // cancelled — there is no rollback and no teardown removal on this profile.
+  it("ORC6e: a created directory survives failed content and cancellation", function* () {
+    const root = yield* useManagedRoot();
+    const checkout = (yield* useOriginlessCheckout()).root;
+
+    yield* runOrdinaryDocument(
+      '<PrintErrors>\n<Dir path="made-then-failed">\n\n<File path="../../no.md">no</File>\n\n</Dir>\n</PrintErrors>\n',
+      { root, cwd: checkout },
+    );
+    expect(yield* exists(join(checkout, "made-then-failed"))).toBe(true);
+
+    // Halted with a component still in flight inside the region. The gate is
+    // reached only after the ensure, so the halt lands strictly after creation
+    // — a halt that arrived first would prove nothing about teardown.
+    const reached = withResolvers<void>();
+    const halted = yield* spawn(() =>
+      runOrdinaryDocument('<Dir path="made-then-halted">\n\n<Gate />\n\n</Dir>\n', {
+        root,
+        cwd: checkout,
+        components: [
+          {
+            name: "Gate",
+            origin: "test",
+            props: { type: "object", additionalProperties: false },
+            *fn(): Operation<string> {
+              reached.resolve();
+              yield* suspend();
+              return "";
+            },
+          },
+        ],
+      }),
+    );
+    yield* reached.operation;
+    yield* halted.halt();
+    expect(yield* exists(join(checkout, "made-then-halted"))).toBe(true);
   });
 });

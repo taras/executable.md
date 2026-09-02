@@ -198,6 +198,43 @@ await main(function* () {
   );
   check("nothing beyond that link was removed", yield* exists(join(outside, "secret.txt")));
 
+  // The directory act, which the compiled binary must carry like the rest. A
+  // relative target creates every missing parent; an absolute one names that
+  // exact location and is used as written, which is the one place this contract
+  // admits an absolute path at all.
+  check(
+    "a missing relative directory and its parents are created",
+    (yield* Files.operations.ensureDirectory({ cwd: workspace, path: "made/deep" })).ok &&
+      (yield* until(lstat(join(workspace, "made", "deep")))).isDirectory(),
+  );
+  yield* writeTextFile(join(workspace, "made", "deep", "kept.txt"), "still here");
+  check(
+    "an existing directory is used without clearing it",
+    (yield* Files.operations.ensureDirectory({ cwd: workspace, path: "made/deep" })).ok &&
+      (yield* readTextFile(join(workspace, "made", "deep", "kept.txt"))) === "still here",
+  );
+  check(
+    "an absolute directory is created where it names",
+    (yield* Files.operations.ensureDirectory({ cwd: workspace, path: join(outside, "absolute") }))
+      .ok && (yield* until(lstat(join(outside, "absolute")))).isDirectory(),
+  );
+  yield* writeTextFile(join(workspace, "occupied"), "a file");
+  check(
+    "a file where a directory was asked for is refused",
+    reasonOf(yield* Files.operations.ensureDirectory({ cwd: workspace, path: "occupied" })) ===
+      "not-directory",
+  );
+  check(
+    "a non-directory on the way to the target is refused",
+    reasonOf(
+      yield* Files.operations.ensureDirectory({ cwd: workspace, path: "occupied/below" }),
+    ) === "not-directory",
+  );
+  check(
+    "the refused file is still a file",
+    (yield* readTextFile(join(workspace, "occupied"))) === "a file",
+  );
+
   let temporary = "";
   yield* scoped(function* () {
     temporary = valueOf(yield* Files.operations.temporaryDirectory()) ?? "";

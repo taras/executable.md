@@ -26,7 +26,7 @@ import type { DeclaredMarkdownComponent } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { forEach } from "@effectionx/stream-helpers";
-import { useHostFiles } from "@executablemd/runtime";
+import { API, useHostFiles } from "@executablemd/runtime";
 import { installWebElicitation } from "@executablemd/web";
 import type { Operation, Result } from "effection";
 import {
@@ -49,6 +49,7 @@ import type {
 } from "@executablemd/testing";
 import { installDocumentComponents } from "./cli.ts";
 import type { HostServiceInstaller } from "./cli.ts";
+import type { RepositoryInstaller } from "./run-repositories.ts";
 
 /** What the entrypoint already decided, and a child must not decide again. */
 export interface TestingHostSettings {
@@ -69,6 +70,15 @@ export interface TestingHostSettings {
   readonly secretDetection: boolean;
   /** The native service adapter this entrypoint supplies. */
   readonly installService: HostServiceInstaller;
+  /**
+   * How this entrypoint installs repository operations for one execution.
+   *
+   * Called again for every child, so an isolated `<Execution host="run">`
+   * constructs a provider instance of its own: its own invocation identity, its
+   * own leases and its own Push evidence. Nothing it publishes authorizes its
+   * parent or a sibling, and nothing they published authorizes it.
+   */
+  readonly installRepositories: RepositoryInstaller;
   /**
    * How this entrypoint re-invokes itself as the test-agent worker, or why it
    * cannot.
@@ -149,6 +159,23 @@ function* runProfileChild(
   if (request.host !== "run") {
     throw new Error(`the ${request.host} host profile is not available on this entrypoint`);
   }
+  // First, because everything below resolves against it. This scope inherits no
+  // `API.Env` handler, so without this the child would stand in the *process*
+  // directory: a `<Dir>` around the `<Execution>` would scope every component
+  // in it except the child, the root reference would resolve from somewhere the
+  // document never named, and the repository provider installed below would
+  // discover its ambient Git from whatever checkout the process was launched
+  // in. Installed ahead of the root, the provider and the execution, so all
+  // three agree with the document that asked.
+  yield* API.Env.around(
+    {
+      // deno-lint-ignore require-yield
+      *cwd(): Operation<string> {
+        return invocation.cwd;
+      },
+    },
+    { at: "min" },
+  );
   const root = rootOf(request);
   // `--journal` is the only thing that asks `xmd run` for a diagnostic record,
   // and a declaration is the only thing that asks a child for one. Neither
@@ -203,6 +230,9 @@ function* runProfileChild(
   // Native service authority belongs only to document execution, here as in the
   // command that owns it.
   yield* settings.installService();
+  // And repository authority the same way, from the same installer the command
+  // used — a fresh instance for this child alone.
+  yield* settings.installRepositories();
 
   const execution = yield* executeInstalled(
     {

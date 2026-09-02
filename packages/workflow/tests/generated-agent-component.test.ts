@@ -1027,7 +1027,7 @@ describe("Tier WGAC — the standard write table", () => {
         { name: "File", identity: "@executablemd/core#File:write", forms: ["paired"] },
         {
           name: "Dir",
-          identity: "@executablemd/workflow/composition#Dir",
+          identity: "@executablemd/workflow/composition/dir-v2#Dir",
           forms: ["paired"],
         },
         {

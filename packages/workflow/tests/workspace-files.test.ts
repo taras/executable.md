@@ -15,7 +15,16 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { createContext, race, scoped, sleep, suspend, type Operation } from "effection";
+import {
+  createContext,
+  race,
+  scoped,
+  sleep,
+  spawn,
+  suspend,
+  type Operation,
+  withResolvers,
+} from "effection";
 import { type Api, createApi } from "@effectionx/context-api";
 import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
 import type { Json } from "@executablemd/durable-streams";
@@ -28,6 +37,8 @@ import { withWorkflowWorkspace } from "../src/deno/workspace/host.ts";
 import { WORKSPACE_FILE } from "../src/deno/workspace/files.ts";
 import { throwWorkspaceFilesystemFailure } from "../src/deno/workspace/errors.ts";
 import type { DenoWorkspaceFilesystem } from "../src/deno/workspace/filesystem.ts";
+import { join } from "node:path";
+import { exists } from "@effectionx/fs";
 import { transactWorkspaceRoots } from "../src/deno/workspace/private.ts";
 import type { PrivateWorkspaceTransaction } from "../src/deno/workspace/private.ts";
 import {
@@ -232,6 +243,19 @@ function countingRemoves(
   });
 }
 
+/** Every directory this run actually created, in order. */
+function countingMkdirs(
+  made: string[],
+): (filesystem: DenoWorkspaceFilesystem) => DenoWorkspaceFilesystem {
+  return (filesystem) => ({
+    ...filesystem,
+    *mkdir(path, options) {
+      made.push(path);
+      yield* filesystem.mkdir(path, options);
+    },
+  });
+}
+
 /**
  * A Workspace filesystem that stops one removal after it has happened.
  *
@@ -246,6 +270,78 @@ function suspendingRemove(
     *remove(path, options) {
       yield* filesystem.remove(path, options);
       if (path === target) {
+        yield* suspend();
+      }
+    },
+  });
+}
+
+/**
+ * A creation that makes a parent and then refuses.
+ *
+ * The refusal a document can be told about arrives *after* part of the path
+ * exists, which is the only shape that exercises the savepoint: a target that
+ * refuses before anything is created rolls nothing back, and a test built on
+ * one would assert an empty Workspace that was never written to.
+ */
+function partialThenRefuse(
+  target: string,
+  parent: string,
+): (filesystem: DenoWorkspaceFilesystem) => DenoWorkspaceFilesystem {
+  return (filesystem) => ({
+    ...filesystem,
+    *mkdir(path, options) {
+      if (path !== target) {
+        yield* filesystem.mkdir(path, options);
+        return;
+      }
+      yield* filesystem.mkdir(parent, { recursive: true });
+      // Planted the way the Workspace filesystem reports one, so it is a
+      // journalable condition rather than an infrastructure failure: an
+      // unrecognized platform error is deliberately fatal here, which is
+      // exactly what an unadorned `Error` would have produced.
+      throwWorkspaceFilesystemFailure(
+        Object.assign(new Error("planted"), { name: "WorkspaceFsError", code: "ENOTDIR" }),
+      );
+    },
+  });
+}
+
+function suspendingWrite(
+  target: string,
+  reached: { resolve(): void },
+): (filesystem: DenoWorkspaceFilesystem) => DenoWorkspaceFilesystem {
+  return (filesystem) => ({
+    ...filesystem,
+    *writeFile(path, content, mode) {
+      yield* filesystem.writeFile(path, content, mode);
+      if (path === target) {
+        reached.resolve();
+        yield* suspend();
+      }
+    },
+  });
+}
+
+/**
+ * A Workspace filesystem that stops one creation after it has happened.
+ *
+ * The suspension sits between the mutation and the transaction's commit, which
+ * is the one window where a Workspace holds a change nothing has published yet.
+ */
+function suspendingMkdir(
+  target: string,
+  reached: { resolve(): void },
+): (filesystem: DenoWorkspaceFilesystem) => DenoWorkspaceFilesystem {
+  return (filesystem) => ({
+    ...filesystem,
+    *mkdir(path, options) {
+      yield* filesystem.mkdir(path, options);
+      if (path === target) {
+        // Signalled after the mutation and before the commit, so a halt that
+        // waits for this lands in that window rather than wherever a deadline
+        // happened to fall.
+        reached.resolve();
         yield* suspend();
       }
     },
@@ -1344,5 +1440,273 @@ describe("WF workflow document filesystem", () => {
       // Performed once, by the continuation, and recorded once.
       expect(committedEffects(path, "delete", "/x.txt")).toEqual(1);
     });
+  });
+});
+
+/** What a logical path is, as a second connection sees it. */
+function* workspaceStat(
+  database: WorkflowRunDatabase,
+  path: string,
+): Operation<string | undefined> {
+  const read = yield* transactWorkspaceRoots(database, function* (workspace) {
+    try {
+      return (yield* workspace.filesystem.stat(path)).kind;
+    } catch {
+      return undefined;
+    }
+  });
+  if (!read.ok) {
+    throw read.error;
+  }
+  return read.value;
+}
+
+describe("Tier WF — the run's own directories", () => {
+  // ORC6h (cancellation): the two halves the replay case does not reach.
+  //
+  // Cancelled before the commit, nothing is published — the directory the
+  // Workspace briefly held is not visible to a second connection, no effect is
+  // recorded and the root has not moved. Cancelled after it, in the content
+  // that runs inside the region, the committed directory stays: the ensure is
+  // its own transaction and the content's fate is not its business.
+  it("ORC6h: cancellation before the commit publishes nothing", function* () {
+    const root = yield* useStorageRoot();
+    const reached = withResolvers<void>();
+    yield* withStorage(
+      root,
+      function* () {
+        const database = yield* createRun();
+        const path = runPath(root, database.record.runId);
+        const before = committedRoot(path);
+
+        // Halted on the signal rather than on a deadline: a race that fired
+        // before `mkdir` ran would find the same empty Workspace and pass
+        // without ever reaching the window under test.
+        const running = yield* spawn(() =>
+          raised(runDocument(database, '<Dir path="never">\n\nINSIDE\n\n</Dir>\n')),
+        );
+        yield* reached.operation;
+        yield* running.halt();
+
+        expect(yield* workspaceStat(database, "/never")).toBe(undefined);
+        expect(committedRoot(path)).toEqual(before);
+        expect(committedEffects(path, "ensure-directory", "/never")).toEqual(0);
+        expect(yield* workspaceEvents(database)).toEqual([]);
+      },
+      { decorateFilesystem: suspendingMkdir("/never", reached) },
+    );
+  });
+
+  it("ORC6h: cancelling later content leaves the committed directory", function* () {
+    const root = yield* useStorageRoot();
+    const reached = withResolvers<void>();
+    yield* withStorage(
+      root,
+      function* () {
+        const database = yield* createRun();
+        const path = runPath(root, database.record.runId);
+
+        // The halt lands inside the region, after the ensure committed: the
+        // write that suspends is the content running in the new directory, and
+        // the signal is what puts the halt there rather than a deadline.
+        const running = yield* spawn(() =>
+          raised(
+            runDocument(
+              database,
+              '<Dir path="committed">\n\n<File path="inside.md">x</File>\n\n</Dir>\n',
+            ),
+          ),
+        );
+        yield* reached.operation;
+        yield* running.halt();
+
+        // The directory and its effect survived the cancellation of the
+        // content that was running inside it — the ensure is its own
+        // transaction and the content's fate is not its business.
+        expect(yield* workspaceStat(database, "/committed")).toBe("directory");
+        expect(committedEffects(path, "ensure-directory", "/committed")).toEqual(1);
+        // And the interrupted write published nothing.
+        expect(committedEffects(path, "write", "/committed/inside.md")).toEqual(0);
+      },
+      { decorateFilesystem: suspendingWrite("/committed/inside.md", reached) },
+    );
+  });
+
+  // WF23: the mutation, its outcome and the resulting root are one commit, and
+  // the content runs after it. Ordering is read off the retained effects, in
+  // the order they committed — the nested `<File>` landing proves nothing on
+  // its own, because a write creates its own parents recursively and would land
+  // either way.
+  it("WF23: recursive creation, its effect and the resulting root commit before content", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const path = runPath(root, database.record.runId);
+      const before = committedRoot(path);
+
+      const run = yield* runDocument(
+        database,
+        '<Dir path="one/two">\n\n<File path="inside.md">landed</File>\n\n</Dir>\n',
+      );
+
+      expect(yield* workspaceStat(database, "/one")).toBe("directory");
+      expect(yield* workspaceStat(database, "/one/two")).toBe("directory");
+      expect(yield* workspaceText(database, "/one/two/inside.md")).toBe("landed");
+      // One ensure effect, and it committed *before* the write.
+      //
+      // The nested `<File>` existing proves nothing on its own: a write creates
+      // its own parents recursively, so it would land whether or not `<Dir>`
+      // had committed first. What settles the ordering is the retained order of
+      // the effects themselves.
+      const effects = yield* recordedFileEffects(database);
+      const ensures = effects.filter((effect) => effect.name.startsWith("ensure-directory:"));
+      expect(ensures).toHaveLength(1);
+      const order = effects.map((effect) => effect.name.split(":")[0]);
+      const ensured = order.indexOf("ensure-directory");
+      const wrote = order.indexOf("write");
+      expect(ensured).toBeGreaterThanOrEqual(0);
+      expect(wrote).toBeGreaterThan(ensured);
+      // The root moved, and the host filesystem was never reached for any of it.
+      expect(committedRoot(path)).not.toEqual(before);
+      expect(rootOfLastEvent(path)).toEqual(committedRoot(path));
+      expect(run.host.seen).toEqual([]);
+    });
+  });
+
+  // WF24: a refusal rolls its savepoint back. The target sits below a file, so
+  // the parent could only be created by an attempt that then had to be undone —
+  // which is what makes "no partial parent" a real assertion rather than a
+  // restatement of "nothing happened".
+  it("WF24: a refusal after a partial creation rolls the savepoint back", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(
+      root,
+      function* () {
+        const database = yield* createRun();
+        const path = runPath(root, database.record.runId);
+        yield* mutateWorkspace(database, function* (workspace) {
+          yield* workspace.filesystem.writeFile("/kept.txt", "kept");
+        });
+        const before = committedRoot(path);
+
+        const run = yield* runDocument(
+          database,
+          [
+            "<PrintErrors>",
+            '<Dir path="deep/nested">',
+            "",
+            "INSIDE",
+            "",
+            "</Dir>",
+            "</PrintErrors>",
+            "",
+            '<File path="after.txt">yes</File>',
+          ].join("\n"),
+        );
+
+        expect(run.output).toContain("not a directory");
+        expect(run.output).not.toContain("INSIDE");
+        expect(run.host.seen).toEqual([]);
+
+        const recorded = yield* recordedFileEffects(database);
+        expect(recorded[0]?.result).toEqual({
+          status: "ok",
+          value: { kind: "refused", phase: "access", reason: "not-directory" },
+        });
+
+        // `/deep` was really created inside the savepoint and is gone again.
+        expect(yield* workspaceStat(database, "/deep")).toBe(undefined);
+        expect(yield* workspaceStat(database, "/deep/nested")).toBe(undefined);
+        // What the Workspace already held is what it still holds.
+        expect(yield* workspaceText(database, "/kept.txt")).toEqual("kept");
+        // And this is what says it was the savepoint rather than the whole
+        // transaction: the next effect still commits. A rollback that took the
+        // transaction with it would lose this write too, and the refusal alone
+        // cannot tell the two apart.
+        expect(recorded[1]?.result).toEqual({ status: "ok", value: { kind: "written" } });
+        expect(yield* workspaceText(database, "/after.txt")).toEqual("yes");
+        expect(committedRoot(path)).not.toEqual(before);
+        // Sanitized: no host path, no platform code.
+        expect(run.output).not.toContain(root);
+        expect(run.output).not.toMatch(/ENOTDIR|ENOENT|errno/i);
+      },
+      { decorateFilesystem: partialThenRefuse("/deep/nested", "/deep") },
+    );
+  });
+
+  // WF25: an existing populated directory is adopted, its contents survive, and
+  // the effect still commits so replay has something to restore. Also the
+  // absolute case: a logical path is used as written, is not rebased under the
+  // contextual directory, and never names anything on the host.
+  it("WF25: an existing directory is adopted, and an absolute path is logical", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const path = runPath(root, database.record.runId);
+      yield* mutateWorkspace(database, function* (workspace) {
+        yield* workspace.filesystem.mkdir("/kept", { recursive: true });
+        yield* workspace.filesystem.writeFile("/kept/inside.txt", "the bytes that were here");
+      });
+
+      const run = yield* runDocument(
+        database,
+        '<Dir path="kept">\n\nA\n\n</Dir>\n\n<Dir path="/nested/deep">\n\n<File path="b.md">B</File>\n\n</Dir>\n',
+      );
+
+      // Adopted, not replaced.
+      expect(yield* workspaceText(database, "/kept/inside.txt")).toBe("the bytes that were here");
+      // The absolute path named exactly that logical path. Not rebased under the
+      // contextual directory — `/kept/nested` would be the rebased spelling and
+      // it does not exist.
+      expect(yield* workspaceStat(database, "/nested/deep")).toBe("directory");
+      expect(yield* workspaceStat(database, "/kept/nested")).toBe(undefined);
+      expect(yield* workspaceText(database, "/nested/deep/b.md")).toBe("B");
+      // And it named nothing on the host: neither the logical path taken as a
+      // host path, nor one beneath the run's own storage.
+      expect(yield* exists("/nested/deep")).toBe(false);
+      expect(yield* exists(join(root, "nested", "deep"))).toBe(false);
+      expect(run.host.seen).toEqual([]);
+      // Both ensures committed, and the last event's root is the run's own.
+      const ensures = (yield* recordedFileEffects(database)).filter((effect) =>
+        effect.name.startsWith("ensure-directory:"),
+      );
+      expect(ensures).toHaveLength(2);
+      expect(rootOfLastEvent(path)).toEqual(committedRoot(path));
+    });
+  });
+
+  // WF26: replay restores rather than repeats. The directory is privately
+  // removed between the two runs, so a second ensure would be visible as it
+  // coming back — and the counter says which of the two happened rather than
+  // leaving it to be inferred.
+  it("WF26: a completed replay restores the outcome without creating again", function* () {
+    const root = yield* useStorageRoot();
+    const made: string[] = [];
+    yield* withStorage(
+      root,
+      function* () {
+        const database = yield* createRun();
+        const path = runPath(root, database.record.runId);
+        const source = '<Dir path="once">\n\nINSIDE\n\n</Dir>\n';
+
+        const first = yield* runDocument(database, source);
+        expect(first.output).toContain("INSIDE");
+        expect(made).toEqual(["/once"]);
+        const after = committedRoot(path);
+
+        // Removed behind the run's back, so a second creation would show.
+        yield* mutateWorkspace(database, function* (workspace) {
+          yield* workspace.filesystem.remove("/once", { recursive: true });
+        });
+
+        const replayed = yield* replayDocument(database, source);
+        expect(replayed.output).toContain("INSIDE");
+        // No second ensure: the counter is unchanged.
+        expect(made).toEqual(["/once"]);
+        // And the retained root is what a replay restores, not a new one.
+        expect(rootOfLastEvent(path)).toEqual(after);
+      },
+      { decorateFilesystem: countingMkdirs(made) },
+    );
   });
 });

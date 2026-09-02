@@ -270,6 +270,7 @@ describe("the CI smoke job", () => {
       "scripts/smoke-foreground.ts",
       "scripts/smoke-loaded-copy.ts",
       "scripts/smoke-fetch.ts",
+      "scripts/smoke-run-composition.ts",
     ]) {
       expect(commands).toContain(script);
     }

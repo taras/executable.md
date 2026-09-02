@@ -153,6 +153,7 @@ type FileEffectOutcome<Phase extends string> =
   | { readonly kind: "content"; readonly content: string }
   | { readonly kind: "written" }
   | { readonly kind: "deleted" }
+  | { readonly kind: "ensured" }
   | { readonly kind: "paths"; readonly paths: string[] }
   | { readonly kind: "refused"; readonly phase: Phase; readonly reason: FilesReason };
 
@@ -176,6 +177,7 @@ const OUTCOME_MEMBERS: ReadonlyMap<string, readonly string[]> = new Map<string, 
   ["content", ["kind", "content"]],
   ["written", ["kind"]],
   ["deleted", ["kind"]],
+  ["ensured", ["kind"]],
   ["paths", ["kind", "paths"]],
   ["refused", ["kind", "phase", "reason"]],
 ]);
@@ -238,6 +240,9 @@ function parseOutcome<Phase extends string>(
   if (kind === "deleted") {
     return { kind: "deleted" };
   }
+  if (kind === "ensured") {
+    return { kind: "ensured" };
+  }
   if (kind === "paths") {
     const paths = readPaths(record.paths);
     return paths === undefined ? undefined : { kind: "paths", paths };
@@ -248,6 +253,28 @@ function parseOutcome<Phase extends string>(
     return undefined;
   }
   return { kind: "refused", phase, reason };
+}
+
+/**
+ * The logical path an authored relative path names, or the refusal to report.
+ *
+ * Returns the failure itself rather than a discriminated wrapper, because the
+ * one caller that needs it has exactly two things to do with the answer. It
+ * reaches no filesystem and no Api, so it is an ordinary function rather than
+ * an Operation that would only ever have yielded nothing.
+ */
+function logicalTarget(input: FilePathInput): string | Result<void> {
+  const resolved = resolveLogicalPath(input.cwd, input.path);
+  if (!resolved.ok) {
+    return Err(
+      filesFailure({
+        operation: "ensure-directory",
+        phase: "lexical",
+        reason: lexicalReason(resolved.error),
+      }),
+    );
+  }
+  return resolved.value;
 }
 
 /**
@@ -373,6 +400,49 @@ function* replace(
     yield* filesystem.mkdir(parent, { recursive: true });
   }
   yield* filesystem.writeFile(path, content);
+}
+
+/**
+ * Make one logical directory exist, discarding the whole attempt if any part
+ * of it refuses.
+ *
+ * An existing directory is the answer already: nothing is written, and the
+ * effect still commits so that replay has a record to restore. An existing
+ * entry that is not a directory is refused at the target, before any parent is
+ * created — which is what keeps a refusal from leaving half a path behind.
+ *
+ * The recursive creation runs inside one savepoint, so a run that creates two
+ * parents and then cannot create the third leaves neither. What comes back
+ * therefore describes a Workspace that is exactly what it was.
+ */
+function* ensureOutcome(
+  filesystem: DenoWorkspaceFilesystem,
+  path: string,
+): Operation<FileEffectOutcome<FilesPhase>> {
+  if (path === WORKSPACE_ROOT) {
+    return { kind: "ensured" };
+  }
+  // `stat` rather than `lstat`, so a symbolic link is classified by what it
+  // points at. A link to a directory is a directory to enter, which is what the
+  // host provider decides too — its resolution follows the whole path — and the
+  // two profiles must not disagree about the same document.
+  const info = yield* statPath(filesystem, path);
+  if (info.ok) {
+    return info.value.kind === "directory"
+      ? { kind: "ensured" }
+      : refused("target", "not-directory");
+  }
+  const reason = refusalReason(info.error);
+  if (reason !== "missing") {
+    return refused("target", reason);
+  }
+
+  try {
+    yield* savepoint(filesystem.mkdir(path, { recursive: true }));
+  } catch (error) {
+    return refused("access", refusalReason(asRefusal(error)));
+  }
+  return { kind: "ensured" };
 }
 
 /**
@@ -578,6 +648,7 @@ export interface WorkflowFilesHandler {
   readTextFile(input: FilePathInput): Operation<Result<string>>;
   writeTextFile(input: FileWriteInput): Operation<Result<FileWriteSuccess>>;
   deleteFile(input: FilePathInput): Operation<Result<void>>;
+  ensureDirectory(input: FilePathInput): Operation<Result<void>>;
   globFiles(input: GlobInput): Operation<Result<string[]>>;
   temporaryDirectory(): Operation<Result<string>>;
 }
@@ -678,6 +749,39 @@ export function workflowFilesHandler(database: WorkflowRunDatabase): WorkflowFil
       return Ok(undefined);
     },
 
+    *ensureDirectory(input: FilePathInput): Operation<Result<void>> {
+      // A bound Workspace path is already logical and absolute, and `<Dir>`
+      // uses one as written. Every other operation refuses an absolute path,
+      // so the resolution is chosen here rather than by relaxing the shared
+      // rule that keeps authored paths inside the working directory.
+      const path = input.path.startsWith("/") ? logicalDirectory(input.path) : logicalTarget(input);
+      if (typeof path !== "string") {
+        return path;
+      }
+      const outcome = yield* performed(
+        database,
+        yield* describeFileEffect("ensure-directory", path, {
+          path: input.path,
+          cwd: input.cwd,
+        }),
+        parseFilesPhase,
+        (filesystem) => ensureOutcome(filesystem, path),
+      );
+      if (outcome.kind === "refused") {
+        return Err(
+          filesFailure({
+            operation: "ensure-directory",
+            phase: outcome.phase,
+            reason: outcome.reason,
+          }),
+        );
+      }
+      if (outcome.kind !== "ensured") {
+        throw new FilesInvariantError("protocol");
+      }
+      return Ok(undefined);
+    },
+
     *globFiles(input: GlobInput): Operation<Result<string[]>> {
       const directory = logicalDirectory(input.cwd);
       const include = [...input.include];
@@ -736,6 +840,9 @@ export function useWorkflowFiles(database: WorkflowRunDatabase): Operation<void>
       },
       *deleteFile([input]) {
         return yield* handler.deleteFile(input);
+      },
+      *ensureDirectory([input]) {
+        return yield* handler.ensureDirectory(input);
       },
       *globFiles([input]) {
         return yield* handler.globFiles(input);

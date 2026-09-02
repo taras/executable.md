@@ -95,7 +95,7 @@ import type {
  * observable rather than merely stated.
  */
 export interface HostFilesEvent {
-  readonly operation: "read" | "write" | "delete" | "glob";
+  readonly operation: "read" | "write" | "delete" | "ensure-directory" | "glob";
   readonly phase: "target" | "access" | "parents" | "temporary" | "commit" | "cleanup" | "read-dir";
 }
 
@@ -282,6 +282,43 @@ function* removalDestination(input: FilePathInput): Operation<Destination> {
     }
     const parent = yield* resolveExisting(dirname(named));
     const path = join(parent, basename(named));
+    if (!within(base, path)) {
+      return { reason: "resolved-escape" };
+    }
+    return { path };
+  } catch (error) {
+    return { reason: reasonOf(error) };
+  }
+}
+
+/**
+ * The directory a `<Dir>` names, which is the one target that may be absolute.
+ *
+ * Every other operation here refuses an absolute path outright, because a
+ * document that writes one is naming a place outside the work it was given.
+ * `<Dir>` is the established exception: an absolute `path` has always been used
+ * as written, and this operation exists to serve that component. So an absolute
+ * target is taken as it stands and is not measured against the working
+ * directory — there is no base it was ever relative to.
+ *
+ * A relative target keeps the ordinary rules: resolved against `cwd`, with both
+ * sides canonical, so a working directory reached through a symlink is not read
+ * as an escape and a `..` that genuinely leaves still is.
+ *
+ * The final segment is resolved along with the rest. A directory that already
+ * exists behind a symlink is the directory it points at, and entering it is
+ * what the document asked for.
+ */
+function* directoryDestination(input: FilePathInput): Operation<Destination> {
+  try {
+    if (isAbsolute(input.path)) {
+      return { path: yield* resolveExisting(input.path) };
+    }
+    if (!within(input.cwd, resolve(input.cwd, input.path))) {
+      return { reason: "lexical-escape" };
+    }
+    const base = (yield* API.Fs.operations.realpath(input.cwd)) ?? input.cwd;
+    const path = yield* resolveExisting(resolve(input.cwd, input.path));
     if (!within(base, path)) {
       return { reason: "resolved-escape" };
     }
@@ -546,6 +583,59 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
   }
 
   /**
+   * Make the named path a directory, creating what is missing.
+   *
+   * Three answers, and the order between them is the contract. An existing
+   * directory is success without touching it: nothing is replaced, cleared or
+   * written, because the document asked for the directory to exist and it does.
+   * An existing entry that is not a directory is a refusal — a file where a
+   * directory was asked for is a mistake to report, never a thing to remove.
+   * Anything else is created, recursively, along with every missing parent.
+   *
+   * The target is classified before creation is attempted so the refusal for a
+   * non-directory target is decided here rather than left to whatever the
+   * platform's `mkdir -p` happens to say. An intermediate non-directory is the
+   * platform's to report, and `ENOTDIR` already carries it into the shared
+   * vocabulary — so both refusals arrive as `not-directory` and neither carries
+   * a host path or a platform message.
+   *
+   * Creation is direct and persists. There is no rollback and no teardown
+   * removal: a later failure of the content that runs inside this directory
+   * says nothing about whether the directory should exist.
+   */
+  function* ensureDirectory(input: FilePathInput): Operation<Result<void>> {
+    if (input.path.length === 0) {
+      return nonWriteFailure("ensure-directory", "lexical", "empty-path");
+    }
+
+    const target = yield* directoryDestination(input);
+    if ("reason" in target) {
+      return nonWriteFailure("ensure-directory", "resolution", target.reason);
+    }
+
+    notify(observe, { operation: "ensure-directory", phase: "target" });
+    try {
+      const info = yield* API.Fs.operations.stat(target.path);
+      if (info.exists && !info.isDirectory) {
+        return nonWriteFailure("ensure-directory", "target", "not-directory");
+      }
+      if (info.exists) {
+        return Ok(undefined);
+      }
+    } catch (error) {
+      return nonWriteFailure("ensure-directory", "target", reasonOf(error));
+    }
+
+    notify(observe, { operation: "ensure-directory", phase: "access" });
+    try {
+      yield* API.Fs.operations.ensureDir(target.path);
+    } catch (error) {
+      return nonWriteFailure("ensure-directory", "access", reasonOf(error));
+    }
+    return Ok(undefined);
+  }
+
+  /**
    * The regular files under `cwd` that `include` selects and `exclude` does not.
    *
    * Traversal is `API.Fs`'s: it reports directories and symbolic links too, and
@@ -623,7 +713,15 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
     });
   }
 
-  return { checkFilePath, readTextFile, writeTextFile, deleteFile, globFiles, temporaryDirectory };
+  return {
+    checkFilePath,
+    readTextFile,
+    writeTextFile,
+    deleteFile,
+    ensureDirectory,
+    globFiles,
+    temporaryDirectory,
+  };
 }
 
 /**
@@ -690,6 +788,9 @@ export function useHostFiles(options: HostFilesOptions = {}): Operation<void> {
       },
       *deleteFile([input]) {
         return yield* handler.deleteFile(input);
+      },
+      *ensureDirectory([input]) {
+        return yield* handler.ensureDirectory(input);
       },
       *globFiles([input]) {
         return yield* handler.globFiles(input);

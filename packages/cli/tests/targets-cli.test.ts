@@ -22,6 +22,7 @@ import { runCli } from "@executablemd/test-support/launch";
 import { runXmd } from "../src/cli.ts";
 import { SOURCE_UPGRADE } from "./support/upgrade-assembly.ts";
 
+import { unsupportedRepositories } from "../src/run-repositories.ts";
 function* useFixture<T>(
   files: Record<string, string>,
   body: (dir: string) => Operation<T>,
@@ -587,6 +588,7 @@ function* replacingRun(
         });
       },
       SOURCE_UPGRADE,
+      unsupportedRepositories,
     );
 
     return { status, stderr, serviceInstalled, serviceStarted, documentReads, reads };
@@ -761,6 +763,7 @@ function* helpRun(args: string[], cwd: string): Operation<HelpRun> {
         serviceInstalled = true;
       },
       SOURCE_UPGRADE,
+      unsupportedRepositories,
     );
 
     return { status, stdout, stderr, serviceInstalled };

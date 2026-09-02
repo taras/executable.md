@@ -719,7 +719,7 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       expect(recorded).toHaveLength(1);
       const policy = JSON.stringify(recorded[0]);
       expect(policy).toContain("File:write");
-      expect(policy).toContain("@executablemd/workflow/composition#Dir");
+      expect(policy).toContain("@executablemd/workflow/composition/dir-v2#Dir");
       expect(policy).toContain('"allow":["write"]');
       // And the change is in the run's own Workspace, where an ordinary read
       // beneath the fragment's own directory finds it. Anchored on the

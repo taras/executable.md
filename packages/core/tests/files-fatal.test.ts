@@ -20,6 +20,8 @@ import { expect } from "@executablemd/test-support/expect";
 import { ensure, Err, Ok, resource, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { ensureDirectory } from "../src/files.ts";
+import { registerComponents } from "../src/components/registration.ts";
 import {
   API,
   FILES_ERROR,
@@ -258,8 +260,40 @@ describe("Tier FF — Files infrastructure failure", () => {
   });
 
   // FF2: the same for every other form. Each stops at its first Files call.
-  it("FF2: read, delete, Glob and TempDir all stop at their first provider call", function* () {
+  //
+  // `<Dir>` belongs to `@executablemd/workflow`, which depends on core rather
+  // than the other way round, so the element itself cannot be expanded here.
+  // What can be — and what FF2 is actually about — is the one call it makes:
+  // `ensureDirectory` through the engine's door, with no provider installed.
+  // `<Ensures>` performs exactly that and nothing else, so an absent provider
+  // reaches this suite by the same path the real component would take. That the
+  // shipped `<Dir>` makes this call and no other is asserted where `<Dir>`
+  // lives.
+  it("FF2: read, delete, ensureDirectory, Glob and TempDir all stop at their first provider call", function* () {
     const dir = yield* useFixture();
+
+    const ensures = function* (): Operation<void> {
+      yield* registerComponents([
+        {
+          name: "Ensures",
+          origin: "test://ensures",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          *fn(): Operation<string> {
+            yield* ensureDirectory({ cwd: dir, path: "made" });
+            return "REACHED";
+          },
+        },
+      ]);
+    };
+
+    const absent = yield* run(dir, "<Ensures />\n\nAFTER", ensures);
+    expect(absent.ok).toBe(false);
+    expect(parseFilesFatal(fatalCause(absent.error))?.kind).toBe("provider-unavailable");
+    expect(absent.output).not.toContain("AFTER");
+    // The operation is what failed, not the element around it: nothing after the
+    // call inside the component ran either.
+    expect(absent.output).not.toContain("REACHED");
+    expect(yield* exists(join(dir, "made"))).toBe(false);
 
     for (const source of [
       '<File path="notes.md" />\n\nAFTER',

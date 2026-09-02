@@ -14,7 +14,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { registerComponents } from "@executablemd/core";
+import { content, registerComponents } from "@executablemd/core";
 import type { ComponentRegistration } from "@executablemd/core";
 import { collect, execute, inlineSource } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -22,7 +22,7 @@ import type { Json } from "@executablemd/durable-streams";
 import { scoped, until } from "effection";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
 import { pathToFileURL } from "node:url";
-import { cwd } from "@executablemd/runtime";
+import { API, cwd } from "@executablemd/runtime";
 import type { Operation } from "effection";
 import {
   GitCompositionProviderError,
@@ -57,6 +57,7 @@ import {
   retainedRepositories,
   retainedWorktrees,
   runDocument,
+  runWorkflowDocument,
   subcommands,
   survivingRoots,
   workspaceText,
@@ -185,6 +186,47 @@ function* expectation(
 }
 function document(locator: string, ...lines: string[]): string {
   return [`<Repository name="project" url="${locator}">`, ...lines, "</Repository>"].join("\n");
+}
+
+/**
+ * A working directory inside the selected checkout that is not a directory.
+ *
+ * The subject of the case below is the Git provider's own authority check: a
+ * contextual working directory the retained checkout does not actually hold is
+ * refused, before the provider spawns anything. Reaching that state needs a cwd
+ * that names something which is not there.
+ *
+ * `<Dir>` used to be the way to write it, because it installed a working
+ * directory and created nothing. It now creates the directory it names (#643),
+ * so it can no longer produce this state — and pointing it at a file instead
+ * would prove Dir's own refusal, which is evidence held elsewhere, while
+ * pointing outside the checkout would repeat the preceding case.
+ *
+ * So the fixture does the one thing `<Dir>` used to: read the real contextual
+ * directory, install a path beneath it for its content, and touch no
+ * filesystem at all. It performs no `API.Files` operation and creates nothing,
+ * which is what leaves the working directory unreal for the Git operation
+ * inside it.
+ */
+function nowhere(): ComponentRegistration {
+  return {
+    name: "Nowhere",
+    origin: "test://nowhere",
+    props: { type: "object", properties: {}, additionalProperties: false },
+    *fn(): Operation<string> {
+      const enclosing = yield* cwd();
+      yield* API.Env.around(
+        {
+          // deno-lint-ignore require-yield
+          *cwd(): Operation<string> {
+            return `${enclosing}/absent`;
+          },
+        },
+        { at: "min" },
+      );
+      return yield* content();
+    },
+  };
 }
 
 describe("workflow Git.Switch", () => {
@@ -551,15 +593,15 @@ describe("workflow Git.Switch selection", () => {
       const database = yield* createRun();
       const counting = countingHost();
       const failure = yield* raised(
-        runDocument(
+        runWorkflowDocument(
           database,
-          document(
-            remote.locator,
-            `<Dir path="absent">`,
-            `<Git.Switch branch="release" />`,
-            "</Dir>",
-          ),
+          document(remote.locator, `<Nowhere>`, `<Git.Switch branch="release" />`, "</Nowhere>"),
           countingOptions(counting),
+          (execute) =>
+            scoped(function* () {
+              yield* registerComponents([nowhere()]);
+              return yield* execute();
+            }),
         ),
       );
 

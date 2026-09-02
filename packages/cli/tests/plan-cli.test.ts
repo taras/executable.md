@@ -44,6 +44,7 @@ import {
 } from "./support/plan-harness.ts";
 import type { PlanHarness } from "./support/plan-harness.ts";
 
+import { unsupportedRepositories } from "../src/run-repositories.ts";
 const REQUEST = "write a greeting";
 
 /** A document that declares props and writes what it resolved. */
@@ -178,6 +179,8 @@ function executor(
     stack ?? STACK,
     undefined,
     function* () {},
+    // No repository provider: this suite drives the executor, not a checkout.
+    unsupportedRepositories,
   );
 }
 

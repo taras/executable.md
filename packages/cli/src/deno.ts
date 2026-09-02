@@ -16,6 +16,7 @@ import { runXmd, XMD_VERSION } from "./cli.ts";
 import type { UpgradeAssembly } from "./upgrade.ts";
 import { useMachineSessions } from "./session-coordinator.ts";
 import { useDenoWorkflowHost } from "./deno-workflow.ts";
+import { denoRunRepositories } from "./deno-repositories.ts";
 import {
   isCredentialHelperMode,
   runCredentialHelper,
@@ -96,10 +97,17 @@ if (isCredentialHelperMode(process.argv.slice(2))) {
     // two owners of one conversation.
     // Helper mode receives neither this nor the workflow host: it is not the
     // public CLI and assembles none of it.
+    // The ordinary repository provider: managed checkouts under
+    // `~/.xmd/repositories`, the ambient repository this command was run in,
+    // and the two GitHub configurations this deployment authorizes. It is
+    // parameterized by the same credential-helper assembly the workflow host
+    // uses, because the program that is running is what knows how to re-invoke
+    // itself as one.
     yield* runXmd(
       args,
       useDenoService,
       UPGRADE,
+      denoRunRepositories(HELPER),
       () => useDenoWorkflowHost(HELPER),
       useMachineSessions(),
     );

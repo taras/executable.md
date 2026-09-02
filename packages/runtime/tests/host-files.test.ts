@@ -857,6 +857,78 @@ describe("Tier HF — host Files provider", () => {
     expect(observed).toEqual(["notes.md"]);
   });
 
+  // HF15b: installation forwards every operation, not only the ones a caller
+  // happens to try first.
+  //
+  // `useHostFiles` forwards member by member, and `Files.around` accepts a
+  // partial handler by design — middleware implementing a subset and delegating
+  // the rest is the ordinary case. So an operation left out of the forwarding
+  // list is well-typed, and every caller of it falls through to the
+  // absent-provider terminal instead. That is not a contract this suite can
+  // check by construction; it has to be reached.
+  //
+  // Asserted through the installed provider rather than the handler, because
+  // the handler having the method is exactly what the omission looks like.
+  it("HF15b: every operation is reachable through the installed provider", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "notes.md"), "reachable");
+    yield* until(mkdir(join(fixture.workspace, "listed")));
+
+    yield* scoped(function* () {
+      yield* useHostFiles();
+      // One call per operation the contract declares. A member missing from the
+      // forwarding list throws `FilesProviderUnavailableError` here rather than
+      // returning a Result, so an omission fails this case loudly.
+      expect(
+        (yield* Files.operations.checkFilePath({
+          cwd: fixture.workspace,
+          path: "notes.md",
+        })).ok,
+      ).toBe(true);
+      expect(
+        value(
+          yield* Files.operations.readTextFile({
+            cwd: fixture.workspace,
+            path: "notes.md",
+          }),
+        ).length,
+      ).toBeGreaterThan(0);
+      expect(
+        (yield* Files.operations.writeTextFile({
+          cwd: fixture.workspace,
+          path: "written.md",
+          content: "x",
+        })).ok,
+      ).toBe(true);
+      expect(
+        (yield* Files.operations.ensureDirectory({
+          cwd: fixture.workspace,
+          path: "made/through/installation",
+        })).ok,
+      ).toBe(true);
+      expect(
+        (yield* Files.operations.deleteFile({
+          cwd: fixture.workspace,
+          path: "written.md",
+        })).ok,
+      ).toBe(true);
+      expect(
+        (yield* Files.operations.globFiles({
+          cwd: fixture.workspace,
+          include: ["**/*"],
+          exclude: [],
+        })).ok,
+      ).toBe(true);
+      yield* scoped(function* () {
+        expect(value(yield* Files.operations.temporaryDirectory()).length).toBeGreaterThan(0);
+      });
+    });
+
+    // And the directory really was made, through the installed provider rather
+    // than a handler the test held itself.
+    expect(yield* exists(join(fixture.workspace, "made", "through", "installation"))).toBe(true);
+  });
+
   // HF16: a junction is the Windows shape of the same limitation, and this is
   // the row that names it. Elsewhere it is an ordinary directory symlink, so
   // the case runs on every target rather than only where the reparse point
@@ -1099,5 +1171,171 @@ describe("Tier HF — host Files provider", () => {
     expect(yield* readTextFile(join(fixture.workspace, "notes.md"))).toBe("first");
     // Deletion acquires nothing, so a halt leaves no temporary and no leftover.
     expect(yield* entries(fixture.workspace)).toEqual(["notes.md"]);
+  });
+});
+
+describe("host Files — making a directory exist", () => {
+  // HF24: the two things a caller can write, and the guarantee that the
+  // operation is finished before anything else happens. A relative path is
+  // resolved against the working directory and every missing parent is made; an
+  // absolute one names that exact location in the caller's filesystem and is
+  // used as written, which is the established `<Dir>` exception and the reason
+  // this operation resolves its own destination.
+  it("HF24: creates missing parents for a relative path and uses an absolute one as written", function* () {
+    const fixture = yield* useFixture();
+    const files = handler();
+
+    const nested = yield* files.ensureDirectory({
+      cwd: fixture.workspace,
+      path: "one/two/three",
+    });
+    expect(nested.ok).toBe(true);
+    expect(yield* exists(join(fixture.workspace, "one", "two", "three"))).toBe(true);
+
+    // Outside the working directory, and accepted: every other operation here
+    // refuses an absolute path, so this asserts the exception rather than
+    // inheriting it. A relative path spelled to reach the same place is refused
+    // just below, which is what makes the two rules distinguishable.
+    const elsewhere = join(fixture.outside, "made", "here");
+    const absolute = yield* files.ensureDirectory({ cwd: fixture.workspace, path: elsewhere });
+    expect(absolute.ok).toBe(true);
+    expect(yield* exists(elsewhere)).toBe(true);
+
+    const escaping = yield* files.ensureDirectory({
+      cwd: fixture.workspace,
+      path: "../outside/climbed",
+    });
+    expect(parseFilesFailure(failed(escaping))?.reason).toBe("lexical-escape");
+    expect(yield* exists(join(fixture.outside, "climbed"))).toBe(false);
+  });
+
+  // HF25: an existing directory is the answer already. Nothing is replaced and
+  // nothing is cleared — asserted on the bytes, because a provider that removed
+  // and recreated the directory would pass a test that only checked it exists.
+  it("HF25: an existing directory is used, and its contents are untouched", function* () {
+    const fixture = yield* useFixture();
+    const files = handler();
+    const target = join(fixture.workspace, "existing");
+    yield* until(mkdir(target));
+    yield* writeTextFile(join(target, "kept.txt"), "the bytes that were here");
+    yield* until(mkdir(join(target, "sub")));
+
+    const again = yield* files.ensureDirectory({ cwd: fixture.workspace, path: "existing" });
+    expect(again.ok).toBe(true);
+    expect(yield* readTextFile(join(target, "kept.txt"))).toBe("the bytes that were here");
+    expect(yield* entries(target)).toEqual(["kept.txt", "sub"]);
+  });
+
+  // HF26: a non-directory is a mistake to report, never a thing to remove. The
+  // matrix is four cases, not two: the entry may be a regular file or a
+  // supported special one, and it may stand at the target or on the way to it.
+  // Those refuse through different code — the target is classified here, an
+  // intermediate is the platform's `ENOTDIR` carried into the shared
+  // vocabulary — so a pair that covered only one position would leave the other
+  // untested.
+  //
+  // A symbolic link is this repository's portable special entry, and it points
+  // at a regular file: a link to a *directory* is a directory to enter, which
+  // is the parity decision both providers make.
+  it("HF26: a file or a special entry, at the target or on the way, refuses", function* () {
+    const fixture = yield* useFixture();
+    const files = handler();
+    yield* writeTextFile(join(fixture.workspace, "occupied"), "a file, not a directory");
+    yield* writeTextFile(join(fixture.workspace, "pointee"), "what the link names");
+    yield* until(symlink(join(fixture.workspace, "pointee"), join(fixture.workspace, "linked")));
+
+    const cases = [
+      { what: "a regular file at the target", path: "occupied", phase: "target" },
+      { what: "a regular file on the way", path: "occupied/below/here", phase: undefined },
+      { what: "a special entry at the target", path: "linked", phase: "target" },
+      { what: "a special entry on the way", path: "linked/below/here", phase: undefined },
+    ] as const;
+
+    for (const entry of cases) {
+      const refused = yield* files.ensureDirectory({ cwd: fixture.workspace, path: entry.path });
+      const failure = parseFilesFailure(failed(refused));
+      // The `what` travels with the assertion, so a failure names which of the
+      // four reported something else.
+      expect(`${entry.what}: ${failure?.operation}`).toBe(`${entry.what}: ensure-directory`);
+      expect(`${entry.what}: ${failure?.reason}`).toBe(`${entry.what}: not-directory`);
+      if (entry.phase !== undefined) {
+        expect(`${entry.what}: ${failure?.phase}`).toBe(`${entry.what}: ${entry.phase}`);
+      }
+      // Nothing resolved crosses back: no host path, no errno, no platform
+      // text. Asserted on the whole serialized failure, so a member added later
+      // that carried one of them would fail here rather than pass unnoticed.
+      const serialized = JSON.stringify(failed(refused));
+      expect(`${entry.what}: ${serialized.includes(fixture.workspace)}`).toBe(
+        `${entry.what}: false`,
+      );
+      expect(`${entry.what}: ${serialized.includes(fixture.root)}`).toBe(`${entry.what}: false`);
+      expect(`${entry.what}: ${/ENOTDIR|ENOENT|errno/i.test(serialized)}`).toBe(
+        `${entry.what}: false`,
+      );
+    }
+
+    // Every refusal changed nothing: the file is still a file, the link is
+    // still a link, and its target still holds its bytes.
+    expect(yield* readTextFile(join(fixture.workspace, "occupied"))).toBe(
+      "a file, not a directory",
+    );
+    expect((yield* until(lstat(join(fixture.workspace, "linked")))).isSymbolicLink()).toBe(true);
+    expect(yield* readTextFile(join(fixture.workspace, "pointee"))).toBe("what the link names");
+  });
+
+  // HF27: creation is direct and persists. The operation has no rollback and no
+  // teardown removal, so a directory made inside a scope that then fails or is
+  // cancelled is still there afterwards — which is the whole difference between
+  // this provider and the transactional one.
+  it("HF27: a created directory survives a later failure and a cancellation", function* () {
+    const fixture = yield* useFixture();
+    const files = handler();
+
+    yield* scoped(function* () {
+      const made = yield* files.ensureDirectory({ cwd: fixture.workspace, path: "kept-on-fail" });
+      expect(made.ok).toBe(true);
+      try {
+        throw new Error("the work inside failed");
+      } catch {
+        // Swallowed here: what is under test is the directory, not the failure.
+      }
+    });
+    expect(yield* exists(join(fixture.workspace, "kept-on-fail"))).toBe(true);
+
+    const created = withResolvers<void>();
+    const task = yield* spawn(function* () {
+      const made = yield* files.ensureDirectory({
+        cwd: fixture.workspace,
+        path: "kept-on-halt",
+      });
+      expect(made.ok).toBe(true);
+      created.resolve();
+      yield* suspend();
+    });
+    // Halted only once the directory exists. Halting a task that had not run
+    // yet would assert nothing about teardown — the directory would be absent
+    // because it was never created, which is a different result wearing the
+    // same shape.
+    yield* created.operation;
+    yield* task.halt();
+    expect(yield* exists(join(fixture.workspace, "kept-on-halt"))).toBe(true);
+  });
+
+  // HF28: the operation is about a directory and nothing else. It reads no
+  // repository, and a checkout it is pointed inside of is byte-identical after.
+  it("HF28: ensuring a directory beneath a checkout leaves the checkout alone", function* () {
+    const fixture = yield* useFixture();
+    const files = handler();
+    const checkout = join(fixture.workspace, "checkout");
+    yield* until(mkdir(join(checkout, ".git"), { recursive: true }));
+    yield* writeTextFile(join(checkout, ".git", "HEAD"), "ref: refs/heads/main\n");
+    yield* writeTextFile(join(checkout, "tracked.txt"), "committed content");
+
+    const made = yield* files.ensureDirectory({ cwd: checkout, path: "generated/output" });
+    expect(made.ok).toBe(true);
+
+    expect(yield* readTextFile(join(checkout, ".git", "HEAD"))).toBe("ref: refs/heads/main\n");
+    expect(yield* readTextFile(join(checkout, "tracked.txt"))).toBe("committed content");
+    expect(yield* entries(checkout)).toEqual([".git", "generated", "tracked.txt"]);
   });
 });

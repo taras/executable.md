@@ -563,8 +563,9 @@ const COMPILED_BINARY: RuntimeExclusion[] = [
  *
  * It holds a managed checkout with a kernel-released exclusive advisory lock,
  * which this repository reaches through the Deno runtime and which Node and Bun
- * expose no equivalent of. The provider is not reachable from any entrypoint
- * yet — these suites install it themselves through the trusted test installer.
+ * expose no equivalent of. The declarations it installs, and the fact that a
+ * runtime without the provider refuses every operation, are covered portably by
+ * `packages/cli/tests/run-composition.test.ts`, which runs everywhere.
  */
 const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
   {
@@ -583,6 +584,18 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
     path: "packages/workflow/tests/run-composition-remote.test.ts",
     reason:
       "the same provider, publishing and reconciling against a modeled Git host; the transport and its evidence are Deno-only for the same reason the rest of the provider is",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/cli/tests/run-composition-deno.test.ts",
+    reason:
+      "the same provider reached through an ordinary run, asked the questions only a runtime that operates repositories can answer: managed-Worktree session placement, an ordinary journal's diagnostic status, and diagnostic-trace non-authority",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/cli/tests/run-composition-nested.test.ts",
+    reason:
+      "a nested execution's own provider instance, which needs the same kernel-released advisory lock the root's does, and real subprocesses to prove where a child stands",
     issue: DERIVED_SCOPE,
   },
 ];

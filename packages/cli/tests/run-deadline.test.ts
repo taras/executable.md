@@ -21,6 +21,7 @@ import { API, Config, Service, fetch, useHostFiles } from "@executablemd/runtime
 import { runXmd } from "../src/cli.ts";
 import { SOURCE_UPGRADE } from "./support/upgrade-assembly.ts";
 
+import { unsupportedRepositories } from "../src/run-repositories.ts";
 /**
  * The exit continuation `exit()` reaches for. `main()` installs one under this
  * name; a suite that drives `runXmd` directly installs its own so a command's
@@ -124,6 +125,7 @@ function* drive(args: string[], options: DriveOptions = {}): Operation<Driven> {
         }
       },
       SOURCE_UPGRADE,
+      unsupportedRepositories,
     );
 
     return { status, stderr, reads, events, serviceInstalled, deadlineReads };

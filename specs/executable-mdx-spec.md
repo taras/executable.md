@@ -116,17 +116,42 @@ paths relative to cwd, and the engine's own file access is written that way:
 component search directories (`["./components", "./"]`) are relative, and
 resolved paths in the journal (`"components/Greeting.md"`) are relative.
 
+#### Lexical working directories
+
+Three components produce the contextual working directory the operations above
+resolve against, and each restores the enclosing one when its invocation ends —
+on success, failure and cancellation alike.
+
+- `<Repository name url base?>` expands its content at the selected checkout.
+- `<Worktree name branch base?>` expands its content at the linked checkout it
+  selected of the Repository in scope.
+- `<Dir path>` recursively creates or adopts `path` before content begins, then
+  expands its content there. A relative path is read against the directory
+  already in effect and an absolute path keeps its existing meaning. It selects
+  no repository.
+
+Written self-closing with `as`, Repository and Worktree render nothing and bind
+the checkout path instead, which is what lets a later sibling `<Dir path={…}>`
+render descendants there.
+
+Every consumer of the contextual working directory observes the selected
+checkout: a process a document runs, a `<Session>` an agent is launched into,
+and every relative document path. Which repository a Git element acts on is
+therefore decided by where it is written, and the same element inside a `<Dir>`
+at a linked worktree acts on that worktree.
+
 #### Document data and engine control plane
 
 Two kinds of filesystem access are separate boundaries, and the separation is
 what lets one document mean the same thing in two environments.
 
-**Document data** — the files a document names in its own text — goes through
-`API.Files`, a contextual Api of whole semantic operations. `<File>` (§6.13),
-`<File.Delete>` (§6.13.1), `<Glob>` (§6.14), and `<TempDir>` (§6.11) speak only
-that Api, hold no host path, and never learn which provider answered. `xmd run` installs a host
-provider that resolves those paths in the caller's filesystem; a workflow run
-installs one whose paths name entries in a logical filesystem the run owns.
+**Document data** — the files and directories a document names in its own text
+— goes through `API.Files`, a contextual Api of whole semantic operations.
+`<Dir>`, `<File>` (§6.13), `<File.Delete>` (§6.13.1), `<Glob>` (§6.14), and
+`<TempDir>` (§6.11) speak only that Api, hold no provider handle, and never learn
+which provider answered. `xmd run` installs a host provider that resolves those
+paths in the caller's filesystem; a workflow run installs one whose paths name
+entries in a logical filesystem the run owns.
 The Api has **no host default**: with no provider installed, every operation
 fails the execution rather than reaching the host.
 
@@ -135,12 +160,27 @@ replay guards, the eval compiler, the diagnostic journal, and the test target
 — reads host paths the caller selected, through the low-level `API.Fs`. Those
 are not document-addressable, and they stay where they are.
 
-A path a document authored is always relative and always resolved by the
-provider, against the contextual `Env.cwd` the component supplies with it.
-Nothing the provider resolves reaches a printed error or the journal: what
-crosses back is a reason from a fixed vocabulary (§6.13), never a resolved
-path, a symlink target, a temporary name, an errno code, or a platform
-message.
+The ordinary file-operation paths a document authors are relative and resolved
+by the provider against contextual `Env.cwd`. Directory placement preserves
+Dir's existing exception: an absolute `path` is used as written, while a
+relative one is resolved against the enclosing cwd. Nothing the provider
+resolves reaches a printed error or the journal: what crosses back is a reason
+from a fixed vocabulary (§6.13), never a resolved path, a symlink target, a
+temporary name, an errno code, or a platform message.
+
+`API.Files.ensureDirectory` is the mandatory provider-neutral directory act.
+It recursively creates a missing target, succeeds for an existing directory
+without replacing it or clearing its contents, and refuses a file or another
+non-directory. Its success carries no path or handle. The absent-provider
+terminal throws like every other Files operation, and the host and workflow
+providers must both implement it; the Api's stable name is what lets separately
+loaded copies compose.
+
+Dir asks for that ensure before installing the target as cwd and before
+expanding content. If it refuses, content does not begin. After it succeeds, the
+directory persists and content failure or cancellation does not remove it; the
+component's scope restores only the enclosing cwd. Repository context is not
+installed or replaced by Dir.
 
 #### The contextual working directory
 
@@ -1910,7 +1950,7 @@ run but are absent from the diagnostic trace.
 | `packages/cli/src/workflow.ts` | the runtime-neutral `xmd workflow` lifecycle: grammar, run opening, execution records, statuses and exit codes |
 | `packages/cli/src/workflow-definition.ts` | establishing an immutable Git definition from a working-tree path, and loading a retained one again |
 | `packages/cli/src/deno-workflow.ts` | the Deno run store and Workspace attachment; Node and Bun install the refusing host instead |
-| `packages/workflow/src/deno/workspace/files.ts` | the transaction-bound `API.Files` provider — one durable Workspace effect per document read, write and search |
+| `packages/workflow/src/deno/workspace/files.ts` | the transaction-bound `API.Files` provider — one durable Workspace effect per document read, write, directory ensure and search |
 | `packages/workflow/src/deno/workspace/host.ts` | `withWorkflowWorkspace()` — the run's effect coordinator, logical cwd `/`, and Files provider installed together inside one execution |
 | `packages/workflow/src/journal.ts` | the `workflow_run` record, canonical-record recognition, and the refusals that name differing fields without their values |
 | `packages/workflow/src/run.ts` | `workflowInstallation()` / `retainedWorkflowInstallation()` — the `ExecutionInstallation` values a trusted host passes to `executeInstalled()`, each contributing a mandatory run-identity admission and the `prepare` hook that creates or restores the run inside the durable root |
@@ -2633,6 +2673,23 @@ included, and a reserved registration overrides the repository. Only genuine
 absence falls through to a default: a candidate that exists but cannot be read,
 imported, parsed, or compiled fails where it is loaded, so a broken local
 component is never quietly replaced.
+
+#### The run profile's repository declarations
+
+Thirteen names — `Repository`, `Worktree`, `Dir`, `Git.Switch`, `Git.Add`,
+`Git.Commit`, `Git.Push`, `PullRequest`, `PullRequest.Reviews`,
+`PullRequest.Comments`, `PullRequest.Checks`, `IssueTracker` and `Issue` — are
+ordinary registered defaults in tier 5. A repository-local Markdown or
+TypeScript component of any of those names is chosen ahead of them, exactly as
+it is ahead of any other package's default, and for its own scope alone.
+
+They are one array with several consumers: an ordinary document execution, a
+workflow attachment, `xmd syntax`, and `xmd plan`'s validation and generation.
+Registering them installs no provider, discovers no repository, acquires no
+lock, spawns no Git and reads no credential — describing an environment mints
+nothing. What each name *does* is decided by whichever repository provider the
+command installed (§8.1), and a host that installed none still resolves every
+one of them.
 
 The bundle tier exists only inside a workflow run, and such a run searches no
 repository directories at all — so a declared name resolves to the exact source
@@ -8457,6 +8514,52 @@ workflow and returns a `DocumentExecution` handle. Options:
 - `secretDetection?` — detect credentials before durable events persist
   (default: enabled)
 
+#### The host's repository provider
+
+A document execution reaches repository operations only through the provider
+the command installed inside the execution scope, before the root document is
+imported. There are two, and they differ in lifetime and authority rather than
+in what an author writes.
+
+The **ordinary provider** is what the Deno source entrypoint and the compiled
+binary install for `xmd run` and for an approved `xmd plan --run`. Constructing
+it mints a fresh opaque invocation identity and empty state, both private to
+that one execution:
+
+- **Ambient discovery** happens once, before root expansion, from the
+  invocation's starting directory: the canonical checkout root, the canonical
+  common Git directory, the object format, the current HEAD and branch, the
+  locally recorded admitted `origin` when there is one, and the recorded default
+  branch. Being outside a Git checkout is not a startup failure — only an
+  element that needs a repository refuses, and it names how to run inside one.
+- **The Git identity** an ordinary commit records is the invoking user's own,
+  read once from the trusted host's environment and configuration. It is used
+  for `<Git.Commit>` alone and is not otherwise observable; a host that can name
+  no identity refuses that one component and leaves every other one usable.
+  Nothing else crosses from the caller's environment: hooks, file-system
+  monitors, signing programs and repository-supplied credential helpers stay
+  disabled.
+- **The invocation identity** names this execution to a service. It is not a
+  prop, a Context value, a component result, a middleware answer or a journal
+  event; it is neither addressable nor reusable, and the engine's own
+  `Expansion.id` names the authored site inside it.
+- **The journal is not authority.** `--journal` writes a diagnostic trace that
+  starts from a path that did not exist; nothing reads one back. A run with an
+  in-memory stream and a run with `--journal` perform the same live operations,
+  the same number of times, and a later run starts with a new identity, empty
+  evidence and a new request.
+
+The **retained provider** is what a workflow host installs inside its Workspace
+attachment. Its operations are durable effects keyed by the WorkflowRun, so a
+completed one restores from the journal without contacting anything.
+
+Node and Bun install neither. They register the same declarations (§5.3), and
+every repository operation there reports an absent provider before a lock, a
+credential, a subprocess or a request exists.
+
+A nested `<Execution host="run">` child constructs a provider of its own, so its
+identity, its locks and its evidence do not reach its parent or a sibling.
+
 #### Secret detection
 
 Every execution refuses to persist a durable event that carries a credential.
@@ -9087,8 +9190,8 @@ how an eval block compiles, how a service process is hosted, or which runtime
 it is on**. A runtime-named
 entrypoint — `deno.ts`, `node.ts`, `bun.ts`, `compiled.ts` — installs its
 `API.Env` providers with `{ at: "min" }` and passes the matching service
-installer and its own upgrade assembly to
-`runXmd(args, installService, upgrade)`:
+installer, its own upgrade assembly and its own repository installer to
+`runXmd(args, installService, upgrade, installRepositories, ...)`:
 
 ```typescript
 yield* API.Env.around(
@@ -9103,7 +9206,14 @@ yield* API.Env.around(
   },
   { at: "min" },
 );
-yield* runXmd(args, useDenoService, UPGRADE);
+yield* runXmd(
+  args,
+  useDenoService,
+  UPGRADE,
+  denoRunRepositories(HELPER),
+  () => useDenoWorkflowHost(HELPER),
+  useMachineSessions(),
+);
 ```
 
 The upgrade assembly is a required parameter rather than an optional one. It
@@ -9114,10 +9224,30 @@ document nothing through which a release could be read, downloaded or replaced,
 and inheriting that authority by omission is impossible. The complete contract
 is [`xmd upgrade`](./upgrade-command-spec.md).
 
-The installer is invoked only for `xmd run` and `xmd test`, immediately before
-`execute()`. Help, inspection and agent-worker paths never install or attach a
-service. Document-aware `xmd run … --help` is one of those inspection paths and
-never invokes the installer.
+The repository installer is required for the same reason and states a different
+fact: what this runtime can *operate*, rather than what it is. Deno and the
+compiled binary pass the live provider — `denoRunRepositories(HELPER)`, built
+from the same credential-helper assembly the workflow host uses — and Node and
+Bun pass `unsupportedRepositories`. Every runtime registers the same thirteen
+declarations either way, so `xmd syntax` describes one language everywhere and a
+runtime that operates none of it reports an absent provider before a lock, a
+credential, a subprocess or a request exists (§5.3, §8.1).
+
+Being *supplied* by the entrypoint and being *used* are different things, and
+the commands differ:
+
+- an ordinary `xmd run`, and an approved `xmd plan --run`, install a fresh
+  provider instance for that execution;
+- `xmd test` installs none for its own root document, and hands the
+  entrypoint's installer to a `host="run"` child — which is an ordinary run
+  whatever command hosts it, and receives an instance of its own;
+- a workflow execution installs none at all, because its Workspace attachment
+  owns repositories for the run.
+
+The service installer is invoked only for `xmd run` and `xmd test`, immediately
+before `execute()`. Help, inspection and agent-worker paths never install or
+attach a service. Document-aware `xmd run … --help` is one of those inspection
+paths and never invokes the installer.
 
 A `xmd run` that refuses its document target (§5.4) may or may not have reached
 the installer: the refusal comes before it when an inspection discovered the
@@ -10153,13 +10283,18 @@ platform's.
 | HF21 | Containment before removal | Empty, absolute, lexically escaping, and parent-link-escaping paths are each refused with their own phase and reason and reach no low-level removal — proven against an admitted deletion that does |
 | HF22 | Platform failures | A refused removal is a structured `Err` carrying a reason and nothing else; one that reports the path already gone is the same success absence is |
 | HF23 | Cancellation | A halt before the removal produces no Result, leaves the entry as it was, and leaves nothing behind — deletion acquires nothing |
+| HF24 | Recursive directory ensure | A missing relative target and all missing parents are created before `<Dir>` content begins; the same operation accepts the exact absolute target without rebasing it |
+| HF25 | Existing directory | An existing target succeeds without replacement or clearing, and planted contents remain byte-identical after the body |
+| HF26 | Non-directory refusal | A regular file and a supported special entry, at the target and as an intermediate entry, each refuse before content with a sanitized reason and no host path, platform code, raw message or cause |
+| HF27 | Direct persistence | A directory created by `<Dir>` remains after successful content, failed content and cancellation; cwd restoration performs no teardown deletion |
+| HF28 | Repository independence | Ensuring and entering a directory beneath a selected checkout leaves every Repository identity member and provider selection unchanged |
 
 ### Tier FF — Files infrastructure failure
 
 | # | Test | Verify |
 |---|------|--------|
 | FF1 | Absence before children | A write with no provider fails the execution, expands no children, renders nothing, reaches no `API.Fs` call, and stops the following sibling |
-| FF2 | Every other form | Read, `<File.Delete>`, `<Glob>`, and `<TempDir>` each stop at their first provider call, and nothing after them expands |
+| FF2 | Every other form | Read, `<Dir>`, `<File.Delete>`, `<Glob>`, and `<TempDir>` each stop at their first provider call, and nothing after them expands |
 | FF3 | A refused operation | Denial is fatal, carries its own fixed diagnostic, and renders no content |
 | FF4 | The check authorizes nothing | A refused check makes exactly one provider call; the children never run and the document carries on |
 | FF5 | Malformed write data | A phase and target that contradict each other, a reason outside the vocabulary, and an undescribable success are all fatal `protocol` invariants, and the category is not interpolated |
@@ -10806,7 +10941,7 @@ Defined in [Workflow runs](./workflow-spec.md) §10.
 
 | # | Test | Verify |
 |---|------|--------|
-| WF1 | Public routing | `<File>` and `<Glob>` reach the run's logical Workspace, and a host `API.Files` spy installed outside the run observes nothing for any read, write, refusal or search |
+| WF1 | Public routing | `<File>`, `<Dir>` and `<Glob>` reach the run's logical Workspace, and a host `API.Files` spy installed outside the run observes nothing for any read, write, directory ensure, refusal or search |
 | WF2 | Atomic write | File bytes, the current-root pointer and one filtered Yield are all visible to a second connection together, and the newest journal row names the published root |
 | WF3 | Recorded read | A read is its own durable effect whose recorded value is the content it read |
 | WF4 | Historical read | A read restores its recorded content where the current frontier holds something else |
@@ -10828,6 +10963,10 @@ Defined in [Workflow runs](./workflow-spec.md) §10.
 | WF20 | Rollback after the removal | An infrastructure failure between the removal and publication rolls the outer transaction back: the file, the committed root and the committed effect history are all the ones the run started with |
 | WF21 | Completed replay | A completed deletion restores its outcome without a second low-level removal, even where the path was privately recreated afterwards, and appends nothing |
 | WF22 | Cancelled deletion | A halt between the removal and the commit publishes no outcome and moves no root; the continuation, which has no record of it, performs and records the deletion exactly once |
+| WF23 | Atomic directory ensure | A recursive creation, its one `workspace_file` outcome and the resulting current Workspace root become visible together; content begins only after that commit |
+| WF24 | Directory refusal rollback | A target or intermediate non-directory rolls its savepoint back, publishes only the sanitized refusal against the unchanged root and begins no content; neither a partial parent nor host detail survives |
+| WF25 | Existing directory and retained root | Ensuring an existing populated directory preserves its contents and commits a successful effect whose resulting root is the run's authoritative current root |
+| WF26 | Directory replay and cancellation | Completed replay restores the recorded success and retained root without creating again; cancellation before commit publishes no effect or root, while cancellation of later content leaves the committed directory and restores the enclosing cwd |
 
 ### Tier EP — The execution protocol
 
@@ -11057,7 +11196,7 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
 | GXC1 | The selection | Omitting `allow` and stating `read` produce one identical retained policy; a mixed selection is retained in canonical class order, with the read table's entries before the write table's and host order inside each |
 | GXC2 | Unstateable policy | An empty selection, one class twice, a selected class with no table or an empty one, and a host table holding one name with overlapping forms or two definitions each fail before the candidate is parsed — with a deliberately unparseable candidate, no `generated_xmd` record and nothing of the candidate retained |
 | GXC3–GXC4 | Name and form | A self-closing and a paired `<File>` in one fragment resolve to the read and the write identity and are retained with their forms; the opposite form under a single-class selection is refused with no read and no write |
-| GXC5–GXC6 | Authority | No admitted name — `<File>` in either form, `<Dir>` or the self-closing `<File.Delete>` — is answered by a same-name repository component, the dotted one included; and Git push, pull request, issue, repository, glob and an executable block are outside the tables whatever the selection |
+| GXC5–GXC6 | Authority | No admitted name — `<File>` in either form, the versioned paired `<Dir>` or the self-closing `<File.Delete>` — is answered by a same-name repository component, the dotted one included; and Git push, pull request, issue, repository, glob and an executable block are outside the tables whatever the selection |
 | GXC7 | The result | A write-only fragment observes nothing and renders nothing; a mixed one collects the read's value and not the write's |
 | GXC8 | Preflight | An unadmitted sibling after an admitted write, an unadmitted child under an admitted parent, and an unadmitted form after an admitted write each perform no write at all |
 | GXC10 | The form at the invocation | An admitted read still performs exactly its read and an admitted write still performs exactly its write, under a `Component.hasContent` handler outside the generated expansion that lies consistently *and* under one answering `[false, true]` / `[true, false]` — with the retained identity and form unmoved, the read's value collected, and the file bytes proving which effect ran. An admitted read beside each of them reports the chain's answer and consumes exactly one, so every case proves the handler installed and answering before it proves the element ignored it — an inert handler, and an element that consulted the chain and took the next answer, both fail. An invocation the evaluator did not receive is refused with no provider call, and a handler that observes and delegates leaves both forms running through their ordinary providers |
@@ -11091,12 +11230,13 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
 | WGAC7 | The import boundary | Through public `importComponent` middleware: calling the implementation with an invocation it built, with the first site's routed at the second, with a live content-bearing parent's routed into the sites inside it, by keeping the declared implementation and running it at another element's invocation, and by keeping one attachment's implementation — with that attachment's whole registration record answered for the name inside a second, simultaneously live attachment — and running it at the second attachment's own `<Evaluate>` site, are each refused. Nothing is admitted and no request performed under an identity the author wrote no observation at, and neither run's database receives a record the other's expansion named: a redirected registry answer carries behavior, never the claimant this execution delivered. Honest delegation, forwarding the genuine invocation, admits each site under its own name, nested or not; and an interrupted run resumes into each site's own record — the retained observation restored without re-reading, the interrupted request performed |
 | WGAC8 | The result shape | The result carries each admitted read's name and returned value in invocation order, with the fragment's rendering under `output` — an admitted `<Fetch>` renders nothing and its response survives anyway. Which pinned identity produced one is not in the value: the retained admission holds that |
 | WGAC9 | The class selection | An empty, repeated, unknown or non-array `allow` is refused before any admission; `read`, `write` and both in either order are admitted and retained in canonical order; omitting it retains exactly `read`, and the write table is not in that policy at all |
-| WGAC10 | The standard write table | An admitted paired `<File>` beneath a generated `<Dir>` lands in the run's own Workspace at the nested logical path, through the ordinary file effect; the retained policy holds all three standard entries with their forms, in the order the profile states them — core's paired `File:write`, the composition package's paired `Dir`, then core's self-closing `File.Delete` — and a `<Git.Push>` and a self-closing `<File />` are each refused under the same selection with no effect |
+| WGAC10 | The standard write table | An admitted paired `<File>` beneath a generated `<Dir>` first recursively creates the directory through one ordinary `workspace_file` effect, then lands the file at the nested logical path through another; the retained policy holds all three standard entries with their forms, in the order the profile states them — core's paired `File:write`, paired `@executablemd/workflow/composition/dir-v2#Dir`, then core's self-closing `File.Delete` — and a `<Git.Push>` and a self-closing `<File />` are each refused under the same selection with no effect |
 | WGAC14 | The admitted deletion | A write-only fragment holding one self-closing `<File.Delete>` removes the file from the run's own Workspace, read back through the run's own transaction; it performs exactly one further `workspace_file` effect, whose outcome is `{ kind: "deleted" }`; it is retained under `@executablemd/core#File.Delete` in the self-closing form; and the document binds exactly `{ observations: [], output: "" }` with no receipt of any kind |
 | WGAC15 | Preflight covers the deletion | A fragment placing an admitted `<File.Delete>` first and an executable code block second is refused for the block — the class proving the deletion was admitted, since a refusal names no name — and the file remains with no deletion effect performed or retained |
 | WGAC11 | What a selection binds | A write-only evaluation binds `observations: []`, and a mixed one binds exactly the read's entry while the write lands in the Workspace |
 | WGAC12 | Committed mutations | A completed replay of a write-enabled document journals nothing new, performs no second mutation, and leaves the retained content |
 | WGAC16 | Bundled continuation | `<Evaluate>` inside a committed bundled Markdown component, then a parent `<File>` write and the real `<Elicit>` outside it, for a generated read and a generated write alike: the real start suspends holding the exactly ordered `generated_xmd → nested workspace_file → parent workspace_file → suspension_request` subsequence; answer delivery and the completed resume leave the journal counts, that subsequence, the Workspace root-publication count and the authoritative current root unchanged; and the delivered value reaches the document after the wait. `API.Files` component calls are not evidence here — re-expansion legitimately enters that boundary before the durable effect restores |
+| WGAC17 | Directory mutation authority | `allow={["write"]}` admits the versioned paired `<Dir>` and intentionally authorizes its persistent recursive creation; a continuation retaining the former `@executablemd/workflow/composition#Dir` refuses before generated execution and creates nothing, while an unchanged current admission replays without a second ensure |
 
 ### Tier WAL — The workflow Agent observation loop
 
@@ -11734,6 +11874,48 @@ drives the `xmd plan` command.
 | VB8 | A direct `xmd test --verbose` root does not have `<Verbose>` |
 | VB9 | Host false is overridden to true for one lexical subtree |
 | VB10 | Host true is overridden to false, the body is skipped, and sibling state is restored |
+
+### Tier ORC — Repository composition under an ordinary run (§5.3, §8.1)
+
+Every case distinguishes what a *document* observed from what the *host*
+holds, because that is the boundary the two profiles differ across. Real Git
+repositories, a real managed root and a real second process carry the
+canonical-identity, linked-worktree and kernel-lock claims; injected roots,
+transports, credential readers and gates carry the rest. No case points at the
+user's own `~/.xmd/repositories`.
+
+| # | Test | Verify |
+|---|------|--------|
+| ORC1 | One declaration surface | All thirteen names appear in the catalog with complete contracts; a repository file of one of those names shadows the default; catalog construction performs no ambient discovery, lock, Git, credential or network operation |
+| ORC2 | Runtime declaration parity | The same catalog assertion holds under Deno, Node and Bun; on a runtime that installs no operational repository provider, representative Repository, Worktree, Git, Issue and PullRequest forms each report an absent provider with zero mutation, while `<Dir>` remains operational through that runtime's host `API.Files` provider |
+| ORC3 | Ambient primary checkout | From a normal repository, root Switch/Add/Commit select the ambient Repository and the contextual checkout; outside Git, a root Worktree, Git operation or PullRequest refusal names how to run inside one |
+| ORC4 | Ambient linked worktree | Invoked from a linked worktree, Repository identity follows the canonical common directory, Git acts on that worktree's root, and the primary checkout is untouched |
+| ORC5 | Origin is not local authority | A repository with no `origin` creates a Worktree and performs local Git; Push and PullRequest refuse before a credential, session or transport exists |
+| ORC6 | Directory ordering and paths | `<Dir>` recursively creates a missing relative target from the enclosing cwd, accepts an absolute target without rebasing it, and completes the ensure before installing cwd or beginning content |
+| ORC6a | Existing directory | `<Dir>` uses an existing directory without replacing or clearing it, and its planted contents remain unchanged after content expands |
+| ORC6b | Non-directory refusal | A file and a supported special entry at the target or along the route each refuse before content; the error carries only the fixed structural vocabulary and no host path or platform detail |
+| ORC6c | Context boundaries | Repository and Worktree bodies observe their checkout; `<Dir>` content observes the ensured directory; the enclosing cwd is restored after success, printed failure and cancellation |
+| ORC6d | Repository remains selected | Entering a directory inside a selected checkout changes only cwd; every Repository identity member and provider selection remains unchanged |
+| ORC6e | Host persistence | An ordinary host-created directory persists after successful, failed and cancelled content, and no teardown deletion occurs |
+| ORC6f | Workflow atomic ensure | Recursive creation, one durable `workspace_file` success and the resulting Workspace root commit together before content; the root retained by the effect is the authoritative current root |
+| ORC6g | Workflow refusal rollback | A target or intermediate non-directory rolls back its mutation savepoint, publishes a sanitized refusal against the unchanged root, creates no partial parent and begins no content |
+| ORC6h | Workflow replay and cancellation | Completed replay restores the recorded success and retained root without ensuring again; cancellation before commit publishes neither, while later content cancellation preserves the committed directory and restores cwd |
+| ORC6i | Generated write authority | `allow={["write"]}` admits paired `@executablemd/workflow/composition/dir-v2#Dir` and authorizes persistent recursive creation; a retained former `@executablemd/workflow/composition#Dir` entry refuses before generated execution and mutation |
+| ORC7 | Session placement | A Session launched in a managed Worktree receives that Git root and a distinct worktree session key; `.git`-file discovery remains the boundary |
+| ORC8 | Persistent lifecycle | Managed paths, metadata and working files survive normal completion, authored failure and cancellation; no teardown Git or delete command occurs |
+| ORC9 | Compatible reuse | A second invocation with the same immutable request reuses the same path and preserves a moved branch and a later commit while revalidating owner, origin, object format and creation commit |
+| ORC10 | Conflict is non-mutating | A changed base, Worktree branch or base, metadata, origin, common directory, object format or owner relationship refuses, and the slot's entries and sidecar are identical before and after |
+| ORC11 | Partial creation | A metadata-free slot in exactly the pre-exposure state is adopted and receives its sidecar; an incompatible or non-empty one refuses and remains byte-identical |
+| ORC12 | Exclusive ownership | A second process selecting the same slot is refused while the first holds it; another slot succeeds concurrently; normal release permits a later owner and the checkout remains |
+| ORC13 | Live local Git | Switch, Add and Commit keep their authored semantics and make real, non-transactional changes; a failure or a cancellation claims neither rollback nor replay; a commit records the invoking user's own identity, an unresolvable one refuses that component alone, and hooks, monitors, signing and repository helpers stay disabled |
+| ORC14 | Live Push evidence | A performed or already-equal Push stores exact private evidence; a Push of another branch, checkout, origin, destination or commit does not authorize a PullRequest; the latest publication of a destination decides |
+| ORC15 | Evidence cannot cross runs | A PullRequest succeeds only after an exact Push in the same execution; a new run must publish again, and copying a Context value, a result or a previous trace grants nothing |
+| ORC16 | Live Issues | Configured reads and upserts use the existing normalized contracts and this execution's own identity; absent or out-of-ceiling configuration sends no credential and no request |
+| ORC17 | Live PullRequests | Configured reviews, comments and checks reads, and a Push-authorized upsert, run under ordinary Deno; the read ceiling and the local evidence check both precede credential and network access |
+| ORC18 | The journal is diagnostic | The same fixture without and with `--journal` performs the same live operations once per invocation; the trace is newly created and never consumed as continuation or evidence |
+| ORC19 | Nested run profile | An isolated `host="run"` child receives the declarations and a fresh provider; its evidence and locks reach neither its parent nor a sibling |
+| ORC20 | Retained workflow regression | Repository and Worktree replay, transactional Git, Push and pull-request history evidence, Issue effects, forks and completed replay keep their records, identities, provider call counts and native-launch refusal unchanged; directory ensure adds only its own `workspace_file` event and resulting retained root |
+| ORC21 | Compiled binary | A compiled smoke creates a root-level ambient Worktree, runs a command there, proves `.git` is a file and the checkout persists after exit; a second gated process proves lock refusal and release |
 
 
 ---

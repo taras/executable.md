@@ -321,6 +321,26 @@ export function deleteFile(input: FilePathInput): Operation<Result<void>> {
   return unit(Files.operations.deleteFile(input), { operation: "delete", phase: "access" });
 }
 
+/**
+ * Make this authored path name a directory, with nothing coming back.
+ *
+ * Unit for the same reason `deleteFile` is: what the caller asked for is the
+ * directory's existence, and existence is the whole answer. A receipt saying
+ * whether this call created it or found it would be a difference the operation
+ * deliberately does not offer, and a caller that could branch on it would be
+ * branching on a race.
+ *
+ * `access` is the fallback phase, because reaching the directory is the step
+ * this operation exists for — a refusal the vocabulary does not recognize
+ * happened while trying to make it, not while reading the path.
+ */
+export function ensureDirectory(input: FilePathInput): Operation<Result<void>> {
+  return unit(Files.operations.ensureDirectory(input), {
+    operation: "ensure-directory",
+    phase: "access",
+  });
+}
+
 export function readFileText(input: FilePathInput): Operation<Result<string>> {
   return outcome(Files.operations.readTextFile(input), {
     operation: "read",
