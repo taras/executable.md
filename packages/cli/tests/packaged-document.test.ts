@@ -121,10 +121,13 @@ describe("packaged documents", () => {
     const committed = yield* readTextFile(fileURLToPath(packagedDocumentUrl(PLAN_DOCUMENT)));
     expect(source).toBe(committed);
 
-    // It is a Markdown value component a document invokes, not a root a command
-    // runs: one optional `session` prop, and a string return.
-    expect(source).toContain("returns:");
+    // It is a Markdown text component a document invokes, not a root a command
+    // runs: one optional `session` prop, no declared return, and one top-level
+    // `<Output>` selecting the approved source as the whole of its rendering.
+    expect(source).not.toContain("returns:");
     expect(source).toContain("session: { type: string, minLength: 1 }");
+    expect(source).toContain("<Output>{admitted}</Output>");
+    expect(source).not.toContain("<Return");
     expect(source).toContain("<CheckDraft");
     expect(source).toContain("<Fail");
     // The caller's Prompt is projected once, before anything is prepared.
@@ -140,9 +143,10 @@ describe("packaged documents", () => {
     ).toBe(2);
     // The worked example is itself a titled Plan.
     expect(source).toContain("# Ask for and save your age");
-    // A final invalid review offers two ways out, and the prose says so.
+    // A tenth draft that could not be repaired is not a review at all, and the
+    // prose says why: there is no decision left to offer.
     expect(source).toContain(
-      "the two\nremaining choices are to ask the coding agent what went wrong, or to stop.",
+      "there is no decision left for you to make, and\nthis workflow does not ask you to make one.",
     );
     // Every visible stage of the workflow is a heading somebody can audit.
     for (const heading of [
@@ -150,7 +154,8 @@ describe("packaged documents", () => {
       "## Check and repair the draft",
       "## Review the draft",
       "## Continue from your decision",
-      "## Return the approved Plan",
+      "## Explain a tenth draft that could not be repaired",
+      "## Produce the approved Plan source",
     ]) {
       expect(source).toContain(`${heading}\n`);
     }
@@ -165,7 +170,10 @@ describe("packaged documents", () => {
     expect(source).toContain(
       '<Let as="unresolved" value="Plan authorship ended without an approved Plan. No Plan was returned." />',
     );
-    expect(source.split("reviewed ten drafts without an approved Plan").length - 1).toBe(4);
+    // Twice, once per surface: the automatic explanation is the only ending
+    // that says it. The authored exhaustion sentence went with the review a
+    // tenth invalid draft no longer reaches.
+    expect(source.split("reviewed ten drafts without an approved Plan").length - 1).toBe(2);
     // The closing branch is an unexpected-no-decision fallback, not a second
     // copy of exhaustion: exhaustion is decided inside review, and saying it
     // twice would make the two endings indistinguishable to a reader.
@@ -173,7 +181,9 @@ describe("packaged documents", () => {
     // The choices are the words a person reads, with no internal spelling
     // behind them.
     expect(source).toContain('["Approve", "Request changes", "Stop"]');
-    expect(source).toContain('["Explain what went wrong", "Stop"]');
+    // A tenth draft that could not be repaired is explained automatically, so
+    // there is no decision to offer and no question naming one.
+    expect(source).not.toContain('"Explain what went wrong"');
     expect(source).not.toContain('"revise"');
     expect(source).not.toContain('"abort"');
     expect(source).not.toContain('<Let as="problems">');

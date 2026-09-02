@@ -40,7 +40,7 @@
 import { createHash } from "node:crypto";
 import { scoped } from "effection";
 import type { Operation, Result, Scope } from "effection";
-import { createDurableOperation } from "@executablemd/durable-streams";
+import { createDurableOperation, StaleInputError } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import {
   agentIdentityComponents,
@@ -180,6 +180,23 @@ const INPUTS_RETURNS = {
   additionalProperties: false,
 };
 
+/**
+ * What the frozen inputs are given: the caller's optional session name, and the
+ * prompt this invocation is about.
+ *
+ * The prompt is here so that the first durable record of the invocation is
+ * about a question as well as a catalog. Only its digest is kept.
+ */
+const INPUTS_PROPS = {
+  type: "object",
+  properties: {
+    session: { type: "string", minLength: 1 },
+    instruction: { type: "string" },
+  },
+  required: ["instruction"],
+  additionalProperties: false,
+};
+
 const OPTIONAL_SESSION = {
   type: "object",
   properties: { session: { type: "string", minLength: 1 } },
@@ -201,6 +218,21 @@ const SOURCE_PROP = {
   type: "object",
   properties: { source: { type: "string" } },
   required: ["source"],
+  additionalProperties: false,
+};
+
+/**
+ * What the final admission is given: the approved bytes, and the prompt they
+ * were written for.
+ *
+ * The prompt is here because the artifact this phase retains is an answer to a
+ * question, and a record that did not say which question would be restorable
+ * for one nobody asked. Only its digest is kept.
+ */
+const ADMIT_PROPS = {
+  type: "object",
+  properties: { source: { type: "string" }, instruction: { type: "string" } },
+  required: ["source", "instruction"],
   additionalProperties: false,
 };
 
@@ -241,6 +273,9 @@ export function* planComponentDeclaration(
     // empty rendering rather than on the spelling, which is the same answer for
     // a body that rendered to nothing.
     forms: ["paired"],
+    // What this Component renders is a program's source. Reflowing it or
+    // formatting it as Markdown would publish bytes nobody approved.
+    exact: true,
     privates: [
       planInputs(assembly),
       planAuthorship(assembly),
@@ -275,6 +310,7 @@ export function* planComponentDescription(): Operation<DeclaredMarkdownComponent
     source,
     digest: sourceDigest(source),
     forms: ["paired"],
+    exact: true,
     // The private names travel too, even though none of them is ever described.
     // Selection refuses a name a declaration keeps to itself, and it has to
     // refuse the same names here as it does in a run — otherwise a repository
@@ -298,13 +334,13 @@ function describedPrivates(): readonly IdentityComponent[] {
   const described: readonly Omit<IdentityComponent, "origin" | "factory">[] = [
     {
       name: "PlanInputs",
-      props: OPTIONAL_SESSION,
+      props: INPUTS_PROPS,
       returns: INPUTS_RETURNS,
       forms: ["self-closing"],
     },
     { name: "PlanAuthorship", props: AUTHORSHIP_PROPS, forms: ["paired"] },
     { name: "CheckDraft", props: SOURCE_PROP, returns: CHECK_RETURNS, forms: ["self-closing"] },
-    { name: "AdmitPlan", props: SOURCE_PROP, returns: { type: "string" }, forms: ["self-closing"] },
+    { name: "AdmitPlan", props: ADMIT_PROPS, returns: { type: "string" }, forms: ["self-closing"] },
   ];
   return described.map((component) => ({
     ...component,
@@ -326,17 +362,24 @@ function* uninvocable(): Operation<never> {
  *
  * The catalog is an observation the first Agent turn is built from, so it is
  * journaled: a continuation restores what the run actually showed the agent
- * rather than rebuilding one from a working tree that has moved. The session
- * placement is derived here too, from the durable identity canonical execution
- * minted for this exact expansion — which is what makes two `<Plan>` sites, and
- * two iterations of one site, distinct without either of them being nameable.
+ * rather than rebuilding one from a working tree that has moved. The instruction
+ * identity beside it is what makes a continuation answerable at all: this is the
+ * first durable record of the invocation, so comparing it here refuses a Plan
+ * asked for different instructions before a directory, a provider, a turn, a
+ * review or an admission exists — the only place that can refuse without having
+ * already done some of the work it would be refusing.
+ *
+ * The session placement is derived here too, from the durable identity canonical
+ * execution minted for this exact expansion — which is what makes two `<Plan>`
+ * sites, and two iterations of one site, distinct without either of them being
+ * nameable.
  */
 function planInputs(assembly: PlanComponentAssembly): IdentityComponent {
   return {
     name: "PlanInputs",
     origin: `${PLAN_ORIGIN}#PlanInputs`,
     forms: ["self-closing"],
-    props: OPTIONAL_SESSION,
+    props: INPUTS_PROPS,
     returns: INPUTS_RETURNS,
     factory: (claim: IdentityClaimant) =>
       function* PlanInputs(
@@ -351,10 +394,23 @@ function planInputs(assembly: PlanComponentAssembly): IdentityComponent {
         const authored = typeof props.session === "string" ? props.session : undefined;
         const session = placementFor(assembly, id, authored);
 
-        const syntax = yield* durablePlanOperation<string>(`plan:inputs:${id}`, assembly.catalog);
+        const instruction = sourceDigest(String(props.instruction));
+
+        const frozen = yield* durablePlanOperation<Json>(`plan:inputs:${id}`, function* () {
+          return { syntax: yield* assembly.catalog(), instruction };
+        });
+
+        // A history is input, so it is parsed rather than trusted.
+        const retained = readInputs(frozen);
+        if (retained === undefined) {
+          throw new StaleInputError(UNREADABLE_INPUTS);
+        }
+        if (retained.instruction !== instruction) {
+          throw new StaleInputError(STALE);
+        }
 
         return {
-          syntax,
+          syntax: retained.syntax,
           session,
           surface: assembly.surface,
           durable: durability(assembly, authored),
@@ -570,6 +626,107 @@ function structuralAssessment(
   };
 }
 
+/** What the frozen inputs retained, or nothing when the record is not one. */
+interface RetainedInputs {
+  readonly syntax: string;
+  readonly instruction: string;
+}
+
+/**
+ * The frozen inputs a record holds, read as a closed protocol.
+ *
+ * Exactly two members, both strings. A record missing one, carrying a member
+ * this version does not know, or holding one of the wrong type is a record this
+ * version cannot read — not one to fill in a default for, because every default
+ * here is a guess about what an earlier run actually asked.
+ */
+function readInputs(value: Json): RetainedInputs | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const { syntax, instruction } = value;
+  if (Object.keys(value).length !== 2) {
+    return undefined;
+  }
+  if (typeof syntax !== "string" || typeof instruction !== "string") {
+    return undefined;
+  }
+  return { syntax, instruction };
+}
+
+/**
+ * What a record this version cannot read is refused with.
+ *
+ * A `StaleInputError`, like the changed-instruction refusal and for the same
+ * reason: it is raised while the journal still holds entries this run will now
+ * never reach, and an ordinary failure there is replaced by the completion's
+ * divergence report — so the person would read a count of unreached entries
+ * instead of what was actually wrong with their history.
+ */
+const UNREADABLE_INPUTS =
+  "the retained Plan inputs cannot be read as Plan inputs, so no Plan source was produced.";
+
+/**
+ * What a continuation asking for a different Plan is refused with.
+ *
+ * A `StaleInputError` rather than an ordinary failure, because that is exactly
+ * what this is: the effect identity matches — same site, same occurrence — and
+ * what changed is outside the journal. Raising it as one also makes it the
+ * run's authoritative outcome, so the person reads why their Plan was refused
+ * instead of a count of unreached journal entries.
+ */
+const STALE =
+  "this Plan was written for different instructions, so the retained Plan is stale input. " +
+  "No Plan source was produced, and none was written for the new instructions. Re-run from " +
+  "the start rather than resuming a journal that answers a different question.";
+
+/**
+ * The record one approved Plan leaves behind.
+ *
+ * Five facts, retained together because they are one answer: which invocation
+ * asked, which prompt it asked about, the exact bytes that were approved, their
+ * digest, and that the structural admission succeeded. A continuation reads it
+ * back as hostile data — a history is input, not a value this process left in
+ * memory — and hands back those bytes without another turn, repair, check,
+ * review, explanation or admission.
+ */
+interface PlanArtifact {
+  readonly invocation: string;
+  readonly instruction: string;
+  readonly source: string;
+  readonly digest: string;
+  readonly admission: "valid";
+}
+
+/**
+ * What a record holds, read as a closed protocol.
+ *
+ * Exactly five members. A record missing one, carrying a sixth this version does
+ * not know, or holding one of the wrong type is refused rather than read
+ * partially: this record is the only thing standing between a continuation and
+ * publishing bytes nobody approved, so a member it cannot account for is a
+ * reason to stop.
+ */
+function readArtifact(value: Json): PlanArtifact | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const { invocation, instruction, source, digest, admission } = value;
+  if (Object.keys(value).length !== 5) {
+    return undefined;
+  }
+  if (typeof invocation !== "string" || typeof instruction !== "string") {
+    return undefined;
+  }
+  if (typeof source !== "string" || typeof digest !== "string" || admission !== "valid") {
+    return undefined;
+  }
+  return { invocation, instruction, source, digest, admission };
+}
+
+const UNREADABLE_ARTIFACT =
+  "the retained Plan artifact cannot be read as one, so no Plan source was produced.";
+
 function admitPlan(
   assembly: PlanComponentAssembly,
   declared: readonly DeclaredMarkdownComponent[],
@@ -578,7 +735,7 @@ function admitPlan(
     name: "AdmitPlan",
     origin: `${PLAN_ORIGIN}#AdmitPlan`,
     forms: ["self-closing"],
-    props: SOURCE_PROP,
+    props: ADMIT_PROPS,
     returns: { type: "string" },
     factory: (claim: IdentityClaimant) =>
       function* AdmitPlan(
@@ -587,21 +744,41 @@ function admitPlan(
       ): Operation<Json> {
         const id = yield* claim(invocation);
         const candidate = String(props.source);
-        return yield* durablePlanOperation<string>(
-          `plan:admit:${id}:${sourceDigest(candidate)}`,
-          function* () {
-            const validation = yield* structurally(assembly, declared, candidate);
-            if (validation.outcome === "invalid") {
-              throw new Error(
-                "the approved Plan does not validate:\n" +
-                  JSON.stringify(validation.diagnostics, null, 2),
-              );
-            }
-            // Byte for byte: what went in is what comes back, and the admission
-            // decided only whether it may.
-            return candidate;
-          },
-        );
+        const instruction = sourceDigest(String(props.instruction));
+        // Named for the invocation alone. A name carrying the candidate's digest
+        // would be a different record for every draft, so a continuation whose
+        // instructions moved would author a second Plan rather than meet the one
+        // this site already has.
+        const retained = yield* durablePlanOperation<Json>(`plan:artifact:${id}`, function* () {
+          const validation = yield* structurally(assembly, declared, candidate);
+          if (validation.outcome === "invalid") {
+            throw new Error(
+              "the approved Plan does not validate:\n" +
+                JSON.stringify(validation.diagnostics, null, 2),
+            );
+          }
+          return {
+            invocation: id,
+            instruction,
+            source: candidate,
+            digest: sourceDigest(candidate),
+            admission: "valid",
+          };
+        });
+
+        const artifact = readArtifact(retained);
+        if (artifact === undefined) {
+          throw new StaleInputError(UNREADABLE_ARTIFACT);
+        }
+        if (artifact.invocation !== id || artifact.digest !== sourceDigest(artifact.source)) {
+          throw new StaleInputError(UNREADABLE_ARTIFACT);
+        }
+        if (artifact.instruction !== instruction) {
+          throw new StaleInputError(STALE);
+        }
+        // Byte for byte: what was approved is what comes back, and the
+        // admission decided only whether it may.
+        return artifact.source;
       },
   };
 }

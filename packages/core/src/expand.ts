@@ -123,6 +123,7 @@ import { declareChildAnswers, expandAnswers, strayAnswerError } from "./answers.
 import { DeclarationScan } from "./declaration-scan.ts";
 import { RESERVED_STRUCTURAL } from "./structural.ts";
 import { renderSegments } from "./render.ts";
+import { markExactSource } from "./output/exact-source.ts";
 import {
   layerEnvironments,
   layerProjectedContentEnvironment,
@@ -2357,6 +2358,14 @@ function* expandComponent(
   const selection = authority?.identities?.beginImport(name);
   let selected: IdentityDomain | undefined;
   let dispatcher: FunctionComponent | undefined;
+  /**
+   * Whether canonical execution answered this import for a name it closed.
+   *
+   * The provenance exact source is read from. An open import's answer — the
+   * chain's, unverified — never sets it, so nothing a handler writes into a
+   * definition can reach the presentation decision below.
+   */
+  let authorizedCanonically = false;
   try {
     // The public chain answers, and canonical execution decides whether the
     // answer is one it produced. In a closed execution — a workflow holding a
@@ -2398,6 +2407,11 @@ function* expandComponent(
       imported = answered;
     } else {
       imported = authority.imports.authorize(name, answered);
+      // This import is canonical execution's own answer for a name this
+      // execution closed, which is the only provenance exact source is read
+      // from. An open import — one no tier claims — never sets it, however its
+      // answer describes itself.
+      authorizedCanonically = true;
       // Closed authorization answers with core's retained copy rather than the
       // object the resolver recorded, and the copy is what this expansion
       // invokes — so the selection is recorded against it too. Only here: an
@@ -2712,6 +2726,9 @@ function* expandComponent(
   }
 
   const bodyOwner = asBinding === undefined ? owner : undefined;
+  // Where this body's own segments start, so what it renders can be told apart
+  // from what the caller had already produced into the same array.
+  const renderedFrom = bodyOwner?.length ?? 0;
   const expanded = yield* withInvocation(function* (invocation) {
     yield* installInvocation(invocation);
     return yield* expandBody(
@@ -2730,6 +2747,24 @@ function* expandComponent(
       returnBody,
     );
   });
+
+  // Exact source is a provenance, and both halves of it are read here from
+  // things no answer can write: that canonical execution authorized this import
+  // for a name this execution closed, and that the *host's own admitted
+  // declaration* for that name states exact source. A definition claiming the
+  // disposition, or segments arriving already marked, decide nothing.
+  //
+  // What a component declared exact renders is exact wherever it renders: the
+  // caller's flow, its own returned region, or neither when the invocation
+  // binds instead. Recording it here — against the segments this body produced,
+  // after it produced them — is what carries the fact to the emission loop,
+  // which is outside every scope the invocation owned.
+  if (authorizedCanonically && authority?.declared?.declaresExact(name) === true) {
+    markExactSource(
+      authority?.exact,
+      bodyOwner === undefined ? expanded : bodyOwner.slice(renderedFrom),
+    );
+  }
 
   if (asBinding) {
     // A capture never swallows an error. The body reported these where they

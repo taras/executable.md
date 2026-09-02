@@ -146,6 +146,7 @@ export function* selectComponent(
       source: declared.source,
       forms: declared.forms,
       definition: declared.definition,
+      exact: declared.exact,
     };
   }
 

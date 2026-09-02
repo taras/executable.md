@@ -96,6 +96,8 @@ import {
 import { Component, importComponent, raise } from "./component-api.ts";
 import { sourceDescription } from "./source-position.ts";
 import { renderSegment } from "./render.ts";
+import { createExactSource } from "./output/exact-source.ts";
+import type { ExactSource as ExactSourceRecord } from "./output/exact-source.ts";
 import { DocumentOutput } from "./api.ts";
 import {
   composeBoundExecChain,
@@ -221,7 +223,22 @@ type DurableSelection =
    * host that no longer declares it, refuses rather than continuing somebody
    * else's policy.
    */
-  | { kind: "declared-markdown"; origin: string; digest: string; content: string }
+  | {
+      kind: "declared-markdown";
+      origin: string;
+      digest: string;
+      content: string;
+      /**
+       * Whether the host declared this component's rendering to be source.
+       *
+       * Closed: present only as `true`, and absent means the ordinary prose
+       * disposition. It is retained because it decides how the bytes this
+       * component produces are published — a continuation that resumed under a
+       * different answer would present a program as prose, or prose as a
+       * program, from the same origin and the same digest.
+       */
+      exact?: true;
+    }
   /**
    * A component only the declaration that carries it may write.
    *
@@ -269,15 +286,28 @@ function readDurableSelection(value: unknown): DurableSelection | undefined {
     const origin = record["origin"];
     const digest = record["digest"];
     const declaredContent = record["content"];
+    // Four members, or five when the optional disposition is present. Anything
+    // else — a member this version does not know, or `exact` written as
+    // anything but `true` — is a record this version cannot read rather than
+    // one it may guess at.
+    const exact = record["exact"];
+    const withExact = Object.hasOwn(record, "exact");
     if (
-      members !== 4 ||
+      members !== (withExact ? 5 : 4) ||
       typeof origin !== "string" ||
       typeof digest !== "string" ||
-      typeof declaredContent !== "string"
+      typeof declaredContent !== "string" ||
+      (withExact && exact !== true)
     ) {
       return undefined;
     }
-    return { kind: "declared-markdown", origin, digest, content: declaredContent };
+    return {
+      kind: "declared-markdown",
+      origin,
+      digest,
+      content: declaredContent,
+      ...(withExact ? { exact: true } : {}),
+    };
   }
 
   const path = record["path"];
@@ -450,6 +480,9 @@ function* durableImportComponent(
             origin: selected.origin,
             digest: selected.digest,
             content: selected.source,
+            // Recorded only when it holds, so an ordinary declaration's record
+            // is exactly what it always was.
+            ...(selected.exact ? { exact: true } : {}),
           };
         case "registered":
           return {
@@ -517,11 +550,15 @@ function* durableImportComponent(
 
   if (selection.kind === "declared-markdown") {
     const declaration = declared?.component(name);
+    // The disposition compares like every other term, absence included: a host
+    // that added or removed it is publishing the same bytes a different way,
+    // which is a different answer to the question this run already recorded.
     if (
       declaration === undefined ||
       declaration.origin !== selection.origin ||
       declaration.digest !== selection.digest ||
-      declaration.source !== selection.content
+      declaration.source !== selection.content ||
+      declaration.exact !== (selection.exact === true)
     ) {
       throw new Error(
         `Component ${name} was recorded as the declared Markdown "${selection.origin}", which is ` +
@@ -1725,10 +1762,11 @@ function* runValueRoot(
         authority,
         ownBody,
       );
+      const exactRecord = authority.exact;
       for (const resolved of expanded) {
         const text = renderSegment(resolved);
         if (text) {
-          yield* ephemeral(DocumentOutput.operations.output(text));
+          yield* ephemeral(DocumentOutput.operations.output(text, exactly(exactRecord, resolved)));
           chunks.push(text);
         }
       }
@@ -1755,6 +1793,47 @@ function* runValueRoot(
  * that exited nonzero failed the run is not theirs to decide, and this is where
  * the run says so (#441).
  */
+/** Whether one expanded segment carries exact bytes rather than prose. */
+function exactly(exact: ExactSourceRecord | undefined, segment: Segment): boolean {
+  return exact !== undefined && exact.has(segment);
+}
+
+/**
+ * What a buffered region emits: consecutive segments of one exactness, joined.
+ *
+ * Buffering is what makes this necessary. A streaming root hands the Output Api
+ * one segment at a time and each write says what it is; a region that renders
+ * as a whole would otherwise join a program's approved source to the prose
+ * beside it and present the pair as one thing. Segments of the same kind still
+ * travel together, so a region holding no exact bytes emits exactly once, as it
+ * always has.
+ */
+interface Emission {
+  readonly text: string;
+  readonly exact: boolean;
+}
+
+function emissions(
+  record: ExactSourceRecord | undefined,
+  segments: readonly Segment[],
+): Emission[] {
+  const runs: Emission[] = [];
+  for (const segment of segments) {
+    const text = renderSegment(segment);
+    if (!text) {
+      continue;
+    }
+    const exact = exactly(record, segment);
+    const last = runs[runs.length - 1];
+    if (last !== undefined && last.exact === exact) {
+      runs[runs.length - 1] = { text: last.text + text, exact };
+      continue;
+    }
+    runs.push({ text, exact });
+  }
+  return runs;
+}
+
 function* refuseCheckedFailure(checkedFailures: CheckedFailures): Operation<void> {
   const segment = checkedFailures.failure;
   if (segment !== undefined) {
@@ -1795,6 +1874,11 @@ function* documentWorkflow(
   // Mutable counter preserves deterministic blockIds across
   // per-segment expansion calls (see spec §6.1).
   const counter = createBlockCounter();
+
+  // Which segments this run produced as source. Read off the private authority
+  // this execution built, so the emission paths below reach it without a
+  // context — there is nothing here for a document to name.
+  const exactRecord = authority.exact;
 
   // What the document rendered before it stopped, held outside the expansion
   // scope so a failure still leaves it here (§6.9 Partial output). The buffered
@@ -1880,11 +1964,12 @@ function* documentWorkflow(
         authority,
         undefined,
       );
-      const text = selected.map(renderSegment).join("");
       // An empty buffered root emits no output event.
-      if (text) {
-        yield* ephemeral(DocumentOutput.operations.output(text));
+      const runs = emissions(exactRecord, selected);
+      for (const run of runs) {
+        yield* ephemeral(DocumentOutput.operations.output(run.text, run.exact));
       }
+      const text = runs.map((run) => run.text).join("");
       yield* refuseCheckedFailure(checkedFailures);
       return { status: "ok", output: text, value: text };
     }
@@ -1917,7 +2002,12 @@ function* documentWorkflow(
           // ephemeral() bridges from Workflow (durable) to Operation
           // (non-durable) — output emission is a derived side effect,
           // not journaled.
-          yield* ephemeral(DocumentOutput.operations.output(text));
+          yield* ephemeral(
+            DocumentOutput.operations.output(
+              text,
+              resolved !== undefined && exactly(exactRecord, resolved),
+            ),
+          );
           streamed.push(text);
         }
       }
@@ -1941,9 +2031,10 @@ function* documentWorkflow(
     // chunks is who the preservation is for, and the completion path only emits
     // for a run that streamed nothing at all — which stops being true as soon
     // as an earlier segment went out.
-    const tail = produced.slice(emittedThrough).map(renderSegment).join("");
-    if (tail) {
-      yield* ephemeral(DocumentOutput.operations.output(tail));
+    const runs = emissions(exactRecord, produced.slice(emittedThrough));
+    const tail = runs.map((run) => run.text).join("");
+    for (const run of runs) {
+      yield* ephemeral(DocumentOutput.operations.output(run.text, run.exact));
     }
     // A durability failure is not something the document did, so it never
     // becomes the document's own outcome (§6.11).
@@ -2178,6 +2269,10 @@ function* executeDocument(
         ...(declaredImports === undefined ? {} : { declared: declaredImports }),
         identities: identity.identities,
         forms,
+        // Created here, held here, and reclaimed with this execution. Nothing a
+        // document, a component, middleware or a separately loaded copy can
+        // name reaches this object.
+        exact: createExactSource(),
       };
 
       // Install the document's runtime Component providers before durableRun
@@ -2836,6 +2931,7 @@ function* invoke(
           ...(declaration.privates === undefined
             ? {}
             : { privates: [...declaration.privates].map(retainedIdentityComponent) }),
+          ...(declaration.exact === undefined ? {} : { exact: declaration.exact }),
         }),
       ),
     ),

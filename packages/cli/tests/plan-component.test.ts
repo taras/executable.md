@@ -15,22 +15,24 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped, until } from "effection";
+import { ensure, scoped, spawn, until } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { forEach } from "@effectionx/stream-helpers";
 import {
   agentIdentityComponents,
   collect,
   installAgentComponents,
   retainedSource,
+  useNormalizedOutput,
 } from "@executablemd/core";
 import type { Json } from "@executablemd/core";
 import { validateDocument } from "@executablemd/core";
-import { executeInstalled } from "@executablemd/core/host";
+import { executeInstalled, sourceDigest } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 
@@ -52,6 +54,8 @@ const PLAN = ["# Say hello", "", "This document greets you.", "", "Hello.", ""].
 /** What one document run produced, and every phase that was reached. */
 interface Run {
   output: string;
+  /** What the Output Api actually emitted, through whatever middleware ran. */
+  emitted: string;
   value: Json | undefined;
   failure: string | undefined;
   harness: PlanDeclarationHarness;
@@ -92,6 +96,18 @@ function* runDocument(options: {
   } | null;
   assess?: (source: string) => Operation<{ valid: boolean; diagnostics: Json }>;
   session?: string;
+  props?: Record<string, Json>;
+  /**
+   * Install the output middleware an ordinary `xmd run` installs.
+   *
+   * Off by default, because most cases are about what a document rendered
+   * rather than about how it was presented. A case about exact bytes turns it
+   * on, so the normalizer that would rewrite them is actually in the way. The
+   * Markdown suite cannot do this: its host installs no presentation
+   * middleware, so an exactness assertion there would hold whether the bypass
+   * existed or not.
+   */
+  normalized?: boolean;
 }): Operation<Run> {
   const root = options.root ?? (yield* authorshipRoot());
   const stream = options.stream ?? new InMemoryStream();
@@ -114,14 +130,19 @@ function* runDocument(options: {
   let value: Json | undefined;
   let failure: string | undefined;
   let output = "";
+  const chunks: string[] = [];
   yield* scoped(function* () {
     yield* installAgentComponents({ defaultAgent: AGENT, permissionMode: "deny-all" });
+    if (options.normalized === true) {
+      yield* useNormalizedOutput();
+    }
     try {
       const execution = yield* executeInstalled(
         {
           ...retainedSource(ROOT, options.source),
           stream,
           includes: [...(options.includes ?? [])],
+          ...(options.props === undefined ? {} : { props: options.props }),
         },
         [
           {
@@ -130,15 +151,32 @@ function* runDocument(options: {
           },
         ],
       );
+      // Subscribed before the completion is awaited, so what is collected is
+      // what went out through the middleware — the close value is the
+      // document's own rendering and would show none of the presentation.
+      const draining = yield* spawn(function* () {
+        yield* forEach(function* (chunk: string) {
+          chunks.push(chunk);
+        }, execution.output);
+      });
       value = yield* collect(execution);
       output = String(value);
+      yield* draining;
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
     }
   });
 
   const leftover = yield* until(readdir(root));
-  return { output, value, failure, harness, stream, leftover: leftover.sort() };
+  return {
+    output,
+    emitted: chunks.join(""),
+    value,
+    failure,
+    harness,
+    stream,
+    leftover: leftover.sort(),
+  };
 }
 
 /** A partial continuation of one run: everything it recorded but the terminals. */
@@ -284,11 +322,14 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       expect(plan).toBeDefined();
       expect(plan?.sourceKind).toBe("declared-markdown");
       expect(plan?.forms).toEqual(["paired"]);
-      expect(plan?.returnMode).toBe("value");
+      // A text component: the approved source is what it renders, and `as` is
+      // ordinary text capture rather than a declared return.
+      expect(plan?.returnMode).toBe("text");
       expect(Reflect.get(Object(plan?.origin), "origin")).toBe(PLAN_ORIGIN);
       // The description a document author reads is the packaged Component's own
       // frontmatter, so the asset and the entry describing it are one text.
-      expect(plan?.description).toContain("Create an XMD program from a Prompt.");
+      expect(plan?.description).toContain("Create an XMD program from a prompt.");
+      expect(plan?.description).toContain("emits the approved program source.");
 
       for (const category of catalog.categories) {
         const names = category.entries.map((entry) => entry.name);
@@ -552,6 +593,355 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       // Two durable placements, not one shared and not one refused.
       expect(run.leftover).toHaveLength(2);
       expect(new Set(run.leftover).size).toBe(2);
+    });
+  });
+
+  /**
+   * The Plan artifact a run retained, or nothing when it retained none.
+   *
+   * Read from the journal rather than from the binding, because retention is what
+   * a continuation reads and an ending that produced no Plan must leave nothing
+   * there for one to find.
+   */
+  function* retainedArtifact(stream: InMemoryStream): Operation<Json | undefined> {
+    for (const event of yield* stream.readAll()) {
+      if (event.type !== "yield" || !event.description.name.startsWith("plan:artifact:")) {
+        continue;
+      }
+      if (event.result.status === "ok") {
+        return event.result.value ?? null;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * The same history, with one Plan record's retained value replaced.
+   *
+   * A continuation reads what the journal holds, and what it holds is not
+   * guaranteed to be what this version wrote — a record can be truncated, edited,
+   * or written by a build that knew a different protocol. Rewriting it here is how
+   * a case asks what the reader does with one it cannot account for.
+   */
+  function* tampered(
+    stream: InMemoryStream,
+    prefix: string,
+    replace: (value: Json) => Json,
+  ): Operation<InMemoryStream> {
+    const partial = new InMemoryStream();
+    for (const event of yield* stream.readAll()) {
+      if (event.type === "close") {
+        continue;
+      }
+      if (
+        event.type === "yield" &&
+        event.description.name.startsWith(prefix) &&
+        event.result.status === "ok"
+      ) {
+        yield* partial.append({
+          ...event,
+          result: { status: "ok", value: replace(event.result.value ?? null) },
+        });
+        continue;
+      }
+      yield* partial.append(event);
+    }
+    return partial;
+  }
+
+  /** One approved run, whose journal a hostile continuation then reads. */
+  function* approvedRun(): Operation<InMemoryStream> {
+    const stream = new InMemoryStream();
+    const run = yield* runDocument({
+      source: ['<Plan as="approved">Write a program.</Plan>', "", "got: {approved}", ""].join("\n"),
+      reply: PLAN,
+      stream,
+    });
+    expect(run.failure).toBe(undefined);
+    return stream;
+  }
+
+  /** What a continuation reading that history produced. */
+  function* continued(stream: InMemoryStream): Operation<Run> {
+    return yield* runDocument({
+      source: ['<Plan as="approved">Write a program.</Plan>', "", "got: {approved}", ""].join("\n"),
+      reply: PLAN,
+      reviews: [],
+      stream,
+    });
+  }
+
+  it("PC19: the emitted source survives the CLI's own output normalization", function* () {
+    yield* useWorkingDirectory(function* (dir) {
+      // Whitespace the normalizer rewrites in prose: a line ending in spaces,
+      // and a run of four newlines. This case owns the presentation path
+      // because only a host can install that middleware — the Markdown suite's
+      // host installs none, so the same assertion there would hold whether the
+      // bypass existed or not.
+      const exact = [
+        "# Approved program",
+        "",
+        "This program writes a file when something runs it.   ",
+        "",
+        "",
+        "",
+        '<File path="planned.txt">the approved Plan ran</File>',
+        "",
+      ].join("\n");
+
+      const run = yield* runDocument({
+        source: ["<Plan>", "Write a program.", "</Plan>", ""].join("\n"),
+        reply: exact,
+        normalized: true,
+      });
+
+      expect(run.failure).toBe(undefined);
+      expect(run.emitted).toContain(exact);
+      // And nothing ran it.
+      expect((yield* until(readdir(dir))).sort()).toEqual([]);
+    });
+  });
+
+  it("PC20: the retained artifact carries the approved bytes and their digest", function* () {
+    yield* useWorkingDirectory(function* () {
+      const stream = new InMemoryStream();
+      const run = yield* runDocument({
+        source: ['<Plan as="approved">Write a program.</Plan>', "", "got: {approved}", ""].join(
+          "\n",
+        ),
+        reply: PLAN,
+        stream,
+      });
+
+      expect(run.failure).toBe(undefined);
+      // Retained before either form could publish the bytes: all five members,
+      // and exactly those five. A sixth would be something a later reader has
+      // to account for, and a missing one is a record that cannot be read.
+      const artifact = Object(yield* retainedArtifact(stream));
+      expect(Object.keys(artifact).sort()).toEqual([
+        "admission",
+        "digest",
+        "instruction",
+        "invocation",
+        "source",
+      ]);
+      expect(Reflect.get(artifact, "source")).toBe(PLAN);
+      expect(Reflect.get(artifact, "digest")).toBe(sourceDigest(PLAN));
+      expect(Reflect.get(artifact, "admission")).toBe("valid");
+      expect(typeof Reflect.get(artifact, "invocation")).toBe("string");
+      expect(typeof Reflect.get(artifact, "instruction")).toBe("string");
+    });
+  });
+
+  it("PC21: a stopped Plan leaves no artifact for a later evaluation to begin from", function* () {
+    yield* useWorkingDirectory(function* () {
+      const stream = new InMemoryStream();
+      const run = yield* runDocument({
+        source: ['<Plan as="approved">Write a program.</Plan>', "", "got: {approved}", ""].join(
+          "\n",
+        ),
+        reply: PLAN,
+        reviews: ["Stop"],
+        stream,
+      });
+
+      expect(run.failure).toBe("Plan authorship stopped at your request. No Plan was returned.");
+      expect(run.output).not.toContain("got:");
+      expect(run.emitted).not.toContain("# Say hello");
+      // Nothing retained, so nothing a later evaluation could restore.
+      expect(yield* retainedArtifact(stream)).toBe(undefined);
+    });
+  });
+
+  it("PC22: a completed Plan restores without authoring or admitting it again", function* () {
+    yield* useWorkingDirectory(function* (dir) {
+      // A component the first run can resolve and the second cannot. The
+      // approved Plan names it, so an admission that ran a second time would
+      // refuse these bytes instead of restoring them — which is how this tells
+      // restoration apart from a repeat.
+      yield* writeTextFile(join(dir, "Widget.md"), "a widget.\n");
+      const withWidget = ["# Use the widget", "", "<Widget />", ""].join("\n");
+      const source = [
+        '<Plan as="approved">Write a program.</Plan>',
+        "",
+        "got: {approved}",
+        "",
+      ].join("\n");
+
+      const first = new InMemoryStream();
+      const one = yield* runDocument({ source, reply: withWidget, includes: [dir], stream: first });
+      expect(one.failure).toBe(undefined);
+      expect(one.output).toContain(`got: ${withWidget}`);
+
+      const two = yield* runDocument({
+        source,
+        reply: "# A different Plan\n\nnot this one.\n",
+        reviews: [],
+        includes: [],
+        stream: yield* continuing(first),
+      });
+
+      expect(two.failure).toBe(undefined);
+      expect(two.output).toContain(`got: ${withWidget}`);
+      expect(two.harness.fake.prompts).toEqual([]);
+      expect(two.harness.reviews).toEqual([]);
+      expect(two.harness.checked).toEqual([]);
+    });
+  });
+
+  it("PC23: a continuation replays the retained root, so a changed body never runs", function* () {
+    yield* useWorkingDirectory(function* () {
+      // The retained-root negative control the story names. A continuation runs
+      // the root the journal kept, so a changed authored body is never expanded
+      // and is not the changed-instruction case below.
+      const first = new InMemoryStream();
+      const one = yield* runDocument({
+        source: ['<Plan as="approved">Write a program.</Plan>', "", "got: {approved}", ""].join(
+          "\n",
+        ),
+        reply: PLAN,
+        stream: first,
+      });
+      expect(one.failure).toBe(undefined);
+
+      const two = yield* runDocument({
+        source: [
+          '<Plan as="approved">Write a different program.</Plan>',
+          "",
+          "second run: {approved}",
+          "",
+        ].join("\n"),
+        reply: PLAN,
+        reviews: [],
+        stream: yield* continuing(first),
+      });
+
+      expect(two.failure).toBe(undefined);
+      expect(two.output).not.toContain("second run:");
+      expect(two.output).toContain(`got: ${PLAN}`);
+    });
+  });
+
+  it("PC24: instructions that render differently refuse in the frozen inputs", function* () {
+    yield* useWorkingDirectory(function* () {
+      // The prompt arrives through props, which is what can actually differ on
+      // a continuation: the authored body cannot, per PC23.
+      const source = [
+        "---",
+        "props:",
+        "  type: object",
+        "  properties:",
+        "    request: { type: string }",
+        "  required: [request]",
+        "---",
+        "",
+        '<Plan as="approved">{props.request}</Plan>',
+        "",
+        "got: {approved}",
+        "",
+      ].join("\n");
+
+      const root = yield* authorshipRoot();
+      const first = new InMemoryStream();
+      const one = yield* runDocument({
+        source,
+        props: { request: "Write a program." },
+        root,
+        reply: PLAN,
+        stream: first,
+      });
+      expect(one.failure).toBe(undefined);
+
+      const two = yield* runDocument({
+        source,
+        props: { request: "Write a different program." },
+        root,
+        reply: PLAN,
+        reviews: [],
+        stream: yield* continuing(first),
+      });
+
+      expect(two.failure).toContain("stale input");
+      expect(two.failure).toContain("none was written for the new instructions");
+      // Neither the retained Plan nor a newly authored one.
+      expect(two.output).not.toContain("# Say hello");
+      expect(two.output).not.toContain("got:");
+      // Refused in the frozen inputs: before a turn, a review, a check or a
+      // session directory existed.
+      expect(two.harness.fake.prompts).toEqual([]);
+      expect(two.harness.reviews).toEqual([]);
+      expect(two.harness.checked).toEqual([]);
+      expect(two.leftover).toEqual([]);
+    });
+  });
+
+  it("PC25: a retained inputs record this version cannot read produces nothing", function* () {
+    yield* useWorkingDirectory(function* () {
+      // Three ways a record stops being one: a member gone, a member added, and
+      // a member of the wrong type. Each is refused with the same fixed
+      // sentence, and none of them produces source or a binding.
+      const cases: [string, (value: Json) => Json][] = [
+        ["a member is missing", (value) => ({ syntax: Object(value).syntax })],
+        [
+          "a member this version does not know was added",
+          (value) => ({ ...Object(value), extra: "surprise" }),
+        ],
+        ["a member has the wrong type", (value) => ({ ...Object(value), instruction: 7 })],
+      ];
+
+      for (const [, replace] of cases) {
+        const run = yield* continued(
+          yield* tampered(yield* approvedRun(), "plan:inputs:", replace),
+        );
+
+        expect(run.failure).toContain("cannot be read as Plan inputs");
+        expect(run.output).not.toContain("got:");
+        expect(run.output).not.toContain("# Say hello");
+        expect(run.emitted).not.toContain("# Say hello");
+      }
+    });
+  });
+
+  it("PC26: a retained artifact this version cannot read produces nothing", function* () {
+    yield* useWorkingDirectory(function* () {
+      const cases: [string, (value: Json) => Json][] = [
+        [
+          "a member is missing",
+          (value) => {
+            const { digest: _digest, ...rest } = Object(value);
+            return rest;
+          },
+        ],
+        [
+          "a member this version does not know was added",
+          (value) => ({ ...Object(value), extra: "surprise" }),
+        ],
+        ["a member has the wrong type", (value) => ({ ...Object(value), source: 7 })],
+        [
+          "the admission is not the one this version accepts",
+          (value) => ({ ...Object(value), admission: "invalid" }),
+        ],
+        [
+          "the digest does not describe the source it sits beside",
+          (value) => ({ ...Object(value), digest: sourceDigest("something else") }),
+        ],
+        [
+          "the record belongs to another invocation",
+          (value) => ({ ...Object(value), invocation: "somebody-else" }),
+        ],
+      ];
+
+      for (const [, replace] of cases) {
+        const run = yield* continued(
+          yield* tampered(yield* approvedRun(), "plan:artifact:", replace),
+        );
+
+        expect(run.failure).toContain("cannot be read as one");
+        // No source reached the document either way it could have.
+        expect(run.output).not.toContain("got:");
+        expect(run.output).not.toContain("# Say hello");
+        expect(run.emitted).not.toContain("# Say hello");
+      }
     });
   });
 

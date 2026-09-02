@@ -102,6 +102,17 @@ export interface DeclaredMarkdownComponent {
   readonly returns?: ReturnsSchema;
   /** Components only elements authored by these exact bytes may resolve. */
   readonly privates?: readonly IdentityComponent[];
+  /**
+   * Whether what this component renders is exact bytes rather than prose.
+   *
+   * A text component's rendering is ordinarily presentation: the whitespace
+   * middleware reflows it and the terminal middleware formats it as Markdown.
+   * A component whose rendering is a program's source is not presentation, and
+   * a host that ships such bytes says so here. Only a declaring host can: the
+   * Markdown itself cannot ask for it, so a repository file of the same name
+   * gets the presentation every other document gets.
+   */
+  readonly exact?: boolean;
 }
 
 /** One declaration, admitted: what the host stated, checked against its bytes. */
@@ -114,6 +125,16 @@ export interface AdmittedDeclaredMarkdown {
   /** The parse of `source`, produced once and shared by every reader. */
   readonly definition: ComponentDefinition;
   readonly privates: readonly IdentityComponent[];
+  /**
+   * Whether the host declared this component's rendering to be source.
+   *
+   * Captured from the declaration, which crossed on an `ExecutionInstallation`
+   * by value before any middleware existed. It lives on the admission rather
+   * than on the parsed definition because a definition is an object handlers
+   * can copy, write and answer with, and this is a fact about *what the host
+   * declared* rather than about any object.
+   */
+  readonly exact: boolean;
 }
 
 /** The SHA-256 of exact UTF-8 bytes, lowercase hex. */
@@ -244,6 +265,7 @@ export function* admitDeclaredMarkdown(
       forms,
       definition,
       privates,
+      exact: declaration.exact === true,
     });
   }
 
@@ -468,6 +490,21 @@ export class DeclaredImports implements ImportTier {
   /** Whether some declaration keeps this name to itself. */
   declaresPrivate(name: string): boolean {
     return this.#privates.has(name);
+  }
+
+  /**
+   * Whether the host declared this name as a component that renders source.
+   *
+   * Answered from the admission — what the host stated before any middleware
+   * existed — rather than from the definition an import produced, so a handler
+   * that answers this name with a definition of its own gets whatever the host
+   * declared about the *name*, and a handler answering an undeclared name gets
+   * `false` because the host declared nothing about it. It is one half of the
+   * question; the caller supplies the other half by asking only for an import
+   * canonical execution authorized.
+   */
+  declaresExact(name: string): boolean {
+    return this.#catalog.component(name)?.exact === true;
   }
 
   /**

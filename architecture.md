@@ -43,7 +43,7 @@ Existing documents and code get aligned to this section retroactively.
 | Prompt | a person's original request, in ordinary natural language. `xmd plan` takes exactly one |
 | Plan | the executable program produced from a Prompt: an Executable Markdown document combining readable prose that expresses the Prompt's intent with the components that carry it out, each placed beside the prose describing what it does. It begins with one descriptive level-one heading. A Plan is what `xmd plan` approves and then delivers: printed to stdout by default, written to an `--output` file, and run only under `--run`. It is not a synonym for a workflow, a policy document or any executable Markdown file |
 | plan command document | the one exact checked-in first-party Markdown value root `xmd plan` executes. It is the command's adapter and nothing else: it projects the request into `<Plan>`, supplies the session, and returns the approved source. It is not itself a Plan. Internal: no command-line option selects another one, and no repository component search can answer for it |
-| packaged `<Plan>` Component | the one exact checked-in first-party Markdown value component that converts a Prompt into a Plan, `packages/cli/src/documents/Plan.md`, declared to every ordinary run as the public `<Plan>`. It owns and implements the Plan authorship workflow — the Prompt wording, the draft and repair loops, the `<CheckDraft>` branches, human review, revision, approval, stopping, exhaustion and the final explanation turn — and returns the exact approved Plan source. Every Plan-producing turn in it states the complete Plan requirements for itself, so a replacement may add or correct a title rather than only carry one forward. Both surfaces expand these exact bytes under one origin and one digest; there is no generated TypeScript copy and no second Markdown implementation. Its four phase components are private to it, and it is not itself a Plan |
+| packaged `<Plan>` Component | the one exact checked-in first-party Markdown text component that converts a prompt into a Plan, `packages/cli/src/documents/Plan.md`, declared to every ordinary run as the public `<Plan>`. It owns and implements the Plan authorship workflow — the Prompt wording, the draft and repair loops, the `<CheckDraft>` branches, human review, revision, approval, stopping, exhaustion and the automatic final explanation turn — and produces the exact approved Plan source as what it renders: written bare it emits those bytes, and `as` is ordinary text capture that binds them and emits nothing. Neither form evaluates the source. Every Plan-producing turn in it states the complete Plan requirements for itself, so a replacement may add or correct a title rather than only carry one forward. Both surfaces expand these exact bytes under one origin and one digest; there is no generated TypeScript copy and no second Markdown implementation. Its four phase components are private to it, and it is not itself a Plan |
 | authorship profile | the trusted-host assembly the packaged `<Plan>` Component runs its authored turns under, installed by its own `<PlanAuthorship>` inside the invocation that owns it rather than around an execution — which is what makes it the same frame whether `xmd plan`, an ordinary document, or a configured `<TestAgent>` run child asked. Which Agent context goes under it is a trusted-host capability the declaration carries — the production ACPX one built from the run's Agent stack, or the deterministic one a canonical `<TestAgent>` child declaration produced — and a host that supplies none states the sentence a `<Plan>` written there is refused with. The fixed policy is installed in one place for both, so a second provider cannot bring a weaker one: its fixed inputs, a constrained Agent provider, Elicitation, the fixed first-party components and the host-declared `<CheckDraft>`. It uses no repository component search and exposes no custom root, and the policy it installs is not readable from the command line. Its working directory is one host-owned directory dedicated to the logical session, keyed by the digest of that name, created empty and required to be empty on the way in. An explicitly named session's directory is durable, because continuation derives the same session identity from it; an invocation-unique default session's is scope-owned, claimed before it is created, and exactly one cleanup is attempted after profile teardown and before admission on every ending — the leaf removed non-recursively when it is still the empty directory that was handed over, and left as found with the command failing terminally when it has gained content or vanished. Where those directories live is a host dependency no caller or document selects |
 | upgrade command document | the one exact checked-in first-party Markdown streaming text root `xmd upgrade` executes to select and install a published release. It owns the exact-tag grammar, release selection, semantic-version comparison, consent, the status, already-current and installation branches, and the wording of every refusal and report; its rendered body is the command's output rather than a value it returns. Internal: no command-line option selects another one, and no repository component search can answer for it |
 | upgrade assembly | what one runtime-named entrypoint states about the `xmd` that is running: its provenance, reported version, invoked executable path, platform, architecture, release target when the release publishes one, and — for an eligible compiled macOS or Linux host alone — the factory for the four phases an installation needs. It describes how this `xmd` is running, never how its files arrived |
@@ -3561,14 +3561,34 @@ registration can answer for it — one decision, shared by execution, inspection
 and validation, so a repository file under a private name is described by none
 of them and runs nowhere.
 
-**The journal records the asset, not a lookup.** A declared import records
-exactly `{ kind: "declared-markdown", origin, digest, content }`, and a private
-one records exactly `{ kind: "declared-private", origin }`. A continuation reads
-both as hostile data, verifies the recorded origin, digest and bytes against
-what this run declares, and reads no file: a host that no longer declares the
-name, or that declares different bytes under it, refuses rather than continuing
+**The journal records the asset, not a lookup.** A declared import records one
+of two closed shapes — `{ kind, origin, digest, content }`, and the same with
+`exact: true` for a component the host declared as rendering a program's source
+— and a private one records exactly `{ kind: "declared-private", origin }`. A
+continuation reads all of it as hostile data, verifies the recorded origin,
+digest, bytes and disposition against what this run declares, and reads no file:
+a host that no longer declares the name, that declares different bytes under it,
+or that publishes those bytes a different way, refuses rather than continuing
 somebody else's Markdown. A recorded private import refuses unless the element
 asking for it is inside the same declaration.
+
+**Exact source is a provenance, not a property.** Whether bytes are published as
+a program's source or presented as prose is decided from two things no answer
+can write: that canonical execution authorized the import for a name this
+execution closed, and that the host's own admitted declaration for that name
+states it. A definition carrying the claim, a segment arriving already marked, a
+frontmatter key and a middleware answer are each data that reached the engine
+from somewhere, so none of them decides it — an ordinary
+`Component.importComponent` handler answering an open name with a definition
+claiming the disposition publishes prose, exactly as a repository file of that
+name does.
+
+The record of which segments an expansion produced as source belongs to the
+execution that made it and is handed down **by value** on canonical core's
+private expansion authority. Not through a context: a context resolves by name,
+and a name is not a secret, so a component could build one, reach the record and
+answer that everything is exact. It is reclaimed with its execution, reaches no
+public entrypoint, and marks nothing on the segments themselves.
 
 ## The syntax catalog boundary
 

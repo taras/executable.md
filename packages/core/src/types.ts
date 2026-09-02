@@ -362,6 +362,14 @@ export type ComponentSelection =
       source: string;
       forms: readonly InvocationForm[];
       definition: ComponentDefinition;
+      /**
+       * Whether the host declared this component's rendering to be source.
+       *
+       * Read from the admission rather than from `definition`, which is an
+       * object an import can copy and answer with. Selection reports what the
+       * host declared about the *name*.
+       */
+      exact: boolean;
     }
   | { kind: "unresolved"; searched: string[]; registered: readonly ComponentOrigin[] };
 

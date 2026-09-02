@@ -29,7 +29,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped, until } from "effection";
+import { createContext, ensure, scoped, until } from "effection";
 import type { Operation } from "effection";
 import { rm, writeTextFile } from "@effectionx/fs";
 import { API } from "@executablemd/runtime";
@@ -52,9 +52,13 @@ import { inspectComponent, inspectSyntax } from "../src/inspect.ts";
 import { validateDocument, validateDocumentStructure } from "../src/document-validation.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { retainedSource } from "../src/root-source.ts";
+import { DocumentOutput } from "../src/api.ts";
+import { useNormalizedOutput } from "../src/output/normalize.ts";
+import { useTerminalOutput } from "../src/output/terminal.ts";
+import { createExactSource, isExactSource } from "../src/output/exact-source.ts";
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
 import type { ImportedDefinition } from "../src/components/import-authority.ts";
-import type { PropsSchema } from "../src/types.ts";
+import type { PropsSchema, Segment } from "../src/types.ts";
 
 const ROOT_PATH = "documents/root.md";
 const ORIGIN = "@executablemd/test/Policy.md";
@@ -1151,6 +1155,55 @@ describe("Tier DM — selection is journaled and replays", () => {
     expect(message).toContain("recorded as the declared Markdown");
   });
 
+  it("DM26b: the record carries the exact-source disposition when the host declares one", function* () {
+    const stream = new InMemoryStream();
+    yield* run("<Policy />\n", [declared(POLICY_SOURCE, { exact: true })], [], stream);
+
+    const selection = (yield* stream.readAll())
+      .filter(isImport)
+      .find((event) => event.type === "yield" && event.description.name === "Policy");
+
+    // Closed: `exact: true` beside the four members an ordinary record has.
+    expect(selection?.type === "yield" && selection.result).toEqual({
+      status: "ok",
+      value: {
+        kind: "declared-markdown",
+        origin: ORIGIN,
+        digest: sourceDigest(POLICY_SOURCE),
+        content: POLICY_SOURCE,
+        exact: true,
+      },
+    });
+  });
+
+  it("DM26c: a continuation that dropped the exact disposition refuses", function* () {
+    const first = new InMemoryStream();
+    yield* run("<Policy />\n", [declared(POLICY_SOURCE, { exact: true })], [], first);
+
+    // The same name, the same origin, the same digest and the same bytes. Only
+    // how they are published changed, which is enough: prose is not what this
+    // run recorded producing.
+    const message = yield* refusal(
+      run("<Policy />\n", [declared(POLICY_SOURCE)], [], yield* continuing(first)),
+    );
+
+    expect(message).toContain("recorded as the declared Markdown");
+  });
+
+  it("DM26d: a continuation that added the exact disposition refuses", function* () {
+    const first = new InMemoryStream();
+    yield* run("<Policy />\n", [declared(POLICY_SOURCE)], [], first);
+
+    // The other direction, which absence has to be compared for rather than
+    // defaulted: a host that started calling these bytes source is answering
+    // differently from the run being continued.
+    const message = yield* refusal(
+      run("<Policy />\n", [declared(POLICY_SOURCE, { exact: true })], [], yield* continuing(first)),
+    );
+
+    expect(message).toContain("recorded as the declared Markdown");
+  });
+
   it("DM27: an ordinary execute() declares nothing and resolves no declared name", function* () {
     const message = yield* refusal(
       scoped(function* () {
@@ -1299,5 +1352,204 @@ describe("Tier DM — structural validation is the same walk without the run's v
     const source = { ...retainedSource(ROOT_PATH, "Nothing to resolve.\n"), includes: [] };
 
     expect(yield* validateDocumentStructure(source)).toEqual(yield* validateDocument(source));
+  });
+});
+
+/**
+ * Bytes that say whether they were presented or emitted.
+ *
+ * A line ending in spaces, a run of four newlines and an emphasis marker: the
+ * whitespace middleware rewrites the first two and the terminal middleware
+ * removes the third, so text that still carries all three was published as
+ * source rather than as prose.
+ */
+const PRESENTABLE = "keep **these** markers   \n\n\n\nand this run\n";
+
+/** Whether what a run published still carries every mark of being unpresented. */
+function unpresented(published: string): boolean {
+  return published.includes("**these**") && published.includes("markers   \n\n\n\n");
+}
+
+/**
+ * One run, published through the presentation an ordinary `xmd run` installs.
+ *
+ * Both middlewares, in the order the CLI installs them, so a case here asks the
+ * question a person's terminal asks: were these bytes presented, or emitted as
+ * source?
+ */
+function* published(
+  source: string,
+  declarations: readonly DeclaredMarkdownComponent[],
+  extra: readonly ExecutionInstallation[],
+): Operation<string> {
+  const chunks: string[] = [];
+  return yield* scoped(function* () {
+    yield* useNormalizedOutput();
+    yield* useTerminalOutput();
+    yield* DocumentOutput.around({
+      // deno-lint-ignore require-yield
+      *output([text]) {
+        chunks.push(text);
+      },
+    });
+    yield* collect(
+      yield* executeInstalled(
+        {
+          ...retainedSource(ROOT_PATH, source),
+          stream: new InMemoryStream(),
+          includes: [],
+        },
+        [installation(declarations), ...extra],
+      ),
+    );
+    return chunks.join("");
+  });
+}
+
+/** A handler that answers an open name with a definition it wrote itself. */
+function answeringOpenName(definition: ImportedDefinition): ExecutionInstallation {
+  return {
+    *install() {
+      yield* Component.around(
+        {
+          *importComponent([name, position], next) {
+            if (name === "Virtual") {
+              return definition;
+            }
+            return yield* next(name, position);
+          },
+        },
+        { at: "max" },
+      );
+    },
+  };
+}
+
+describe("Tier DM — exact source is a provenance, not a field", () => {
+  it("DM49: a declared component the host called exact emits its bytes unpresented", function* () {
+    // The positive control. Without it the two refusals below would pass for a
+    // build where exact source never worked at all.
+    const output = yield* published("<Policy />\n", [declared(PRESENTABLE, { exact: true })], []);
+
+    expect(unpresented(output)).toBe(true);
+  });
+
+  it("DM50: an ordinary declared component is presented as prose", function* () {
+    const output = yield* published("<Policy />\n", [declared(PRESENTABLE)], []);
+
+    expect(unpresented(output)).toBe(false);
+    expect(output).not.toContain("**these**");
+  });
+
+  it("DM51: middleware answering with `exact: true` gets prose", function* () {
+    // The definition is the handler's own, written to claim the disposition a
+    // trusted declaration states. Nothing admitted it, so nothing about it is
+    // exact — the claim is data on an object, and the answer is prose.
+    const output = yield* published(
+      "<Virtual />\n",
+      [declared(POLICY_SOURCE)],
+      [
+        answeringOpenName({
+          kind: "markdown",
+          name: "Virtual",
+          path: "Virtual.md",
+          meta: {},
+          props: NO_PROPS,
+          exact: true,
+          bodySegments: [{ type: "text", content: PRESENTABLE }],
+        } as unknown as ImportedDefinition),
+      ],
+    );
+
+    expect(unpresented(output)).toBe(false);
+    expect(output).not.toContain("**these**");
+  });
+
+  it("DM53: a component that reaches for the record by context name gets prose", function* () {
+    // Effection contexts resolve by name, so a name is not a secret: anything
+    // that can run code can build a context with the same one. This is the
+    // attack that closes — a function component nobody trusts asks for the
+    // record, corrupts whatever it finds, and then returns prose that would be
+    // published unpresented if the corruption had worked.
+    let reached = false;
+
+    const output = yield* published(
+      "<Virtual />\n",
+      [declared(POLICY_SOURCE)],
+      [
+        answeringOpenName({
+          kind: "function",
+          name: "Virtual",
+          path: "Virtual.ts",
+          props: NO_PROPS,
+          *fn() {
+            const stolen = createContext<{ has?: unknown } | undefined>(
+              "xmd.exact-source",
+              undefined,
+            );
+            const record = yield* stolen.get();
+            if (record !== undefined) {
+              reached = true;
+              // Every segment is exact, if anything asks this object.
+              record.has = () => true;
+            }
+            return PRESENTABLE;
+          },
+        } as unknown as ImportedDefinition),
+      ],
+    );
+
+    // The record is not reachable by name at all, which is the property under
+    // test; the assertion below holds either way, because reaching it would
+    // still decide nothing.
+    expect(reached).toBe(false);
+    expect(unpresented(output)).toBe(false);
+    expect(output).not.toContain("**these**");
+  });
+
+  it("DM52: a segment this engine did not mark is prose, whatever it carries", function* () {
+    // The other half of the same attack: not the definition claiming the
+    // disposition, but segments arriving already wearing the mark. Two
+    // assertions, because they prove different things.
+    //
+    // First the seam itself. The record of what is exact is keyed by the
+    // identity of the segment objects canonical expansion marked, so an object
+    // carrying any field at all — including the one an earlier design used —
+    // answers false. This is the assertion that discriminates: a marker that
+    // consulted a field would pass it back.
+    const record = createExactSource();
+    expect(
+      isExactSource(record, {
+        type: "text",
+        content: PRESENTABLE,
+        exact: true,
+      } as unknown as Segment),
+    ).toBe(false);
+    expect(
+      isExactSource(record, { type: "text", content: PRESENTABLE } as unknown as Segment),
+    ).toBe(false);
+
+    // Then the end-to-end shape, which records a second fact worth keeping:
+    // expansion rebuilds text segments, so a field a definition wrote onto its
+    // own body never reaches the emission loop to begin with. That is defence
+    // in depth rather than the defence — the assertion above is what holds if
+    // expansion ever starts passing segments through by reference.
+    const output = yield* published(
+      "<Virtual />\n",
+      [declared(POLICY_SOURCE)],
+      [
+        answeringOpenName({
+          kind: "markdown",
+          name: "Virtual",
+          path: "Virtual.md",
+          meta: {},
+          props: NO_PROPS,
+          bodySegments: [{ type: "text", content: PRESENTABLE, exact: true }],
+        } as unknown as ImportedDefinition),
+      ],
+    );
+
+    expect(unpresented(output)).toBe(false);
+    expect(output).not.toContain("**these**");
   });
 });

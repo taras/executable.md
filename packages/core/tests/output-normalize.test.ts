@@ -13,7 +13,7 @@ import { subscribe } from "../src/subscribe.ts";
  *
  * Install order: normalize first (outermost), channel last (closest to core).
  */
-function* collectNormalized(texts: string[]): Operation<string[]> {
+function* collectNormalized(texts: (string | [string, boolean])[]): Operation<string[]> {
   const channel = createChannel<string, void>();
   // First: normalization (runs first — outermost)
   yield* useNormalizedOutput();
@@ -29,7 +29,11 @@ function* collectNormalized(texts: string[]): Operation<string[]> {
   yield* ready;
 
   for (const text of texts) {
-    yield* DocumentOutput.operations.output(text);
+    if (typeof text === "string") {
+      yield* DocumentOutput.operations.output(text);
+      continue;
+    }
+    yield* DocumentOutput.operations.output(text[0], text[1]);
   }
   yield* channel.close();
 
@@ -80,5 +84,32 @@ describe("Tier WN — Whitespace normalization", () => {
   it("WN7: tab trailing whitespace stripped", function* () {
     const result = yield* collectNormalized(["text\t\n"]);
     expect(result).toEqual(["text\n"]);
+  });
+
+  // WN8: An exact write is presentation-free
+  it("WN8: exact bytes pass through untouched", function* () {
+    // Every rewrite this middleware makes, in one write: a line ending in
+    // spaces, one ending in a tab, and a run of four newlines.
+    const exact = "one   \ntwo\t\n\n\n\nthree";
+    const result = yield* collectNormalized([[exact, true]]);
+    expect(result).toEqual([exact]);
+  });
+
+  // WN9: The bypass is per write, not a switch
+  it("WN9: prose around an exact write is still normalized", function* () {
+    const result = yield* collectNormalized([
+      "before   \n\n",
+      ["kept   \n\n\n\n", true],
+      "\n\nafter   \n\n\nend",
+    ]);
+
+    // The prose before it is normalized as it always was.
+    expect(result[0]).toBe("before\n\n");
+    // The exact write is not.
+    expect(result[1]).toBe("kept   \n\n\n\n");
+    // And the prose after it is normalized again — including the leading-newline
+    // collapse, which means the exact write's own trailing newlines were still
+    // counted rather than the tracking being abandoned.
+    expect(result[2]).toBe("\nafter\n\nend");
   });
 });

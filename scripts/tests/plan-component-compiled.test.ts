@@ -82,7 +82,10 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
       digest,
     });
     expect(plan.forms).toEqual(["paired"]);
-    expect(plan.returnMode).toBe("value");
+    // A text component: what it renders is the approved program source, so a
+    // build still reporting a declared return is one that embedded the bytes
+    // from before this stack.
+    expect(plan.returnMode).toBe("text");
 
     // And the private capabilities are not syntax any build lets a document
     // write.
