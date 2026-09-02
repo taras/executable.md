@@ -376,22 +376,42 @@ describe("durableSpawn — why a child was cancelled (DEC-040)", () => {
       );
   }
 
+  /**
+   * A child that says when it is running and then waits to be stopped.
+   *
+   * Every row below halts or unwinds a *live* child, and `started` is how each
+   * one knows the child is live. Nothing waits for a duration: a child that
+   * never started never resolves it, and the row hangs rather than recording a
+   * cancellation of something that was not running.
+   */
+  function living(
+    started: { resolve: () => void },
+    mark?: (note: string) => void,
+  ): () => Workflow<string> {
+    return function* (): Workflow<string> {
+      return yield* ephemeral(
+        (function* (): Operation<string> {
+          mark?.("first life");
+          started.resolve();
+          yield* suspend();
+          return "never";
+        })(),
+      );
+    };
+  }
+
   it("records a deliberate halt as caller", function* () {
     const stream = new InMemoryStream();
+    const started = withResolvers<void>();
 
     yield* durableRun(
       function* (): Workflow<string> {
-        const task = yield* durableSpawn(function* (): Workflow<string> {
-          return yield* ephemeral(
-            (function* (): Operation<string> {
-              yield* suspend();
-              return "never";
-            })(),
-          );
-        });
+        const task = yield* durableSpawn(living(started));
         yield* ephemeral(
           (function* (): Operation<void> {
-            yield* sleep(1);
+            // The child is running; stopping it now is a deliberate stop of
+            // live work rather than of whatever a delay happened to reach.
+            yield* started.operation;
             yield* task.halt();
           })(),
         );
@@ -405,18 +425,12 @@ describe("durableSpawn — why a child was cancelled (DEC-040)", () => {
 
   it("records a scope unwinding as unwound", function* () {
     const stream = new InMemoryStream();
+    const started = withResolvers<void>();
 
     const run = yield* spawn(function* () {
       yield* durableRun(
         function* (): Workflow<string> {
-          yield* durableSpawn(function* (): Workflow<string> {
-            return yield* ephemeral(
-              (function* (): Operation<string> {
-                yield* suspend();
-                return "never";
-              })(),
-            );
-          });
+          yield* durableSpawn(living(started));
           yield* ephemeral(
             (function* (): Operation<void> {
               yield* suspend();
@@ -427,7 +441,8 @@ describe("durableSpawn — why a child was cancelled (DEC-040)", () => {
         { stream },
       );
     });
-    yield* sleep(3);
+    // Interrupted while the child is live, said by the child.
+    yield* started.operation;
     yield* run.halt();
 
     expect(yield* cancellations(stream)).toEqual(["unwound"]);
@@ -436,24 +451,20 @@ describe("durableSpawn — why a child was cancelled (DEC-040)", () => {
   it("does not revive a child the caller deliberately halted", function* () {
     const marks: string[] = [];
     const stream = new InMemoryStream();
-    // The caller halts the child, then the run is interrupted before it
-    // completes. Both facts are in the journal; only the first decides.
+    const started = withResolvers<void>();
+    const halted = withResolvers<void>();
+
+    // The caller halts the child on purpose, and only then is the run
+    // interrupted — so the journal holds both facts and only the first decides.
     const first = yield* spawn(function* () {
       yield* durableRun(
         function* (): Workflow<string> {
-          const task = yield* durableSpawn(function* (): Workflow<string> {
-            return yield* ephemeral(
-              (function* (): Operation<string> {
-                marks.push("first life");
-                yield* suspend();
-                return "never";
-              })(),
-            );
-          });
+          const task = yield* durableSpawn(living(started, (note) => marks.push(note)));
           yield* ephemeral(
             (function* (): Operation<void> {
-              yield* sleep(1);
+              yield* started.operation;
               yield* task.halt();
+              halted.resolve();
               yield* suspend();
             })(),
           );
@@ -462,14 +473,16 @@ describe("durableSpawn — why a child was cancelled (DEC-040)", () => {
         { stream },
       );
     });
-    yield* sleep(5);
+    yield* halted.operation;
     yield* first.halt();
 
     expect(marks).toEqual(["first life"]);
     expect(yield* cancellations(stream)).toEqual(["caller"]);
 
-    // The resumed run reaches the same deliberate halt, so the child suspends
-    // until it does rather than performing work nobody asked to redo.
+    // The resumed run reaches the same deliberate halt. Getting there is the
+    // proof of non-revival: a revived child would have recorded its mark before
+    // the caller could halt it, and the mark list is checked after.
+    const reachedTheHalt = withResolvers<void>();
     const second = yield* spawn(function* () {
       yield* durableRun(
         function* (): Workflow<string> {
@@ -483,8 +496,8 @@ describe("durableSpawn — why a child was cancelled (DEC-040)", () => {
           });
           yield* ephemeral(
             (function* (): Operation<void> {
-              yield* sleep(1);
               yield* task.halt();
+              reachedTheHalt.resolve();
               yield* suspend();
             })(),
           );
@@ -493,7 +506,7 @@ describe("durableSpawn — why a child was cancelled (DEC-040)", () => {
         { stream },
       );
     });
-    yield* sleep(10);
+    yield* reachedTheHalt.operation;
     yield* second.halt();
 
     expect(marks).toEqual(["first life"]);
@@ -509,6 +522,7 @@ describe("durableSpawn — why a child was cancelled (DEC-040)", () => {
       result: { status: "cancelled" },
     });
 
+    const asked = withResolvers<void>();
     const run = yield* spawn(function* () {
       yield* durableRun(
         function* (): Workflow<string> {
@@ -520,12 +534,15 @@ describe("durableSpawn — why a child was cancelled (DEC-040)", () => {
               })(),
             );
           });
+          // The child has been asked for and the request has returned. A
+          // revived child would have recorded its mark by now.
+          asked.resolve();
           return yield* ephemeral(task);
         },
         { stream },
       );
     });
-    yield* sleep(10);
+    yield* asked.operation;
     yield* run.halt();
 
     // Absent evidence is the safe direction: nothing is revived.

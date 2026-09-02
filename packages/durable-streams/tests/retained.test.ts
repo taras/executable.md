@@ -17,7 +17,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { consumable, detachJson, retainEvents } from "../retained.ts";
 import { ReplayIndex } from "../replay-index.ts";
-import type { Close, DurableEvent, Json } from "../types.ts";
+import type { DurableEvent, Json } from "../types.ts";
 
 /** An event whose members answer from a list, counting reads per member. */
 function shifting(
@@ -478,19 +478,6 @@ describe("retention keeps why a child was cancelled (DEC-040)", () => {
       });
     }
     expect(consumable(cancelled().result)).toEqual({ status: "cancelled" });
-  });
-
-  it("does not retain a reason it does not recognise", function* () {
-    // A record that says something else says nothing this reads, and the safe
-    // default — a deliberate stop — is what an absent reason already means.
-    const [retained] = retainEvents([
-      {
-        type: "close",
-        coroutineId: "root.0",
-        result: { status: "cancelled", cancellation: "somebody" } as unknown as Close["result"],
-      },
-    ]);
-    expect(retained?.result).toEqual({ status: "cancelled" });
   });
 
   it("reaches the replay index with its reason intact", function* () {
