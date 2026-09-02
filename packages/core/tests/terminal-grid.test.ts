@@ -118,6 +118,7 @@ function useGridComponents(
   onMark: (mark: string) => void = () => {},
   afterAttach: () => Operation<void> = function* () {},
   teardownHeld: () => Operation<void> = function* () {},
+  teardownArmed: () => void = () => {},
 ): Operation<void> {
   return registerComponents([
     {
@@ -179,6 +180,9 @@ function useGridComponents(
         yield* ensure(function* () {
           yield* teardownHeld();
         });
+        // Armed: the finalizer is installed and this pane is live, which is
+        // what a row waits for before letting the reader leave.
+        teardownArmed();
         yield* suspend();
         return "";
       },
@@ -408,6 +412,8 @@ function runInterrupted(
      * would record the pane as cancelled by the close instead.
      */
     closeAfterFailure?: boolean;
+    /** Let the reader leave only once a `<SlowTeardown />` pane is armed. */
+    closeWhenArmed?: boolean;
     /** Ordinal of a shell that starts, waits for attachment, then exits badly. */
     shellFailsAfterAttach?: number;
     /** Holds a `<SlowTeardown />` pane's finalizer until this settles. */
@@ -467,6 +473,8 @@ function runInterrupted(
       },
     });
     const paneFailed = withResolvers<void>();
+    // Resolved once a `<SlowTeardown />` pane has installed its finalizer.
+    const armed = withResolvers<void>();
     yield* useGridComponents(
       ran,
       [],
@@ -482,6 +490,7 @@ function runInterrupted(
           yield* options.holdTeardown();
         }
       },
+      () => armed.resolve(),
     );
     yield* installControlledLauncher();
     if (options.provider !== false) {
