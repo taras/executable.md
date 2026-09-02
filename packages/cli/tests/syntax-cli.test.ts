@@ -266,6 +266,34 @@ describe("Tier SX — the run profile the command describes", () => {
     ]);
   });
 
+  it("SX2c: says what <Plan> returns, in both renderings", function* () {
+    const catalog = yield* syntaxCatalog([]);
+    const plan = catalog.categories[1].entries.find((entry) => entry.name === "Plan");
+
+    // The disposition is part of the contract a document author is reading:
+    // written without `as`, the approved plan expands where they wrote it.
+    expect(plan?.returnMode).toBe("value");
+    expect(plan?.returnDisposition).toEqual({
+      kind: "executable-source",
+      sourceIdentity: "<plan>",
+    });
+    expect(plan?.description).toContain("expands the approved plan");
+    expect(plan?.as).toContain("Optional");
+
+    const markdown = renderSyntaxMarkdown(catalog);
+    expect(markdown).toContain("**Returns:** executable source");
+    expect(markdown).toContain("expands where you wrote it");
+
+    const json = JSON.parse(renderSyntaxJson(catalog));
+    const described = json.categories[1].entries.find(
+      (entry: { name: string }) => entry.name === "Plan",
+    );
+    expect(described.returnDisposition).toEqual({
+      kind: "executable-source",
+      sourceIdentity: "<plan>",
+    });
+  });
+
   it("SX3: describes <Session> without minting an execution claimant", function* () {
     const catalog = yield* syntaxCatalog([]);
     const session = catalog.categories[1].entries.find((entry) => entry.name === "Session");

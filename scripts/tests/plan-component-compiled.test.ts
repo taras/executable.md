@@ -83,6 +83,15 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
     });
     expect(plan.forms).toEqual(["paired"]);
     expect(plan.returnMode).toBe("value");
+    // What that return *is* travels with the declaration rather than with the
+    // bytes, so the digest above cannot answer for it: a build that shipped the
+    // Component without its disposition would let a document write `<Plan>` and
+    // then refuse it for having captured nothing.
+    expect(plan.returnDisposition).toEqual({
+      kind: "executable-source",
+      sourceIdentity: "<plan>",
+    });
+    expect(plan.description).toContain("expands the approved plan");
 
     // And the private capabilities are not syntax any build lets a document
     // write.

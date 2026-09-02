@@ -336,6 +336,11 @@ interface CompleteContract {
   readonly captures: readonly string[];
   readonly forms: readonly InvocationForm[];
   readonly hasReturns: boolean;
+  /**
+   * Whether an uncaptured return expands where the component is written, which
+   * only exact host-declared Markdown can say about itself (§5.3).
+   */
+  readonly expandsSource?: boolean;
 }
 
 /**
@@ -873,6 +878,7 @@ class ValidationState {
           captures: [],
           forms: selected.forms,
           hasReturns: selected.definition.returns !== undefined,
+          expandsSource: selected.returnDisposition !== undefined,
         },
         capture,
       );
@@ -966,7 +972,12 @@ class ValidationState {
     // A site whose `as` was already refused is not asked again.
     const missingCapture = capture.refused
       ? undefined
-      : returnCaptureViolation(segment.name, contract.hasReturns, capture.binding);
+      : returnCaptureViolation(
+          segment.name,
+          contract.hasReturns,
+          capture.binding,
+          contract.expandsSource === true,
+        );
     if (missingCapture !== undefined) {
       draft.tokens.push(
         this.#draft(ordinal, missingCapture.code, {

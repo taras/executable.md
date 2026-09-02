@@ -68,13 +68,20 @@ export function capturedBinding(value: Json | undefined): string | undefined {
 /**
  * A component that declares `returns` renders nothing, so an invocation that
  * captures nothing would discard the only thing it produces.
+ *
+ * Unless a trusted host declared that return to be executable source (§5.3):
+ * such a component has somewhere for an uncaptured return to go, because the
+ * engine expands it where the component was written. Expansion and document
+ * validation ask this one question, so they cannot disagree about which
+ * invocations need `as`.
  */
 export function returnCaptureViolation(
   name: string,
   declaresReturns: boolean,
   capture: string | undefined,
+  expandsSource = false,
 ): StructuralViolation | undefined {
-  return declaresReturns && capture === undefined
+  return declaresReturns && capture === undefined && !expandsSource
     ? {
         code: "return-usage-invalid",
         source: name,

@@ -4,6 +4,7 @@ import { readTextFile } from "@executablemd/runtime";
 import type {
   ComponentOrigin,
   ComponentSelection,
+  ExecutableSourceDisposition,
   InvocationForm,
   PropsSchema,
   ReturnsSchema,
@@ -176,6 +177,8 @@ export interface DescribedContract extends ComponentDocumentation {
   readonly forms: readonly InvocationForm[];
   readonly captures: readonly string[];
   readonly returnMode: "text" | "value";
+  /** What the declaring host says that return is, when it says more (§5.3). */
+  readonly returnDisposition?: ExecutableSourceDisposition;
 }
 
 /**
@@ -264,11 +267,12 @@ function* completeEntry(
 }
 
 function describedContract(entry: CompleteComponentSyntaxEntry): DescribedContract {
-  const { forms, captures, returnMode, description, as, context } = entry;
+  const { forms, captures, returnMode, returnDisposition, description, as, context } = entry;
   return {
     forms,
     captures,
     returnMode,
+    ...(returnDisposition === undefined ? {} : { returnDisposition }),
     ...(description === undefined ? {} : { description }),
     ...(as === undefined ? {} : { as }),
     ...(context === undefined ? {} : { context }),
@@ -340,6 +344,12 @@ export interface CompleteComponentSyntaxEntry {
   readonly captures: readonly string[];
   readonly returnMode: "text" | "value";
   readonly returns: ReturnsSchema;
+  /**
+   * What the declaring host says that return is, when a value is not the whole
+   * of it (§5.3). Only exact declared Markdown carries one, so a reader can see
+   * which components expand what they return and which bind it.
+   */
+  readonly returnDisposition?: ExecutableSourceDisposition;
   readonly description?: string;
   readonly as?: string;
   readonly context?: string;
@@ -536,6 +546,9 @@ function* componentEntry(
       props: definition.props,
       captures: [],
       returns: definition.returns,
+      ...(selected.returnDisposition === undefined
+        ? {}
+        : { returnDisposition: selected.returnDisposition }),
       documentation: documentationOf(definition.meta),
     });
   }
@@ -580,6 +593,8 @@ interface CompleteContract {
   captures: readonly string[];
   /** Absent in text mode, which is what `returnMode` reports. */
   returns: ReturnsSchema | undefined;
+  /** Present only where a declaring host stated one. */
+  returnDisposition?: ExecutableSourceDisposition;
   documentation: ComponentDocumentation;
 }
 
@@ -600,6 +615,9 @@ function complete(
     captures: contract.captures,
     returnMode: contract.returns === undefined ? "text" : "value",
     returns: contract.returns ?? TEXT_RETURN_SCHEMA,
+    ...(contract.returnDisposition === undefined
+      ? {}
+      : { returnDisposition: contract.returnDisposition }),
     ...contract.documentation,
   };
 }

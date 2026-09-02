@@ -91,6 +91,24 @@ export const PLAN_COMPONENT = "Plan";
  */
 export const PLAN_IDENTITY = "<plan>";
 
+/**
+ * What this host says the Component's return is.
+ *
+ * `<Plan>` produces approved XMD program source rather than ordinary text, so a
+ * site that captures nothing has somewhere for that return to go: canonical
+ * core expands those exact bytes where the author wrote the element, under the
+ * identity above. A site that writes `as` binds the same bytes and runs none of
+ * them.
+ *
+ * It travels with the declaration and nowhere else. No frontmatter field names
+ * it, so a repository `Plan.md`, a workflow bundle member and a registration
+ * cannot ask for it, and neither can the Plan a run approves.
+ */
+const PLAN_DISPOSITION = {
+  kind: "executable-source",
+  sourceIdentity: PLAN_IDENTITY,
+} as const;
+
 /** Which surface reached the Component. Sealed: it is never a public prop. */
 export type PlanSurface = "command" | "component";
 
@@ -236,6 +254,7 @@ export function* planComponentDeclaration(
     // empty rendering rather than on the spelling, which is the same answer for
     // a body that rendered to nothing.
     forms: ["paired"],
+    returnDisposition: PLAN_DISPOSITION,
     privates: [
       planInputs(assembly),
       planAuthorship(assembly),
@@ -270,6 +289,7 @@ export function* planComponentDescription(): Operation<DeclaredMarkdownComponent
     source,
     digest: sourceDigest(source),
     forms: ["paired"],
+    returnDisposition: PLAN_DISPOSITION,
     // The private names travel too, even though none of them is ever described.
     // Selection refuses a name a declaration keeps to itself, and it has to
     // refuse the same names here as it does in a run — otherwise a repository

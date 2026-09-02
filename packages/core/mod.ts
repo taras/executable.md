@@ -29,6 +29,7 @@ export type {
   PartialContent,
   ComponentRegistry,
   ComponentSelection,
+  ExecutableSourceDisposition,
   Registered,
   RegistryEntry,
   SampleContext,

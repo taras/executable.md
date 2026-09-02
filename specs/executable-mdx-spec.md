@@ -2704,11 +2704,11 @@ outside a workflow run learns that a bundle exists.
 
 A trusted host may hand one execution exact first-party Markdown: the public
 name, the reported origin, the source, the SHA-256 of those bytes, the accepted
-forms, an optional statement of the props schema and return, and an optional
-private component closure. It crosses on an `ExecutionInstallation`, by value,
-before any installation, middleware or document code exists — the same terms the
-component bundle crosses on — so no caller-facing option selects one, adds one,
-or names its source.
+forms, an optional statement of the props schema and return, an optional return
+disposition, and an optional private component closure. It crosses on an
+`ExecutionInstallation`, by value, before any installation, middleware or
+document code exists — the same terms the component bundle crosses on — so no
+caller-facing option selects one, adds one, or names its source.
 
 **It is held to its own bytes.** Canonical core parses the source and refuses
 the declaration before the root document is imported when the stated digest is
@@ -2719,6 +2719,23 @@ registration already claims it. A build that ships different bytes under a
 declared name therefore fails where it is installed. The prose a reader sees is
 the source's own frontmatter, exactly as it is for any other Markdown component,
 so the asset and the entry describing it are one text.
+
+**A declaration may say what its return *is*.** `returnDisposition` is the one
+member that states something the bytes cannot state about themselves, and it has
+one value: `{ kind: "executable-source", sourceIdentity }`. It says the string
+those bytes return is Executable Markdown rather than an ordinary value, and
+that a site which captures nothing has somewhere for it to go — canonical core
+expands it there, as an embedded text root read under `sourceIdentity` (§5.4).
+Written with `as`, the same invocation binds the exact source and expands none
+of it (§6.10).
+
+It is admitted against the source as well as against itself: a declaration whose
+Markdown returns anything but a string is refused, so a disposition never
+describes a return that is not text. There is no frontmatter field for it. A
+repository file, a workflow bundle member, a registration, a function component
+and a document-authored component therefore cannot request it, and neither can a
+program a `<Plan>` approves. Omitting it is ordinary value-component behavior,
+which is what every declaration that says nothing keeps.
 
 **A declaration may carry private components.** They are ordinary declared
 components (§5.6) — one domain, one claimant, revoked when the execution is torn
@@ -2776,9 +2793,9 @@ any other name: an unrelated import in the same execution is the ordinary open
 import it has always been.
 
 **Every declaration is read once, before any installation runs.** The name,
-origin, source, digest, forms, prose and each private declaration are captured
-by the invocation and held by it, with the factory bound and every array and
-schema copied. A schema is copied rather than referenced because it is a whole
+origin, source, digest, forms, prose, return disposition and each private
+declaration are captured by the invocation and held by it, with the factory
+bound and every array, schema and disposition copied. A schema is copied rather than referenced because it is a whole
 object graph: holding the caller's object would let a hook reach into it after
 capture and change the contract admission compiles, registration publishes and
 expansion validates each invocation against. So a host that hands over a
@@ -2787,22 +2804,29 @@ holds — has replaced nothing: what is admitted, registered and executed is wha
 it declared at the moment of capture.
 
 **The journal records the asset.** A declared import records exactly
-`{ kind: "declared-markdown", origin, digest, content }` and a private one
-records exactly `{ kind: "declared-private", origin }`. A continuation reads
-both as hostile data and verifies the recorded origin, digest and bytes against
-what this run declares, reading no file: a host that no longer declares the name,
-or that declares different bytes under it, refuses rather than continuing
-somebody else's Markdown, and a recorded private import refuses unless the
-element asking is inside the same declaration.
+`{ kind: "declared-markdown", origin, digest, content }`, with `disposition`
+beside them when the host stated one, and a private one records exactly
+`{ kind: "declared-private", origin }`. A continuation reads both as hostile data
+and verifies the recorded origin, digest, bytes and disposition against what this
+run declares, reading no file: a host that no longer declares the name, that
+declares different bytes under it, or that now says something else about what its
+return is, refuses rather than continuing somebody else's Markdown, and a
+recorded private import refuses unless the element asking is inside the same
+declaration. The disposition is compared whole and by absence: a record that
+carries none was continuing an ordinary value component, so it is never read as
+executable source, and one that carries a different one is a different contract
+rather than the same one described more fully.
 
 **`<Plan>` is the one of these the `run` profile has.** The CLI declares
 `packages/cli/src/documents/Plan.md` to every ordinary run under the origin
-`@executablemd/cli/Plan.md`, paired-only, returning a string. Its body is the
-Prompt, rendered once with the capabilities the calling document already has;
-its `as` receives the exact approved Plan source after the authorship frame has
-been dismantled and the bytes have been structurally admitted. Its four private
-capabilities — `<PlanInputs>`, `<PlanAuthorship>`, `<CheckDraft>` and
-`<AdmitPlan>` — are the closure those exact bytes carry, and are syntax no
+`@executablemd/cli/Plan.md`, paired-only, returning a string, with the
+executable-source disposition and the identity `<plan>`. Its body is the Prompt,
+rendered once with the capabilities the calling document already has. Written
+without `as`, the exact approved Plan source expands at the authored site once
+the authorship frame has been dismantled and the bytes have been structurally
+admitted; written with `as`, that same source is bound and none of it runs. Its
+four private capabilities — `<PlanInputs>`, `<PlanAuthorship>`, `<CheckDraft>`
+and `<AdmitPlan>` — are the closure those exact bytes carry, and are syntax no
 document may write. [The plan command](./plan-command-spec.md) is the contract.
 
 Two registrations for one name and kind at the same scope are a configuration
@@ -3098,9 +3122,12 @@ own bytes. What inspection does not do is build anything from them.
 
 Each declared Markdown name contributes one complete entry under built-in,
 reporting `declared-markdown` as its source kind and the declared origin and
-digest as its origin. Its private closure contributes nothing: those names are
-not syntax a document may write, so listing them would describe an environment
-that does not exist.
+digest as its origin, and carrying the return disposition its host stated. That
+last is part of the contract an author is reading rather than a note about it —
+it says whether writing the component without `as` expands what it returns — so
+the catalog reports it and `xmd syntax` renders it in both formats. Its private
+closure contributes nothing: those names are not syntax a document may write, so
+listing them would describe an environment that does not exist.
 
 **Inspection is observation, never authority.** Building a catalog installs only
 the declarative registration layer selection needs. It enters no execution,
@@ -3215,7 +3242,11 @@ author reading a result is owed all of them at once.
 **A declared Markdown component is checked as the contract it declares.** An
 invocation of one is held to the props, forms and return mode parsed from the
 declared bytes, exactly as a registration's invocation is held to its
-declaration, and its origin is recorded on the invocation record. Its body is
+declaration, and its origin is recorded on the invocation record. Its return
+disposition is part of that contract: a declaration whose host said its return is
+executable source validates without `as`, because that is what running it does
+(§6.10). The source it would produce does not exist yet and is not validated
+here; what runs it admits it structurally first. Its body is
 not walked: those bytes are the host's, an author cannot change them, and the
 private names only they may write resolve nowhere else — so reporting on them
 would report a document's author for the engine's own asset. A private name
@@ -3640,6 +3671,60 @@ root's body therefore runs fail-fast — a structural violation, an invalid
 schema, an invalid value, a body error, and a failure raised after `<Return>`
 all complete `Err`, and body text emitted before the failure remains only on
 the output stream.
+
+#### Embedded text roots
+
+A component whose host declared its return to be executable source (§5.3)
+produces a third kind of root: source the engine expands **where the component
+was written**, inside the execution that wrote it. `<Plan>` invoked without
+`as` is the one the `run` profile has.
+
+The projection happens after the component's invocation and its teardown have
+completed, so the source runs under the authority the site already had rather
+than under anything the component installed for its own body. Nothing about it
+is a second execution: it calls no `execute()`, imports no `__root__`, produces
+no root result, installs no host profile, and writes to no output channel of its
+own.
+
+**It is a root in exactly three respects**, and each is decided before its first
+effect:
+
+- **Its own root contract.** A root `returns` declaration is refused — source
+  expanded where it was written has nowhere to hand a value back to. A declared
+  root props schema validates the properties ambient at the site, which is what
+  a caller can actually offer.
+- **Its own frontmatter metadata**, which is what `{meta.key}` reads inside it.
+- **Its own top-level `<Output>` selection** (§6.9), so what reaches the
+  surrounding document is what the program selected rather than everything it
+  rendered.
+
+**Everything else is the enclosing expansion's.** The component selection and
+import authority, the Workspace, the error mode, the checked-failure ledger, the
+block counter, the output owner, the cancellation scope and the journal are the
+ones already in force. Bindings the document made are readable inside the source
+and the validated root props are what it reads under `props`; what the source
+binds stays inside it. The authority is the authored site's rather than the
+declaration's, so the private closure only the declared bytes may write is
+unreachable from the program they produced, and the source expands under the
+producing component's own hide set, so it cannot re-enter that component.
+
+**It is its own flow, too.** A `<Break>` written in the source belongs to a
+`<Loop>` written in the source, exactly as a component's own body's does (§6.10),
+so a stray one is reported there rather than ending the loop the element was
+written in. A `<Return>` is reserved for the same reason: an embedded root owns
+no return frame at all.
+
+**Its identities extend the authored element's.** Every effect the source
+performs is durable beneath the site the component was written at, so two sites
+running the same program are two sets of effects and a replay re-enters the same
+expansion rather than deriving a new one. A partial journal therefore restores
+whatever produced the source — for `<Plan>`, the authorship and the admission —
+re-enters the source at the same path, restores the effects that had completed,
+and continues without repeating one.
+
+The source is never emitted in place of what it does: an invocation that expands
+its return renders that program's selected output, and an invocation that
+captures it with `as` renders nothing at all.
 
 #### Document targets
 
@@ -6510,6 +6595,17 @@ renders nothing, must be invoked with `as`, and binds one schema-validated JSON
 value. Absence of the declaration is what selects text mode, so an explicit
 `returns: { type: string }` is a value component that happens to return a
 string.
+
+**One exception, and only a trusted host can make it.** Exact declared Markdown
+whose host stated an executable-source return disposition (§5.3) may be invoked
+without `as`: what it returns is a program rather than a value, and the engine
+expands it at the authored site as an embedded text root (§5.4). Written with
+`as`, it binds the exact source and expands none of it, so adding `as` is what
+prevents every effect of that program. Expansion and document validation ask one
+question about this, so a site that needs no capture when it runs needs none when
+it is validated. Nothing a document, a repository file, a workflow bundle, a
+registration or a function component can write reaches the exception: an
+ordinary value component still requires `as`, string-valued ones included.
 
 #### Declaring a return value
 
@@ -11916,6 +12012,30 @@ user's own `~/.xmd/repositories`.
 | ORC19 | Nested run profile | An isolated `host="run"` child receives the declarations and a fresh provider; its evidence and locks reach neither its parent nor a sibling |
 | ORC20 | Retained workflow regression | Repository and Worktree replay, transactional Git, Push and pull-request history evidence, Issue effects, forks and completed replay keep their records, identities, provider call counts and native-launch refusal unchanged; directory ensure adds only its own `workspace_file` event and resulting retained root |
 | ORC21 | Compiled binary | A compiled smoke creates a root-level ambient Worktree, runs a command there, proves `.git` is a file and the checkout persists after exit; a second gated process proves lock refusal and release |
+
+### Tier ES — Executable source returns (§5.3, §5.4, §6.10)
+
+A declared component stands where `<Plan>` stands and returns the caller's own
+text, so every case is about what the engine does with approved bytes rather
+than about how they were approved. The program's one effect is a component that
+names durable work, so "it did not run" is proven by a recorder that stayed
+empty rather than by absent output.
+
+| # | Test | Verify |
+|---|------|--------|
+| ES1 | Immediate expansion | An invocation without `as` performs the program's effect exactly once, between the markers surrounding the element, and emits the program's output rather than its source |
+| ES2 | The document's own environment | One program uses ambient props through its root schema, its own frontmatter metadata, a caller binding, a component on the caller's include path, and top-level `<Output>` |
+| ES3 | Capture | The same source under `as` binds byte for byte while the effect in it does not happen |
+| ES4 | No return, no expansion | A component that fails before returning expands nothing and binds nothing |
+| ES5 | Root preflight | A root `returns` declaration and a root-props mismatch each refuse before a negative-control effect |
+| ES6 | Replay | A partial journal resumes inside the source, does not repeat the completed effect, and produces the same output |
+| ES6b | Its own flow | A stray `<Break />` in the source is reported there rather than ending the loop the element was written in |
+| ES7 | One lifecycle | The journal records exactly one root import |
+| ES8 | Ordinary value components | A declared string-valued component without the disposition still requires `as` |
+| ES9 | No document-authored opt-in | A repository component's similarly named frontmatter grants nothing and still requires `as` |
+| ES10 | Disposition is part of the selection | A continuation that drops the disposition, and one that adds it, each refuse |
+| ES11 | Admitted against the source | A declaration whose Markdown returns no string cannot carry the disposition |
+| ES12 | One described contract | Inspection and the catalog report the disposition; validation accepts an uncaptured site and still refuses one without it |
 
 
 ---

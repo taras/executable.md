@@ -53,6 +53,7 @@ import { documentationOf } from "./documentation.ts";
 import type {
   ComponentDefinition,
   ComponentRegistry,
+  ExecutableSourceDisposition,
   FunctionComponentDefinition,
   InvocationForm,
   PropsSchema,
@@ -100,6 +101,14 @@ export interface DeclaredMarkdownComponent {
   readonly props?: PropsSchema;
   /** What the host says the source returns. Refused when it disagrees. */
   readonly returns?: ReturnsSchema;
+  /**
+   * What the host says that return *is*, when a value is not the whole of it.
+   *
+   * Host-only, and the one member here that says something the bytes cannot say
+   * about themselves. Omitting it is ordinary value-component behavior, so
+   * every declaration that says nothing keeps the contract it always had.
+   */
+  readonly returnDisposition?: ExecutableSourceDisposition;
   /** Components only elements authored by these exact bytes may resolve. */
   readonly privates?: readonly IdentityComponent[];
 }
@@ -113,6 +122,8 @@ export interface AdmittedDeclaredMarkdown {
   readonly forms: readonly InvocationForm[];
   /** The parse of `source`, produced once and shared by every reader. */
   readonly definition: ComponentDefinition;
+  /** The host's own copy of what it said this return is, or nothing. */
+  readonly returnDisposition?: ExecutableSourceDisposition;
   readonly privates: readonly IdentityComponent[];
 }
 
@@ -205,6 +216,8 @@ export function* admitDeclaredMarkdown(
       );
     }
 
+    const returnDisposition = admitDisposition(name, declaration.returnDisposition, definition);
+
     // The same admission a registration is held to, so a declared contract is
     // admissible on exactly the terms every other declared contract is: the
     // schemas compile here, before a document can write the name.
@@ -243,6 +256,7 @@ export function* admitDeclaredMarkdown(
       digest,
       forms,
       definition,
+      ...(returnDisposition === undefined ? {} : { returnDisposition }),
       privates,
     });
   }
@@ -256,6 +270,47 @@ export function* admitDeclaredMarkdown(
   }
 
   return admitted;
+}
+
+/**
+ * The host's own copy of what it said this declaration's return is.
+ *
+ * Copied rather than referenced, like every other authoritative member: a host
+ * that hands over a disposition and then mutates the object it still holds has
+ * replaced nothing. The check is on the source as well as on the statement — a
+ * disposition describes what the returned *string* is, so bytes that return
+ * something else, or nothing, cannot carry one.
+ */
+function admitDisposition(
+  name: string,
+  stated: ExecutableSourceDisposition | undefined,
+  definition: ComponentDefinition,
+): ExecutableSourceDisposition | undefined {
+  if (stated === undefined) {
+    return undefined;
+  }
+  if (stated.kind !== "executable-source") {
+    throw refuse(
+      `the declared Markdown component "${name}" states a return disposition this version does ` +
+        "not know.",
+    );
+  }
+  if (typeof stated.sourceIdentity !== "string" || stated.sourceIdentity.length === 0) {
+    throw refuse(
+      `the declared Markdown component "${name}" states an executable-source return without the ` +
+        "identity its source is read under.",
+    );
+  }
+  if (definition.returns?.["type"] !== "string") {
+    throw refuse(
+      `the declared Markdown component "${name}" states an executable-source return, which is ` +
+        "what a returned string is. Its source returns something else.",
+    );
+  }
+  return Object.freeze({
+    kind: stated.kind,
+    sourceIdentity: stated.sourceIdentity,
+  });
 }
 
 /** Whether two schemas describe the same thing, whatever order they wrote it in. */
@@ -463,6 +518,28 @@ export class DeclaredImports implements ImportTier {
       return undefined;
     }
     return imported.path === declaration.origin ? this.#closures.get(name) : undefined;
+  }
+
+  /**
+   * What the host said the return of `imported` is, if `imported` is the
+   * declaration's own definition.
+   *
+   * Decided the way a private closure is: from the definition canonical
+   * resolution retained — the one this expansion is about to invoke, reporting
+   * the origin core declared — rather than from the name. A repository file, a
+   * bundled component and a registration all report a different origin, so
+   * nothing that answers for a declared name by another route carries the
+   * host's disposition with it.
+   */
+  executableSourceFor(
+    name: string,
+    imported: { kind: string; path?: string },
+  ): ExecutableSourceDisposition | undefined {
+    const declaration = this.#catalog.component(name);
+    if (declaration?.returnDisposition === undefined || imported.kind !== "markdown") {
+      return undefined;
+    }
+    return imported.path === declaration.origin ? declaration.returnDisposition : undefined;
   }
 
   /** Whether some declaration keeps this name to itself. */

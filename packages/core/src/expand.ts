@@ -24,6 +24,7 @@ import type {
   ComponentFailure,
   EvalEnv,
   ExecutableCodeBlock,
+  ExecutableSourceDisposition,
   FunctionComponentDefinition,
   Json,
   CodeBlockContext,
@@ -97,6 +98,7 @@ import type { CheckedFailures } from "./component-failures.ts";
 import type { ExpansionAuthority, ImportedDefinition } from "./components/import-authority.ts";
 import { DeclaredMarkdownError } from "./components/declared-markdown.ts";
 import type { PrivateImport } from "./components/declared-markdown.ts";
+import { parseMarkdownDefinitionPhased } from "./definition.ts";
 import CoreTest from "./components/Test.ts";
 import { carriesTestActivationDecision } from "./test-activation.ts";
 import { declaredRouting, withRouting } from "./foreground.ts";
@@ -2477,6 +2479,13 @@ function* expandComponent(
   // reporting the origin core declared — rather than from the name alone.
   const bodyAuthority = authorityForBody(authority, name, definition);
 
+  // What the host said this declaration's return is. Read from the definition
+  // canonical resolution retained rather than from the name, so a repository
+  // file, a bundle member or a registration answering for a declared name
+  // carries none of it — and an execution that declares nothing has none to
+  // read at all.
+  const executableSource = authority?.declared?.executableSourceFor(name, definition);
+
   const placementError = validateBodyStructure(definition.bodySegments, definition.returns);
   if (placementError) {
     return [yield* raise(placementError)];
@@ -2521,7 +2530,12 @@ function* expandComponent(
     return [yield* raise(schemaValidationErrorSegment(error, name))];
   }
 
-  const missingCapture = returnCaptureViolation(name, definition.returns !== undefined, asBinding);
+  const missingCapture = returnCaptureViolation(
+    name,
+    definition.returns !== undefined,
+    asBinding,
+    executableSource !== undefined,
+  );
   if (missingCapture !== undefined) {
     return [yield* raise({ type: "error", message: missingCapture.message, source: name })];
   }
@@ -2695,6 +2709,26 @@ function* expandComponent(
       return [yield* raise(schemaValidationErrorSegment(error, name))];
     }
 
+    // Expanded only after the invocation has torn down, so the source runs
+    // under the authority the site already had rather than under anything the
+    // component installed for its own body. Under this component's own hide
+    // set, too: a program a component produced may not re-enter the component
+    // that produced it.
+    if (executableSource !== undefined && asBinding === undefined) {
+      return yield* expandExecutableSource(
+        name,
+        executableSource,
+        value,
+        callerProps,
+        newHideSet,
+        counter,
+        owner,
+        path,
+        checkedFailures,
+        authority,
+      );
+    }
+
     // Bind only after the invocation has torn down, so the value reaches the
     // caller's environment and never the component's own.
     const parentEnv = yield* env;
@@ -2762,6 +2796,125 @@ function* expandComponent(
   // A rendering body already wrote into the owner, so there is nothing left to
   // hand back; one that kept its own returns what it rendered.
   return bodyOwner === undefined ? expanded : [];
+}
+
+/**
+ * Expand the Executable Markdown a trusted declaration returned, at the site
+ * that authored it (spec §5.4, §6.10).
+ *
+ * This is an **embedded text root**, not another document execution. The source
+ * is a root — its own frontmatter metadata, its own root props schema and its
+ * own top-level `<Output>` selection apply — and everything else is the
+ * enclosing expansion's: the component selection and import authority, the
+ * Workspace, the error mode, the checked-failure ledger, the block counter, the
+ * output owner, the cancellation scope and the journal. Nothing here starts a
+ * lifecycle, imports `__root__`, produces a root result, installs a profile, or
+ * writes to `DocumentOutput`.
+ *
+ * The two root contracts are decided before the first effect. A root `returns`
+ * is refused outright: source expanded where it was written has nowhere to hand
+ * a value back to. Declared root props are validated against the props ambient
+ * at the site, which is what a caller can actually offer.
+ *
+ * The authority is the *site's*, not the declaration's, so the private closure
+ * only those declared bytes may write is unreachable from the program they
+ * produced — a Plan cannot write `<AdmitPlan>`.
+ *
+ * Identities extend the authored element's path, so every effect the source
+ * performs is durable beneath that site and a replay re-enters the same
+ * expansion rather than deriving a new one.
+ */
+function* expandExecutableSource(
+  name: string,
+  disposition: ExecutableSourceDisposition,
+  returned: Json,
+  /** The props ambient at the site, which the embedded root's schema validates. */
+  callerProps: Record<string, Json>,
+  hideSet: Set<string>,
+  counter: BlockCounter,
+  owner: Segment[] | undefined,
+  path: string,
+  checkedFailures: CheckedFailures | undefined,
+  authority: ExpansionAuthority | undefined,
+): Operation<Segment[]> {
+  if (typeof returned !== "string") {
+    return [
+      yield* raise({
+        type: "error",
+        message: `<${name} /> returns executable source, which is text, and returned something else.`,
+        source: name,
+      }),
+    ];
+  }
+
+  const parsed = yield* parseMarkdownDefinitionPhased(name, disposition.sourceIdentity, returned);
+  if (!parsed.ok) {
+    return [yield* raise(schemaValidationErrorSegment(parsed.error, name))];
+  }
+  const embedded = parsed.value;
+
+  if (embedded.returns !== undefined) {
+    return [
+      yield* raise({
+        type: "error",
+        message:
+          `<${name} /> expands its source where it is written, and that source declares ` +
+          "`returns`. There is nowhere for a root value to go, so nothing was run.",
+        source: name,
+      }),
+    ];
+  }
+
+  const structureError = validateBodyStructure(embedded.bodySegments, undefined);
+  if (structureError) {
+    return [yield* raise(structureError)];
+  }
+
+  let validatedProps: Record<string, Json>;
+  try {
+    validatedProps = yield* validateProps(disposition.sourceIdentity, callerProps, embedded.props);
+  } catch (error) {
+    return [yield* raise(schemaValidationErrorSegment(error, name))];
+  }
+
+  // The caller's bindings, with the root's own validated props over them. The
+  // layered environment is derived from the caller's, so the source reads what
+  // the document has bound; its own values object is fresh, so what the source
+  // binds stays inside it.
+  const siteEnv = yield* env;
+  const propsEnv = propsEnvironment(validatedProps);
+  const sourceEnv = layerEnvironments(siteEnv, propsEnv, false) ?? propsEnv;
+
+  const sourcePath = extendPath(path, { f: "source", at: disposition.sourceIdentity });
+
+  const expanded = yield* scoped(function* () {
+    yield* provideEnv(sourceEnv);
+    // Isolated from the loop the element was written in, for the reason a
+    // component's own body is: a `<Break>` belongs to a `<Loop>` written in the
+    // flow that holds it, and this source is its own flow. A `<Return>` is
+    // reserved here for the same reason — the body below is given no return
+    // frame at all.
+    yield* ActiveLoop.set(undefined);
+    return yield* expandBody(
+      embedded.bodySegments,
+      [],
+      embedded.meta,
+      validatedProps,
+      hideSet,
+      counter,
+      undefined,
+      passthroughClaim,
+      owner,
+      sourcePath,
+      checkedFailures,
+      authority,
+      undefined,
+    );
+  });
+
+  // The owner already holds what the source selected, exactly as a rendering
+  // body's does.
+  return owner === undefined ? expanded : [];
 }
 
 // Without `returns`, a function component's rendering is its return value, so

@@ -627,7 +627,12 @@ The checks that hold this together, each proving a different build:
   asks the built bin — from a directory that is not the package — which Plan
   `<Plan>` Component source it would let a document write. The answer carries the
   origin and the SHA-256 of those bytes, so a build that shipped different ones, or none,
-  answers differently here rather than at a person's first `xmd plan`.
+  answers differently here rather than at a person's first `xmd plan`. It carries
+  the return disposition too: what `<Plan>` returns is executable source the
+  engine expands, and that travels with the declaration rather than with the
+  bytes, so the digest cannot answer for it. A build that shipped the Component
+  without it would let a document write `<Plan>` and then refuse it for having
+  captured nothing.
 - `scripts/tests/plan-component-compiled.test.ts` asks the same question of the
   compiled binary, which has no checkout to fall back to. It runs in the `smoke`
   job, beside the other suites whose subject is `dist/xmd`.

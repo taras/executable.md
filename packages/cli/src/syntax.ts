@@ -206,6 +206,14 @@ function renderReturns(entry: CompleteComponentSyntaxEntry): string[] {
       fence("json", stringify(entry.returns)),
     ];
   }
+  if (entry.returnDisposition?.kind === "executable-source") {
+    return [
+      "**Returns:** executable source — written without `as`, it expands where you wrote it, " +
+        `under the identity ${code(entry.returnDisposition.sourceIdentity)}. Written with ` +
+        "`as`, it binds that source and expands none of it.",
+      fence("json", stringify(entry.returns)),
+    ];
+  }
   return [
     "**Returns:** a value — it renders nothing, and `as` binds what it returns.",
     fence("json", stringify(entry.returns)),

@@ -2,11 +2,12 @@
  * Tier PC — `<Plan>` written in an ordinary document.
  *
  * The same packaged Component `xmd plan` runs, reached the other way: a document
- * writes `<Plan>`, its body renders the Prompt, and the approved source arrives
- * under `as`. What this tier is about is everything that differs from the
- * command — the caller's Prompt, the caller's journal, the caller's authority —
- * and everything that must not: the ceiling the Agent writes under, the order
- * the phases run in, and the exact bytes that come back.
+ * writes `<Plan>`, its body renders the Prompt, and the approved program is
+ * carried out where the element was written — or, with `as`, bound and left
+ * alone. What this tier is about is everything that differs from the command —
+ * the caller's Prompt, the caller's journal, the caller's authority — and
+ * everything that must not: the ceiling the Agent writes under, the order the
+ * phases run in, and the exact bytes that come back.
  *
  * Every seam is deterministic and in process: the scriptable ACPX runtime, a
  * scripted review, a recorded draft answer, and an authorship root the case
@@ -15,11 +16,11 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped, until } from "effection";
+import { ensure, scoped, spawn, until } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
-import { readdir } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -48,6 +49,36 @@ const ROOT = "document.md";
 
 /** A Plan the coding agent replies with, and that admission accepts. */
 const PLAN = ["# Say hello", "", "This document greets you.", "", "Hello.", ""].join("\n");
+
+/**
+ * The same Plan with one observable, durable effect: a line appended to a log.
+ *
+ * A line rather than a file, because the question every case here asks is *how
+ * many times* — once when the program expanded, never when it was captured or
+ * refused, and not again when a partial journal resumed inside it.
+ */
+function programAppending(log: string): string {
+  return [
+    "# Say hello",
+    "",
+    "the program ran.",
+    "",
+    "```bash exec silent",
+    `echo ran >> ${log}`,
+    "```",
+    "",
+  ].join("\n");
+}
+
+/** How many times the program's effect happened, from the log it appends to. */
+function* timesRun(log: string): Operation<number> {
+  try {
+    const text = String(yield* until(readFile(log, "utf8")));
+    return text.split("\n").filter((line) => line.trim().length > 0).length;
+  } catch {
+    return 0;
+  }
+}
 
 /** What one document run produced, and every phase that was reached. */
 interface Run {
@@ -79,7 +110,11 @@ function* authorshipRoot(): Operation<string> {
 function* runDocument(options: {
   source: string;
   reply?: string;
-  reviews?: readonly ("Approve" | "Stop")[];
+  /** Turns scripted whole, for a case about how one of them settles. */
+  turns?: readonly { reply: string; stopReason?: string }[];
+  reviews?: readonly ("Approve" | "Stop" | "Request changes")[];
+  /** The properties the enclosing document is run with. */
+  props?: Record<string, Json>;
   root?: string;
   includes?: readonly string[];
   stream?: InMemoryStream;
@@ -107,8 +142,13 @@ function* runDocument(options: {
   if (options.reply !== undefined) {
     harness.fake.script({ reply: options.reply });
   }
+  for (const turn of options.turns ?? []) {
+    harness.fake.script(turn);
+  }
   for (const decision of options.reviews ?? ["Approve"]) {
-    harness.script({ decision });
+    harness.script(
+      decision === "Request changes" ? { decision, feedback: "change it" } : { decision },
+    );
   }
 
   let value: Json | undefined;
@@ -122,6 +162,7 @@ function* runDocument(options: {
           ...retainedSource(ROOT, options.source),
           stream,
           includes: [...(options.includes ?? [])],
+          ...(options.props === undefined ? {} : { props: options.props }),
         },
         [
           {
@@ -284,7 +325,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       expect(Reflect.get(Object(plan?.origin), "origin")).toBe(PLAN_ORIGIN);
       // The description a document author reads is the packaged Component's own
       // frontmatter, so the asset and the entry describing it are one text.
-      expect(plan?.description).toContain("Create an XMD program from a Prompt.");
+      expect(plan?.description).toContain("Create an XMD program from a prompt.");
 
       for (const category of catalog.categories) {
         const names = category.entries.map((entry) => entry.name);
@@ -548,6 +589,314 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       // Two durable placements, not one shared and not one refused.
       expect(run.leftover).toHaveLength(2);
       expect(new Set(run.leftover).size).toBe(2);
+    });
+  });
+
+  it("PC19: an approved Plan expands where the element is written", function* () {
+    yield* useWorkingDirectory(function* (dir) {
+      const log = join(dir, "log.txt");
+      const run = yield* runDocument({
+        source: ["before", "", "<Plan>Write a program.</Plan>", "", "after", ""].join("\n"),
+        reply: programAppending(log),
+      });
+
+      expect(run.failure).toBe(undefined);
+      // One program, carried out once, between the two markers the author wrote
+      // around the element.
+      expect(yield* timesRun(log)).toBe(1);
+      const before = run.output.indexOf("before");
+      const ran = run.output.indexOf("the program ran.");
+      const after = run.output.indexOf("after");
+      expect(before).toBeGreaterThanOrEqual(0);
+      expect(ran).toBeGreaterThan(before);
+      expect(after).toBeGreaterThan(ran);
+      // What the reader sees is the program's output, not its source.
+      expect(run.output).not.toContain("```bash exec");
+      expect(run.output).not.toContain("echo ran");
+    });
+  });
+
+  it("PC20: the same Plan under `as` binds the bytes and carries out none of them", function* () {
+    yield* useWorkingDirectory(function* (dir) {
+      const log = join(dir, "log.txt");
+      const approved = programAppending(log);
+      const run = yield* runDocument({
+        source: ['<Plan as="program">Write a program.</Plan>', "", "got:{program}", ""].join("\n"),
+        reply: approved,
+      });
+
+      expect(run.failure).toBe(undefined);
+      // Byte for byte, and the effect in those bytes is the negative control.
+      expect(run.output).toContain(`got:${approved}`);
+      expect(yield* timesRun(log)).toBe(0);
+    });
+  });
+
+  it("PC21: the program runs in the calling document's own environment", function* () {
+    yield* useWorkingDirectory(function* (dir) {
+      // A component on the caller's own include path. The program reaches it
+      // because the component selection, the includes and the registry are the
+      // enclosing execution's rather than a second run's.
+      yield* writeTextFile(join(dir, "Greeting.md"), "a greeting\n");
+
+      const approved = [
+        "---",
+        "props:",
+        "  type: object",
+        "  properties:",
+        "    who: { type: string }",
+        "  required: [who]",
+        "  additionalProperties: false",
+        "release: 1.2.3",
+        "---",
+        "",
+        "# Greet somebody",
+        "",
+        "<Output>",
+        "for {props.who} at {meta.release}, greeting {greeting} via <Greeting />",
+        "</Output>",
+        "",
+        "this line is documentation and is not selected.",
+        "",
+      ].join("\n");
+
+      const run = yield* runDocument({
+        source: [
+          "---",
+          "props:",
+          "  type: object",
+          "  properties:",
+          "    who: { type: string }",
+          "  required: [who]",
+          "  additionalProperties: false",
+          "---",
+          "",
+          '<Let as="greeting" value="hello" />',
+          "<Plan>Write a greeter.</Plan>",
+          "",
+        ].join("\n"),
+        reply: approved,
+        includes: [dir],
+        props: { who: "ada" },
+      });
+
+      expect(run.failure).toBe(undefined);
+      expect(run.output).toContain("for ada at 1.2.3, greeting hello via a greeting");
+      // Its own top-level `<Output>` selected what renders, exactly as a root's does.
+      expect(run.output).not.toContain("this line is documentation");
+    });
+  });
+
+  it("PC22: every unsuccessful ending leaves no program effect and no binding", function* () {
+    const endings: readonly {
+      name: string;
+      reviews: readonly ("Approve" | "Stop" | "Request changes")[];
+      reply?: string;
+      turns?: readonly { reply: string; stopReason?: string }[];
+      expect: string;
+    }[] = [
+      { name: "stopping", reviews: ["Stop"], expect: "stopped at your request" },
+      {
+        name: "repeated rejection",
+        reviews: ["Request changes", "Request changes", "Stop"],
+        expect: "stopped at your request",
+      },
+      {
+        name: "a failed turn",
+        reviews: [],
+        turns: [{ reply: "", stopReason: "refusal" }],
+        expect: 'stop reason "refusal"',
+      },
+      {
+        name: "a structural refusal",
+        reviews: ["Approve"],
+        reply: "<Nonexistent />\n",
+        expect: "does not validate",
+      },
+      {
+        // The program a `<Plan>` produces expands under the authority the
+        // authored site carried, not the declaration's, so the phases only
+        // those exact bytes may write are not names it can reach.
+        name: "a private name in the approved source",
+        reviews: ["Approve"],
+        reply: '<AdmitPlan source="x" as="admitted" />\n',
+        expect: "does not validate",
+      },
+    ];
+
+    for (const ending of endings) {
+      yield* useWorkingDirectory(function* (dir) {
+        const log = join(dir, "log.txt");
+        // A row scripts turns or a reply, never both; the rest approve the
+        // program whose one effect this case counts.
+        const scripted =
+          ending.turns === undefined
+            ? { reply: ending.reply ?? programAppending(log) }
+            : { turns: ending.turns };
+
+        const run = yield* runDocument({
+          source: ["<Plan>Write a program.</Plan>", "", "after", ""].join("\n"),
+          ...scripted,
+          reviews: ending.reviews,
+        });
+
+        expect(run.failure).toContain(ending.expect);
+        // Nothing was carried out and nothing of the program was rendered in its
+        // place. The ending's name travels into the assertion so a failure says
+        // which of them produced it.
+        expect([ending.name, yield* timesRun(log)]).toEqual([ending.name, 0]);
+        expect(run.output).not.toContain("the program ran.");
+      });
+    }
+  });
+
+  it("PC23: cancelling authorship leaves no program effect", function* () {
+    yield* useWorkingDirectory(function* (dir) {
+      const log = join(dir, "log.txt");
+      const root = yield* authorshipRoot();
+      const harness = yield* planDeclarationHarness({
+        surface: "component",
+        authorshipRoot: root,
+      });
+      // The turn never settles, so the run is interrupted while the agent is
+      // still writing — the one ending no review answer can produce.
+      harness.fake.script({ reply: programAppending(log), manual: true });
+
+      yield* scoped(function* () {
+        yield* installAgentComponents({ defaultAgent: AGENT, permissionMode: "deny-all" });
+        const running = yield* spawn(function* () {
+          return yield* collect(
+            yield* executeInstalled(
+              {
+                ...retainedSource(ROOT, "<Plan>Write a program.</Plan>\n"),
+                stream: new InMemoryStream(),
+                includes: [],
+              },
+              [
+                {
+                  components: agentIdentityComponents(),
+                  declarations: [harness.declaration],
+                },
+              ],
+            ),
+          );
+        });
+        yield* harness.fake.startedTurns(1);
+        yield* running.halt();
+      });
+
+      expect(harness.reviews).toEqual([]);
+      expect(yield* timesRun(log)).toBe(0);
+      expect(yield* until(readdir(root))).toEqual([]);
+    });
+  });
+
+  it("PC24: a root contract the caller cannot meet refuses before the program runs", function* () {
+    yield* useWorkingDirectory(function* (dir) {
+      const log = join(dir, "log.txt");
+      const effect = ["```bash exec silent", `echo ran >> ${log}`, "```"].join("\n");
+
+      // A Plan whose root declares required properties nothing here offers.
+      // Admission accepts it — a Plan declaring properties is a Plan — and the
+      // expansion refuses it against the properties this site actually has.
+      const demanding = yield* runDocument({
+        source: ["<Plan>Write a greeter.</Plan>", ""].join("\n"),
+        reply: [
+          "---",
+          "props:",
+          "  type: object",
+          "  properties:",
+          "    who: { type: string }",
+          "  required: [who]",
+          "  additionalProperties: false",
+          "---",
+          "",
+          "# Greet somebody",
+          "",
+          effect,
+          "",
+        ].join("\n"),
+      });
+
+      expect(demanding.failure).toContain("who");
+      expect(yield* timesRun(log)).toBe(0);
+
+      // And a Plan declaring a root return, which expanded source has nowhere
+      // to hand a value back to.
+      const valued = yield* runDocument({
+        source: ["<Plan>Write a program.</Plan>", ""].join("\n"),
+        reply: [
+          "---",
+          "returns:",
+          "  type: string",
+          "---",
+          "",
+          "# Produce a value",
+          "",
+          effect,
+          "",
+          '<Return value="x" />',
+          "",
+        ].join("\n"),
+      });
+
+      expect(valued.failure).toContain("declares `returns`");
+      expect(yield* timesRun(log)).toBe(0);
+    });
+  });
+
+  it("PC25: a partial journal resumes inside the program without repeating it", function* () {
+    yield* useWorkingDirectory(function* (dir) {
+      const log = join(dir, "log.txt");
+      const first = new InMemoryStream();
+      const source = ["before", "", "<Plan>Write a program.</Plan>", "", "after", ""].join("\n");
+
+      const one = yield* runDocument({
+        source,
+        reply: programAppending(log),
+        stream: first,
+      });
+      expect(one.failure).toBe(undefined);
+      expect(yield* timesRun(log)).toBe(1);
+
+      // A second run continuing that history, with a provider that would answer
+      // differently and a review nobody scripted. Authorship, the check, the
+      // approval and the admission are all restored — and so is the effect the
+      // program had already performed.
+      const two = yield* runDocument({
+        source,
+        reply: "# A different Plan\n\nnot this one.\n",
+        reviews: [],
+        stream: yield* continuing(first),
+      });
+
+      expect(two.failure).toBe(undefined);
+      expect(two.harness.fake.prompts).toEqual([]);
+      expect(two.harness.reviews).toEqual([]);
+      expect(two.harness.checked).toEqual([]);
+      expect(yield* timesRun(log)).toBe(1);
+      expect(two.output).toBe(one.output);
+    });
+  });
+
+  it("PC26: the catalog says the approved plan expands, and validation agrees", function* () {
+    yield* useWorkingDirectory(function* () {
+      const catalog = yield* syntaxCatalog([]);
+      const plan = catalog.categories[1].entries.find((entry) => entry.name === "Plan");
+
+      expect(plan?.returnDisposition).toEqual({
+        kind: "executable-source",
+        sourceIdentity: "<plan>",
+      });
+      expect(plan?.description).toContain("expands the approved plan");
+
+      // A site without `as` is what the common path writes, so validation has to
+      // accept it — and it asks the same question expansion does.
+      const validation = yield* validateDocument({
+        ...retainedSource(ROOT, "<Plan>Write a program.</Plan>\n"),
+        declarations: [yield* planComponentDescription()],
+      });
+      expect(validation.outcome).toBe("valid");
     });
   });
 

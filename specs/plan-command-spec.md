@@ -266,6 +266,19 @@ document invoking `<Plan>` expand the same bytes, under the same origin
 `@executablemd/cli/Plan.md` and the same digest, in every distribution. There is
 no generated TypeScript copy and no second Markdown implementation.
 
+**What the Component returns is a program, and the engine expands it.** The host
+declares the executable-source return disposition on those exact bytes under the
+identity `<plan>` ([executable MDX](./executable-mdx-spec.md) §5.3), so an
+ordinary document writing `<Plan>…</Plan>` carries the approved program out
+where it wrote the element, as an embedded text root (§5.4). Writing
+`<Plan as="program">` binds the exact approved source instead and performs none
+of its effects. Authorship and review are about the program's contents and do
+not change between the two.
+
+`plan-command.md` writes `as`, which is what keeps `xmd plan` source-only: the
+command hands the caller bytes, and `--run` is still the one thing that executes
+them, through the independent path below.
+
 The Component contains one enclosing `<Session>` expansion whose body holds every
 initial, repair and human-revision `<Prompt>`. A loop inside that one Session
 creates no second placement; sibling Sessions are not used, because sibling

@@ -173,6 +173,15 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
       digest,
     });
     expect(plan.forms).toEqual(["paired"]);
+    // What that return *is* travels with the declaration rather than with the
+    // bytes, so the digest above cannot answer for it: a build that shipped the
+    // Component without its disposition would let a document write `<Plan>` and
+    // then refuse it for having captured nothing.
+    expect(plan.returnDisposition).toEqual({
+      kind: "executable-source",
+      sourceIdentity: "<plan>",
+    });
+    expect(plan.description).toContain("expands the approved plan");
     // And no private capability is syntax a document may write, in any build.
     for (const name of ["PlanInputs", "PlanAuthorship", "CheckDraft", "AdmitPlan"]) {
       expect(entries.map((entry: { name?: string }) => entry?.name)).not.toContain(name);

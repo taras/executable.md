@@ -7,9 +7,11 @@ props:
 returns:
   type: string
 description: >-
-  Create an XMD program from a Prompt. `<Plan as="program">Ask for the user's
-  age.</Plan>` expands its content normally to form the complete Prompt.
-as: Required. The exact approved Plan source after teardown and structural admission.
+  Create an XMD program from a prompt. `<Plan>Ask for the user's age.</Plan>`
+  expands the approved plan.
+as: >-
+  Optional. It captures the exact approved Plan source, after teardown and
+  structural admission, without expanding any of it.
 context: The complete Prompt, expanded once before authorship.
 ---
 

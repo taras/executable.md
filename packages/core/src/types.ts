@@ -318,6 +318,26 @@ export interface PartialContent {
 }
 
 /**
+ * What a trusted host says the exact Markdown it declares returns, beyond the
+ * value its `returns` schema describes (spec §5.3).
+ *
+ * `executable-source` says the returned string is Executable Markdown the
+ * engine expands where the component was written, unless the site captured it
+ * with `as`. `sourceIdentity` is the identity those bytes are read under —
+ * source positions and diagnostics report it, the way `<eval>` reports supplied
+ * root text.
+ *
+ * Only a declaration carries this. There is no frontmatter field for it, so a
+ * repository component, a workflow bundle member, a registration and a document
+ * cannot ask for it, and a declaration that does is refused unless its own
+ * source returns a string.
+ */
+export type ExecutableSourceDisposition = {
+  readonly kind: "executable-source";
+  readonly sourceIdentity: string;
+};
+
+/**
  * Where a selected implementation came from (spec §5.3).
  *
  * A registration names itself with a stable human-readable `origin` rather than
@@ -362,6 +382,8 @@ export type ComponentSelection =
       source: string;
       forms: readonly InvocationForm[];
       definition: ComponentDefinition;
+      /** What the host says this declaration's return is, when it says more. */
+      returnDisposition?: ExecutableSourceDisposition;
     }
   | { kind: "unresolved"; searched: string[]; registered: readonly ComponentOrigin[] };
 

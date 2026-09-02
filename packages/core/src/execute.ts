@@ -41,6 +41,7 @@ import type { Context } from "effection";
 import type {
   ComponentDefinition,
   ComponentRegistry,
+  ExecutableSourceDisposition,
   FunctionComponent,
   FunctionComponentDefinition,
   JsonObject,
@@ -221,7 +222,23 @@ type DurableSelection =
    * host that no longer declares it, refuses rather than continuing somebody
    * else's policy.
    */
-  | { kind: "declared-markdown"; origin: string; digest: string; content: string }
+  | {
+      kind: "declared-markdown";
+      origin: string;
+      digest: string;
+      content: string;
+      /**
+       * What the host said this declaration's return is, when it said anything.
+       *
+       * Recorded because it is not in the bytes: the digest above proves the
+       * source, and only this proves what the run was treating that source's
+       * return as. A record that carries none was continuing an ordinary value
+       * component, and a run that now declares an executable-source return
+       * under the same name is a different contract rather than the same one
+       * described more fully.
+       */
+      disposition?: ExecutableSourceDisposition;
+    }
   /**
    * A component only the declaration that carries it may write.
    *
@@ -269,15 +286,24 @@ function readDurableSelection(value: unknown): DurableSelection | undefined {
     const origin = record["origin"];
     const digest = record["digest"];
     const declaredContent = record["content"];
+    const stated = record["disposition"];
     if (
-      members !== 4 ||
+      (members !== 4 && members !== 5) ||
+      (members === 5 && stated === undefined) ||
       typeof origin !== "string" ||
       typeof digest !== "string" ||
       typeof declaredContent !== "string"
     ) {
       return undefined;
     }
-    return { kind: "declared-markdown", origin, digest, content: declaredContent };
+    if (stated === undefined) {
+      return { kind: "declared-markdown", origin, digest, content: declaredContent };
+    }
+    const disposition = readRecordedDisposition(stated);
+    if (disposition === undefined) {
+      return undefined;
+    }
+    return { kind: "declared-markdown", origin, digest, content: declaredContent, disposition };
   }
 
   const path = record["path"];
@@ -324,6 +350,35 @@ function readDurableSelection(value: unknown): DurableSelection | undefined {
   }
 
   return undefined;
+}
+
+/**
+ * The return disposition a record carries, read as a closed protocol.
+ *
+ * Journal data, so every member is parsed: an unknown kind is malformed rather
+ * than ignored, because reading it as absent would continue an executable
+ * source as an ordinary value.
+ */
+function readRecordedDisposition(value: Json | undefined): ExecutableSourceDisposition | undefined {
+  if (!isJsonObject(value) || Object.keys(value).length !== 2) {
+    return undefined;
+  }
+  const sourceIdentity = value["sourceIdentity"];
+  if (value["kind"] !== "executable-source" || typeof sourceIdentity !== "string") {
+    return undefined;
+  }
+  return { kind: "executable-source", sourceIdentity };
+}
+
+/** Whether two records describe the same return disposition, absence included. */
+function sameDisposition(
+  recorded: ExecutableSourceDisposition | undefined,
+  declared: ExecutableSourceDisposition | undefined,
+): boolean {
+  if (recorded === undefined || declared === undefined) {
+    return recorded === declared;
+  }
+  return recorded.kind === declared.kind && recorded.sourceIdentity === declared.sourceIdentity;
 }
 
 /**
@@ -450,6 +505,9 @@ function* durableImportComponent(
             origin: selected.origin,
             digest: selected.digest,
             content: selected.source,
+            ...(selected.returnDisposition === undefined
+              ? {}
+              : { disposition: selected.returnDisposition }),
           };
         case "registered":
           return {
@@ -521,7 +579,12 @@ function* durableImportComponent(
       declaration === undefined ||
       declaration.origin !== selection.origin ||
       declaration.digest !== selection.digest ||
-      declaration.source !== selection.content
+      declaration.source !== selection.content ||
+      // What the run was treating the return as is part of the selection, not a
+      // description of it: continuing a record that carries no disposition as
+      // executable source — or one that carries a different one — would run
+      // bytes this run's contract says something else about.
+      !sameDisposition(selection.disposition, declaration.returnDisposition)
     ) {
       throw new Error(
         `Component ${name} was recorded as the declared Markdown "${selection.origin}", which is ` +
@@ -2833,6 +2896,14 @@ function* invoke(
           ...(declaration.returns === undefined
             ? {}
             : { returns: detachedSchema(declaration.returns) }),
+          ...(declaration.returnDisposition === undefined
+            ? {}
+            : {
+                returnDisposition: Object.freeze({
+                  kind: declaration.returnDisposition.kind,
+                  sourceIdentity: declaration.returnDisposition.sourceIdentity,
+                }),
+              }),
           ...(declaration.privates === undefined
             ? {}
             : { privates: [...declaration.privates].map(retainedIdentityComponent) }),
