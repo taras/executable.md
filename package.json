@@ -81,5 +81,10 @@
   },
   "workspaces": [
     "packages/*"
-  ]
+  ],
+  "pnpm": {
+    "overrides": {
+      "tsx": "4.23.1"
+    }
+  }
 }
