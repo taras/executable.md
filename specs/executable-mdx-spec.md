@@ -3119,6 +3119,13 @@ and `--json`. It takes no document and no run option, because it runs nothing.
 An inspection failure is reported on stderr with exit status 1 and no partial
 catalog on stdout.
 
+**The command has not succeeded until stdout has taken the whole catalog.** A
+pipe holds far less than a catalog, so backpressure changes how long the command
+takes and never which bytes arrive: a reader that consumes slowly receives
+exactly what a regular-file redirect receives, in both forms. A sink that closes
+or refuses the write is reported on stderr with exit status 1, rather than
+succeeding with what happened to fit.
+
 #### Validating a supplied document: `validateDocument()`
 
 Inspection answers about a name and about a directory. `validateDocument()`
@@ -10520,6 +10527,21 @@ itself, so an execution starting anywhere fails the row. Defined in §5.3.
 | SX9 | Failure | An unusable include exits 1, reports on stderr and prints no catalog |
 | SX10/SX11 | Formats | Markdown by default, version-1 JSON with `--json`; the catalog is inspection, and `xmd plan` is the command that writes with the same structured value |
 | SX12 | A package tree | Bare `xmd syntax` succeeds with the default includes in a repository whose `node_modules` holds directory links |
+| SX13–SX15 | Delivery | A real pipeline reading a catalog larger than one pipe buffer receives the bytes a regular-file redirect receives, in both forms; a consumer that closes early leaves the command reporting on stderr with exit 1 rather than an unhandled write failure |
+
+### Tier SDL — Delivering a rendered result
+
+Delivery installs one `error` listener on a stream every command shares, so its
+lifetime is the claim. Tier SX cannot show it: a real pipe reports what arrived,
+not what stayed attached afterwards.
+
+| # | Test | Verify |
+|---|------|--------|
+| SDL1 | Success | A delivery that succeeds leaves the stream's listeners as it found them |
+| SDL2/SDL3 | Both arrival orders | The listener is still attached when the trailing event lands and gone once it has; either order settles on the first arrival and absorbs the duplicate |
+| SDL4 | One arrival | A failure the stream reports once, holding nothing after it, settles without waiting for a second |
+| SDL5/SDL6 | Refusal and cancellation | A `write` that refuses outright and a delivery halted before it settles both detach |
+| SDL7/SDL8 | No residue | No finished delivery observes a later, unrelated failure, and the real `process.stdout` is left as it was found |
 
 ### Tier SM — `xmd syntax` end to end
 

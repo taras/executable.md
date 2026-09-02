@@ -99,7 +99,7 @@ jobs:
       # spawn a literal `bun`. The runner image ships Node but not bun.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.0
 
       - name: Typecheck
         run: deno task check
@@ -445,7 +445,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.0
 
       # `deno install` rather than `deno task deps`: the task also caches the
       # graphs a browser build and a release compile walk, and it reaches them
@@ -534,7 +534,7 @@ jobs:
       # empty spool.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.0
 
       - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
         with:
@@ -629,7 +629,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.0
 
       - run: bun install
 
