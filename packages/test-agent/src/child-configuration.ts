@@ -63,6 +63,16 @@ function mappingKey(agent: string, session: string): string {
   return JSON.stringify([agent, session]);
 }
 
+/**
+ * The table key one agent's any-session mapping occupies.
+ *
+ * A shape `mappingKey()` cannot produce for any session name, so the two kinds
+ * of declaration share one duplicate check without one masking the other.
+ */
+function anyKey(agent: string): string {
+  return JSON.stringify([agent]);
+}
+
 function describeMapping(agent: string, session: string): string {
   return `agent "${agent}" and session "${session === "" ? "(default)" : session}"`;
 }
@@ -100,7 +110,7 @@ function open(collect: {
   const declareScenario: ChildDeclarationChild = function* (
     props: Record<string, Json>,
   ): Operation<string> {
-    const { agent, session: sessionProp, src } = props;
+    const { agent, session: sessionProp, src, anySession } = props;
     if (typeof src !== "string" || src.length === 0) {
       refuse(`<${SCENARIO}> requires a "src" prop.`);
       return "";
@@ -111,19 +121,35 @@ function open(collect: {
       return "";
     }
     const agentName = typeof agent === "string" ? agent : defaultAgent;
+    const serveAny = anySession === true || anySession === "" || anySession === "true";
+    if (serveAny && typeof sessionProp === "string") {
+      refuse(
+        `<${SCENARIO}> was written with both "session" and "anySession". One names the ` +
+          "conversation it answers for and the other says it does not name one.",
+      );
+      return "";
+    }
     const session = typeof sessionProp === "string" ? sessionProp : "";
-    const key = mappingKey(agentName, session);
+    // Kept in the same table as the exact mappings, under a key no session name
+    // can produce, so declaring two of them for one agent is refused where it is
+    // written rather than discovered when a prompt arrives.
+    const key = serveAny ? anyKey(agentName) : mappingKey(agentName, session);
     if (mapped.has(key)) {
       // Refused where it is written rather than where it would be used: the
       // wrapper can only find out when a prompt asks for the mapping, and a
       // child has not been created yet for one to ask in.
-      refuse(`<${SCENARIO}> maps ${describeMapping(agentName, session)} more than once.`);
+      refuse(
+        serveAny
+          ? `<${SCENARIO}> maps any session of agent "${agentName}" more than once.`
+          : `<${SCENARIO}> maps ${describeMapping(agentName, session)} more than once.`,
+      );
       return "";
     }
     mapped.add(key);
     scenarios.push({
       agent: agentName,
       session,
+      ...(serveAny ? { anySession: true } : {}),
       rootDir: read.value.rootDir,
       document: read.value.document,
     });
@@ -189,13 +215,18 @@ export function* installChildTestAgent(
   const controller = yield* useTestAgentController();
   const declarations = new Map<string, ScenarioDeclaration>();
   for (const scenario of configuration.scenarios) {
-    declarations.set(mappingKey(scenario.agent, scenario.session), {
-      agent: scenario.agent,
-      sessionName: scenario.session,
-      rootDir: scenario.rootDir,
-      document: { path: scenario.document.path, source: scenario.document.source },
-      duplicate: false,
-    });
+    declarations.set(
+      scenario.anySession === true
+        ? anyKey(scenario.agent)
+        : mappingKey(scenario.agent, scenario.session),
+      {
+        agent: scenario.agent,
+        sessionName: scenario.session,
+        rootDir: scenario.rootDir,
+        document: { path: scenario.document.path, source: scenario.document.source },
+        duplicate: false,
+      },
+    );
   }
   const partition = yield* provisionPartition({
     defaultAgent: configuration.defaultAgent,

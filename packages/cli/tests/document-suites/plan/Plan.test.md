@@ -15,23 +15,63 @@ document. A child's `target` is a document the run host resolves, so it is
 written relative to the working directory — the repository root, where each
 runtime starts its test process.
 
-## The successful path is not here yet
+<Test name="a document captures its approved Plan" timeout="120s">
 
-The two rows this suite exists for — a document capturing its approved Plan, and
-the approved source not having run — are not written here, because a scenario
-cannot address the conversation `<Plan>` opens.
+The child is `uses-plan.md`, which writes `<Plan>` and prints what it bound. The
+scenario answers the one request the Plan workflow sends, and the answer
+approves the draft it produced.
 
-`<Plan>` places its conversation under a session it derives from the expansion
-that asked for it, so `<Plan session="planner">` talks to
-`xmd-plan:<64 hex digits>` rather than to `planner`. A scenario maps one exact
-agent and logical session, and an omitted `session` maps the unnamed default
-rather than acting as a wildcard (specs/test-agent-spec.md, "Behavior
-documents"). There is therefore no name a checked-in test can write that reaches
-the Plan's turn, and the child fails with `no <TestAgent.Scenario> maps agent
-"test" and session "xmd-plan:…"`.
+`anySession` is how the scenario reaches it. `<Plan>` derives the conversation
+it opens from the expansion that asked, so there is no session name an author
+could write here — that is what this opt-in is for, and an exact mapping still
+wins wherever one exists.
 
-The refusal below is the part that does hold today, and it is the part that
-proves the ceiling is real.
+<Execution host="run" target="packages/cli/tests/document-suites/plan/uses-plan.md" as="run">
+<TestAgent>
+<TestAgent.Scenario anySession={true} src="./agents/approved-plan.md" />
+</TestAgent>
+
+<Answers>
+<Answer value={{ decision: "Approve" }} />
+</Answers>
+
+<CollectOutput as="output" />
+
+<AssertEquals actual={run.result.ok} expected={true} />
+<AssertStringIncludes actual={output} expected="# Approved program" />
+<AssertStringIncludes actual={output} expected="the approved Plan ran" />
+</Execution>
+</Test>
+
+## An approved Plan is source, not something that ran
+
+The program this scenario approves names a file. Approving it hands the source
+back; it does not run it. The file is therefore the evidence: a child that
+executed what it was given would have created it.
+
+<Test name="the approved source did not run" timeout="120s">
+<Execution host="run" target="packages/cli/tests/document-suites/plan/uses-plan.md" as="run">
+<TestAgent>
+<TestAgent.Scenario anySession={true} src="./agents/approved-plan.md" />
+</TestAgent>
+
+<Answers>
+<Answer value={{ decision: "Approve" }} />
+</Answers>
+
+<CollectOutput as="output" />
+
+<AssertEquals actual={run.result.ok} expected={true} />
+<AssertStringIncludes actual={output} expected="the approved Plan ran" />
+</Execution>
+
+The source arrived, and the file it names is nowhere: the child ran in this
+working directory, so a child that executed what it was given would have written
+it here.
+
+<Glob include={["planned.txt"]} as="written" />
+<AssertEquals actual={written.length} expected={0} />
+</Test>
 
 ## Without a scripted agent there is no ceiling to write under
 

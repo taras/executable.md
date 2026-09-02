@@ -94,6 +94,11 @@ function configError(source: string, message: string): ErrorSegment {
   return { type: "error", message: `<${source}> ${message}`, source };
 }
 
+/** Where one agent's any-session mapping sits, if it declared one. */
+function anyDeclarationKey(agent: string): string {
+  return JSON.stringify([agent]);
+}
+
 function declarationKey(agent: string, sessionName: string): string {
   // JSON encoding keeps the key textual and collision-safe for any
   // agent/session values.
@@ -177,7 +182,13 @@ export function* provisionPartition(options: {
     sessionName: string | undefined,
     dir: string,
   ): Operation<ScenarioHandle> {
-    const declared = declarations.get(declarationKey(agentName, sessionName ?? ""));
+    // The exact mapping first, always. An any-session declaration is a fallback
+    // an author opted into for conversations they cannot name — `<Plan>` derives
+    // its session from the expansion that asked — and it must never take a
+    // session somebody did name.
+    const declared =
+      declarations.get(declarationKey(agentName, sessionName ?? "")) ??
+      declarations.get(anyDeclarationKey(agentName));
     if (!declared) {
       throw new Error(`no <TestAgent.Scenario> maps ${describeMapping(agentName, sessionName)}`);
     }
@@ -499,6 +510,15 @@ export const SCENARIO_PROPS: PropsSchema = {
     src: { type: "string" },
     agent: { type: "string" },
     session: { type: "string" },
+    /**
+     * Answer for any of this agent's sessions no exact mapping claims.
+     *
+     * For a conversation whose name a test cannot write down — `<Plan>` derives
+     * its session from the expansion that asked. An exact mapping always wins,
+     * and it is an explicit opt-out of exact matching rather than a new meaning
+     * for an omitted `session`.
+     */
+    anySession: { type: "boolean" },
   },
   required: ["src"],
   additionalProperties: false,

@@ -445,6 +445,11 @@ Only the canonical declaration this harness recognizes grants any of it. A
 repository component named `TestAgent` ends the scan and configures nothing, so
 a child that reached one is refused exactly as an unconfigured child is.
 
+A scenario reaches the Plan's own turn through `anySession`
+(specs/test-agent-spec.md): `<Plan>` derives its conversation from the expansion
+that asked, so there is no session name a test could write, and that opt-in is
+what answers for it without weakening exact matching anywhere else.
+
 Only detached declaration data enters the host-profile request. A test cannot
 send an Agent provider, Elicitation middleware, context, Api handler, execution
 installation, controller or scope to the child. The trusted host consumes the
