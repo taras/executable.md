@@ -1665,15 +1665,13 @@ authenticated provider state rather than props. Form validation runs first: a
 missing prop, an unknown prop, a `purpose` outside the enum and a missing `as`
 each fail before a Repository is observed or a provider is reached.
 
-**The parent order is the caller's, and the two purposes are opposite
-operations.** `purpose="synchronize"` brings a target into an implementation and
-is authored `[implementationHead, targetBase]`. `purpose="publish"` brings a
-reviewed implementation onto a target and is authored `[reviewedBase,
-reviewedHead]`. The component does not infer the order from the purpose and does
-not reorder what it was given; the purpose is retained so the record says which
-operation the run believed it was performing.
+**The parent order is the caller's, and `purpose` authorizes it.** `purpose="synchronize"` brings a target into an implementation and is authored `[implementationHead, targetBase]`. `purpose="publish"` brings a reviewed implementation onto a target and is authored `[reviewedBase, reviewedHead]`. The component neither infers the order from the purpose nor reorders what it was given — but it does not merely record the purpose either. It validates that what was authored equals the retained authority for the purpose declared.
 
-**The request is the four authored inputs plus what the provider authenticates.** The durable request carries `firstParent`, `secondParent`, `mergeBase` and `purpose` exactly as authored, together with the Repository identity, the checkout, the pre-merge Workspace root and the executor acquisition the provider validated. Those four are provider-authenticated state and never authored props, and the effect is named by the run and the expansion like every other one.
+The provider-authenticated merge ceiling supplies that authority. For `purpose="synchronize"` it supplies the exact current implementation head and the observed target base, and `firstParent` must equal that head while `secondParent` must equal that base. For `purpose="publish"` it supplies the exact reviewed `{ headSha, baseSha }` the retained Stage 7 decision authorized, and `firstParent` must equal `baseSha` while `secondParent` must equal `headSha`. In both cases `mergeBase` must equal the completely observed merge base for that same authenticated pair.
+
+A missing ceiling, a purpose the ceiling does not authorize, a swapped parent, a stale parent, a stale merge base, a revision other than the authorized one, and a ceiling belonging to another Repository or checkout each refuse before any Git mutation. Retaining the purpose without checking it would leave the one mistake this contract most needs to catch — a Stage 7 publication authored in Stage 4's order — detectable only by reading the history afterwards.
+
+**The request is the four authored inputs plus what the provider authenticates.** The durable request carries `firstParent`, `secondParent`, `mergeBase` and `purpose` exactly as authored, together with the Repository identity, the checkout, the pre-merge Workspace root, the executor acquisition and the merge ceiling the provider validated. Those are provider-authenticated state and never authored props, and the effect is named by the run and the expansion like every other one.
 
 **The result is a closed discriminated union of exactly two shapes**, keyed on `outcome`:
 
@@ -1839,9 +1837,24 @@ interface PullRequestCommentResult {
 
 `subject` is the canonical pull-request URL, `effect` is the engine-derived effect identity of [Workflow runs](./workflow-spec.md) §8, and `url` is the canonical URL of the comment this effect settled on. The binding is `{ url }`: that comment's own URL, which is the only fact the effect produces — the subject was already in hand at the call site.
 
-**The natural key is `subject` plus `effect`, and the body is never part of it.** A Git host issues no client-supplied idempotency key for a comment, so the effect identity has to be observable on the host for an interrupted creation to be found again. The adapter makes it observable by appending one fixed, presentation-neutral trailer to the body it sends — an HTML comment carrying the effect identity and nothing else — and observation matches that trailer alone. The trailer is adapter-owned rather than authored: a document does not write it, the rendered body it wrote is not searched for it, and a person editing the comment's prose afterwards leaves the identity untouched. That is what makes an edited sentence the same comment and a re-rendered body not a second one.
+**The natural key is `subject` plus `effect`, and the body is never part of it.** A Git host issues no client-supplied idempotency key for a comment, so the effect identity has to be observable on the host for an interrupted creation to be found again. A comment provider therefore has to support one **stable opaque correlation marker**: a value it can write with a comment, preserve unchanged, and query completely. A provider that cannot do all three refuses the effect before its first mutation, the way a plain Git server refuses pull requests today — there is no fallback that searches prose.
 
-Observation is complete or it is not an observation: a comment list the adapter could not finish reading is an incomplete observation and refuses, because an unfinished search would report absence and create a duplicate. Exactly one comment carrying the trailer is a compatible completion and is adopted with nothing performed; none is a proven absence and is performed once; more than one is permanent ambiguity and refuses. Temporary unavailability refuses as itself and performs nothing.
+The marker is provider transport metadata. The **authored logical body is byte for byte what the document rendered**, and the provider's projection may carry the correlation representation outside it; GitHub's adapter encodes it as a non-rendered HTML comment. It is not authored prose, not a credential and not lifecycle authority — publishing an engine-derived effect identity as an opaque non-secret correlation value is what it is for. The public binding and every replay expose the authored body and the provider's comment identity, never the transport encoding.
+
+**Observation is judged against the attempt state, not against the host alone.** Before any provider mutation, the durable effect retains that this exact request is prepared and unattempted; a live attempt is what moves it past that. What a complete observation means then depends on which side of that line the effect is on:
+
+| Attempt state and observation | Decision |
+| --- | --- |
+| unattempted, and no marker | proven absence; create once |
+| unattempted or attempted, and exactly one marker | compatible completion; adopt with nothing performed |
+| any state, and more than one marker | permanent ambiguity; refuse |
+| **attempted with no committed local completion, and no marker** | **permanent ambiguity; refuse** |
+| an observation that did not complete | incomplete observation; refuse, adopt nothing, perform nothing |
+| the host is temporarily unreachable | temporary unavailability; refuse as itself |
+
+The fourth row is the one that matters. A marker that is absent *after* an attempt does not prove the comment was never created — it equally describes a person having edited or deleted it inside the interrupted window — so treating that as absence is how a duplicate gets published. Refusing it as ambiguity costs a stall and buys the guarantee. Once a local completion has committed, the marker no longer decides anything: a completed replay reads its own record and contacts no provider, so removing the marker afterwards changes nothing.
+
+An incomplete observation is never absence. A comment list the adapter could not finish reading is a search that did not answer, and an unfinished search reported as absence is the same duplicate by another route.
 
 #### `PullRequest.Ready` and `PullRequest.Close`
 
@@ -1913,9 +1926,19 @@ interface PullRequestMergedResult {
 
 `subject` is the canonical pull-request URL and is the whole natural key. The binding is the result record.
 
-The observation is complete or it is nothing. A pull request the host reports as `merged` with a merge commit equal to `expectedMergeCommit` is the compatible completion and is adopted. One reported merged at a *different* commit is a conflict: the target carries somebody else's merge, and the exact-revision reviews invalidate rather than this step succeeding. One still open, or closed unmerged, is temporary unavailability rather than absence or conflict — the host has not caught up, and a later attempt starts again at observation. An incomplete read and an undecidable one are incomplete observation and permanent ambiguity, each refusing as itself.
+The observation is complete or it is nothing, and its five outcomes are distinct:
 
-Cancellation publishes no completion, and a completed record replays without contacting a Git host. Where this step sits in the terminal sequence — after `Git.PublishTarget` and before the issue is closed — belongs to [the software factory](./github-actions-software-factory-spec.md) §10.3.
+| Observation | Decision |
+| --- | --- |
+| `merged: true` at exactly `expectedMergeCommit` | compatible completion; adopt |
+| `merged: true` at another commit | conflict; the target carries somebody else's merge, and the exact-revision reviews invalidate rather than this step succeeding |
+| `state: "open"`, `merged: false` | temporary unavailability; the host has not yet recognized the merge, and a later attempt starts again at observation |
+| `state: "closed"`, `merged: false` | conflict; a pull request somebody closed by hand is a state incompatible with the merged path, not lag |
+| an incomplete read, or an undecidable one | incomplete observation and permanent ambiguity respectively, each refusing as itself |
+
+The third and fourth rows are deliberately not one row. Still open after a publication is eventual consistency and is worth waiting for; closed unmerged is a person having intervened, and waiting for that to resolve itself would wait forever.
+
+Cancellation publishes no completion, and a completed record replays without contacting a Git host. What the run does while the third row persists — a bounded host-configured retry, then a durable machine wait — and where this step sits in the terminal sequence belong to [the software factory](./github-actions-software-factory-spec.md) §10.3.
 
 ## 8. Agents inspect; XMD mutates
 
@@ -3020,7 +3043,7 @@ interface IssueCommentResult {
 
 `subject` is the canonical issue URL — the normalized single spelling this section already requires of a target — `effect` is the engine-derived effect identity, and `url` is the canonical URL of the comment the effect settled on. The binding is `{ url }`, that comment's own URL.
 
-**The natural key is `subject` plus `effect`, and the body is never part of it.** As with a pull-request comment, the effect identity is made remotely observable by one fixed presentation-neutral trailer the adapter appends to the body it sends, and observation matches that trailer alone. Exactly one comment carrying it is adopted, none is performed once, more than one is permanent ambiguity, and a comment list the adapter could not finish reading is an incomplete observation — never absence.
+**The natural key is `subject` plus `effect`, and the body is never part of it.** An Issue provider carries the same requirement §7.10 states for a pull-request comment: it supports one stable opaque correlation marker it can write, preserve and completely query, or it refuses the effect before its first mutation. The authored logical body is byte for byte what the document rendered, and the correlation representation rides outside it. The attempt-state table of §7.10 governs the decision unchanged, including its fourth row — an absent marker after an attempted-but-uncommitted creation is permanent ambiguity rather than proven absence.
 
 `Issue.Close` is self-closing and takes one required `url`, one required `reason` from the closed enum `"completed" | "not_planned"`, and one required `as`. Its natural key is the canonical issue URL alone:
 
@@ -3090,15 +3113,20 @@ document may reach for by itself.
 
 `commands` is an authored **structured argv list**: an ordered, non-empty list whose every member is a non-empty list of strings. There is no interpreter, no quoting layer and no string to mis-split, which is what makes the record of what ran the same thing as what ran. `as` is required, the prop set is closed, and the form is validated before the host's ceilings are read — an empty list, an empty vector, a member that is not a list of strings, an unknown prop and a missing `as` each fail before any child exists.
 
-**The whole list runs.** Each command runs exactly once, in authored order, and a command that ends unsuccessfully does not stop the ones after it. Running the list is how a reader learns what is broken, and a list that stopped at the first defect would hide the rest — the same reason this repository's own test shards run their files to the end. Each command is charged its own duration ceiling, so one command timing out does not consume another's.
+**The pipeline is fail-fast.** Commands run in authored order, and the first command that does not complete successfully is the last one that runs. A command is successful only when it exits normally with status `0`; a non-zero exit, a signal termination and a timeout are each retained as the final row and start no successor. A plan's evidence list is a pipeline — build, then test, then lint — and continuing past a failed build produces later rows evaluated against missing or stale prerequisites, which is evidence that is confidently wrong rather than absent.
 
-The host owns everything else. Which executables may run, what environment they see, the logical working root, how long each command may take, how much output is retained, and what happens to a process tree are host ceilings rather than props. No host path, shell string, ambient environment or command authority enters an authored prop. The commands run against one exact retained Workspace root the host materialized, on the trusted runner where the native toolchain lives — never inside the run's durable owner, which has no toolchain and must not acquire one.
+Breadth belongs inside one command whose own contract runs a corpus to completion, such as this repository's runtime-test shards, or in several separately authored `Evidence.Run` elements where the plan says the groups are independent. That a shard runs its files to the end says nothing about whether one arbitrary pipeline should continue after a failure.
 
-**The result is one record per command, in authored order:**
+The host owns everything else. Which executables may run, what environment they see, the logical working root, how long each command and the whole list may take, how much output is retained, and what happens to a process tree are host ceilings rather than props. No host path, shell string, ambient environment or command authority enters an authored prop. The commands run against one exact retained Workspace root the host materialized, on the trusted runner where the native toolchain lives — never inside the run's durable owner, which has no toolchain and must not acquire one.
+
+**The result is the executed prefix, not one row per authored command:**
 
 ```ts
 interface EvidenceRunResult {
-  readonly commands: readonly EvidenceCommandResult[];
+  readonly completion: "passed" | "failed";
+  readonly authoredCommands: number;
+  readonly executed: readonly EvidenceCommandResult[];
+  readonly runTimeout?: EvidenceRunTimeout;
 }
 
 interface EvidenceCommandResult {
@@ -3106,8 +3134,14 @@ interface EvidenceCommandResult {
   readonly outcome: "exited" | "signalled" | "timeout";
   readonly status?: number;
   readonly signal?: string;
+  readonly limit?: "command" | "run";
   readonly stdout: EvidenceChannel;
   readonly stderr: EvidenceChannel;
+}
+
+interface EvidenceRunTimeout {
+  readonly limit: "run";
+  readonly notStartedAt: number;
 }
 
 interface EvidenceChannel {
@@ -3118,27 +3152,37 @@ interface EvidenceChannel {
 }
 ```
 
-`commands` has exactly one entry per authored command, in the order they were authored, and `argv` repeats the vector that ran. `status` is present exactly when `outcome` is `"exited"` and is the numeric exit status; `signal` is present exactly when `outcome` is `"signalled"` and names the signal; `outcome: "timeout"` carries neither, because a child the host terminated for exceeding its ceiling did not choose how it ended. An unknown member, an unknown `outcome`, and a `status` or `signal` beside the wrong outcome each refuse the record.
+`completion` is `"passed"` exactly when `executed` holds `authoredCommands` rows and every one of them is an `"exited"` row with `status: 0`; it is `"failed"` in every other case. `authoredCommands` is retained beside `executed` so a reader can tell a complete pass from a deliberately stopped prefix without knowing the authored list, which is the whole reason a prefix is safe to publish.
+
+`executed` holds the commands that ran, in authored order, and `argv` repeats the vector that ran. `status` is present exactly when `outcome` is `"exited"` and is the numeric exit status; `signal` is present exactly when `outcome` is `"signalled"`; `limit` is present exactly when `outcome` is `"timeout"` and names which ceiling fired. An unknown member, an unknown `outcome`, an unknown `limit`, and any of those three members beside the wrong outcome each refuse the record.
+
+`runTimeout` is present exactly when the whole-run ceiling expired **between** commands, with no child running. `notStartedAt` is the zero-based index into the authored list of the command that did not start. It is a member of its own rather than a row in `executed`, because a row would have to invent an argv that never ran and a channel that captured nothing.
 
 Both channels are retained separately and neither is folded into the other: `text` is the retained UTF-8 prefix, `retainedBytes` is its length in bytes, `producedBytes` is what the child actually produced, and `truncated` is `producedBytes > retainedBytes`. Truncation is stated rather than inferred from a length, so a reader never has to guess whether a command was quiet or cut off.
+
+**Two ceilings bound the work, and both are host-owned.** A per-command ceiling stops one command monopolizing the run; a whole-`Evidence.Run` ceiling bounds total wall-clock cost across the list, including process startup, output draining and teardown. Neither is an authored prop. Before starting each command the host requires positive remaining whole-run time, and while a command runs its effective deadline is the earlier of its own deadline and the whole-run deadline — so a timeout row's `limit` says which of the two fired. A whole-run ceiling that expires between commands ends the result with `completion: "failed"` and the `runTimeout` record above, and starts no successor.
+
+**A timeout is an ordinary unsuccessful outcome, not an infrastructure failure.** It records that the host enforced its ceiling successfully: it terminated and reaped the process tree and captured bounded channels. It becomes the last row and stops the pipeline. If termination, output draining or reaping *fails* while the host is enforcing that ceiling, the case is an infrastructure failure below rather than a timeout result — the difference is whether the host is reporting what it did or reporting that it could not.
 
 **Which cases bind, which fail, and which commit nothing.**
 
 | Case | Outcome |
 | --- | --- |
-| a command exits, at any status | an ordinary result; the list continues |
-| a command is terminated by a signal | an ordinary result; the list continues |
-| a command exceeds its duration ceiling and the host terminates it | an ordinary `"timeout"` result; the list continues |
-| the executable or environment ceiling refuses a command, or the child cannot be created | **launch failure**: the effect fails with an `Error`, binds nothing and commits no result |
-| the host cannot read a channel it promised to bound | **output-pump failure**: the effect fails with an `Error`, binds nothing and commits no result |
-| the host cannot reap a child or its process tree | **teardown failure**: the effect fails with an `Error`, binds nothing and commits no result |
-| the effect is cancelled | nothing is committed at all: the running child is terminated, the remaining commands do not run, and no result and no failure record is published |
+| a command exits with status `0` | an ordinary row; the next command starts |
+| a command exits non-zero, is terminated by a signal, or hits either duration ceiling | an ordinary final row; `completion` is `"failed"` and no successor starts |
+| the whole-run ceiling expires between commands | `completion: "failed"` with a `runTimeout` record and no successor |
+| the executable or environment ceiling refuses a command, or the child cannot be created | **launch failure**: the effect fails and produces no `EvidenceRunResult` |
+| the host cannot read a channel it promised to bound | **output-pump failure**: the effect fails and produces no `EvidenceRunResult` |
+| the host cannot terminate or reap a child or its process tree | **teardown failure**: the effect fails and produces no `EvidenceRunResult` |
+| the effect is cancelled | the complete process tree is terminated and no completion and no failure record is committed |
 
-A non-zero status is evidence, not an infrastructure failure — it is the answer the evidence exists to obtain. An infrastructure failure is the host being unable to say what happened, which is why it publishes no partial list: half an answer read as a whole one is worse than no answer.
+A non-zero status is evidence, not an infrastructure failure — it is the answer the evidence exists to obtain. An infrastructure failure is the host being unable to say what happened, which is why it publishes no result: half an answer read as a whole one is worse than no answer.
 
-**Precedence is fixed.** Cancellation wins over everything, and invents no completion. Otherwise the first infrastructure failure raised wins, and a teardown failure with no earlier infrastructure failure fails the effect even when every command produced an ordinary outcome — a host that cannot prove it stopped what it started cannot state what the run produced. This is the same rule the workflow lifecycle applies to settlement: teardown is part of the evidence, not work performed after the outcome.
+**Precedence is fixed.** Cancellation wins over every other outcome, terminates the complete process tree, and commits neither a completion nor a failure record. Otherwise the first infrastructure failure is authoritative, and a teardown failure that follows it is retained as secondary evidence rather than replacing it. With no earlier infrastructure failure, a teardown failure is itself authoritative even when every command produced an observed exit: a host that cannot prove its process ownership settled cannot publish a successful binding. This is the rule the workflow lifecycle already applies to settlement, where teardown is part of the evidence rather than work performed after the outcome.
 
-A completed record replays without running anything at all.
+**No successful binding is not the same as no retained evidence.** A failed effect retains bounded diagnostic evidence on its `Error`: the safely collected executed-command prefix, the separate bounded stdout and stderr channels, the primary infrastructure-failure category, and the secondary teardown category when there is one. That is filtered diagnostic failure evidence and it is deliberately not an `EvidenceRunResult` — nothing binds it, and no document reads it as a pass or a fail of the commands. Replaying a failed effect starts no process. Cancellation retains neither, because no completion won.
+
+The operation returns Effection's `Result<T>` at the implementation boundary and puts its failure data on an `Error`, like every other outcome in this repository; the authored binding exists only for a successful `EvidenceRunResult`. There is no local success-or-failure union.
 
 `Evidence.Run` is not Worker Shell (§10.4) and does not replace it: Worker Shell is a contained interpreter over the Workspace filesystem, while this is native execution of an authored list under a trusted host's ceiling. It is absent from the workflow Agent's capabilities (§8.3) and from every generated-XMD table (§8.4), so neither an Agent nor a fragment it wrote can reach it.
 
@@ -3684,29 +3728,30 @@ runtime-named adapter beside the Deno one: shared modules reach it through the
 same contextual storage, lifecycle and Workspace APIs, detect no runtime, and
 import nothing Cloudflare-specific.
 
-**The host assembly contract does not change.** `WorkflowHost` keeps its four methods — `useRunHost()`, `useLifecycle()`, `useDelivery()` and `attach()` — and the Cloudflare adapter is one more implementation of them beside the Deno one. Starting, looking up, executing, delivering into and inspecting a run are lifecycle operations reached *through* that boundary, exactly as they are locally; they are not replacement method names, and no fifth method appears. What a remote adapter changes is where each of those four reaches, not what the shared CLI asks for.
+**The host assembly contract does not change.** `WorkflowHost` keeps its four methods — `useRunHost()`, `useLifecycle()`, `useDelivery()` and `attach()` — and the Cloudflare adapter is one more implementation of them beside the Deno one. Starting, looking up, executing, delivering into and inspecting a run are lifecycle operations reached *through* that boundary, exactly as they are locally; they are not replacement method names, and no fifth method appears. A remote host receives no transitions type of its own either. What a remote adapter changes is where each of those four reaches, not what the shared CLI asks for.
+
+**The transition types those methods speak are provider-neutral.** `WorkflowExecutionTransitions`, `WorkflowBeginRequest`, `WorkflowExecutionBegun`, `WorkflowForkRequest`, `WorkflowForkSelection` and `WorkflowRunCreation` describe what any host's lifecycle does, not what one adapter retains, and they are already defined in the provider-neutral lifecycle module. They become package-root public types, and the Deno entrypoint may keep re-exporting them for source compatibility without owning their meaning. Runtime-specific implementations and retained encodings — SQLite, DOFS, run-id hashing, filesystem paths — stay behind their runtime-named entrypoints, which is the boundary that rationale was always about. That export move is the first implementation story's work; #710 settles that the types are neutral, and performs no production change.
 
 Executor ownership is one authenticated WebSocket connection whose lifetime is the acquisition. The owner registers the exact acquisition on admission and invalidates it on close; there is no duration, expiry, renewal, heartbeat, generation record or liveness poll, and a close rolls back nothing already committed. Every mutating transaction validates that exact acquisition and the expected Workspace root together.
 
 Native Git, evidence processes and Agent clients run on the ephemeral runner and nowhere else. The runner materializes one selected retained root, works in it, and submits content-addressed changes; the owner validates acquisition, root and content and then atomically publishes the new root with the filtered journal result. That is §10.1's effect transaction with the mutation performed where the tools are and the publication performed where the authority is, so a runner crash exposes only a prior or a new complete transaction and the next acquisition resumes from the exact committed frontier.
 
-#### The transport between them is versioned
+#### The transport between them is private to one release
 
-A runner and its durable owner deploy separately, so the connection between them carries records that outlive one deployment and has to be treated as a compatibility boundary rather than as an internal calling convention. It is a closed, versioned, discriminated envelope:
+The runner client and the durable owner ship as one software-factory release identity, so the messages between them are not a compatibility boundary and are not a public contract. They are journaled by neither side, exported by neither, authored by nobody, and never expected to interoperate across independently versioned builds. Their decomposition is implementation detail.
 
-```ts
-interface RunnerRequest {
-  readonly protocol: 1;
-  readonly operation: "acquire" | "frontier" | "materialize" | "commit" | "settle";
-  readonly runId: string;
-  readonly acquisition?: string;
-  readonly payload: Json;
-}
-```
+What replaces a wire contract is a release-identity check at admission. Connection admission validates an exact immutable client and server build or protocol fingerprint supplied by trusted deployment configuration, and a mismatch refuses closed — before request parsing, before acquisition, before any state access. There is no cross-version adaptation, no downgrade and no compatibility promise, because two builds that disagree about what was committed is the failure this check exists to prevent rather than to survive.
 
-`acquire` presents the runner's admission assertion and asks for the executor acquisition. `frontier` reads the committed run record and current Workspace root. `materialize` asks for the content-addressed bytes of one retained root. `commit` submits one mutation — the expected root, the content-addressed additions and the already-filtered journal result to append — for the owner to validate and publish atomically. `settle` publishes the run's resulting status. `acquisition` is absent only on `acquire` and required on the other four. There is no operation for delivery or inspection on this connection: those reach the owner on their own authenticated paths and take no acquisition.
+Privacy of the transport is not privacy of the authority. These constraints are public and exact however the messages are decomposed:
 
-Compatibility is refusal, never adaptation. A request whose `protocol` this owner does not implement is refused with a fixed protocol-version refusal before any other member is read; an unknown `operation`, an unknown member, and an `acquisition` present or absent against the rule above each refuse without effect. The owner never reads an older shape charitably and the runner never downgrades to one, because a transport that guessed would let two deployments disagree about what was committed.
+- one authenticated connection is one executor acquisition;
+- every execution mutation validates that acquisition and the expected Workspace root inside the owner's transaction;
+- the owner alone parses and adopts requests and alone opens and commits transactions;
+- content-addressed data is validated before publication;
+- delivery and inspection use separate authenticated paths that take no acquisition;
+- credentials and raw transport payloads are never durable public records;
+- a runner-to-owner release-identity mismatch refuses closed; and
+- a completed replay may read its durable owner but attaches no execution or external-effect provider.
 
 #### Which side owns what
 
@@ -3762,6 +3807,7 @@ A completed run replays there as it does locally: it attaches no Workspace, Agen
 | `Issue.Comment` and `Issue.Close` (§10.3) | specified by #710; implementation unbuilt |
 | `Evidence.Run` trusted native evidence execution (§10.5) | specified by #710; implementation unbuilt |
 | `Project.Status` and the Project-provider boundary (§10.6) | specified by #710; implementation unbuilt |
+| factory protocol records consumed by these effects | specified by #710 and owned normatively by [the software factory](./github-actions-software-factory-spec.md) §11.2, which this specification links to rather than duplicating: `Git.Merge`'s publish ceiling reads the Stage 7 decision, `PullRequest.Merged`'s wait is one of those records, and `Project.Status` projects a stage through the configured stage-to-option table |
 | remote lifecycle host, executor connection, versioned runner transport and remote topology (§3.8, §13.2) — the existing four-method `WorkflowHost` boundary, with a Cloudflare implementation beside the Deno one | specified by #710; implementation unbuilt |
 | terminal-decision delivery on the delivery plane (§3.8) | specified by #710; implementation unbuilt |
 | Worker JavaScript | deferred |

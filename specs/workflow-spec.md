@@ -340,7 +340,7 @@ behavior appear. Shared modules import none of them and detect no runtime.
 A second host installs its own the same way. Cloudflare is a runtime-named
 adapter beside the Deno one, not a second contract: it answers `create()` and
 `lookup()` with a `WorkflowRunDatabase` of its own, and every shared
-WorkflowRun surface above it stays host-neutral. Nothing below changes for it —
+WorkflowRun surface above it stays host-neutral. The lifecycle transition and request types a host assembly speaks — `WorkflowExecutionTransitions`, `WorkflowBeginRequest`, `WorkflowExecutionBegun`, `WorkflowForkRequest`, `WorkflowForkSelection` and `WorkflowRunCreation` — are part of that neutral surface and are published from the package root; a runtime-named entrypoint may re-export them for source compatibility, but what belongs behind one is the implementation and its retained encoding, not the shape of the request. Nothing below changes for it —
 immutable run identity is compared the same way, recognition stays strict,
 events reach storage already filtered, a caller still owns the transaction it
 opened, and a completed run still replays without attaching a provider. What a
@@ -432,6 +432,8 @@ here narrows the ids an ordinary caller may choose.
 The software factory derives its ids that way. A factory run id is the lowercase unpadded RFC 4648 Base32 encoding of the full SHA-256 digest of the UTF-8 bytes `github-issue-v1`, a NUL, the canonical GitHub authority, a NUL, and the exact GitHub issue GraphQL node ID — 52 characters of `a`-`z` and `2`-`7`, so the storage rule above is satisfied by construction.
 
 Those two inputs are the ones [the software factory](./github-actions-software-factory-spec.md) §1.1 defines, byte for byte, and this paragraph restates rather than generalizes them: the authority is the lowercase DNS hostname plus a non-default port, with no scheme, path, query, fragment, user information or trailing separator, and the node ID is GitHub's exact returned string with no case folding and no Unicode normalization. There is no broader Issue-provider authority in this hash — a hash whose inputs two documents spell differently is two hashes.
+
+That specification also owns every other factory protocol record: its §11.2 holds the closed versioned schemas, and no other document restates them.
 
 Because every input is immutable, admitting one issue twice derives one id and reaches one run through ordinary compatible reuse, and no separate idempotency concept appears. Two independent implementations given the same authority and node ID therefore produce the same id. A changed authority or node ID for a subject the host already retains is unsupported provider-identity drift, refused under §1.1 of that specification rather than derived into a second run.
 

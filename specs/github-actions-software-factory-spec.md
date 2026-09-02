@@ -374,6 +374,14 @@ permission read are all **unavailable** — they are neither absence nor
 authorization. Treating an unreadable Project as an empty one is how an
 unauthorized item would be admitted.
 
+**A configured table maps status options to stages, in both directions.** It is a total bijection between the nine `FactoryStage` values of §11.2 and nine exact Project V2 status option IDs: one option ID for every stage `0` through `8`, and every configured option ID appearing exactly once. It is host configuration and part of the admission and projection ceiling — never an authored prop, and never something a provider payload can supply.
+
+The table is validated before it is used. Startup and admission refuse — before an intake is retained, a token is minted, a run is started, or anything is projected — when the table is missing, partial, holds a duplicate, names an option the Project does not currently offer, names an option belonging to another field or another Project, or names an option whose display name reread from GitHub is not the settled §2 status string for its stage.
+
+Admission maps the completely reread option ID to a stage through that table, and projection maps a retained stage back to its option ID through the inverse. Neither direction parses a display string: the strings are what a person reads, the option IDs are what the factory compares, and a status renamed on the board is a configuration refusal rather than a silent remapping.
+
+Only the configured `Backlog`-to-`User` movement admits a new item. A Project edit at any other point is projection drift or an authenticated intake to reconcile, and is never a role verdict.
+
 A duplicate delivery of the same identity finds the retained intake and changes
 nothing. That is the same compatible-reuse rule run identity uses, applied to
 intake.
@@ -424,6 +432,8 @@ further, per operation, to the exact repository, implementation branch, target
 branch, organization Project, status field, option IDs, issue or pull-request
 subject, reviewed revision, parent pair, and non-force operation. A ceiling the
 installation grants is not a ceiling the host uses.
+
+Three more ceilings are host configuration on the same terms, none of them an authored prop: the stage-to-option bijection of §5.1; the merge authority `Git.Merge` validates its authored parents against, which supplies the current implementation head and observed target base for a synchronization and the reviewed `{ headSha, baseSha }` the Stage 7 decision authorized for a publication; and the bounded retry — count, total duration and backoff — the merged observation of §10.4 runs under. `Evidence.Run`'s executable, environment, working-root, per-command duration, whole-run duration, output and process-tree ceilings are the same kind of configuration, stated in [Workflow workspaces](./workflow-workspace-spec.md) §10.5.
 
 Mutation of `.github/workflows/**` is refused, even though Contents write could
 otherwise reach it. A factory that can rewrite the workflow that runs it is a
@@ -609,7 +619,7 @@ There are two terminal paths and they share no step list. Each begins by retaini
 1. Retain the `merge` decision of §11.2, bound to the exact reviewed revision and the authenticated actor.
 2. Construct the trusted merge commit — `<Git.Merge purpose="publish" />` with parents `[reviewedBase, reviewedHead]`.
 3. Publish the target — `<Git.PublishTarget />` under §10.2.
-4. Observe that the pull request merged — `<PullRequest.Merged />`, the reconciled Git-host observation of [Workflow workspaces](./workflow-workspace-spec.md) §7.11, against the published merge commit. A Git host records a pull request as merged on its own schedule, so this is its own retained step and not something publication implies.
+4. Observe that the pull request merged — `<PullRequest.Merged />`, the reconciled Git-host observation of [Workflow workspaces](./workflow-workspace-spec.md) §7.11, against the published merge commit. A Git host records a pull request as merged on its own schedule, so this is its own retained step and not something publication implies. §10.4 says what the run does while it has not caught up.
 5. Close the issue — `<Issue.Close reason="completed" />`.
 6. Move the Project item to `Closed` — `<Project.Status />`.
 7. Publish terminal kind `merged`.
@@ -630,6 +640,18 @@ Terminal settlement is last on both paths for one reason: a completed run replay
 
 Both terminal kinds retain the authorizing actor, the exact reviewed revision, the resulting provider identities, and the reason where one is required, in the `FactoryTerminal` record of §11.2 — whose two shapes differ exactly as these two paths do. Both retain the Project item, the implementation branch, the issue and pull-request comments, the journal, the Workspace roots and the Agent evidence. Reopening the issue afterwards does not reopen the completed run; continuing that work requires a new linked issue, and therefore a new run.
 
+### 10.4 Waiting for the host to notice
+
+A pull request observed still open after a successful target publication is temporary unavailability, not absence and not refusal — the Git host has not yet recognized its own ref moving. The factory waits for it in two stages, and neither is a human decision.
+
+The authored factory first performs a **bounded retry** around `PullRequest.Merged`. The retry count, total duration and backoff are host ceilings configured for the deployment; they are not props on the component and no document widens them.
+
+When that retry is exhausted while the pull request is still open, the run enters a **durable machine wait** at Stage 7. It is a suspension in the ordinary sense — the executor settles `suspended` and releases its acquisition — but its subject is a fact about a provider rather than a question for a person, so it is neither an answer nor a Stage 7 decision, and no form is bound to it. Its exact subject is the canonical pull-request URL, the expected merge commit, the retained terminal decision identity and the current implementation revision, retained as the `MergedObservationWait` record of §11.2.
+
+Two things may wake it. An authenticated intake for a relevant pull-request state change on that exact subject is retained as a delivery-plane transaction under §5, taking no executor acquisition; an operator may also resume the run explicitly. Neither wakeup carries a verdict, a stage or a transition — waking is permission to look again, not an answer. A later executor reobserves `PullRequest.Merged` and proceeds only on the adoption of §7.11's first row.
+
+The wait is not a second lifecycle controller. It appends no outcome, moves no stage, and terminal settlement stays absent until the observation adopts. A conflict observed on any attempt — a merge at another commit, or a pull request closed unmerged — ends the wait as a conflict rather than continuing it.
+
 ## 11. Exact public contracts
 
 ### 11.1 Authored construct inventory
@@ -649,9 +671,9 @@ expansion; it is never a document prop.
 | `Issue.Close` | Self-closing `<Issue.Close url={issue.url} reason="completed" as="closed" />`, or the same form with `reason="not_planned"`; binds the normalized URL, state and reason | Issue-provider effect; `reason` is a closed enum and must match the retained terminal intent |
 | `Git.Merge` | Self-closing `<Git.Merge firstParent={sha} secondParent={sha} mergeBase={sha} purpose="synchronize" as="merge" />`, or the same form with `purpose="publish"`; binds the `GitMergeResult` union of [Workflow workspaces](./workflow-workspace-spec.md) §7.8 — `{ outcome: "clean", purpose, firstParent, secondParent, mergeBase, commit, workspaceRoot }` or `{ outcome: "conflicted", purpose, firstParent, secondParent, mergeBase, workspaceRoot, conflicts }` | Workspace-local Git effect; repository, checkout, root and acquisition are authenticated provider state; a clean publication is atomic and a conflict restores before the result is published |
 | `Git.PublishTarget` | Self-closing `<Git.PublishTarget expectedRemoteCommit={baseSha} sourceCommit={merge.commit} reviewedHead={headSha} as="publication" />`; binds normalized target, expected and published evidence | Git-host effect; remote, ref, credential and non-force ceiling are host-owned; exact compare-and-swap reconciliation |
-| `Evidence.Run` | Self-closing `<Evidence.Run commands={commands} as="evidence" />`, where `commands` is an ordered non-empty list of non-empty argv vectors; binds the `EvidenceRunResult` of [Workflow workspaces](./workflow-workspace-spec.md) §10.5 — one `{ argv, outcome, status?, signal?, stdout, stderr }` per command, in authored order, each channel `{ text, retainedBytes, producedBytes, truncated }` | Trusted runner-host effect; the exact retained root and the executable, environment, working-root, duration, output and process-tree ceilings; the whole list runs, launch/output-pump/teardown failures bind nothing, cancellation commits nothing; absent from Agent and generated-XMD capabilities; a completed replay runs nothing |
+| `Evidence.Run` | Self-closing `<Evidence.Run commands={commands} as="evidence" />`, where `commands` is an ordered non-empty list of non-empty argv vectors; binds the `EvidenceRunResult` of [Workflow workspaces](./workflow-workspace-spec.md) §10.5 — `{ completion, authoredCommands, executed, runTimeout? }`, where each executed row is `{ argv, outcome, status?, signal?, limit?, stdout, stderr }` and each channel is `{ text, retainedBytes, producedBytes, truncated }` | Trusted runner-host effect; the exact retained root and the executable, environment, working-root, per-command duration, whole-run duration, output and process-tree ceilings; a fail-fast pipeline binding the executed prefix, launch/output-pump/teardown failures binding no result and retaining bounded error evidence, cancellation committing nothing; absent from Agent and generated-XMD capabilities; a completed replay runs nothing |
 | `PullRequest.Merged` | Self-closing `<PullRequest.Merged url={pr.url} expectedMergeCommit={publication.sourceCommit} as="merged" />`; binds `{ subject, state: "closed", merged: true, mergeCommit, decision: "adopted" }` | Git-host reconciled observation, [Workflow workspaces](./workflow-workspace-spec.md) §7.11; it mutates nothing and adoption is its only completion; keyed by the canonical pull-request URL |
-| Remote `WorkflowHost` | The existing four-method host boundary — `useRunHost()`, `useLifecycle()`, `useDelivery()`, `attach()` — with a Cloudflare runtime-named implementation beside the Deno one; start, lookup, execute, deliver and inspect are lifecycle operations reached through it rather than method names of their own. The runner-to-owner transport is the versioned `RunnerRequest` envelope of [Workflow workspaces](./workflow-workspace-spec.md) §13.2 | A host assembly contract rather than an XMD component; the execution, delivery and inspection planes stay distinct across it |
+| Remote `WorkflowHost` | The existing four-method host boundary — `useRunHost()`, `useLifecycle()`, `useDelivery()`, `attach()` — with a Cloudflare runtime-named implementation beside the Deno one; start, lookup, execute, deliver and inspect are lifecycle operations reached through it rather than method names of their own, and a remote host receives no transitions type of its own. Its transition and request types are provider-neutral and become package-root public types; the runner-to-owner messages are private to one release, admitted by an exact build fingerprint ([Workflow workspaces](./workflow-workspace-spec.md) §13.2) | A host assembly contract rather than an XMD component; the execution, delivery and inspection planes stay distinct across it |
 | Factory protocol records | The closed versioned schemas of §11.2 | A provider-neutral durable protocol; neither an XMD component nor a TypeScript lifecycle controller |
 
 Each construct's closed props, form, binding, request, natural key, compatible pre-state, normalized result, refusal and unavailability behavior, cancellation, replay, provider ownership, credential boundary, and whether it is Workspace-local or an external reconciled effect are defined normatively in [Workflow workspaces](./workflow-workspace-spec.md): §7.8 `Git.Merge`, §7.9 `Git.PublishTarget`, §7.10 `PullRequest.Comment`, `PullRequest.Ready` and `PullRequest.Close`, §7.11 `PullRequest.Merged`, §10.3 `Issue.Comment` and `Issue.Close`, §10.5 `Evidence.Run`, §10.6 `Project.Status`, §10.7 the credential boundary they share, and §13.2 the remote host and its transport. A later implementation may choose ordinary private function and module names; it may not change these public forms, their records or their ownership.
@@ -771,6 +793,43 @@ type Stage7Decision =
 
 All three bind the exact revision they were made against and the authenticated actor who made them, and all three name the delivery identity they arrived under. `abandon` requires a reason and `change` requires both a reason and the earliest stage it invalidates; `merge` takes neither, because approving what two reviews already passed adds no new claim. A decision whose `revision` is not the current frontier revision refuses. `merge` and `abandon` are terminal intents that §10.3 orders; `change` is not terminal and reduces to an invalidation.
 
+#### Waiting for the merged observation
+
+```ts
+interface MergedObservationWait {
+  readonly schema: "merged-observation-wait";
+  readonly version: 1;
+  readonly subject: string;
+  readonly expectedMergeCommit: string;
+  readonly decisionId: string;
+  readonly revision: ImplementationRevision;
+  readonly suspensionId: string;
+  readonly retriesExhausted: true;
+}
+```
+
+`subject` is the canonical pull-request URL, `decisionId` names the retained `merge` decision this wait belongs to, and `suspensionId` is the durable wait's own identity. `retriesExhausted` is literal: the record exists only after §10.4's bounded retry has run out, so a wait retained before that would be a run skipping the cheap path. The wait carries no stage, no outcome and no verdict, and consuming it authorizes one reobservation and nothing else.
+
+#### The configured stage-to-option table
+
+```ts
+interface StageOptionTable {
+  readonly schema: "stage-option-table";
+  readonly version: 1;
+  readonly projectId: string;
+  readonly statusFieldId: string;
+  readonly options: readonly StageOption[];
+}
+
+interface StageOption {
+  readonly stage: FactoryStage;
+  readonly optionId: string;
+  readonly displayName: string;
+}
+```
+
+`options` holds exactly nine entries, one per stage `0` through `8`, ordered by `stage`. Every `optionId` is distinct, and every `displayName` equals the §2 status string for its stage. This is the retained form of §5.1's configuration: it is validated against a complete reread of the Project before it is used, and a table that does not satisfy every one of those conditions refuses rather than being partially applied.
+
 #### The active frontier and its reduction
 
 ```ts
@@ -831,7 +890,11 @@ type FactoryTerminal =
   };
 ```
 
-The two kinds do not share a member list, and that asymmetry is the contract: a `merged` terminal names a merge commit, a target publication and a merged observation, and an `abandoned` terminal names a pull-request closure and a reason and can name none of the first three. Every member ending in `Id` or naming a step is a journal event identity, so the terminal record points at the reconciled effects that completed rather than restating their results. A terminal record whose named events are not all present and complete refuses, which is what makes §10.3's ordering checkable from the record alone.
+The two kinds do not share a member list, and that asymmetry is the contract: a `merged` terminal names a merge commit, a target publication and a merged observation, and an `abandoned` terminal names a pull-request closure and a reason and can name none of the first three.
+
+Every member ending in `Id` or naming a step is a **journal event identity**, and it stays one. The terminal record points at the reconciled effects that completed rather than restating their results, so each provider identity keeps one durable source — the effect result that observed it — and settlement ordering stays checkable against the journal instead of against a copy that could disagree with it.
+
+Validation follows those references rather than copying through them. Every referenced event must belong to this run and this active terminal intent, parse under its exact effect kind, be complete, and agree with the terminal record's revision, actor and decision where each applies; the referenced results carry the normalized provider identities, and terminal validation checks compatibility without duplicating them. A missing, foreign, wrong-kind, incomplete, invalidated, duplicated or cross-path event refuses settlement — and cross-path is exact: a `merged` terminal cannot name a pull-request close-unmerged or any abandonment effect, and an `abandoned` terminal cannot name a merge construction, a target publication or a merged observation. That is what makes §10.3's two orders checkable from the record alone.
 
 ## 12. Structural consequences
 
@@ -929,7 +992,8 @@ A factory implementation satisfies this specification when every item holds:
     only the exact merge commit, and never force-updates.
 21. The merged state of the pull request is observed as its own retained step
     after publication and before issue closure, and is adopted only at the exact
-    published merge commit.
+    published merge commit. A pull request still open is a bounded retry and
+    then a durable machine wait; one closed unmerged is a conflict.
 22. The merged and abandoned paths of §10.3 run in their stated orders, and
     neither borrows a step from the other.
 23. A terminal `merged` or `abandoned` state is published only after every
