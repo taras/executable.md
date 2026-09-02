@@ -66,17 +66,87 @@ function* append(description: EffectDescription, value: Json): Workflow<unknown>
   });
 }
 
-/** The retained layout a journal entry holds, or undefined if it holds anything else. */
+/**
+ * The layout a journal entry holds, parsed member by member.
+ *
+ * Total: every field is read and checked, and anything the record does not say
+ * exactly — a missing member, a member of the wrong kind, an extra one, a pane
+ * whose ordinal is not its position, a row or column that does not follow from
+ * the columns it claims — makes the record unreadable rather than half-read. A
+ * layout is what a resumed run is held to, so a record that cannot be believed
+ * in full must not be believed in part.
+ */
 function readLayout(value: unknown): RetainedLayout | undefined {
+  const record = members(value);
+  if (record === undefined || !onlyNames(record, ["columns", "rows", "panes"])) {
+    return undefined;
+  }
+  const columns = positiveInteger(record.columns);
+  const rows = positiveInteger(record.rows);
+  const list = record.panes;
+  if (columns === undefined || rows === undefined || !Array.isArray(list)) {
+    return undefined;
+  }
+  const panes: RetainedLayout["panes"] = [];
+  for (const [index, entry] of list.entries()) {
+    const pane = readPane(entry, index, columns);
+    if (pane === undefined) {
+      return undefined;
+    }
+    panes.push(pane);
+  }
+  // The rows a grid claims have to be the rows its panes need, or the record
+  // describes a grid nothing could have derived.
+  if (panes.length === 0 || Math.ceil(panes.length / columns) !== rows) {
+    return undefined;
+  }
+  return { columns, rows, panes };
+}
+
+/** One retained pane, checked against the position it claims to occupy. */
+function readPane(
+  value: unknown,
+  index: number,
+  columns: number,
+): RetainedLayout["panes"][number] | undefined {
+  const record = members(value);
+  if (record === undefined || !onlyNames(record, ["ordinal", "title", "form", "row", "column"])) {
+    return undefined;
+  }
+  const { ordinal, title, form, row, column } = record;
+  if (ordinal !== index) {
+    return undefined;
+  }
+  if (typeof title !== "string" || title.length === 0) {
+    return undefined;
+  }
+  if (form !== "paired" && form !== "self-closing") {
+    return undefined;
+  }
+  // Derived, not asserted: a position that does not follow from the ordinal and
+  // the column count is a record that disagrees with itself.
+  if (row !== Math.floor(index / columns) || column !== index % columns) {
+    return undefined;
+  }
+  return { ordinal, title, form, row, column };
+}
+
+/** The members of a JSON object, or `undefined` for anything else. */
+function members(value: unknown): Record<string, unknown> | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }
-  const fields: Record<string, unknown> = Object.fromEntries(Object.entries(value));
-  const { columns, rows, panes } = fields;
-  if (typeof columns !== "number" || typeof rows !== "number" || !Array.isArray(panes)) {
-    return undefined;
-  }
-  return { columns, rows, panes: panes as RetainedLayout["panes"] };
+  return Object.fromEntries(Object.entries(value));
+}
+
+/** Whether a record carries exactly these member names, and no others. */
+function onlyNames(record: Record<string, unknown>, names: readonly string[]): boolean {
+  const present = Object.keys(record);
+  return present.length === names.length && names.every((name) => name in record);
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
 /** How two layouts differ, in the words an author can act on. */

@@ -18,14 +18,7 @@
  * See protocol spec §7 (structured concurrency), §10 (race semantics).
  */
 
-import {
-  all as effectionAll,
-  ensure,
-  race as effectionRace,
-  spawn,
-  suspend,
-  useScope,
-} from "effection";
+import { all as effectionAll, ensure, race as effectionRace, suspend, useScope } from "effection";
 import type { Operation, Task } from "effection";
 import { DurableContext } from "./context.ts";
 import {
@@ -36,7 +29,7 @@ import {
 import { ephemeral } from "./ephemeral.ts";
 import { EarlyReturnDivergenceError, TerminalDivergenceError } from "./errors.ts";
 import { deserializeError, serializeError } from "./serialize.ts";
-import type { Close, DurableEffect, Json, Workflow, WorkflowValue } from "./types.ts";
+import type { Cancellation, Close, DurableEffect, Json, Workflow, WorkflowValue } from "./types.ts";
 
 /**
  * Run a child workflow within a spawned scope, setting up its own
@@ -75,11 +68,42 @@ import type { Close, DurableEffect, Json, Workflow, WorkflowValue } from "./type
  */
 type CancelledChildPolicy = "combinator-cancels" | "resume";
 
+/**
+ * Whether the caller deliberately stopped the child this run (DEC-040).
+ *
+ * Written by the task `durableSpawn` hands out — the only place a deliberate
+ * halt can be observed — and read once, when the cancelled Close is built. A
+ * combinator supplies none: a child it cancels stopped because a scope came
+ * down, which is what `"unwound"` means.
+ */
+interface CancellationEvidence {
+  deliberate: boolean;
+}
+
+/** How a cancelled child's stop is recorded. */
+function cancellationOf(evidence: CancellationEvidence | undefined): Cancellation {
+  return evidence?.deliberate === true ? "caller" : "unwound";
+}
+
+/**
+ * Why a retained cancelled child stopped.
+ *
+ * Absent is `"caller"`: a record written before this evidence existed says
+ * nothing, and reviving work nobody asked to be redone is the worse mistake.
+ */
+function retainedCancellation(close: Close): Cancellation {
+  if (close.result.status !== "cancelled") {
+    return "caller";
+  }
+  return close.result.cancellation === "unwound" ? "unwound" : "caller";
+}
+
 function* runDurableChild<T extends WorkflowValue>(
   childWorkflow: () => Workflow<T>,
   childId: string,
   parentCtx: DurableContext,
   cancelledPolicy: CancelledChildPolicy = "combinator-cancels",
+  evidence?: CancellationEvidence,
 ): Operation<T> {
   const { replayIndex, stream } = parentCtx;
   replayIndex.claim(childId);
@@ -99,18 +123,25 @@ function* runDurableChild<T extends WorkflowValue>(
       return closeEvent.result.value as T;
     } else if (closeEvent.result.status === "err") {
       throw deserializeError(closeEvent.result.error);
-    } else if (cancelledPolicy === "combinator-cancels") {
-      // A race loser, or a sibling `all` cancelled when another failed. The
-      // same combinator cancels it again on this run, so reproducing the
-      // original execution means blocking until it does — in the live run this
-      // child never threw, it simply stopped. The Close(cancelled) event
-      // already exists, so the teardown below skips re-emitting it.
+    } else if (
+      cancelledPolicy === "combinator-cancels" ||
+      retainedCancellation(closeEvent) === "caller"
+    ) {
+      // Either a combinator's child — a race loser, or a sibling `all`
+      // cancelled when another failed — or a spawned child its own caller
+      // deliberately halted. Both are reproduced the same way: block until the
+      // thing that stopped it last time stops it again. A combinator cancels it
+      // as it did before; a caller reaches the same `halt()` its deterministic
+      // control flow reached before. In the live run neither child threw, it
+      // simply stopped. The Close(cancelled) event already exists, so the
+      // teardown below skips re-emitting it.
       yield* suspend();
       // unreachable — suspend blocks until cancelled
       return undefined as T;
     } else {
-      // A spawned region whose run was interrupted. Nobody is going to cancel
-      // this child a second time, so suspending would hang the resumed run.
+      // A spawned region whose run was interrupted — involuntarily, which is
+      // what `"unwound"` records. Nobody is going to cancel this child a second
+      // time, so suspending would hang the resumed run.
       // Forget the retained close — its yields stay replayable, so the child
       // continues its own history — and fall through to run the rest.
       resumedFromCancelled = true;
@@ -158,7 +189,7 @@ function* runDurableChild<T extends WorkflowValue>(
       closeEvent = {
         type: "close",
         coroutineId: childId,
-        result: { status: "cancelled" },
+        result: { status: "cancelled", cancellation: cancellationOf(evidence) },
       };
     }
 
@@ -263,8 +294,10 @@ export function durableSpawn<T extends WorkflowValue>(
     const ctx = yield* ephemeral(readDurableContext());
     const childIndex = ctx.childCounter++;
     const childId = `${ctx.coroutineId}.${childIndex}`;
-    return (yield createSpawnEffect(() =>
-      runDurableChild(childWorkflow, childId, ctx, "resume"),
+    const evidence: CancellationEvidence = { deliberate: false };
+    return (yield createSpawnEffect(
+      () => runDurableChild(childWorkflow, childId, ctx, "resume", evidence),
+      evidence,
     )) as Task<T>;
   })();
 }
@@ -285,15 +318,50 @@ function* readDurableContext(): Operation<DurableContext> {
  * Effection `spawn` does. What replay must not do is reach the child's body
  * again to discover that.
  */
-function createSpawnEffect<T>(child: () => Operation<T>): DurableEffect<Task<T>> {
+function createSpawnEffect<T>(
+  child: () => Operation<T>,
+  evidence: CancellationEvidence,
+): DurableEffect<Task<T>> {
   return {
     description: "durable-spawn",
     effectDescription: { type: "ephemeral", name: "durable-spawn" },
     enter(resolve, routine) {
-      resolve({ ok: true, value: routine.scope.run(child) });
+      resolve({ ok: true, value: observingHalt(routine.scope.run(child), evidence) });
       return (exit) => exit({ ok: true, value: undefined as undefined });
     },
   };
+}
+
+/**
+ * The same task, with a deliberate `halt()` recorded as it happens.
+ *
+ * The caller receives every member the task defines — `then`, `catch`,
+ * `finally`, the async dispose, the iterator — copied from the task itself
+ * along with its prototype, so the public surface is the one `Task` has always
+ * had. Only `halt` is replaced, and only to note that someone stopped the child
+ * on purpose before stopping it.
+ *
+ * Copied rather than proxied: a task's members are read-only and
+ * non-configurable, and a proxy is required to hand back exactly what the
+ * target holds — so a `get` trap cannot substitute `halt` at all. Each copied
+ * member is the task's own closure and keeps working on the copy.
+ */
+function observingHalt<T>(task: Task<T>, evidence: CancellationEvidence): Task<T> {
+  const members = Object.getOwnPropertyDescriptors(task);
+  // Replaced in the descriptor map rather than on the finished object: the
+  // task's own members are non-configurable, so redefining one afterwards
+  // throws.
+  members.halt = {
+    value: () => {
+      evidence.deliberate = true;
+      return task.halt();
+    },
+    enumerable: true,
+    configurable: false,
+    writable: false,
+  };
+  const observed: Task<T> = Object.create(Object.getPrototypeOf(task), members);
+  return observed;
 }
 
 /**
