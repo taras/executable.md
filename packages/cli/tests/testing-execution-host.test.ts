@@ -469,6 +469,71 @@ describe("deterministic dependencies declared for a nested run", () => {
     expect(result.code).toBe(0);
   });
 
+  /**
+   * PMT6 — only the canonical declaration configures a Plan ceiling.
+   *
+   * The repository file ends the scan, so what the `<Execution>` prefix holds is
+   * an ordinary component invocation rather than a declaration this host
+   * recognizes. A child whose `<Plan>` found a ceiling anyway would mean the
+   * capability came from the name rather than from the definition ordinary
+   * resolution selected.
+   */
+  it("configures no Plan authorship ceiling from a repository TestAgent", function* () {
+    const project = yield* useProject({
+      "agents/review.md": BEHAVIOR,
+      // Chosen ahead of the package's, so this is ordinary assertion content.
+      "components/TestAgent.md": doc("a repository component"),
+      "writes-a-plan.md": doc('<Plan session="planner" as="approved">Write a program.</Plan>'),
+      "README.md": doc(
+        '<Test name="a repository TestAgent configures no Plan ceiling" timeout="120s">',
+        '<Execution host="run" target="./writes-a-plan.md" as="run">',
+        '<TestAgent as="shadowed" />',
+        "",
+        '<AssertStringIncludes actual={shadowed} expected="a repository component" />',
+        "<AssertEquals actual={run.result.ok} expected={false} />",
+        "<AssertStringIncludes",
+        "  actual={run.result.error.message}",
+        '  expected="establishes no coding-agent ceiling"',
+        "/>",
+        "</Execution>",
+        "</Test>",
+      ),
+    });
+    const result = yield* runCli(["test", "README.md"], { cwd: project, ...WORKER }).join();
+    expect(result.stdout + result.stderr).not.toContain("❌");
+    expect(result.code).toBe(0);
+  });
+
+  /**
+   * PMT7 — the direct test root is the testing profile, not a Plan host.
+   *
+   * The run profile's vocabulary is installed for a run, and `xmd test` is a
+   * different profile: it declares `<Plan>` to the production run children it
+   * launches and to nothing else, so its own root does not resolve the name at
+   * all (`cli.ts`, where the declaration is withheld under `mode.testing`).
+   *
+   * Either refusal would satisfy "a test root cannot write a Plan". This case
+   * pins which one is delivered, so a later change that quietly gave the test
+   * root the declaration — and therefore a ceiling to be refused at — is a
+   * change somebody has to make deliberately.
+   */
+  it("gives a direct test root no Plan authorship authority", function* () {
+    const project = yield* useProject({
+      "README.md": doc(
+        '<Test name="a test root cannot write a Plan">',
+        '<Plan session="planner" as="approved">Write a program.</Plan>',
+        "</Test>",
+      ),
+    });
+    const result = yield* runCli(["test", "README.md"], { cwd: project, ...WORKER }).join();
+    expect(result.code).toBe(1);
+    const reported = result.stdout + result.stderr;
+    expect(reported).toContain("Cannot resolve component: Plan");
+    // And no ceiling was established for it to be refused at, which is the
+    // difference between "not this profile" and "this profile, no agent".
+    expect(reported).not.toContain("establishes no coding-agent ceiling");
+  });
+
   it("refuses an unreadable behavior document before the child's root is imported", function* () {
     const project = yield* useProject({
       "two-turns.md": doc("the child imported its root"),
