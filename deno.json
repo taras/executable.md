@@ -13,7 +13,8 @@
     "packages/acp/vendor/acpx/generated/**/*.d.ts",
     "packages/workflow/src/cloudflare",
     "packages/workflow/tests/cloudflare",
-    "vitest.config.ts"
+    "vitest.config.ts",
+    "packages/workflow/tsconfig.cloudflare.json"
   ],
   "nodeModulesDir": "auto",
   "lock": {
@@ -78,6 +79,7 @@
     "analyze": "deno run --allow-all packages/cli/src/deno.ts run .reviews/AnalyzeRepo.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.analyze.jsonl",
     "analyze:ci": "deno run --allow-all packages/cli/src/deno.ts run .reviews/AnalyzeRepoCI.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.analyze.ci.jsonl",
     "analyze:dispatch": "deno run --allow-all packages/cli/src/deno.ts run .reviews/DispatchRepoAnalysis.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.dispatch.jsonl",
-    "test:cloudflare": "pnpm test:cloudflare"
+    "test:cloudflare": "pnpm test:cloudflare",
+    "check:cloudflare": "pnpm check:cloudflare"
   }
 }

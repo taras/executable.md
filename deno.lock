@@ -41,7 +41,8 @@
     "npm:@agentclientprotocol/sdk@1.3.0": "1.3.0_zod@4.4.3",
     "npm:@babel/core@^7.28.0": "7.29.7",
     "npm:@babel/preset-react@^7.27.1": "7.29.7_@babel+core@7.29.7",
-    "npm:@cloudflare/vitest-plugin@1.1.3": "1.1.3_@vitest+runner@4.1.11_@vitest+snapshot@4.1.11_vitest@4.1.11__@opentelemetry+api@1.9.1__@types+node@24.13.3__vite@7.3.6___@types+node@24.13.3___tsx@4.23.1_@opentelemetry+api@1.9.1_@types+node@24.13.3_vite@7.3.6__@types+node@24.13.3__tsx@4.23.1",
+    "npm:@cloudflare/vitest-plugin@1.1.3": "1.1.3_@vitest+runner@4.1.11_@vitest+snapshot@4.1.11_vitest@4.1.11__@opentelemetry+api@1.9.1__@types+node@24.13.3__vite@7.3.6___@types+node@24.13.3___tsx@4.23.1_@cloudflare+workers-types@5.20260901.1",
+    "npm:@cloudflare/workers-types@^5.20260831.1": "5.20260901.1",
     "npm:@durable-streams/client@~0.2.2": "0.2.6",
     "npm:@durable-streams/server@~0.3.8": "0.3.8",
     "npm:@effectionx/context-api@0.6.0": "0.6.0_effection@4.1.0",
@@ -498,7 +499,7 @@
         "workerd"
       ]
     },
-    "@cloudflare/vitest-plugin@1.1.3_@vitest+runner@4.1.11_@vitest+snapshot@4.1.11_vitest@4.1.11__@opentelemetry+api@1.9.1__@types+node@24.13.3__vite@7.3.6___@types+node@24.13.3___tsx@4.23.1_@opentelemetry+api@1.9.1_@types+node@24.13.3_vite@7.3.6__@types+node@24.13.3__tsx@4.23.1": {
+    "@cloudflare/vitest-plugin@1.1.3_@vitest+runner@4.1.11_@vitest+snapshot@4.1.11_vitest@4.1.11__@opentelemetry+api@1.9.1__@types+node@24.13.3__vite@7.3.6___@types+node@24.13.3___tsx@4.23.1_@cloudflare+workers-types@5.20260901.1": {
       "integrity": "sha512-ED1Rkaq5Wr5rCeHXpLoDyV4WGJzD0Ju0clM8jS7Hj+wjj/CwaMHeb8DXzUfUQPiHW9rTgwcttPPQnzau2kp6Jg==",
       "dependencies": [
         "@vitest/runner",
@@ -535,6 +536,9 @@
       "integrity": "sha512-do+KDYw0PABwsrKUQIccWBZB70kqKcADoSnvzJ8pvMaWUVB4qaCspEZYfm97WNdtY1wt8mlKYqIJyYUNOkTvQg==",
       "os": ["win32"],
       "cpu": ["x64"]
+    },
+    "@cloudflare/workers-types@5.20260901.1": {
+      "integrity": "sha512-m1rNbR3UYC1pgaEyXkSlwLFLDB11QziYUlY0z/nqjwuYtg5dw9zBrgDudoSfYM6ebbPDKU81ogBQAzLp6h1y4w=="
     },
     "@colors/colors@1.5.0": {
       "integrity": "sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ=="
@@ -4415,11 +4419,12 @@
       "scripts": true,
       "bin": true
     },
-    "wrangler@4.128.0": {
+    "wrangler@4.128.0_@cloudflare+workers-types@5.20260901.1": {
       "integrity": "sha512-jNXy9e8/pbx8iqTzXPiuflnitKJZoAfEUSUUDLW87bwyeMvJ7kb3yQMSbxEcfNdfHqJW38KRcKaLljOYV4N/4w==",
       "dependencies": [
         "@cloudflare/kv-asset-handler",
         "@cloudflare/unenv-preset",
+        "@cloudflare/workers-types",
         "blake3-wasm",
         "esbuild@0.28.1",
         "miniflare",
@@ -4429,6 +4434,9 @@
       ],
       "optionalDependencies": [
         "fsevents"
+      ],
+      "optionalPeers": [
+        "@cloudflare/workers-types"
       ],
       "bin": true
     },
@@ -4523,6 +4531,7 @@
     "packageJson": {
       "dependencies": [
         "npm:@cloudflare/vitest-plugin@1.1.3",
+        "npm:@cloudflare/workers-types@^5.20260831.1",
         "npm:@durable-streams/client@~0.2.2",
         "npm:@durable-streams/server@~0.3.8",
         "npm:@effectionx/context-api@0.6.0",

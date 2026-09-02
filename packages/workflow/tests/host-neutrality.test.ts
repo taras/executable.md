@@ -95,6 +95,7 @@ describe("the shared workflow package", () => {
     expect(modules.length > 20).toEqual(true);
     expect(modules.some((path) => path.endsWith("/src/lifecycle/execution.ts"))).toEqual(true);
     expect(modules.some((path) => path.endsWith("/src/software-factory/run-id.ts"))).toEqual(true);
+    expect(modules.some((path) => path.endsWith("/src/sqlite/workflow-schema.ts"))).toEqual(true);
     expect(modules.some((path) => path.includes("/src/deno/"))).toEqual(false);
     expect(modules.some((path) => path.includes("/src/cloudflare/"))).toEqual(false);
   });

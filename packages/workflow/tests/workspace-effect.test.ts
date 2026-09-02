@@ -695,6 +695,13 @@ describe("Tier DLC — Workspace coordination selection", () => {
       // root and every shared module stay covered, so a host name reaching the
       // neutral surface is still a failure.
       //
+      // `src/sqlite` is a private physical SQLite backend the two runtime
+      // adapters share so version 1 is declared once rather than twice. It
+      // names a database engine because that is its subject, and it is not the
+      // provider-neutral coordination or external-effect surface — it owns no
+      // connection, path, transaction or lifecycle authority and is published
+      // from no entrypoint.
+      //
       // The software factory is the other kind of exception. It is not a
       // runtime adapter and is still held to the host-import and
       // runtime-detection rules by `host-neutrality.test.ts`; what it is
@@ -709,6 +716,7 @@ describe("Tier DLC — Workspace coordination selection", () => {
         "packages/workflow/src/deno/**",
         "packages/workflow/src/cloudflare/**",
         "packages/workflow/src/software-factory/**",
+        "packages/workflow/src/sqlite/**",
         "packages/durable-streams/http-stream.ts",
       ],
     }))
@@ -756,6 +764,7 @@ describe("Tier DLC — Workspace coordination selection", () => {
     expect(found.some((path) => path.includes("/src/deno/"))).toBe(false);
     expect(found.some((path) => path.includes("/src/cloudflare/"))).toBe(false);
     expect(found.some((path) => path.includes("/src/software-factory/"))).toBe(false);
+    expect(found.some((path) => path.includes("/src/sqlite/"))).toBe(false);
 
     const crossings: Record<string, string[]> = {};
     const unread: string[] = [];

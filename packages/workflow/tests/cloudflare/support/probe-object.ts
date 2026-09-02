@@ -10,15 +10,18 @@
  * has, or it does not, and that decides how §4 is written rather than being a
  * detail inside it.
  *
- * So this object exists to be asked, on real workerd, before anything is built
- * on the answer.
+ * So this object exists to be asked, on real workerd. It lives in test support
+ * rather than in production source: it measures the runtime, and the answers it
+ * gives are asserted by `storage-capabilities.vitest.ts` so a platform change
+ * that moved any of them would fail rather than pass quietly.
  */
 
 import { DurableObject } from "cloudflare:workers";
-import { Database as DofsDatabase } from "../../vendor/cloudflare-computer-dofs/generated/storage.js";
-import { initializeSchema as initializeDofsSchema } from "../../vendor/cloudflare-computer-dofs/generated/schema/index.js";
-import { mkdir as mkdirPath } from "../../vendor/cloudflare-computer-dofs/generated/fs/mkdir.js";
-import { writeFileSync } from "../../vendor/cloudflare-computer-dofs/generated/fs/writeFile.js";
+import { dofsStorage } from "../../../src/cloudflare/storage.ts";
+import { Database as DofsDatabase } from "../../../vendor/cloudflare-computer-dofs/generated/storage.js";
+import { initializeSchema as initializeDofsSchema } from "../../../vendor/cloudflare-computer-dofs/generated/schema/index.js";
+import { mkdir as mkdirPath } from "../../../vendor/cloudflare-computer-dofs/generated/fs/mkdir.js";
+import { writeFileSync } from "../../../vendor/cloudflare-computer-dofs/generated/fs/writeFile.js";
 
 export interface StorageCapabilities {
   readonly applicationIdRead: string;
@@ -49,7 +52,7 @@ function attempt(body: () => unknown): string {
 export class StorageProbeObject extends DurableObject {
   capabilities(): StorageCapabilities {
     const sql = this.ctx.storage.sql;
-    const dofs = new DofsDatabase(this.ctx.storage);
+    const dofs = new DofsDatabase(dofsStorage(this.ctx.storage));
     return {
       applicationIdWrite: attempt(() => {
         sql.exec("PRAGMA application_id = 1701078349");

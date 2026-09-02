@@ -6,7 +6,7 @@
  * stubs, so this handler answers no request a test depends on.
  */
 
-export { StorageProbeObject } from "../../src/cloudflare/probe-object.ts";
+export { StorageProbeObject } from "./support/probe-object.ts";
 
 export default {
   fetch(): Response {
