@@ -28,7 +28,7 @@ const PACKAGE = fileURLToPath(new URL("..", import.meta.url));
  *
  * `vendor` is pinned upstream source whose drift verifier owns its bytes.
  */
-const RUNTIME_OWNED = ["deno.ts", "cloudflare.ts", "src/deno", "src/cloudflare", "vendor"];
+const RUNTIME_OWNED = ["deno.ts", "src/deno", "vendor"];
 
 /** Specifiers only a host adapter may import. */
 const HOST_SPECIFIERS = [

@@ -19,7 +19,7 @@ import {
   FACTORY_RUN_ID_LENGTH,
   factoryRunIdPreimage,
   FactoryRunSubjectError,
-} from "@executablemd/workflow";
+} from "../src/factory-run-id.ts";
 
 /** An opaque node id of the shape GitHub's GraphQL API returns for an issue. */
 const NODE = "I_kwDOABCD12M5abcdef";

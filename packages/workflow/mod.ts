@@ -314,18 +314,6 @@ export type {
   WorkflowLifecycleApi,
   WorkflowLifecycleSnapshot,
 } from "./src/lifecycle/api.ts";
-export {
-  admitFactoryRunSubject,
-  admitIssueNodeId,
-  base32Unpadded,
-  canonicalGitHubAuthority,
-  deriveFactoryRunId,
-  FACTORY_RUN_ID_LENGTH,
-  factoryRunIdPreimage,
-  FactoryRunSubjectError,
-} from "./src/factory/run-id.ts";
-export type { FactoryRunSubject, FactoryRunSubjectFailure } from "./src/factory/run-id.ts";
-
 // What a trusted host needs to move a run's lifecycle. These describe what any
 // host's lifecycle does rather than what one adapter retains, so this entrypoint
 // owns their meaning; `./deno` re-exports them for source compatibility and a
