@@ -130,6 +130,7 @@ import { runUpgrade } from "./upgrade.ts";
 import type { UpgradeAssembly } from "./upgrade.ts";
 import { componentSearchPath, resolveTestTarget } from "./test-target.ts";
 import { renderSyntaxJson, renderSyntaxMarkdown, syntaxCatalog } from "./syntax.ts";
+import { deliverWhole } from "./stdout-delivery.ts";
 import { testingExecutionHost } from "./testing-host.ts";
 import { unsupportedRepositories } from "./run-repositories.ts";
 import type { RepositoryInstaller } from "./run-repositories.ts";
@@ -2429,7 +2430,10 @@ function* dispatch(
         yield* exit(1);
         break;
       }
-      const written = yield* writeStdoutWhole(rendered);
+      // Only the catalog goes through delivery today, because it is the one
+      // output this command writes in a single call and the only one already
+      // past a pipe buffer.
+      const written = yield* deliverWhole(rendered, process.stdout);
       if (!written.ok) {
         console.error(
           `xmd syntax: stdout did not accept the whole catalog: ${describeError(written.error)}`,
@@ -2534,43 +2538,6 @@ function* dispatch(
       break;
     }
   }
-}
-
-/**
- * Write to stdout and wait for it to reach the operating system.
- *
- * `process.stdout` is asynchronous when it is a pipe and synchronous when it is
- * a file or a terminal. A large document handed to `write` is therefore still
- * sitting in a buffer when the run ends, and the process exits without it:
- * `xmd syntax --json > file` is whole, `xmd syntax --json | jq` stops at about
- * 64 KiB, in the middle of a token. Waiting for the callback is what makes the
- * write finish before anything can exit.
- *
- * A sink that closes mid-write is the failure this reports rather than raises.
- * A broken pipe arrives twice — once at this callback, and again as an `error`
- * event on `process.stdout` a tick later — so the listener stays attached after
- * the outcome is settled. Removing it would leave that second arrival
- * unhandled, and an unhandled `error` event ends the process with a stack trace
- * before the command can say which output was cut short.
- *
- * Only the catalog goes through this today, because it is the one output this
- * command writes in a single call and the only one already past the buffer.
- */
-function* writeStdoutWhole(text: string): Operation<Result<void>> {
-  return yield* until(
-    new Promise<Result<void>>((resolve) => {
-      let settled = false;
-      const settle = (error?: Error | null) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        resolve(error ? Err(error) : Ok());
-      };
-      process.stdout.on("error", settle);
-      process.stdout.write(text, settle);
-    }),
-  );
 }
 
 export function* runXmd(

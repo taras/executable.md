@@ -10527,6 +10527,21 @@ itself, so an execution starting anywhere fails the row. Defined in §5.3.
 | SX9 | Failure | An unusable include exits 1, reports on stderr and prints no catalog |
 | SX10/SX11 | Formats | Markdown by default, version-1 JSON with `--json`; the catalog is inspection, and `xmd plan` is the command that writes with the same structured value |
 | SX12 | A package tree | Bare `xmd syntax` succeeds with the default includes in a repository whose `node_modules` holds directory links |
+| SX13–SX15 | Delivery | A real pipeline reading a catalog larger than one pipe buffer receives the bytes a regular-file redirect receives, in both forms; a consumer that closes early leaves the command reporting on stderr with exit 1 rather than an unhandled write failure |
+
+### Tier SD — Delivering a rendered result
+
+Delivery installs one `error` listener on a stream every command shares, so its
+lifetime is the claim. Tier SX cannot show it: a real pipe reports what arrived,
+not what stayed attached afterwards.
+
+| # | Test | Verify |
+|---|------|--------|
+| SD1 | Success | A delivery that succeeds leaves the stream's listeners as it found them |
+| SD2/SD3 | Both arrival orders | The listener is still attached when the trailing event lands and gone once it has; either order settles on the first arrival and absorbs the duplicate |
+| SD4 | One arrival | A failure the stream reports once, holding nothing after it, settles without waiting for a second |
+| SD5/SD6 | Refusal and cancellation | A `write` that refuses outright and a delivery halted before it settles both detach |
+| SD7/SD8 | No residue | No finished delivery observes a later, unrelated failure, and the real `process.stdout` is left as it was found |
 
 ### Tier SM — `xmd syntax` end to end
 
