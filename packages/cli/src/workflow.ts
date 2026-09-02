@@ -90,7 +90,7 @@ import type {
   WorkflowExecutionBegun,
   WorkflowExecutionTransitions,
   WorkflowRunCreation,
-} from "@executablemd/workflow/deno";
+} from "@executablemd/workflow";
 import type { SuspensionControllerOptions, SuspensionNotice } from "@executablemd/workflow/deno";
 import { SUSPENSION_REQUEST } from "@executablemd/workflow";
 import { describeError } from "./props.ts";

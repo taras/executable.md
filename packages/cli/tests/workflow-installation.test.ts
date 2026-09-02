@@ -26,7 +26,7 @@ import {
   useWorkflowLifecycle,
   useWorkflowRunHost,
 } from "@executablemd/workflow/deno";
-import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
+import type { WorkflowExecutionTransitions } from "@executablemd/workflow";
 import { Git, WorkflowLifecycle, WorkflowRunStorage } from "@executablemd/workflow";
 import type { WorkflowRunDatabase, WorkflowRunStatus } from "@executablemd/workflow";
 import type { Json } from "@executablemd/core";

@@ -28,6 +28,15 @@ export { useWorkflowRunStorage } from "./src/deno/provider.ts";
 export type { WorkflowRunStorageOptions } from "./src/deno/provider.ts";
 export { useWorkflowLifecycle } from "./src/deno/lifecycle.ts";
 export { useWorkflowRunHost } from "./src/deno/run-host.ts";
+/**
+ * Re-exported for source compatibility only.
+ *
+ * These are provider-neutral: they describe what any host's lifecycle does, not
+ * what this adapter retains, and `@executablemd/workflow` owns their meaning.
+ * Import them from there. What belongs behind this entrypoint is the
+ * implementation and its retained encoding — SQLite, DOFS, run-id hashing,
+ * filesystem paths — not the shape of a request.
+ */
 export type {
   WorkflowBeginRequest,
   WorkflowExecutionTransitions,
