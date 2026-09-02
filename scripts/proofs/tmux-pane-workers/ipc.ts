@@ -55,12 +55,16 @@ const DescendantOutcomeSchema = z.object({
   gone: z.boolean(),
 });
 
+const TerminalHolderSchema = z.object({ pid: z.number().int(), gone: z.boolean() });
+
 export const QuiescenceProofSchema = z.object({
   method: z.enum(["exited", "interrupted", "killed"]),
   childPid: z.number().int().optional(),
   childGone: z.boolean(),
   descendants: z.array(DescendantOutcomeSchema),
   survivors: z.array(z.number().int()),
+  /** Whatever still held the pane's terminal after the escalation, and whether it is gone. */
+  terminalHolders: z.array(TerminalHolderSchema),
 });
 
 export const FromWorkerSchema = z.discriminatedUnion("type", [
@@ -74,6 +78,8 @@ export const FromWorkerSchema = z.discriminatedUnion("type", [
     id: z.string(),
     exitCode: z.number().int().optional(),
     signal: z.string().optional(),
+    /** The settlement that preceded this report; the pane is free once it arrives. */
+    proof: QuiescenceProofSchema,
   }),
   z.object({
     type: z.literal("quiescent"),
@@ -83,7 +89,7 @@ export const FromWorkerSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("bye"),
     /** Processes that still held the pane's terminal at shutdown, and whether they are gone. */
-    ttyHolders: z.array(z.object({ pid: z.number().int(), gone: z.boolean() })),
+    ttyHolders: z.array(TerminalHolderSchema),
   }),
 ]);
 

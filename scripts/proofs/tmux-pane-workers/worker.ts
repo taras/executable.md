@@ -34,7 +34,12 @@ import { deliver, holdersOf, isReachable, processFacts } from "./processes.ts";
 interface ActiveChild {
   id: string;
   process: InteractiveProcess | undefined;
+  /** The one settlement of this child: escalation, then the terminal sweep. */
+  settled: ReturnType<typeof withResolvers<WireProof>> | undefined;
 }
+
+/** The proof as it crosses the socket: the escalation plus the pane's sweep. */
+type WireProof = QuiescenceProof & { terminalHolders: { pid: number; gone: boolean }[] };
 
 function ignoreTerminalSignals(): void {
   for (const name of ["SIGINT", "SIGQUIT", "SIGTSTP"] as const) {
@@ -44,6 +49,12 @@ function ignoreTerminalSignals(): void {
   }
 }
 
+/**
+ * Kill whatever still holds the pane's terminal other than this worker. Runs
+ * after every child settles — a descendant that left the process group and
+ * lost its parent is outside the escalation's snapshot, and the pane is not
+ * free for the next child while it can still read the terminal.
+ */
 function* sweepTerminalHolders(
   tty: string | undefined,
 ): Operation<{ pid: number; gone: boolean }[]> {
@@ -105,18 +116,49 @@ await run(function* () {
 
   let active: ActiveChild | undefined;
 
-  function* quiesce(): Operation<QuiescenceProof> {
-    const child = active?.process;
-    if (child === undefined) {
+  // Escalate, then sweep the terminal, once per child however many ask: the
+  // launch task on exit and the main loop on cancel or shutdown both wait on
+  // the same settlement, and `active` clears only after it.
+  function* settle(entry: ActiveChild): Operation<WireProof> {
+    if (entry.settled) {
+      return yield* entry.settled.operation;
+    }
+    entry.settled = withResolvers<WireProof>();
+    try {
+      const escalation: QuiescenceProof = entry.process
+        ? yield* entry.process.stop()
+        : {
+            method: "exited",
+            childPid: undefined,
+            childGone: true,
+            descendants: [],
+            survivors: [],
+          };
+      const terminalHolders = yield* sweepTerminalHolders(facts?.tty);
+      const proof = { ...escalation, terminalHolders };
+      if (active === entry) {
+        active = undefined;
+      }
+      entry.settled.resolve(proof);
+      return proof;
+    } catch (error) {
+      entry.settled.reject(error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    }
+  }
+
+  function* quiesce(): Operation<WireProof> {
+    if (active === undefined) {
       return {
         method: "exited",
         childPid: undefined,
         childGone: true,
         descendants: [],
         survivors: [],
+        terminalHolders: [],
       };
     }
-    return yield* child.stop();
+    return yield* settle(active);
   }
 
   while (true) {
@@ -137,7 +179,7 @@ await run(function* () {
           yield* say({ type: "refused", id: message.id, reason: "busy" });
           break;
         }
-        const entry: ActiveChild = { id: message.id, process: undefined };
+        const entry: ActiveChild = { id: message.id, process: undefined, settled: undefined };
         active = entry;
         yield* spawn(function* () {
           const child = yield* useInteractiveProcess({
@@ -154,15 +196,13 @@ await run(function* () {
           }
           yield* say({ type: "ready", id: message.id, pid: ready.value });
           const outcome = yield* child.exited;
-          // A child that exited on its own may have left descendants in the
-          // pane's process group. They are swept before `exited` is reported,
-          // because `exited` is what makes the pane free for the next child —
-          // and a sweep running beside a new child would reach that child too.
-          yield* child.stop();
-          if (active === entry) {
-            active = undefined;
-          }
-          yield* say({ type: "exited", id: message.id, ...outcome });
+          // `exited` is what makes the pane free for the next child, so it
+          // follows the whole settlement: a child that exited on its own may
+          // have left descendants in the group, or an escaped orphan on the
+          // terminal, and a sweep running beside a new child would reach
+          // that child too.
+          const proof = yield* settle(entry);
+          yield* say({ type: "exited", id: message.id, ...outcome, proof });
         });
         break;
       }
@@ -177,7 +217,8 @@ await run(function* () {
         // The pane's last sweep, by the only process that can still make it:
         // once this worker exits, tmux closes the pane's pty master and macOS
         // revokes the slave, after which nothing can name a process that kept
-        // the terminal open. A holder here escaped every earlier sweep.
+        // the terminal open. Every child's settlement already swept, so a
+        // holder here arrived between that sweep and now.
         const ttyHolders = yield* sweepTerminalHolders(facts?.tty);
         yield* say({ type: "bye", ttyHolders });
         socket.end();

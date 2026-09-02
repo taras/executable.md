@@ -35,6 +35,7 @@ import {
   checkMeasurements,
   checkNegativeChildren,
   checkReadinessBoundary,
+  checkSequentialHandoff,
   checkSignalsDistinct,
   checkStartupFailureAtomic,
 } from "./checks.ts";
@@ -134,6 +135,7 @@ function* runChecks(options: Options, outDirectory: string): Operation<number> {
         ["startup-failure-atomic", (check) => checkStartupFailureAtomic(check, context)],
         ["signals-distinct", (check) => checkSignalsDistinct(check, context)],
         ["negative-children", (check) => checkNegativeChildren(check, context)],
+        ["sequential-handoff", (check) => checkSequentialHandoff(check, context)],
         ["cancellation-points", (check) => checkCancellationPoints(check, context)],
         ["measurements", (check) => checkMeasurements(check, context, options.runs)],
       ];

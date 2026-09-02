@@ -752,6 +752,7 @@ export function* checkNegativeChildren(check: Check, context: CheckContext): Ope
     { ordinal: 4, mode: "escape-closed" },
   ] as const;
   const orphanPids: number[] = [];
+  const orphanExits: (PaneEvent & { type: "exited" })[] = [];
   for (const orphan of orphans) {
     const id = `orphan-${orphan.mode}`;
     yield* workspace.launch(orphan.ordinal, { id, argv: childCommand(evidence(id), orphan.mode) });
@@ -760,14 +761,21 @@ export function* checkNegativeChildren(check: Check, context: CheckContext): Ope
     const file = yield* readChildEvidence(evidence(id));
     const pid = file?.descendants[0]?.pid ?? -1;
     orphanPids.push(pid);
-    yield* workspace.keys(orphan.ordinal, "exit 0", "Enter");
-    yield* workspace.waitFor(orphan.ordinal, isLaunchEvent("exited", id));
-    const row = yield* processFacts(pid);
-    check.fact(`${id}`, { pid, row });
+    const before = yield* processFacts(pid);
     check.expect(
-      `${id}: the escaped descendant outlived its parent and was reparented`,
-      row !== undefined && row.ppid === 1 && row.tty === "??",
-      row,
+      `${id}: the descendant left the session and process group while its parent lived`,
+      before !== undefined && before.pgid === before.pid && before.tty === "??",
+      before,
+    );
+    yield* workspace.keys(orphan.ordinal, "exit 0", "Enter");
+    const exited = yield* workspace.waitFor(orphan.ordinal, isLaunchEvent("exited", id));
+    orphanExits.push(exited);
+    const row = yield* processFacts(pid);
+    check.fact(`${id}`, { pid, before, afterParentExit: row, settlement: exited.proof });
+    check.expect(
+      `${id}: outside the settlement's ancestry once the parent exited`,
+      !exited.proof.descendants.some((entry) => entry.pid === pid),
+      exited.proof.descendants,
     );
   }
 
@@ -802,15 +810,23 @@ export function* checkNegativeChildren(check: Check, context: CheckContext): Ope
     byes.map((bye) => bye.ttyHolders),
   );
   const [holdingOrphan, closedOrphan] = orphanPids;
-  const foundHolding = byes[3].ttyHolders.find((entry) => entry.pid === holdingOrphan);
+  const foundHolding = orphanExits[0].proof.terminalHolders.find(
+    (entry) => entry.pid === holdingOrphan,
+  );
   check.expect(
-    "orphan holding the terminal: named by the worker's shutdown sweep and stopped",
+    "orphan holding the terminal: named by its parent's settlement sweep and stopped before `exited`",
     foundHolding !== undefined && foundHolding.gone && !isReachable(holdingOrphan),
     { holdingOrphan, foundHolding },
   );
-  const closedFound = byes.some((bye) =>
-    bye.ttyHolders.some((entry) => entry.pid === closedOrphan),
+  const closedRow = yield* processFacts(closedOrphan);
+  check.expect(
+    "orphan that closed the terminal: outlived its parent, reparented, still running",
+    closedRow !== undefined && closedRow.ppid === 1 && closedRow.tty === "??",
+    closedRow,
   );
+  const closedFound =
+    orphanExits[1].proof.terminalHolders.some((entry) => entry.pid === closedOrphan) ||
+    byes.some((bye) => bye.ttyHolders.some((entry) => entry.pid === closedOrphan));
   const closedAlive = isReachable(closedOrphan);
   check.fact("orphanClosed", {
     pid: closedOrphan,
@@ -839,6 +855,113 @@ export function* checkNegativeChildren(check: Check, context: CheckContext): Ope
   );
   check.note(
     "once the worker exits, tmux closes the pane's pty master and macOS revokes the slave, so a holder can only be named by the worker before it leaves",
+  );
+}
+
+/**
+ * Regression: a first child forks a descendant that `setsid()`s, keeps the
+ * pane's terminal, and outlives its parent. The pane must not admit a second
+ * child until that descendant is stopped and nothing from the first child's
+ * lifetime still holds the terminal.
+ */
+export function* checkSequentialHandoff(check: Check, context: CheckContext): Operation<void> {
+  const evidence = (name: string) => join(context.evidenceDirectory, `handoff-${name}.json`);
+  const workspace = yield* useWorkspace({
+    columns: 1,
+    panes: 1,
+    evidenceDirectory: context.evidenceDirectory,
+    titles: ["handoff"],
+  });
+  const pane = workspace.pane(0);
+  const worker = workspace.links[0].hello.pid;
+
+  yield* workspace.launch(0, { id: "first", argv: childCommand(evidence("first"), "escape") });
+  const first = yield* workspace.waitFor(0, isLaunchEvent("ready", "first"));
+  yield* childEvidenceHas(evidence("first"), (file) => file.descendants.length === 1);
+  const descendant = (yield* readChildEvidence(evidence("first")))?.descendants[0]?.pid ?? -1;
+  const escaped = yield* processFacts(descendant);
+  const holdersBefore = yield* holdersOf(pane.tty);
+  check.fact("first", { child: first.pid, descendant, escaped, holdersBefore });
+  check.expect(
+    "the descendant left the session and process group and still holds the pane terminal",
+    escaped !== undefined &&
+      escaped.pgid === escaped.pid &&
+      escaped.tty === "??" &&
+      holdersBefore.includes(descendant),
+    { escaped, holdersBefore },
+  );
+
+  // The parent exits on its own; a second launch is sent before `exited`
+  // can possibly have arrived.
+  const tExit = Date.now();
+  yield* workspace.keys(0, "exit 0", "Enter");
+  yield* workspace.launch(0, { id: "early", argv: childCommand(evidence("early"), "plain") });
+  const early = yield* workspace.waitFor(
+    0,
+    (event): event is PaneEvent & { type: "refused" | "ready" } =>
+      (event.type === "refused" || event.type === "ready") && event.id === "early",
+  );
+  const exited = yield* workspace.waitFor(0, isLaunchEvent("exited", "first"));
+  const handoffMs = Date.now() - tExit;
+  const order = workspace.events(0).map((event) => event.type);
+  check.fact("exited", { exitCode: exited.exitCode, proof: exited.proof, handoffMs, order });
+  check.expect(
+    "a launch sent while the first child was settling was refused, before `exited`",
+    early.type === "refused" && order.indexOf("refused") < order.indexOf("exited"),
+    { early, order },
+  );
+  const swept = exited.proof.terminalHolders.find((entry) => entry.pid === descendant);
+  check.expect(
+    "the orphaned descendant was outside ancestry but named by the settlement's terminal sweep",
+    !exited.proof.descendants.some((entry) => entry.pid === descendant) && swept !== undefined,
+    { descendants: exited.proof.descendants, terminalHolders: exited.proof.terminalHolders },
+  );
+  check.expect(
+    "the descendant was stopped before `exited` was reported",
+    swept?.gone === true && !isReachable(descendant),
+    { swept, reachable: isReachable(descendant) },
+  );
+
+  const tRelaunch = Date.now();
+  yield* workspace.launch(0, { id: "second", argv: childCommand(evidence("second"), "plain") });
+  const second = yield* workspace.waitFor(0, isLaunchEvent("ready", "second"));
+  const relaunchMs = Date.now() - tRelaunch;
+  yield* childEvidenceHas(evidence("second"), (file) => file.pid === second.pid);
+  const holdersAfter = yield* holdersOf(pane.tty);
+  const strangers = holdersAfter.filter((pid) => pid !== worker && pid !== second.pid);
+  check.fact("second", { child: second.pid, holdersAfter, relaunchMs });
+  check.expect(
+    "after admission, only the worker and the second child hold the pane terminal",
+    strangers.length === 0 && holdersAfter.includes(second.pid),
+    { holdersAfter, worker, second: second.pid },
+  );
+  check.expect(
+    "the second child runs on the same pane and worker",
+    (yield* workspace.grid.tmux.run([
+      "list-panes",
+      "-t",
+      "grid:0",
+      "-F",
+      "#{pane_id} #{pane_pid}",
+    ])) === `${pane.id} ${pane.pid}`,
+  );
+
+  yield* workspace.keys(0, "exit 0", "Enter");
+  yield* workspace.waitFor(0, isLaunchEvent("exited", "second"));
+  const bye = yield* workspace.shutdown(0);
+  check.expect(
+    "nothing held the terminal at shutdown",
+    bye.ttyHolders.length === 0,
+    bye.ttyHolders,
+  );
+  const stopped = yield* workspace.grid.stop();
+  check.expect("server stopped", stopped.serverGone && stopped.unreachable);
+  check.expect(
+    "first child, descendant, second child gone",
+    yield* allGone([first.pid, descendant, second.pid]),
+  );
+  check.note(
+    `handoff (exit requested → exited) ${handoffMs} ms; relaunch (launch → ready) ${relaunchMs} ms`,
   );
 }
 
@@ -932,6 +1055,10 @@ export interface MeasuredRun {
   readyMs: number;
   attachMs: number;
   closeDetectMs: number;
+  /** Exit requested on pane 0 → `exited`, including the settlement sweep. */
+  handoffMs: number;
+  /** `exited` → the next child on the same pane ready. */
+  relaunchMs: number;
   teardownMs: number;
 }
 
@@ -980,19 +1107,45 @@ export function* measureOnce(panes: number, context: CheckContext): Operation<Me
   yield* controlUntil(workspace.grid, cursor, (event) => event.kind === "client-detached");
   yield* client.process.exited;
   const closeDetectMs = Date.now() - tClose;
+  // Sequential handoff on pane 0: exit requested → `exited` (which follows the
+  // settlement sweep) → a second child ready on the same pane.
+  const tHandoff = Date.now();
+  yield* workspace.keys(0, "exit 0", "Enter");
+  yield* workspace.waitFor(0, isLaunchEvent("exited", "m0"));
+  const handoffMs = Date.now() - tHandoff;
+  const tRelaunch = Date.now();
+  yield* workspace.launch(0, {
+    id: "m0b",
+    argv: childCommand(join(context.evidenceDirectory, `measure-${panes}-0b.json`), "plain"),
+  });
+  const second = yield* workspace.waitFor(0, isLaunchEvent("ready", "m0b"));
+  const relaunchMs = Date.now() - tRelaunch;
   const tTeardown = Date.now();
-  yield* all(readies.map((_, ordinal) => workspace.cancel(ordinal, `m${ordinal}`)));
+  yield* all(
+    readies.map((_, ordinal) => workspace.cancel(ordinal, ordinal === 0 ? "m0b" : `m${ordinal}`)),
+  );
   yield* all(readies.map((_, ordinal) => workspace.shutdown(ordinal)));
   yield* workspace.grid.stop();
   const gone = yield* allGone([
     ...readies.map((event) => event.pid),
+    second.pid,
     ...workspace.links.map((link) => link.hello.pid),
   ]);
   if (!gone) {
     throw new Error(`measurement with ${panes} panes: a process survived teardown`);
   }
   const teardownMs = Date.now() - tTeardown;
-  return { panes, layoutMs, workersMs, readyMs, attachMs, closeDetectMs, teardownMs };
+  return {
+    panes,
+    layoutMs,
+    workersMs,
+    readyMs,
+    attachMs,
+    closeDetectMs,
+    handoffMs,
+    relaunchMs,
+    teardownMs,
+  };
 }
 
 export function* checkMeasurements(
@@ -1022,6 +1175,8 @@ export function* checkMeasurements(
       "readyMs",
       "attachMs",
       "closeDetectMs",
+      "handoffMs",
+      "relaunchMs",
       "teardownMs",
     ] as const) {
       const values = mine.map((run) => run[key]).toSorted((a, b) => a - b);
