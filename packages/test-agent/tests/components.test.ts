@@ -673,7 +673,7 @@ describe(
             },
             { workerCommand: options.worker },
           );
-          yield* installAgentComponents(agent);
+          yield* installAgentComponents(agent.components);
           if (options.answers) {
             yield* installAnswerProvider(options.answers);
           }
