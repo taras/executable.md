@@ -130,6 +130,14 @@ function* runWithDurability(operation, producer) {
 }
 ```
 
+A `cancelled` Close also records **why**, because two very different things
+produce one: a caller deliberately halting a task it owns, and a run being
+interrupted. `cancellation: "caller"` is the deliberate stop; `"unwound"` is
+everything involuntary. A resumed spawned region continues an `"unwound"` child
+and reproduces a `"caller"` one by suspending, so nothing deliberately stopped
+is silently performed again. A record with no `cancellation` member reads as
+`"caller"`. See DEC-040.
+
 For **Close events**, the ordering discipline is:
 
 ```typescript
