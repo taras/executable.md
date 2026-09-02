@@ -93,7 +93,14 @@ function* useAmbient(
   return { checkout, root: join(managed, "repositories"), home };
 }
 
-/** Run one document under the ordinary provider, on a stream a caller chose. */
+/**
+ * Run one document under the ordinary provider, on a stream a caller chose.
+ *
+ * The commit identity is stated rather than read from the host. The provider's
+ * production default is the caller's own `git config`, so leaving it alone
+ * makes `<Git.Commit>` refuse on any machine without `user.name` set — every CI
+ * runner — and turns these cases into an assertion about who ran them.
+ */
 function runOrdinary(
   source: string,
   options: {
@@ -117,7 +124,14 @@ function runOrdinary(
     yield* useHostFiles();
     yield* installAgentComponents();
     yield* useCompositionComponents();
-    yield* useRunComposition({ root: options.root, cwd: options.cwd });
+    yield* useRunComposition({
+      root: options.root,
+      cwd: options.cwd,
+      // deno-lint-ignore require-yield
+      *identity(): Operation<string | undefined> {
+        return "Fixture <fixture@example.invalid> 0 +0000";
+      },
+    });
     if (options.agent !== undefined) {
       yield* options.agent();
     }
