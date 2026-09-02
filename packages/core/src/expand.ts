@@ -2177,11 +2177,11 @@ function* expandTerminalGrid(
     // child never runs.
     yield* recordGridLayout(identity, toRequest(layout));
 
-    const retained = yield* durableGrid(function* () {
+    const retained = yield* durableGrid(function* (boundary, commit) {
       const work = structure.panes.map((pane, index) =>
         paneWork(pane, layout.cells[index]!.title, site),
       );
-      return yield* openTerminalGrid(layout, work);
+      return yield* openTerminalGrid(layout, work, boundary, commit);
     });
 
     const failed = retained.panes.find((pane) => pane.status === "failed");

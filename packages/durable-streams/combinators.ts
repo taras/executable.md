@@ -98,8 +98,24 @@ function retainedCancellation(close: Close): Cancellation {
   return close.result.cancellation === "unwound" ? "unwound" : "caller";
 }
 
+/**
+ * Declare a child's terminal value before its scope has finished unwinding.
+ *
+ * A child that has already decided what it settled to — a terminal grid that
+ * crossed its reader-close boundary, say — must record that outcome even if the
+ * run is cancelled while its finalizers are still going. Without this, a halt
+ * arriving during teardown loses the decision and the child records a
+ * cancellation instead, which is a different thing entirely.
+ *
+ * Committing is live state, never journaled on its own: the value reaches the
+ * journal only as the child's ordinary `Close`, written where it always was.
+ * A child that goes on to return or throw normally overrides what it committed,
+ * because that is the outcome it actually reached.
+ */
+export type CommitOutcome<T> = (value: T) => void;
+
 function* runDurableChild<T extends WorkflowValue>(
-  childWorkflow: () => Workflow<T>,
+  childWorkflow: (commit: CommitOutcome<T>) => Workflow<T>,
   childId: string,
   parentCtx: DurableContext,
   cancelledPolicy: CancelledChildPolicy = "combinator-cancels",
@@ -163,10 +179,28 @@ function* runDurableChild<T extends WorkflowValue>(
 
   let closeEvent: Close | undefined;
   let suppressClose = false;
+  // What the child declared it had settled to before its scope finished coming
+  // down. Read only when the child never reached a normal ending.
+  let committed: { value: T } | undefined;
+  const commit: CommitOutcome<T> = (value) => {
+    committed = { value };
+  };
 
   yield* ensure(function* () {
     if (suppressClose || activeDurabilityFailure(childCtx)) {
       return;
+    }
+
+    // A child that committed an outcome and was then cancelled mid-teardown
+    // settled: the decision was made before the cancellation arrived, and the
+    // record has to say so. The cancellation is still a cancellation for
+    // whoever asked for it — it is simply delivered after this.
+    if (!closeEvent && committed !== undefined && !replayIndex.firstUnaligned(childId)) {
+      closeEvent = {
+        type: "close",
+        coroutineId: childId,
+        result: { status: "ok", value: committed.value as Json },
+      };
     }
 
     // closeEvent still undefined means the child was cancelled before the
@@ -205,7 +239,7 @@ function* runDurableChild<T extends WorkflowValue>(
   try {
     // Run the child workflow. DurableEffects inside the child read
     // DurableContext from the scope, so they'll use childId.
-    const result: T = yield* childWorkflow();
+    const result: T = yield* childWorkflow(commit);
 
     const durabilityFailure = activeDurabilityFailure(childCtx);
     if (durabilityFailure) {
@@ -287,7 +321,7 @@ function* runDurableChild<T extends WorkflowValue>(
  * again. See `CancelledChildPolicy` and `Cancellation`.
  */
 export function durableSpawn<T extends WorkflowValue>(
-  childWorkflow: () => Workflow<T>,
+  childWorkflow: (commit: CommitOutcome<T>) => Workflow<T>,
 ): Workflow<Task<T>> {
   return (function* (): Workflow<Task<T>> {
     // Reading the context and allocating the child id is ordinary scope setup:
