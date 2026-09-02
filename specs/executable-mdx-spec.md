@@ -2805,6 +2805,24 @@ capabilities — `<PlanInputs>`, `<PlanAuthorship>`, `<CheckDraft>` and
 `<AdmitPlan>` — are the closure those exact bytes carry, and are syntax no
 document may write. [The plan command](./plan-command-spec.md) is the contract.
 
+**Who can establish its ceiling is the host's to say, not the Component's.** The
+declaration carries a trusted-host capability: the agent a Plan conversation
+defaults to, and the operation that installs that one invocation's provider
+inside the ceiling. It is a closure the host supplied before the declaration
+existed — never a prop, a Context value, a registration result or anything a
+document, component or middleware can reach or replace.
+
+Three surfaces state one. A production run states the ACPX ceiling built from
+the Agent stack it settled. A nested `<Execution host="run">` that declares a
+canonical `<TestAgent>` states the deterministic one built from the controlled
+provider that declaration produced (specs/testing-spec.md). Everything else
+states none, and carries the sentence a person reads instead: an `xmd test` root
+does not resolve the name at all, and an unconfigured child resolves these exact
+bytes and is refused at the ceiling before a directory, a provider, a turn or a
+review exists. What the ceiling then does — the permission mode, the
+prompt-failure policy, the capability refusals, the empty session directory — is
+the same whichever provider is underneath.
+
 Two registrations for one name and kind at the same scope are a configuration
 error naming both origins. Installation order is not a resolution mechanism —
 reserved and default registrations are held apart, so which one wins is decided
