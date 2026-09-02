@@ -279,9 +279,12 @@ function* runDurableChild<T extends WorkflowValue>(
  * `ephemeral()` instead — as this once did — put it in a scope that closed as
  * soon as the effect resolved, so every `yield* task` threw `halted`.
  *
- * A retained `Close(cancelled)` here means the run was interrupted, not that a
- * combinator chose against this child, so the child resumes its remaining work.
- * See `CancelledChildPolicy`.
+ * A retained `Close(cancelled)` here is read for *why* it was cancelled, not
+ * treated as one thing. `"unwound"` — the run was interrupted, and nothing will
+ * cancel this child again — resumes the work it had left. `"caller"`, and a
+ * legacy record that says nothing, is a stop this caller chose, and is
+ * reproduced by suspending until its deterministic control flow chooses it
+ * again. See `CancelledChildPolicy` and `Cancellation`.
  */
 export function durableSpawn<T extends WorkflowValue>(
   childWorkflow: () => Workflow<T>,
