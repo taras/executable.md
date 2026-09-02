@@ -36,6 +36,42 @@ strongest cancellation boundary ACP can express. A candidate signal still
 needs evidence that it is absent when the backend did not accept the turn
 before XMD can translate it into durable session materialization.
 
+## Supported boundary
+
+Treat a Devin session as invocation-scoped. One XMD invocation may keep
+multiple Devin sessions live at the same time. Prompts sent through one session
+are serialized and continue that session's live ACP conversation; prompts sent
+through different sessions may execute concurrently.
+
+This is not one-shot execution. The same live ACP handle carries multi-turn
+context until the invocation ends. Teardown closes every Devin handle and
+retains no route, provider identity, or resume authority for a later
+invocation.
+
+Refuse Devin before contacting it when the caller requires durable semantics:
+workflow continuation, replay that needs another model turn, cross-invocation
+resume, plan-session continuity, and native `Session.Launch`. These surfaces
+remain unsupported until Devin publishes an acceptance event and a
+provider-native conversation identity that satisfy XMD's durable session
+contract.
+
+The baseline and cancellation traces establish the narrower boundary. Devin
+authenticates, receives prompts, streams updates, and honors ACP cancellation.
+The first update after the cancelled prompt is a `session_info_update` carrying
+a display title, followed by Devin's stopped notification and a cancelled
+prompt response. The title is ordinary ACP session metadata, not evidence that
+the backend accepted the turn. The response's `cognition.ai/userMessageId`
+arrives only at the terminal boundary, and neither trace reports an
+`agentSessionId`. XMD therefore does not promote either value into durable
+materialization or session identity.
+
+Supporting this boundary requires the ordinary-run host to resolve `devin` as
+`devin acp`, retain one live handle per Devin session in invocation-local
+state, and discard that state on teardown. The workflow and native-launch
+hosts do not advertise this capability. This keeps the provider limitation at
+the host boundary instead of weakening the durability contract shared by other
+agents.
+
 ## Cost and authorization
 
 The discovery is opt-in twice. Without `XMD_DEVIN_ACP_DISCOVERY=1`, no Devin
