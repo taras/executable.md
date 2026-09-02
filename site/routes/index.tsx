@@ -39,9 +39,28 @@ const PAIR =
 /**
  * The release-link hover inverts the base rule: it inherits the eyebrow's
  * dim until hover, where it picks up the accent.
+ *
+ * The plan panels wrap rather than scroll, so every line is its own block
+ * instead of a newline in the source — an instruction that wraps then takes a
+ * 3ch hanging indent and its continuation aligns under the text rather than
+ * under the number. Both panels take the same treatment: the two examples
+ * differ only in the syntax around them.
  */
 const PAGE_CSS = ".release-link{color:inherit;letter-spacing:inherit;}" +
-  ".release-link:hover{color:var(--green);}";
+  ".release-link:hover{color:var(--green);}" +
+  "#plan .code-panel pre{white-space:pre-wrap;overflow-wrap:break-word;}" +
+  "#plan .plan-line{display:block;}" +
+  "#plan .plan-step{display:block;padding-left:3ch;text-indent:-3ch;}" +
+  "#plan strong code{font-weight:800;}";
+
+/** The instruction list both plan examples are built from, verbatim. */
+const PLAN_STEPS = [
+  "1. Read package.json and CHANGELOG.md.",
+  "2. Ask an agent to recommend the next semantic version and explain why.",
+  "3. Validate the answer.",
+  "4. Ask me to approve it.",
+  "5. Write RELEASE.md.",
+];
 
 const RELEASE_MD: Tok[][] = [
   [bold("# Release")],
@@ -425,6 +444,19 @@ const RUNTIMES: { name: string; body: string; lines: string[][] }[] = [
   },
 ];
 
+/** The plan instructions, one block per line. */
+function PlanSteps() {
+  return (
+    <>
+      {PLAN_STEPS.map((step) => (
+        <span key={step} class="plan-step">
+          {step}
+        </span>
+      ))}
+    </>
+  );
+}
+
 /** A terminal slab whose lines each open with a prompt. */
 function Terminal(
   { lines, noWrap }: { lines: string[][]; noWrap?: boolean },
@@ -460,6 +492,10 @@ export default define.page(function Home({ url }) {
                 rel="noopener"
               >
                 {VERSION}
+              </a>{" "}
+              ·{" "}
+              <a class="release-link" href={GITHUB} rel="noopener">
+                Star on GitHub ↗
               </a>
             </span>
 
@@ -844,6 +880,66 @@ export default define.page(function Home({ url }) {
           </div>
         </section>
 
+        {/* Plan */}
+        <section id="plan" class="section" style="gap:1.5rem;">
+          <div class="section-head">
+            <h2>Plans are made to be followed.</h2>
+          </div>
+
+          {/* Same instructions, two surfaces: the row states the equivalence. */}
+          <div
+            class="grid"
+            style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr));align-items:start;"
+          >
+            <div style="display:flex;flex-direction:column;gap:0.625rem;min-width:0;">
+              <span class="eyebrow">CLI</span>
+              <CodeBlock command>
+                <span class="plan-line">
+                  <Prompt /> xmd plan "
+                </span>
+                <PlanSteps />
+                <span class="plan-line">"</span>
+              </CodeBlock>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:0.625rem;min-width:0;">
+              <span class="eyebrow">XMD</span>
+              <CodeBlock>
+                <span class="plan-line">
+                  <Source lines={[[key("<Plan>")]]} />
+                </span>
+                <PlanSteps />
+                <span class="plan-line">
+                  <Source lines={[[key("</Plan>")]]} />
+                </span>
+              </CodeBlock>
+            </div>
+          </div>
+
+          <p style={P_MD}>
+            <strong style={STRONG}>
+              <Term>xmd plan</Term> is command-line shorthand for{" "}
+              <Term>{"<Plan>"}</Term>.
+            </strong>{" "}
+            Underneath, it expands <Term>{"<Plan>"}</Term>{" "}
+            with your instructions to produce an XMD program you can review,
+            change, commit, and run.
+          </p>
+
+          <p style={P_MD}>
+            <strong style={STRONG}>Planning is part of the language.</strong>
+            {" "}
+            <Term>{"<Plan>"}</Term> uses the components exposed by{" "}
+            <Term>xmd syntax</Term>, so it plans with the same vocabulary
+            available to you.
+          </p>
+
+          <p style={P_MD}>
+            Once the workflow says what you mean, run the program instead of
+            asking an agent to figure it out again.
+          </p>
+        </section>
+
         {/* Durability */}
         <section id="durability" class="section" style="gap:1.5rem;">
           <div style="width:100%;max-width:720px;display:flex;flex-direction:column;gap:1.5rem;">
@@ -954,6 +1050,24 @@ export default define.page(function Home({ url }) {
           >
             Standalone binary · Deno · Node · Bun
           </p>
+
+          <div
+            class="card"
+            style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:1rem;"
+          >
+            <div style="display:flex;flex-direction:column;gap:0.375rem;min-width:0;">
+              <span class="eyebrow">Open source · {VERSION}</span>
+              <p style={CLAIM}>Star the repository to follow releases.</p>
+            </div>
+            <a
+              class="btn push"
+              href={GITHUB}
+              rel="noopener"
+              style="font-size:0.875rem;font-weight:800;letter-spacing:0.07em;text-transform:uppercase;"
+            >
+              Star on GitHub ↗
+            </a>
+          </div>
         </section>
       </div>
 
