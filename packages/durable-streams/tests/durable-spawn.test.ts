@@ -15,7 +15,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { sleep, spawn, suspend, withResolvers } from "effection";
+import { sleep, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 
 import { durableRun } from "../run.ts";
@@ -507,6 +507,68 @@ describe("durableSpawn — why a child was cancelled (DEC-040)", () => {
       );
     });
     yield* reachedTheHalt.operation;
+    yield* second.halt();
+
+    expect(marks).toEqual(["first life"]);
+  });
+
+  it("records disposal through Symbol.asyncDispose as caller, and does not revive", function* () {
+    const marks: string[] = [];
+    const stream = new InMemoryStream();
+    const started = withResolvers<void>();
+    const disposed = withResolvers<void>();
+
+    // `await using` stops a task without ever touching `halt()`. It is the same
+    // decision spelled another way, so it has to leave the same evidence.
+    const first = yield* spawn(function* () {
+      yield* durableRun(
+        function* (): Workflow<string> {
+          const task = yield* durableSpawn(living(started, (note) => marks.push(note)));
+          yield* ephemeral(
+            (function* (): Operation<void> {
+              yield* started.operation;
+              yield* until(task[Symbol.asyncDispose]());
+              disposed.resolve();
+              yield* suspend();
+            })(),
+          );
+          return "never";
+        },
+        { stream },
+      );
+    });
+    yield* disposed.operation;
+    yield* first.halt();
+
+    expect(marks).toEqual(["first life"]);
+    expect(yield* cancellations(stream)).toEqual(["caller"]);
+
+    // Resuming that journal must not enter the child again.
+    const reachedTheDisposal = withResolvers<void>();
+    const second = yield* spawn(function* () {
+      yield* durableRun(
+        function* (): Workflow<string> {
+          const task = yield* durableSpawn(function* (): Workflow<string> {
+            return yield* ephemeral(
+              (function* (): Operation<string> {
+                marks.push("revived");
+                return "revived";
+              })(),
+            );
+          });
+          yield* ephemeral(
+            (function* (): Operation<void> {
+              yield* until(task[Symbol.asyncDispose]());
+              reachedTheDisposal.resolve();
+              yield* suspend();
+            })(),
+          );
+          return "never";
+        },
+        { stream },
+      );
+    });
+    yield* reachedTheDisposal.operation;
     yield* second.halt();
 
     expect(marks).toEqual(["first life"]);
