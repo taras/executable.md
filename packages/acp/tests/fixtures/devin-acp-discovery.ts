@@ -9,9 +9,9 @@
  * the report.
  */
 
-import { ensure, exit, main, scoped, until, withResolvers } from "effection";
+import { ensure, exit, main, scoped, sleep, until, useScope, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, readdir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { spawn as spawnChild } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -36,6 +36,8 @@ const BASELINE_SCENARIO = "baseline";
 const CANCEL_AFTER_PROMPT_SCENARIO = "cancel-after-prompt";
 const EXPECTED_REPLY = "DEVIN-ACP-DISCOVERY-OK";
 const TIMEOUT_MS = 5 * 60 * 1000;
+const TRACE_SETTLE_TIMEOUT_MS = 5_000;
+const TRACE_POLL_MS = 25;
 const FIXTURE = fileURLToPath(import.meta.url);
 
 type VerdictKind = "PASS" | "REFUSED" | "ENVIRONMENT_BLOCKED" | "PRODUCT_FAILED";
@@ -315,6 +317,7 @@ function observeJsonLines(
   nonJson: { clientToAgent: number; agentToClient: number },
   requestTokens: Map<string, string>,
   identityTokens: Map<string, string>,
+  onEntry: () => void,
 ): () => void {
   let buffer = "";
   const onData = (chunk: string | Buffer) => {
@@ -332,6 +335,7 @@ function observeJsonLines(
         entries.push(
           sanitizeMessage(message, direction, entries.length + 1, requestTokens, identityTokens),
         );
+        onEntry();
       } catch {
         if (direction === "client-to-agent") {
           nonJson.clientToAgent++;
@@ -355,6 +359,7 @@ function relayClientJsonLines(
   requestTokens: Map<string, string>,
   identityTokens: Map<string, string>,
   injectCancelAfterPrompt: boolean,
+  onEntry: () => void,
 ): { stop: () => void; cancelInjected: () => boolean } {
   let buffer = "";
   let injected = false;
@@ -381,6 +386,7 @@ function relayClientJsonLines(
             identityTokens,
           ),
         );
+        onEntry();
         const params = field(message, "params");
         const sessionId = stringField(params, "sessionId");
         if (
@@ -403,6 +409,7 @@ function relayClientJsonLines(
               identityTokens,
             ),
           );
+          onEntry();
           child.stdin.write(`${JSON.stringify(cancellation)}\n`);
           injected = true;
         }
@@ -499,16 +506,46 @@ function traceSnapshot(
 
 function* runRelay(): Operation<void> {
   const executable = process.env[REAL_DEVIN_ENV];
-  const tracePath = process.env[TRACE_ENV];
-  if (executable === undefined || tracePath === undefined) {
+  const traceDirectory = process.env[TRACE_ENV];
+  if (executable === undefined || traceDirectory === undefined) {
     throw new Error("the Devin ACP discovery relay is missing its private launch inputs");
   }
 
+  const scope = yield* useScope();
   const entries: TraceEntry[] = [];
   const nonJson = { clientToAgent: 0, agentToClient: 0 };
   const requestTokens = new Map<string, string>();
   const identityTokens = new Map<string, string>();
   let stderr = "";
+  let snapshotSequence = 0;
+  const cancelInjected = () =>
+    entries.some(
+      (entry) => entry.direction === "client-to-agent" && entry.method === "session/cancel",
+    );
+  const terminalTurnResponseObserved = () =>
+    entries.some(
+      (entry) =>
+        entry.direction === "agent-to-client" &&
+        entry.kind === "response" &&
+        entry.stopReason !== undefined,
+    );
+  const snapshotContent = (complete: boolean, outcome = { code: -1, signal: "" }) =>
+    `${JSON.stringify(
+      traceSnapshot([...entries], { ...nonJson }, stderr, outcome, complete, cancelInjected()),
+      null,
+      2,
+    )}\n`;
+  const initialTracePath = join(traceDirectory, "snapshot-000000.json");
+  yield* writeTextFile(initialTracePath, snapshotContent(false));
+  const writeLiveSnapshot = () => {
+    snapshotSequence++;
+    const name = `snapshot-${String(snapshotSequence).padStart(6, "0")}.json`;
+    const path = join(traceDirectory, name);
+    const content = snapshotContent(terminalTurnResponseObserved());
+    scope.run(function* () {
+      yield* writeTextFile(path, content);
+    });
+  };
   const child: ChildProcessWithoutNullStreams = spawnChild(executable, process.argv.slice(3), {
     env: process.env,
     stdio: ["pipe", "pipe", "pipe"],
@@ -521,6 +558,7 @@ function* runRelay(): Operation<void> {
     requestTokens,
     identityTokens,
     process.env[SCENARIO_ENV] === CANCEL_AFTER_PROMPT_SCENARIO,
+    writeLiveSnapshot,
   );
   const stopAgentObservation = observeJsonLines(
     child.stdout,
@@ -529,6 +567,7 @@ function* runRelay(): Operation<void> {
     nonJson,
     requestTokens,
     identityTokens,
+    writeLiveSnapshot,
   );
   child.stderr.on("data", (chunk: Buffer) => {
     stderr += chunk.toString("utf8");
@@ -548,22 +587,6 @@ function* runRelay(): Operation<void> {
     }
   });
 
-  yield* writeTextFile(
-    tracePath,
-    `${JSON.stringify(
-      traceSnapshot(
-        entries,
-        nonJson,
-        stderr,
-        { code: -1, signal: "" },
-        false,
-        clientRelay.cancelInjected(),
-      ),
-      null,
-      2,
-    )}\n`,
-  );
-
   let outcome: { code: number; signal: string };
   try {
     outcome = yield* settled.operation;
@@ -577,7 +600,10 @@ function* runRelay(): Operation<void> {
       true,
       clientRelay.cancelInjected(),
     );
-    yield* writeTextFile(tracePath, `${JSON.stringify(failed, null, 2)}\n`);
+    yield* writeTextFile(
+      join(traceDirectory, "final.json"),
+      `${JSON.stringify(failed, null, 2)}\n`,
+    );
     throw error;
   }
   const trace = traceSnapshot(
@@ -588,10 +614,42 @@ function* runRelay(): Operation<void> {
     true,
     clientRelay.cancelInjected(),
   );
-  yield* writeTextFile(tracePath, `${JSON.stringify(trace, null, 2)}\n`);
+  yield* writeTextFile(join(traceDirectory, "final.json"), `${JSON.stringify(trace, null, 2)}\n`);
   if (outcome.code !== 0) {
     yield* exit(outcome.code);
   }
+}
+
+function* readCompletedTrace(traceDirectory: string): Operation<WireTrace | undefined> {
+  const attempts = Math.ceil(TRACE_SETTLE_TIMEOUT_MS / TRACE_POLL_MS);
+  let lastValid: WireTrace | undefined;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (yield* exists(traceDirectory)) {
+      const names = yield* readdir(traceDirectory);
+      const snapshots = names
+        .filter((name) => /^snapshot-[0-9]{6}\.json$/.test(name))
+        .toSorted()
+        .toReversed();
+      const candidates = names.includes("final.json") ? ["final.json", ...snapshots] : snapshots;
+      for (const name of candidates) {
+        try {
+          const parsed: unknown = JSON.parse(yield* readTextFile(join(traceDirectory, name)));
+          const trace = WireTraceSchema.safeParse(parsed);
+          if (trace.success) {
+            lastValid = trace.data;
+            if (trace.data.complete) {
+              return trace.data;
+            }
+            break;
+          }
+        } catch {
+          // A live snapshot can be visible before its write has completed.
+        }
+      }
+    }
+    yield* sleep(TRACE_POLL_MS);
+  }
+  return lastValid;
 }
 
 function* runDiscovery(): Operation<DiscoveryVerdict> {
@@ -632,7 +690,8 @@ function* runDiscovery(): Operation<DiscoveryVerdict> {
   yield* ensureDir(root);
   yield* ensure(() => rm(root, { recursive: true, force: true }));
   const projectDirectory = process.cwd();
-  const tracePath = join(root, "wire.json");
+  const traceDirectory = join(root, "wire");
+  yield* ensureDir(traceDirectory);
   const relay = join(root, "devin");
   yield* until(symlink(process.execPath, relay));
 
@@ -651,7 +710,7 @@ function* runDiscovery(): Operation<DiscoveryVerdict> {
     "--frozen",
     "--allow-env",
     `--allow-run=${executable}`,
-    `--allow-write=${tracePath}`,
+    `--allow-write=${traceDirectory}`,
     FIXTURE,
     "relay",
     "acp",
@@ -668,7 +727,7 @@ function* runDiscovery(): Operation<DiscoveryVerdict> {
     timeoutMs: TIMEOUT_MS,
     agentProcessEnv: {
       [REAL_DEVIN_ENV]: executable,
-      [TRACE_ENV]: tracePath,
+      [TRACE_ENV]: traceDirectory,
       [SCENARIO_ENV]: verdict.scenario,
     },
   });
@@ -739,21 +798,14 @@ function* runDiscovery(): Operation<DiscoveryVerdict> {
     verdict.detail = "inspect the safe runtime failure fields and relay trace";
   }
 
-  if (yield* exists(tracePath)) {
+  const trace = yield* readCompletedTrace(traceDirectory);
+  if (trace !== undefined) {
     verdict.relayTraceWritten = true;
-    try {
-      const parsed: unknown = JSON.parse(yield* readTextFile(tracePath));
-      const trace = WireTraceSchema.safeParse(parsed);
-      if (trace.success) {
-        verdict.trace = trace.data;
-      } else {
-        verdict.failureStage = "trace-validation";
-        verdict.runtimeErrorClassification = "invalid-relay-trace";
-      }
-    } catch {
-      verdict.failureStage = "trace-read";
-      verdict.runtimeErrorClassification = "invalid-relay-trace";
-    }
+    verdict.trace = trace;
+  } else if (yield* exists(traceDirectory)) {
+    verdict.relayTraceWritten = true;
+    verdict.failureStage = "trace-read";
+    verdict.runtimeErrorClassification = "invalid-relay-trace";
   }
   verdict.ran =
     verdict.modelTurns === 1 || verdict.relayTraceWritten || verdict.trace.entries.length > 0;
