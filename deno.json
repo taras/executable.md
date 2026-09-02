@@ -63,6 +63,7 @@
     "gen:publish-workflow": "deno run --allow-all packages/cli/src/deno.ts run scripts/gen-publish-workflow.md",
     "bump": "deno run -A scripts/bump-version.ts",
     "weights:measure": "deno run --allow-all scripts/measure-test-weights.ts",
+    "proof:tmux-pane-workers": "deno run --allow-all --frozen scripts/proofs/tmux-pane-workers/proof.ts",
     "test": "deno test --allow-all --frozen",
     "verify": "deno run --allow-all --node-modules-dir=none --cached-only --frozen scripts/preflight.ts scripts/verify.ts",
     "vendor:verify": "deno run --allow-read --allow-write=/tmp --allow-env --allow-run --cached-only --frozen scripts/verify-cloudflare-dofs.ts",
