@@ -15,7 +15,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { sleep, spawn, suspend } from "effection";
+import { sleep, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
 
 import { durableRun } from "../run.ts";
