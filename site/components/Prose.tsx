@@ -65,9 +65,21 @@ export function PageFooter() {
     <footer style="border-top:var(--rule) solid var(--line);padding:1.5rem 0;margin-top:1rem;">
       <div
         class="container"
-        style={`${MONO}font-size:0.8125rem;color:var(--dim);`}
+        style={`${MONO}font-size:0.8125rem;color:var(--dim);display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:0.5rem 1rem;`}
       >
-        Made with ❤️ Effection.
+        <span>
+          Made with ❤️{" "}
+          <a href="https://frontside.com/effection/" rel="noopener">
+            Effection
+          </a>.
+        </span>
+        <span style="display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem;">
+          <a href="https://github.com/taras/executable.md" rel="noopener">
+            GitHub ↗
+          </a>
+          <span aria-hidden="true">·</span>
+          <a href="https://discord.gg/r9F5QrZrP" rel="noopener">Discord ↗</a>
+        </span>
       </div>
     </footer>
   );
