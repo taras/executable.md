@@ -615,6 +615,62 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     return undefined;
   }
 
+  /**
+   * The same history, with one Plan record's retained value replaced.
+   *
+   * A continuation reads what the journal holds, and what it holds is not
+   * guaranteed to be what this version wrote — a record can be truncated, edited,
+   * or written by a build that knew a different protocol. Rewriting it here is how
+   * a case asks what the reader does with one it cannot account for.
+   */
+  function* tampered(
+    stream: InMemoryStream,
+    prefix: string,
+    replace: (value: Json) => Json,
+  ): Operation<InMemoryStream> {
+    const partial = new InMemoryStream();
+    for (const event of yield* stream.readAll()) {
+      if (event.type === "close") {
+        continue;
+      }
+      if (
+        event.type === "yield" &&
+        event.description.name.startsWith(prefix) &&
+        event.result.status === "ok"
+      ) {
+        yield* partial.append({
+          ...event,
+          result: { status: "ok", value: replace(event.result.value ?? null) },
+        });
+        continue;
+      }
+      yield* partial.append(event);
+    }
+    return partial;
+  }
+
+  /** One approved run, whose journal a hostile continuation then reads. */
+  function* approvedRun(): Operation<InMemoryStream> {
+    const stream = new InMemoryStream();
+    const run = yield* runDocument({
+      source: ['<Plan as="approved">Write a program.</Plan>', "", "got: {approved}", ""].join("\n"),
+      reply: PLAN,
+      stream,
+    });
+    expect(run.failure).toBe(undefined);
+    return stream;
+  }
+
+  /** What a continuation reading that history produced. */
+  function* continued(stream: InMemoryStream): Operation<Run> {
+    return yield* runDocument({
+      source: ['<Plan as="approved">Write a program.</Plan>', "", "got: {approved}", ""].join("\n"),
+      reply: PLAN,
+      reviews: [],
+      stream,
+    });
+  }
+
   it("PC19: the emitted source survives the CLI's own output normalization", function* () {
     yield* useWorkingDirectory(function* (dir) {
       // Whitespace the normalizer rewrites in prose: a line ending in spaces,
@@ -658,11 +714,22 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       });
 
       expect(run.failure).toBe(undefined);
-      // Retained before either form could publish the bytes.
+      // Retained before either form could publish the bytes: all five members,
+      // and exactly those five. A sixth would be something a later reader has
+      // to account for, and a missing one is a record that cannot be read.
       const artifact = Object(yield* retainedArtifact(stream));
+      expect(Object.keys(artifact).sort()).toEqual([
+        "admission",
+        "digest",
+        "instruction",
+        "invocation",
+        "source",
+      ]);
       expect(Reflect.get(artifact, "source")).toBe(PLAN);
       expect(Reflect.get(artifact, "digest")).toBe(sourceDigest(PLAN));
       expect(Reflect.get(artifact, "admission")).toBe("valid");
+      expect(typeof Reflect.get(artifact, "invocation")).toBe("string");
+      expect(typeof Reflect.get(artifact, "instruction")).toBe("string");
     });
   });
 
@@ -805,6 +872,76 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       expect(two.harness.reviews).toEqual([]);
       expect(two.harness.checked).toEqual([]);
       expect(two.leftover).toEqual([]);
+    });
+  });
+
+  it("PC25: a retained inputs record this version cannot read produces nothing", function* () {
+    yield* useWorkingDirectory(function* () {
+      // Three ways a record stops being one: a member gone, a member added, and
+      // a member of the wrong type. Each is refused with the same fixed
+      // sentence, and none of them produces source or a binding.
+      const cases: [string, (value: Json) => Json][] = [
+        ["a member is missing", (value) => ({ syntax: Object(value).syntax })],
+        [
+          "a member this version does not know was added",
+          (value) => ({ ...Object(value), extra: "surprise" }),
+        ],
+        ["a member has the wrong type", (value) => ({ ...Object(value), instruction: 7 })],
+      ];
+
+      for (const [, replace] of cases) {
+        const run = yield* continued(
+          yield* tampered(yield* approvedRun(), "plan:inputs:", replace),
+        );
+
+        expect(run.failure).toContain("cannot be read as Plan inputs");
+        expect(run.output).not.toContain("got:");
+        expect(run.output).not.toContain("# Say hello");
+        expect(run.emitted).not.toContain("# Say hello");
+      }
+    });
+  });
+
+  it("PC26: a retained artifact this version cannot read produces nothing", function* () {
+    yield* useWorkingDirectory(function* () {
+      const cases: [string, (value: Json) => Json][] = [
+        [
+          "a member is missing",
+          (value) => {
+            const { digest: _digest, ...rest } = Object(value);
+            return rest;
+          },
+        ],
+        [
+          "a member this version does not know was added",
+          (value) => ({ ...Object(value), extra: "surprise" }),
+        ],
+        ["a member has the wrong type", (value) => ({ ...Object(value), source: 7 })],
+        [
+          "the admission is not the one this version accepts",
+          (value) => ({ ...Object(value), admission: "invalid" }),
+        ],
+        [
+          "the digest does not describe the source it sits beside",
+          (value) => ({ ...Object(value), digest: sourceDigest("something else") }),
+        ],
+        [
+          "the record belongs to another invocation",
+          (value) => ({ ...Object(value), invocation: "somebody-else" }),
+        ],
+      ];
+
+      for (const [, replace] of cases) {
+        const run = yield* continued(
+          yield* tampered(yield* approvedRun(), "plan:artifact:", replace),
+        );
+
+        expect(run.failure).toContain("cannot be read as one");
+        // No source reached the document either way it could have.
+        expect(run.output).not.toContain("got:");
+        expect(run.output).not.toContain("# Say hello");
+        expect(run.emitted).not.toContain("# Say hello");
+      }
     });
   });
 

@@ -96,9 +96,18 @@ component does not exist.
 ## The bare form emits the program's source
 
 Written without `as`, `<Plan>` emits the approved program where the component
-appears. The source is bytes rather than prose, so what reaches the run's output
-is what the agent wrote — including a line ending in spaces and a run of blank
-lines that the default output normalization rewrites in ordinary Markdown.
+appears, and what a reader of the run sees is what the agent wrote.
+
+**This host installs no presentation middleware**, so what these two cases prove
+is the raw author-facing path: which form emits, which binds, and that the bytes
+arrive whole. They do not prove that the presentation an ordinary `xmd run`
+installs leaves those bytes alone — nothing here would fail if it did not.
+That discrimination is owned elsewhere, by cases that install the real
+middleware and fail when the bypass is removed: `PC19` in
+`packages/cli/tests/plan-component.test.ts` for whitespace normalization on the
+emitted source, `WN8`/`WN9` in `packages/core/tests/output-normalize.test.ts`
+for the normalizer itself, and `TF6`/`TF7` in
+`packages/core/tests/output-terminal.test.ts` for terminal formatting.
 
 <Test name="a bare Plan emits the exact approved source" timeout="120s">
 <Execution host="run" target="packages/cli/tests/document-suites/plan/emits-plan.md" as="run">
@@ -115,8 +124,8 @@ lines that the default output normalization rewrites in ordinary Markdown.
 <AssertEquals actual={run.result.ok} expected={true} />
 </Execution>
 
-The trailing spaces and the four newlines survived, which is what says these
-bytes were emitted as source rather than presented as prose.
+The trailing spaces and the four newlines arrived intact, which is what says the
+approved bytes reached the document's output whole.
 
 <AssertStringIncludes
   actual={output}

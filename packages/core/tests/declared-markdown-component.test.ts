@@ -1151,6 +1151,55 @@ describe("Tier DM — selection is journaled and replays", () => {
     expect(message).toContain("recorded as the declared Markdown");
   });
 
+  it("DM26b: the record carries the exact-source disposition when the host declares one", function* () {
+    const stream = new InMemoryStream();
+    yield* run("<Policy />\n", [declared(POLICY_SOURCE, { exact: true })], [], stream);
+
+    const selection = (yield* stream.readAll())
+      .filter(isImport)
+      .find((event) => event.type === "yield" && event.description.name === "Policy");
+
+    // Closed: `exact: true` beside the four members an ordinary record has.
+    expect(selection?.type === "yield" && selection.result).toEqual({
+      status: "ok",
+      value: {
+        kind: "declared-markdown",
+        origin: ORIGIN,
+        digest: sourceDigest(POLICY_SOURCE),
+        content: POLICY_SOURCE,
+        exact: true,
+      },
+    });
+  });
+
+  it("DM26c: a continuation that dropped the exact disposition refuses", function* () {
+    const first = new InMemoryStream();
+    yield* run("<Policy />\n", [declared(POLICY_SOURCE, { exact: true })], [], first);
+
+    // The same name, the same origin, the same digest and the same bytes. Only
+    // how they are published changed, which is enough: prose is not what this
+    // run recorded producing.
+    const message = yield* refusal(
+      run("<Policy />\n", [declared(POLICY_SOURCE)], [], yield* continuing(first)),
+    );
+
+    expect(message).toContain("recorded as the declared Markdown");
+  });
+
+  it("DM26d: a continuation that added the exact disposition refuses", function* () {
+    const first = new InMemoryStream();
+    yield* run("<Policy />\n", [declared(POLICY_SOURCE)], [], first);
+
+    // The other direction, which absence has to be compared for rather than
+    // defaulted: a host that started calling these bytes source is answering
+    // differently from the run being continued.
+    const message = yield* refusal(
+      run("<Policy />\n", [declared(POLICY_SOURCE, { exact: true })], [], yield* continuing(first)),
+    );
+
+    expect(message).toContain("recorded as the declared Markdown");
+  });
+
   it("DM27: an ordinary execute() declares nothing and resolves no declared name", function* () {
     const message = yield* refusal(
       scoped(function* () {

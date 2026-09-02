@@ -403,7 +403,7 @@ function planInputs(assembly: PlanComponentAssembly): IdentityComponent {
         // A history is input, so it is parsed rather than trusted.
         const retained = readInputs(frozen);
         if (retained === undefined) {
-          throw new Error(UNREADABLE_INPUTS);
+          throw new StaleInputError(UNREADABLE_INPUTS);
         }
         if (retained.instruction !== instruction) {
           throw new StaleInputError(STALE);
@@ -632,17 +632,37 @@ interface RetainedInputs {
   readonly instruction: string;
 }
 
+/**
+ * The frozen inputs a record holds, read as a closed protocol.
+ *
+ * Exactly two members, both strings. A record missing one, carrying a member
+ * this version does not know, or holding one of the wrong type is a record this
+ * version cannot read — not one to fill in a default for, because every default
+ * here is a guess about what an earlier run actually asked.
+ */
 function readInputs(value: Json): RetainedInputs | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }
   const { syntax, instruction } = value;
+  if (Object.keys(value).length !== 2) {
+    return undefined;
+  }
   if (typeof syntax !== "string" || typeof instruction !== "string") {
     return undefined;
   }
   return { syntax, instruction };
 }
 
+/**
+ * What a record this version cannot read is refused with.
+ *
+ * A `StaleInputError`, like the changed-instruction refusal and for the same
+ * reason: it is raised while the journal still holds entries this run will now
+ * never reach, and an ordinary failure there is replaced by the completion's
+ * divergence report — so the person would read a count of unreached entries
+ * instead of what was actually wrong with their history.
+ */
 const UNREADABLE_INPUTS =
   "the retained Plan inputs cannot be read as Plan inputs, so no Plan source was produced.";
 
@@ -678,12 +698,23 @@ interface PlanArtifact {
   readonly admission: "valid";
 }
 
-/** What a record holds, or nothing when it is not one of these. */
+/**
+ * What a record holds, read as a closed protocol.
+ *
+ * Exactly five members. A record missing one, carrying a sixth this version does
+ * not know, or holding one of the wrong type is refused rather than read
+ * partially: this record is the only thing standing between a continuation and
+ * publishing bytes nobody approved, so a member it cannot account for is a
+ * reason to stop.
+ */
 function readArtifact(value: Json): PlanArtifact | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }
   const { invocation, instruction, source, digest, admission } = value;
+  if (Object.keys(value).length !== 5) {
+    return undefined;
+  }
   if (typeof invocation !== "string" || typeof instruction !== "string") {
     return undefined;
   }
@@ -737,10 +768,10 @@ function admitPlan(
 
         const artifact = readArtifact(retained);
         if (artifact === undefined) {
-          throw new Error(UNREADABLE_ARTIFACT);
+          throw new StaleInputError(UNREADABLE_ARTIFACT);
         }
         if (artifact.invocation !== id || artifact.digest !== sourceDigest(artifact.source)) {
-          throw new Error(UNREADABLE_ARTIFACT);
+          throw new StaleInputError(UNREADABLE_ARTIFACT);
         }
         if (artifact.instruction !== instruction) {
           throw new StaleInputError(STALE);

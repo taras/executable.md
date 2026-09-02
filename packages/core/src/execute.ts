@@ -221,7 +221,22 @@ type DurableSelection =
    * host that no longer declares it, refuses rather than continuing somebody
    * else's policy.
    */
-  | { kind: "declared-markdown"; origin: string; digest: string; content: string }
+  | {
+      kind: "declared-markdown";
+      origin: string;
+      digest: string;
+      content: string;
+      /**
+       * Whether the host declared this component's rendering to be source.
+       *
+       * Closed: present only as `true`, and absent means the ordinary prose
+       * disposition. It is retained because it decides how the bytes this
+       * component produces are published — a continuation that resumed under a
+       * different answer would present a program as prose, or prose as a
+       * program, from the same origin and the same digest.
+       */
+      exact?: true;
+    }
   /**
    * A component only the declaration that carries it may write.
    *
@@ -269,15 +284,28 @@ function readDurableSelection(value: unknown): DurableSelection | undefined {
     const origin = record["origin"];
     const digest = record["digest"];
     const declaredContent = record["content"];
+    // Four members, or five when the optional disposition is present. Anything
+    // else — a member this version does not know, or `exact` written as
+    // anything but `true` — is a record this version cannot read rather than
+    // one it may guess at.
+    const exact = record["exact"];
+    const withExact = Object.hasOwn(record, "exact");
     if (
-      members !== 4 ||
+      members !== (withExact ? 5 : 4) ||
       typeof origin !== "string" ||
       typeof digest !== "string" ||
-      typeof declaredContent !== "string"
+      typeof declaredContent !== "string" ||
+      (withExact && exact !== true)
     ) {
       return undefined;
     }
-    return { kind: "declared-markdown", origin, digest, content: declaredContent };
+    return {
+      kind: "declared-markdown",
+      origin,
+      digest,
+      content: declaredContent,
+      ...(withExact ? { exact: true } : {}),
+    };
   }
 
   const path = record["path"];
@@ -450,6 +478,9 @@ function* durableImportComponent(
             origin: selected.origin,
             digest: selected.digest,
             content: selected.source,
+            // Recorded only when it holds, so an ordinary declaration's record
+            // is exactly what it always was.
+            ...(selected.definition.exact === true ? { exact: true } : {}),
           };
         case "registered":
           return {
@@ -517,11 +548,15 @@ function* durableImportComponent(
 
   if (selection.kind === "declared-markdown") {
     const declaration = declared?.component(name);
+    // The disposition compares like every other term, absence included: a host
+    // that added or removed it is publishing the same bytes a different way,
+    // which is a different answer to the question this run already recorded.
     if (
       declaration === undefined ||
       declaration.origin !== selection.origin ||
       declaration.digest !== selection.digest ||
-      declaration.source !== selection.content
+      declaration.source !== selection.content ||
+      (declaration.definition.exact === true) !== (selection.exact === true)
     ) {
       throw new Error(
         `Component ${name} was recorded as the declared Markdown "${selection.origin}", which is ` +

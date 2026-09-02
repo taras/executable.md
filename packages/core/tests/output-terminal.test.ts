@@ -16,7 +16,7 @@ import { subscribe } from "../src/subscribe.ts";
 /**
  * Helper: install terminal middleware + capture handler, emit text, collect.
  */
-function* collectTerminal(texts: string[]): Operation<string[]> {
+function* collectTerminal(texts: (string | [string, boolean])[]): Operation<string[]> {
   const channel = createChannel<string, void>();
   // First: terminal formatting (outermost)
   yield* useTerminalOutput();
@@ -32,7 +32,11 @@ function* collectTerminal(texts: string[]): Operation<string[]> {
   yield* ready;
 
   for (const text of texts) {
-    yield* DocumentOutput.operations.output(text);
+    if (typeof text === "string") {
+      yield* DocumentOutput.operations.output(text);
+      continue;
+    }
+    yield* DocumentOutput.operations.output(text[0], text[1]);
   }
   yield* channel.close();
 
@@ -89,5 +93,47 @@ describe("Tier TF — Terminal ANSI formatting", () => {
     // marked-terminal strips the ** markers
     expect(captured[0]).not.toContain("**");
     expect(captured[0]).toContain("bold");
+  });
+
+  // TF6: An exact write is source, and source is never rendered
+  it("TF6: exact bytes pass through byte for byte", function* () {
+    // Everything this formatter would otherwise transform: a heading, a fenced
+    // block, emphasis markers, a line ending in spaces, and a run of blank
+    // lines. As a program's source, all of it has to arrive unchanged — a
+    // heading turned into a styled heading is no longer source anybody can run.
+    const exact = [
+      "# Approved program",
+      "",
+      "Writes **evidence** when something runs it.   ",
+      "",
+      "",
+      "",
+      "```markdown",
+      '  <File path="planned.txt">ran</File>',
+      "```",
+      "",
+    ].join("\n");
+
+    const result = yield* collectTerminal([[exact, true]]);
+
+    expect(result).toEqual([exact]);
+    // The emphasis markers inside the source survived, which is the same fact
+    // TF2 proves this formatter removes from prose.
+    expect(result[0]).toContain("**evidence**");
+  });
+
+  // TF7: The bypass is per write, not a switch
+  it("TF7: prose around an exact write is still formatted", function* () {
+    const exact = "keep **these** markers   \n";
+    const result = yield* collectTerminal(["**before**\n", [exact, true], "**after**\n"]);
+
+    // The prose on either side went through marked-terminal as it always has.
+    expect(result[0]).not.toContain("**");
+    expect(result[0]).toContain("before");
+    expect(result[2]).not.toContain("**");
+    expect(result[2]).toContain("after");
+    // The write between them did not: its markers and its trailing spaces are
+    // exactly what was written.
+    expect(result[1]).toBe(exact);
   });
 });
