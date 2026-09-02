@@ -36,7 +36,7 @@ import {
 import { ephemeral } from "./ephemeral.ts";
 import { EarlyReturnDivergenceError, TerminalDivergenceError } from "./errors.ts";
 import { deserializeError, serializeError } from "./serialize.ts";
-import type { Close, Json, Workflow, WorkflowValue } from "./types.ts";
+import type { Close, DurableEffect, Json, Workflow, WorkflowValue } from "./types.ts";
 
 /**
  * Run a child workflow within a spawned scope, setting up its own
@@ -53,13 +53,39 @@ import type { Close, Json, Workflow, WorkflowValue } from "./types.ts";
  * IMPORTANT: This must be called inside a spawn() so it gets its own scope.
  * The caller is responsible for spawn().
  */
+/**
+ * What a spawned region does with a retained `Close(cancelled)`.
+ *
+ * The two answers are not preferences; they follow from who is going to cancel
+ * the child on this run.
+ *
+ * - `"combinator-cancels"` — `durableRace` and `durableAll`. A retained
+ *   cancelled child is a race loser or a fail-fast sibling, and the same
+ *   combinator will cancel it again, so the child reproduces the original run
+ *   by suspending until it does.
+ * - `"resume"` — `durableSpawn`. The caller owns the task, and a retained
+ *   cancelled child under a parent that never completed means the *run* was
+ *   interrupted, not that a combinator chose against this child. Nothing will
+ *   cancel it a second time, so suspending would hang the resumed run forever.
+ *   It continues its own retained history instead and finishes the work it had
+ *   left, writing the Close its second life actually reached.
+ *
+ * The policy belongs to the combinator, not to its caller: it is fixed at each
+ * call site below and there is no way to ask for another one.
+ */
+type CancelledChildPolicy = "combinator-cancels" | "resume";
+
 function* runDurableChild<T extends WorkflowValue>(
   childWorkflow: () => Workflow<T>,
   childId: string,
   parentCtx: DurableContext,
+  cancelledPolicy: CancelledChildPolicy = "combinator-cancels",
 ): Operation<T> {
   const { replayIndex, stream } = parentCtx;
   replayIndex.claim(childId);
+  // Set when this run continued a retained cancelled child, so its teardown
+  // writes the Close it reached rather than leaving the stale cancelled one.
+  let resumedFromCancelled = false;
 
   // Short-circuit: child already completed in a previous run.
   // NOTE: Replay guard validation is not bypassed here — the check phase
@@ -73,22 +99,22 @@ function* runDurableChild<T extends WorkflowValue>(
       return closeEvent.result.value as T;
     } else if (closeEvent.result.status === "err") {
       throw deserializeError(closeEvent.result.error);
-    } else {
-      // cancelled — this child was cancelled in a previous run (e.g.,
-      // a race loser). Instead of throwing, we suspend forever. The
-      // parent combinator (race/all) will cancel this child as part of
-      // normal structured concurrency teardown, just like the original
-      // run. The Close(cancelled) event already exists in the journal,
-      // so we skip re-emitting it (the ensure teardown checks for this).
-      //
-      // INVARIANT: This branch is only reachable when a parent combinator
-      // (durableRace or durableAll with a failed sibling) will cancel this
-      // child. Close(cancelled) in the journal means the child was
-      // previously cancelled by structured concurrency, so on replay the
-      // same combinator will cancel it again. This cannot deadlock.
+    } else if (cancelledPolicy === "combinator-cancels") {
+      // A race loser, or a sibling `all` cancelled when another failed. The
+      // same combinator cancels it again on this run, so reproducing the
+      // original execution means blocking until it does — in the live run this
+      // child never threw, it simply stopped. The Close(cancelled) event
+      // already exists, so the teardown below skips re-emitting it.
       yield* suspend();
       // unreachable — suspend blocks until cancelled
       return undefined as T;
+    } else {
+      // A spawned region whose run was interrupted. Nobody is going to cancel
+      // this child a second time, so suspending would hang the resumed run.
+      // Forget the retained close — its yields stay replayable, so the child
+      // continues its own history — and fall through to run the rest.
+      resumedFromCancelled = true;
+      replayIndex.reopen(childId);
     }
   }
 
@@ -137,8 +163,10 @@ function* runDurableChild<T extends WorkflowValue>(
     }
 
     // Don't re-emit a Close event if one already exists in the journal
-    // (e.g., a cancelled child being replayed via suspend()).
-    if (!replayIndex.hasClose(childId)) {
+    // (e.g., a cancelled child being replayed via suspend()). A child that
+    // resumed from a retained cancelled Close is the exception: the record it
+    // reached this time is the one that describes the work that actually ran.
+    if (resumedFromCancelled || !replayIndex.hasClose(childId)) {
       yield* appendDurableEvent(childCtx, closeEvent);
     }
   });
@@ -209,33 +237,63 @@ function* runDurableChild<T extends WorkflowValue>(
 }
 
 /**
- * Spawn a durable child workflow.
+ * Spawn a durable child workflow, and hand its task back to the caller.
  *
- * Assigns a deterministic coroutine ID (parentId.N), sets up DurableContext
- * on the child scope, and ensures Close events are emitted.
+ * Assigns a deterministic coroutine ID (`parentId.N`) in call order, sets up
+ * DurableContext on the child scope, and ensures a Close event is emitted.
  *
- * Returns a Task<T> that can be yield*-ed to get the child's result.
+ * **The task outlives this call.** It is started in the *routine's* own scope
+ * rather than inside the effect that returns it, so the caller can await it,
+ * cancel it, or leave it running beside other work. Spawning it through
+ * `ephemeral()` instead — as this once did — put it in a scope that closed as
+ * soon as the effect resolved, so every `yield* task` threw `halted`.
  *
- * Returns Workflow<Task<T>> via ephemeral() — the infrastructure effects
- * (useScope, spawn) are durable-safe scope setup that doesn't need
- * journaling and re-runs correctly on replay.
+ * A retained `Close(cancelled)` here means the run was interrupted, not that a
+ * combinator chose against this child, so the child resumes its remaining work.
+ * See `CancelledChildPolicy`.
  */
 export function durableSpawn<T extends WorkflowValue>(
   childWorkflow: () => Workflow<T>,
 ): Workflow<Task<T>> {
-  return ephemeral(
-    (function* (): Operation<Task<T>> {
-      const scope = yield* useScope();
-      const ctx = scope.expect<DurableContext>(DurableContext);
+  return (function* (): Workflow<Task<T>> {
+    // Reading the context and allocating the child id is ordinary scope setup:
+    // no journal entry, and it re-runs identically on replay. Allocation is
+    // synchronous and in call order, so ids follow the order children are
+    // asked for rather than the order they are scheduled.
+    const ctx = yield* ephemeral(readDurableContext());
+    const childIndex = ctx.childCounter++;
+    const childId = `${ctx.coroutineId}.${childIndex}`;
+    return (yield createSpawnEffect(() =>
+      runDurableChild(childWorkflow, childId, ctx, "resume"),
+    )) as Task<T>;
+  })();
+}
 
-      // Assign deterministic child ID
-      const childIndex = ctx.childCounter++;
-      const childId = `${ctx.coroutineId}.${childIndex}`;
+function* readDurableContext(): Operation<DurableContext> {
+  const scope = yield* useScope();
+  return scope.expect<DurableContext>(DurableContext);
+}
 
-      // Spawn the child with durable wrapping
-      return yield* spawn(() => runDurableChild(childWorkflow, childId, ctx));
-    })(),
-  );
+/**
+ * Start `child` in the routine's own scope and resolve with its task.
+ *
+ * The routine's scope is the workflow's, so the task lives for as long as the
+ * workflow does — that is the whole repair. Nothing is journaled: the child
+ * writes its own entries under its own coroutine id.
+ *
+ * A child that fails fails the workflow that spawned it, exactly as an ordinary
+ * Effection `spawn` does. What replay must not do is reach the child's body
+ * again to discover that.
+ */
+function createSpawnEffect<T>(child: () => Operation<T>): DurableEffect<Task<T>> {
+  return {
+    description: "durable-spawn",
+    effectDescription: { type: "ephemeral", name: "durable-spawn" },
+    enter(resolve, routine) {
+      resolve({ ok: true, value: routine.scope.run(child) });
+      return (exit) => exit({ ok: true, value: undefined as undefined });
+    },
+  };
 }
 
 /**
