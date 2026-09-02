@@ -23,7 +23,7 @@ import { ensure, scoped, spawn, until } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { readdir } from "node:fs/promises";
-import { join, sep } from "node:path";
+import { join, relative, sep } from "node:path";
 import { API, stat } from "@executablemd/runtime";
 import { Elicitation } from "@executablemd/core";
 import type { ElicitationRequest } from "@executablemd/core";
@@ -419,9 +419,11 @@ describe(
         expect(namedDirectories[0]).toBe(namedDirectories[1]);
         expect(survived).toEqual([true, true]);
         // The name never reaches the path, and the digest is what the host
-        // derived from it.
+        // derived from it. Only the leaf is the host's to keep the name out of:
+        // the root above it carries a random hex UUID, which spells "ada" one
+        // run in a hundred or so.
         expect(namedDirectories[0]).toBe(authorshipDirectoryFor(authorshipRoot, "ada"));
-        expect(namedDirectories[0]).not.toContain("ada");
+        expect(relative(authorshipRoot, namedDirectories[0])).not.toContain("ada");
 
         // The second invocation continued the record the first established
         // rather than placing a second one: the store holds one, and only the
