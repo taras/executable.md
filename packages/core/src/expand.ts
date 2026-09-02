@@ -68,6 +68,9 @@ import {
 import type { StructuralViolation, SwitchCase, TerminalPane } from "./structural-rules.ts";
 import { terminalGridLayout } from "./terminal-grid.ts";
 import type { PlacedPane } from "./terminal-grid.ts";
+import { runTerminalGrid } from "./terminal/grid.ts";
+import type { PaneWork } from "./terminal/grid.ts";
+import { usePaneTerminal } from "./terminal/pane.ts";
 import {
   asBindingViolation,
   asExpressionViolation,
@@ -139,7 +142,7 @@ import {
 import { remark } from "remark";
 import { select as cssSelect } from "unist-util-select";
 import { toString as mdastToString } from "mdast-util-to-string";
-import { liveEnvironment } from "./live-env.ts";
+import { derivedEnvironment, liveEnvironment } from "./live-env.ts";
 import { TestHarnessComponentDefinition } from "./test-harness.ts";
 import type { TestHarnessBinding } from "./test-harness.ts";
 
@@ -1181,7 +1184,15 @@ function* expandListSegments(
         if (segment.name === "Terminal.Grid") {
           // No raise() here, like the branches above: expandTerminalGrid
           // reports every error it creates.
-          yield* expandTerminalGrid(segment, result);
+          yield* expandTerminalGrid(segment, result, {
+            parentMeta,
+            parentProps,
+            hideSet,
+            counter,
+            path: elementPath,
+            checkedFailures,
+            authority,
+          });
           break;
         }
 
@@ -2102,7 +2113,22 @@ function* resolveStructuralProp(
  * does, which is what makes the refusal a closed one rather than a partial grid
  * left behind.
  */
-function* expandTerminalGrid(segment: ComponentElement, owner: Segment[]): Operation<void> {
+/** Everything a pane's own content needs to expand where the grid was written. */
+interface GridSite {
+  readonly parentMeta: Record<string, unknown>;
+  readonly parentProps: Record<string, Json>;
+  readonly hideSet: Set<string>;
+  readonly counter: BlockCounter;
+  readonly path: string;
+  readonly checkedFailures: CheckedFailures | undefined;
+  readonly authority: ExpansionAuthority | undefined;
+}
+
+function* expandTerminalGrid(
+  segment: ComponentElement,
+  owner: Segment[],
+  site: GridSite,
+): Operation<void> {
   const structure = terminalGridStructure(segment);
   if (structure.violations.length > 0) {
     for (const violation of structure.violations) {
@@ -2137,23 +2163,105 @@ function* expandTerminalGrid(segment: ComponentElement, owner: Segment[]): Opera
   }
 
   const layout = terminalGridLayout(columns.value, placed);
-  owner.push(
-    yield* raise({
-      type: "error",
-      message: positioned(noTerminalProviderMessage(), segment),
-      source: "Terminal.Grid",
-      // The grid the author asked for, carried beside the sentence so an
-      // assertion is about the layout that was derived rather than about the
-      // wording of a refusal.
-      cause: {
-        layout: {
-          columns: layout.columns,
-          rows: layout.rows,
-          cells: layout.cells.map((cell) => ({ ...cell })),
-        },
-      },
-    }),
+  // The grid renders nothing into the document: what a pane shows belongs to
+  // that pane, and the sibling after `</Terminal.Grid>` renders to the root
+  // again only once the provider has restored it.
+  const work = structure.panes.map((pane, index) =>
+    paneWork(pane, layout.cells[index]!.title, site, segment),
   );
+
+  try {
+    const result = yield* runTerminalGrid(layout, work);
+    if (result.failure !== undefined) {
+      owner.push(yield* raise(terminalGridError(segment, result.failure.message)));
+    }
+  } catch (error) {
+    owner.push(
+      yield* raise(
+        terminalGridError(segment, error instanceof Error ? error.message : String(error)),
+      ),
+    );
+  }
+}
+
+/**
+ * What one authored pane does once the grid has minted its claim.
+ *
+ * A self-closing pane runs the host's default shell through its claim. A paired
+ * pane expands its own content in a scope of its own: it inherits the bindings,
+ * providers, configuration and working directory visible where the grid was
+ * written, and everything it creates afterwards stays inside the pane. Its
+ * `<Break>` cannot reach a loop outside the grid, its `<Return>` cannot claim an
+ * enclosing body, and a checked failure settles the pane rather than poisoning
+ * the root or a sibling.
+ */
+function paneWork(
+  pane: TerminalPane,
+  title: string,
+  site: GridSite,
+  grid: ComponentElement,
+): PaneWork {
+  if (pane.form === "self-closing") {
+    return {
+      ordinal: pane.ordinal,
+      *run(claim, composite) {
+        const outcome = yield* claim.admit(() =>
+          composite.shell(pane.ordinal, () => claim.ready()),
+        );
+        if (outcome.signal !== undefined) {
+          throw new Error(`pane ${pane.ordinal} ("${title}") shell ended on ${outcome.signal}`);
+        }
+        if (outcome.exitCode !== undefined && outcome.exitCode !== 0) {
+          throw new Error(
+            `pane ${pane.ordinal} ("${title}") shell exited with status ${outcome.exitCode}`,
+          );
+        }
+      },
+    };
+  }
+
+  return {
+    ordinal: pane.ordinal,
+    *run(claim, composite) {
+      yield* scoped(function* () {
+        // A pane is not inside the loop the grid was written in, so a <Break>
+        // in its content has no loop to exit and says so.
+        yield* ActiveLoop.set(undefined);
+        yield* usePaneTerminal(claim);
+        const siteEnv = yield* env;
+        // Starts from what the grid site can see and keeps its own writes: a
+        // binding this pane makes is visible to later work in this pane and to
+        // nothing else.
+        yield* provideEnv(derivedEnvironment(siteEnv, { ...(siteEnv?.values ?? {}) }));
+
+        const shown: Segment[] = [];
+        yield* expandSegmentsWithin(
+          pane.element.children,
+          site.parentMeta,
+          site.parentProps,
+          site.hideSet,
+          site.counter,
+          shown,
+          extendPath(
+            site.path,
+            elementFrame(pane.element.name, elementSite(pane.element.position, pane.index)),
+          ),
+          0,
+          // The pane's own ledger: a checked failure settles this pane and
+          // cannot reach the root or a sibling.
+          containedLedger(site.checkedFailures),
+          site.authority,
+          // No enclosing value body: a <Return> written in a pane cannot claim
+          // one outside the grid.
+          undefined,
+        );
+        const text = renderSegments(shown);
+        if (text.length > 0) {
+          yield* composite.display(pane.ordinal, text);
+        }
+      });
+    },
+  };
 }
 
 /** The label one pane displays, from the value its own `title` prop produced. */
@@ -2166,15 +2274,6 @@ function* resolvePaneTitle(pane: TerminalPane): Operation<Result<string>> {
     return Err(new Error(terminalTitleMissingMessage()));
   }
   return terminalTitle(value.value);
-}
-
-/** What a complete grid says on a host where nothing can open one. */
-function noTerminalProviderMessage(): string {
-  return (
-    "no terminal provider opened this grid. A host installs the terminal-grid capability " +
-    "explicitly, and this one installs none, so no pane expanded its content and no default " +
-    "shell started."
-  );
 }
 
 function loopError(segment: ComponentElement, message: string): ErrorSegment {
