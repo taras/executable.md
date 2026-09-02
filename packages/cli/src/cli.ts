@@ -72,7 +72,7 @@ import {
   useTerminalOutput,
 } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
-import type { ExecutionInstallation } from "@executablemd/core/host";
+import type { DeclaredMarkdownComponent, ExecutionInstallation } from "@executablemd/core/host";
 import type {
   DocumentTargetInfo,
   FileRootDocument,
@@ -96,6 +96,7 @@ import { timebox } from "@effectionx/timebox";
 import { timeout as runTimeout } from "@executablemd/runtime";
 import { installRunAgentStack, resolveAgentStack } from "./agent-stack.ts";
 import { planComponentDeclaration } from "./plan-component.ts";
+import { planAuthorshipCeiling } from "./authorship-profile.ts";
 import { VERBOSE_REGISTRATION } from "./verbose-component.ts";
 import type { AgentStack } from "./agent-stack.ts";
 import { reportFailure } from "./report.ts";
@@ -132,6 +133,7 @@ import { componentSearchPath, resolveTestTarget } from "./test-target.ts";
 import { renderSyntaxJson, renderSyntaxMarkdown, syntaxCatalog } from "./syntax.ts";
 import { deliverWhole } from "./stdout-delivery.ts";
 import { testingExecutionHost } from "./testing-host.ts";
+import type { ChildPlanDeclaration } from "./testing-host.ts";
 import { unsupportedRepositories } from "./run-repositories.ts";
 import type { RepositoryInstaller } from "./run-repositories.ts";
 import { EVAL_ALIAS, EVAL_OPTION, evalGrammarError, readEvalFlags } from "./eval-source.ts";
@@ -954,22 +956,40 @@ function* runDocument(
   // declares the Component, so a document that writes `<Plan>` there resolves the
   // same protected bytes and is refused at the ceiling rather than told the
   // component does not exist.
-  const plan = yield* planComponentDeclaration({
-    surface: "component",
-    includes: include,
-    ...(mode.agent === undefined ? {} : { stack: mode.agent }),
-    ...(mode.machineSessions === undefined ? {} : { sessions: mode.machineSessions }),
-    ...(mode.planAuthorshipRoot === undefined ? {} : { authorshipRoot: mode.planAuthorshipRoot }),
-    // Captured before the document exists, so the two acts that are this host's
-    // — putting this build's adapter on disk, and opening the review form — run
-    // outside the ceiling the Component installs around itself.
+  //
+  // A factory rather than a value, because a nested `<Execution host="run">`
+  // learns what ceiling it can establish only after its own configuration has
+  // been read — and a declaration built out here would have closed over the
+  // absence of one before that child existed. Each caller supplies the ceiling
+  // it settled, the authorship root it owns and the scope its host acts run in;
+  // everything else about the Component is this entrypoint's and identical for
+  // all of them.
+  const planDeclaration = (request: ChildPlanDeclaration): Operation<DeclaredMarkdownComponent> =>
+    planComponentDeclaration({
+      surface: "component",
+      includes: include,
+      ceiling: request.ceiling,
+      ...(mode.machineSessions === undefined ? {} : { sessions: mode.machineSessions }),
+      ...(request.authorshipRoot !== undefined
+        ? { authorshipRoot: request.authorshipRoot }
+        : mode.planAuthorshipRoot === undefined
+          ? {}
+          : { authorshipRoot: mode.planAuthorshipRoot }),
+      // Captured before the document exists, so the two acts that are this
+      // host's — putting this build's adapter on disk, and opening the review
+      // form — run outside the ceiling the Component installs around itself.
+      host: request.host,
+      installElicitation: installWebElicitation,
+      // Rendered when a `<Plan>` first asks, not before: an ordinary run that
+      // writes none never builds a catalog it has no reader for.
+      *catalog() {
+        return renderSyntaxMarkdown(yield* syntaxCatalog(include));
+      },
+    });
+
+  const plan = yield* planDeclaration({
+    ceiling: planAuthorshipCeiling(mode.agent),
     host: yield* useScope(),
-    installElicitation: installWebElicitation,
-    // Rendered when a `<Plan>` first asks, not before: an ordinary run that
-    // writes none never builds a catalog it has no reader for.
-    *catalog() {
-      return renderSyntaxMarkdown(yield* syntaxCatalog(include));
-    },
   });
 
   // Wire --verbose observability via Signal.
@@ -1062,7 +1082,7 @@ function* runDocument(
     // invocation identity, its own leases and its own Push evidence.
     installRepositories: childRepositories,
     testAgentWorker: yield* readWorkerCommand(),
-    plan,
+    planDeclaration,
   });
 
   // One authoritative execution, and only one. What a host attaches travels as

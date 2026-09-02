@@ -55,15 +55,14 @@ import type {
   IdentityComponent,
 } from "@executablemd/core/host";
 import type { DocumentValidation } from "@executablemd/core";
-import type { AcpxProviderDependencies } from "@executablemd/acp";
 import type { ComponentInvocation } from "@executablemd/core";
 
-import type { AgentStack } from "./agent-stack.ts";
 import {
   DEFAULT_AUTHORSHIP_ROOT,
   installAuthorshipFrame,
   useSessionDirectory,
 } from "./authorship-profile.ts";
+import type { PlanAuthorshipCeiling } from "./authorship-profile.ts";
 import type { CandidateAssessment } from "./authorship-profile.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import { PLAN_DOCUMENT, readPackagedDocument } from "./packaged-document.ts";
@@ -108,19 +107,21 @@ export interface PlanComponentAssembly {
   /** The component search path a Plan's own components resolve against. */
   readonly includes: readonly string[];
   /**
-   * The one Agent configuration this invocation settled, when it settled one.
+   * Whether this host can put an Agent under the Plan ceiling, and why not.
    *
-   * Absent is a host that has no run stack — `xmd test` drives agents through
-   * the deterministic TestAgent stack — and it is not a reason to withhold the
-   * Component. A document that writes `<Plan>` there resolves the same protected
-   * bytes and is refused at the ceiling, before any placement, rather than told
-   * the component does not exist.
+   * A host that establishes none — `xmd test` at its own root, or an
+   * unconfigured run child — still declares the Component. A document that
+   * writes `<Plan>` there resolves the same protected bytes and is refused at
+   * the ceiling, before any placement, rather than told the component does not
+   * exist.
+   *
+   * The capability is a closure the host supplied before this declaration
+   * existed. No prop, binding, registration, middleware answer or separately
+   * loaded copy can supply or replace one.
    */
-  readonly stack?: AgentStack;
+  readonly ceiling: PlanAuthorshipCeiling;
   /** What this host states about machine-wide agent sessions, if anything. */
   readonly sessions?: MachineSessionAssembly;
-  /** What the constrained provider is built on, beyond the host's assembly. */
-  readonly acp?: AcpxProviderDependencies;
   /**
    * Where this host keeps its authorship session directories.
    *
@@ -427,18 +428,9 @@ function planAuthorship(assembly: PlanComponentAssembly): IdentityComponent {
         // cannot establish this ceiling refuses rather than writing a Plan under
         // a weaker one, and broader authority in the calling document cannot
         // widen it.
-        const stack = assembly.stack;
-        if (stack === undefined) {
-          throw new Error(
-            "this host establishes no coding-agent ceiling, so no Plan can be written here — " +
-              "no Plan was returned",
-          );
-        }
-        if (stack.provider !== "acpx") {
-          throw new Error(
-            `the ${stack.provider} provider cannot establish the Plan authorship ceiling — ` +
-              "no Plan was returned",
-          );
+        const ceiling = assembly.ceiling;
+        if (!ceiling.established) {
+          throw new Error(ceiling.refusal);
         }
 
         const session = String(props.session);
@@ -457,8 +449,7 @@ function planAuthorship(assembly: PlanComponentAssembly): IdentityComponent {
 
         yield* installAuthorshipFrame({
           workdir: established.value,
-          stack,
-          ...(assembly.acp === undefined ? {} : { acp: assembly.acp }),
+          authorship: ceiling.authorship,
           host: assembly.host,
           installElicitation: assembly.installElicitation,
         });

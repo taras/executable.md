@@ -28,6 +28,7 @@ import { syntaxCatalog } from "../../src/syntax.ts";
 import { planComponentDeclaration } from "../../src/plan-component.ts";
 import type { PlanSurface } from "../../src/plan-component.ts";
 import type { CandidateAssessment } from "../../src/authorship-profile.ts";
+import { planAuthorshipCeiling } from "../../src/authorship-profile.ts";
 import type { AgentStack } from "../../src/agent-stack.ts";
 import type { DeclaredMarkdownComponent } from "@executablemd/core/host";
 import type { PlanDependencies, PlanExecution } from "../../src/plan.ts";
@@ -295,21 +296,24 @@ export function* planDeclarationHarness(options: {
   const declaration = yield* planComponentDeclaration({
     surface: options.surface,
     includes: options.includes ?? [],
-    ...(options.stack === null
-      ? {}
-      : {
-          stack: options.stack ?? {
+    // The production ceiling, built from the stack a case states and this
+    // harness's own ACPX seams. `stack: null` is a host that settled none, which
+    // is what `xmd test` at its own root and an unconfigured run child are.
+    ceiling: planAuthorshipCeiling(
+      options.stack === null
+        ? undefined
+        : (options.stack ?? {
             provider: "acpx",
             defaultAgent: AGENT,
             permissionMode: "deny-all",
             adapters: ADAPTERS,
-          },
-        }),
-    acp: {
-      createRuntime: fake.create,
-      sessionStore: options.store ?? makeStore(),
-      agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
-    },
+          }),
+      {
+        createRuntime: fake.create,
+        sessionStore: options.store ?? makeStore(),
+        agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
+      },
+    ),
     authorshipRoot: options.authorshipRoot,
     ...(options.session === undefined ? {} : { session: options.session }),
     ...(options.explicitSession === undefined ? {} : { explicitSession: options.explicitSession }),

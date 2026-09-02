@@ -504,9 +504,9 @@ describe("deterministic dependencies declared for a nested run", () => {
       installService: function* (): Operation<void> {},
       installRepositories: unsupportedRepositories,
       testAgentWorker: Err(new Error("xmd command not installed")),
-      // The run profile's own Component travels to every child, and this case is
-      // about the relaunch it cannot perform rather than about `<Plan>`.
-      plan: yield* planComponentDescription(),
+      // The run profile's own Component is built for every child, and this case
+      // is about the relaunch it cannot perform rather than about `<Plan>`.
+      planDeclaration: () => planComponentDescription(),
     });
     const refusal = yield* scoped(function* () {
       try {

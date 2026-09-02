@@ -106,10 +106,8 @@ export interface AuthorshipProfile {
    * test never reads, creates or removes anything under a real one.
    */
   root: string;
-  /** The one Agent configuration this invocation settled. */
-  stack: AgentStack;
-  /** What the constrained provider is built on, beyond the host's assembly. */
-  acp?: AcpxProviderDependencies;
+  /** Whether this host can put an Agent under the Plan ceiling, and why not. */
+  ceiling: PlanAuthorshipCeiling;
   /** Who answers the review question. */
   installElicitation(): Operation<void>;
   /**
@@ -138,6 +136,93 @@ export interface AuthorshipCeilingInputs {
   readonly acp?: AcpxProviderDependencies;
 }
 
+/**
+ * The trusted host's ability to put an Agent under the Plan ceiling.
+ *
+ * A closure the host supplies before any Plan invocation exists, and the only
+ * thing that decides whether a Plan can be written here. It is never a prop, a
+ * Context value, a registration result or anything a document, component or
+ * middleware can reach or replace — which is what keeps "who may write a Plan"
+ * a question about the host rather than about what a document arranged.
+ *
+ * What it does not decide is the rest of the ceiling. The permission mode, the
+ * prompt-failure policy, the capability refusals and the session directory are
+ * {@link installAuthorshipFrame}'s, identically for every provider, so a second
+ * implementation cannot quietly bring a weaker ceiling with it.
+ */
+export interface PlanAuthorship {
+  /** The agent this Plan conversation defaults to. */
+  readonly defaultAgent: string;
+  /**
+   * Install this invocation's Agent provider, inside the Plan ceiling.
+   *
+   * Called within `<PlanAuthorship>`, so what it registers belongs to that one
+   * invocation and goes when the invocation does.
+   *
+   * @param workdir This conversation's directory, established and proven empty.
+   * @param host The scope captured before the ceiling existed, for host acts.
+   */
+  installProvider(workdir: string, host: Scope): Operation<void>;
+}
+
+/**
+ * Whether this host can put an Agent under the Plan ceiling, and why not.
+ *
+ * One value rather than an absent capability beside a reason, because the two
+ * must agree: a host that cannot establish the ceiling owes the person a
+ * sentence saying so, and a host that can owes no sentence at all.
+ */
+export type PlanAuthorshipCeiling =
+  | { readonly established: true; readonly authorship: PlanAuthorship }
+  | { readonly established: false; readonly refusal: string };
+
+/** What a host with no coding-agent ceiling at all refuses a Plan with. */
+export const NO_CEILING =
+  "this host establishes no coding-agent ceiling, so no Plan can be written here — " +
+  "no Plan was returned";
+
+/**
+ * The production ceiling: ACPX, built from the Agent stack this run settled.
+ *
+ * One concrete provider of {@link PlanAuthorship}, and the only one production
+ * has. Its ACPX construction, embedded adapters, machine-session assembly,
+ * system instruction, strict permission policy, empty MCP servers, empty
+ * allowed tools and controlled working directory are exactly what they were
+ * when this was the only way to establish a ceiling.
+ */
+export function planAuthorshipCeiling(
+  stack: AgentStack | undefined,
+  acp?: AcpxProviderDependencies,
+): PlanAuthorshipCeiling {
+  if (stack === undefined) {
+    return { established: false, refusal: NO_CEILING };
+  }
+  if (stack.provider !== "acpx") {
+    return {
+      established: false,
+      refusal:
+        `the ${stack.provider} provider cannot establish the Plan authorship ceiling — ` +
+        "no Plan was returned",
+    };
+  }
+  return {
+    established: true,
+    authorship: {
+      defaultAgent: stack.defaultAgent,
+      *installProvider(workdir: string, host: Scope): Operation<void> {
+        const acpx = createAcpxProvider(
+          authorshipCeiling({ stack, ...(acp === undefined ? {} : { acp }) }, workdir, host),
+        );
+        yield* registerAgentProvider("acpx", acpx);
+        yield* installInvocationAgentProvider("acpx", {
+          defaultAgent: stack.defaultAgent,
+          permissionMode: AUTHORSHIP_PERMISSION_MODE,
+        });
+      },
+    },
+  };
+}
+
 /** What claiming one conversation's directory needs, and nothing more. */
 export interface AuthorshipPlacement {
   /** Where this host keeps its authorship session directories. */
@@ -149,11 +234,13 @@ export interface AuthorshipPlacement {
 }
 
 /** Everything the constrained authorship frame is built from. */
-export interface AuthorshipFrame extends AuthorshipCeilingInputs {
+export interface AuthorshipFrame {
   /** This conversation's directory, already established and proven empty. */
   readonly workdir: string;
   /** The scope the two host acts run in, captured before this frame exists. */
   readonly host: Scope;
+  /** The host's ability to put an Agent under this ceiling. */
+  readonly authorship: PlanAuthorship;
   installElicitation(): Operation<void>;
 }
 
@@ -175,19 +262,17 @@ export function* installAuthorshipFrame(frame: AuthorshipFrame): Operation<void>
   yield* openFormsThroughHost(frame.host);
   yield* frame.installElicitation();
 
-  // Registered here, so the name resolves to *this* ceiling and not to whatever
-  // the enclosing document registered under it, and installed in this
-  // invocation rather than in a frame nested inside it — the content this
-  // ceiling was selected for is projected into the invocation, and a provider
-  // installed anywhere else would be invisible to it. The default agent and the
-  // permission mode travel with the installation, so an enclosing document
-  // cannot widen either by inheritance.
-  const acpx = createAcpxProvider(authorshipCeiling(frame, frame.workdir, frame.host));
-  yield* registerAgentProvider("acpx", acpx);
-  yield* installInvocationAgentProvider("acpx", {
-    defaultAgent: frame.stack.defaultAgent,
-    permissionMode: AUTHORSHIP_PERMISSION_MODE,
-  });
+  // Installed here, so the provider resolves to *this* ceiling and not to
+  // whatever the enclosing document registered, and in this invocation rather
+  // than in a frame nested inside it — the content this ceiling was selected for
+  // is projected into the invocation, and a provider installed anywhere else
+  // would be invisible to it. The default agent and the permission mode travel
+  // with the installation, so an enclosing document cannot widen either by
+  // inheritance.
+  //
+  // Which provider it is belongs to the host that supplied the capability. What
+  // does not is everything below: one ceiling, whoever is underneath it.
+  yield* frame.authorship.installProvider(frame.workdir, frame.host);
   // A candidate comes from a turn's complete successful close value or from
   // nowhere. `<Prompt>` ordinarily renders whatever a failed turn managed to
   // emit and carries on, which for a workflow that reviews source would mean
@@ -212,13 +297,9 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
   // Before a directory exists, before a provider exists, and therefore before
   // any session could be placed or any turn started. A host that cannot
   // establish this ceiling refuses rather than writing a Plan under a weaker one.
-  if (profile.stack.provider !== "acpx") {
-    return Err(
-      new Error(
-        `the ${profile.stack.provider} provider cannot establish the authorship profile's ` +
-          "ceiling — nothing was written or run",
-      ),
-    );
+  const ceiling = profile.ceiling;
+  if (!ceiling.established) {
+    return Err(new Error(`${ceiling.refusal} — nothing was written or run`));
   }
 
   return yield* scoped(function* (): Operation<Result<string>> {
@@ -227,7 +308,7 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
     // its own content, and a root provider here would be one the Component's
     // regional install had to shadow rather than one it owns.
     yield* installAgentComponents({
-      defaultAgent: profile.stack.defaultAgent,
+      defaultAgent: ceiling.authorship.defaultAgent,
       permissionMode: AUTHORSHIP_PERMISSION_MODE,
     });
     const source = yield* readPackagedDocument(PLAN_COMMAND_DOCUMENT);

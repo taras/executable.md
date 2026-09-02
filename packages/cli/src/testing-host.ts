@@ -28,17 +28,29 @@ import type { DurableEvent } from "@executablemd/durable-streams";
 import { forEach } from "@effectionx/stream-helpers";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { installWebElicitation } from "@executablemd/web";
-import type { Operation, Result } from "effection";
+import { ensure, until, useScope } from "effection";
+import type { Operation, Result, Scope } from "effection";
 import {
   agentIdentityComponents,
   fileSource,
   inlineSource,
   installAgentComponents,
+  registerAgentProvider,
 } from "@executablemd/core";
-import type { RootDocumentSource } from "@executablemd/core";
-import { executeInstalled, installAnswerProvider } from "@executablemd/core/host";
+import type { AgentComponentsOptions, RootDocumentSource } from "@executablemd/core";
+import {
+  executeInstalled,
+  installAnswerProvider,
+  installInvocationAgentProvider,
+} from "@executablemd/core/host";
+import { mkdir, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { NO_CEILING } from "./authorship-profile.ts";
+import type { PlanAuthorshipCeiling } from "./authorship-profile.ts";
 import type { ExecutionInstallation } from "@executablemd/core/host";
-import { installChildTestAgent } from "@executablemd/test-agent";
+import { installChildTestAgent, TEST_AGENT_PROVIDER } from "@executablemd/test-agent";
 import type {
   AnswersChildConfiguration,
   ChildInvocation,
@@ -51,21 +63,35 @@ import { installDocumentComponents } from "./cli.ts";
 import type { HostServiceInstaller } from "./cli.ts";
 import type { RepositoryInstaller } from "./run-repositories.ts";
 
+/** What one child asks the entrypoint to build its `<Plan>` declaration from. */
+export interface ChildPlanDeclaration {
+  /** Whether this child can put an Agent under the Plan ceiling, and why not. */
+  readonly ceiling: PlanAuthorshipCeiling;
+  /** The authorship root the host made for this child, when it made one. */
+  readonly authorshipRoot?: string;
+  /** The scope this child's own host acts run in. */
+  readonly host: Scope;
+}
+
 /** What the entrypoint already decided, and a child must not decide again. */
 export interface TestingHostSettings {
   /** The component search path this run resolves names through. */
   readonly includes: string[];
   /**
-   * The packaged `<Plan>` Component this run profile declares.
+   * How this run profile builds a `<Plan>` declaration for one execution.
    *
    * A child of the run profile writes `<Plan>` and means what a `<Plan>` in the
-   * parent means, so the declaration crosses as the value the parent built
-   * rather than being rebuilt here from state a child cannot see. It crosses
-   * even from an entrypoint that settled no Agent stack: the child is the
-   * production run profile whatever launched it, and a `<Plan>` there is refused
-   * at the ceiling rather than reported as a component nothing supplies.
+   * parent means, so the Component, its origin, its digest and its private
+   * closure come from the entrypoint rather than from state a child could
+   * reach. What the child supplies is the part only the child knows: the
+   * ceiling its own configuration established, the authorship root the host
+   * made for it, and its own scope.
+   *
+   * A declaration built once out there and shared would close over the absence
+   * of a ceiling before any child configuration had been read, which is exactly
+   * why a configured child could not write a Plan.
    */
-  readonly plan: DeclaredMarkdownComponent;
+  readonly planDeclaration: (request: ChildPlanDeclaration) => Operation<DeclaredMarkdownComponent>;
   /** Whether durable events are scanned for credentials before they persist. */
   readonly secretDetection: boolean;
   /** The native service adapter this entrypoint supplies. */
@@ -151,6 +177,65 @@ function selectConfiguration(request: HostProfileRequest): {
   return { testAgent, answers };
 }
 
+/**
+ * The Plan ceiling a configured child establishes: the controlled provider it
+ * was already given, installed again for the Plan invocation that asks.
+ *
+ * Installed *inside* `<PlanAuthorship>` rather than inherited from what the
+ * child registered around itself, so the Plan conversation gets the deny-all
+ * permission mode, the prompt-failure policy and the capability refusals that
+ * every Plan gets, whichever provider is underneath. The provider is the
+ * child's own partition, which is what lets a `<TestAgent.Scenario>` address the
+ * Plan's session by name.
+ *
+ * The partition, the scenarios and this closure belong to one child. A sibling
+ * that declares the same thing provisions all of it again, and neither reaches
+ * the other.
+ */
+function controlledCeiling(agents: AgentComponentsOptions): PlanAuthorshipCeiling {
+  const root = agents.rootProvider;
+  const defaultAgent = agents.defaultAgent;
+  if (root === undefined || defaultAgent === undefined) {
+    // Not reachable from `installChildTestAgent`, which states both. A child
+    // that somehow reached here has no provider to put under the ceiling, and
+    // saying so is the honest answer rather than establishing one anyway.
+    return { established: false, refusal: NO_CEILING };
+  }
+  return {
+    established: true,
+    authorship: {
+      defaultAgent,
+      *installProvider(): Operation<void> {
+        yield* registerAgentProvider(TEST_AGENT_PROVIDER, root.factory);
+        yield* installInvocationAgentProvider(TEST_AGENT_PROVIDER, {
+          defaultAgent,
+          permissionMode: PLAN_PERMISSION_MODE,
+        });
+      },
+    },
+  };
+}
+
+/** The permission mode every Plan conversation runs under, test or production. */
+const PLAN_PERMISSION_MODE = "deny-all";
+
+/**
+ * A Plan authorship root this child owns and nothing else can reach.
+ *
+ * Not the child's working directory, not the outer test's, not the process
+ * home and not anything a document named: an agent writing a program has no
+ * business in the tree the program will run in. Registered before the
+ * directory exists, so a partial creation is still cleaned up, and recursive
+ * because the Plan sessions underneath it are this child's too — including a
+ * named one, which production keeps and a test may not.
+ */
+function* useChildAuthorshipRoot(): Operation<string> {
+  const root = join(tmpdir(), `xmd-child-plan-${randomUUID()}`);
+  yield* ensure(() => until(rm(root, { recursive: true, force: true })));
+  yield* until(mkdir(root, { recursive: true }));
+  return root;
+}
+
 function* runProfileChild(
   invocation: ChildInvocation,
   settings: TestingHostSettings,
@@ -186,6 +271,11 @@ function* runProfileChild(
 
   yield* installDocumentComponents({ testing: false }, false);
   const installations: ExecutionInstallation[] = [];
+  // What this child can establish for a `<Plan>` written inside it. A child
+  // nobody configured establishes nothing, which is the refusal `<Plan>` has
+  // always given where no coding-agent ceiling exists.
+  let ceiling: PlanAuthorshipCeiling = { established: false, refusal: NO_CEILING };
+  let authorshipRoot: string | undefined;
   if (testAgent !== undefined) {
     const worker = settings.testAgentWorker;
     if (!worker.ok) {
@@ -200,15 +290,30 @@ function* runProfileChild(
     // separately because its implementation names durable work after its own
     // invocation, so the execution is told about it rather than a registration
     // being made for it.
-    yield* installAgentComponents(
-      yield* installChildTestAgent(testAgent, { workerCommand: worker.value }),
-    );
+    const agents = yield* installChildTestAgent(testAgent, { workerCommand: worker.value });
+    yield* installAgentComponents(agents);
     installations.push({ components: agentIdentityComponents() });
+    // Created out here, outside the ceiling that refuses a directory to
+    // everything inside it, and owned by this child alone: the Plan invocation
+    // still makes and proves its own empty session directory underneath it, and
+    // the whole tree goes when this child settles however it settles.
+    authorshipRoot = yield* useChildAuthorshipRoot();
+    ceiling = controlledCeiling(agents);
   }
   // The production run profile's own vocabulary, whichever command launched the
   // child: `<Execution host="run">` means the run profile, and a child that
-  // could not resolve `<Plan>` would be a different one.
-  installations.push({ declarations: [settings.plan] });
+  // could not resolve `<Plan>` would be a different one. Built here, from what
+  // this child settled above, rather than taken from a declaration the
+  // entrypoint built before this child's configuration had been read.
+  installations.push({
+    declarations: [
+      yield* settings.planDeclaration({
+        ceiling,
+        ...(authorshipRoot === undefined ? {} : { authorshipRoot }),
+        host: yield* useScope(),
+      }),
+    ],
+  });
   // A child gets what `xmd run` gets, and the browser form is part of that.
   // Installed here rather than inherited: this scope is isolated from the
   // command that started it, so the run profile's provider reaches a child only
