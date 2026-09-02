@@ -22,9 +22,25 @@
  * desynchronise the journal on the next run.
  */
 
-import { ensure, race, scoped, spawn, withResolvers } from "effection";
-import type { Operation, Task } from "effection";
-import { DurableContext, durableSpawn, ephemeral } from "@executablemd/durable-streams";
+import {
+  createScope,
+  Err,
+  ensure,
+  race,
+  scoped,
+  Ok,
+  spawn,
+  until,
+  useScope,
+  withResolvers,
+} from "effection";
+import type { Operation, Result, Task } from "effection";
+import {
+  DurableContext,
+  durableSpawn,
+  durableSpawnIn,
+  ephemeral,
+} from "@executablemd/durable-streams";
 import type { Json, Workflow } from "@executablemd/durable-streams";
 import { flushOutput, reserveTerminal, TerminalGrids } from "@executablemd/runtime";
 import type { TerminalComposite, TerminalGridRequest } from "@executablemd/runtime";
@@ -198,7 +214,6 @@ export function openTerminalGrid(
   layout: TerminalGridLayout,
   work: readonly PaneWork[],
   boundary: CloseBoundary,
-  commit: (grid: RetainedGrid) => void,
 ): Operation<RetainedGrid> {
   return scoped(function* (): Operation<RetainedGrid> {
     const installation = yield* terminalInstallation();
@@ -218,7 +233,7 @@ export function openTerminalGrid(
       used: false,
       settled: false,
       *run(composite) {
-        settled = yield* presentGrid(request, composite, work, boundary, commit);
+        settled = yield* presentGrid(request, composite, work, boundary);
         grid.settled = true;
       },
     };
@@ -261,7 +276,6 @@ function presentGrid(
   composite: TerminalComposite,
   work: readonly PaneWork[],
   boundary: CloseBoundary,
-  commit: (grid: RetainedGrid) => void,
 ): Operation<RetainedGrid> {
   return scoped(function* (): Operation<RetainedGrid> {
     // Registered before a single pane starts: a composite that was presented is
@@ -299,9 +313,7 @@ function presentGrid(
       const claim = grid.claims[index]!;
       const readiness = grid.readiness[index]!;
       panes.push(
-        yield* paneChild(function* (
-          commitPane: (outcome: RetainedPaneOutcome) => void,
-        ): Operation<RetainedPaneOutcome> {
+        yield* paneChild(function* (): Operation<RetainedPaneOutcome> {
           return yield* runPane(
             pane,
             claim,
@@ -310,7 +322,6 @@ function presentGrid(
             request,
             index,
             closing.operation,
-            commitPane,
           );
         }),
       );
@@ -374,12 +385,6 @@ function presentGrid(
     // acquired can still act.
     grid.seal();
     closing.resolve();
-    // The outcome is decided the moment the boundary is crossed: every settled
-    // pane keeps its own, every pane still live is closed. Committed here, so a
-    // cancellation arriving while pane and provider finalizers are still going
-    // records what close decided rather than a cancellation.
-    const decided = outcomes.map((outcome) => outcome ?? { status: "closed" as const, reason: "" });
-    commit(retained(request, decided, firstReason(decided)));
     // Published before anything is awaited: once the reader has left, a pane
     // that had not settled is closed, and that is true whether or not its own
     // finalizers are quick about it.
@@ -410,7 +415,6 @@ function runPane(
   request: TerminalGridRequest,
   index: number,
   closing: Operation<void>,
-  commitPane: (outcome: RetainedPaneOutcome) => void,
 ): Operation<RetainedPaneOutcome> {
   return (function* (): Operation<RetainedPaneOutcome> {
     try {
@@ -431,17 +435,11 @@ function runPane(
         })(),
       ]);
       if (closed) {
-        const outcome: RetainedPaneOutcome = { status: "closed", reason: "" };
-        // Decided at the boundary, so a cancellation arriving while this pane's
-        // finalizers are still going records the close rather than a
-        // cancellation — and never a caller-cancelled child a later run would
-        // have to revive or wait on.
-        commitPane(outcome);
         // The nested work is stopped by this pane's own scope, and its
-        // finalizers are awaited here: the durable child settles only once they
-        // have.
+        // finalizers are awaited here: the durable child settles as closed only
+        // once that work and its finalizers have settled.
         yield* running.halt();
-        return outcome;
+        return { status: "closed", reason: "" };
       }
       if (!readiness.acknowledged) {
         // Settled without ever starting: a startup failure even though the work
@@ -496,19 +494,16 @@ function firstReason(outcomes: readonly (RetainedPaneOutcome | undefined)[]): st
  * Without a journal there is no child to derive, and the work simply runs.
  */
 function paneChild(
-  body: (commit: (outcome: RetainedPaneOutcome) => void) => Operation<RetainedPaneOutcome>,
+  body: () => Operation<RetainedPaneOutcome>,
 ): Operation<Task<RetainedPaneOutcome>> {
   return (function* (): Operation<Task<RetainedPaneOutcome>> {
     const durable = yield* DurableContext.get();
     if (durable === undefined) {
-      // No journal behind this run: an ordinary spawned child, with nothing to
-      // commit an outcome into.
-      return yield* spawn(() => body(() => {}));
+      // No journal behind this run: an ordinary spawned child.
+      return yield* spawn(body);
     }
-    return yield* durableSpawn(function* (
-      commit: (outcome: RetainedPaneOutcome) => void,
-    ): Workflow<RetainedPaneOutcome> {
-      return yield* ephemeral(body(commit));
+    return yield* durableSpawn(function* (): Workflow<RetainedPaneOutcome> {
+      return yield* ephemeral(body());
     });
   })();
 }
@@ -522,35 +517,72 @@ function paneChild(
  * beneath it, so a resumed run starts nothing.
  */
 export function durableGrid(
-  live: (boundary: CloseBoundary, commit: (grid: RetainedGrid) => void) => Operation<RetainedGrid>,
+  live: (boundary: CloseBoundary) => Operation<RetainedGrid>,
 ): Operation<RetainedGrid> {
   return (function* (): Operation<RetainedGrid> {
     const boundary = createCloseBoundary();
     const durable = yield* DurableContext.get();
     if (durable === undefined) {
-      // No journal to commit into, so the boundary is crossed as soon as it is
+      // No journal to finish into, so the boundary is crossed as soon as it is
       // proposed and the grid closes in one step.
       yield* spawn(function* () {
         yield* boundary.proposed();
         boundary.acknowledge();
       });
-      return yield* live(boundary, () => {});
+      return yield* live(boundary);
     }
-    const task = yield* durableSpawn(function* (
-      commit: (grid: RetainedGrid) => void,
-    ): Workflow<RetainedGrid> {
-      return yield* ephemeral(live(boundary, commit));
+
+    // The grid's durable child runs in a scope of its own — a child of this one,
+    // so it inherits every context the document runs under, and its own so that
+    // tearing this one down does not reach the child first.
+    //
+    // That ordering is what makes the await below genuinely deferred. A scope
+    // runs its finalizers in reverse, so one registered after this scope exists
+    // runs before this scope is destroyed: the grid and its panes finish their
+    // own teardown and append their ordinary completed `Close` records, and only
+    // then does the cancellation carry on to the parent.
+    const [detached, destroy] = createScope(yield* useScope());
+    const held: {
+      task?: Task<RetainedGrid>;
+      outcome?: Result<RetainedGrid>;
+    } = {};
+
+    // Registered after the scope and before the await, so a cancellation runs it
+    // and waits for it. Before the boundary is crossed there is nothing to
+    // finish, and destroying the scope cancels the active grid under the
+    // ordinary rules.
+    yield* ensure(function* () {
+      if (held.task !== undefined && boundary.acknowledged && held.outcome === undefined) {
+        held.outcome = yield* finish(held.task);
+      }
+      yield* until(destroy());
     });
-    // The owner's cancellation-deferred await. Acknowledging happens here,
-    // inside it: from this point a cancellation cannot pre-empt the close,
-    // because the child commits its outcome as the boundary is crossed and
-    // Effection completes a child's teardown — its pane and provider
-    // finalizers, its `Close` append and its settlement — before the halt
-    // reaches whoever asked for it.
+
+    held.task = yield* durableSpawnIn(detached, function* (): Workflow<RetainedGrid> {
+      return yield* ephemeral(live(boundary));
+    });
+    // The owner acknowledges, and only the owner. By the time it can, the
+    // finalizer above is already registered — so crossing the boundary and
+    // being committed to finishing the child are the same moment.
     yield* spawn(function* () {
       yield* boundary.proposed();
       boundary.acknowledge();
     });
-    return yield* task;
+
+    held.outcome = yield* finish(held.task);
+    yield* until(destroy());
+    if (!held.outcome.ok) {
+      throw held.outcome.error;
+    }
+    return held.outcome.value;
   })();
+}
+
+/** Await one grid child, keeping how it ended rather than re-throwing it here. */
+function* finish(task: Task<RetainedGrid>): Operation<Result<RetainedGrid>> {
+  try {
+    return Ok(yield* task);
+  } catch (error) {
+    return Err(error instanceof Error ? error : new Error(String(error)));
+  }
 }

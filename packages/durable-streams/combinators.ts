@@ -19,7 +19,7 @@
  */
 
 import { all as effectionAll, ensure, race as effectionRace, suspend, useScope } from "effection";
-import type { Operation, Task } from "effection";
+import type { Operation, Scope, Task } from "effection";
 import { DurableContext } from "./context.ts";
 import {
   activeDurabilityFailure,
@@ -98,24 +98,8 @@ function retainedCancellation(close: Close): Cancellation {
   return close.result.cancellation === "unwound" ? "unwound" : "caller";
 }
 
-/**
- * Declare a child's terminal value before its scope has finished unwinding.
- *
- * A child that has already decided what it settled to — a terminal grid that
- * crossed its reader-close boundary, say — must record that outcome even if the
- * run is cancelled while its finalizers are still going. Without this, a halt
- * arriving during teardown loses the decision and the child records a
- * cancellation instead, which is a different thing entirely.
- *
- * Committing is live state, never journaled on its own: the value reaches the
- * journal only as the child's ordinary `Close`, written where it always was.
- * A child that goes on to return or throw normally overrides what it committed,
- * because that is the outcome it actually reached.
- */
-export type CommitOutcome<T> = (value: T) => void;
-
 function* runDurableChild<T extends WorkflowValue>(
-  childWorkflow: (commit: CommitOutcome<T>) => Workflow<T>,
+  childWorkflow: () => Workflow<T>,
   childId: string,
   parentCtx: DurableContext,
   cancelledPolicy: CancelledChildPolicy = "combinator-cancels",
@@ -179,28 +163,10 @@ function* runDurableChild<T extends WorkflowValue>(
 
   let closeEvent: Close | undefined;
   let suppressClose = false;
-  // What the child declared it had settled to before its scope finished coming
-  // down. Read only when the child never reached a normal ending.
-  let committed: { value: T } | undefined;
-  const commit: CommitOutcome<T> = (value) => {
-    committed = { value };
-  };
 
   yield* ensure(function* () {
     if (suppressClose || activeDurabilityFailure(childCtx)) {
       return;
-    }
-
-    // A child that committed an outcome and was then cancelled mid-teardown
-    // settled: the decision was made before the cancellation arrived, and the
-    // record has to say so. The cancellation is still a cancellation for
-    // whoever asked for it — it is simply delivered after this.
-    if (!closeEvent && committed !== undefined && !replayIndex.firstUnaligned(childId)) {
-      closeEvent = {
-        type: "close",
-        coroutineId: childId,
-        result: { status: "ok", value: committed.value as Json },
-      };
     }
 
     // closeEvent still undefined means the child was cancelled before the
@@ -239,7 +205,7 @@ function* runDurableChild<T extends WorkflowValue>(
   try {
     // Run the child workflow. DurableEffects inside the child read
     // DurableContext from the scope, so they'll use childId.
-    const result: T = yield* childWorkflow(commit);
+    const result: T = yield* childWorkflow();
 
     const durabilityFailure = activeDurabilityFailure(childCtx);
     if (durabilityFailure) {
@@ -321,7 +287,35 @@ function* runDurableChild<T extends WorkflowValue>(
  * again. See `CancelledChildPolicy` and `Cancellation`.
  */
 export function durableSpawn<T extends WorkflowValue>(
-  childWorkflow: (commit: CommitOutcome<T>) => Workflow<T>,
+  childWorkflow: () => Workflow<T>,
+): Workflow<Task<T>> {
+  return spawnDurableChild(childWorkflow, undefined);
+}
+
+/**
+ * Spawn a durable child into `scope` rather than into the routine's own.
+ *
+ * Same child, same deterministic identity, same cancellation policy — only the
+ * lifetime differs. A caller that has to finish a region *after* its own
+ * cancellation has begun needs the child to outlive the scope being torn down,
+ * and a scope of its own is the only honest way to express that: the child then
+ * settles normally and writes its ordinary `Close`, and the caller decides when
+ * to destroy the scope.
+ *
+ * It grants nothing a caller does not already have. Placing a child somewhere
+ * is not replay authority, and the policy stays fixed at the call site.
+ */
+export function durableSpawnIn<T extends WorkflowValue>(
+  scope: Scope,
+  childWorkflow: () => Workflow<T>,
+): Workflow<Task<T>> {
+  return spawnDurableChild(childWorkflow, scope);
+}
+
+/** Both spellings of a durable spawn; `into` is the only thing that differs. */
+function spawnDurableChild<T extends WorkflowValue>(
+  childWorkflow: () => Workflow<T>,
+  into: Scope | undefined,
 ): Workflow<Task<T>> {
   return (function* (): Workflow<Task<T>> {
     // Reading the context and allocating the child id is ordinary scope setup:
@@ -335,6 +329,7 @@ export function durableSpawn<T extends WorkflowValue>(
     return (yield createSpawnEffect(
       () => runDurableChild(childWorkflow, childId, ctx, "resume", evidence),
       evidence,
+      into,
     )) as Task<T>;
   })();
 }
@@ -358,12 +353,14 @@ function* readDurableContext(): Operation<DurableContext> {
 function createSpawnEffect<T>(
   child: () => Operation<T>,
   evidence: CancellationEvidence,
+  into?: Scope,
 ): DurableEffect<Task<T>> {
   return {
     description: "durable-spawn",
     effectDescription: { type: "ephemeral", name: "durable-spawn" },
     enter(resolve, routine) {
-      resolve({ ok: true, value: observingDisposal(routine.scope.run(child), evidence) });
+      const host = into ?? routine.scope;
+      resolve({ ok: true, value: observingDisposal(host.run(child), evidence) });
       return (exit) => exit({ ok: true, value: undefined as undefined });
     },
   };
