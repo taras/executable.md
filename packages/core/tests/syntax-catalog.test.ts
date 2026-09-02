@@ -358,11 +358,8 @@ describe("Tier SY: structural vocabulary", () => {
       origin: { kind: "structural", construct: "Terminal.Grid" },
       syntax: ["<Terminal.Grid columns={2}>…</Terminal.Grid>"],
       description:
-        "Show several interactive terminals at once. " +
-        '`<Terminal.Grid columns={2}><Terminal title="Agent">…</Terminal>' +
-        '<Terminal title="Shell" /></Terminal.Grid>` fills `columns` columns with its panes ' +
-        "in the order they are written, leaving the last row short when the count does not " +
-        "divide. Only `<Terminal>` panes may be written directly inside it.",
+        "Open several terminals in one view. " +
+        '`<Terminal.Grid columns={2}><Terminal title="Agent">…</Terminal></Terminal.Grid>`',
       context: "The `<Terminal>` panes the grid lays out.",
     });
     expect(find(entries, "Terminal")).toEqual({
@@ -371,10 +368,9 @@ describe("Tier SY: structural vocabulary", () => {
       origin: { kind: "structural", construct: "Terminal" },
       syntax: ['<Terminal title="Agent">…</Terminal>', '<Terminal title="Shell" />'],
       description:
-        "Give one pane of a `<Terminal.Grid>` its work. " +
-        '`<Terminal title="Agent">…</Terminal>` runs that markdown in the pane; ' +
-        '`<Terminal title="Shell" />` runs the host\'s default interactive shell. `title` ' +
-        "labels the pane on screen, so two panes may share one.",
+        "Expand Markdown or open a shell in a pane. " +
+        '`<Terminal title="Agent">…</Terminal>` runs content; ' +
+        '`<Terminal title="Shell" />` opens a shell.',
       context: "Markdown the pane runs, in the paired form.",
     });
     // Neither construct binds, so neither carries an `as` sentence at all.
