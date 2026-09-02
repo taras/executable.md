@@ -62,7 +62,7 @@ import {
   installAuthorshipFrame,
   useSessionDirectory,
 } from "./authorship-profile.ts";
-import type { PlanAuthorshipCeiling } from "./authorship-profile.ts";
+import type { PlanAuthorshipCeiling, PlanAuthorshipObservation } from "./authorship-profile.ts";
 import type { CandidateAssessment } from "./authorship-profile.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import { PLAN_DOCUMENT, readPackagedDocument } from "./packaged-document.ts";
@@ -144,6 +144,8 @@ export interface PlanComponentAssembly {
   readonly explicitSession?: boolean;
   /** The scope the two host acts run in, captured before the ceiling exists. */
   readonly host: Scope;
+  /** A trusted host-only observation after the complete ceiling is installed. */
+  observeAuthorship?(observation: PlanAuthorshipObservation): Operation<void>;
   /** Who answers the review question. */
   installElicitation(): Operation<void>;
   /** The run profile's rendered vocabulary, as the first Agent turn receives it. */
@@ -172,6 +174,7 @@ const INPUTS_RETURNS = {
     session: { type: "string" },
     surface: { type: "string" },
     durable: { type: "boolean" },
+    authoredSession: { type: "string" },
   },
   required: ["syntax", "session", "surface", "durable"],
   additionalProperties: false,
@@ -188,6 +191,7 @@ const AUTHORSHIP_PROPS = {
   properties: {
     session: { type: "string", minLength: 1 },
     durable: { type: "boolean" },
+    authoredSession: { type: "string", minLength: 1 },
   },
   required: ["session", "durable"],
   additionalProperties: false,
@@ -354,6 +358,7 @@ function planInputs(assembly: PlanComponentAssembly): IdentityComponent {
           session,
           surface: assembly.surface,
           durable: durability(assembly, authored),
+          ...(authored === undefined ? {} : { authoredSession: authored }),
         };
       },
   };
@@ -451,6 +456,13 @@ function planAuthorship(assembly: PlanComponentAssembly): IdentityComponent {
           workdir: established.value,
           authorship: ceiling.authorship,
           host: assembly.host,
+          session,
+          ...(typeof props.authoredSession === "string"
+            ? { authoredSession: props.authoredSession }
+            : {}),
+          ...(assembly.observeAuthorship === undefined
+            ? {}
+            : { observe: assembly.observeAuthorship }),
           installElicitation: assembly.installElicitation,
         });
 

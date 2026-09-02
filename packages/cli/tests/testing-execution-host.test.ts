@@ -16,17 +16,18 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { Err, ensure, resource, scoped } from "effection";
+import { Err, Ok, ensure, resource, scoped, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, readdir, rm, writeTextFile } from "@effectionx/fs";
 import { mkdtemp } from "node:fs/promises";
 import { until } from "effection";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { runCli } from "@executablemd/test-support/launch";
-import { DEFAULT_AUTHORSHIP_ROOT } from "../src/authorship-profile.ts";
+import { cliBase, runCli } from "@executablemd/test-support/launch";
+import { AUTHORSHIP_INSTRUCTIONS, DEFAULT_AUTHORSHIP_ROOT } from "../src/authorship-profile.ts";
+import type { PlanAuthorshipObservation } from "../src/authorship-profile.ts";
 import { testingExecutionHost } from "../src/testing-host.ts";
-import { planComponentDescription } from "../src/plan-component.ts";
+import { planComponentDeclaration, planComponentDescription } from "../src/plan-component.ts";
 
 import { unsupportedRepositories } from "../src/run-repositories.ts";
 function doc(...lines: string[]): string {
@@ -94,7 +95,7 @@ const PLAN_BEHAVIOR = doc(
 const PLAN_CHILD = doc(
   "# A document that writes a Plan",
   "",
-  '<Plan as="approved">Write the release program.</Plan>',
+  '<Plan session="planner" as="approved">Write the release program.</Plan>',
   "",
   "Approved source: {approved}",
 );
@@ -103,12 +104,12 @@ const PLAN_CHILD = doc(
  * What a child needs to write one: a scripted agent for the turn, and an
  * authored approval for the review.
  *
- * `anySession` because `<Plan>` derives the conversation it opens from the
- * expansion that asked, so there is no session name to write here.
+ * The trusted child host privately connects the authored `planner` label to
+ * the opaque conversation identity while the provider keeps that identity.
  */
 const PLAN_DECLARATION = [
   "<TestAgent>",
-  '<TestAgent.Scenario anySession={true} src="./agents/plan.md" />',
+  '<TestAgent.Scenario session="planner" src="./agents/plan.md" />',
   "</TestAgent>",
   "",
   "<Answers>",
@@ -572,7 +573,7 @@ describe("deterministic dependencies declared for a nested run", () => {
         "",
         '<Execution host="run" target="./writes-a-plan.md" as="stopped">',
         "<TestAgent>",
-        '<TestAgent.Scenario anySession={true} src="./agents/plan.md" />',
+        '<TestAgent.Scenario session="planner" src="./agents/plan.md" />',
         "</TestAgent>",
         "",
         "<Answers>",
@@ -598,6 +599,90 @@ describe("deterministic dependencies declared for a nested run", () => {
     const after = yield* planRoots();
     expect(after.children.filter((entry) => !before.children.includes(entry))).toEqual([]);
     // And neither of them reached the tree a production `xmd plan` owns.
+    expect(after.production.filter((entry) => !before.production.includes(entry))).toEqual([]);
+  });
+
+  it("installs the controlled Plan policy and removes its root after cancellation", function* () {
+    const before = yield* planRoots();
+    const observed = withResolvers<PlanAuthorshipObservation>();
+    const hold = withResolvers<void>();
+    const host = testingExecutionHost({
+      includes: [],
+      secretDetection: true,
+      // deno-lint-ignore require-yield
+      installService: function* (): Operation<void> {},
+      installRepositories: unsupportedRepositories,
+      testAgentWorker: Ok([...cliBase(), "test-agent"]),
+      planDeclaration: (request) =>
+        planComponentDeclaration({
+          surface: "component",
+          includes: [],
+          ceiling: request.ceiling,
+          ...(request.authorshipRoot === undefined
+            ? {}
+            : { authorshipRoot: request.authorshipRoot }),
+          host: request.host,
+          ...(request.observeAuthorship === undefined
+            ? {}
+            : { observeAuthorship: request.observeAuthorship }),
+          installElicitation: request.installElicitation,
+          // deno-lint-ignore require-yield
+          *catalog(): Operation<string> {
+            return "";
+          },
+        }),
+      *observePlanAuthorship(observation): Operation<void> {
+        observed.resolve(observation);
+        yield* hold.operation;
+      },
+    });
+    const running = yield* spawn(() =>
+      host.runChild({
+        request: {
+          host: "run",
+          source: '<Plan session="planner" as="approved">Write a program.</Plan>\n',
+          props: {},
+          journal: "transient",
+          collectJournal: false,
+          configuration: [
+            {
+              kind: "test-agent",
+              defaultAgent: "test",
+              scenarios: [
+                {
+                  agent: "test",
+                  session: "planner",
+                  rootDir: tmpdir(),
+                  document: { path: "plan.md", source: PLAN_BEHAVIOR },
+                },
+              ],
+            },
+          ],
+        },
+        run: undefined,
+        cwd: tmpdir(),
+        // deno-lint-ignore require-yield
+        *chunk(): Operation<void> {},
+      }),
+    );
+
+    const ceiling = yield* observed.operation;
+    expect(ceiling.providerOrigin).toBe("controlled-test-agent");
+    expect(ceiling.policy.systemInstruction).toBe(AUTHORSHIP_INSTRUCTIONS);
+    expect(ceiling.policy.permissionMode).toBe("deny-all");
+    expect(ceiling.policy.promptFailures).toBe("fail");
+    expect(ceiling.policy.mcpServers).toEqual([]);
+    expect(ceiling.policy.allowedTools).toEqual([]);
+    expect(ceiling.workdir.startsWith(join(tmpdir(), "xmd-child-plan-"))).toBe(true);
+    expect(ceiling.workdir.startsWith(DEFAULT_AUTHORSHIP_ROOT)).toBe(false);
+
+    // The observer runs from controlled turn routing after its scenario exists,
+    // so the child's Prompt is in flight here. halt() waits for the provider,
+    // declaration, session directory and child root to finish teardown before
+    // it returns.
+    yield* running.halt();
+    const after = yield* planRoots();
+    expect(after.children.filter((entry) => !before.children.includes(entry))).toEqual([]);
     expect(after.production.filter((entry) => !before.production.includes(entry))).toEqual([]);
   });
 

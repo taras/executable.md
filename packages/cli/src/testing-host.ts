@@ -35,22 +35,19 @@ import {
   fileSource,
   inlineSource,
   installAgentComponents,
-  registerAgentProvider,
 } from "@executablemd/core";
-import type { AgentComponentsOptions, RootDocumentSource } from "@executablemd/core";
-import {
-  executeInstalled,
-  installAnswerProvider,
-  installInvocationAgentProvider,
-} from "@executablemd/core/host";
+import type { RootDocumentSource } from "@executablemd/core";
+import { executeInstalled, installAnswerProvider } from "@executablemd/core/host";
 import { mkdir, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NO_CEILING } from "./authorship-profile.ts";
 import type { PlanAuthorshipCeiling } from "./authorship-profile.ts";
+import type { PlanAuthorshipObservation } from "./authorship-profile.ts";
 import type { ExecutionInstallation } from "@executablemd/core/host";
-import { installChildTestAgent, TEST_AGENT_PROVIDER } from "@executablemd/test-agent";
+import { installChildTestAgent } from "@executablemd/test-agent";
+import type { ChildTestAgentInstallation } from "@executablemd/test-agent";
 import type {
   AnswersChildConfiguration,
   ChildInvocation,
@@ -81,6 +78,7 @@ export interface ChildPlanDeclaration {
    * therefore installs nothing and lets its own matcher provider answer.
    */
   installElicitation(): Operation<void>;
+  observeAuthorship?(observation: PlanAuthorshipObservation): Operation<void>;
 }
 
 /** What the entrypoint already decided, and a child must not decide again. */
@@ -130,6 +128,8 @@ export interface TestingHostSettings {
    * agent has anything to say about it.
    */
   readonly testAgentWorker: Result<readonly string[]>;
+  /** Trusted host evidence after a controlled Plan ceiling is fully installed. */
+  observePlanAuthorship?(observation: PlanAuthorshipObservation): Operation<void>;
 }
 
 /**
@@ -202,9 +202,9 @@ function selectConfiguration(request: HostProfileRequest): {
  * that declares the same thing provisions all of it again, and neither reaches
  * the other.
  */
-function controlledCeiling(agents: AgentComponentsOptions): PlanAuthorshipCeiling {
-  const root = agents.rootProvider;
-  const defaultAgent = agents.defaultAgent;
+function controlledCeiling(installation: ChildTestAgentInstallation): PlanAuthorshipCeiling {
+  const root = installation.components.rootProvider;
+  const defaultAgent = installation.components.defaultAgent;
   if (root === undefined || defaultAgent === undefined) {
     // Not reachable from `installChildTestAgent`, which states both. A child
     // that somehow reached here has no provider to put under the ceiling, and
@@ -215,11 +215,28 @@ function controlledCeiling(agents: AgentComponentsOptions): PlanAuthorshipCeilin
     established: true,
     authorship: {
       defaultAgent,
-      *installProvider(): Operation<void> {
-        yield* registerAgentProvider(TEST_AGENT_PROVIDER, root.factory);
-        yield* installInvocationAgentProvider(TEST_AGENT_PROVIDER, {
-          defaultAgent,
-          permissionMode: PLAN_PERMISSION_MODE,
+      origin: "controlled-test-agent",
+      *installProvider(invocation): Operation<void> {
+        const observe = invocation.observe;
+        yield* installation.installPlanProvider({
+          agent: defaultAgent,
+          ...(invocation.authoredSession === undefined
+            ? {}
+            : { authoredSession: invocation.authoredSession }),
+          session: invocation.session,
+          workdir: invocation.workdir,
+          policy: invocation.policy,
+          ...(observe === undefined
+            ? {}
+            : {
+                *observeTurn(): Operation<void> {
+                  yield* observe({
+                    providerOrigin: "controlled-test-agent",
+                    policy: invocation.policy,
+                    workdir: invocation.workdir,
+                  });
+                },
+              }),
         });
       },
     },
@@ -227,8 +244,6 @@ function controlledCeiling(agents: AgentComponentsOptions): PlanAuthorshipCeilin
 }
 
 /** The permission mode every Plan conversation runs under, test or production. */
-const PLAN_PERMISSION_MODE = "deny-all";
-
 /**
  * A Plan authorship root this child owns and nothing else can reach.
  *
@@ -301,7 +316,7 @@ function* runProfileChild(
     // invocation, so the execution is told about it rather than a registration
     // being made for it.
     const agents = yield* installChildTestAgent(testAgent, { workerCommand: worker.value });
-    yield* installAgentComponents(agents);
+    yield* installAgentComponents(agents.components);
     installations.push({ components: agentIdentityComponents() });
     // Created out here, outside the ceiling that refuses a directory to
     // everything inside it, and owned by this child alone: the Plan invocation
@@ -326,6 +341,9 @@ function* runProfileChild(
         // declared one, and the browser form installed for the child otherwise.
         // deno-lint-ignore require-yield
         *installElicitation(): Operation<void> {},
+        ...(settings.observePlanAuthorship === undefined
+          ? {}
+          : { observeAuthorship: settings.observePlanAuthorship }),
       }),
     ],
   });

@@ -35,6 +35,7 @@ import type { Operation } from "effection";
 import { hasContent, registerAgentProvider, tryContent } from "@executablemd/core";
 import type { AgentComponentsOptions, Json } from "@executablemd/core";
 import { createPartitionedAcpxProvider } from "@executablemd/acp";
+import { installInvocationAgentProvider } from "@executablemd/core/host";
 import { installControlledLauncher } from "@executablemd/runtime";
 import type {
   ChildDeclaration,
@@ -61,16 +62,6 @@ function mappingKey(agent: string, session: string): string {
   // JSON encoding keeps the key textual and collision-safe for any
   // agent/session values.
   return JSON.stringify([agent, session]);
-}
-
-/**
- * The table key one agent's any-session mapping occupies.
- *
- * A shape `mappingKey()` cannot produce for any session name, so the two kinds
- * of declaration share one duplicate check without one masking the other.
- */
-function anyKey(agent: string): string {
-  return JSON.stringify([agent]);
 }
 
 function describeMapping(agent: string, session: string): string {
@@ -110,7 +101,7 @@ function open(collect: {
   const declareScenario: ChildDeclarationChild = function* (
     props: Record<string, Json>,
   ): Operation<string> {
-    const { agent, session: sessionProp, src, anySession } = props;
+    const { agent, session: sessionProp, src } = props;
     if (typeof src !== "string" || src.length === 0) {
       refuse(`<${SCENARIO}> requires a "src" prop.`);
       return "";
@@ -121,35 +112,19 @@ function open(collect: {
       return "";
     }
     const agentName = typeof agent === "string" ? agent : defaultAgent;
-    const serveAny = anySession === true || anySession === "" || anySession === "true";
-    if (serveAny && typeof sessionProp === "string") {
-      refuse(
-        `<${SCENARIO}> was written with both "session" and "anySession". One names the ` +
-          "conversation it answers for and the other says it does not name one.",
-      );
-      return "";
-    }
     const session = typeof sessionProp === "string" ? sessionProp : "";
-    // Kept in the same table as the exact mappings, under a key no session name
-    // can produce, so declaring two of them for one agent is refused where it is
-    // written rather than discovered when a prompt arrives.
-    const key = serveAny ? anyKey(agentName) : mappingKey(agentName, session);
+    const key = mappingKey(agentName, session);
     if (mapped.has(key)) {
       // Refused where it is written rather than where it would be used: the
       // wrapper can only find out when a prompt asks for the mapping, and a
       // child has not been created yet for one to ask in.
-      refuse(
-        serveAny
-          ? `<${SCENARIO}> maps any session of agent "${agentName}" more than once.`
-          : `<${SCENARIO}> maps ${describeMapping(agentName, session)} more than once.`,
-      );
+      refuse(`<${SCENARIO}> maps ${describeMapping(agentName, session)} more than once.`);
       return "";
     }
     mapped.add(key);
     scenarios.push({
       agent: agentName,
       session,
-      ...(serveAny ? { anySession: true } : {}),
       rootDir: read.value.rootDir,
       document: read.value.document,
     });
@@ -187,11 +162,11 @@ function open(collect: {
  * Build this package's Agent behavior inside one nested child.
  *
  * Called by the trusted host, in the child's own isolated scope, from the
- * frozen data one declaration produced. Exactly one partition: this child is
- * the isolation boundary, so a sibling execution repeating the same
- * declarations reaches its own controller, its own worker, its own routes and
- * its own logical sessions, and a named session continues only within the
- * child whose declaration created it.
+ * frozen data one declaration produced. This child is the isolation boundary,
+ * so a sibling execution repeating the same declarations reaches its own
+ * controller, workers, routes and logical sessions. The ordinary provider has
+ * one partition; each controlled Plan invocation gets a private partition so
+ * its derived identity and working directory cannot meet a sibling's state.
  *
  * What comes back is what the host passes to `installAgentComponents()`. The
  * wrapper installs its provider from inside a running document, where
@@ -205,28 +180,40 @@ function open(collect: {
  * outcome the `<Execution>` binds — rather than an enclosing `<Test>` the child
  * cannot see.
  */
+export interface ChildTestAgentInstallation {
+  readonly components: AgentComponentsOptions;
+  installPlanProvider(request: {
+    readonly agent: string;
+    readonly authoredSession?: string;
+    readonly session: string;
+    readonly workdir: string;
+    readonly policy: {
+      readonly systemInstruction: string;
+      readonly permissionMode: "deny-all";
+      readonly mcpServers: readonly never[];
+      readonly allowedTools: readonly never[];
+    };
+    observeTurn?(): Operation<void>;
+  }): Operation<void>;
+}
+
 export function* installChildTestAgent(
   configuration: TestAgentChildConfiguration,
   options: {
     /** How the trusted entrypoint re-invokes itself as the agent worker. */
     readonly workerCommand: readonly string[];
   },
-): Operation<AgentComponentsOptions> {
+): Operation<ChildTestAgentInstallation> {
   const controller = yield* useTestAgentController();
   const declarations = new Map<string, ScenarioDeclaration>();
   for (const scenario of configuration.scenarios) {
-    declarations.set(
-      scenario.anySession === true
-        ? anyKey(scenario.agent)
-        : mappingKey(scenario.agent, scenario.session),
-      {
-        agent: scenario.agent,
-        sessionName: scenario.session,
-        rootDir: scenario.rootDir,
-        document: { path: scenario.document.path, source: scenario.document.source },
-        duplicate: false,
-      },
-    );
+    declarations.set(mappingKey(scenario.agent, scenario.session), {
+      agent: scenario.agent,
+      sessionName: scenario.session,
+      rootDir: scenario.rootDir,
+      document: { path: scenario.document.path, source: scenario.document.source },
+      duplicate: false,
+    });
   }
   const partition = yield* provisionPartition({
     defaultAgent: configuration.defaultAgent,
@@ -246,11 +233,52 @@ export function* installChildTestAgent(
   yield* installControlledLauncher({});
   const permissionMode = "deny-all";
   return {
-    defaultAgent: configuration.defaultAgent,
-    permissionMode,
-    rootProvider: {
-      factory,
-      options: { defaultAgent: configuration.defaultAgent, permissionMode },
+    components: {
+      defaultAgent: configuration.defaultAgent,
+      permissionMode,
+      rootProvider: {
+        factory,
+        options: { defaultAgent: configuration.defaultAgent, permissionMode },
+      },
+    },
+    *installPlanProvider(request): Operation<void> {
+      const planDeclarations = new Map(declarations);
+      if (request.authoredSession !== undefined) {
+        const declared = declarations.get(mappingKey(request.agent, request.authoredSession));
+        if (declared === undefined) {
+          throw new Error(
+            `no <TestAgent.Scenario> maps ${describeMapping(request.agent, request.authoredSession)}`,
+          );
+        }
+        const key = mappingKey(request.agent, request.session);
+        const existing = planDeclarations.get(key);
+        if (existing !== undefined && existing !== declared) {
+          throw new Error(
+            `duplicate <TestAgent.Scenario> mappings for ${describeMapping(request.agent, request.session)}`,
+          );
+        }
+        planDeclarations.set(key, declared);
+      }
+      const plan = yield* provisionPartition({
+        defaultAgent: configuration.defaultAgent,
+        controller,
+        declarations: planDeclarations,
+        workerCommand: [...options.workerCommand],
+        planCeiling: {
+          workdir: request.workdir,
+          policy: request.policy,
+          ...(request.observeTurn === undefined ? {} : { observeTurn: request.observeTurn }),
+        },
+      });
+      // deno-lint-ignore require-yield
+      const planFactory = createPartitionedAcpxProvider(function* () {
+        return plan.provider;
+      });
+      yield* registerAgentProvider(TEST_AGENT_PROVIDER, planFactory);
+      yield* installInvocationAgentProvider(TEST_AGENT_PROVIDER, {
+        defaultAgent: request.agent,
+        permissionMode: request.policy.permissionMode,
+      });
     },
   };
 }

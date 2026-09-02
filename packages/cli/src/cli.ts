@@ -979,6 +979,9 @@ function* runDocument(
       // host's — putting this build's adapter on disk, and opening the review
       // form — run outside the ceiling the Component installs around itself.
       host: request.host,
+      ...(request.observeAuthorship === undefined
+        ? {}
+        : { observeAuthorship: request.observeAuthorship }),
       installElicitation: request.installElicitation,
       // Rendered when a `<Plan>` first asks, not before: an ordinary run that
       // writes none never builds a catalog it has no reader for.

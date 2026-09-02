@@ -101,6 +101,9 @@ export function runMarkdownTier(document: string): Operation<MarkdownTierRun> {
             ? {}
             : { authorshipRoot: request.authorshipRoot }),
           host: request.host,
+          ...(request.observeAuthorship === undefined
+            ? {}
+            : { observeAuthorship: request.observeAuthorship }),
           installElicitation: request.installElicitation,
           *catalog(): Operation<string> {
             return renderSyntaxMarkdown(yield* syntaxCatalog(["components", "."]));

@@ -82,21 +82,14 @@ wildcard. A named `<Session>` requires an exact named mapping. A missing or
 duplicate mapping fails the owning test before its agent turn starts. An unused
 mapping does not fail the test-agent scope.
 
-`anySession` is the one way to answer without naming a conversation, and it is
-an explicit opt-in rather than a new meaning for an omitted `session`:
-
-```md
-<TestAgent.Scenario anySession={true} src="./agents/approved-plan.md" />
-```
-
-It exists for a conversation whose name a test cannot write down. `<Plan>`
-derives its session from the expansion that asked for it, so no author can name
-it and no name stays true when the document moves. Such a mapping answers for
-any of its agent's sessions that no exact mapping claims: an exact mapping
-always wins, so every guarantee above still holds wherever one is written. An
-agent declares at most one, and writing both `session` and `anySession` on one
-scenario is refused where it is written. Two of them for one agent is a
-duplicate mapping like any other.
+The configured-child Plan host has one sealed translation because `<Plan>`
+derives an opaque identity after the declaration was captured. A Plan site may
+author a label such as `session="planner"`; the trusted host selects the exact
+scenario declared under that label and installs it under that invocation's
+opaque identity. Runtime and scenario state stay keyed by the opaque identity
+and child working directory. This is not a TestAgent matcher: ordinary Agent
+use still requires the exact session it opens, a missing authored Plan label is
+refused, and siblings cannot reach one another's mapping or state.
 
 The test runtime does not inject agent, session, cwd, or harness metadata into
 the behavior document. The document sees its own frontmatter and bindings,

@@ -94,11 +94,6 @@ function configError(source: string, message: string): ErrorSegment {
   return { type: "error", message: `<${source}> ${message}`, source };
 }
 
-/** Where one agent's any-session mapping sits, if it declared one. */
-function anyDeclarationKey(agent: string): string {
-  return JSON.stringify([agent]);
-}
-
 function declarationKey(agent: string, sessionName: string): string {
   // JSON encoding keeps the key textual and collision-safe for any
   // agent/session values.
@@ -160,9 +155,9 @@ function resolvePinned(
  * reaches its own of each.
  *
  * Shared by both placements of `<TestAgent>`. The wrapper provisions one of
- * these per enclosing `<Test>`; nested-run configuration provisions exactly one,
- * inside the child it configures. What differs is the lifetime the caller
- * acquires it in — the partition itself is the same world either way.
+ * these per enclosing `<Test>`; nested-run configuration provisions one for the
+ * ordinary child and a private one for each controlled Plan invocation. Each is
+ * acquired inside the child it belongs to and remains its own world.
  */
 export function* provisionPartition(options: {
   defaultAgent: string;
@@ -170,8 +165,18 @@ export function* provisionPartition(options: {
   declarations: ReadonlyMap<string, ScenarioDeclaration>;
   /** How to re-invoke this host as the agent worker. */
   workerCommand: string[];
+  planCeiling?: {
+    readonly workdir: string;
+    readonly policy: {
+      readonly systemInstruction: string;
+      readonly permissionMode: "deny-all";
+      readonly mcpServers: readonly never[];
+      readonly allowedTools: readonly never[];
+    };
+    observeTurn?(): Operation<void>;
+  };
 }): Operation<BoundaryState> {
-  const { defaultAgent, controller, declarations, workerCommand } = options;
+  const { defaultAgent, controller, declarations, workerCommand, planCeiling } = options;
   const scenarios = new Map<string, ScenarioHandle>();
   const pending = new Map<string, Operation<ScenarioHandle>>();
   const bySessionKey = new Map<string, PinnedSession>();
@@ -182,13 +187,7 @@ export function* provisionPartition(options: {
     sessionName: string | undefined,
     dir: string,
   ): Operation<ScenarioHandle> {
-    // The exact mapping first, always. An any-session declaration is a fallback
-    // an author opted into for conversations they cannot name — `<Plan>` derives
-    // its session from the expansion that asked — and it must never take a
-    // session somebody did name.
-    const declared =
-      declarations.get(declarationKey(agentName, sessionName ?? "")) ??
-      declarations.get(anyDeclarationKey(agentName));
+    const declared = declarations.get(declarationKey(agentName, sessionName ?? ""));
     if (!declared) {
       throw new Error(`no <TestAgent.Scenario> maps ${describeMapping(agentName, sessionName)}`);
     }
@@ -249,6 +248,9 @@ export function* provisionPartition(options: {
       return { route: pinned.scenario.route, resolved: () => {} };
     }
     const scenario = yield* provision(context.agentName, context.session, context.cwd);
+    if (planCeiling?.observeTurn !== undefined) {
+      yield* planCeiling.observeTurn();
+    }
     return {
       route: scenario.route,
       resolved(value) {
@@ -277,6 +279,7 @@ export function* provisionPartition(options: {
     // bound to a build the next does not share.
     executableObserver: createControlledExecutableObserver().observer,
     routeStore: createMemorySessionRouteStore(),
+    ...(planCeiling === undefined ? {} : { planCeiling }),
   });
   return { provider, boundaryScope, scenarios, pending, bySessionKey };
 }
@@ -510,15 +513,6 @@ export const SCENARIO_PROPS: PropsSchema = {
     src: { type: "string" },
     agent: { type: "string" },
     session: { type: "string" },
-    /**
-     * Answer for any of this agent's sessions no exact mapping claims.
-     *
-     * For a conversation whose name a test cannot write down — `<Plan>` derives
-     * its session from the expansion that asked. An exact mapping always wins,
-     * and it is an explicit opt-out of exact matching rather than a new meaning
-     * for an omitted `session`.
-     */
-    anySession: { type: "boolean" },
   },
   required: ["src"],
   additionalProperties: false,

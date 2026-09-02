@@ -2823,6 +2823,13 @@ review exists. What the ceiling then does — the permission mode, the
 prompt-failure policy, the capability refusals, the empty session directory — is
 the same whichever provider is underneath.
 
+For that controlled child alone, an authored `<Plan session="planner">` gives
+the trusted host the exact scenario label to select before it privately maps the
+declaration to Plan's derived conversation identity. The provider and scenario
+state remain keyed by that opaque identity and the child working directory.
+This adds no TestAgent matcher or fallback, and ordinary Agent sessions retain
+their exact-session semantics.
+
 Two registrations for one name and kind at the same scope are a configuration
 error naming both origins. Installation order is not a resolution mechanism —
 reserved and default registrations are held apart, so which one wins is decided

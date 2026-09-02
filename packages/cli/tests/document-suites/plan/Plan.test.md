@@ -21,14 +21,14 @@ The child is `uses-plan.md`, which writes `<Plan>` and prints what it bound. The
 scenario answers the one request the Plan workflow sends, and the answer
 approves the draft it produced.
 
-`anySession` is how the scenario reaches it. `<Plan>` derives the conversation
-it opens from the expansion that asked, so there is no session name an author
-could write here — that is what this opt-in is for, and an exact mapping still
-wins wherever one exists.
+The child authors `session="planner"`, and its scenario names that exact label.
+The trusted child host privately connects the declaration to the opaque
+conversation identity `<Plan>` derives for this invocation; the provider keeps
+all runtime state under that opaque identity.
 
 <Execution host="run" target="packages/cli/tests/document-suites/plan/uses-plan.md" as="run">
 <TestAgent>
-<TestAgent.Scenario anySession={true} src="./agents/approved-plan.md" />
+<TestAgent.Scenario session="planner" src="./agents/approved-plan.md" />
 </TestAgent>
 
 <Answers>
@@ -52,7 +52,7 @@ executed what it was given would have created it.
 <Test name="the approved source did not run" timeout="120s">
 <Execution host="run" target="packages/cli/tests/document-suites/plan/uses-plan.md" as="run">
 <TestAgent>
-<TestAgent.Scenario anySession={true} src="./agents/approved-plan.md" />
+<TestAgent.Scenario session="planner" src="./agents/approved-plan.md" />
 </TestAgent>
 
 <Answers>

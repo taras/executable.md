@@ -73,6 +73,16 @@ export interface TestAgentProviderOptions {
   /** Which build this partition observes. Its own controlled one. */
   executableObserver?: ExecutableObserver;
   dependencies?: AcpxProviderDependencies;
+  /** The fixed, narrower ceiling used only by a trusted child Plan host. */
+  planCeiling?: {
+    readonly workdir: string;
+    readonly policy: {
+      readonly systemInstruction: string;
+      readonly permissionMode: "deny-all";
+      readonly mcpServers: readonly never[];
+      readonly allowedTools: readonly never[];
+    };
+  };
 }
 
 /**
@@ -137,6 +147,7 @@ export const TEST_AGENT_CLIENT_NATIVE_ADAPTER: NativeAdapter = {
 export function* useTestAgentProvider(options: TestAgentProviderOptions): Operation<AcpxProvider> {
   let pendingRoute: string | undefined;
   const routeSlot = yield* useRouteSlot();
+  const planCeiling = options.planCeiling;
 
   // ACPX tokenizes the command on whitespace with quote support, so
   // command segments containing spaces (e.g. a binary path) are quoted.
@@ -194,6 +205,20 @@ export function* useTestAgentProvider(options: TestAgentProviderOptions): Operat
       ...(options.dependencies?.createRuntime
         ? { createRuntime: options.dependencies.createRuntime }
         : {}),
+      ...(planCeiling === undefined
+        ? {}
+        : {
+            // deno-lint-ignore require-yield
+            *agentCwd(): Operation<string> {
+              return planCeiling.workdir;
+            },
+            mcpServers: [...planCeiling.policy.mcpServers],
+            permissions: "strict",
+            newSessionOptions: {
+              systemPrompt: planCeiling.policy.systemInstruction,
+              allowedTools: [...planCeiling.policy.allowedTools],
+            },
+          }),
     },
   );
 }

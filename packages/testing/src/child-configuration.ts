@@ -63,17 +63,6 @@ export interface ChildScenario {
   readonly agent: string;
   /** The logical session, or the empty string for the unnamed one. */
   readonly session: string;
-  /**
-   * Whether this mapping answers for any of its agent's sessions that no exact
-   * mapping claims.
-   *
-   * For a conversation whose name the test cannot write down. `<Plan>` is the
-   * case it exists for: it derives its session from the expansion that asked,
-   * so there is no name an author could put here. An exact mapping always wins,
-   * and an agent may declare at most one of these — it is an explicit opt-out
-   * of exact matching, never what omitting `session` means.
-   */
-  readonly anySession?: boolean;
   /** The containment root the behavior document's dependencies resolve under. */
   readonly rootDir: string;
   readonly document: { readonly path: string; readonly source: string };
@@ -171,7 +160,6 @@ function detachScenario(scenario: ChildScenario): ChildScenario {
   return frozen({
     agent: scenario.agent,
     session: scenario.session,
-    ...(scenario.anySession === true ? { anySession: true } : {}),
     rootDir: scenario.rootDir,
     document: frozen({ path: scenario.document.path, source: scenario.document.source }),
   });

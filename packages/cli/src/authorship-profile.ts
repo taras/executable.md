@@ -153,6 +153,8 @@ export interface AuthorshipCeilingInputs {
 export interface PlanAuthorship {
   /** The agent this Plan conversation defaults to. */
   readonly defaultAgent: string;
+  /** The trusted adapter that supplies this invocation's provider. */
+  readonly origin: "production-acpx" | "controlled-test-agent";
   /**
    * Install this invocation's Agent provider, inside the Plan ceiling.
    *
@@ -162,7 +164,30 @@ export interface PlanAuthorship {
    * @param workdir This conversation's directory, established and proven empty.
    * @param host The scope captured before the ceiling existed, for host acts.
    */
-  installProvider(workdir: string, host: Scope): Operation<void>;
+  installProvider(invocation: PlanAuthorshipInvocation): Operation<void>;
+}
+
+export interface PlanAuthorshipInvocation {
+  readonly workdir: string;
+  readonly host: Scope;
+  readonly session: string;
+  readonly authoredSession?: string;
+  readonly policy: PlanAuthorshipPolicy;
+  observe?(observation: PlanAuthorshipObservation): Operation<void>;
+}
+
+export interface PlanAuthorshipPolicy {
+  readonly systemInstruction: string;
+  readonly permissionMode: "deny-all";
+  readonly promptFailures: "fail";
+  readonly mcpServers: readonly never[];
+  readonly allowedTools: readonly never[];
+}
+
+export interface PlanAuthorshipObservation {
+  readonly providerOrigin: PlanAuthorship["origin"];
+  readonly policy: PlanAuthorshipPolicy;
+  readonly workdir: string;
 }
 
 /**
@@ -209,14 +234,20 @@ export function planAuthorshipCeiling(
     established: true,
     authorship: {
       defaultAgent: stack.defaultAgent,
-      *installProvider(workdir: string, host: Scope): Operation<void> {
+      origin: "production-acpx",
+      *installProvider(invocation: PlanAuthorshipInvocation): Operation<void> {
         const acpx = createAcpxProvider(
-          authorshipCeiling({ stack, ...(acp === undefined ? {} : { acp }) }, workdir, host),
+          authorshipCeiling(
+            { stack, ...(acp === undefined ? {} : { acp }) },
+            invocation.workdir,
+            invocation.host,
+            invocation.policy,
+          ),
         );
         yield* registerAgentProvider("acpx", acpx);
         yield* installInvocationAgentProvider("acpx", {
           defaultAgent: stack.defaultAgent,
-          permissionMode: AUTHORSHIP_PERMISSION_MODE,
+          permissionMode: invocation.policy.permissionMode,
         });
       },
     },
@@ -241,6 +272,11 @@ export interface AuthorshipFrame {
   readonly host: Scope;
   /** The host's ability to put an Agent under this ceiling. */
   readonly authorship: PlanAuthorship;
+  /** The opaque conversation identity the provider must preserve. */
+  readonly session: string;
+  /** The exact authored label a trusted child host may address privately. */
+  readonly authoredSession?: string;
+  observe?(observation: PlanAuthorshipObservation): Operation<void>;
   installElicitation(): Operation<void>;
 }
 
@@ -272,7 +308,14 @@ export function* installAuthorshipFrame(frame: AuthorshipFrame): Operation<void>
   //
   // Which provider it is belongs to the host that supplied the capability. What
   // does not is everything below: one ceiling, whoever is underneath it.
-  yield* frame.authorship.installProvider(frame.workdir, frame.host);
+  yield* frame.authorship.installProvider({
+    workdir: frame.workdir,
+    host: frame.host,
+    session: frame.session,
+    ...(frame.authoredSession === undefined ? {} : { authoredSession: frame.authoredSession }),
+    policy: PLAN_AUTHORSHIP_POLICY,
+    ...(frame.observe === undefined ? {} : { observe: frame.observe }),
+  });
   // A candidate comes from a turn's complete successful close value or from
   // nowhere. `<Prompt>` ordinarily renders whatever a failed turn managed to
   // emit and carries on, which for a workflow that reviews source would mean
@@ -280,7 +323,7 @@ export function* installAuthorshipFrame(frame: AuthorshipFrame): Operation<void>
   // failed, cancelled or protocol-invalid turn ends authorship before anything
   // is presented. The Component cannot opt out of it.
   yield* installPromptFailurePolicy(function* () {
-    return true;
+    return PLAN_AUTHORSHIP_POLICY.promptFailures === "fail";
   });
   yield* refuseDocumentCapabilities();
 }
@@ -309,7 +352,7 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
     // regional install had to shadow rather than one it owns.
     yield* installAgentComponents({
       defaultAgent: ceiling.authorship.defaultAgent,
-      permissionMode: AUTHORSHIP_PERMISSION_MODE,
+      permissionMode: PLAN_AUTHORSHIP_POLICY.permissionMode,
     });
     const source = yield* readPackagedDocument(PLAN_COMMAND_DOCUMENT);
     try {
@@ -390,6 +433,7 @@ export function authorshipCeiling(
   profile: AuthorshipCeilingInputs,
   workdir: string,
   host: Scope,
+  policy: PlanAuthorshipPolicy = PLAN_AUTHORSHIP_POLICY,
 ): AcpxProviderDependencies {
   const assembly = hostAcpDependencies(profile.stack);
   const prepare = assembly.prepareAgent;
@@ -403,9 +447,12 @@ export function authorshipCeiling(
     *agentCwd() {
       return workdir;
     },
-    mcpServers: [],
+    mcpServers: [...policy.mcpServers],
     permissions: "strict",
-    newSessionOptions: { systemPrompt: AUTHORSHIP_INSTRUCTIONS, allowedTools: [] },
+    newSessionOptions: {
+      systemPrompt: policy.systemInstruction,
+      allowedTools: [...policy.allowedTools],
+    },
   };
 }
 
@@ -471,6 +518,15 @@ export const AUTHORSHIP_INSTRUCTIONS = [
   "explanation is answered with an explanation. Never answer one in the shape the",
   "other asked for.",
 ].join("\n");
+
+/** The one policy both production and controlled Plan providers consume. */
+export const PLAN_AUTHORSHIP_POLICY: PlanAuthorshipPolicy = Object.freeze({
+  systemInstruction: AUTHORSHIP_INSTRUCTIONS,
+  permissionMode: AUTHORSHIP_PERMISSION_MODE,
+  promptFailures: "fail",
+  mcpServers: Object.freeze([]),
+  allowedTools: Object.freeze([]),
+});
 
 /**
  * Where this host keeps its profile session directories by default.
