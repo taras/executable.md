@@ -33,7 +33,7 @@
 
 import type { Operation } from "effection";
 import { hasContent, registerAgentProvider, tryContent } from "@executablemd/core";
-import type { AgentComponentsOptions, Json } from "@executablemd/core";
+import type { AgentComponentsOptions, AgentProviderOptions, Json } from "@executablemd/core";
 import { createPartitionedAcpxProvider } from "@executablemd/acp";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { installInvocationAgentProvider } from "@executablemd/core/host";
@@ -209,15 +209,21 @@ export interface PlanProviderPolicy {
   readonly allowedTools: readonly never[];
 }
 
-/** What one adapter actually assembled, read off the values it handed over. */
+/**
+ * One installed provider, as the objects it was installed with.
+ *
+ * Not a description built beside the installation but the installation itself:
+ * the same value registers the provider, installs the invocation options, and
+ * is handed to a trusted host as the observation. There is nothing for a report
+ * to disagree with, because there is no second report.
+ */
 export interface PlanProviderAssembly {
+  /** The identity registered and selected for this invocation. */
   readonly provider: string;
-  readonly agentCwd: string;
-  readonly systemInstruction: string | undefined;
-  readonly allowedTools: readonly string[] | undefined;
-  readonly mcpServers: number | undefined;
-  readonly permissions: string | undefined;
-  readonly permissionMode: string;
+  /** The dependencies the provider was built from, as the provider holds them. */
+  readonly dependencies: AcpxProviderDependencies;
+  /** The options the invocation provider was installed with. */
+  readonly invocation: AgentProviderOptions;
 }
 
 /** What a Plan whose scenario nobody declared is refused with. */
@@ -302,39 +308,36 @@ export function* installChildTestAgent(
         }
         planDeclarations.set(key, declared);
       }
-      // Assembled once, here, and then both used and described. The provider is
-      // built by spreading this exact object, so a report taken from it is a
-      // report of what runs rather than of what was asked for.
-      const dependencies = planProviderDependencies(request.workdir, request.policy);
+      // One assembly, used for every installation and handed back as the
+      // observation. Nothing is reconstructed afterward, so a report cannot
+      // describe an arrangement other than the one installed.
       const plan = yield* provisionPartition({
         defaultAgent: configuration.defaultAgent,
         controller,
         declarations: planDeclarations,
         workerCommand: [...options.workerCommand],
-        planCeiling: { dependencies },
+        planConfiguration: {
+          dependencies: planProviderDependencies(request.workdir, request.policy),
+        },
       });
+      const installed: PlanProviderAssembly = {
+        provider: TEST_AGENT_PROVIDER,
+        // The partition's own account of what its provider holds, so a provider
+        // built from anything but the assembled Plan dependencies reports as
+        // what it actually is rather than as what was asked for.
+        dependencies: plan.dependencies,
+        invocation: {
+          defaultAgent: request.agent,
+          permissionMode: request.policy.permissionMode,
+        },
+      };
       // deno-lint-ignore require-yield
       const planFactory = createPartitionedAcpxProvider(function* () {
         return plan.provider;
       });
-      yield* registerAgentProvider(TEST_AGENT_PROVIDER, planFactory);
-      yield* installInvocationAgentProvider(TEST_AGENT_PROVIDER, {
-        defaultAgent: request.agent,
-        permissionMode: request.policy.permissionMode,
-      });
-      return {
-        provider: TEST_AGENT_PROVIDER,
-        agentCwd: dependencies.agentCwd === undefined ? "" : yield* dependencies.agentCwd(),
-        systemInstruction:
-          typeof dependencies.newSessionOptions?.systemPrompt === "string"
-            ? dependencies.newSessionOptions.systemPrompt
-            : undefined,
-        allowedTools: dependencies.newSessionOptions?.allowedTools,
-        mcpServers: dependencies.mcpServers?.length,
-        permissions:
-          typeof dependencies.permissions === "string" ? dependencies.permissions : undefined,
-        permissionMode: request.policy.permissionMode,
-      };
+      yield* registerAgentProvider(installed.provider, planFactory);
+      yield* installInvocationAgentProvider(installed.provider, installed.invocation);
+      return installed;
     },
   };
 }

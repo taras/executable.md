@@ -42,7 +42,7 @@ import {
   registerAgentProvider,
   retainedSource,
 } from "@executablemd/core";
-import type { Json } from "@executablemd/core";
+import type { AgentProviderOptions, Json } from "@executablemd/core";
 import type { DeclaredMarkdownComponent } from "@executablemd/core/host";
 import { executeInstalled, installInvocationAgentProvider } from "@executablemd/core/host";
 import { createAcpxProvider } from "@executablemd/acp";
@@ -182,35 +182,24 @@ export interface PlanAuthorshipPolicy {
 }
 
 /**
- * What one adapter actually assembled, read off the values it handed the
- * provider rather than off the policy it was given.
+ * One installed provider, as the objects it was installed with.
  *
- * The difference is the whole point. A report built from the policy input would
- * say the same thing however the adapter assembled its dependencies, so it
- * could not tell an assembly that honored the policy from one that dropped it.
+ * Not a description built beside the installation but the installation itself:
+ * the same value registers the provider, installs the invocation options, and
+ * is handed to a trusted host as its observation. There is nothing for a report
+ * to disagree with, because there is no second report.
  */
 export interface PlanProviderAssembly {
-  /** The provider name this adapter registered, which is what routes a turn. */
+  /** The identity registered and selected for this invocation. */
   readonly provider: string;
-  /** The working directory the assembled dependencies actually carry. */
-  readonly agentCwd: string;
-  /** The system instruction a new session is actually opened with. */
-  readonly systemInstruction: string | undefined;
-  /** The native tools a fresh session is actually allowed. */
-  readonly allowedTools: readonly string[] | undefined;
-  /** The MCP servers actually configured. */
-  readonly mcpServers: number | undefined;
-  /** The native permission answer actually configured. */
-  readonly permissions: string | undefined;
-  /** The permission mode actually installed for the invocation. */
-  readonly permissionMode: string;
+  /** The dependencies the provider was built from, as the provider holds them. */
+  readonly dependencies: AcpxProviderDependencies;
+  /** The options the invocation provider was installed with. */
+  readonly invocation: AgentProviderOptions;
 }
 
-/** Everything a Plan's configuration turned out to be, once it is installed. */
-export interface PlanAuthorshipObservation extends PlanProviderAssembly {
-  /** Whether the frame installed the policy that ends authorship on a failed turn. */
-  readonly promptFailures: PlanAuthorshipPolicy["promptFailures"];
-}
+/** What a Plan's configuration turned out to be, once it is installed. */
+export type PlanAuthorshipObservation = PlanProviderAssembly;
 
 /** What a host that supplies no Agent at all refuses a Plan with. */
 export const NO_AGENT_CONTEXT = "No Agent context was found. No Plan was returned.";
@@ -245,46 +234,27 @@ export function planAgentContext(
   return Ok({
     defaultAgent: stack.defaultAgent,
     *installProvider(invocation: PlanAuthorshipInvocation): Operation<PlanProviderAssembly> {
-      // Assembled once and then read, so what is reported is what the provider
-      // was built from rather than what this adapter was asked for.
-      const dependencies = authorshipDependencies(
-        { stack, ...(acp === undefined ? {} : { acp }) },
-        invocation.workdir,
-        invocation.host,
-        invocation.policy,
-      );
-      yield* registerAgentProvider("acpx", createAcpxProvider(dependencies));
-      yield* installInvocationAgentProvider("acpx", {
-        defaultAgent: stack.defaultAgent,
-        permissionMode: invocation.policy.permissionMode,
-      });
-      return yield* describeAssembly("acpx", dependencies, invocation.policy.permissionMode);
+      // One assembly, used for every installation and handed back as the
+      // observation. Nothing is reconstructed afterward, so a report cannot
+      // describe an arrangement other than the one installed.
+      const installed: PlanProviderAssembly = {
+        provider: "acpx",
+        dependencies: authorshipDependencies(
+          { stack, ...(acp === undefined ? {} : { acp }) },
+          invocation.workdir,
+          invocation.host,
+          invocation.policy,
+        ),
+        invocation: {
+          defaultAgent: stack.defaultAgent,
+          permissionMode: invocation.policy.permissionMode,
+        },
+      };
+      yield* registerAgentProvider(installed.provider, createAcpxProvider(installed.dependencies));
+      yield* installInvocationAgentProvider(installed.provider, installed.invocation);
+      return installed;
     },
   });
-}
-
-/**
- * One assembled provider, as the values it was actually built from.
- *
- * `agentCwd` is an operation on the dependencies rather than a field, so it is
- * asked the way the provider asks it.
- */
-export function* describeAssembly(
-  provider: string,
-  dependencies: AcpxProviderDependencies,
-  permissionMode: string,
-): Operation<PlanProviderAssembly> {
-  const session = dependencies.newSessionOptions;
-  return {
-    provider,
-    agentCwd: dependencies.agentCwd === undefined ? "" : yield* dependencies.agentCwd(),
-    systemInstruction: typeof session?.systemPrompt === "string" ? session.systemPrompt : undefined,
-    allowedTools: session?.allowedTools,
-    mcpServers: dependencies.mcpServers?.length,
-    permissions:
-      typeof dependencies.permissions === "string" ? dependencies.permissions : undefined,
-    permissionMode,
-  };
 }
 
 /** What claiming one conversation's directory needs, and nothing more. */
@@ -348,18 +318,19 @@ export function* installAuthorshipFrame(frame: AuthorshipFrame): Operation<void>
     ...(frame.authoredSession === undefined ? {} : { authoredSession: frame.authoredSession }),
     policy: PLAN_AUTHORSHIP_POLICY,
   });
-  const promptFailures = yield* installPlanPromptFailurePolicy();
+  yield* installPlanPromptFailurePolicy();
   yield* refuseDocumentCapabilities();
-  // After everything, and from what everything turned out to be. A report built
-  // before the last install would describe an arrangement that does not exist
-  // yet, which is the one thing a trusted observer must not be given.
+  // After everything, and it is the installation rather than an account of one.
+  // Whether the prompt-failure policy is installed is not reported here at all:
+  // a value saying so would agree with itself however the middleware behaved,
+  // so a turn that fails partway proves it instead.
   if (frame.observe !== undefined) {
-    yield* frame.observe({ ...assembly, promptFailures });
+    yield* frame.observe(assembly);
   }
 }
 
 /**
- * End authorship on a failed turn, and say that it was installed.
+ * End authorship on a failed turn.
  *
  * A candidate comes from a turn's complete successful close value or from
  * nowhere. `<Prompt>` ordinarily renders whatever a failed turn managed to emit
@@ -367,16 +338,11 @@ export function* installAuthorshipFrame(frame: AuthorshipFrame): Operation<void>
  * person half a program; the host decides otherwise here, so a failed, cancelled
  * or protocol-invalid turn ends authorship before anything is presented. The
  * Component cannot opt out of it.
- *
- * The answer is returned rather than assumed by the caller, so removing this
- * installation removes the fact an observer reports rather than leaving one that
- * describes an install that no longer happens.
  */
-function* installPlanPromptFailurePolicy(): Operation<PlanAuthorshipPolicy["promptFailures"]> {
+function* installPlanPromptFailurePolicy(): Operation<void> {
   yield* installPromptFailurePolicy(function* () {
     return PLAN_AUTHORSHIP_POLICY.promptFailures === "fail";
   });
-  return PLAN_AUTHORSHIP_POLICY.promptFailures;
 }
 
 /**

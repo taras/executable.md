@@ -73,6 +73,8 @@ interface PinnedSession {
 
 export interface BoundaryState {
   provider: AcpxProvider;
+  /** The exact dependencies that provider was built from. */
+  dependencies: AcpxProviderDependencies;
   /** Owns every scenario resource provisioned for this boundary. */
   boundaryScope: Scope;
   scenarios: Map<string, ScenarioHandle>;
@@ -167,9 +169,9 @@ export function* provisionPartition(options: {
   declarations: ReadonlyMap<string, ScenarioDeclaration>;
   /** How to re-invoke this host as the agent worker. */
   workerCommand: string[];
-  planCeiling?: { readonly dependencies: AcpxProviderDependencies };
+  planConfiguration?: { readonly dependencies: AcpxProviderDependencies };
 }): Operation<BoundaryState> {
-  const { defaultAgent, controller, declarations, workerCommand, planCeiling } = options;
+  const { defaultAgent, controller, declarations, workerCommand, planConfiguration } = options;
   const scenarios = new Map<string, ScenarioHandle>();
   const pending = new Map<string, Operation<ScenarioHandle>>();
   const bySessionKey = new Map<string, PinnedSession>();
@@ -250,7 +252,7 @@ export function* provisionPartition(options: {
     };
   }
 
-  const provider = yield* useTestAgentProvider({
+  const partition = yield* useTestAgentProvider({
     defaultAgent,
     // Two agents, because the two construction routes are two contracts:
     // the default one's worker asserts its own identity, and the second
@@ -267,9 +269,16 @@ export function* provisionPartition(options: {
     // bound to a build the next does not share.
     executableObserver: createControlledExecutableObserver().observer,
     routeStore: createMemorySessionRouteStore(),
-    ...(planCeiling === undefined ? {} : { planCeiling }),
+    ...(planConfiguration === undefined ? {} : { planConfiguration }),
   });
-  return { provider, boundaryScope, scenarios, pending, bySessionKey };
+  return {
+    provider: partition.provider,
+    dependencies: partition.dependencies,
+    boundaryScope,
+    scenarios,
+    pending,
+    bySessionKey,
+  };
 }
 
 /**

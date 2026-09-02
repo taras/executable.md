@@ -91,6 +91,24 @@ const PLAN_BEHAVIOR = doc(
   "{program}",
 );
 
+/**
+ * A turn that produces part of a candidate and then fails.
+ *
+ * The marker is emitted before the failure, so it is exactly what a `<Prompt>`
+ * that rendered whatever a failed turn managed to emit would hand onward. Under
+ * the authorship policy no such partial reaches the draft check or the review,
+ * and the run ends instead.
+ */
+const PARTIAL_THEN_FAILS = doc(
+  '<WhenPrompt template="{?lead}Create one complete XMD Plan from this Prompt:{?rest}" />',
+  "",
+  "# Half a program",
+  "",
+  "partialcandidatemarker",
+  "",
+  '<Fail message="the scripted turn failed after emitting part of a candidate" />',
+);
+
 /** An ordinary document that writes a Plan and prints what it bound. */
 const PLAN_CHILD = doc(
   "# A document that writes a Plan",
@@ -680,24 +698,32 @@ describe("deterministic dependencies declared for a nested run", () => {
       }),
     );
 
+    // What comes back is the installation, not an account of it: the same value
+    // registered the provider and installed the invocation options.
     const installed = yield* observed.operation;
-    // The provider that routes this Plan's turns is the controlled one, named by
-    // the registration rather than by anything authored beside it.
-    expect(installed.provider).toBe("test-agent");
-    // And every term of the fixed policy, as the assembled dependencies carry it.
-    expect(installed.systemInstruction).toBe(AUTHORSHIP_INSTRUCTIONS);
-    expect(installed.permissionMode).toBe("deny-all");
-    expect(installed.promptFailures).toBe("fail");
-    expect(installed.mcpServers).toBe(0);
-    expect(installed.allowedTools).toEqual([]);
-    expect(installed.permissions).toBe("strict");
-    expect(installed.agentCwd.startsWith(join(tmpdir(), "xmd-child-plan-"))).toBe(true);
-    expect(installed.agentCwd.startsWith(DEFAULT_AUTHORSHIP_ROOT)).toBe(false);
 
-    // The observer runs from controlled turn routing after its scenario exists,
-    // so the child's Prompt is in flight here. halt() waits for the provider,
-    // declaration, session directory and child root to finish teardown before
-    // it returns.
+    // The identity that was registered and selected for this invocation.
+    expect(installed.provider).toBe("test-agent");
+    expect(installed.invocation.permissionMode).toBe("deny-all");
+
+    // And the dependencies the provider actually holds. Read through the
+    // provider's own accessors where it has them, so a provider disconnected
+    // from these dependencies reports what it really has.
+    const dependencies = installed.dependencies;
+    expect(dependencies.newSessionOptions?.systemPrompt).toBe(AUTHORSHIP_INSTRUCTIONS);
+    expect(dependencies.newSessionOptions?.allowedTools).toEqual([]);
+    expect(dependencies.mcpServers).toEqual([]);
+    expect(dependencies.permissions).toBe("strict");
+    const agentCwd = dependencies.agentCwd === undefined ? "" : yield* dependencies.agentCwd();
+    expect(agentCwd.startsWith(join(tmpdir(), "xmd-child-plan-"))).toBe(true);
+    expect(agentCwd.startsWith(DEFAULT_AUTHORSHIP_ROOT)).toBe(false);
+
+    // The observer runs once the authorship frame is installed and before the
+    // Component's content starts, so no Prompt has been sent yet — what is in
+    // flight is the invocation holding the provider, the session directory and
+    // the child root. halt() waits for all of them to finish teardown before it
+    // returns, which is what makes this a structured-cancellation proof rather
+    // than a check that something was deleted eventually.
     yield* running.halt();
     const after = yield* planRoots();
     expect(after.children.filter((entry) => !before.children.includes(entry))).toEqual([]);
@@ -705,22 +731,58 @@ describe("deterministic dependencies declared for a nested run", () => {
   });
 
   /**
-   * PMT6 — only the canonical declaration configures a Plan ceiling.
+   * PMT4 — the prompt-failure rule, proven by a turn rather than by a value.
+   *
+   * `<Prompt>` ordinarily renders whatever a failed turn managed to emit and
+   * carries on. Authorship installs the opposite, and this is the difference
+   * being observed: a turn that emits part of a candidate and then fails must
+   * end authorship before that partial can be checked or reviewed. A report
+   * saying the policy is installed would say so however the middleware behaved.
+   */
+  it("stops authorship when a turn fails after emitting part of a candidate", function* () {
+    const project = yield* useProject({
+      "agents/plan.md": PARTIAL_THEN_FAILS,
+      "writes-a-plan.md": PLAN_CHILD,
+      "README.md": doc(
+        '<Test name="a failed turn ends authorship" timeout="180s">',
+        '<Execution host="run" target="./writes-a-plan.md" as="run">',
+        ...PLAN_DECLARATION,
+        "",
+        '<CollectOutput as="output" />',
+        "",
+        "<AssertEquals actual={run.result.ok} expected={false} />",
+        // The partial never became a draft, so it reached neither the check nor
+        // the review, and no approved source came back.
+        '<AssertEquals actual={output.includes("partialcandidatemarker")} expected={false} />',
+        '<AssertEquals actual={output.includes("Approved source:")} expected={false} />',
+        "</Execution>",
+        "</Test>",
+      ),
+    });
+    const result = yield* runCli(["test", "README.md"], { cwd: project, ...WORKER }).join();
+    expect(result.stdout + result.stderr).not.toContain("❌");
+    expect(result.code).toBe(0);
+    // And the partial reached the person running the suite nowhere either.
+    expect(result.stdout + result.stderr).not.toContain("partialcandidatemarker");
+  });
+
+  /**
+   * PMT6 — only the canonical declaration supplies a Plan Agent context.
    *
    * The repository file ends the scan, so what the `<Execution>` prefix holds is
    * an ordinary component invocation rather than a declaration this host
-   * recognizes. A child whose `<Plan>` found a ceiling anyway would mean the
+   * recognizes. A child whose `<Plan>` found an Agent context anyway would mean the
    * capability came from the name rather than from the definition ordinary
    * resolution selected.
    */
-  it("configures no Plan authorship ceiling from a repository TestAgent", function* () {
+  it("supplies no Plan Agent context from a repository TestAgent", function* () {
     const project = yield* useProject({
       "agents/review.md": BEHAVIOR,
       // Chosen ahead of the package's, so this is ordinary assertion content.
       "components/TestAgent.md": doc("a repository component"),
       "writes-a-plan.md": doc('<Plan session="planner" as="approved">Write a program.</Plan>'),
       "README.md": doc(
-        '<Test name="a repository TestAgent configures no Plan ceiling" timeout="120s">',
+        '<Test name="a repository TestAgent supplies no Agent context" timeout="120s">',
         '<Execution host="run" target="./writes-a-plan.md" as="run">',
         '<TestAgent as="shadowed" />',
         "",
@@ -749,7 +811,7 @@ describe("deterministic dependencies declared for a nested run", () => {
    *
    * Either refusal would satisfy "a test root cannot write a Plan". This case
    * pins which one is delivered, so a later change that quietly gave the test
-   * root the declaration — and therefore a ceiling to be refused at — is a
+   * root the declaration — and therefore an Agent context to be refused for — is a
    * change somebody has to make deliberately.
    */
   it("gives a direct test root no Plan authorship authority", function* () {
@@ -764,7 +826,7 @@ describe("deterministic dependencies declared for a nested run", () => {
     expect(result.code).toBe(1);
     const reported = result.stdout + result.stderr;
     expect(reported).toContain("Cannot resolve component: Plan");
-    // And no ceiling was established for it to be refused at, which is the
+    // And no Agent context was supplied for it to be refused for, which is the
     // difference between "not this profile" and "this profile, no agent".
     expect(reported).not.toContain("No Agent context was found.");
   });
