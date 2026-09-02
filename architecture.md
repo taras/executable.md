@@ -2977,8 +2977,31 @@ a terminal provider, starting a shell, expanding pane content, acquiring an
 Agent session, or launching a native UI. The structured durable boundary owns
 that short circuit; a public replay context does not.
 
-Partial replay first compares the exact authored layout and refuses divergence
-before provider work. It rebuilds a fresh provider composite: completed pane
+Partial replay compares the **resolved** layout and refuses divergence before
+provider work.
+
+What that can and cannot cover follows from where a resumed run gets its
+document. A continuation executes the root the journal retained: the source the
+new invocation supplies is not read, not compared and not refused. So the
+authored structure of a grid — how many panes it has, their order, and whether
+each was written paired or self-closing — is fixed for the whole life of a
+journal, and cannot differ between runs. Comparing it would compare a value with
+itself.
+
+What can still differ is everything the retained source *resolves*: `columns`
+and each `title` are expressions, and props are not restored across a
+continuation, so a prop-borne or otherwise live value produces a different
+resolved layout from the same retained document. Those are what the comparison
+is for, and a change in either refuses before the foreground lease is taken and
+before any provider is contacted.
+
+Authored-structure change is therefore not a grid concern. A document whose body
+changed under an existing journal is a root-definition compatibility question —
+the retained root stays authoritative, and deciding whether a changed source
+should be refused rather than ignored belongs to a versioned root boundary that
+does not exist yet. Until it does, the grid's obligation is the narrower one it
+can actually discharge: retain the complete authored structure, and open the
+structure it retained rather than the one the file now shows. It rebuilds a fresh provider composite: completed pane
 children are restored as settled statuses without re-running their effects,
 while incomplete children replay or start their remaining work. An incomplete
 `<Session.Launch>` preserves the prepared/detached identity rules of its own
