@@ -905,7 +905,9 @@ document-execution record, appends no journal event and changes no run status.
 What authorizes it is the subject, not the caller's position in the lifecycle —
 a suspension id the run's retained `suspension_request` names for an answer, and
 the exact retained decision subject for a terminal decision. A value for a
-subject the run is not holding is refused with nothing written. Read-only
+subject the run is not holding is refused with nothing written.
+
+A **wake notification** is delivered on the same terms and is the one delivery that carries no value at all. A run may wait on a fact about a provider rather than on an answer, and that machine wait is a distinct event kind identified by a `waitId` rather than by a suspension id. An authenticated intake correlated to the exact wait subject retains a bounded notification saying that another observation may occur — no answer, verdict, stage, transition or observation result — and a later executor consumes it and appends the wake event in the run's own transaction. Delivery still stores and execution still decides; what changes is that here there is nothing stored for the execution to read except permission to look again. Read-only
 inspection takes no acquisition either, and returns the immutable snapshot
 surface of the lifecycle contract rather than a writable handle.
 

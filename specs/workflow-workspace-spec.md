@@ -359,6 +359,14 @@ resume, watchers, unattended iteration and remote host selection — is #300's.
 Nothing above waits on it: a suspended run continues through `xmd workflow
 answer` followed by an explicit `xmd workflow resume`.
 
+**A machine wait is a second wait kind, not a second protocol.** Everything above describes a wait that ends when somebody delivers one typed value. A run can also wait on a fact about a provider — a remote object whose state a later observation will read — and that wait asks nobody anything. It has no request to answer, no response schema, no `xmd workflow answer` route and no bound value, so it publishes no `suspension_request`, consumes no retained answer and appends no `suspension_answer`.
+
+What it shares is this section's boundary and nothing else. Its retained event kind is `machine_wait`, distinct from `suspension_request`; its stable identity is a `waitId` the trusted execution derives from the run and the authored expansion, on the same terms every other durable position uses, and it is never a suspension ID. The wait event and the `suspended` run status commit together, the executor acquisition is released only after that commit, and a settlement the host refuses publishes neither. The stop reason references the filtered `machine_wait` event, so inspection reports a run waiting on provider state and offers no response schema and no answer command.
+
+A machine wait ends by being woken and then looking again. An authenticated intake correlated to the exact wait subject retains one bounded **wake notification** as an ordinary delivery-plane transaction — no executor acquisition, no lifecycle outcome, no run-status change — and it carries no answer, verdict, stage, transition or observation result. A duplicate notification changes nothing, and one naming another, spent, invalidated or terminal wait refuses without touching the active wait. An authorized operator resume is executor-side control rather than a delivery and reaches the same place. A later executor consumes one wake and appends one filtered `machine_wake` event for that exact `waitId` in one transaction, so a crash before the commit leaves both pending and a replay after it restores the event without consuming or appending again. The wake permits one further observation and decides nothing about its outcome; a resume with neither a pending wake nor operator authority reports the same wait and settles `suspended` again.
+
+The software factory's merged-observation wait ([the software factory](./github-actions-software-factory-spec.md) §10.4) is the first machine wait, and its closed records are §11.2 there.
+
 ### 3.6 Interruption and cancellation differ
 
 Interrupting foreground execution, including with Ctrl-C, releases the current
@@ -492,8 +500,9 @@ Workspace root inside its own mutating transaction.
 **Delivery and inspection are the exceptions, and they stay exceptions.** A
 delivery retains one externally supplied value for one exact retained subject
 under §3.5's rules — no acquisition, no execution, no attachment, no journal
-event, no status change — whether the subject is a suspension request or a
-terminal decision. Inspection is read-only and returns immutable snapshots. A
+event, no status change — whether the subject is a suspension request, a
+terminal decision, or a machine wait whose notification carries no value at all.
+Inspection is read-only and returns immutable snapshots. A
 remote host that let either one advance a lifecycle would have built a second
 state machine beside the journal.
 
@@ -1839,7 +1848,7 @@ interface PullRequestCommentResult {
 
 **The natural key is `subject` plus `effect`, and the body is never part of it.** A Git host issues no client-supplied idempotency key for a comment, so the effect identity has to be observable on the host for an interrupted creation to be found again. A comment provider therefore has to support one **stable opaque correlation marker**: a value it can write with a comment, preserve unchanged, and query completely. A provider that cannot do all three refuses the effect before its first mutation, the way a plain Git server refuses pull requests today — there is no fallback that searches prose.
 
-The marker is provider transport metadata. The **authored logical body is byte for byte what the document rendered**, and the provider's projection may carry the correlation representation outside it; GitHub's adapter encodes it as a non-rendered HTML comment. It is not authored prose, not a credential and not lifecycle authority — publishing an engine-derived effect identity as an opaque non-secret correlation value is what it is for. The public binding and every replay expose the authored body and the provider's comment identity, never the transport encoding.
+The marker is provider transport metadata. The **authored logical body is preserved byte for byte as the authored portion of the projection**, and the correlation representation lives outside that logical body rather than inside it; GitHub's adapter encodes it as a non-rendered HTML comment in its provider payload, so the payload the provider sends is not claimed to equal the authored bytes. It is not authored prose, not a credential and not lifecycle authority — publishing an engine-derived effect identity as an opaque non-secret correlation value is what it is for. The public binding and every replay expose the authored body and the provider's comment identity, never the transport encoding.
 
 **Observation is judged against the attempt state, not against the host alone.** Before any provider mutation, the durable effect retains that this exact request is prepared and unattempted; a live attempt is what moves it past that. What a complete observation means then depends on which side of that line the effect is on:
 
@@ -1938,7 +1947,7 @@ The observation is complete or it is nothing, and its five outcomes are distinct
 
 The third and fourth rows are deliberately not one row. Still open after a publication is eventual consistency and is worth waiting for; closed unmerged is a person having intervened, and waiting for that to resolve itself would wait forever.
 
-Cancellation publishes no completion, and a completed record replays without contacting a Git host. What the run does while the third row persists — a bounded host-configured retry, then a durable machine wait — and where this step sits in the terminal sequence belong to [the software factory](./github-actions-software-factory-spec.md) §10.3.
+Cancellation publishes no completion, and a completed record replays without contacting a Git host. What the run does while the third row persists — a bounded host-configured retry, then a machine wait that ends on reobservation rather than on a delivered answer — and where this step sits in the terminal sequence belong to [the software factory](./github-actions-software-factory-spec.md) §10.3 and §10.4.
 
 ## 8. Agents inspect; XMD mutates
 
@@ -2644,11 +2653,13 @@ authorizes a mutation: a later explicit attempt starts again at observation.
 
 **Whether absence can be proved at all depends on where the completion is visible**, and effects divide into two kinds. Most of them mutate a subject that already exists and whose own state answers the question: a Push reads the destination ref, a numbered pull-request update reads that pull request, `PullRequest.Ready` and `PullRequest.Close` read its state, `Issue.Close` reads the issue, `Project.Status` reads the field's current option. For those, a complete observation of the subject is decisive whether or not this effect has attempted anything, because what the observation reports is the resource itself.
 
-The other kind **creates a new object the host names**, and a comment is the case in this specification. Nothing pre-exists to read, and the host issues no client-supplied idempotency key, so the completion is observable only through a correlation value the effect itself wrote. Absence then means "that value is not there", which is a different claim before and after a mutation has been attempted, and the effect therefore retains its **attempt state**: the exact request is retained as prepared and unattempted before any provider mutation, and a live attempt moves it past that.
+The other kind **creates a new object the host names**. Creating one is safely reconcilable through either of two mechanisms, and which one an effect has decides whether attempt state takes part. An effect the provider gives a native client idempotency or correlation key — the key an Issue upsert derives from the canonical target and this run's own effect identity is one — reconciles on that key under its already-stated natural-key and complete-observation contract, and carries no attempt state: creating an object is not by itself what makes an effect attempt-stateful. A pull-request upsert is the same, reconciling on its explicit head-and-base or numbered identity.
+
+A comment is the one construct here with neither. Nothing pre-exists to read, and the host issues no client-supplied idempotency key, so the completion is observable only through a correlation value the effect itself wrote. Absence then means "that value is not there", which is a different claim before and after a mutation has been attempted, and the effect therefore retains its **attempt state**: the exact request is retained as prepared and unattempted before any provider mutation, and a live attempt moves it past that.
 
 For such an effect the decision above narrows in exactly one place. Unattempted with nothing found is proven absence and performs once. **Attempted with no committed local completion and nothing found is permanent ambiguity, not absence** — the correlation value is equally missing because the object was never created and because somebody removed it inside the interrupted window, and performing on that reading is how a duplicate gets published. Exactly one correlation match is compatible completion in either state; more than one is permanent ambiguity in either state; and an incomplete observation stays incomplete rather than becoming absence, since an unfinished search reported as absence is the same duplicate by another route. Once a local completion has committed, none of it decides anything further: replay reads the record and contacts no provider.
 
-A provider that cannot write, preserve and completely query such a correlation value cannot supply this kind of effect at all, and refuses it from observation before any mutation — the same refusal a plain Git server gives for pull requests.
+A provider that cannot write, preserve and completely query such a correlation value cannot supply this kind of effect at all, and refuses it from observation before any mutation — the same refusal a plain Git server gives for pull requests. A future host-named create effect that has neither a provider-native client key nor a preservable marker refuses on the same terms. That refusal is the contract rather than a gap in it: an effect that can prove neither absence nor completion has no safe way to run once.
 
 **The record.** A decision publishes one journal result holding the request, the
 normalized pre-state, the normalized observations, the decision — `adopted` or
@@ -3051,7 +3062,7 @@ interface IssueCommentResult {
 
 `subject` is the canonical issue URL — the normalized single spelling this section already requires of a target — `effect` is the engine-derived effect identity, and `url` is the canonical URL of the comment the effect settled on. The binding is `{ url }`, that comment's own URL.
 
-**The natural key is `subject` plus `effect`, and the body is never part of it.** An Issue provider carries the same requirement §7.10 states for a pull-request comment: it supports one stable opaque correlation marker it can write, preserve and completely query, or it refuses the effect before its first mutation. The authored logical body is byte for byte what the document rendered, and the correlation representation rides outside it. The attempt-state table of §7.10 governs the decision unchanged, including its fourth row — an absent marker after an attempted-but-uncommitted creation is permanent ambiguity rather than proven absence.
+**The natural key is `subject` plus `effect`, and the body is never part of it.** An Issue provider carries the same requirement §7.10 states for a pull-request comment: it supports one stable opaque correlation marker it can write, preserve and completely query, or it refuses the effect before its first mutation. The authored logical body is preserved byte for byte as the authored portion of the projection, and the correlation representation lives outside it. The attempt-state table of §7.10 governs the decision unchanged, including its fourth row — an absent marker after an attempted-but-uncommitted creation is permanent ambiguity rather than proven absence.
 
 `Issue.Close` is self-closing and takes one required `url`, one required `reason` from the closed enum `"completed" | "not_planned"`, and one required `as`. Its natural key is the canonical issue URL alone:
 

@@ -256,9 +256,7 @@ admission are its. Shared production modules stay provider-neutral: they do not
 detect Cloudflare, Deno, GitHub Actions or any other runtime, and they reach
 every host-specific behavior through the contextual APIs that already exist.
 
-**A completed replay attaches nothing.** It contacts no remote storage session
-and attaches no Workspace, Agent, process, Git, GitHub, Project or credential
-provider. That is the property §10's terminal ordering exists to preserve.
+**A completed replay reads its own history and nothing else.** It may reach and read the run's durable owner, because that owner is where the retained result is and an ephemeral client holds nothing to replay from. It attaches no Workspace, Agent, process, Git, Git-host, Issue, Project, credential or other external-effect provider, performs no effect again and starts no native operation. Reading retained completion from its authoritative owner is lifecycle storage access, not external-effect replay, and it is that second thing §10's terminal ordering exists to keep unnecessary.
 
 ## 4. Durable procedure and GitHub projection
 
@@ -646,11 +644,25 @@ A pull request observed still open after a successful target publication is temp
 
 The authored factory first performs a **bounded retry** around `PullRequest.Merged`. The retry count, total duration and backoff are host ceilings configured for the deployment; they are not props on the component and no document widens them.
 
-When that retry is exhausted while the pull request is still open, the run enters a **durable machine wait** at Stage 7. It is a suspension in the ordinary sense — the executor settles `suspended` and releases its acquisition — but its subject is a fact about a provider rather than a question for a person, so it is neither an answer nor a Stage 7 decision, and no form is bound to it. Its exact subject is the canonical pull-request URL, the expected merge commit, the retained terminal decision identity and the current implementation revision, retained as the `MergedObservationWait` record of §11.2.
+When that retry is exhausted while the pull request is still open, the run enters a **machine wait** at Stage 7.
 
-Two things may wake it. An authenticated intake for a relevant pull-request state change on that exact subject is retained as a delivery-plane transaction under §5, taking no executor acquisition; an operator may also resume the run explicitly. Neither wakeup carries a verdict, a stage or a transition — waking is permission to look again, not an answer. A later executor reobserves `PullRequest.Merged` and proceeds only on the adoption of §7.11's first row.
+A machine wait is a second kind of durable wait, and it is deliberately not a suspension in the typed-answer sense. A typed suspension publishes a request and a response schema and ends when somebody delivers one value that satisfies it. This wait asks nobody anything: it ends because a later execution looked at a provider again. It therefore has no response schema, no `xmd workflow answer` route, no web form and no bound value, and nothing about the typed-answer protocol — `suspension_request`, `suspension_answer`, a suspension ID — takes part in it. It is a second wait *kind* inside the existing lifecycle, never a second lifecycle controller.
 
-The wait is not a second lifecycle controller. It appends no outcome, moves no stage, and terminal settlement stays absent until the observation adopts. A conflict observed on any attempt — a merge at another commit, or a pull request closed unmerged — ends the wait as a conflict rather than continuing it.
+What it does share is the lifecycle boundary. The retained wait event and the `suspended` run status commit together, the executor acquisition is released only after that commit, and a settlement the host refuses publishes neither. Its retained event kind is `machine_wait`, distinct from `suspension_request`, and its stable identity is a `waitId` the trusted execution derives from the run and the authored expansion on the same engine-owned terms every other durable position uses. The run's stop reason references that filtered `machine_wait` event, so inspection reports that the run is waiting on provider state and offers no response schema and no answer command.
+
+The wait's subject is the canonical pull-request URL, the expected merge commit, the retained merge-decision event identity, the current implementation revision and `retriesExhausted: true`, retained as the `MergedObservationWait` record of §11.2.
+
+**Waking is permission to look again, not an answer.** Two sources may wake it. An authenticated intake for a relevant pull-request state change, correlated to that exact wait subject, is retained as a delivery-plane transaction under §5: it takes no executor acquisition, appends no lifecycle outcome, changes no run status, and supplies no answer, verdict, stage, transition or observation result. It records a bounded wake notification and nothing else. An authorized operator may also resume the run, which is executor-side control rather than a delivery — a resume is not a forged intake.
+
+A duplicate wake notification changes nothing. One naming another wait, a spent wait, an invalidated wait or a terminal run refuses and leaves the active wait exactly as it was.
+
+A later executor consumes one retained wake notification inside the run's transaction and appends one filtered `machine_wake` event for that exact `waitId`; an authorized operator resume appends the same event with `source: "operator-resume"`. Consuming the wake and ending the retained wait are one transaction, so a crash before it commits leaves both the wait and the notification pending, and a replay after it commits restores the wake event without consuming or appending anything again.
+
+After the wake event, authored control flow invokes `PullRequest.Merged` again. Only the compatible adoption of §7.11's first row advances the terminal sequence. An observation that is still open may retry and wait again at a new durable position; a merge at another commit and a pull request closed unmerged remain conflicts and end the wait as one rather than continuing it.
+
+An explicit resume with neither a pending provider wake nor operator-resume authority ends nothing. It reports the same machine wait and settles `suspended` again. Cancellation follows ordinary run cancellation and invents neither a wake nor a merged observation.
+
+The wait appends no lifecycle outcome and moves no stage, and terminal settlement stays absent until the observation adopts.
 
 ## 11. Exact public contracts
 
@@ -799,16 +811,26 @@ All three bind the exact revision they were made against and the authenticated a
 interface MergedObservationWait {
   readonly schema: "merged-observation-wait";
   readonly version: 1;
+  readonly waitId: string;
   readonly subject: string;
   readonly expectedMergeCommit: string;
   readonly decisionId: string;
   readonly revision: ImplementationRevision;
-  readonly suspensionId: string;
   readonly retriesExhausted: true;
+}
+
+interface MergedObservationWake {
+  readonly schema: "merged-observation-wake";
+  readonly version: 1;
+  readonly waitId: string;
+  readonly source: "provider-intake" | "operator-resume";
+  readonly intakeId?: string;
 }
 ```
 
-`subject` is the canonical pull-request URL, `decisionId` names the retained `merge` decision this wait belongs to, and `suspensionId` is the durable wait's own identity. `retriesExhausted` is literal: the record exists only after §10.4's bounded retry has run out, so a wait retained before that would be a run skipping the cheap path. The wait carries no stage, no outcome and no verdict, and consuming it authorizes one reobservation and nothing else.
+`waitId` is the machine wait's own identity, derived from the run and the authored expansion; it is not a suspension ID, and no typed-answer record names it. `subject` is the canonical pull-request URL and `decisionId` names the retained `merge` decision this wait belongs to. `retriesExhausted` is literal: the record exists only after §10.4's bounded retry has run out, so a wait retained before that would be a run skipping the cheap path. The wait carries no stage, no outcome, no verdict and no response schema.
+
+`MergedObservationWake` is what a later executor appends for that exact `waitId`. `intakeId` is required exactly when `source` is `"provider-intake"` and absent exactly when it is `"operator-resume"`, because the operator path is authenticated executor-side control rather than a delivery, and a wake that claimed an intake it does not have would be a forged one. A wake says only that another observation attempt may occur; it carries no observation result, and consuming it authorizes exactly one reobservation.
 
 #### The configured stage-to-option table
 
