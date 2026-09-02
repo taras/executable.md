@@ -42,7 +42,7 @@ function request(overrides: Partial<TerminalGridRequest> = {}): TerminalGridRequ
 }
 
 function log(): TerminalProviderLog {
-  return { events: [] };
+  return { events: [], shown: new Map<number, string>() };
 }
 
 describe("Tier TG — the provider boundary", () => {
