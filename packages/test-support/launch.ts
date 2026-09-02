@@ -47,6 +47,23 @@ export function cliCommand(args: string[]): { command: string; arguments: string
 }
 
 /**
+ * The same command as one quoted shell word list.
+ *
+ * A suite whose subject is what a *pipeline* delivers — a regular-file
+ * redirect, a reader that closes early — needs the CLI as text it can compose
+ * around, and the runtime it belongs to is still this package's to know.
+ */
+export function cliShellCommand(args: string[]): string {
+  const cli = cliCommand(args);
+  return [cli.command, ...cli.arguments].map(shellQuote).join(" ");
+}
+
+/** One shell word, quoted — a path a composed line names goes through here too. */
+export function shellQuote(word: string): string {
+  return `'${word.replaceAll("'", `'\\''`)}'`;
+}
+
+/**
  * What a subprocess needs from this one: where to find executables, and where
  * each runtime caches what it downloads. `HOME` is deliberately absent — a run
  * that exercises user configuration supplies an isolated one — so a
@@ -84,9 +101,26 @@ export interface CliRun {
  * timeout are configured here so every suite launches the same way.
  */
 export function runCli(args: string[], options: CliRunOptions = {}): CliRun {
+  const launch = cliCommand(args);
+  const label = `xmd ${args.join(" ")}`;
   return {
-    join: () => bounded(args, options, "join"),
-    expect: () => bounded(args, options, "expect"),
+    join: () => bounded(launch, label, options, "join"),
+    expect: () => bounded(launch, label, options, "expect"),
+  };
+}
+
+/**
+ * Run a shell line the caller composed, in the environment `runCli` uses.
+ *
+ * Compose it from `cliShellCommand()`. The exit status reported is the shell's,
+ * which in a pipeline is the last stage's — a row that needs the CLI's own
+ * status reports it out of band.
+ */
+export function runShell(line: string, options: CliRunOptions = {}): CliRun {
+  const launch = { command: line, shell: true };
+  return {
+    join: () => bounded(launch, line, options, "join"),
+    expect: () => bounded(launch, line, options, "expect"),
   };
 }
 
@@ -96,20 +130,27 @@ interface PartialOutput {
   stderr: string;
 }
 
+interface Launch {
+  command: string;
+  arguments?: string[];
+  shell?: boolean;
+}
+
 function* bounded(
-  args: string[],
+  launch: Launch,
+  label: string,
   options: CliRunOptions,
   mode: "join" | "expect",
 ): Operation<ProcessResult> {
   const limit = options.timeout ?? DEFAULT_TIMEOUT;
-  const cli = cliCommand(args);
   // Accumulated outside the deadline, so a run the deadline abandons still has
   // an account: a timeout that reports nothing but its duration cannot say
   // whether the child hung before its first line or after its last.
   const partial: PartialOutput = { stdout: "", stderr: "" };
   const result = yield* timebox<ProcessResult>(limit, function* () {
-    const child = yield* exec(cli.command, {
-      arguments: cli.arguments,
+    const child = yield* exec(launch.command, {
+      arguments: launch.arguments,
+      shell: launch.shell,
       cwd: options.cwd,
       env: cliEnv(options),
     });
@@ -129,7 +170,7 @@ function* bounded(
     return { ...status, stdout: partial.stdout, stderr: partial.stderr };
   });
   if (result.timeout) {
-    throw new Error(abandonedReport(args, limit, partial));
+    throw new Error(abandonedReport(label, limit, partial));
   }
   return result.value;
 }
@@ -145,12 +186,12 @@ function text(bytes: Uint8Array): string {
  * expire under contention, not by the child's own doing — and whatever each
  * channel received before the run was abandoned.
  */
-function abandonedReport(args: string[], limit: number, partial: PartialOutput): string {
+function abandonedReport(label: string, limit: number, partial: PartialOutput): string {
   const load = loadavg()
     .map((average) => average.toFixed(1))
     .join(", ");
   return [
-    `xmd ${args.join(" ")} timed out after ${limit}ms (load average ${load})`,
+    `${label} timed out after ${limit}ms (load average ${load})`,
     channel("stdout", partial.stdout),
     channel("stderr", partial.stderr),
   ].join("\n");

@@ -3119,6 +3119,13 @@ and `--json`. It takes no document and no run option, because it runs nothing.
 An inspection failure is reported on stderr with exit status 1 and no partial
 catalog on stdout.
 
+**The command has not succeeded until stdout has taken the whole catalog.** A
+pipe holds far less than a catalog, so backpressure changes how long the command
+takes and never which bytes arrive: a reader that consumes slowly receives
+exactly what a regular-file redirect receives, in both forms. A sink that closes
+or refuses the write is reported on stderr with exit status 1, rather than
+succeeding with what happened to fit.
+
 #### Validating a supplied document: `validateDocument()`
 
 Inspection answers about a name and about a directory. `validateDocument()`

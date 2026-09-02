@@ -3,16 +3,16 @@
  *
  * Two halves, matching the command's own. The profile rows run in process,
  * because what they check is which declarations `xmd run` installs — a claim
- * about assembly, not about argv. The grammar and failure rows shell out, so
- * exit status, stdout and stderr are the ones an operator sees.
+ * about assembly, not about argv. The grammar, failure and delivery rows shell
+ * out, so exit status, stdout and stderr are the ones an operator sees.
  *
  * Catalog behavior itself is Tier SY's; nothing here re-proves selection.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { runCli } from "@executablemd/test-support/launch";
-import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
+import { cliShellCommand, runCli, runShell, shellQuote } from "@executablemd/test-support/launch";
+import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { ensure, scoped, until } from "effection";
 import type { Operation } from "effection";
 import { symlink } from "node:fs/promises";
@@ -463,3 +463,116 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
     expect(stdout).toMatch(/^\s+plan\s/m);
   });
 });
+
+/**
+ * Tier SX — what a pipe receives.
+ *
+ * These rows shell out to a real pipeline rather than capturing a stream this
+ * process owns, because the subject is the boundary itself: an operating-system
+ * pipe holds about 64 KiB, and a catalog handed to a fire-and-forget
+ * `process.stdout.write()` ends mid-token there while the same invocation
+ * redirected to a file is whole. Nothing smaller than an oversize catalog
+ * through an actual pipe tells the two apart.
+ *
+ * The two completeness rows are answered by Node and Bun, where that write
+ * truncates at 80 and 64 KiB. Deno's own `process.stdout` flushes a pipe on the
+ * way out, so it cannot distinguish them — a change verified under Deno alone
+ * has not been verified. The closing-consumer row fails under all three.
+ */
+describe(
+  "Tier SX — the catalog a pipe receives",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    it("SX13: the Markdown form arrives whole, and equals a file redirect", function* () {
+      yield* useWorkspace(OVERSIZE, function* (cwd) {
+        const { redirected, piped } = yield* deliveries([], cwd);
+
+        expect(piped).toBe(redirected);
+        expect(piped.lastIndexOf("### `<ZBeyondTheBuffer>`")).toBeGreaterThan(PIPE_BUFFER);
+      });
+    });
+
+    it("SX14: the JSON form arrives whole, parses, and equals a file redirect", function* () {
+      yield* useWorkspace(OVERSIZE, function* (cwd) {
+        const { redirected, piped } = yield* deliveries(["--json"], cwd);
+
+        expect(piped).toBe(redirected);
+        const catalog = parseCatalog(piped);
+        expect(catalog.version).toBe(1);
+        expect(names(catalog.categories[2].entries)).toContain("ZBeyondTheBuffer");
+        expect(piped.lastIndexOf(`"ZBeyondTheBuffer"`)).toBeGreaterThan(PIPE_BUFFER);
+      });
+    });
+
+    it("SX15: a consumer that closes early fails the command", function* () {
+      yield* useWorkspace(OVERSIZE, function* (cwd) {
+        // A pipeline reports its last stage's status, so the command's own
+        // travels on stderr, which the closing consumer never held.
+        const { stdout, stderr } = yield* runShell(
+          `{ ${cliShellCommand(["syntax", "--json"])}; echo "xmd-exit=$?" >&2; } | head -c 100`,
+          { cwd },
+        ).join();
+
+        expect(stdout.length).toBe(100);
+        expect(stderr).toContain("xmd-exit=1");
+        expect(stderr).toContain("stdout did not accept the whole catalog");
+        // The broken pipe is reported, not raised: an unhandled write failure
+        // ends the process with one of these instead.
+        expect(stderr).not.toContain("Unhandled 'error' event");
+        expect(stderr).not.toContain("Uncaught");
+      });
+    });
+  },
+);
+
+/** What an operating-system pipe holds before a writer has to wait. */
+const PIPE_BUFFER = 64 * 1024;
+
+/**
+ * A workspace whose catalog is past that buffer in both forms.
+ *
+ * The built-ins alone render about 89 KiB of JSON but only about 63 KiB of
+ * Markdown, so the padding is what puts the *default* form past the boundary
+ * too. `ZBeyondTheBuffer` sorts after every filler, which is how a row names
+ * bytes that a truncated delivery could not contain.
+ */
+const OVERSIZE: Record<string, string> = {
+  ...Object.fromEntries(
+    Array.from({ length: 8 }, (_unused, index) => [
+      `components/Filler${index}.md`,
+      described(`filler ${index} ${"padding ".repeat(220)}`),
+    ]),
+  ),
+  "components/ZBeyondTheBuffer.md": described("the entry past the pipe buffer."),
+};
+
+function described(description: string): string {
+  return `---\ndescription: ${description}\n---\n\nbody\n`;
+}
+
+/**
+ * A reader that takes one line at a time, so the writer blocks on a full pipe
+ * long before the catalog ends. It reproduces its input byte for byte: both
+ * renderers end every line, `IFS=` keeps the surrounding whitespace, and `-r`
+ * keeps the backslashes.
+ */
+const SLOW_READER = `while IFS= read -r line; do printf '%s\\n' "$line"; done`;
+
+/** The same invocation delivered twice: to a regular file, and through a pipe. */
+function* deliveries(
+  form: string[],
+  cwd: string,
+): Operation<{ redirected: string; piped: string }> {
+  const command = cliShellCommand(["syntax", ...form]);
+  const direct = join(cwd, "direct.out");
+  const through = join(cwd, "piped.out");
+
+  yield* runShell(`${command} > ${shellQuote(direct)}`, { cwd }).expect();
+  const redirected = yield* readTextFile(direct);
+  // Without this the comparison proves nothing: a catalog that fits in one
+  // pipe buffer arrives whole however it was written.
+  expect(redirected.length).toBeGreaterThan(PIPE_BUFFER);
+
+  yield* runShell(`${command} | (${SLOW_READER}) > ${shellQuote(through)}`, { cwd }).expect();
+  return { redirected, piped: yield* readTextFile(through) };
+}
