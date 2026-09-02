@@ -37,6 +37,19 @@ can act without guessing or rereading.
 The Planner does not write production code, open a PR or mutate GitHub unless
 the user explicitly requests it.
 
+## Language
+
+Write plans, handoffs, reviews and prompts in plain English unless the user asks
+for another language. Lead with what will change for the user or system. Prefer
+short sentences and familiar words. Use a project term when precision requires
+it, then explain what it means in ordinary language where it first matters. Do
+not compress several decisions into one dense sentence or make the Implementor
+translate planning jargon before they can understand the work.
+
+Plain English does not remove necessary detail. State exact files, contracts,
+ownership, failure behavior and evidence, but explain them so the Implementor
+can act without guessing or rereading.
+
 ## Decision completeness
 
 A plan is decision-complete when the Implementor does not need to choose:
