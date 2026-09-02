@@ -26,9 +26,13 @@ const PACKAGE = fileURLToPath(new URL("..", import.meta.url));
 /**
  * The subtrees that are allowed to know a host, because naming one is their job.
  *
- * `vendor` is pinned upstream source whose drift verifier owns its bytes.
+ * The runtime-named entrypoints and their implementation subtrees, and nothing
+ * else. `software-factory.ts` is deliberately absent: it is product-specific
+ * rather than host-specific, uses the cross-runtime Web primitives, and is held
+ * to these rules like any shared module. `vendor` is pinned upstream source
+ * whose drift verifier owns its bytes.
  */
-const RUNTIME_OWNED = ["deno.ts", "src/deno", "vendor"];
+const RUNTIME_OWNED = ["deno.ts", "cloudflare.ts", "src/deno", "src/cloudflare", "vendor"];
 
 /** Specifiers only a host adapter may import. */
 const HOST_SPECIFIERS = [
@@ -82,7 +86,9 @@ describe("the shared workflow package", () => {
     const modules = yield* sharedModules();
     expect(modules.length > 20).toEqual(true);
     expect(modules.some((path) => path.endsWith("/src/lifecycle/execution.ts"))).toEqual(true);
+    expect(modules.some((path) => path.endsWith("/src/software-factory/run-id.ts"))).toEqual(true);
     expect(modules.some((path) => path.includes("/src/deno/"))).toEqual(false);
+    expect(modules.some((path) => path.includes("/src/cloudflare/"))).toEqual(false);
   });
 
   it("imports no host-owned specifier outside a runtime-named entrypoint", function* () {
