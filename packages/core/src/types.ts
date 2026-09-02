@@ -24,16 +24,6 @@ export type Segment =
 export interface TextSegment {
   type: "text";
   content: string;
-  /**
-   * Whether this text is exact bytes rather than prose.
-   *
-   * Prose is reflowed on the way out — trailing spaces go and runs of blank
-   * lines collapse — because that is presentation of something written to be
-   * read. Bytes a run produced as a program's source are not that: their
-   * whitespace is part of what was approved, so a segment carrying them says
-   * so and the emission loop hands them to the Output Api on their own.
-   */
-  exact?: true;
 }
 
 export interface ComponentElement {
@@ -209,14 +199,6 @@ export interface ComponentDefinition {
   /** Absent in text mode, where the component returns its rendered markdown. */
   returns?: ReturnsSchema;
   bodySegments: Segment[];
-  /**
-   * Whether what this component renders is exact bytes rather than prose.
-   *
-   * Stated by the trusted host that declares the component, never by the
-   * Markdown itself: a repository file cannot ask for its own rendering to
-   * bypass the presentation every other document is subject to.
-   */
-  exact?: boolean;
 }
 
 /**
@@ -380,6 +362,14 @@ export type ComponentSelection =
       source: string;
       forms: readonly InvocationForm[];
       definition: ComponentDefinition;
+      /**
+       * Whether the host declared this component's rendering to be source.
+       *
+       * Read from the admission rather than from `definition`, which is an
+       * object an import can copy and answer with. Selection reports what the
+       * host declared about the *name*.
+       */
+      exact: boolean;
     }
   | { kind: "unresolved"; searched: string[]; registered: readonly ComponentOrigin[] };
 

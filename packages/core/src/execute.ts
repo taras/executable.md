@@ -96,6 +96,7 @@ import {
 import { Component, importComponent, raise } from "./component-api.ts";
 import { sourceDescription } from "./source-position.ts";
 import { renderSegment } from "./render.ts";
+import { isExactSource } from "./output/exact-source.ts";
 import { DocumentOutput } from "./api.ts";
 import {
   composeBoundExecChain,
@@ -480,7 +481,7 @@ function* durableImportComponent(
             content: selected.source,
             // Recorded only when it holds, so an ordinary declaration's record
             // is exactly what it always was.
-            ...(selected.definition.exact === true ? { exact: true } : {}),
+            ...(selected.exact ? { exact: true } : {}),
           };
         case "registered":
           return {
@@ -556,7 +557,7 @@ function* durableImportComponent(
       declaration.origin !== selection.origin ||
       declaration.digest !== selection.digest ||
       declaration.source !== selection.content ||
-      (declaration.definition.exact === true) !== (selection.exact === true)
+      declaration.exact !== (selection.exact === true)
     ) {
       throw new Error(
         `Component ${name} was recorded as the declared Markdown "${selection.origin}", which is ` +
@@ -1792,7 +1793,7 @@ function* runValueRoot(
  */
 /** Whether one expanded segment carries exact bytes rather than prose. */
 function exactly(segment: Segment): boolean {
-  return segment.type === "text" && segment.exact === true;
+  return isExactSource(segment);
 }
 
 /**

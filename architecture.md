@@ -3561,14 +3561,27 @@ registration can answer for it — one decision, shared by execution, inspection
 and validation, so a repository file under a private name is described by none
 of them and runs nowhere.
 
-**The journal records the asset, not a lookup.** A declared import records
-exactly `{ kind: "declared-markdown", origin, digest, content }`, and a private
-one records exactly `{ kind: "declared-private", origin }`. A continuation reads
-both as hostile data, verifies the recorded origin, digest and bytes against
-what this run declares, and reads no file: a host that no longer declares the
-name, or that declares different bytes under it, refuses rather than continuing
+**The journal records the asset, not a lookup.** A declared import records one
+of two closed shapes — `{ kind, origin, digest, content }`, and the same with
+`exact: true` for a component the host declared as rendering a program's source
+— and a private one records exactly `{ kind: "declared-private", origin }`. A
+continuation reads all of it as hostile data, verifies the recorded origin,
+digest, bytes and disposition against what this run declares, and reads no file:
+a host that no longer declares the name, that declares different bytes under it,
+or that publishes those bytes a different way, refuses rather than continuing
 somebody else's Markdown. A recorded private import refuses unless the element
 asking for it is inside the same declaration.
+
+**Exact source is a provenance, not a property.** Whether bytes are published as
+a program's source or presented as prose is decided from two things no answer
+can write: that canonical execution authorized the import for a name this
+execution closed, and that the host's own admitted declaration for that name
+states it. A definition carrying the claim, a segment arriving already marked, a
+frontmatter key and a middleware answer are each data that reached the engine
+from somewhere, so none of them decides it — an ordinary
+`Component.importComponent` handler answering an open name with a definition
+claiming the disposition publishes prose, exactly as a repository file of that
+name does.
 
 ## The syntax catalog boundary
 

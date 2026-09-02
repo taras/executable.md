@@ -2780,8 +2780,21 @@ text component's rendering is ordinarily presentation, and the output middleware
 reflows it and formats it. One whose rendering is a program's source is not, so
 what it renders is emitted exactly — the presentation middleware passes it
 through untouched, and prose on either side of it is presented as before
-(§9.4). Only the declaring host states this. The Markdown cannot ask for it, so
-a repository file of the same name is presented like every other document.
+(§9.4).
+
+**Exact source is a provenance, not a property.** The question is whether
+canonical execution produced these bytes by expanding a declared component *this
+host admitted* as rendering source, and no object answers that about itself. So
+it is decided from two facts an answer cannot write: that canonical execution
+authorized this import for a name the execution closed, and that the admitted
+declaration for that name states it. A `ComponentDefinition` carrying the claim,
+a `TextSegment` arriving already marked, a frontmatter key, a prop and a
+middleware answer are each data that reached the engine from somewhere, and none
+of them decides anything — an ordinary `Component.importComponent` handler that
+answers an open name with a definition claiming the disposition gets prose, and
+so does a repository file of the same name. Which segments an expansion produced
+as source is recorded against those segment objects' identity, where nothing a
+document or a package can supply is able to write.
 
 **Every declaration is read once, before any installation runs.** The name,
 origin, source, digest, forms, prose, whether it renders exact source, and each
@@ -2794,14 +2807,23 @@ declaration and then replaces a member of it — or mutates a schema it still
 holds — has replaced nothing: what is admitted, registered and executed is what
 it declared at the moment of capture.
 
-**The journal records the asset.** A declared import records exactly
-`{ kind: "declared-markdown", origin, digest, content }` and a private one
-records exactly `{ kind: "declared-private", origin }`. A continuation reads
-both as hostile data and verifies the recorded origin, digest and bytes against
-what this run declares, reading no file: a host that no longer declares the name,
-or that declares different bytes under it, refuses rather than continuing
-somebody else's Markdown, and a recorded private import refuses unless the
-element asking is inside the same declaration.
+**The journal records the asset.** A declared import records one of exactly two
+closed shapes — `{ kind, origin, digest, content }` for an ordinary declaration,
+and `{ kind, origin, digest, content, exact: true }` for one the host declared
+as rendering source — and a private one records exactly
+`{ kind: "declared-private", origin }`. Every other spelling of the disposition
+is refused: `exact: false`, `exact: "true"`, a null and any other value are not
+this protocol, and neither is a record missing a member or carrying one this
+version does not know.
+
+A continuation reads all of it as hostile data and verifies the recorded origin,
+digest, bytes and disposition against what this run declares, reading no file: a
+host that no longer declares the name, or that declares different bytes under
+it, refuses rather than continuing somebody else's Markdown. The disposition
+compares like every other term, **absence included** — a run that added or
+removed it publishes the same bytes a different way, which is a different answer
+to the question the recorded run already settled — and a recorded private import
+refuses unless the element asking is inside the same declaration.
 
 **`<Plan>` is the one of these the `run` profile has.** The CLI declares
 `packages/cli/src/documents/Plan.md` to every ordinary run under the origin
@@ -11774,6 +11796,8 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | WN5 | Single newline preserved | `"a\nb"` → unchanged |
 | WN6 | Empty write | `""` → unchanged, trailing count preserved |
 | WN7 | Tab trailing whitespace | `"text\t\n"` → `"text\n"` |
+| WN8 | Exact bytes pass through | A write marked exact keeps its trailing spaces, its trailing tab and its run of four newlines |
+| WN9 | The bypass is per write | Prose written before and after an exact write is still stripped and collapsed, and the exact write's own trailing newlines still feed the cross-write count |
 
 ### Tier TF — Terminal ANSI formatting
 
@@ -11784,6 +11808,8 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | TF3 | Code block formatted | Fenced code block → syntax-highlighted output |
 | TF4 | `async: false` | `marked.parse()` called with `{ async: false }` — no promises |
 | TF5 | Middleware composes with normalize | Normalized text passes through terminal formatter |
+| TF6 | Exact bytes pass through | A write marked exact keeps its heading, its fence, its emphasis markers, its trailing spaces and its blank runs byte for byte |
+| TF7 | The bypass is per write | Prose written before and after an exact write is still formatted, and only the exact write is untouched |
 
 ### Tier SE — Streaming emission
 
@@ -11961,6 +11987,24 @@ drives the `xmd plan` command.
 | VB8 | A direct `xmd test --verbose` root does not have `<Verbose>` |
 | VB9 | Host false is overridden to true for one lexical subtree |
 | VB10 | Host true is overridden to false, the body is skipped, and sibling state is restored |
+
+### Tier DM — Declared Markdown selection and exact source (§5.3)
+
+The durable selection protocol and the boundary that decides which bytes are
+published as a program's source rather than presented as prose. Every row here
+runs against declarations a trusted host supplied on an `ExecutionInstallation`,
+and the presentation rows install the real whitespace and terminal middleware so
+what they observe is what a person's terminal would show.
+
+| # | Test | Verify |
+|---|------|--------|
+| DM26b | The record carries the disposition | A declaration the host called exact records `{ kind, origin, digest, content, exact: true }`, and an ordinary one records the four-member shape unchanged |
+| DM26c | A dropped disposition refuses | A continuation whose origin, digest and bytes are identical but which no longer declares the component exact refuses before publishing |
+| DM26d | An added disposition refuses | The same in the other direction, so absence is compared rather than defaulted |
+| DM49 | Exact source reaches the terminal | A declared exact component's bytes keep their trailing spaces, blank runs and emphasis markers through both presentation middlewares |
+| DM50 | An ordinary declaration is prose | The same bytes from a declaration the host did not call exact are stripped, collapsed and formatted |
+| DM51 | A middleware answer cannot claim it | `Component.importComponent` middleware answering an open name with a definition carrying the disposition gets prose; nothing admitted that definition, so nothing about it is exact |
+| DM52 | A mark this engine did not make is nothing | A segment carrying the disposition as a field is not exact, whoever supplied it; expansion also rebuilds text segments, so such a field never reaches emission in the first place |
 
 ### Tier ORC — Repository composition under an ordinary run (§5.3, §8.1)
 
