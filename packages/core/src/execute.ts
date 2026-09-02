@@ -96,7 +96,8 @@ import {
 import { Component, importComponent, raise } from "./component-api.ts";
 import { sourceDescription } from "./source-position.ts";
 import { renderSegment } from "./render.ts";
-import { isExactSource } from "./output/exact-source.ts";
+import { ExactSource, useExactSource } from "./output/exact-source.ts";
+import type { ExactSource as ExactSourceRecord } from "./output/exact-source.ts";
 import { DocumentOutput } from "./api.ts";
 import {
   composeBoundExecChain,
@@ -1761,10 +1762,11 @@ function* runValueRoot(
         authority,
         ownBody,
       );
+      const exactRecord = yield* ExactSource.get();
       for (const resolved of expanded) {
         const text = renderSegment(resolved);
         if (text) {
-          yield* ephemeral(DocumentOutput.operations.output(text, exactly(resolved)));
+          yield* ephemeral(DocumentOutput.operations.output(text, exactly(exactRecord, resolved)));
           chunks.push(text);
         }
       }
@@ -1792,8 +1794,8 @@ function* runValueRoot(
  * the run says so (#441).
  */
 /** Whether one expanded segment carries exact bytes rather than prose. */
-function exactly(segment: Segment): boolean {
-  return isExactSource(segment);
+function exactly(exact: ExactSourceRecord | undefined, segment: Segment): boolean {
+  return exact !== undefined && exact.has(segment);
 }
 
 /**
@@ -1811,14 +1813,17 @@ interface Emission {
   readonly exact: boolean;
 }
 
-function emissions(segments: readonly Segment[]): Emission[] {
+function emissions(
+  record: ExactSourceRecord | undefined,
+  segments: readonly Segment[],
+): Emission[] {
   const runs: Emission[] = [];
   for (const segment of segments) {
     const text = renderSegment(segment);
     if (!text) {
       continue;
     }
-    const exact = exactly(segment);
+    const exact = exactly(record, segment);
     const last = runs[runs.length - 1];
     if (last !== undefined && last.exact === exact) {
       runs[runs.length - 1] = { text: last.text + text, exact };
@@ -1869,6 +1874,11 @@ function* documentWorkflow(
   // Mutable counter preserves deterministic blockIds across
   // per-segment expansion calls (see spec §6.1).
   const counter = createBlockCounter();
+
+  // Which segments this run produced as source, read once: the emission paths
+  // below include the durable workflow's own, where an ordinary context read is
+  // not what `yield*` means.
+  const exactRecord = yield* ephemeral(ExactSource.get());
 
   // What the document rendered before it stopped, held outside the expansion
   // scope so a failure still leaves it here (§6.9 Partial output). The buffered
@@ -1955,7 +1965,7 @@ function* documentWorkflow(
         undefined,
       );
       // An empty buffered root emits no output event.
-      const runs = emissions(selected);
+      const runs = emissions(exactRecord, selected);
       for (const run of runs) {
         yield* ephemeral(DocumentOutput.operations.output(run.text, run.exact));
       }
@@ -1993,7 +2003,10 @@ function* documentWorkflow(
           // (non-durable) — output emission is a derived side effect,
           // not journaled.
           yield* ephemeral(
-            DocumentOutput.operations.output(text, resolved !== undefined && exactly(resolved)),
+            DocumentOutput.operations.output(
+              text,
+              resolved !== undefined && exactly(exactRecord, resolved),
+            ),
           );
           streamed.push(text);
         }
@@ -2018,7 +2031,7 @@ function* documentWorkflow(
     // chunks is who the preservation is for, and the completion path only emits
     // for a run that streamed nothing at all — which stops being true as soon
     // as an earlier segment went out.
-    const runs = emissions(produced.slice(emittedThrough));
+    const runs = emissions(exactRecord, produced.slice(emittedThrough));
     const tail = runs.map((run) => run.text).join("");
     for (const run of runs) {
       yield* ephemeral(DocumentOutput.operations.output(run.text, run.exact));
@@ -2175,6 +2188,9 @@ function* executeDocument(
       // failure from. All created here and reclaimed with this task, so nothing
       // a run decided outlives it.
       yield* useSegmentCauses();
+      // Which segments this run produced as source. Scope-owned like the rest:
+      // reclaimed with the run, and answering nothing during the next.
+      yield* useExactSource();
       yield* usePropsCompiler();
       yield* useParseCompiler();
       const liveFailure: LiveFailureSlot = {};

@@ -55,7 +55,7 @@ import { retainedSource } from "../src/root-source.ts";
 import { DocumentOutput } from "../src/api.ts";
 import { useNormalizedOutput } from "../src/output/normalize.ts";
 import { useTerminalOutput } from "../src/output/terminal.ts";
-import { isExactSource } from "../src/output/exact-source.ts";
+import { isExactSource, useExactSource } from "../src/output/exact-source.ts";
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
 import type { ImportedDefinition } from "../src/components/import-authority.ts";
 import type { PropsSchema, Segment } from "../src/types.ts";
@@ -1475,10 +1475,21 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
     // carrying any field at all — including the one an earlier design used —
     // answers false. This is the assertion that discriminates: a marker that
     // consulted a field would pass it back.
-    expect(
-      isExactSource({ type: "text", content: PRESENTABLE, exact: true } as unknown as Segment),
-    ).toBe(false);
-    expect(isExactSource({ type: "text", content: PRESENTABLE } as unknown as Segment)).toBe(false);
+    yield* scoped(function* () {
+      // The record belongs to the scope that made it, so the questions are
+      // asked inside that scope rather than by carrying it out.
+      const record = yield* useExactSource();
+      expect(
+        isExactSource(record, {
+          type: "text",
+          content: PRESENTABLE,
+          exact: true,
+        } as unknown as Segment),
+      ).toBe(false);
+      expect(
+        isExactSource(record, { type: "text", content: PRESENTABLE } as unknown as Segment),
+      ).toBe(false);
+    });
 
     // Then the end-to-end shape, which records a second fact worth keeping:
     // expansion rebuilds text segments, so a field a definition wrote onto its

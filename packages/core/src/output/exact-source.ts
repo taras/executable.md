@@ -10,36 +10,63 @@
  * `Component.importComponent` middleware publish unpresented bytes by writing a
  * field.
  *
- * So the record lives here, keyed by the identity of the segment objects the
- * engine marked, and it is written only where canonical expansion has already
- * decided the provenance. It is deliberately not a field on `Segment`: a field
- * can be supplied, and this cannot — a segment scanned from a document, parsed
- * from a journal, or built by a handler is simply not in this set.
+ * So the record is kept beside the segments rather than on them, keyed by the
+ * identity of the objects canonical expansion marked, and written only where
+ * that expansion has already decided the provenance. A segment scanned from a
+ * document, parsed from a journal, or built by a handler is simply not in it —
+ * where a field could be supplied, membership cannot be.
+ *
+ * It belongs to the run that made it. The table is created inside the execution
+ * that owns it and handed down through context, so what one document decided is
+ * reclaimed with it and answers nothing during the next.
  */
+
+import { createContext } from "effection";
+import type { Context, Operation } from "effection";
 
 import type { Segment } from "../types.ts";
 
-/**
- * The segments this engine produced from exact-source components.
- *
- * Weak, so a segment is remembered exactly as long as something still holds it,
- * and identity-keyed, so two segments with identical content are two different
- * answers. Module-level because the producer and the emission loop are the same
- * loaded copy of core; nothing crosses a copy boundary, and nothing a document
- * or a package can reach ever writes to it.
- */
-const EXACT = new WeakSet<Segment>();
+/** The segments one execution produced from exact-source components. */
+export type ExactSource = WeakSet<Segment>;
 
-/** Record that canonical expansion produced these segments as source. */
-export function markExactSource(segments: readonly Segment[]): void {
+/**
+ * Where this execution keeps that record.
+ *
+ * Module-private: it is exported for the two core modules that produce and
+ * consume the mark, and reaches neither public package entrypoint, so nothing a
+ * document or a package can load is able to read or replace it.
+ */
+export const ExactSource: Context<ExactSource | undefined> = createContext<ExactSource | undefined>(
+  "xmd.exact-source",
+  undefined,
+);
+
+/** Install this execution's own record, and hand it back. */
+export function* useExactSource(): Operation<ExactSource> {
+  const exact: ExactSource = new WeakSet();
+  yield* ExactSource.set(exact);
+  return exact;
+}
+
+/**
+ * Record that canonical expansion produced these segments as source.
+ *
+ * With no run installed there is nothing to record into, and nothing is
+ * published as source — which is the safe answer rather than a lost one.
+ */
+export function* markExactSource(segments: readonly Segment[]): Operation<void> {
+  const exact = yield* ExactSource.get();
+  if (exact === undefined) {
+    return;
+  }
   for (const segment of segments) {
     if (segment.type === "text") {
-      EXACT.add(segment);
+      exact.add(segment);
     }
   }
 }
 
 /** Whether this exact segment object is one canonical expansion marked. */
-export function isExactSource(segment: Segment): boolean {
-  return EXACT.has(segment);
+export function isExactSource(exact: ExactSource | undefined, segment: Segment): boolean {
+  return exact !== undefined && exact.has(segment);
 }
