@@ -1107,10 +1107,10 @@ describe(
         expect(harness.executions).toHaveLength(0);
       });
 
-      // Exhaustion is reachable, and it is a different ending. Ten presentations
-      // that never validated, the last offering nothing but a way out, and the
-      // sentence says there was never a Plan to approve rather than that
-      // somebody decided to stop.
+      // Exhaustion is reachable, and it is a different ending: ten drafts that
+      // never validated. The tenth is not a review at all — there is nothing to
+      // approve and nothing left to revise into — so what ends the command is
+      // the automatic explanation below rather than a decision somebody took.
       yield* useWorkingDirectory(function* (dir, authorshipRoot) {
         const harness = createPlanHarness({ authorshipRoot });
         for (const round of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
@@ -1118,46 +1118,45 @@ describe(
           for (const _draft of [0, 1, 2, 3]) {
             harness.fake.script({ reply: UNRESOLVED });
           }
-          harness.script(
-            round < 10
-              ? { decision: "Request changes", feedback: `round ${round}` }
-              : { decision: "Stop" },
-          );
+          if (round < 10) {
+            harness.script({ decision: "Request changes", feedback: `round ${round}` });
+          }
         }
+        harness.fake.script({
+          reply: "The drafts all named a component this profile does not have.",
+        });
 
         const { value, lines } = yield* reported(() =>
           runPlan(command(dir, [REQUEST], STACK), harness.deps),
         );
 
         expect(value).toBe(1);
-        expect(harness.reviews).toHaveLength(10);
-        // Rounds one to nine could be sent back; the tenth had one choice, and
-        // taking it is what reaches the exhaustion ending.
+        // Nine reviews, not ten: the tenth invalid draft is never presented,
+        // because every decision it could have offered is unavailable.
+        expect(harness.reviews).toHaveLength(9);
         expect(decisions(harness.reviews[8])).toEqual(["Request changes", "Stop"]);
-        expect(decisions(harness.reviews[9])).toEqual(["Explain what went wrong", "Stop"]);
         expect(lines).toHaveLength(1);
-        expect(lines[0]).toBe(
-          "xmd plan reviewed ten drafts without an approved Plan. Nothing was output or run.",
-        );
-        // Stopping asks the coding agent nothing: forty drafting turns and no
-        // forty-first.
-        expect(harness.fake.prompts).toHaveLength(40);
+        expect(lines[0]).toContain("reviewed ten drafts without an approved Plan");
+        expect(lines[0]).toContain("Nothing was output or run.");
+        // Forty drafting turns and exactly one explanation turn after them.
+        expect(harness.fake.prompts).toHaveLength(41);
         expect(harness.executions).toHaveLength(0);
       });
     });
 
-    it("C3, C9: the last invalid draft can be explained rather than only stopped", function* () {
+    it("C3, C9: a tenth draft that cannot be repaired is explained automatically", function* () {
       yield* useWorkingDirectory(function* (dir, authorshipRoot) {
         const harness = createPlanHarness({ authorshipRoot });
         for (const round of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
           for (const _draft of [0, 1, 2, 3]) {
             harness.fake.script({ reply: UNRESOLVED });
           }
-          harness.script(
-            round < 10
-              ? { decision: "Request changes", feedback: `round ${round}` }
-              : { decision: "Explain what went wrong" },
-          );
+          // No answer is scripted for a tenth review, because there is no
+          // tenth review: running out would be a test defect, so a run that
+          // asked for one fails here rather than passing quietly.
+          if (round < 10) {
+            harness.script({ decision: "Request changes", feedback: `round ${round}` });
+          }
         }
         // The explanation the coding agent gives is prose, and stays prose.
         const explanation = [
@@ -1177,7 +1176,7 @@ describe(
         // conversation. It is not another draft: no eleventh review, and the
         // ten-draft limit is not reopened.
         expect(harness.fake.prompts).toHaveLength(41);
-        expect(harness.reviews).toHaveLength(10);
+        expect(harness.reviews).toHaveLength(9);
         expect(sessions(harness)).toHaveLength(1);
 
         // It carries the final problems, which were produced after the agent's

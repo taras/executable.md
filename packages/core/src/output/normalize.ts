@@ -17,7 +17,19 @@ export function* useNormalizedOutput(): Operation<void> {
   let trailingNewlines = 0;
 
   yield* DocumentOutput.around({
-    *output([text], next) {
+    *output([text, exact], next) {
+      // Exact bytes are not prose. Stripping a trailing space or collapsing a
+      // blank line inside a program's approved source would publish bytes
+      // nobody approved, so the write goes out as it arrived — while its own
+      // trailing newlines still count, because the prose after it is still
+      // prose.
+      if (exact === true) {
+        const trailing = text.match(/\n+$/);
+        trailingNewlines = trailing ? trailing[0].length : 0;
+        yield* next(text, true);
+        return;
+      }
+
       let normalized = text;
 
       // Strip trailing whitespace on each line
@@ -36,7 +48,7 @@ export function* useNormalizedOutput(): Operation<void> {
       const match = normalized.match(/\n+$/);
       trailingNewlines = match ? match[0].length : 0;
 
-      yield* next(normalized);
+      yield* next(normalized, exact);
     },
   });
 }

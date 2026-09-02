@@ -102,6 +102,17 @@ export interface DeclaredMarkdownComponent {
   readonly returns?: ReturnsSchema;
   /** Components only elements authored by these exact bytes may resolve. */
   readonly privates?: readonly IdentityComponent[];
+  /**
+   * Whether what this component renders is exact bytes rather than prose.
+   *
+   * A text component's rendering is ordinarily presentation: the whitespace
+   * middleware reflows it and the terminal middleware formats it as Markdown.
+   * A component whose rendering is a program's source is not presentation, and
+   * a host that ships such bytes says so here. Only a declaring host can: the
+   * Markdown itself cannot ask for it, so a repository file of the same name
+   * gets the presentation every other document gets.
+   */
+  readonly exact?: boolean;
 }
 
 /** One declaration, admitted: what the host stated, checked against its bytes. */
@@ -181,7 +192,9 @@ export function* admitDeclaredMarkdown(
       );
     }
 
-    const definition = yield* parseMarkdownDefinition(name, origin, source);
+    const parsed = yield* parseMarkdownDefinition(name, origin, source);
+    const definition: ComponentDefinition =
+      declaration.exact === true ? { ...parsed, exact: true } : parsed;
 
     const forms = declaration.forms ?? BOTH_FORMS;
     const badForms = formsRefusal(forms);

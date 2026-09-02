@@ -92,3 +92,166 @@ component does not exist.
 <AssertEquals actual={output.includes("# Approved program")} expected={false} />
 </Execution>
 </Test>
+
+## The bare form emits the program's source
+
+Written without `as`, `<Plan>` emits the approved program where the component
+appears. The source is bytes rather than prose, so what reaches the run's output
+is what the agent wrote — including a line ending in spaces and a run of blank
+lines that the default output normalization rewrites in ordinary Markdown.
+
+<Test name="a bare Plan emits the exact approved source" timeout="120s">
+<Execution host="run" target="packages/cli/tests/document-suites/plan/emits-plan.md" as="run">
+<TestAgent>
+<TestAgent.Scenario session="planner" src="./agents/whitespace-plan.md" />
+</TestAgent>
+
+<Answers>
+<Answer value={{ decision: "Approve" }} />
+</Answers>
+
+<CollectOutput as="output" />
+
+<AssertEquals actual={run.result.ok} expected={true} />
+</Execution>
+
+The trailing spaces and the four newlines survived, which is what says these
+bytes were emitted as source rather than presented as prose.
+
+<AssertStringIncludes
+  actual={output}
+  expected={"This program writes a file when something runs it.   \n\n\n\n"}
+/>
+
+And nothing ran it: the file the program names is not here.
+
+<Glob include={["planned.txt"]} as="written" />
+<AssertEquals actual={written.length} expected={0} />
+</Test>
+
+## The captured form binds those same bytes and emits nothing
+
+`as` is ordinary text capture. The two forms differ only in where the source
+goes, so the bytes a document binds are the bytes the bare form emits.
+
+<Test name="a captured Plan binds the same bytes and emits no source" timeout="120s">
+<Execution host="run" target="packages/cli/tests/document-suites/plan/captures-plan.md" as="run">
+<TestAgent>
+<TestAgent.Scenario session="planner" src="./agents/whitespace-plan.md" />
+</TestAgent>
+
+<Answers>
+<Answer value={{ decision: "Approve" }} />
+</Answers>
+
+<CollectOutput as="output" />
+
+<AssertEquals actual={run.result.ok} expected={true} />
+</Execution>
+
+The run printed no program: capture emits nothing.
+
+<AssertEquals actual={output.includes("# Approved program")} expected={false} />
+
+What it bound is in the file it wrote, byte for byte — the same whitespace the
+bare form emitted, read back rather than presented.
+
+<File path="captured.txt" as="captured" />
+<AssertStringIncludes
+  actual={captured}
+  expected={"This program writes a file when something runs it.   \n\n\n\n"}
+/>
+<AssertStringIncludes actual={captured} expected="# Approved program" />
+
+<File.Delete path="captured.txt" />
+
+Still nothing ran it.
+
+<Glob include={["planned.txt"]} as="alsoWritten" />
+<AssertEquals actual={alsoWritten.length} expected={0} />
+</Test>
+
+## A tenth draft that cannot be repaired is explained, not reviewed
+
+Ten drafts is the limit and the tenth cannot be revised, so a tenth draft that
+still fails its check leaves no decision for a person to make. The workflow does
+not ask for one. It asks the coding agent, once, why the attempts did not work,
+and ends without a program.
+
+The only answer this test supplies is **Request changes**. That is what makes
+the ending evidence: if a tenth review had opened, it could not have offered
+that decision, and the run would have failed on the answer rather than on the
+explanation below.
+
+<Test name="a tenth unrepairable draft is explained automatically" timeout="180s">
+<Execution host="run" target="packages/cli/tests/document-suites/plan/uses-plan.md" as="run">
+<TestAgent>
+<TestAgent.Scenario session="planner" src="./agents/exhausted-plan.md" />
+</TestAgent>
+
+<Answers>
+<Answer value={{ decision: "Request changes", feedback: "try again" }} />
+</Answers>
+
+<CollectOutput as="output" />
+
+<AssertEquals actual={run.result.ok} expected={false} />
+
+The ending says ten drafts were reviewed and carries the coding agent's own
+explanation of why none of them worked.
+
+<AssertStringIncludes
+  actual={run.result.error.message}
+  expected="reviewed ten drafts without an approved Plan"
+/>
+<AssertStringIncludes
+  actual={run.result.error.message}
+  expected="Every draft named a component this profile does not offer."
+/>
+</Execution>
+
+No Plan came out of it, and the explanation was not mistaken for one.
+
+<AssertEquals actual={output.includes("# A plan that cannot be checked")} expected={false} />
+<Glob include={["planned.txt"]} as="none" />
+<AssertEquals actual={none.length} expected={0} />
+</Test>
+
+## A draft with a revision left in it still reaches you
+
+The automatic explanation is only for a tenth draft with nothing left to decide.
+Everywhere else the review is unchanged: a draft that still has problems can be
+sent back, and the draft that comes back can be approved.
+
+The two answers below are told apart by what the review shows. A draft that
+failed its check is presented with the problems that remain, so the matcher
+naming that heading answers the first review; the second review has no such
+heading and falls through to approval.
+
+<Test name="requesting changes still produces a draft you can approve" timeout="120s">
+<Execution host="run" target="packages/cli/tests/document-suites/plan/uses-plan.md" as="run">
+<TestAgent>
+<TestAgent.Scenario session="planner" src="./agents/revised-plan.md" />
+</TestAgent>
+
+<Answers>
+<Answer
+  template="{?before}Problems that remain{?after}"
+  value={{ decision: "Request changes", feedback: "use a component that exists" }}
+/>
+<Answer value={{ decision: "Approve" }} />
+</Answers>
+
+<CollectOutput as="output" />
+
+<AssertEquals actual={run.result.ok} expected={true} />
+
+The revision was reviewed and approved, and its source is what came back.
+
+<AssertStringIncludes actual={output} expected="# Approved program" />
+<AssertEquals actual={output.includes("# A plan that cannot be checked")} expected={false} />
+</Execution>
+
+<Glob include={["planned.txt"]} as="written" />
+<AssertEquals actual={written.length} expected={0} />
+</Test>

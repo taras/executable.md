@@ -2712,6 +2712,9 @@ function* expandComponent(
   }
 
   const bodyOwner = asBinding === undefined ? owner : undefined;
+  // Where this body's own segments start, so what it renders can be told apart
+  // from what the caller had already produced into the same array.
+  const renderedFrom = bodyOwner?.length ?? 0;
   const expanded = yield* withInvocation(function* (invocation) {
     yield* installInvocation(invocation);
     return yield* expandBody(
@@ -2730,6 +2733,15 @@ function* expandComponent(
       returnBody,
     );
   });
+
+  // What a component declared exact renders is exact wherever it renders: the
+  // caller's flow, its own returned region, or neither when the invocation
+  // binds instead. Marking it here — on the segments this body produced, after
+  // it produced them — is what carries the fact to the emission loop, which is
+  // outside every scope the invocation owned.
+  if (definition.exact === true) {
+    markExact(bodyOwner === undefined ? expanded : bodyOwner.slice(renderedFrom));
+  }
 
   if (asBinding) {
     // A capture never swallows an error. The body reported these where they
@@ -2762,6 +2774,15 @@ function* expandComponent(
   // A rendering body already wrote into the owner, so there is nothing left to
   // hand back; one that kept its own returns what it rendered.
   return bodyOwner === undefined ? expanded : [];
+}
+
+/** Say of each text segment here that its bytes are exact rather than prose. */
+function markExact(segments: readonly Segment[]): void {
+  for (const segment of segments) {
+    if (segment.type === "text") {
+      segment.exact = true;
+    }
+  }
 }
 
 // Without `returns`, a function component's rendering is its return value, so

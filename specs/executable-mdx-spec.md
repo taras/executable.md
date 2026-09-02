@@ -2775,10 +2775,18 @@ middleware cannot answer, replace or change one of those. It says nothing about
 any other name: an unrelated import in the same execution is the ordinary open
 import it has always been.
 
+**A declaring host may say its component renders source rather than prose.** A
+text component's rendering is ordinarily presentation, and the output middleware
+reflows it and formats it. One whose rendering is a program's source is not, so
+what it renders is emitted exactly — the presentation middleware passes it
+through untouched, and prose on either side of it is presented as before
+(§9.4). Only the declaring host states this. The Markdown cannot ask for it, so
+a repository file of the same name is presented like every other document.
+
 **Every declaration is read once, before any installation runs.** The name,
-origin, source, digest, forms, prose and each private declaration are captured
-by the invocation and held by it, with the factory bound and every array and
-schema copied. A schema is copied rather than referenced because it is a whole
+origin, source, digest, forms, prose, whether it renders exact source, and each
+private declaration are captured by the invocation and held by it, with the
+factory bound and every array and schema copied. A schema is copied rather than referenced because it is a whole
 object graph: holding the caller's object would let a hook reach into it after
 capture and change the contract admission compiles, registration publishes and
 expansion validates each invocation against. So a host that hands over a
@@ -2797,10 +2805,13 @@ element asking is inside the same declaration.
 
 **`<Plan>` is the one of these the `run` profile has.** The CLI declares
 `packages/cli/src/documents/Plan.md` to every ordinary run under the origin
-`@executablemd/cli/Plan.md`, paired-only, returning a string. Its body is the
-Prompt, rendered once with the capabilities the calling document already has;
-its `as` receives the exact approved Plan source after the authorship frame has
-been dismantled and the bytes have been structurally admitted. Its four private
+`@executablemd/cli/Plan.md`, paired-only, as a text component. Its body is the
+prompt, rendered once with the capabilities the calling document already has;
+what it renders is the exact approved Plan source, after the authorship frame
+has been dismantled and the bytes have been structurally admitted. Written bare
+it emits that source where the component is written, and `as` is ordinary text
+capture: the same bytes are bound and nothing is emitted. Neither form
+evaluates the source. Its four private
 capabilities — `<PlanInputs>`, `<PlanAuthorship>`, `<CheckDraft>` and
 `<AdmitPlan>` — are the closure those exact bytes carry, and are syntax no
 document may write. [The plan command](./plan-command-spec.md) is the contract.
@@ -9088,6 +9099,10 @@ A single Effection Api named `DocumentOutput` with one operation: `output`. The 
 is the system's public surface — extensible to progress, printed errors, etc.
 as needs grow.
 
+`exact` says whether the text is exact bytes rather than prose. Absent means
+prose, which is what every ordinary emission is; the presentation middleware
+(§9.4, §9.5) passes an exact write through untouched.
+
 ```typescript
 // src/api.ts
 
@@ -9095,11 +9110,11 @@ import type { Operation } from "effection";
 import { createApi } from "./api.ts";
 
 export interface DocumentOutputApi {
-  output(text: string): Operation<void>;
+  output(text: string, exact?: boolean): Operation<void>;
 }
 
 export const DocumentOutput = createApi<DocumentOutputApi>("DocumentOutput", {
-  *output(_text: string): Operation<void> {},
+  *output(_text: string, _exact?: boolean): Operation<void> {},
 });
 
 export const { output } = DocumentOutput.operations;
@@ -9157,7 +9172,17 @@ export function* useNormalizedOutput(): Operation<void> {
   const scope = yield* useScope();
 
   scope.around(DocumentOutput, {
-    *output([text], next) {
+    *output([text, exact], next) {
+      // Exact bytes are not prose. Their whitespace is part of what the run
+      // produced, so the write goes out as it arrived — while its own trailing
+      // newlines still count, because the prose after it is still prose.
+      if (exact === true) {
+        const trailing = text.match(/\n+$/);
+        trailingNewlines = trailing ? trailing[0].length : 0;
+        yield* next(text, true);
+        return;
+      }
+
       let normalized = text;
 
       // Strip trailing whitespace on each line
@@ -9176,7 +9201,7 @@ export function* useNormalizedOutput(): Operation<void> {
       const match = normalized.match(/\n+$/);
       trailingNewlines = match ? match[0].length : 0;
 
-      yield* next(normalized);
+      yield* next(normalized, exact);
     },
   });
 }
@@ -9185,6 +9210,15 @@ export function* useNormalizedOutput(): Operation<void> {
 Mutable closure state (`trailingNewlines`) is safe because the middleware
 is scoped per `useNormalizedOutput()` call — one instance per document
 run, not shared across concurrent scopes.
+
+**An exact write is one write, not a mode.** `output()` carries whether the text
+is exact bytes or prose, so the bypass applies to that write alone and the
+middleware presents everything around it exactly as it did before. The terminal
+formatter (§9.5) makes the same distinction, because rendering a program's
+source as Markdown would turn its headings into headings and its fences into
+boxes. Where a write comes from is §9.1: the emission loop reads it from the
+segment, and only a component the host declared as rendering source produces
+one (§5.3).
 
 ### 9.5 Terminal ANSI formatting middleware
 
@@ -9205,9 +9239,15 @@ export function* useTerminalOutput(): Operation<void> {
   const scope = yield* useScope();
 
   scope.around(DocumentOutput, {
-    *output([text], next) {
+    *output([text, exact], next) {
+      // Exact bytes go out as they arrived: a program's approved source must
+      // never be turned into rendered Markdown.
+      if (exact === true) {
+        yield* next(text, true);
+        return;
+      }
       const formatted = marked.parse(text, { async: false }) as string;
-      yield* next(formatted);
+      yield* next(formatted, exact);
     },
   });
 }

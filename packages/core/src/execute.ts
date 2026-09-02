@@ -1728,7 +1728,7 @@ function* runValueRoot(
       for (const resolved of expanded) {
         const text = renderSegment(resolved);
         if (text) {
-          yield* ephemeral(DocumentOutput.operations.output(text));
+          yield* ephemeral(DocumentOutput.operations.output(text, exactly(resolved)));
           chunks.push(text);
         }
       }
@@ -1755,6 +1755,44 @@ function* runValueRoot(
  * that exited nonzero failed the run is not theirs to decide, and this is where
  * the run says so (#441).
  */
+/** Whether one expanded segment carries exact bytes rather than prose. */
+function exactly(segment: Segment): boolean {
+  return segment.type === "text" && segment.exact === true;
+}
+
+/**
+ * What a buffered region emits: consecutive segments of one exactness, joined.
+ *
+ * Buffering is what makes this necessary. A streaming root hands the Output Api
+ * one segment at a time and each write says what it is; a region that renders
+ * as a whole would otherwise join a program's approved source to the prose
+ * beside it and present the pair as one thing. Segments of the same kind still
+ * travel together, so a region holding no exact bytes emits exactly once, as it
+ * always has.
+ */
+interface Emission {
+  readonly text: string;
+  readonly exact: boolean;
+}
+
+function emissions(segments: readonly Segment[]): Emission[] {
+  const runs: Emission[] = [];
+  for (const segment of segments) {
+    const text = renderSegment(segment);
+    if (!text) {
+      continue;
+    }
+    const exact = exactly(segment);
+    const last = runs[runs.length - 1];
+    if (last !== undefined && last.exact === exact) {
+      runs[runs.length - 1] = { text: last.text + text, exact };
+      continue;
+    }
+    runs.push({ text, exact });
+  }
+  return runs;
+}
+
 function* refuseCheckedFailure(checkedFailures: CheckedFailures): Operation<void> {
   const segment = checkedFailures.failure;
   if (segment !== undefined) {
@@ -1880,11 +1918,12 @@ function* documentWorkflow(
         authority,
         undefined,
       );
-      const text = selected.map(renderSegment).join("");
       // An empty buffered root emits no output event.
-      if (text) {
-        yield* ephemeral(DocumentOutput.operations.output(text));
+      const runs = emissions(selected);
+      for (const run of runs) {
+        yield* ephemeral(DocumentOutput.operations.output(run.text, run.exact));
       }
+      const text = runs.map((run) => run.text).join("");
       yield* refuseCheckedFailure(checkedFailures);
       return { status: "ok", output: text, value: text };
     }
@@ -1917,7 +1956,9 @@ function* documentWorkflow(
           // ephemeral() bridges from Workflow (durable) to Operation
           // (non-durable) — output emission is a derived side effect,
           // not journaled.
-          yield* ephemeral(DocumentOutput.operations.output(text));
+          yield* ephemeral(
+            DocumentOutput.operations.output(text, resolved !== undefined && exactly(resolved)),
+          );
           streamed.push(text);
         }
       }
@@ -1941,9 +1982,10 @@ function* documentWorkflow(
     // chunks is who the preservation is for, and the completion path only emits
     // for a run that streamed nothing at all — which stops being true as soon
     // as an earlier segment went out.
-    const tail = produced.slice(emittedThrough).map(renderSegment).join("");
-    if (tail) {
-      yield* ephemeral(DocumentOutput.operations.output(tail));
+    const runs = emissions(produced.slice(emittedThrough));
+    const tail = runs.map((run) => run.text).join("");
+    for (const run of runs) {
+      yield* ephemeral(DocumentOutput.operations.output(run.text, run.exact));
     }
     // A durability failure is not something the document did, so it never
     // becomes the document's own outcome (§6.11).
@@ -2836,6 +2878,7 @@ function* invoke(
           ...(declaration.privates === undefined
             ? {}
             : { privates: [...declaration.privates].map(retainedIdentityComponent) }),
+          ...(declaration.exact === undefined ? {} : { exact: declaration.exact }),
         }),
       ),
     ),

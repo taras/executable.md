@@ -12,7 +12,14 @@ import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
 
 export interface DocumentOutputApi {
-  output(text: string): Operation<void>;
+  /**
+   * @param exact Whether this text is exact bytes rather than prose. The
+   * presentation middleware — whitespace normalization and terminal
+   * formatting — passes exact bytes through untouched, because their
+   * whitespace is part of what the run produced rather than a way of writing
+   * it. Absent means prose, which is what every ordinary emission is.
+   */
+  output(text: string, exact?: boolean): Operation<void>;
 }
 
 /**
@@ -36,6 +43,6 @@ export interface DocumentOutputApi {
 export const DocumentOutput: Api<DocumentOutputApi> = createApi<DocumentOutputApi>(
   "DocumentOutput",
   {
-    *output(_text: string): Operation<void> {},
+    *output(_text: string, _exact?: boolean): Operation<void> {},
   },
 );

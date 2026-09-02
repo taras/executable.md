@@ -15,9 +15,16 @@ export function* useTerminalOutput(): Operation<void> {
   // markedTerminal() returns a marked extension object ({ renderer, useNewRenderer })
   const marked = new Marked(markedTerminal());
   yield* DocumentOutput.around({
-    *output([text], next) {
+    *output([text, exact], next) {
+      // Exact bytes go out as they arrived. Rendering a program's approved
+      // source as Markdown would show its headings as headings and its fences
+      // as boxes, which is the one thing source must never be turned into.
+      if (exact === true) {
+        yield* next(text, true);
+        return;
+      }
       const formatted = marked.parse(text, { async: false }) as string;
-      yield* next(formatted);
+      yield* next(formatted, exact);
     },
   });
 }

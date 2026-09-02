@@ -251,8 +251,8 @@ They are not Plan root props and consume none of the approved Plan's property
 sources.
 
 **The root is an adapter, not the workflow.** It projects `props.request` into
-`<Plan>` without adding whitespace, supplies `props.session`, binds the returned
-string and returns it. It contains no Prompt, no check, no review, no revision
+`<Plan>` without adding whitespace, supplies `props.session`, captures the exact
+source the Component renders, and returns it. It contains no Prompt, no check, no review, no revision
 and no ending of its own. `props.syntax` is sealed by the host rather than
 forwarded: the catalog the agent is shown is the one this command rendered, and
 no prop on the adapter could supply another.
@@ -260,7 +260,7 @@ no prop on the adapter could supply another.
 ## The packaged `<Plan>` Component
 
 Everything the command used to hold is `packages/cli/src/documents/Plan.md`, the
-one packaged Markdown value component the public `<Plan>` name resolves to
+one packaged Markdown text component the public `<Plan>` name resolves to
 ([executable MDX](./executable-mdx-spec.md) §5.3). The command and an ordinary
 document invoking `<Plan>` expand the same bytes, under the same origin
 `@executablemd/cli/Plan.md` and the same digest, in every distribution. There is
@@ -292,12 +292,16 @@ run. TypeScript supplies neither the words nor the choice between them.
 
 **The four private capabilities.** The Component's phases are components only these
 exact bytes may write, declared by the host with the definition and revoked with
-the execution: `<PlanInputs>` freezes the catalog, the session placement, the
-surface and whether that placement outlives the invocation; paired
+the execution: `<PlanInputs>` freezes the catalog, the instruction identity, the
+session placement, the surface and whether that placement outlives the
+invocation, and refuses a continuation whose instructions render differently —
+as stale input, before a directory, a provider, a turn or a review exists; paired
 `<PlanAuthorship>` installs the constrained frame and does not return until every
 part of it has torn down; `<CheckDraft>` answers about one draft without
 executing it; and `<AdmitPlan>` structurally admits the approved bytes after that
-teardown.
+teardown and retains them as one Plan artifact — the invocation identity, the
+instruction identity, the approved source, its digest and that successful
+admission — before the Component renders them.
 
 Whether the placement is durable is carried across that boundary rather than
 re-derived, because `<PlanInputs>` is the last thing that sees the public
@@ -445,8 +449,8 @@ and prevents final validation and every way a Plan could leave the command.
 
 An Agent reply is an inert string while the Plan is being written. The command
 document may bind it, pass it to the validator, serialize its problems, present
-it with `<CodeBlock>` and return it. It never evaluates the draft and never
-dynamically imports it. Only after approval, teardown and final host validation
+it with `<CodeBlock>` and produce it as source. It never evaluates the draft and
+never dynamically imports it. Only after approval, teardown and final host validation
 may those exact bytes enter ordinary execution.
 
 ## Host-declared draft validation
@@ -581,15 +585,16 @@ provider answers with — there is no internal spelling behind them:
 | 1–9 | passed its check | **Approve**, **Request changes**, **Stop** |
 | 1–9 | problems remain | **Request changes**, **Stop** |
 | 10 | passed its check | **Approve**, **Stop** |
-| 10 | problems remain | **Explain what went wrong**, **Stop** |
+| 10 | problems remain | *no review — see the explanation turn below* |
 
 **Request changes** requires non-empty feedback, sends one complete-replacement
 request through the same enclosing Session, and resets the three-turn repair
 budget.
 
-**The explanation turn.** **Explain what went wrong** is offered only on a tenth
-draft that still has problems, and makes exactly one more `<Prompt>` in the same
-enclosing Session. The Session already holds the original Prompt, the catalog,
+**The explanation turn.** A tenth draft that still has problems after its
+repairs leaves nothing to approve and nothing left to revise into, so no review
+opens for it: there is no decision to offer. The workflow instead makes exactly
+one more `<Prompt>` in the same enclosing Session, automatically. The Session already holds the original Prompt, the catalog,
 every draft, every earlier diagnostic and every revision request, so nothing is
 resent: the turn carries only the final diagnostics, which were produced after
 the agent's last draft and have not appeared in the conversation. It asks for a
@@ -612,16 +617,15 @@ returns its source unchanged. Stopping reaches `<Fail>` with one of two
 authored messages, and which one depends on whether an approvable Plan ever
 existed:
 
-- **Stop** on a tenth draft that still has problems is **exhaustion** — ten
-  drafts were reviewed and none was approved;
-- **Explain what went wrong**, offered only there, makes one more turn (below)
-  and then ends the same way;
-- every other **Stop**, including one on a tenth draft that could have been
-  approved, is the ordinary ending: you decided to stop.
+- a tenth draft that still has problems is **exhaustion** — ten drafts were
+  written and none was approvable — and it ends through the automatic
+  explanation above rather than through a decision;
+- every **Stop**, including one on a tenth draft that could have been approved,
+  is the ordinary ending: you decided to stop.
 
 The branch after the Session is only an unexpected-no-decision fallback and says
-so; exhaustion is decided inside review, not duplicated there. Failure is authored in Markdown
-rather than hidden in the host or represented by a missing-`<Return>` accident.
+so; exhaustion is decided where the tenth draft's check is, not duplicated
+there. Failure is authored in Markdown rather than hidden in the host.
 
 The command document's rendered output is not command output. Everything you see
 while a Plan is written reaches you through Elicitation, and that document's
@@ -713,7 +717,7 @@ produced.
 | --- | --- | --- |
 | C1 | Fixed grammar and help | Prompt cardinality, individual-property ordering, aggregate props before the Prompt, `--session` including its empty-value refusal, run-only flags refused without `--run` before any authorship or filesystem effect, a first token of `prompt` refused in preflight rather than read as a document path — leaving `xmd run ./prompt` still able to execute a document of that name — and effect-free generic help that explains `--output` and `--run` |
 | C2 | Exact packaged adapter and Component | The command executes the checked-in Markdown value root under `<plan-command>`, and that root only projects the request into the packaged `<Plan>` Component and returns what it approved; the turn text is that Component's own words, and no TypeScript authorship loop or custom root supplies them |
-| C3 | Visible authorship workflow | Generation, three-turn repair, ten-round review, revision, approval, stopping, exhaustion and the explanation turn are present in the Component's Markdown under visible headings; the generation, repair and revision instructions each require the descriptive title and the steps-beside-components structure; `<Prompt>` remains one turn |
+| C3 | Visible authorship workflow | Generation, three-turn repair, ten-round review, revision, approval, stopping, exhaustion and the automatic explanation turn are present in the Component's Markdown under visible headings; the generation, repair and revision instructions each require the descriptive title and the steps-beside-components structure; `<Prompt>` remains one turn |
 | C4 | One Session | One enclosing Session expansion carries every turn; two default invocations get different profile directories and session keys, two `--session` invocations get the same directory and key with the raw name absent from the path, and two named invocations sharing one ACPX store continue the established record rather than placing a second |
 | C5 | Authorship profile ceiling | This session's own host-owned directory, empty while the command document runs, no MCP servers, no native tools, strict private denial, no Files/command/network capability for the command document, and final-run permission flags that cannot widen any of it; pre-existing content in that directory refuses before any provider, session, turn, review, result or execution and is left untouched |
 | C6 | Draft inertness | A draft is only data while the Plan is written, and no draft effect occurs before the final execution |

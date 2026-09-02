@@ -4,13 +4,11 @@ props:
   properties:
     session: { type: string, minLength: 1 }
   additionalProperties: false
-returns:
-  type: string
 description: >-
-  Create an XMD program from a Prompt. `<Plan as="program">Ask for the user's
-  age.</Plan>` expands its content normally to form the complete Prompt.
-as: Required. The exact approved Plan source after teardown and structural admission.
-context: The complete Prompt, expanded once before authorship.
+  Create an XMD program from a prompt. `<Plan>Ask for the user's age.</Plan>`
+  emits the approved program source.
+as: Binds the exact approved program source and emits nothing. Omitted, that source is emitted where the component is written.
+context: The complete prompt, expanded once before authorship.
 ---
 
 # Turning a Prompt into a Plan
@@ -21,8 +19,9 @@ available to carry them out. A coding agent turns both into one document that
 explains and executes the sequence.
 
 A draft remains text while this workflow reviews it. Nothing in it runs before
-you approve it. After approval, the exact source is checked once more as
-structure and handed back unchanged.
+you approve it, and nothing runs it afterwards either: what this workflow
+produces is the approved program's source, byte for byte, for you to keep,
+read, or hand to something that runs it.
 
 ## Read the Prompt
 
@@ -37,7 +36,7 @@ nothing reaches no catalog, no session, no agent and no review.
 <Fail message="<Plan> requires its body to render a non-empty Prompt." />
 </If>
 
-<PlanInputs session={props.session} as="inputs" />
+<PlanInputs session={props.session} instruction={prompt} as="inputs" />
 
 ## Say what this surface calls things
 
@@ -48,13 +47,11 @@ of them is raised.
 
 <If condition={inputs.surface === "command"}>
 <Let as="stopped" value="xmd plan stopped at your request. Nothing was output or run." />
-<Let as="exhausted" value="xmd plan reviewed ten drafts without an approved Plan. Nothing was output or run." />
 <Let as="unresolved" value="xmd plan ended without an approved Plan. Nothing was output or run." />
 <Let as="explained" value="xmd plan reviewed ten drafts without an approved Plan. The coding agent explained why:" />
 <Let as="closing" value="Nothing was output or run." />
 <Else>
 <Let as="stopped" value="Plan authorship stopped at your request. No Plan was returned." />
-<Let as="exhausted" value="Plan authorship reviewed ten drafts without an approved Plan. No Plan was returned." />
 <Let as="unresolved" value="Plan authorship ended without an approved Plan. No Plan was returned." />
 <Let as="explained" value="Plan authorship reviewed ten drafts without an approved Plan. The coding agent explained why:" />
 <Let as="closing" value="No Plan was returned." />
@@ -162,18 +159,44 @@ explanation before or after it.
 <CheckDraft source={draft} as="check" />
 </Loop>
 
+## Explain a tenth draft that could not be repaired
+
+Ten drafts is the limit, and the tenth cannot be revised into an eleventh. So a
+tenth draft that still has problems after its repair attempts leaves nothing to
+approve and nothing to ask for — there is no decision left for you to make, and
+this workflow does not ask you to make one.
+
+Instead the coding agent is asked once, automatically, why the attempts did not
+work and what would make a future prompt more likely to succeed. That answer is
+explanation and nothing else: it creates no new draft, extends no limit, and
+ends this Plan without a program.
+
+<If condition={round === 10 && !check.valid}>
+<Prompt as="explanation">
+The final Plan still has these problems:
+
+<Json value={check.diagnostics} as="problems" />
+<CodeBlock value={problems} language="json" />
+
+Explain briefly why the attempts did not resolve them and what the person should
+clarify in their next Prompt. Do not create another Plan.
+</Prompt>
+
+<Fail message={`${explained}\n\n${explanation}\n\n${closing}`} />
+</If>
+
 ## Review the draft
 
-The workflow shows you the complete draft after its repair attempts.
+Every draft you are shown has a decision left in it. The workflow shows you the
+complete draft after its repair attempts.
 
 - Choose **Approve** to accept a draft that passed its check.
 - Choose **Request changes** to send feedback to the coding agent and create a
   new draft.
 - Choose **Stop** to end without returning anything.
 
-A draft with remaining problems cannot be approved. You may review at most ten
-drafts, and the tenth cannot be revised. If the tenth draft still has problems,
-you may ask the coding agent to explain what went wrong or stop.
+A draft with remaining problems cannot be approved, and the tenth draft cannot
+be revised, so on either of those the choices you are offered are narrower.
 
 <Elicit
   as="review"
@@ -184,9 +207,7 @@ you may ask the coding agent to explain what went wrong or stop.
         type: "string",
         enum: check.valid
           ? (round === 10 ? ["Approve", "Stop"] : ["Approve", "Request changes", "Stop"])
-          : (round === 10
-            ? ["Explain what went wrong", "Stop"]
-            : ["Request changes", "Stop"]),
+          : ["Request changes", "Stop"],
       },
       feedback: { type: "string" },
     },
@@ -226,9 +247,7 @@ problems:
 ## Continue from your decision
 
 Approve keeps this exact draft and leaves the review. Request changes sends your
-feedback to the coding agent and starts a new draft. Stop ends here. On a tenth
-draft that still has problems there is nothing left to revise into, so the two
-remaining choices are to ask the coding agent what went wrong, or to stop.
+feedback to the coding agent and starts a new draft. Stop ends here.
 
 <If condition={review.decision === "Approve"}>
 <Let as="approved" value={draft} />
@@ -236,26 +255,7 @@ remaining choices are to ask the coding agent what went wrong, or to stop.
 </If>
 
 <If condition={review.decision === "Stop"}>
-<If condition={round === 10 && !check.valid}>
-<Fail message={exhausted} />
-<Else>
 <Fail message={stopped} />
-</Else>
-</If>
-</If>
-
-<If condition={review.decision === "Explain what went wrong"}>
-<Prompt as="explanation">
-The final Plan still has these problems:
-
-<Json value={check.diagnostics} as="problems" />
-<CodeBlock value={problems} language="json" />
-
-Explain briefly why the attempts did not resolve them and what the person should
-clarify in their next Prompt. Do not create another Plan.
-</Prompt>
-
-<Fail message={`${explained}\n\n${explanation}\n\n${closing}`} />
 </If>
 
 <Prompt as="draft">
@@ -286,17 +286,21 @@ explanation before or after it.
 </Session>
 </PlanAuthorship>
 
-## Return the approved Plan
+## Produce the approved Plan source
 
 Only an approved Plan leaves this workflow, and only after the whole authorship
 frame above has been taken down. Its exact source is checked once more as
-structure — every declaration, resolution and form it uses — and then handed
-back byte for byte.
+structure — every declaration, resolution and form it uses — and retained
+together with the prompt it was written for, so asking again restores these
+exact bytes instead of writing a second Plan.
 
 <If condition={approved !== null}>
-<AdmitPlan source={approved} as="admitted" />
-<Return value={admitted} />
+<AdmitPlan source={approved} instruction={prompt} as="admitted" />
 <Else>
 <Fail message={unresolved} />
 </Else>
 </If>
+
+The source is what this workflow produces, byte for byte. Nothing here runs it.
+
+<Output>{admitted}</Output>
