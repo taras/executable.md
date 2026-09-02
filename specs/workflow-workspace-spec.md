@@ -2642,6 +2642,14 @@ performance retains is that observation, which is how the record says what the
 external resource held before this attempt moved it. Temporary unavailability is neither absence nor conflict, and never
 authorizes a mutation: a later explicit attempt starts again at observation.
 
+**Whether absence can be proved at all depends on where the completion is visible**, and effects divide into two kinds. Most of them mutate a subject that already exists and whose own state answers the question: a Push reads the destination ref, a numbered pull-request update reads that pull request, `PullRequest.Ready` and `PullRequest.Close` read its state, `Issue.Close` reads the issue, `Project.Status` reads the field's current option. For those, a complete observation of the subject is decisive whether or not this effect has attempted anything, because what the observation reports is the resource itself.
+
+The other kind **creates a new object the host names**, and a comment is the case in this specification. Nothing pre-exists to read, and the host issues no client-supplied idempotency key, so the completion is observable only through a correlation value the effect itself wrote. Absence then means "that value is not there", which is a different claim before and after a mutation has been attempted, and the effect therefore retains its **attempt state**: the exact request is retained as prepared and unattempted before any provider mutation, and a live attempt moves it past that.
+
+For such an effect the decision above narrows in exactly one place. Unattempted with nothing found is proven absence and performs once. **Attempted with no committed local completion and nothing found is permanent ambiguity, not absence** — the correlation value is equally missing because the object was never created and because somebody removed it inside the interrupted window, and performing on that reading is how a duplicate gets published. Exactly one correlation match is compatible completion in either state; more than one is permanent ambiguity in either state; and an incomplete observation stays incomplete rather than becoming absence, since an unfinished search reported as absence is the same duplicate by another route. Once a local completion has committed, none of it decides anything further: replay reads the record and contacts no provider.
+
+A provider that cannot write, preserve and completely query such a correlation value cannot supply this kind of effect at all, and refuses it from observation before any mutation — the same refusal a plain Git server gives for pull requests.
+
 **The record.** A decision publishes one journal result holding the request, the
 normalized pre-state, the normalized observations, the decision — `adopted` or
 `performed` — and the normalized result. Replaying it contacts no provider and
