@@ -26,16 +26,21 @@ import type { AcpRuntimeEvent } from "../../src/acpx-runtime.ts";
 
 const DISCOVERY_ENV = "XMD_DEVIN_ACP_DISCOVERY";
 const TURNS_ENV = "XMD_DEVIN_MODEL_TURNS_AUTHORIZED";
+const SCENARIO_ENV = "XMD_DEVIN_SCENARIO";
+const CANCEL_TURN_ENV = "XMD_DEVIN_CANCEL_TURN_AUTHORIZED";
 const DEVIN_EXECUTABLE_ENV = "XMD_DEVIN_EXECUTABLE";
 const REAL_DEVIN_ENV = "XMD_DEVIN_REAL_EXECUTABLE";
 const TRACE_ENV = "XMD_DEVIN_TRACE";
 const AUTHORIZED_TURNS = "1";
+const BASELINE_SCENARIO = "baseline";
+const CANCEL_AFTER_PROMPT_SCENARIO = "cancel-after-prompt";
 const EXPECTED_REPLY = "DEVIN-ACP-DISCOVERY-OK";
 const TIMEOUT_MS = 5 * 60 * 1000;
 const FIXTURE = fileURLToPath(import.meta.url);
 
 type VerdictKind = "PASS" | "REFUSED" | "ENVIRONMENT_BLOCKED" | "PRODUCT_FAILED";
 type Direction = "client-to-agent" | "agent-to-client";
+type ProbeScenario = typeof BASELINE_SCENARIO | typeof CANCEL_AFTER_PROMPT_SCENARIO;
 
 interface CommandOutcome {
   code: number;
@@ -54,25 +59,28 @@ const TraceEntrySchema = z.object({
   errorCode: z.string().optional(),
   stopReason: z.string().optional(),
   sessionUpdate: z.string().optional(),
+  updateKeys: z.array(z.string()).optional(),
   metadata: z.record(z.string(), z.array(z.string())).optional(),
   identities: z.record(z.string(), z.string()).optional(),
   clientInfo: z.object({ name: z.string(), version: z.string() }).optional(),
 });
 
 const WireTraceSchema = z.object({
-  schema: z.literal("devin-acp-wire.v1"),
+  schema: z.literal("devin-acp-wire.v2"),
   complete: z.boolean(),
   entries: z.array(TraceEntrySchema),
   nonJsonLines: z.object({ clientToAgent: z.number().int(), agentToClient: z.number().int() }),
   agentStderr: z.object({ bytes: z.number().int(), classification: z.string() }),
   agentExit: z.object({ code: z.number().int(), signal: z.string() }),
+  cancelAfterPromptInjected: z.boolean(),
 });
 
 type TraceEntry = z.infer<typeof TraceEntrySchema>;
 type WireTrace = z.infer<typeof WireTraceSchema>;
 
 interface DiscoveryVerdict {
-  schema: "devin-acp-discovery.v1";
+  schema: "devin-acp-discovery.v2";
+  scenario: ProbeScenario;
   verdict: VerdictKind;
   authorized: boolean;
   ran: boolean;
@@ -98,18 +106,20 @@ interface DiscoveryVerdict {
 
 function emptyTrace(): WireTrace {
   return {
-    schema: "devin-acp-wire.v1",
+    schema: "devin-acp-wire.v2",
     complete: false,
     entries: [],
     nonJsonLines: { clientToAgent: 0, agentToClient: 0 },
     agentStderr: { bytes: 0, classification: "none" },
     agentExit: { code: -1, signal: "" },
+    cancelAfterPromptInjected: false,
   };
 }
 
 function baseVerdict(): DiscoveryVerdict {
   return {
-    schema: "devin-acp-discovery.v1",
+    schema: "devin-acp-discovery.v2",
+    scenario: BASELINE_SCENARIO,
     verdict: "REFUSED",
     authorized: false,
     ran: false,
@@ -289,6 +299,7 @@ function sanitizeMessage(
     ...(stringField(update, "sessionUpdate") === undefined
       ? {}
       : { sessionUpdate: stringField(update, "sessionUpdate") }),
+    ...(objectKeys(update) === undefined ? {} : { updateKeys: objectKeys(update) }),
     ...(Object.keys(metadata).length === 0 ? {} : { metadata }),
     ...(Object.keys(identities).length === 0 ? {} : { identities }),
     ...(clientName === undefined || clientVersion === undefined
@@ -333,6 +344,84 @@ function observeJsonLines(
   stream.on("data", onData);
   return () => {
     stream.off("data", onData);
+  };
+}
+
+function relayClientJsonLines(
+  stream: NodeJS.ReadableStream,
+  child: ChildProcessWithoutNullStreams,
+  entries: TraceEntry[],
+  nonJson: { clientToAgent: number; agentToClient: number },
+  requestTokens: Map<string, string>,
+  identityTokens: Map<string, string>,
+  injectCancelAfterPrompt: boolean,
+): { stop: () => void; cancelInjected: () => boolean } {
+  let buffer = "";
+  let injected = false;
+  const onData = (chunk: string | Buffer) => {
+    buffer += chunk.toString();
+    let index = buffer.indexOf("\n");
+    while (index >= 0) {
+      const rawLine = buffer.slice(0, index);
+      const line = rawLine.trim();
+      buffer = buffer.slice(index + 1);
+      index = buffer.indexOf("\n");
+      child.stdin.write(`${rawLine}\n`);
+      if (line.length === 0) {
+        continue;
+      }
+      try {
+        const message: unknown = JSON.parse(line);
+        entries.push(
+          sanitizeMessage(
+            message,
+            "client-to-agent",
+            entries.length + 1,
+            requestTokens,
+            identityTokens,
+          ),
+        );
+        const params = field(message, "params");
+        const sessionId = stringField(params, "sessionId");
+        if (
+          injectCancelAfterPrompt &&
+          !injected &&
+          stringField(message, "method") === "session/prompt" &&
+          sessionId !== undefined
+        ) {
+          const cancellation = {
+            jsonrpc: "2.0",
+            method: "session/cancel",
+            params: { sessionId },
+          };
+          entries.push(
+            sanitizeMessage(
+              cancellation,
+              "client-to-agent",
+              entries.length + 1,
+              requestTokens,
+              identityTokens,
+            ),
+          );
+          child.stdin.write(`${JSON.stringify(cancellation)}\n`);
+          injected = true;
+        }
+      } catch {
+        nonJson.clientToAgent++;
+      }
+    }
+  };
+  const onEnd = () => {
+    child.stdin.end();
+  };
+  stream.on("data", onData);
+  stream.on("end", onEnd);
+  return {
+    stop: () => {
+      stream.off("data", onData);
+      stream.off("end", onEnd);
+    },
+    cancelInjected: () => injected,
   };
 }
 
@@ -395,14 +484,16 @@ function traceSnapshot(
   stderr: string,
   outcome: { code: number; signal: string },
   complete: boolean,
+  cancelAfterPromptInjected: boolean,
 ): WireTrace {
   return {
-    schema: "devin-acp-wire.v1",
+    schema: "devin-acp-wire.v2",
     complete,
     entries,
     nonJsonLines: nonJson,
     agentStderr: { bytes: Buffer.byteLength(stderr), classification: classifyStderr(stderr) },
     agentExit: outcome,
+    cancelAfterPromptInjected,
   };
 }
 
@@ -422,13 +513,14 @@ function* runRelay(): Operation<void> {
     env: process.env,
     stdio: ["pipe", "pipe", "pipe"],
   });
-  const stopClientObservation = observeJsonLines(
+  const clientRelay = relayClientJsonLines(
     process.stdin,
-    "client-to-agent",
+    child,
     entries,
     nonJson,
     requestTokens,
     identityTokens,
+    process.env[SCENARIO_ENV] === CANCEL_AFTER_PROMPT_SCENARIO,
   );
   const stopAgentObservation = observeJsonLines(
     child.stdout,
@@ -441,7 +533,6 @@ function* runRelay(): Operation<void> {
   child.stderr.on("data", (chunk: Buffer) => {
     stderr += chunk.toString("utf8");
   });
-  process.stdin.pipe(child.stdin);
   child.stdout.pipe(process.stdout);
 
   const settled = withResolvers<{ code: number; signal: string }>();
@@ -450,7 +541,7 @@ function* runRelay(): Operation<void> {
     settled.resolve({ code: code ?? 1, signal: signal ?? "" });
   });
   yield* ensure(() => {
-    stopClientObservation();
+    clientRelay.stop();
     stopAgentObservation();
     if (child.exitCode === null && child.signalCode === null) {
       child.kill();
@@ -459,7 +550,18 @@ function* runRelay(): Operation<void> {
 
   yield* writeTextFile(
     tracePath,
-    `${JSON.stringify(traceSnapshot(entries, nonJson, stderr, { code: -1, signal: "" }, false), null, 2)}\n`,
+    `${JSON.stringify(
+      traceSnapshot(
+        entries,
+        nonJson,
+        stderr,
+        { code: -1, signal: "" },
+        false,
+        clientRelay.cancelInjected(),
+      ),
+      null,
+      2,
+    )}\n`,
   );
 
   let outcome: { code: number; signal: string };
@@ -473,11 +575,19 @@ function* runRelay(): Operation<void> {
       `${stderr}\n${classified}`,
       { code: -1, signal: "SPAWN_ERROR" },
       true,
+      clientRelay.cancelInjected(),
     );
     yield* writeTextFile(tracePath, `${JSON.stringify(failed, null, 2)}\n`);
     throw error;
   }
-  const trace = traceSnapshot(entries, nonJson, stderr, outcome, true);
+  const trace = traceSnapshot(
+    entries,
+    nonJson,
+    stderr,
+    outcome,
+    true,
+    clientRelay.cancelInjected(),
+  );
   yield* writeTextFile(tracePath, `${JSON.stringify(trace, null, 2)}\n`);
   if (outcome.code !== 0) {
     yield* exit(outcome.code);
@@ -491,9 +601,20 @@ function* runDiscovery(): Operation<DiscoveryVerdict> {
     verdict.detail = "no Devin process was started and no model turn was spent";
     return verdict;
   }
-  if (process.env[TURNS_ENV] !== AUTHORIZED_TURNS) {
-    verdict.refusal = `${TURNS_ENV}=${AUTHORIZED_TURNS} was not supplied`;
-    verdict.detail = "the separate one-turn authorization was absent";
+  const requestedScenario = process.env[SCENARIO_ENV] ?? BASELINE_SCENARIO;
+  if (
+    requestedScenario !== BASELINE_SCENARIO &&
+    requestedScenario !== CANCEL_AFTER_PROMPT_SCENARIO
+  ) {
+    verdict.refusal = `${SCENARIO_ENV} did not name a supported probe`;
+    verdict.detail = `use ${BASELINE_SCENARIO} or ${CANCEL_AFTER_PROMPT_SCENARIO}`;
+    return verdict;
+  }
+  verdict.scenario = requestedScenario;
+  const authorizationEnv = verdict.scenario === BASELINE_SCENARIO ? TURNS_ENV : CANCEL_TURN_ENV;
+  if (process.env[authorizationEnv] !== AUTHORIZED_TURNS) {
+    verdict.refusal = `${authorizationEnv}=${AUTHORIZED_TURNS} was not supplied`;
+    verdict.detail = "the separate authorization for this probe was absent";
     return verdict;
   }
   verdict.authorized = true;
@@ -545,7 +666,11 @@ function* runDiscovery(): Operation<DiscoveryVerdict> {
     permissionMode: "deny-all",
     nonInteractivePermissions: "deny",
     timeoutMs: TIMEOUT_MS,
-    agentProcessEnv: { [REAL_DEVIN_ENV]: executable, [TRACE_ENV]: tracePath },
+    agentProcessEnv: {
+      [REAL_DEVIN_ENV]: executable,
+      [TRACE_ENV]: tracePath,
+      [SCENARIO_ENV]: verdict.scenario,
+    },
   });
 
   let activeStage = "session-initialization";
@@ -636,7 +761,11 @@ function* runDiscovery(): Operation<DiscoveryVerdict> {
     const windsurf = verdict.trace.entries.some(
       (entry) => entry.method === "initialize" && entry.clientInfo?.name === "windsurf",
     );
-    verdict.verdict = windsurf && verdict.runtimeStatus === "completed" ? "PASS" : "PRODUCT_FAILED";
+    const scenarioSatisfied =
+      verdict.scenario === BASELINE_SCENARIO
+        ? verdict.runtimeStatus === "completed"
+        : verdict.trace.cancelAfterPromptInjected && verdict.runtimeStatus === "cancelled";
+    verdict.verdict = windsurf && scenarioSatisfied ? "PASS" : "PRODUCT_FAILED";
     verdict.refusal = verdict.verdict === "PASS" ? "" : "the ACP journey did not satisfy its probe";
     verdict.detail =
       verdict.verdict === "PASS"

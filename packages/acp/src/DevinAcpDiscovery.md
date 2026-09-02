@@ -28,10 +28,13 @@ It does not prove native `Session.Launch`. That requires a second, interactive
 gate for Devin's native create or resume command, prepared instruction layer,
 zero-turn exit, and continuity after a separate invocation.
 
-One successful trace is discovery evidence, not an acceptance proof. A
-candidate signal still needs paired failed and cancelled turns showing that it
-is absent when the backend did not accept the turn before XMD can translate it
-into durable session materialization.
+One successful trace is discovery evidence, not an acceptance proof. The
+cancel-after-prompt control queues ACP's `session/cancel` immediately behind
+`session/prompt`, before Devin can send any response. Comparing the first
+post-prompt update in both traces shows whether the candidate survives the
+strongest cancellation boundary ACP can express. A candidate signal still
+needs evidence that it is absent when the backend did not accept the turn
+before XMD can translate it into durable session materialization.
 
 ## Cost and authorization
 
@@ -44,6 +47,18 @@ that the provider did not publish.
 
 ```sh
 XMD_DEVIN_ACP_DISCOVERY=1 XMD_DEVIN_MODEL_TURNS_AUTHORIZED=1 \
+  deno task xmd run packages/acp/src/DevinAcpDiscovery.md --raw
+```
+
+After capturing that baseline, run the cancellation control separately. It can
+still reach Devin's backend and incur model cost, so it has its own explicit
+authorization. The relay forwards `session/prompt` and then sends
+`session/cancel` in the same input callback, before it accepts another event:
+
+```sh
+XMD_DEVIN_ACP_DISCOVERY=1 \
+XMD_DEVIN_SCENARIO=cancel-after-prompt \
+XMD_DEVIN_CANCEL_TURN_AUTHORIZED=1 \
   deno task xmd run packages/acp/src/DevinAcpDiscovery.md --raw
 ```
 
@@ -83,7 +98,7 @@ deno run --allow-all --frozen packages/acp/tests/fixtures/devin-acp-discovery.ts
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schema", "verdict", "authorized", "ran", "refusal", "detail",
+    "schema", "scenario", "verdict", "authorized", "ran", "refusal", "detail",
     "devinVersion", "platform", "architecture", "modelTurns",
     "runtimeStatus", "failureStage", "runtimeErrorCode",
     "runtimeErrorDetailCode", "runtimeErrorClassification",
@@ -92,7 +107,8 @@ deno run --allow-all --frozen packages/acp/tests/fixtures/devin-acp-discovery.ts
     "privateContentReported"
   ],
   "properties": {
-    "schema": { "const": "devin-acp-discovery.v1" },
+    "schema": { "const": "devin-acp-discovery.v2" },
+    "scenario": { "enum": ["baseline", "cancel-after-prompt"] },
     "verdict": {
       "enum": ["PASS", "REFUSED", "ENVIRONMENT_BLOCKED", "PRODUCT_FAILED"]
     },
@@ -119,10 +135,11 @@ deno run --allow-all --frozen packages/acp/tests/fixtures/devin-acp-discovery.ts
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "schema", "complete", "entries", "nonJsonLines", "agentStderr", "agentExit"
+        "schema", "complete", "entries", "nonJsonLines", "agentStderr", "agentExit",
+        "cancelAfterPromptInjected"
       ],
       "properties": {
-        "schema": { "const": "devin-acp-wire.v1" },
+        "schema": { "const": "devin-acp-wire.v2" },
         "complete": { "type": "boolean" },
         "entries": {
           "type": "array",
@@ -140,6 +157,7 @@ deno run --allow-all --frozen packages/acp/tests/fixtures/devin-acp-discovery.ts
               "errorCode": { "type": "string" },
               "stopReason": { "type": "string" },
               "sessionUpdate": { "type": "string" },
+              "updateKeys": { "type": "array", "items": { "type": "string" } },
               "metadata": {
                 "type": "object",
                 "additionalProperties": {
@@ -190,7 +208,8 @@ deno run --allow-all --frozen packages/acp/tests/fixtures/devin-acp-discovery.ts
             "code": { "type": "integer" },
             "signal": { "type": "string" }
           }
-        }
+        },
+        "cancelAfterPromptInjected": { "type": "boolean" }
       }
     }
   }
@@ -242,6 +261,10 @@ messages while attempting {proof.modelTurns} turn.
 
 <If condition={proof.verdict === "PASS" && proof.modelTurns !== 1}>
 <Fail message="A successful discovery must spend exactly one authorized model turn." />
+</If>
+
+<If condition={proof.scenario === "cancel-after-prompt" && !proof.trace.cancelAfterPromptInjected}>
+<Fail message="The cancellation control did not queue session/cancel immediately after session/prompt." />
 </If>
 
 <Else>
