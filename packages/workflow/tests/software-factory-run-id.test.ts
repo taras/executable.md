@@ -13,13 +13,13 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import {
   admitFactoryRunSubject,
-  base32Unpadded,
-  canonicalGitHubAuthority,
   deriveFactoryRunId,
-  FACTORY_RUN_ID_LENGTH,
-  factoryRunIdPreimage,
   FactoryRunSubjectError,
 } from "@executablemd/workflow/software-factory";
+// The encoder is an internal algorithm rather than a public promise, so the
+// RFC 4648 vectors below reach it directly. Everything else in this file goes
+// through the published product API, which is what a host actually holds.
+import { base32Unpadded, factoryRunIdPreimage } from "../src/software-factory/run-id.ts";
 
 /** An opaque node id of the shape GitHub's GraphQL API returns for an issue. */
 const NODE = "I_kwDOABCD12M5abcdef";
@@ -48,6 +48,11 @@ const VECTORS = [
   },
 ] as const;
 
+/** The canonical authority a subject is admitted under, through the public seam. */
+function authorityOf(value: string): string {
+  return admitFactoryRunSubject({ authority: value, issueNodeId: NODE }).authority;
+}
+
 function reason(body: () => unknown): string {
   try {
     body();
@@ -68,7 +73,7 @@ describe("the factory run id", () => {
         issueNodeId: vector.issueNodeId,
       });
       expect(runId).toEqual(vector.runId);
-      expect(runId.length).toEqual(FACTORY_RUN_ID_LENGTH);
+      expect(runId.length).toEqual(52);
       expect(/^[a-z2-7]{52}$/.test(runId)).toEqual(true);
     }
   });
@@ -87,51 +92,35 @@ describe("the factory run id", () => {
   });
 
   it("writes the scheme tag, both separators and both inputs", function* () {
-    const bytes = factoryRunIdPreimage({ authority: "github.com", issueNodeId: "x" });
+    const bytes = new Uint8Array(
+      factoryRunIdPreimage({ authority: "github.com", issueNodeId: "x" }),
+    );
     expect(new TextDecoder().decode(bytes)).toEqual("github-issue-v1\0github.com\0x");
     expect([...bytes].filter((byte) => byte === 0).length).toEqual(2);
   });
 
   it("folds case and keeps a non-default port", function* () {
-    expect(canonicalGitHubAuthority("GitHub.Com")).toEqual("github.com");
-    expect(canonicalGitHubAuthority("GitHub.Example.COM:8443")).toEqual("github.example.com:8443");
+    expect(authorityOf("GitHub.Com")).toEqual("github.com");
+    expect(authorityOf("GitHub.Example.COM:8443")).toEqual("github.example.com:8443");
   });
 
   it("refuses every part an authority may not carry", function* () {
-    expect(reason(() => canonicalGitHubAuthority(""))).toEqual("authority-empty");
-    expect(reason(() => canonicalGitHubAuthority("https://github.com"))).toEqual(
-      "authority-has-scheme",
-    );
-    expect(reason(() => canonicalGitHubAuthority("user@github.com"))).toEqual(
-      "authority-has-userinfo",
-    );
-    expect(reason(() => canonicalGitHubAuthority("github.com/octo"))).toEqual("authority-has-path");
-    expect(reason(() => canonicalGitHubAuthority("github.com/"))).toEqual("authority-has-path");
-    expect(reason(() => canonicalGitHubAuthority("github.com?a=b"))).toEqual("authority-has-query");
-    expect(reason(() => canonicalGitHubAuthority("github.com#top"))).toEqual(
-      "authority-has-fragment",
-    );
-    expect(reason(() => canonicalGitHubAuthority("git hub.com"))).toEqual(
-      "authority-has-whitespace",
-    );
-    expect(reason(() => canonicalGitHubAuthority("-github.com"))).toEqual(
-      "authority-malformed-host",
-    );
-    expect(reason(() => canonicalGitHubAuthority("github.com:https"))).toEqual(
-      "authority-malformed-port",
-    );
-    expect(reason(() => canonicalGitHubAuthority("github.com:0"))).toEqual(
-      "authority-malformed-port",
-    );
-    expect(reason(() => canonicalGitHubAuthority("github.com:70000"))).toEqual(
-      "authority-malformed-port",
-    );
+    expect(reason(() => authorityOf(""))).toEqual("authority-empty");
+    expect(reason(() => authorityOf("https://github.com"))).toEqual("authority-has-scheme");
+    expect(reason(() => authorityOf("user@github.com"))).toEqual("authority-has-userinfo");
+    expect(reason(() => authorityOf("github.com/octo"))).toEqual("authority-has-path");
+    expect(reason(() => authorityOf("github.com/"))).toEqual("authority-has-path");
+    expect(reason(() => authorityOf("github.com?a=b"))).toEqual("authority-has-query");
+    expect(reason(() => authorityOf("github.com#top"))).toEqual("authority-has-fragment");
+    expect(reason(() => authorityOf("git hub.com"))).toEqual("authority-has-whitespace");
+    expect(reason(() => authorityOf("-github.com"))).toEqual("authority-malformed-host");
+    expect(reason(() => authorityOf("github.com:https"))).toEqual("authority-malformed-port");
+    expect(reason(() => authorityOf("github.com:0"))).toEqual("authority-malformed-port");
+    expect(reason(() => authorityOf("github.com:70000"))).toEqual("authority-malformed-port");
   });
 
   it("refuses a default port written out, so one deployment has one spelling", function* () {
-    expect(reason(() => canonicalGitHubAuthority("github.com:443"))).toEqual(
-      "authority-default-port",
-    );
+    expect(reason(() => authorityOf("github.com:443"))).toEqual("authority-default-port");
   });
 
   it("compares a node id byte for byte", function* () {

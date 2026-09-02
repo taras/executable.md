@@ -37,7 +37,7 @@ const BASE32_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
  * unpadded encoding is `ceil(256 / 5)` characters. Stated rather than computed
  * because it is a contract a second implementation is held to.
  */
-export const FACTORY_RUN_ID_LENGTH = 52;
+const FACTORY_RUN_ID_LENGTH = 52;
 
 /** Why a subject could not be turned into a run id. */
 export type FactoryRunSubjectFailure =
@@ -103,7 +103,7 @@ const HOSTNAME =
  * usable is a value somebody meant differently, and two spellings that both
  * became one authority would be two runs quietly becoming one.
  */
-export function canonicalGitHubAuthority(value: string): string {
+function canonicalGitHubAuthority(value: string): string {
   if (value === "") {
     throw new FactoryRunSubjectError("authority-empty", "the authority is empty");
   }
@@ -166,7 +166,7 @@ export function canonicalGitHubAuthority(value: string): string {
 }
 
 /** Hold a node id to what a retained identity has to be, and change nothing about it. */
-export function admitIssueNodeId(value: string): string {
+function admitIssueNodeId(value: string): string {
   if (value === "") {
     throw new FactoryRunSubjectError("node-id-empty", "the issue node id is empty");
   }
@@ -183,12 +183,15 @@ export function admitIssueNodeId(value: string): string {
  * UTF-8. The NULs are separators the inputs cannot contain, so no pair of
  * (authority, node id) can be rearranged into another pair with the same bytes.
  */
-export function factoryRunIdPreimage(subject: FactoryRunSubject): Uint8Array {
+export function factoryRunIdPreimage(subject: FactoryRunSubject): ArrayBuffer {
   const encoder = new TextEncoder();
   const scheme = encoder.encode(SCHEME);
   const authority = encoder.encode(subject.authority);
   const node = encoder.encode(subject.issueNodeId);
-  const bytes = new Uint8Array(scheme.length + 1 + authority.length + 1 + node.length);
+  // An `ArrayBuffer` rather than a view, because that is what `crypto.subtle`
+  // accepts without anything having to assert a type at the call site.
+  const buffer = new ArrayBuffer(scheme.length + 1 + authority.length + 1 + node.length);
+  const bytes = new Uint8Array(buffer);
   let at = 0;
   bytes.set(scheme, at);
   at += scheme.length;
@@ -199,7 +202,7 @@ export function factoryRunIdPreimage(subject: FactoryRunSubject): Uint8Array {
   bytes[at] = 0;
   at += 1;
   bytes.set(node, at);
-  return bytes;
+  return buffer;
 }
 
 /** Lowercase unpadded RFC 4648 Base32 of exactly these bytes. */
@@ -244,8 +247,6 @@ export function admitFactoryRunSubject(subject: FactoryRunSubject): FactoryRunSu
  */
 export function* deriveFactoryRunId(subject: FactoryRunSubject): Operation<string> {
   const admitted = admitFactoryRunSubject(subject);
-  const digest = yield* until(
-    crypto.subtle.digest("SHA-256", factoryRunIdPreimage(admitted) as BufferSource),
-  );
+  const digest = yield* until(crypto.subtle.digest("SHA-256", factoryRunIdPreimage(admitted)));
   return base32Unpadded(new Uint8Array(digest));
 }

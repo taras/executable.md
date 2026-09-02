@@ -27,6 +27,12 @@
  * `specs/github-actions-software-factory-spec.md` §1.1 and restated in
  * `specs/workflow-spec.md` §9.1.
  *
+ * The seam is deliberately small: admit a subject, or derive its id. The scheme
+ * tag, the Base32 alphabet, the authority rule, the preimage layout and the
+ * encoder are implementation, not promises — a caller that could reach them
+ * could also reimplement the hash, and two implementations of an identity that
+ * must agree byte for byte is the failure §1.1 exists to prevent.
+ *
  * Nothing here is runtime-specific. It uses the cross-runtime Web primitives —
  * `TextEncoder` and `crypto.subtle` — and names no host, so the provider host
  * and a GitHub intake reach the same single implementation rather than each
@@ -35,12 +41,7 @@
 
 export {
   admitFactoryRunSubject,
-  admitIssueNodeId,
-  base32Unpadded,
-  canonicalGitHubAuthority,
   deriveFactoryRunId,
-  FACTORY_RUN_ID_LENGTH,
-  factoryRunIdPreimage,
   FactoryRunSubjectError,
 } from "./src/software-factory/run-id.ts";
 export type { FactoryRunSubject, FactoryRunSubjectFailure } from "./src/software-factory/run-id.ts";
