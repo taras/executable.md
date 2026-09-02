@@ -2917,16 +2917,48 @@ The grid runs as one structured scope:
 6. Once attached, each pane settles independently and keeps its final status
    visible while siblings continue. The composite remains present after all
    panes settle until the reader closes or leaves it.
-7. Closing begins an ordered teardown: prevent new pane launches, cancel live
-   pane scopes, await every child and finalizer, detach and destroy the exact
-   provider composite, restore the root terminal, and only then release the
-   foreground lease and settle the grid. The document never continues while an
-   observable pane child or provider-owned process can still act through the
-   grid.
+7. Reader close first crosses a live close boundary, then begins an ordered
+   teardown: prevent new pane launches, ask live pane children to close, await
+   every child and finalizer, detach and destroy the exact provider composite,
+   restore the root terminal, and only then release the foreground lease and
+   settle the grid. The document never continues while an observable pane child
+   or provider-owned process can still act through the grid.
+
+The provider's `closed()` settlement proposes the live close boundary. The
+boundary is crossed when the grid owner has entered a cancellation-deferred
+await of the grid's durable child and acknowledges that proposal; only then may
+the child signal pane close. That await ends only when the task has settled and
+its durable `Close` has been acknowledged, not when the grid body has merely
+chosen an outcome. This handshake has no provider identity and is not itself
+journaled.
+
+Reader-close intent becomes durable only as that completed grid `Close`, after
+pane and provider teardown. There is no standalone durable "closing" state. The
+gap between observing close and committing it is safe because ordinary parent
+cancellation is held pending across the whole gap. A cancellation that arrives
+before the owner acknowledges the close boundary cancels the active grid. One that arrives
+afterward does not rewrite grid or pane outcomes: panes already settled keep
+their outcomes, each then-live pane completes its own scope and retains
+`closed`, and the grid retains the same `reader` or `failed` result it would
+have retained without the cancellation. Once the grid child is durably closed,
+the pending cancellation is delivered to the parent, so no following document
+sibling runs in that attempt. A fatal or cleanup failure still takes its
+existing precedence over cancellation.
+
+Pane work and every finalizer it installs live inside that pane's durable child
+scope. Reader close is cooperative at the durable boundary: it asks the pane to
+close and awaits it; it never halts the pane's durable task. The pane may stop
+its live nested work as part of its own scope teardown, but its durable child
+does not settle as `closed` or write `Close(ok)` until that work and its finalizers
+have settled. This preserves the pane's ordinal-derived identity and never
+turns a deliberate reader close into a caller-cancelled durable child that a
+later run could revive or wait on forever.
 
 Parent cancellation follows the same teardown from preparation, readiness, or
-the active grid and remains cancellation. A provider or host failure cancels
-the whole grid and is the grid's canonical failure. An ordinary pane failure
+the active grid and remains cancellation. Once reader close has crossed its
+live boundary, the close result is committed first and that cancellation is
+observed by the parent afterward. A provider or host failure cancels the whole
+grid and is the grid's canonical failure. An ordinary pane failure
 after attachment is contained as that pane's status and does not cancel its
 siblings. When the reader closes the grid, core fails it with the first failed
 pane in authored order; cancellation initiated by grid teardown is not a pane
@@ -2976,6 +3008,16 @@ whole region and returns its retained outcome without installing or contacting
 a terminal provider, starting a shell, expanding pane content, acquiring an
 Agent session, or launching a native UI. The structured durable boundary owns
 that short circuit; a public replay context does not.
+
+The reader-close handshake makes cancellation during teardown a completed-grid
+case rather than a new partial-replay state. When a pane finalizer delays close
+and parent cancellation arrives, the first attempt still finishes every pane
+and provider finalizer, writes the pane outcomes and completed grid `Close`, and
+only then reports cancellation to its parent. A continuation claims that
+completed child and resumes after it without recreating the provider or
+re-entering pane work. A host loss can still interrupt the unjournaled live
+teardown; panes whose `Close` was acknowledged remain complete, while any pane
+and grid without a completed record follow the existing partial-replay rules.
 
 Partial replay compares the **resolved** layout and refuses divergence before
 provider work.
