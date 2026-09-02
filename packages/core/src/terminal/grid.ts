@@ -22,9 +22,9 @@
  * desynchronise the journal on the next run.
  */
 
-import { all, ensure, race, scoped, spawn, withResolvers } from "effection";
-import type { Operation } from "effection";
-import { DurableContext, durableAll, ephemeral } from "@executablemd/durable-streams";
+import { ensure, race, scoped, spawn, withResolvers } from "effection";
+import type { Operation, Task } from "effection";
+import { DurableContext, durableSpawn, ephemeral } from "@executablemd/durable-streams";
 import type { Json, Workflow } from "@executablemd/durable-streams";
 import { flushOutput, reserveTerminal, TerminalGrids } from "@executablemd/runtime";
 import type { TerminalComposite, TerminalGridRequest } from "@executablemd/runtime";
@@ -226,32 +226,45 @@ function presentGrid(
     const startupFailed = withResolvers<never>();
     let attached = false;
 
-    // Every pane's work, in authored order. The children are allocated in this
-    // order too, so a pane's durable identity follows its ordinal rather than
-    // the order the runtime happened to schedule it in.
-    const paneWorkflows = work.map((pane, index) => {
+    for (const pane of work) {
+      yield* composite.update(pane.ordinal, "starting");
+    }
+
+    // One durable child per pane, allocated here in authored order, so a pane's
+    // identity follows its ordinal rather than the order the runtime happened
+    // to schedule it in. Each task is observed *outside* its child: a replayed
+    // completed pane returns its retained outcome without entering a body, a
+    // shell, or a launcher, and that outcome is what publishes its status and
+    // satisfies the readiness barrier.
+    const panes: Task<RetainedPaneOutcome>[] = [];
+    for (const [index, pane] of work.entries()) {
       const claim = grid.claims[index]!;
       const readiness = grid.readiness[index]!;
-      return function* (): Operation<RetainedPaneOutcome> {
-        const outcome = yield* runPane(pane, claim, composite, readiness, request, index);
+      panes.push(
+        yield* paneChild(function* (): Operation<RetainedPaneOutcome> {
+          return yield* runPane(pane, claim, composite, readiness, request, index);
+        }),
+      );
+    }
+
+    // Observing each task is what turns a pane's outcome — replayed or live —
+    // into a published status and a satisfied readiness latch.
+    for (const [index, task] of panes.entries()) {
+      yield* spawn(function* () {
+        const outcome = yield* task;
         outcomes[index] = outcome;
-        yield* composite.update(pane.ordinal, outcome.status);
+        // A pane restored from its retained outcome counts as started: it did
+        // start, on the run that recorded it.
+        grid.claims[index]!.ready();
+        yield* composite.update(work[index]!.ordinal, outcome.status);
         if (outcome.status === "failed" && !attached) {
           // Before the barrier a pane failure is the whole grid's: nothing has
           // been shown, so the grid fails closed rather than attaching what is
           // left. After it, the failure is this pane's status alone.
           startupFailed.reject(new Error(outcome.reason));
         }
-        return outcome;
-      };
-    });
-
-    for (const pane of work) {
-      yield* composite.update(pane.ordinal, "starting");
+      });
     }
-    // Spawned as one task so the coordinator below can reach the readiness
-    // barrier, attach, and wait for the reader while the panes are still live.
-    const panes = yield* spawn(() => paneChildren(paneWorkflows));
 
     // Every pane must actually have started before anything is shown. Racing
     // the barrier against startup failure is what stops a grid whose pane
@@ -290,8 +303,8 @@ function presentGrid(
         yield* composite.update(pane.ordinal, "closed");
         outcomes[index] = { status: "closed", reason: "" };
       }
+      yield* panes[index]!.halt();
     }
-    yield* panes.halt();
 
     const settled = outcomes.map((outcome) => outcome ?? { status: "closed" as const, reason: "" });
     const reason = firstReason(settled);
@@ -339,36 +352,33 @@ function firstReason(outcomes: readonly (RetainedPaneOutcome | undefined)[]): st
 }
 
 /**
- * Run every pane as a durable child of the grid, in authored order.
+ * Run one pane as a durable child of the grid.
  *
  * A pane's identity is derived from the grid's coroutine and its authored
  * ordinal, never from a title, a schedule, or a provider identifier — so a
  * resumed run restores a completed pane as its outcome without re-running it,
  * and continues an incomplete one from its own history.
  *
- * `durableAll` rather than `durableSpawn`: the latter returns a task spawned
- * inside the ephemeral effect's own scope, and that scope closes as the effect
- * resolves, so awaiting the task throws `halted`. It has no call sites or tests
- * upstream; `durableAll` is the primitive that is exercised.
+ * `durableSpawn` rather than a combinator, because the grid owns the panes
+ * itself: it has to reach the readiness barrier and attach while they are still
+ * live, and cancel them one at a time when the reader leaves. A retained
+ * cancelled pane resumes its remaining work rather than suspending, which is
+ * `durableSpawn`'s policy for a spawned region.
  *
- * Without a journal there are no children to derive, and the work simply runs.
+ * Without a journal there is no child to derive, and the work simply runs.
  */
-function paneChildren(
-  workflows: readonly (() => Operation<RetainedPaneOutcome>)[],
-): Operation<RetainedPaneOutcome[]> {
-  return (function* (): Operation<RetainedPaneOutcome[]> {
+function paneChild(
+  body: () => Operation<RetainedPaneOutcome>,
+): Operation<Task<RetainedPaneOutcome>> {
+  return (function* (): Operation<Task<RetainedPaneOutcome>> {
     const durable = yield* DurableContext.get();
     if (durable === undefined) {
-      return yield* all(workflows.map((workflow) => workflow()));
+      // No journal behind this run: an ordinary spawned child.
+      return yield* spawn(body);
     }
-    return yield* durableAll<RetainedPaneOutcome>(
-      workflows.map(
-        (workflow) =>
-          function* (): Workflow<RetainedPaneOutcome> {
-            return yield* ephemeral(workflow());
-          },
-      ),
-    );
+    return yield* durableSpawn(function* (): Workflow<RetainedPaneOutcome> {
+      return yield* ephemeral(body());
+    });
   })();
 }
 
@@ -386,11 +396,9 @@ export function durableGrid(live: () => Operation<RetainedGrid>): Operation<Reta
     if (durable === undefined) {
       return yield* live();
     }
-    const [retained] = yield* durableAll<RetainedGrid>([
-      function* (): Workflow<RetainedGrid> {
-        return yield* ephemeral(live());
-      },
-    ]);
-    return retained!;
+    const task = yield* durableSpawn(function* (): Workflow<RetainedGrid> {
+      return yield* ephemeral(live());
+    });
+    return yield* task;
   })();
 }

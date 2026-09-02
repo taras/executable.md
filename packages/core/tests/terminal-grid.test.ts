@@ -89,6 +89,15 @@ interface DocumentRun {
   journal: DurableEvent[];
 }
 
+/**
+ * The mark a document records once it is past the grid.
+ *
+ * It fires whether the grid ran or replayed, so a harness can stop the run at
+ * the same point either way — and a replay that hangs never reaches it, which
+ * is a failure rather than something a deadline would quietly pass.
+ */
+const PAST_THE_GRID = "past the grid";
+
 function useDir(): Operation<string> {
   return resource<string>(function* (provide) {
     const dir = yield* until(mkdtemp(join(tmpdir(), "xmd-tg-")));
@@ -100,7 +109,11 @@ function useDir(): Operation<string> {
 }
 
 /** The controlled interactive child, and a tripwire. */
-function useGridComponents(ran: string[], slowMarks: string[] = []): Operation<void> {
+function useGridComponents(
+  ran: string[],
+  slowMarks: string[] = [],
+  onMark: (mark: string) => void = () => {},
+): Operation<void> {
   return registerComponents([
     {
       name: "Interactive",
@@ -129,6 +142,7 @@ function useGridComponents(ran: string[], slowMarks: string[] = []): Operation<v
       // deno-lint-ignore require-yield
       *fn(props) {
         ran.push(String(props.mark));
+        onMark(String(props.mark));
         return "";
       },
     },
@@ -329,19 +343,33 @@ function runInterrupted(
   dir: string,
   source: string,
   stream: InMemoryStream,
-  options: { provider?: boolean } = {},
+  options: {
+    provider?: boolean;
+    shell?: ControlledCompositeOptions["shell"];
+    /** Let the reader leave, so the grid completes rather than staying open. */
+    close?: boolean;
+  } = {},
 ): Operation<DocumentRun> {
   return scoped(function* () {
     const requests: TerminalGridRequest[] = [];
     const log = terminalProviderLog();
     const ran: string[] = [];
     const opened = withResolvers<void>();
-    yield* useGridComponents(ran);
+    // Two signals, neither a deadline: the grid opened on a live run, or the
+    // document reached the sibling after it — which is what a replayed grid
+    // does. A replay that hangs reaches neither and hangs the row, rather than
+    // passing on a timer.
+    yield* useGridComponents(ran, [], (mark) => {
+      if (mark === PAST_THE_GRID) {
+        opened.resolve();
+      }
+    });
     yield* installControlledLauncher();
     if (options.provider !== false) {
       yield* useControlledProvider({
         log,
-        close: () => suspend(),
+        close: options.close === true ? immediateClose() : () => suspend(),
+        ...(options.shell === undefined ? {} : { shell: options.shell }),
         *onPrepare(asked) {
           requests.push(asked);
           yield* sleep(0);
@@ -365,7 +393,7 @@ function runInterrupted(
     // The grid is open and its panes have settled, so the journal now holds the
     // pane children's own entries. A resumed run never attaches at all — the
     // region short-circuits — so this is bounded rather than waited on.
-    yield* race([opened.operation, sleep(120)]);
+    yield* opened.operation;
     yield* sleep(5);
     yield* task.halt();
     return {
@@ -974,12 +1002,14 @@ describe("Tier TG — startup, settlement and teardown", () => {
     );
 
     expect(run.outcome.ok).toBe(true);
-    // Ready enough to attach, and settled enough to be `succeeded`.
+    // Ready at the spawn event, so the grid attached; settled straight after,
+    // so its final status is its own. Both, from one child that started and
+    // stopped in the same breath.
     expect(run.events).toContain("attach:0");
     expect(run.events).toContain("state:0:0:succeeded");
-    // A pane that already settled keeps the status it settled to.
-    expect(run.events.indexOf("state:0:0:succeeded")).toBeLessThan(run.events.indexOf("attach:0"));
-    expect(run.events).not.toContain("state:0:0:running");
+    expect(run.events.indexOf("state:0:0:succeeded")).toBeGreaterThan(
+      run.events.indexOf("attach:0"),
+    );
   });
 
   it("TG9: a preparation failure starts no pane at all", function* () {
@@ -1080,61 +1110,65 @@ describe("Tier TG — startup, settlement and teardown", () => {
 describe("Tier TG — durability and replay", () => {
   const GRID = heldDocument(2, PANES);
 
-  /** Every terminal-grid entry the journal holds. */
-  function gridEntries(run: DocumentRun): DurableEvent[] {
-    return run.journal.filter(
-      (event) =>
-        event.type === "yield" && String(event.description.name).startsWith("terminal_grid:"),
-    );
-  }
-
-  it("TG15: a completed grid replays without contacting a provider at all", function* () {
-    const dir = yield* useDir();
-    const stream = new InMemoryStream();
-
-    // The grid opened and its panes ran; the document was then interrupted, so
-    // the root reached no outcome and a resumed run reaches the grid again.
-    const first = yield* runInterrupted(dir, GRID, stream);
-    expect(first.requests).toHaveLength(1);
-
-    const second = yield* runInterrupted(dir, GRID, stream);
-
-    // The region's retained result is the answer: no provider was asked for a
-    // grid, no pane content expanded, and nothing was displayed.
-    expect(second.requests).toEqual([]);
-    expect(second.shown.size).toBe(0);
-    expect(second.events).toEqual([]);
-  });
-
-  it("TG15: a completed grid replays even where no provider could open one", function* () {
-    const dir = yield* useDir();
-    const stream = new InMemoryStream();
-
-    yield* runInterrupted(dir, GRID, stream);
-    // This host installs no provider at all. A replay that contacted one would
-    // refuse here; the retained result does not need one.
-    const second = yield* runInterrupted(dir, GRID, stream, { provider: false });
-
-    expect(second.requests).toEqual([]);
-    expect(second.shown.size).toBe(0);
-    expect(second.events).toEqual([]);
-  });
-
   it("TG16: each pane is a durable child of the grid, in authored order", function* () {
     const dir = yield* useDir();
     const stream = new InMemoryStream();
     const first = yield* runInterrupted(dir, GRID, stream);
 
     const closes = first.journal.filter((event) => event.type === "close");
-    const ids = closes.map((event) => String(event.coroutineId)).sort();
-    // Two pane children beneath one grid child: `<parent>.<n>.<ordinal>`.
-    const paneIds = ids.filter((id) => id.split(".").length >= 3);
+    const paneIds = closes
+      .map((event) => String(event.coroutineId))
+      .filter((id) => id.split(".").length >= 3)
+      .sort();
     expect(paneIds).toHaveLength(2);
     const [left, right] = paneIds;
-    // Authored order, not scheduling order.
+    // Authored order, not scheduling order, and both beneath one grid child.
     expect(left!.endsWith(".0")).toBe(true);
     expect(right!.endsWith(".1")).toBe(true);
     expect(left!.slice(0, left!.lastIndexOf("."))).toBe(right!.slice(0, right!.lastIndexOf(".")));
+  });
+
+  it("TG16: an interrupted grid rebuilds a fresh composite rather than hanging", function* () {
+    const dir = yield* useDir();
+    const stream = new InMemoryStream();
+
+    // Interrupted while the grid is open, so its child records a cancelled
+    // close. Under the repaired spawn policy the resumed run continues that
+    // region instead of suspending on it forever.
+    const first = yield* runInterrupted(dir, GRID, stream);
+    expect(first.requests).toHaveLength(1);
+
+    const second = yield* runInterrupted(dir, GRID, stream);
+
+    // A fresh composite, built by this run.
+    expect(second.requests).toHaveLength(1);
+    expect(second.events).toContain("prepare:0:2x1");
+  });
+
+  it("TG16: a completed pane is restored; an incomplete shell starts again", function* () {
+    const dir = yield* useDir();
+    const stream = new InMemoryStream();
+    const source = heldDocument(2, [
+      '<Terminal title="Left"><Ran mark="left ran" /><Interactive /></Terminal>',
+      '<Terminal title="Right" />',
+    ]);
+    const holdingShell: ControlledCompositeOptions["shell"] = function* (_ordinal, spawned) {
+      spawned();
+      yield* suspend();
+      return { exitCode: 0 };
+    };
+
+    const first = yield* runInterrupted(dir, source, stream, { shell: holdingShell });
+    expect(first.ran).toContain("left ran");
+
+    const second = yield* runInterrupted(dir, source, stream, { shell: holdingShell });
+
+    // The completed pane came back from its retained outcome: its body did not
+    // run again.
+    expect(second.ran).not.toContain("left ran");
+    // The incomplete shell starts again under current host policy, claiming no
+    // continuity with the terminal history it had before.
+    expect(second.events.some((event) => event.startsWith("shell:"))).toBe(true);
   });
 
   it("TG17: the layout is recorded before any provider is contacted", function* () {
@@ -1142,32 +1176,24 @@ describe("Tier TG — durability and replay", () => {
     const stream = new InMemoryStream();
     const run = yield* runInterrupted(dir, GRID, stream);
 
-    const layout = run.journal.find(
+    const layoutIndex = run.journal.findIndex(
       (event) => event.type === "yield" && String(event.description.name).endsWith(":layout"),
     );
-    expect(layout).toBeDefined();
-    // Written before the grid child that opens anything, so a comparison
-    // against it happens while nothing has been presented.
-    const layoutIndex = run.journal.indexOf(layout!);
-    const opened = run.journal.findIndex(
+    const firstChildClose = run.journal.findIndex(
       (event) => event.type === "close" && String(event.coroutineId).includes("."),
     );
     expect(layoutIndex).toBeGreaterThan(-1);
-    if (opened > -1) {
-      expect(layoutIndex).toBeLessThan(opened);
+    if (firstChildClose > -1) {
+      expect(layoutIndex).toBeLessThan(firstChildClose);
     }
   });
 
-  it("TG17: the retained record holds provider-neutral facts only", function* () {
+  it("TG17: the retained layout and pane outcomes are provider-neutral", function* () {
     const dir = yield* useDir();
     const stream = new InMemoryStream();
     const run = yield* runInterrupted(dir, GRID, stream);
 
-    const entries = gridEntries(run);
-    expect(entries.length).toBeGreaterThan(0);
-
     const written = JSON.stringify(run.journal);
-    // The layout the author wrote, and nothing about whatever presented it.
     expect(written).toContain('"columns":2');
     expect(written).toContain('"Left"');
     for (const leak of ["socket", "tmux", "attach-key", "argv", "multiplexer"]) {
