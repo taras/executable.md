@@ -152,6 +152,36 @@ export { DocumentOutput } from "./src/api.ts";
 export type { DocumentOutputApi } from "./src/api.ts";
 export { useNormalizedOutput } from "./src/output/normalize.ts";
 export { useTerminalOutput } from "./src/output/terminal.ts";
+export {
+  createTerminalAuthority,
+  createTerminalGridClaims,
+  TerminalAuthorityError,
+  terminalInstallation,
+  useTerminalInstallation,
+} from "./src/terminal/authority.ts";
+export type {
+  PaneReadiness,
+  TerminalGridAuthority,
+  TerminalGridClaims,
+  TerminalPaneClaim,
+} from "./src/terminal/authority.ts";
+export {
+  installTerminalProvider,
+  registerTerminalProvider,
+  TERMINAL_PROVIDERS_API,
+  TerminalProviderInstallError,
+  TerminalProviders,
+} from "./src/terminal/provider-api.ts";
+export type {
+  TerminalProviderFactory,
+  TerminalProviderInstallRequest,
+  TerminalProviderOptions,
+} from "./src/terminal/provider-api.ts";
+export { installTerminalGridProfile } from "./src/terminal/profile.ts";
+export type { TerminalGridProfileOptions } from "./src/terminal/profile.ts";
+export { paneTerminal } from "./src/terminal/pane.ts";
+export type { PaneTerminal } from "./src/terminal/pane.ts";
+export type { PaneStatus, RetainedGrid, RetainedPaneOutcome } from "./src/terminal/grid.ts";
 
 export { execute, Execution } from "./src/execute.ts";
 export type {

@@ -68,8 +68,9 @@ import {
 import type { StructuralViolation, SwitchCase, TerminalPane } from "./structural-rules.ts";
 import { terminalGridLayout } from "./terminal-grid.ts";
 import type { PlacedPane } from "./terminal-grid.ts";
-import { runTerminalGrid } from "./terminal/grid.ts";
+import { durableGrid, openTerminalGrid, toRequest } from "./terminal/grid.ts";
 import type { PaneWork } from "./terminal/grid.ts";
+import { recordGridLayout } from "./terminal/journal.ts";
 import { usePaneTerminal } from "./terminal/pane.ts";
 import {
   asBindingViolation,
@@ -1188,7 +1189,6 @@ function* expandListSegments(
             parentMeta,
             parentProps,
             hideSet,
-            counter,
             path: elementPath,
             checkedFailures,
             authority,
@@ -2118,7 +2118,6 @@ interface GridSite {
   readonly parentMeta: Record<string, unknown>;
   readonly parentProps: Record<string, Json>;
   readonly hideSet: Set<string>;
-  readonly counter: BlockCounter;
   readonly path: string;
   readonly checkedFailures: CheckedFailures | undefined;
   readonly authority: ExpansionAuthority | undefined;
@@ -2166,13 +2165,28 @@ function* expandTerminalGrid(
   // The grid renders nothing into the document: what a pane shows belongs to
   // that pane, and the sibling after `</Terminal.Grid>` renders to the root
   // again only once the provider has restored it.
+  const identity = {
+    path: site.path,
+    ...(segment.position === undefined ? {} : { position: segment.position }),
+  };
+
   try {
-    const work = structure.panes.map((pane, index) =>
-      paneWork(pane, layout.cells[index]!.title, site),
-    );
-    const result = yield* runTerminalGrid(layout, work);
-    if (result.failure !== undefined) {
-      owner.push(yield* raise(terminalGridError(segment, result.failure.message)));
+    // Recorded in this coroutine, before the lease and before any provider is
+    // contacted: a resumed run whose grid changed is refused while nothing has
+    // been opened. It cannot live inside the grid child, because a completed
+    // child never runs.
+    yield* recordGridLayout(identity, toRequest(layout));
+
+    const retained = yield* durableGrid(function* () {
+      const work = structure.panes.map((pane, index) =>
+        paneWork(pane, layout.cells[index]!.title, site),
+      );
+      return yield* openTerminalGrid(layout, work);
+    });
+
+    const failed = retained.panes.find((pane) => pane.status === "failed");
+    if (failed !== undefined) {
+      owner.push(yield* raise(terminalGridError(segment, failed.reason)));
     }
   } catch (error) {
     owner.push(
@@ -2234,7 +2248,10 @@ function paneWork(pane: TerminalPane, title: string, site: GridSite): PaneWork {
           site.parentMeta,
           site.parentProps,
           site.hideSet,
-          site.counter,
+          // A counter of its own. Panes expand concurrently, and a shared
+          // mutable counter would hand two of them block identities that depend
+          // on which happened to run first.
+          createBlockCounter(),
           shown,
           extendPath(
             site.path,

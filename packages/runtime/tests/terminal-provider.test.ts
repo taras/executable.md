@@ -1,17 +1,17 @@
 /**
- * Tier TG — the terminal provider boundary (architecture.md §Terminal
- * authority, spec §6.21).
+ * Tier TG — the terminal grid routing surface and the composite contract
+ * (architecture.md §Terminal authority, spec §6.21).
  *
- * What a host installs to present a grid, and what composing middleware around
- * it may and may not do. Nothing here opens a terminal, looks for a
- * multiplexer, or starts a process: the whole point of the boundary is that the
- * language does not depend on any of that, so a suite that needed one would be
- * testing the wrong thing.
+ * Two things live here, and neither is an authority. The routing surface is
+ * where middleware composes around a grid request, and its whole contract is
+ * that it decides nothing: `open()` answers `unknown`, and core throws the
+ * answer away. The composite is what a provider prepares, and its contract is
+ * ordering — prepared hidden, attached once, destroyed exactly once.
  *
- * The controlled provider records what it was asked to do, in order. Ordering
- * claims are read off that record rather than inferred from timing, because a
- * grid that attached too early and a grid that attached on time can take the
- * same wall clock.
+ * Who may present a grid, and what presenting one authorizes, is core's, and is
+ * proved in `packages/core/tests/terminal-grid.test.ts`.
+ *
+ * Nothing here opens a terminal, looks for a multiplexer, or starts a process.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -20,13 +20,13 @@ import { scoped } from "effection";
 import type { Operation } from "effection";
 
 import {
-  installControlledTerminalProvider,
-  prepareTerminalGrid,
+  prepareControlledComposite,
   TERMINAL_PROVIDER_UNAVAILABLE,
-  TerminalProvider,
+  TerminalGrids,
+  terminalProviderLog,
   TerminalProviderUnavailableError,
 } from "../terminal.ts";
-import type { TerminalComposite, TerminalGridRequest, TerminalProviderLog } from "../terminal.ts";
+import type { TerminalGridRequest } from "../terminal.ts";
 
 /** A two-by-one grid: the smallest request that still has two ordinals. */
 function request(overrides: Partial<TerminalGridRequest> = {}): TerminalGridRequest {
@@ -41,16 +41,12 @@ function request(overrides: Partial<TerminalGridRequest> = {}): TerminalGridRequ
   };
 }
 
-function log(): TerminalProviderLog {
-  return { events: [], shown: new Map<number, string>() };
-}
-
-describe("Tier TG — the provider boundary", () => {
+describe("Tier TG — the routing surface", () => {
   it("TP1: refuses when no host has installed a provider", function* () {
     let refusal: unknown;
     yield* scoped(function* () {
       try {
-        yield* prepareTerminalGrid(request());
+        yield* TerminalGrids.operations.open(request());
       } catch (error) {
         refusal = error;
       }
@@ -60,27 +56,118 @@ describe("Tier TG — the provider boundary", () => {
     expect(refusal instanceof Error ? refusal.message : "").toBe(TERMINAL_PROVIDER_UNAVAILABLE);
   });
 
-  it("TP2: an installed provider prepares without presenting anything", function* () {
-    const record = log();
-    const events = yield* scoped(function* () {
-      yield* installControlledTerminalProvider({ log: record });
-      yield* prepareTerminalGrid(request());
-      return [...record.events];
+  it("TP2: middleware observes a delegated request without changing it", function* () {
+    const seen: TerminalGridRequest[] = [];
+    const reached: TerminalGridRequest[] = [];
+    yield* scoped(function* () {
+      yield* TerminalGrids.around(
+        {
+          // deno-lint-ignore require-yield
+          *open([asked]) {
+            reached.push(asked);
+            return undefined;
+          },
+        },
+        // The terminal end of the chain, where a registered provider sits.
+        { at: "min" },
+      );
+      yield* TerminalGrids.around({
+        *open([asked], next) {
+          seen.push(asked);
+          return yield* next(asked);
+        },
+      });
+      yield* TerminalGrids.operations.open(request({ columns: 3, rows: 2 }));
     });
 
-    // Preparation happened; nothing was shown. A composite the reader can see
-    // before every pane is ready is the one thing atomic startup forbids.
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.columns).toBe(3);
+    // Observation is not interference: the same object reached the far end.
+    expect(reached[0]).toBe(seen[0]);
+  });
+
+  it("TP2: middleware narrows a request before anything below sees it", function* () {
+    const reached: TerminalGridRequest[] = [];
+    yield* scoped(function* () {
+      yield* TerminalGrids.around(
+        {
+          // deno-lint-ignore require-yield
+          *open([asked]) {
+            reached.push(asked);
+            return undefined;
+          },
+        },
+        // The terminal end of the chain, where a registered provider sits.
+        { at: "min" },
+      );
+      yield* TerminalGrids.around({
+        *open([asked], next) {
+          return yield* next({ ...asked, columns: 1, rows: asked.panes.length });
+        },
+      });
+      yield* TerminalGrids.operations.open(request());
+    });
+
+    expect(reached[0]?.columns).toBe(1);
+    expect(reached[0]?.rows).toBe(2);
+  });
+
+  it("TP2: middleware refuses a request, and nothing below is reached", function* () {
+    const reached: TerminalGridRequest[] = [];
+    let refusal: unknown;
+    yield* scoped(function* () {
+      yield* TerminalGrids.around(
+        {
+          // deno-lint-ignore require-yield
+          *open([asked]) {
+            reached.push(asked);
+            return undefined;
+          },
+        },
+        // The terminal end of the chain, where a registered provider sits.
+        { at: "min" },
+      );
+      yield* TerminalGrids.around({
+        // deno-lint-ignore require-yield
+        *open(): Operation<unknown> {
+          throw new Error("this host does not open terminal grids");
+        },
+      });
+      try {
+        yield* TerminalGrids.operations.open(request());
+      } catch (error) {
+        refusal = error;
+      }
+    });
+
+    expect(refusal instanceof Error ? refusal.message : "").toBe(
+      "this host does not open terminal grids",
+    );
+    expect(reached).toEqual([]);
+  });
+});
+
+describe("Tier TG — the composite contract", () => {
+  it("TP3: a prepared composite presents nothing until it is attached", function* () {
+    const log = terminalProviderLog();
+    const events = yield* scoped(function* () {
+      yield* prepareControlledComposite(request(), { log });
+      return [...log.events];
+    });
+
+    // A composite the reader can see before every pane is ready is the one
+    // thing atomic startup forbids.
     expect(events).toEqual(["prepare:0:2x1"]);
     expect(events.some((event) => event.startsWith("attach:"))).toBe(false);
   });
 
-  it("TP2: attach, update, shell and destroy are recorded in the order they happen", function* () {
-    const record = log();
+  it("TP3: attach, update, display, shell and destroy record in order", function* () {
+    const log = terminalProviderLog();
     const spawns: number[] = [];
     yield* scoped(function* () {
-      yield* installControlledTerminalProvider({ log: record });
-      const composite = yield* prepareTerminalGrid(request());
+      const composite = yield* prepareControlledComposite(request(), { log });
       yield* composite.update(0, "starting");
+      yield* composite.display(0, "pane text");
       yield* composite.update(0, "running");
       yield* composite.shell(1, () => spawns.push(1));
       yield* composite.attach();
@@ -89,7 +176,7 @@ describe("Tier TG — the provider boundary", () => {
       yield* composite.destroy();
     });
 
-    expect(record.events).toEqual([
+    expect(log.events).toEqual([
       "prepare:0:2x1",
       "state:0:0:starting",
       "state:0:0:running",
@@ -99,22 +186,22 @@ describe("Tier TG — the provider boundary", () => {
       "closed:0",
       "destroy:0",
     ]);
+    expect(log.shown.get(0)).toBe("pane text");
     // The default shell starts, and says so through the latch it was handed:
     // readiness is reported by the shell rather than assumed by the grid.
     expect(spawns).toEqual([1]);
   });
 
-  it("TP5: a shell that never starts never reports a spawn", function* () {
+  it("TP4: a shell that never starts never reports a spawn", function* () {
     const spawns: number[] = [];
     const outcome = yield* scoped(function* () {
-      yield* installControlledTerminalProvider({
+      const composite = yield* prepareControlledComposite(request(), {
         // deno-lint-ignore require-yield
-        *shell(_ordinal, _spawned) {
+        *shell() {
           // No spawn event: nothing started, so nothing is acknowledged.
           return { exitCode: 127 };
         },
       });
-      const composite = yield* prepareTerminalGrid(request());
       return yield* composite.shell(1, () => spawns.push(1));
     });
 
@@ -122,107 +209,18 @@ describe("Tier TG — the provider boundary", () => {
     expect(spawns).toEqual([]);
   });
 
-  it("TP3: middleware observes a delegated request without changing it", function* () {
-    const record = log();
-    const seen: TerminalGridRequest[] = [];
-    yield* scoped(function* () {
-      yield* installControlledTerminalProvider({ log: record });
-      yield* TerminalProvider.around({
-        *prepare([asked], next) {
-          seen.push(asked);
-          return yield* next(asked);
-        },
-      });
-      yield* prepareTerminalGrid(request({ columns: 3, rows: 2 }));
-    });
-
-    expect(seen).toHaveLength(1);
-    expect(seen[0]?.columns).toBe(3);
-    // Observation is not interference: the provider still saw the same grid.
-    expect(record.events).toEqual(["prepare:0:3x2"]);
-  });
-
-  it("TP3: middleware refuses a request, and no composite is ever built", function* () {
-    const record = log();
+  it("TP4: a preparation failure leaves no composite to tear down", function* () {
+    const log = terminalProviderLog();
     let refusal: unknown;
     yield* scoped(function* () {
-      yield* installControlledTerminalProvider({ log: record });
-      yield* TerminalProvider.around({
-        // deno-lint-ignore require-yield
-        *prepare(): Operation<TerminalComposite> {
-          throw new Error("this host does not open terminal grids");
-        },
-      });
       try {
-        yield* prepareTerminalGrid(request());
-      } catch (error) {
-        refusal = error;
-      }
-    });
-
-    expect(refusal instanceof Error ? refusal.message : "").toBe(
-      "this host does not open terminal grids",
-    );
-    // Refusing means refusing: the provider below was never reached, so there
-    // is no hidden composite left needing teardown.
-    expect(record.events).toEqual([]);
-  });
-
-  it("TP3: middleware narrows a request before the provider sees it", function* () {
-    const record = log();
-    yield* scoped(function* () {
-      yield* installControlledTerminalProvider({ log: record });
-      yield* TerminalProvider.around({
-        *prepare([asked], next) {
-          return yield* next({ ...asked, columns: 1, rows: asked.panes.length });
-        },
-      });
-      yield* prepareTerminalGrid(request());
-    });
-
-    expect(record.events).toEqual(["prepare:0:1x2"]);
-  });
-
-  it("TP4: middleware wraps the composite it delegated for", function* () {
-    const record = log();
-    const wrapped: string[] = [];
-    yield* scoped(function* () {
-      yield* installControlledTerminalProvider({ log: record });
-      yield* TerminalProvider.around({
-        *prepare([asked], next) {
-          const composite = yield* next(asked);
-          return {
-            ...composite,
-            *attach() {
-              wrapped.push("before");
-              yield* composite.attach();
-              wrapped.push("after");
-            },
-          };
-        },
-      });
-      const composite = yield* prepareTerminalGrid(request());
-      yield* composite.attach();
-      yield* composite.destroy();
-    });
-
-    expect(wrapped).toEqual(["before", "after"]);
-    expect(record.events).toEqual(["prepare:0:2x1", "attach:0", "destroy:0"]);
-  });
-
-  it("TP5: a preparation failure leaves nothing to tear down", function* () {
-    const record = log();
-    let refusal: unknown;
-    yield* scoped(function* () {
-      yield* installControlledTerminalProvider({
-        log: record,
-        // deno-lint-ignore require-yield
-        *onPrepare() {
-          throw new Error("no pane endpoint could be created");
-        },
-      });
-      try {
-        yield* prepareTerminalGrid(request());
+        yield* prepareControlledComposite(request(), {
+          log,
+          // deno-lint-ignore require-yield
+          *onPrepare() {
+            throw new Error("no pane endpoint could be created");
+          },
+        });
       } catch (error) {
         refusal = error;
       }
@@ -231,16 +229,15 @@ describe("Tier TG — the provider boundary", () => {
     expect(refusal instanceof Error ? refusal.message : "").toBe(
       "no pane endpoint could be created",
     );
-    // The failure happened before the composite existed, so the record shows
-    // no composite was built and none is owed a destroy.
-    expect(record.events).toEqual([]);
+    // The failure happened before the composite existed, so nothing is owed a
+    // destroy.
+    expect(log.events).toEqual([]);
   });
 
-  it("TP5: a composite refuses to be destroyed twice", function* () {
+  it("TP4: a composite refuses to be destroyed twice", function* () {
     let refusal: unknown;
     yield* scoped(function* () {
-      yield* installControlledTerminalProvider();
-      const composite = yield* prepareTerminalGrid(request());
+      const composite = yield* prepareControlledComposite(request());
       yield* composite.destroy();
       try {
         yield* composite.destroy();
@@ -254,18 +251,17 @@ describe("Tier TG — the provider boundary", () => {
     expect(refusal instanceof Error ? refusal.message : "").toContain("destroyed twice");
   });
 
-  it("TP6: each preparation is its own composite", function* () {
-    const record = log();
+  it("TP5: each preparation is its own composite", function* () {
+    const log = terminalProviderLog();
     yield* scoped(function* () {
-      yield* installControlledTerminalProvider({ log: record });
-      const first = yield* prepareTerminalGrid(request());
-      const second = yield* prepareTerminalGrid(request());
+      const first = yield* prepareControlledComposite(request(), { log }, 0);
+      const second = yield* prepareControlledComposite(request(), { log }, 1);
       yield* first.destroy();
       yield* second.destroy();
     });
 
     // Two expansions are two grids. A provider that handed the same composite
     // back would have presented the second expansion's grid as the first's.
-    expect(record.events).toEqual(["prepare:0:2x1", "prepare:1:2x1", "destroy:0", "destroy:1"]);
+    expect(log.events).toEqual(["prepare:0:2x1", "prepare:1:2x1", "destroy:0", "destroy:1"]);
   });
 });
