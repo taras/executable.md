@@ -196,11 +196,34 @@ export interface TerminalProviderLog {
    * document output to prove where it did not.
    */
   readonly shown: Map<number, string>;
+  /**
+   * What the provider still holds, counted rather than described.
+   *
+   * Each one goes up when the composite takes something and down when it gives
+   * it back, so a suite reads it after a run to prove nothing was stranded —
+   * including after a cancellation, where the ordering of the record alone
+   * would not say whether teardown finished.
+   */
+  readonly live: TerminalProviderResources;
+}
+
+/** What one controlled composite holds at a moment, by kind. */
+export interface TerminalProviderResources {
+  /** Composites prepared and not yet destroyed. */
+  composites: number;
+  /** Composites attached and not yet destroyed. */
+  attached: number;
+  /** Shells started whose outcome has not been returned. */
+  shells: number;
 }
 
 /** A fresh, empty record. */
 export function terminalProviderLog(): TerminalProviderLog {
-  return { events: [], shown: new Map<number, string>() };
+  return {
+    events: [],
+    shown: new Map<number, string>(),
+    live: { composites: 0, attached: 0, shells: 0 },
+  };
 }
 
 /**
@@ -247,13 +270,17 @@ export function prepareControlledComposite(
       yield* options.onPrepare(request);
     }
     log.events.push(`prepare:${generation}:${request.columns}x${request.rows}`);
+    log.live.composites++;
     let destroyed = false;
+    let attached = false;
     return {
       *attach() {
         if (options.onAttach) {
           yield* options.onAttach();
         }
         log.events.push(`attach:${generation}`);
+        attached = true;
+        log.live.attached++;
       },
       // deno-lint-ignore require-yield
       *update(ordinal, state) {
@@ -266,14 +293,22 @@ export function prepareControlledComposite(
       },
       *shell(ordinal, spawned) {
         log.events.push(`shell:${generation}:${ordinal}`);
-        if (options.shell) {
-          return yield* options.shell(ordinal, spawned);
+        log.live.shells++;
+        try {
+          if (options.shell) {
+            return yield* options.shell(ordinal, spawned);
+          }
+          // The default shell starts: a suite that says nothing about a pane
+          // wants a pane that works, and one that never reported a spawn would
+          // hang the readiness barrier instead.
+          spawned();
+          return { exitCode: 0 };
+        } finally {
+          // Counted down however the shell left — returned, thrown, or
+          // cancelled — because a shell a suite can still find is a shell the
+          // provider is still holding.
+          log.live.shells--;
         }
-        // The default shell starts: a suite that says nothing about a pane
-        // wants a pane that works, and one that never reported a spawn would
-        // hang the readiness barrier instead.
-        spawned();
-        return { exitCode: 0 };
       },
       *closed() {
         if (options.close) {
@@ -293,6 +328,11 @@ export function prepareControlledComposite(
           yield* options.onDestroy();
         }
         log.events.push(`destroy:${generation}`);
+        log.live.composites--;
+        if (attached) {
+          attached = false;
+          log.live.attached--;
+        }
       },
     };
   })();

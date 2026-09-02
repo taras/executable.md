@@ -44,6 +44,7 @@ import type { DurableEvent } from "@executablemd/durable-streams";
 import {
   installControlledLauncher,
   prepareControlledComposite,
+  reserveTerminal,
   TerminalGrids,
   terminalProviderLog,
 } from "@executablemd/runtime";
@@ -52,6 +53,7 @@ import type {
   TerminalComposite,
   TerminalGridRequest,
   TerminalProviderLog,
+  TerminalProviderResources,
 } from "@executablemd/runtime";
 
 import { Component } from "../src/component-api.ts";
@@ -90,6 +92,8 @@ interface DocumentRun {
   errors: string[];
   /** The journal this run read and appended to. */
   journal: DurableEvent[];
+  /** What the controlled provider still held when the run was over. */
+  live: TerminalProviderResources;
 }
 
 /**
@@ -353,6 +357,7 @@ function runDocument(
       ran,
       errors,
       journal: yield* stream.readAll(),
+      live: log.live,
     };
   });
 }
@@ -420,8 +425,31 @@ function runInterrupted(
     shellFailsAfterAttach?: number;
     /** Holds a `<SlowTeardown />` pane's finalizer until this settles. */
     holdTeardown?: () => Operation<void>;
-    /** Resolved once a pane's finalizer has been entered and is blocked. */
-    onTeardownEntered?: () => void;
+    /**
+     * Called once a pane's finalizer has been entered and is blocked, with what
+     * the provider is holding at that moment.
+     *
+     * A row reads those counters here to know they ever went up, which is what
+     * makes reading them again at the end mean something.
+     */
+    onTeardownEntered?: (live: TerminalProviderResources) => void;
+    /**
+     * Called once that finalizer has left.
+     *
+     * Kept apart from entering it deliberately: a finalizer that was entered
+     * and then cancelled reaches the first hook and never the second, which is
+     * the difference between teardown starting and teardown finishing.
+     */
+    onTeardownExited?: () => void;
+    /**
+     * Called once for each time the foreground lease is taken back after the
+     * run, which the harness always does twice.
+     *
+     * It is the grid's lease that has to come back: a run that stranded it
+     * would refuse the first of those, and one that never released what this
+     * harness took would refuse the second.
+     */
+    onLeaseReacquired?: () => void;
     /** Interrupt the run when this settles rather than at a lifecycle signal. */
     interruptWhen?: Operation<void>;
     /**
@@ -491,10 +519,11 @@ function runInterrupted(
       },
       () => attached.operation,
       function* () {
-        options.onTeardownEntered?.();
+        options.onTeardownEntered?.(log.live);
         if (options.holdTeardown) {
           yield* options.holdTeardown();
         }
+        options.onTeardownExited?.();
       },
       () => armed.resolve(),
     );
@@ -585,6 +614,16 @@ function runInterrupted(
     const halting = yield* spawn(() => task.halt());
     options.releaseOnInterrupt?.();
     yield* halting;
+    // Taken and given back twice, now that the run is over. The first proves
+    // the grid returned the foreground lease; the second proves this harness
+    // gave it back too, so the first cannot have passed against a lease nobody
+    // was holding in the first place.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      yield* scoped(function* () {
+        yield* reserveTerminal();
+        options.onLeaseReacquired?.();
+      });
+    }
     return {
       outcome: { ok: false, error: new Error("interrupted") } as Result<Json>,
       output: "",
@@ -594,6 +633,7 @@ function runInterrupted(
       ran,
       errors,
       journal: yield* stream.readAll(),
+      live: log.live,
     };
   });
 }
@@ -1355,8 +1395,8 @@ describe("Tier TG — durability and replay", () => {
     );
   }
 
-  /** The pane outcomes the grid retained, in authored order. */
-  function paneOutcomes(run: DocumentRun): unknown[] {
+  /** What the grid child retained, read from its own completed `Close`. */
+  function retainedGrid(run: DocumentRun): Record<string, unknown> | undefined {
     for (const event of run.journal) {
       if (
         event.type === "close" &&
@@ -1365,14 +1405,34 @@ describe("Tier TG — durability and replay", () => {
       ) {
         const value = event.result.value;
         if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-          const panes = Reflect.get(value, "panes");
-          if (Array.isArray(panes)) {
-            return panes;
-          }
+          return { ...value };
         }
       }
     }
-    return [];
+    return undefined;
+  }
+
+  /** The pane outcomes the grid retained, in authored order. */
+  function paneOutcomes(run: DocumentRun): unknown[] {
+    const panes = retainedGrid(run)?.panes;
+    return Array.isArray(panes) ? panes : [];
+  }
+
+  /**
+   * How every `Close` at this coroutine depth ended, in journal order.
+   *
+   * Depth 2 is the grid child and depth 3 its panes, so a row reads these to
+   * say how many records each level wrote and what each one settled to —
+   * including whether any of them settled as a cancellation.
+   */
+  function closeStatuses(run: DocumentRun, depth: number): string[] {
+    const statuses: string[] = [];
+    for (const event of run.journal) {
+      if (event.type === "close" && String(event.coroutineId).split(".").length === depth) {
+        statuses.push(event.result.status);
+      }
+    }
+    return statuses;
   }
 
   it("TG15: a completed successful grid replays its exact result, with no work", function* () {
@@ -1715,56 +1775,85 @@ describe("Tier TG — durability and replay", () => {
       '<Terminal title="Shell" />',
     ]);
 
-    // Every step below is an event this run produced. Nothing waits for a
-    // duration, so a lifecycle that never reached a step hangs the row rather
-    // than passing it.
+    // Signals and counters, and nothing else. Every step below is an event this
+    // run produced, so a lifecycle that never reached one hangs the row rather
+    // than passing it, and every "exactly once" claim is a count rather than a
+    // look at the record.
     const entered = withResolvers<void>();
     const release = withResolvers<void>();
+    let entries = 0;
+    let exits = 0;
+    let leases = 0;
+    let heldWhenBlocked: TerminalProviderResources | undefined;
 
     const first = yield* runInterrupted(dir, source, stream, {
       // 1. The live pane arms its blocking finalizer, and 2. only then does the
       //    reader leave.
       closeWhenArmed: true,
       // 3. Entering the finalizer is observed, and it blocks there.
-      onTeardownEntered: () => entered.resolve(),
+      onTeardownEntered: (live) => {
+        entries++;
+        heldWhenBlocked = { ...live };
+        entered.resolve();
+      },
       holdTeardown: () => release.operation,
+      onTeardownExited: () => {
+        exits++;
+      },
       // 4. Cancellation begins while that finalizer is still blocked.
       interruptWhen: entered.operation,
       // 5. Released afterwards, so the cancellation was not waiting on it.
       releaseOnInterrupt: () => release.resolve(),
+      onLeaseReacquired: () => {
+        leases++;
+      },
     });
 
     // 6. Teardown ran to the end, and the grid recorded a completed close —
     //    both before the cancellation was observed, because the document never
     //    reached the sibling after the grid.
-    expect(first.events).toContain("destroy:0");
-    expect(completedGrid(first)).toBe(true);
+    expect(entries).toBe(1);
+    expect(exits).toBe(1);
+    expect(first.events.filter((event) => event === "destroy:0")).toEqual(["destroy:0"]);
     expect(first.ran).toEqual(["pane body"]);
-    // The live pane settled as closed rather than cancelled: a cancelled child
-    // is what a later run would have to revive, and this one has nothing left
-    // to do.
+
+    // One grid child, completed, and it says what closed it.
+    expect(closeStatuses(first, 2)).toEqual(["ok"]);
+    expect(retainedGrid(first)?.close).toBe("reader");
+    // Two pane children, both completed. Neither they nor the grid recorded a
+    // cancellation: a cancelled child is what a later run would have to revive,
+    // and these have nothing left to do.
+    expect(closeStatuses(first, 3)).toEqual(["ok", "ok"]);
     expect(paneOutcomes(first)).toEqual([
       { status: "closed", reason: "" },
       { status: "succeeded", reason: "" },
     ]);
 
+    // The provider's counters went up and came back down. Reading them only at
+    // the end would be true of counters that never moved.
+    expect(heldWhenBlocked).toEqual({ composites: 1, attached: 1, shells: 0 });
+    expect(first.live).toEqual({ composites: 0, attached: 0, shells: 0 });
+    // And the foreground lease came back: it was taken and given back twice
+    // over once the run was done.
+    expect(leases).toBe(2);
+
     // 7. Resumed with three tripwires: no provider at all, so a replay that
     //    asked for a grid would refuse; a mark inside the pane body, so a pane
     //    that expanded again would say so; and the finalizer, which would
     //    report being entered a second time.
-    let reentered = false;
+    let reentered = 0;
     const second = yield* runInterrupted(dir, source, stream, {
       close: true,
       provider: false,
       onTeardownEntered: () => {
-        reentered = true;
+        reentered++;
       },
     });
 
     expect(second.requests).toEqual([]);
     expect(second.events).toEqual([]);
     expect(second.shown.size).toBe(0);
-    expect(reentered).toBe(false);
+    expect(reentered).toBe(0);
     // The retained grid came back and the document carried on from it.
     expect(second.ran).toEqual([PAST_THE_GRID]);
   });
