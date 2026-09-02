@@ -16,13 +16,23 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, sleep, spawn, suspend, withResolvers } from "effection";
-import type { Operation } from "effection";
+import { ensure, resource, scoped, sleep, spawn, suspend, until, withResolvers } from "effection";
+import type { Operation, Result } from "effection";
+import { forEach } from "@effectionx/stream-helpers";
+import { rm, writeTextFile } from "@effectionx/fs";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { InMemoryStream } from "@executablemd/durable-streams";
 import {
   installControlledLauncher,
   installControlledTerminalProvider,
 } from "@executablemd/runtime";
-import type { TerminalProviderLog } from "@executablemd/runtime";
+import type { TerminalGridRequest, TerminalProviderLog } from "@executablemd/runtime";
+
+import { execute } from "../src/execute.ts";
+import { registerComponents } from "../src/components/registration.ts";
+import type { Json } from "../src/types.ts";
 
 import { createTerminalGridClaims, TerminalAuthorityError } from "../src/terminal/authority.ts";
 import { runTerminalGrid } from "../src/terminal/grid.ts";
@@ -505,3 +515,331 @@ function* spawnGrid(layout: TerminalGridLayout, work: readonly PaneWork[]): Oper
     yield* runTerminalGrid(layout, work);
   });
 }
+
+/** One document run against a controlled grid host. */
+interface DocumentRun {
+  outcome: Result<Json>;
+  /** Text the consumer received — the root document's own output. */
+  output: string;
+  /** The grid the provider was actually asked to present. */
+  requests: TerminalGridRequest[];
+  /** What each pane displayed. */
+  shown: Map<number, string>;
+  /** Every mark a tripwire component recorded, in order. */
+  ran: string[];
+}
+
+function useDir(): Operation<string> {
+  return resource<string>(function* (provide) {
+    const dir = yield* until(mkdtemp(join(tmpdir(), "xmd-tg-")));
+    yield* ensure(function* () {
+      yield* rm(dir, { recursive: true, force: true });
+    });
+    yield* provide(dir);
+  });
+}
+
+/**
+ * The controlled interactive child, and a tripwire.
+ *
+ * A paired pane is ready only when something in it starts and reports a spawn.
+ * Until the native-launch Story lands, this is what a suite writes to be that
+ * something — and it reaches the pane through the same seam a real launch will.
+ */
+function useGridComponents(ran: string[]): Operation<void> {
+  return registerComponents([
+    {
+      name: "Interactive",
+      origin: "tier-tg",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn() {
+        const pane = yield* paneTerminal();
+        if (pane === undefined) {
+          throw new Error("<Interactive /> is written inside a <Terminal> pane");
+        }
+        yield* pane.interactive(function* (spawned) {
+          spawned();
+        });
+        return "";
+      },
+    },
+    {
+      name: "Ran",
+      origin: "tier-tg",
+      props: {
+        type: "object",
+        properties: { mark: { type: "string" } },
+        required: ["mark"],
+        additionalProperties: false,
+      },
+      // deno-lint-ignore require-yield
+      *fn(props) {
+        ran.push(String(props.mark));
+        return "";
+      },
+    },
+  ]);
+}
+
+/**
+ * Run one document against a controlled grid host.
+ *
+ * `provider: false` installs no terminal provider, which is how "a host that
+ * cannot open a grid refuses" is asked for.
+ */
+function runDocument(
+  dir: string,
+  source: string,
+  options: { provider?: boolean } = {},
+): Operation<DocumentRun> {
+  return scoped(function* () {
+    const path = join(dir, "doc.md");
+    yield* writeTextFile(path, source);
+    const requests: TerminalGridRequest[] = [];
+    const record = log();
+    const ran: string[] = [];
+    yield* useGridComponents(ran);
+    yield* installControlledLauncher();
+    // The reader stays until every pane has settled. Leaving sooner is a real
+    // thing a reader does — TG12 covers it — but a row about what a pane
+    // rendered must not race the close that cancels it.
+    const settled = withResolvers<void>();
+    let expected = 0;
+    let done = 0;
+    if (options.provider !== false) {
+      yield* installControlledTerminalProvider({
+        log: record,
+        close: () => settled.operation,
+        *onPrepare(asked) {
+          expected = asked.panes.length;
+          requests.push(asked);
+          yield* sleep(0);
+        },
+        onUpdate(_ordinal, state) {
+          if (state === "succeeded" || state === "failed") {
+            done++;
+            if (done >= expected) {
+              settled.resolve();
+            }
+          }
+        },
+      });
+    }
+    const execution = yield* execute({ path, stream: new InMemoryStream(), includes: [dir] });
+    const outcome = yield* execution;
+    const output = yield* forEach(function* (_chunk: string) {}, execution.output);
+    return { outcome, output, requests, shown: record.shown, ran };
+  });
+}
+
+/** The message a run failed with, failing the test if it completed. */
+function failureOf(run: DocumentRun): string {
+  if (run.outcome.ok) {
+    throw new Error(`expected the document to fail, but it completed: ${run.outcome.value}`);
+  }
+  return run.outcome.error.message;
+}
+
+describe("Tier TG — a grid written in a document", () => {
+  it("TG4: the provider is asked for exactly the authored row-major layout", function* () {
+    const dir = yield* useDir();
+    const run = yield* runDocument(
+      dir,
+      [
+        "<Terminal.Grid columns={2}>",
+        '<Terminal title="One" />',
+        '<Terminal title="Two" />',
+        '<Terminal title="Three" />',
+        '<Terminal title="Four" />',
+        '<Terminal title="Five" />',
+        "</Terminal.Grid>",
+        "",
+      ].join("\n"),
+    );
+
+    expect(run.outcome.ok).toBe(true);
+    expect(run.requests).toHaveLength(1);
+    expect(run.requests[0]).toEqual({
+      columns: 2,
+      rows: 3,
+      panes: [
+        { ordinal: 0, title: "One", row: 0, column: 0, form: "self-closing" },
+        { ordinal: 1, title: "Two", row: 0, column: 1, form: "self-closing" },
+        { ordinal: 2, title: "Three", row: 1, column: 0, form: "self-closing" },
+        { ordinal: 3, title: "Four", row: 1, column: 1, form: "self-closing" },
+        { ordinal: 4, title: "Five", row: 2, column: 0, form: "self-closing" },
+      ],
+    });
+  });
+
+  it("TG4: duplicate titles stay valid, and identity is the ordinal", function* () {
+    const dir = yield* useDir();
+    const run = yield* runDocument(
+      dir,
+      [
+        "<Terminal.Grid columns={2}>",
+        '<Terminal title="Agent">first<Interactive /></Terminal>',
+        '<Terminal title="Agent" />',
+        '<Terminal title="Agent">third<Interactive /></Terminal>',
+        "</Terminal.Grid>",
+        "",
+      ].join("\n"),
+    );
+
+    expect(run.outcome.ok).toBe(true);
+    // Three panes sharing one label are three panes: the ordinal separates
+    // them, and the form each was written in travels with it.
+    expect(run.requests[0]?.panes).toEqual([
+      { ordinal: 0, title: "Agent", row: 0, column: 0, form: "paired" },
+      { ordinal: 1, title: "Agent", row: 0, column: 1, form: "self-closing" },
+      { ordinal: 2, title: "Agent", row: 1, column: 0, form: "paired" },
+    ]);
+  });
+
+  it("TG1: both pane forms run, and whitespace between panes is nothing", function* () {
+    const dir = yield* useDir();
+    const run = yield* runDocument(
+      dir,
+      [
+        "<Terminal.Grid columns={2}>",
+        "",
+        '<Terminal title="Agent">Instructions.<Interactive /></Terminal>',
+        "",
+        '<Terminal title="Shell" />',
+        "",
+        "</Terminal.Grid>",
+        "",
+      ].join("\n"),
+    );
+
+    expect(run.outcome.ok).toBe(true);
+    expect(run.requests[0]).toEqual({
+      columns: 2,
+      rows: 1,
+      panes: [
+        { ordinal: 0, title: "Agent", row: 0, column: 0, form: "paired" },
+        { ordinal: 1, title: "Shell", row: 0, column: 1, form: "self-closing" },
+      ],
+    });
+  });
+
+  it("TG7: a pane's text reaches that pane, and the grid renders nothing", function* () {
+    const dir = yield* useDir();
+    const run = yield* runDocument(
+      dir,
+      [
+        "before",
+        "",
+        "<Terminal.Grid columns={2}>",
+        '<Terminal title="Left">left text<Interactive /></Terminal>',
+        '<Terminal title="Right">right text<Interactive /></Terminal>',
+        "</Terminal.Grid>",
+        "",
+        "after",
+        "",
+      ].join("\n"),
+    );
+
+    expect(run.outcome.ok).toBe(true);
+    // Each pane's own text went to that pane.
+    expect(run.shown.get(0)).toContain("left text");
+    expect(run.shown.get(1)).toContain("right text");
+    // The grid renders "": the root output holds what surrounds it and no pane
+    // display at all.
+    expect(run.output).toContain("before");
+    expect(run.output).toContain("after");
+    expect(run.output).not.toContain("left text");
+    expect(run.output).not.toContain("right text");
+  });
+
+  it("TG6: a pane inherits the grid site's bindings and keeps its own", function* () {
+    const dir = yield* useDir();
+    const run = yield* runDocument(
+      dir,
+      [
+        '<Let as="shared" value={"site"} />',
+        "",
+        "<Terminal.Grid columns={2}>",
+        '<Terminal title="Left">',
+        "sees {shared}",
+        "",
+        '<Let as="mine" value={"left"} />',
+        "",
+        "then {mine}",
+        "",
+        "<Interactive />",
+        "</Terminal>",
+        '<Terminal title="Right">',
+        "sees {shared} and {mine}",
+        "",
+        "<Interactive />",
+        "</Terminal>",
+        "</Terminal.Grid>",
+        "",
+        "after {mine}",
+        "",
+      ].join("\n"),
+    );
+
+    expect(run.outcome.ok).toBe(true);
+    // Inherited from the grid site.
+    expect(run.shown.get(0)).toContain("sees site");
+    expect(run.shown.get(1)).toContain("sees site");
+    // Created inside one pane, visible to later work in that pane.
+    expect(run.shown.get(0)).toContain("then left");
+    // Invisible to the sibling and to the document after the grid: an
+    // unresolved binding stays the literal text it was written as.
+    expect(run.shown.get(1)).toContain("and {mine}");
+    expect(run.output).toContain("after {mine}");
+  });
+
+  it("TG6: a pane's <Break> cannot reach a loop outside the grid", function* () {
+    const dir = yield* useDir();
+    const run = yield* runDocument(
+      dir,
+      [
+        "<Loop max={2}>",
+        '<Ran mark="iteration" />',
+        "<Terminal.Grid columns={1}>",
+        '<Terminal title="Pane">',
+        "<Break />",
+        "<Interactive />",
+        "</Terminal>",
+        "</Terminal.Grid>",
+        "</Loop>",
+        "",
+      ].join("\n"),
+    );
+
+    // Refused where it was written. Had the <Break> reached the loop around the
+    // grid it would have exited it quietly and the document would have
+    // succeeded; instead the pane failed with the stray-<Break> rule, which is
+    // what fails the grid and then the document.
+    expect(failureOf(run)).toContain("<Break> must be written inside a <Loop>");
+    expect(failureOf(run)).toContain("cannot break the loop that invoked it");
+    expect(run.ran).toEqual(["iteration"]);
+  });
+
+  it("TG9: with no provider installed, no pane body or shell runs", function* () {
+    const dir = yield* useDir();
+    const run = yield* runDocument(
+      dir,
+      [
+        "<Terminal.Grid columns={2}>",
+        '<Terminal title="Work">',
+        '<Ran mark="pane body" />',
+        "<Interactive />",
+        "</Terminal>",
+        '<Terminal title="Shell" />',
+        "</Terminal.Grid>",
+        "",
+      ].join("\n"),
+      { provider: false },
+    );
+
+    expect(failureOf(run)).toContain("no terminal provider is installed");
+    // The pane held work; none of it was reached, and nothing was displayed.
+    expect(run.ran).toEqual([]);
+    expect(run.shown.size).toBe(0);
+  });
+});
