@@ -147,19 +147,20 @@ export type {
   NativeLaunchRequest,
 } from "./launcher.ts";
 export {
-  installControlledTerminalProvider,
-  prepareTerminalGrid,
+  prepareControlledComposite,
+  TERMINAL_GRIDS_API,
   TERMINAL_PROVIDER_UNAVAILABLE,
-  TerminalProvider,
+  TerminalGrids,
+  terminalProviderLog,
   TerminalProviderUnavailableError,
 } from "./terminal.ts";
 export type {
-  ControlledTerminalProviderOptions,
+  ControlledCompositeOptions,
   TerminalComposite,
+  TerminalGridApi,
   TerminalGridRequest,
   TerminalPaneRequest,
   TerminalPaneState,
-  TerminalProviderHandler,
   TerminalProviderLog,
   TerminalShellOutcome,
 } from "./terminal.ts";
