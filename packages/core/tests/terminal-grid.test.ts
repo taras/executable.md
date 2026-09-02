@@ -414,6 +414,8 @@ function runInterrupted(
     closeAfterFailure?: boolean;
     /** Let the reader leave only once a `<SlowTeardown />` pane is armed. */
     closeWhenArmed?: boolean;
+    /** Let the reader leave only once this tripwire mark has been recorded. */
+    closeWhenMarked?: string;
     /** Ordinal of a shell that starts, waits for attachment, then exits badly. */
     shellFailsAfterAttach?: number;
     /** Holds a `<SlowTeardown />` pane's finalizer until this settles. */
@@ -475,12 +477,16 @@ function runInterrupted(
     const paneFailed = withResolvers<void>();
     // Resolved once a `<SlowTeardown />` pane has installed its finalizer.
     const armed = withResolvers<void>();
+    const marked = withResolvers<void>();
     yield* useGridComponents(
       ran,
       [],
       (mark) => {
         if (mark === PAST_THE_GRID) {
           pastGrid.resolve();
+        }
+        if (mark === options.closeWhenMarked) {
+          marked.resolve();
         }
       },
       () => attached.operation,
@@ -499,9 +505,13 @@ function runInterrupted(
         close:
           options.closeAfterFailure === true
             ? () => paneFailed.operation
-            : options.close === true
-              ? immediateClose()
-              : () => suspend(),
+            : options.closeWhenMarked !== undefined
+              ? () => marked.operation
+              : options.closeWhenArmed === true
+                ? () => armed.operation
+                : options.close === true
+                  ? immediateClose()
+                  : () => suspend(),
         ...(options.shellFailsAfterAttach !== undefined
           ? {
               shell: function* (ordinal: number, spawned: () => void) {
@@ -1077,6 +1087,25 @@ describe("Tier TG — a grid written in a document", () => {
     expect(run.output).not.toContain("this pane gave up");
   });
 
+  it("TG6: a paired pane runs every component in its body, in order", function* () {
+    const dir = yield* useDir();
+    const stream = new InMemoryStream();
+    // The reader leaves only once the pane's *second* component has run, so a
+    // pane body that stopped after the first would never let the grid close —
+    // a hang rather than a pass.
+    const run = yield* runInterrupted(
+      dir,
+      heldDocument(2, [
+        '<Terminal title="Two components"><Interactive /><Ran mark="second component" /></Terminal>',
+        '<Terminal title="Shell" />',
+      ]),
+      stream,
+      { close: true, closeWhenMarked: "second component" },
+    );
+
+    expect(run.ran).toContain("second component");
+  });
+
   it("TG9: with no provider installed, no pane body or shell runs", function* () {
     const dir = yield* useDir();
     const run = yield* runDocument(
@@ -1324,6 +1353,26 @@ describe("Tier TG — durability and replay", () => {
         String(event.coroutineId).split(".").length === 2 &&
         (event.result.status === "ok" || event.result.status === "err"),
     );
+  }
+
+  /** The pane outcomes the grid retained, in authored order. */
+  function paneOutcomes(run: DocumentRun): unknown[] {
+    for (const event of run.journal) {
+      if (
+        event.type === "close" &&
+        String(event.coroutineId).split(".").length === 2 &&
+        event.result.status === "ok"
+      ) {
+        const value = event.result.value;
+        if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+          const panes = Reflect.get(value, "panes");
+          if (Array.isArray(panes)) {
+            return panes;
+          }
+        }
+      }
+    }
+    return [];
   }
 
   it("TG15: a completed successful grid replays its exact result, with no work", function* () {
@@ -1656,6 +1705,68 @@ describe("Tier TG — durability and replay", () => {
       expect(`${what}: ${second.events.length}`).toBe(`${what}: 0`);
       expect(`${what}: ${second.shown.size}`).toBe(`${what}: 0`);
     }
+  });
+
+  it("TG19: a cancellation during reader-close teardown waits for it, and replays", function* () {
+    const dir = yield* useDir();
+    const stream = new InMemoryStream();
+    const source = heldDocument(2, [
+      '<Terminal title="Live"><Interactive /><Ran mark="pane body" /><SlowTeardown /></Terminal>',
+      '<Terminal title="Shell" />',
+    ]);
+
+    // Every step below is an event this run produced. Nothing waits for a
+    // duration, so a lifecycle that never reached a step hangs the row rather
+    // than passing it.
+    const entered = withResolvers<void>();
+    const release = withResolvers<void>();
+
+    const first = yield* runInterrupted(dir, source, stream, {
+      // 1. The live pane arms its blocking finalizer, and 2. only then does the
+      //    reader leave.
+      closeWhenArmed: true,
+      // 3. Entering the finalizer is observed, and it blocks there.
+      onTeardownEntered: () => entered.resolve(),
+      holdTeardown: () => release.operation,
+      // 4. Cancellation begins while that finalizer is still blocked.
+      interruptWhen: entered.operation,
+      // 5. Released afterwards, so the cancellation was not waiting on it.
+      releaseOnInterrupt: () => release.resolve(),
+    });
+
+    // 6. Teardown ran to the end, and the grid recorded a completed close —
+    //    both before the cancellation was observed, because the document never
+    //    reached the sibling after the grid.
+    expect(first.events).toContain("destroy:0");
+    expect(completedGrid(first)).toBe(true);
+    expect(first.ran).toEqual(["pane body"]);
+    // The live pane settled as closed rather than cancelled: a cancelled child
+    // is what a later run would have to revive, and this one has nothing left
+    // to do.
+    expect(paneOutcomes(first)).toEqual([
+      { status: "closed", reason: "" },
+      { status: "succeeded", reason: "" },
+    ]);
+
+    // 7. Resumed with three tripwires: no provider at all, so a replay that
+    //    asked for a grid would refuse; a mark inside the pane body, so a pane
+    //    that expanded again would say so; and the finalizer, which would
+    //    report being entered a second time.
+    let reentered = false;
+    const second = yield* runInterrupted(dir, source, stream, {
+      close: true,
+      provider: false,
+      onTeardownEntered: () => {
+        reentered = true;
+      },
+    });
+
+    expect(second.requests).toEqual([]);
+    expect(second.events).toEqual([]);
+    expect(second.shown.size).toBe(0);
+    expect(reentered).toBe(false);
+    // The retained grid came back and the document carried on from it.
+    expect(second.ran).toEqual([PAST_THE_GRID]);
   });
 
   it("TG17: the retained layout and pane outcomes are provider-neutral", function* () {
