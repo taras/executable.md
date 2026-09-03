@@ -135,6 +135,9 @@ export function usePaneChannels(
     // Awaited, not asked for. `destroy()` and `close()` are requests; what the
     // directory's removal has to wait for is the closures themselves.
     let closing: ReturnType<typeof withResolvers<void>> | undefined;
+    /** Handles that have actually closed, so a retry does not close them twice. */
+    const shut = new Set<Socket | Server>();
+
     function* closeAll(): Operation<void> {
       if (closing !== undefined) {
         // Published before anything is closed, so a second caller arriving
@@ -143,26 +146,60 @@ export function usePaneChannels(
         return yield* closing.operation;
       }
       closing = withResolvers<void>();
-      const closings: Operation<void>[] = [];
-      const counted = (): void => {
-        closedCount++;
+      let failure: Error | undefined;
+      const failed = (error: unknown): void => {
+        failure = failure ?? (error instanceof Error ? error : new Error(String(error)));
       };
-      for (const socket of live) {
-        // Asked for before the destroy, so the listener is there when the close
-        // it waits for arrives.
-        closings.push(closed(socket, counted));
-        socket.destroy();
+      const waits: Operation<void>[] = [];
+
+      // The requests are inside the same failure boundary as the waits: asking
+      // a handle to close is as capable of failing as waiting for it, and a
+      // request that threw must not stop the others being asked. The watch for
+      // one that threw is abandoned rather than awaited — nothing is going to
+      // close it — and the handle is left out of `shut`, so a later call asks
+      // again.
+      for (const socket of [...live]) {
+        if (shut.has(socket)) {
+          continue;
+        }
+        const watch = closedSocket(socket, () => {
+          closedCount++;
+          shut.add(socket);
+        });
+        try {
+          socket.destroy();
+          waits.push(watch.wait);
+        } catch (error) {
+          watch.abandon();
+          failed(error);
+        }
       }
       for (const server of servers) {
-        closings.push(shut(server, counted));
-        server.close();
-      }
-      try {
-        for (const pending of closings) {
-          yield* pending;
+        if (shut.has(server)) {
+          continue;
         }
-      } catch (error) {
-        const failure = error instanceof Error ? error : new Error(String(error));
+        const watch = closedServer(server, () => {
+          closedCount++;
+          shut.add(server);
+        });
+        try {
+          server.close();
+          waits.push(watch.wait);
+        } catch (error) {
+          watch.abandon();
+          failed(error);
+        }
+      }
+      for (const wait of waits) {
+        try {
+          yield* wait;
+        } catch (error) {
+          failed(error);
+        }
+      }
+      if (failure !== undefined) {
+        // Cleared, so a later call retries the handles that did not close and
+        // leaves the ones that did alone.
         closing.reject(failure);
         closing = undefined;
         throw failure;
@@ -292,7 +329,7 @@ export function usePaneChannels(
 }
 
 /** Settle once this socket has closed, whether or not it already had. */
-function closed(socket: Socket, onClosed: () => void): Operation<void> {
+function closedSocket(socket: Socket, onClosed: () => void): CloseWatch {
   // Attached now, awaited later. The caller asks for this *before* destroying
   // the socket, so a listener attached lazily would miss the close it is
   // waiting for — and the directory would go while the socket was still open.
@@ -307,18 +344,34 @@ function closed(socket: Socket, onClosed: () => void): Operation<void> {
   } else {
     socket.on("close", onClose);
   }
-  return (function* (): Operation<void> {
-    try {
-      yield* done.operation;
-    } finally {
-      // Removed synchronously when the wait is over, however it ends.
-      socket.off("close", onClose);
-    }
-  })();
+  return {
+    wait: (function* (): Operation<void> {
+      try {
+        yield* done.operation;
+      } finally {
+        // Removed synchronously when the wait is over, however it ends.
+        socket.off("close", onClose);
+      }
+    })(),
+    abandon: () => socket.off("close", onClose),
+  };
+}
+
+/**
+ * A closure this code is already listening for.
+ *
+ * Two halves because asking a handle to close can fail: the listener has to be
+ * on before the request, and a request that threw leaves nothing to wait for.
+ * `abandon` takes the listener off without claiming the handle closed, so the
+ * handle stays retryable rather than being counted or waited on forever.
+ */
+interface CloseWatch {
+  readonly wait: Operation<void>;
+  abandon(): void;
 }
 
 /** Settle once this server has stopped listening. */
-function shut(server: Server, onClosed: () => void): Operation<void> {
+function closedServer(server: Server, onClosed: () => void): CloseWatch {
   const done = withResolvers<void>();
   const onClose = (): void => {
     onClosed();
@@ -330,13 +383,16 @@ function shut(server: Server, onClosed: () => void): Operation<void> {
   } else {
     server.on("close", onClose);
   }
-  return (function* (): Operation<void> {
-    try {
-      yield* done.operation;
-    } finally {
-      server.off("close", onClose);
-    }
-  })();
+  return {
+    wait: (function* (): Operation<void> {
+      try {
+        yield* done.operation;
+      } finally {
+        server.off("close", onClose);
+      }
+    })(),
+    abandon: () => server.off("close", onClose),
+  };
 }
 
 /** A connection that has said nothing for long enough to be nobody. */
