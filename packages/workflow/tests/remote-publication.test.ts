@@ -51,12 +51,6 @@ function event(name: string) {
 
 const LOCATOR = "https://git.example.invalid/octo/app.git";
 
-function serve(
-  captured: Awaited<ReturnType<typeof captureWorkspace>> extends infer T ? never : never,
-): never {
-  throw new Error("unused");
-}
-
 /** A recording connection: every request it was sent, and canned answers. */
 function wire(answer: (request: Record<string, unknown>) => Record<string, unknown>) {
   const sent: Record<string, unknown>[] = [];
@@ -123,6 +117,48 @@ function ownerAnswers(rootId: string, sizes: ReadonlyMap<string, number> = new M
       value: { workspaceRootId: rootId, journalEventIds: ["e1"] },
     };
   };
+}
+
+/** The final command a transaction sent, proved to be one. */
+function lastCommit(sent: readonly Record<string, unknown>[]): Record<string, unknown> {
+  const commit = sent.at(-1);
+  if (commit === undefined || commit["command"] !== "commit") {
+    throw new Error("expected the last request to be a commit");
+  }
+  return commit;
+}
+
+/** One object member, read rather than asserted into shape. */
+function member(value: unknown, name: string): Record<string, unknown> {
+  const found = value === null || typeof value !== "object" ? undefined : Object.entries(value);
+  const entry = found?.find(([key]) => key === name)?.[1];
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+    throw new Error(`expected ${name} to be an object`);
+  }
+  return Object.fromEntries(Object.entries(entry));
+}
+
+/** One text member, read rather than asserted. */
+function text(value: Record<string, unknown>, name: string): string {
+  const found = value[name];
+  if (typeof found !== "string") {
+    throw new Error(`expected ${name} to be text`);
+  }
+  return found;
+}
+
+/** One list member, read the same way. */
+function memberList(value: Record<string, unknown>, name: string): Record<string, unknown>[] {
+  const entry = value[name];
+  if (!Array.isArray(entry)) {
+    throw new Error(`expected ${name} to be a list`);
+  }
+  return entry.map((item) => {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error(`expected every ${name} entry to be an object`);
+    }
+    return Object.fromEntries(Object.entries(item));
+  });
 }
 
 function ids(): () => string {
@@ -273,17 +309,15 @@ describe("what the production runner publishes", () => {
       expect(committed).toMatchObject({ ok: true });
 
       // The last request is one closed commit carrying the whole proposal.
-      const commit = transport.sent.at(-1);
-      expect(commit?.["command"]).toBe("commit");
-      expect(commit?.["expectedWorkspaceRootId"]).toBe(captured.root.rootId);
-      expect(commit?.["events"]).toEqual([serializeDurableEvent(event("published"))]);
-      const publication = commit?.["publication"] as Record<string, unknown>;
+      const commit = lastCommit(transport.sent);
+      expect(commit["expectedWorkspaceRootId"]).toBe(captured.root.rootId);
+      expect(commit["events"]).toEqual([serializeDurableEvent(event("published"))]);
+      const publication = member(commit, "publication");
       expect(publication["proposedWorkspaceRootId"]).toBe(proposed.root.rootId);
       expect(sha256Hex(`${WORKSPACE_ROOT_DOMAIN}${String(publication["proposedManifest"])}`)).toBe(
         proposed.root.rootId,
       );
-      const mappings = commit?.["mappings"] as Record<string, unknown>[];
-      expect(mappings[0]?.["locator"]).toBe(LOCATOR);
+      expect(text(memberList(commit, "mappings")[0] ?? {}, "locator")).toBe(LOCATOR);
       // Everything the proposal names was staged before the commit went out.
       const staged = transport.sent.filter((request) => request["command"] === "stage");
       expect(staged.length).toBe(proposed.root.manifests.length + proposed.root.blobs.length);
@@ -382,84 +416,74 @@ describe("what the production runner publishes", () => {
   });
 
   it("cannot be changed by a caller that kept its own copy", function* () {
-    const files = runnerFiles();
-    yield* scoped(function* () {
-      const trees = yield* useRunnerTrees();
-      void trees;
-      const { captured, reads } = yield* startingTree();
-      const transport = wire(ownerAnswers(captured.root.rootId));
-      const connection = yield* useOwnerConnection(transport.socket);
-      const link = cloudflareOwnerLink(connection, reads, ids());
-      const content: ProposedContent[] = [{ kind: "manifest", digest: "a".repeat(64), size: 1 }];
-      const mappings: RetainedMapping[] = [
-        {
-          kind: "repository",
-          locator: LOCATOR,
-          record: {
-            name: "app",
-            locatorFingerprint: locatorFingerprintOf(LOCATOR),
-            requestedBase: null,
-            creationCommit: "9".repeat(40),
-            primaryBranch: "main",
-            objectFormat: "sha1",
-            checkoutPath: "/docs",
-          },
+    const { captured, reads } = yield* startingTree();
+    const transport = wire(ownerAnswers(captured.root.rootId));
+    const connection = yield* useOwnerConnection(transport.socket);
+    const link = cloudflareOwnerLink(connection, reads, ids());
+    const content: ProposedContent[] = [{ kind: "manifest", digest: "a".repeat(64), size: 1 }];
+    const mappings: RetainedMapping[] = [
+      {
+        kind: "repository",
+        locator: LOCATOR,
+        record: {
+          name: "app",
+          locatorFingerprint: locatorFingerprintOf(LOCATOR),
+          requestedBase: null,
+          creationCommit: "9".repeat(40),
+          primaryBranch: "main",
+          objectFormat: "sha1",
+          checkoutPath: "/docs",
         },
-      ];
-      yield* transactRemotely(link, createTransactionGate(), function* (_transaction, enlist) {
-        enlist({
-          publication: {
-            proposedWorkspaceRootId: captured.root.rootId,
-            proposedManifest: captured.root.manifest,
-            content,
-          },
-          mappings,
-        });
-        // The caller still holds both arrays and edits them after admission.
-        content.push({ kind: "blob", digest: "b".repeat(64), size: 2 });
-        const first = mappings[0];
-        if (first?.kind === "repository") {
-          mappings[0] = { ...first, locator: "https://elsewhere.invalid/x.git" };
-        }
-        return "done";
-      });
-      const commit = transport.sent.at(-1);
-      const publication = commit?.["publication"] as Record<string, unknown>;
-      expect((publication["content"] as unknown[]).length).toBe(1);
-      expect((commit?.["mappings"] as Record<string, unknown>[])[0]?.["locator"]).toBe(LOCATOR);
-    });
-  });
-
-  it("refuses a second Workspace publication in one transaction", function* () {
-    const files = runnerFiles();
-    void files;
-    yield* scoped(function* () {
-      const { captured, reads } = yield* startingTree();
-      const transport = wire(ownerAnswers(captured.root.rootId));
-      const connection = yield* useOwnerConnection(transport.socket);
-      const link = cloudflareOwnerLink(connection, reads, ids());
-      const proposal = {
+      },
+    ];
+    yield* transactRemotely(link, createTransactionGate(), function* (_transaction, enlist) {
+      enlist({
         publication: {
           proposedWorkspaceRootId: captured.root.rootId,
           proposedManifest: captured.root.manifest,
-          content: [],
+          content,
         },
-        mappings: [],
-      };
-      let raised: unknown;
-      try {
-        yield* transactRemotely(link, createTransactionGate(), function* (_transaction, enlist) {
-          enlist(proposal);
-          enlist(proposal);
-          return "done";
-        });
-      } catch (error) {
-        raised = error;
+        mappings,
+      });
+      // The caller still holds both arrays and edits them after admission.
+      content.push({ kind: "blob", digest: "b".repeat(64), size: 2 });
+      const first = mappings[0];
+      if (first?.kind === "repository") {
+        mappings[0] = { ...first, locator: "https://elsewhere.invalid/x.git" };
       }
-      // Two Workspaces proposed for one commit is a choice nobody may make on
-      // the run's behalf, so the transaction fails and nothing is sent.
-      expect(raised).toBeInstanceOf(Error);
-      expect(transport.sent.some((request) => request["command"] === "commit")).toBe(false);
+      return "done";
     });
+    const commit = lastCommit(transport.sent);
+    expect(memberList(member(commit, "publication"), "content")).toHaveLength(1);
+    expect(text(memberList(commit, "mappings")[0] ?? {}, "locator")).toBe(LOCATOR);
+  });
+
+  it("refuses a second Workspace publication in one transaction", function* () {
+    const { captured, reads } = yield* startingTree();
+    const transport = wire(ownerAnswers(captured.root.rootId));
+    const connection = yield* useOwnerConnection(transport.socket);
+    const link = cloudflareOwnerLink(connection, reads, ids());
+    const proposal = {
+      publication: {
+        proposedWorkspaceRootId: captured.root.rootId,
+        proposedManifest: captured.root.manifest,
+        content: [],
+      },
+      mappings: [],
+    };
+    let raised: unknown;
+    try {
+      yield* transactRemotely(link, createTransactionGate(), function* (_transaction, enlist) {
+        enlist(proposal);
+        enlist(proposal);
+        return "done";
+      });
+    } catch (error) {
+      raised = error;
+    }
+    // Two Workspaces proposed for one commit is a choice nobody may make on
+    // the run's behalf, so the transaction fails and nothing is sent.
+    expect(raised).toBeInstanceOf(Error);
+    expect(transport.sent.some((request) => request["command"] === "commit")).toBe(false);
   });
 });
