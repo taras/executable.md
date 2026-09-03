@@ -17,7 +17,7 @@ const DEFAULT_DESC =
 // Per-route metadata so each page has a distinct title and its own canonical URL.
 const META: Record<string, { title: string; desc: string }> = {
   "/": {
-    title: "executable.md — minimize agentic work",
+    title: "xmd — minimize agentic work",
     desc:
       "Turn repeatable work into programs. Use agents only for the judgment that remains.",
   },

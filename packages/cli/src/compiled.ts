@@ -10,6 +10,7 @@ import process from "node:process";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { compileDataUri } from "@executablemd/core";
 import { runXmd, XMD_VERSION } from "./cli.ts";
+import { readInputStream } from "./standard-input.ts";
 import { compiledUpgradeAssembly } from "./compiled-upgrade.ts";
 import { useMachineSessions } from "./session-coordinator.ts";
 import { useDenoWorkflowHost } from "./deno-workflow.ts";
@@ -89,6 +90,7 @@ if (isCredentialHelperMode(process.argv.slice(2))) {
       useCompiledService,
       UPGRADE,
       denoRunRepositories(HELPER),
+      () => readInputStream(process.stdin),
       () => useDenoWorkflowHost(HELPER),
       useMachineSessions(),
     );

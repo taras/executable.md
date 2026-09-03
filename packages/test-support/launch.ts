@@ -1,8 +1,10 @@
 import { exec } from "@effectionx/process";
 import type { ProcessResult } from "@effectionx/process";
 import { timebox } from "@effectionx/timebox";
-import { spawn } from "effection";
-import type { Operation } from "effection";
+import { Err, Ok, ensure, spawn, withResolvers } from "effection";
+import type { Operation, Result } from "effection";
+import { spawn as spawnChild } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { loadavg } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
@@ -82,6 +84,14 @@ export interface CliRunOptions {
   inheritEnv?: boolean;
   /** Milliseconds before the run is abandoned (default 60s). */
   timeout?: number;
+  /**
+   * Exactly this text on the child's standard input, followed by end of file.
+   *
+   * Omitting it leaves the child's stdin as the launcher has always left it. An
+   * empty string is a value like any other: the child observes an immediate end
+   * of file rather than nothing at all.
+   */
+  stdin?: string;
 }
 
 /** A bounded run of `xmd`, synchronized like any `@effectionx/process` exec. */
@@ -148,6 +158,10 @@ function* bounded(
   // whether the child hung before its first line or after its last.
   const partial: PartialOutput = { stdout: "", stderr: "" };
   const result = yield* timebox<ProcessResult>(limit, function* () {
+    const input = options.stdin;
+    if (input !== undefined) {
+      return yield* withInput(launch, options, partial, mode, input);
+    }
     const child = yield* exec(launch.command, {
       arguments: launch.arguments,
       shell: launch.shell,
@@ -178,6 +192,182 @@ function* bounded(
 // Chunks decode independently, exactly as capture concatenates them.
 function text(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);
+}
+
+/** How long a terminated child is given to close before the signal escalates. */
+const TERMINATION_GRACE = 2_000;
+
+/**
+ * The same bounded run, for a child that has to observe a real end of file.
+ *
+ * `@effectionx/process` publishes stdin as a writable that can send and never
+ * close, so a CLI reading to end of file would wait forever behind it. This
+ * path owns the child instead, writes the supplied text and closes the pipe, so
+ * what the CLI observes is the pipeline a caller would build. Everything else
+ * is the launcher's: the same environment, the same capture into the caller's
+ * accumulators, and the same status handling.
+ *
+ * Owning the child means owning its exit. Teardown is registered before this
+ * operation can suspend, and it finishes only once the child's own `close`
+ * boundary has been reached — a signal that has been sent is not a process that
+ * is gone. A group that has not closed within the grace period is escalated to
+ * `SIGKILL`, so a child ignoring `SIGTERM` cannot outlive the run that started
+ * it or hold the deadline open.
+ */
+function* withInput(
+  launch: Launch,
+  options: CliRunOptions,
+  partial: PartialOutput,
+  mode: "join" | "expect",
+  input: string,
+): Operation<ProcessResult> {
+  const settled = withResolvers<Result<{ code?: number; signal?: string }>>();
+  const closed = withResolvers<void>();
+  const child = spawnChild(launch.command, launch.arguments ?? [], {
+    detached: true,
+    shell: launch.shell,
+    cwd: options.cwd,
+    env: cliEnv(options),
+    stdio: "pipe",
+  });
+
+  child.stdout?.on("data", (chunk: Uint8Array) => {
+    partial.stdout += text(chunk);
+  });
+  child.stderr?.on("data", (chunk: Uint8Array) => {
+    partial.stderr += text(chunk);
+  });
+  // A child that never started closes through this rather than through `close`,
+  // so teardown has an end either way.
+  child.on("error", (error: Error) => {
+    settled.resolve(Err(error));
+    closed.resolve();
+  });
+  // A pipe the child could not use is the launcher's problem and not the run's:
+  // the close below is what this whole path exists for, and a broken one would
+  // otherwise raise on a process that is already reporting why.
+  child.stdin?.on("error", () => {});
+  child.on("close", (code: number | null, signal: string | null) => {
+    settled.resolve(
+      Ok({
+        ...(code === null ? {} : { code }),
+        ...(signal === null ? {} : { signal }),
+      }),
+    );
+    closed.resolve();
+  });
+
+  // Registered before the first suspension point, so a run cancelled anywhere
+  // below still ends with its process group gone.
+  yield* ensure(() => reap(child, closed.operation));
+
+  child.stdin?.end(input);
+
+  const exit = yield* settled.operation;
+  if (!exit.ok) {
+    throw exit.error;
+  }
+  const status = { ...exit.value, stdout: partial.stdout, stderr: partial.stderr };
+  if (mode === "expect" && status.code !== 0) {
+    throw new Error(
+      `${launch.command} exited ${status.code ?? `on ${status.signal}`}\n` +
+        `${channel("stdout", status.stdout)}\n${channel("stderr", status.stderr)}`,
+    );
+  }
+  return status;
+}
+
+/**
+ * End the child's whole process group, and do not return until it is gone.
+ *
+ * A child that already closed resolves immediately. Otherwise the group is
+ * asked to terminate, given a bounded chance to close, then killed — and either
+ * way this waits for the `close` event, which is the only thing that says the
+ * process and its pipes are actually finished.
+ *
+ * A kill that was refused is not a process that stopped, so a group nothing
+ * could be delivered to while the child is still reachable ends the run with
+ * that fact rather than waiting on a `close` that is never coming.
+ */
+function* reap(child: ChildProcess, closed: Operation<void>): Operation<void> {
+  const pid = child.pid;
+  if (pid === undefined || child.exitCode !== null || child.signalCode !== null) {
+    yield* closed;
+    return;
+  }
+
+  end(pid, "SIGTERM");
+  const graceful = yield* timebox(TERMINATION_GRACE, () => closed);
+  if (!graceful.timeout) {
+    return;
+  }
+
+  const killed = end(pid, "SIGKILL");
+  if (killed === "refused" && isReachable(pid)) {
+    throw new Error(`the launched process ${pid} could not be stopped: SIGKILL was refused`);
+  }
+  yield* closed;
+}
+
+/** What one signal delivery established about what it was aimed at. */
+type Delivery = "delivered" | "absent" | "refused";
+
+/**
+ * Signal the child's whole process group, falling back to the child itself.
+ *
+ * The group is the target, because a child that spawned its own children is
+ * only gone once they are. But a group that reported nothing is not a group
+ * that is empty: `detached` can fail, and the process may simply not lead one.
+ * So a delivery the group did not accept, while the child is still reachable,
+ * is retried against the child directly.
+ */
+function end(pid: number, name: "SIGTERM" | "SIGKILL"): Delivery {
+  const group = deliver(-pid, name);
+  if (group === "delivered" || !isReachable(pid)) {
+    return group;
+  }
+  return deliver(pid, name);
+}
+
+/**
+ * Send one signal by pid and report what that established.
+ *
+ * Deliberately not `child.kill()`. Deno's `node:child_process` marks a child as
+ * killed after the first call and delivers nothing on any later one, so a child
+ * that ignores the first signal could never be escalated through the handle.
+ */
+function deliver(target: number, name: "SIGTERM" | "SIGKILL"): Delivery {
+  try {
+    process.kill(target, name);
+    return "delivered";
+  } catch (error) {
+    // Gone between the decision and the delivery is the outcome this was
+    // asking for. Anything else is a delivery that did not happen, and is not
+    // evidence of termination.
+    return isNoSuchProcess(error) ? "absent" : "refused";
+  }
+}
+
+function isNoSuchProcess(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    Reflect.get(error, "code") === "ESRCH"
+  );
+}
+
+/**
+ * Whether a process still exists. Signal 0 delivers nothing: it asks the kernel
+ * whether the pid is reachable, which is the whole question here.
+ */
+function isReachable(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

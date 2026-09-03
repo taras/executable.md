@@ -533,6 +533,17 @@ export default define.page(function Home({ url }) {
             Then run the program instead of asking an agent to figure the
             workflow out again.
           </p>
+
+          <p style={P_MD}>
+            <strong style={STRONG}>A Plan is text, so it composes.</strong>{" "}
+            <Term>xmd plan</Term>{" "}
+            writes the approved program to standard output, and{" "}
+            <Term>xmd run -</Term>{" "}
+            takes a whole program from standard input — so the two are one
+            command when you want no file in between.
+          </p>
+
+          <Terminal lines={[[' xmd plan "prepare the release" | xmd run -']]} />
         </section>
 
         {/* Compose */}
