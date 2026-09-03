@@ -28,7 +28,7 @@
 
 import { exec } from "@effectionx/process";
 import { lines } from "@effectionx/stream-helpers";
-import { ensure, resource, sleep, spawn } from "effection";
+import { createSignal, ensure, resource, sleep, spawn } from "effection";
 import type { Operation } from "effection";
 import { processReachable } from "@executablemd/runtime";
 import { layoutString, swapsInto } from "./layout.ts";
@@ -92,6 +92,10 @@ export interface TmuxGrid {
   readonly events: readonly ControlEvent[];
   /** Pane geometry now, for checking placement after a resize. */
   geometry(): Operation<readonly LayoutCell[]>;
+  /** Show one pane's label. Display only; core has settled what it says. */
+  title(ordinal: number, text: string): Operation<void>;
+  /** Settles when the control channel says the reader's client has gone. */
+  detached(): Operation<void>;
   /** Show the grid on this process's terminal. */
   attach(): Operation<VisibleClient>;
   /** Ask the visible client to leave, so it restores the terminal itself. */
@@ -261,6 +265,9 @@ export function useTmuxGrid(tmux: Tmux, request: TmuxGridRequest): Operation<Tmu
     // The control client. `-f no-output` is what keeps pane bytes out of this
     // process: what arrives is the server's own account of its clients.
     const events: ControlEvent[] = [];
+    const reports = createSignal<ControlEvent, never>();
+    // Subscribed before the client is started, so no report is missed.
+    const watching = yield* reports;
     yield* spawn(function* () {
       const [program = "tmux", ...argv] = tmux.argv([
         "-C",
@@ -274,11 +281,14 @@ export function useTmuxGrid(tmux: Tmux, request: TmuxGridRequest): Operation<Tmu
       const reported = yield* lines()(client.stdout);
       let next = yield* reported.next();
       while (!next.done) {
-        events.push(classify(next.value));
+        const event = classify(next.value);
+        events.push(event);
+        reports.send(event);
         next = yield* reported.next();
       }
       // EOF on the control channel is its own event, and is not a detach.
       events.push({ kind: "closed" });
+      reports.send({ kind: "closed" });
     });
 
     yield* provide({
@@ -286,6 +296,27 @@ export function useTmuxGrid(tmux: Tmux, request: TmuxGridRequest): Operation<Tmu
       events,
       *geometry() {
         return (yield* readPanes(tmux, target, paneIds)).map((pane) => pane.cell);
+      },
+      *title(ordinal, text) {
+        const id = paneIds[ordinal];
+        if (id === undefined) {
+          return;
+        }
+        yield* tmux.tryRun(["select-pane", "-t", id, "-T", text]);
+      },
+      *detached() {
+        // The control client's account. An attach client's exit code is 0 after
+        // a detach, 0 after a session is killed and 1 after the server is, so
+        // it cannot tell a reader leaving from a grid being taken down.
+        if (events.some((event) => event.kind === "client-detached")) {
+          return;
+        }
+        while (true) {
+          const next = yield* watching.next();
+          if (next.done || next.value.kind === "client-detached") {
+            return;
+          }
+        }
       },
       *attach() {
         // Its own lifecycle, not a pane child's. A pane child is settled by

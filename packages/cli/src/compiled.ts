@@ -19,6 +19,7 @@ import {
   runCredentialHelper,
 } from "@executablemd/workflow/credential-helper";
 import { paneWorkerInvocation, runPaneWorkerProcess } from "./terminal/pane-worker.ts";
+import { foregroundTerminalGrid } from "./terminal/host.ts";
 import type { HelperAssembly } from "@executablemd/workflow/credential-helper";
 import { useCompiledService } from "./compiled-service.ts";
 
@@ -98,6 +99,9 @@ if (paneWorker !== undefined) {
       denoRunRepositories(HELPER),
       () => useDenoWorkflowHost(HELPER),
       useMachineSessions(),
+      // This host presents grids: it has a terminal to divide, and it can
+      // re-invoke itself for one pane.
+      foregroundTerminalGrid(),
     );
   });
 }
