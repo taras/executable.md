@@ -545,9 +545,8 @@ export default define.page(function Home({ url }) {
           </p>
 
           <p style={P_MD}>
-            Plan produces a program. Run executes a program from the host or CLI.
-            {" "}
-            Composition decides whether and when a planned program runs.
+            Plan produces a program. Run executes a program from the host or
+            CLI. Composition decides whether and when a planned program runs.
           </p>
 
           <Terminal lines={[[' xmd plan "prepare the release" | xmd run -']]} />

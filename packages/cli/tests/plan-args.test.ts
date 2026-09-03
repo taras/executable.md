@@ -169,9 +169,10 @@ describe("Tier PR — xmd plan fixed grammar", () => {
       // No hidden field survives it: the token reached neither the parser's
       // argv nor anything this scan established beyond the request itself.
       expect(scan.fixed).not.toContain("--run");
-      expect(Object.keys(scan).toSorted()).toEqual(
-        scan.request === undefined ? ["error", "fixed"] : ["error", "fixed", "request"],
-      );
+      const established =
+        scan.request === undefined ? ["error", "fixed"] : ["error", "fixed", "request"];
+      expect(Object.keys(scan).filter((key) => !established.includes(key))).toEqual([]);
+      expect(established.filter((key) => !(key in scan))).toEqual([]);
     }
 
     // There is no alias, and no compatibility spelling that means the same
