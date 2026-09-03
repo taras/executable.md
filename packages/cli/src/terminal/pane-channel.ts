@@ -123,12 +123,17 @@ export function usePaneChannels(
     // directory's removal has to wait for is the closures themselves.
     yield* ensure(function* () {
       const closings: Operation<void>[] = [];
+      const counted = (): void => {
+        closedCount++;
+      };
       for (const socket of live) {
-        closings.push(closed(socket));
+        // Asked for before the destroy, so the listener is there when the close
+        // it waits for arrives.
+        closings.push(closed(socket, counted));
         socket.destroy();
       }
       for (const server of servers) {
-        closings.push(shut(server));
+        closings.push(shut(server, counted));
         server.close();
       }
       for (const closing of closings) {
@@ -150,21 +155,24 @@ export function usePaneChannels(
       const server = net.createServer((socket) => {
         live.add(socket);
         closable++;
-        socket.once("close", () => {
+        const onSocketClose = (): void => {
           live.delete(socket);
-          closedCount++;
-        });
+          socket.off("close", onSocketClose);
+        };
+        socket.on("close", onSocketClose);
         arrivals.send({ ordinal, socket });
       });
       servers.push(server);
       closable++;
-      server.once("close", () => {
-        closedCount++;
-      });
       const listening = withResolvers<void>();
-      server.once("error", (error: Error) => listening.reject(error));
+      const onListenError = (error: Error): void => listening.reject(error);
+      server.on("error", onListenError);
       server.listen(paneSocketPath(directory, ordinal), () => listening.resolve());
-      yield* listening.operation;
+      try {
+        yield* listening.operation;
+      } finally {
+        server.off("error", onListenError);
+      }
     }
 
     function* admit(ordinal: number, socket: Socket): Operation<void> {
@@ -229,25 +237,51 @@ export function usePaneChannels(
 }
 
 /** Settle once this socket has closed, whether or not it already had. */
-function closed(socket: Socket): Operation<void> {
+function closed(socket: Socket, onClosed: () => void): Operation<void> {
+  // Attached now, awaited later. The caller asks for this *before* destroying
+  // the socket, so a listener attached lazily would miss the close it is
+  // waiting for — and the directory would go while the socket was still open.
   const done = withResolvers<void>();
+  const onClose = (): void => {
+    onClosed();
+    done.resolve();
+  };
   if (socket.destroyed) {
+    onClosed();
     done.resolve();
   } else {
-    socket.once("close", () => done.resolve());
+    socket.on("close", onClose);
   }
-  return done.operation;
+  return (function* (): Operation<void> {
+    try {
+      yield* done.operation;
+    } finally {
+      // Removed synchronously when the wait is over, however it ends.
+      socket.off("close", onClose);
+    }
+  })();
 }
 
 /** Settle once this server has stopped listening. */
-function shut(server: Server): Operation<void> {
+function shut(server: Server, onClosed: () => void): Operation<void> {
   const done = withResolvers<void>();
+  const onClose = (): void => {
+    onClosed();
+    done.resolve();
+  };
   if (!server.listening) {
+    onClosed();
     done.resolve();
   } else {
-    server.once("close", () => done.resolve());
+    server.on("close", onClose);
   }
-  return done.operation;
+  return (function* (): Operation<void> {
+    try {
+      yield* done.operation;
+    } finally {
+      server.off("close", onClose);
+    }
+  })();
 }
 
 /** A connection that has said nothing for long enough to be nobody. */

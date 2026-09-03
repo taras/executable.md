@@ -22,7 +22,6 @@ import {
   descendantsOf,
   establishQuiescence,
   groupMembers,
-  installPosixTerminalProcesses,
   paneOccupants,
   processReachable,
   processTable,
@@ -30,6 +29,8 @@ import {
   TerminalProcesses,
   terminalHolders,
 } from "../terminal-processes.ts";
+import { installDenoTerminalProcesses } from "../deno-terminal-processes.ts";
+import type { ProcessProbes } from "../deno-terminal-processes.ts";
 import type { PaneOccupants, ProcessFacts, SignalDelivery, TerminalSignal } from "../mod.ts";
 
 /** A table written by hand, so a row can describe a machine it is not on. */
@@ -102,7 +103,7 @@ describe("Tier TP — proving a terminal pane is free", () => {
   });
 
   it("TP2: the POSIX observer reads this process out of the real table", function* () {
-    yield* installPosixTerminalProcesses();
+    yield* installDenoTerminalProcesses();
 
     const rows = yield* processTable();
     const self = rows.find((row) => row.pid === process.pid);
@@ -115,6 +116,95 @@ describe("Tier TP — proving a terminal pane is free", () => {
     // does not.
     expect(yield* processReachable(process.pid)).toBe(true);
     expect(yield* processReachable(2 ** 30)).toBe(false);
+  });
+
+  /** Probes a row answers for, in place of the machine's. */
+  function probes(answers: {
+    ps?: { code: number; stdout: string };
+    lsof?: { code: number; stdout: string };
+    kill?: (pid: number) => void;
+  }): ProcessProbes {
+    return {
+      // deno-lint-ignore require-yield
+      *run(command) {
+        if (command === "ps") {
+          return answers.ps ?? { code: 0, stdout: "" };
+        }
+        return answers.lsof ?? { code: 0, stdout: "" };
+      },
+      kill(pid) {
+        answers.kill?.(pid);
+      },
+    };
+  }
+
+  /** An error the way `process.kill` raises one. */
+  function refusal(code: string): Error {
+    return Object.assign(new Error(code), { code });
+  }
+
+  it("TP2b: a process this user may not signal is not an absent one", function* () {
+    yield* installDenoTerminalProcesses(
+      probes({
+        kill: () => {
+          throw refusal("EPERM");
+        },
+      }),
+    );
+
+    let raised = "";
+    try {
+      // `EPERM` means a process exists that this user may not signal — the
+      // opposite of absence. Answering `false` would read "I may not ask" as
+      // "nothing is there", and every quiescence proof downstream would believe
+      // it.
+      yield* processReachable(4242);
+    } catch (error) {
+      raised = error instanceof Error ? error.message : String(error);
+    }
+    expect(raised).toContain("could not establish whether a process is still running");
+    expect(raised).toContain("EPERM");
+  });
+
+  it("TP2c: a process table that could not be read is not an empty one", function* () {
+    yield* installDenoTerminalProcesses(probes({ ps: { code: 1, stdout: "" } }));
+
+    let raised = "";
+    try {
+      // An empty table would satisfy every descendant and group sweep without
+      // having looked at anything.
+      yield* processTable();
+    } catch (error) {
+      raised = error instanceof Error ? error.message : String(error);
+    }
+    expect(raised).toContain("could not read its process table");
+  });
+
+  it("TP2d: lsof's documented no-holder result is the only failure read as nobody", function* () {
+    // `lsof -t` exits 1 with no output when nothing holds the file. That is an
+    // answer, and the only failing one that is.
+    yield* scoped(function* () {
+      yield* installDenoTerminalProcesses(probes({ lsof: { code: 1, stdout: "" } }));
+      expect(yield* terminalHolders("/dev/ttys003")).toEqual([]);
+    });
+    // And a success with holders is read as holders.
+    yield* scoped(function* () {
+      yield* installDenoTerminalProcesses(probes({ lsof: { code: 0, stdout: "900\n901\n" } }));
+      expect(yield* terminalHolders("/dev/ttys003")).toEqual([900, 901]);
+    });
+  });
+
+  it("TP2e: any other lsof failure is a question that was not answered", function* () {
+    yield* installDenoTerminalProcesses(probes({ lsof: { code: 9, stdout: "" } }));
+
+    let raised = "";
+    try {
+      yield* terminalHolders("/dev/ttys003");
+    } catch (error) {
+      raised = error instanceof Error ? error.message : String(error);
+    }
+    // Not an empty holder list: "nobody holds it" is not the safe guess.
+    expect(raised).toContain("could not enumerate the holders");
   });
 
   it("TP3: descendants come from the snapshot, not from parent links after a kill", function* () {

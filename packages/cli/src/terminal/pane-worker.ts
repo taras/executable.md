@@ -26,11 +26,11 @@
 import net from "node:net";
 import process from "node:process";
 import { readTextFile, rm } from "@effectionx/fs";
-import { run, spawn, withResolvers } from "effection";
+import { ensure, resource, run, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { installPosixTerminalProcesses, processTable } from "@executablemd/runtime";
-import { usePaneChild, sweepHolders } from "./pane-child.ts";
-import type { PaneChild } from "./pane-child.ts";
+import { installDenoTerminalProcesses, processTable } from "@executablemd/runtime";
+import { sweepHolders, usePaneChild } from "./pane-child.ts";
+import type { PaneChild, PaneChildRequest } from "./pane-child.ts";
 import {
   paneSocketPath,
   paneTokenPath,
@@ -85,8 +85,12 @@ export function runPaneWorkerProcess(invocation: {
   ordinal: number;
   directory: string;
 }): Promise<void> {
-  ignoreForegroundSignals();
-  return run(() => runPaneWorker(invocation.ordinal, invocation.directory));
+  return run(function* () {
+    // Inside the run scope, so the handlers go on before any work and come off
+    // with it — rather than living for the process's lifetime regardless.
+    yield* useForegroundSignals();
+    yield* runPaneWorker(invocation.ordinal, invocation.directory);
+  });
 }
 
 /**
@@ -147,11 +151,27 @@ interface Live {
  * in it. Doing nothing is the correct handling: the child inherits default
  * dispositions across `exec`, so it receives the same signal and acts on it.
  */
-export function ignoreForegroundSignals(): void {
-  const foreground: NodeJS.Signals[] = ["SIGINT", "SIGQUIT", "SIGTSTP"];
-  for (const name of foreground) {
-    process.on(name, () => {});
-  }
+export function useForegroundSignals(): Operation<void> {
+  return resource<void>(function* (provide) {
+    const foreground: NodeJS.Signals[] = ["SIGINT", "SIGQUIT", "SIGTSTP"];
+    const ignore = (): void => {};
+    for (const name of foreground) {
+      process.on(name, ignore);
+    }
+    yield* ensure(() => {
+      // Installed and removed by the scope that runs this worker, so a worker
+      // that has finished stops answering for a pane it no longer owns.
+      for (const name of foreground) {
+        process.off(name, ignore);
+      }
+    });
+    yield* provide();
+  });
+}
+
+/** How many handlers this process has for one signal. */
+export function foregroundSignalListeners(name: NodeJS.Signals): number {
+  return process.listenerCount(name);
 }
 
 function writeOut(text: string): Operation<void> {
@@ -167,8 +187,30 @@ function writeOut(text: string): Operation<void> {
  * under `run()`; both are properties of the *process*, not of this operation,
  * which is why they are the entrypoint's to establish.
  */
-export function* runPaneWorker(ordinal: number, directory: string): Operation<void> {
-  yield* installPosixTerminalProcesses();
+/**
+ * What a worker uses to start a child.
+ *
+ * A seam rather than a hard call, because the one thing a suite cannot arrange
+ * in another process is a child whose settlement *fails* — a real SIGKILL
+ * always works, and a real terminal sweep on a pane with no terminal always
+ * comes back empty. Substituting the child is how the worker's own behaviour on
+ * that path is observable at all; the alternative would be a fault switch in
+ * production code, which is not a trade worth making.
+ */
+export interface PaneWorkerDependencies {
+  useChild(request: PaneChildRequest, tty: string | undefined): Operation<PaneChild>;
+  /** Whether to install the POSIX observer. A caller that has one says no. */
+  observe?: boolean;
+}
+
+export function* runPaneWorker(
+  ordinal: number,
+  directory: string,
+  deps: PaneWorkerDependencies = { useChild: usePaneChild },
+): Operation<void> {
+  if (deps.observe !== false) {
+    yield* installDenoTerminalProcesses();
+  }
 
   // Read once, then spent. A second worker for this pane finds no token, so it
   // has nothing to present and is refused by the parent.
@@ -176,10 +218,27 @@ export function* runPaneWorker(ordinal: number, directory: string): Operation<vo
   yield* rm(paneTokenPath(directory, ordinal), { force: true });
 
   const socket = net.createConnection(paneSocketPath(directory, ordinal));
+  // The socket is this scope's, so however this worker ends — a shutdown it was
+  // asked for, a channel that failed, a settlement it could not prove — the
+  // parent sees the channel close rather than waiting on a worker that is no
+  // longer there.
+  yield* ensure(() => {
+    socket.destroy();
+  });
   const connected = withResolvers<void>();
-  socket.once("connect", () => connected.resolve());
-  socket.once("error", (error: Error) => connected.reject(error));
-  yield* connected.operation;
+  const onConnect = (): void => connected.resolve();
+  const onConnectError = (error: Error): void => connected.reject(error);
+  socket.on("connect", onConnect);
+  socket.on("error", onConnectError);
+  try {
+    yield* connected.operation;
+  } finally {
+    // Removed synchronously, in the scope that installed them: a listener that
+    // outlived this wait would answer for a socket this worker has finished
+    // with.
+    socket.off("connect", onConnect);
+    socket.off("error", onConnectError);
+  }
 
   const inbound = readFrames(socket, (value) => ToWorkerSchema.parse(value));
   const say = (message: FromWorker) => writeFrame(socket, message);
@@ -254,7 +313,7 @@ export function* runPaneWorker(ordinal: number, directory: string): Operation<vo
         const entry: Live = { id: message.id, child: undefined, settled: undefined };
         live = entry;
         yield* spawn(function* () {
-          const child = yield* usePaneChild(
+          const child = yield* deps.useChild(
             { argv: message.argv, cwd: message.cwd, env: message.env },
             tty,
           );

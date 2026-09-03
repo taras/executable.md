@@ -126,15 +126,18 @@ export function usePaneChild(
       // or capture what passes.
       stdio: "inherit",
     });
-    child.once("spawn", () => {
+    // Named, and removed by the scope that installed them. `exit` in
+    // particular has to stay through the settlement that waits on it, so it is
+    // removed with the resource rather than after its first delivery.
+    const onSpawn = (): void => {
       if (child?.pid !== undefined) {
         started.resolve(Ok(child.pid));
       }
-    });
-    child.once("error", (error: Error & { code?: string }) => {
+    };
+    const onError = (error: Error & { code?: string }): void => {
       started.resolve(Err(new PaneStartFailure(error.code ?? error.message)));
-    });
-    child.once("exit", (code: number | null, signal: string | null) => {
+    };
+    const onExit = (code: number | null, signal: string | null): void => {
       const settled: PaneChildOutcome = {};
       if (code !== null) {
         settled.exitCode = code;
@@ -144,6 +147,14 @@ export function usePaneChild(
       }
       outcome = settled;
       exited.resolve(settled);
+    };
+    child.on("spawn", onSpawn);
+    child.on("error", onError);
+    child.on("exit", onExit);
+    yield* ensure(() => {
+      child?.off("spawn", onSpawn);
+      child?.off("error", onError);
+      child?.off("exit", onExit);
     });
 
     yield* provide({ started: started.operation, exited: exited.operation, settle });

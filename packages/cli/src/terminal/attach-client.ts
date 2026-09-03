@@ -139,15 +139,26 @@ export function useAttachClient(options: {
       // The reader's terminal, handed straight through.
       stdio: "inherit",
     });
-    child.once("spawn", () => {
+    // Named, and removed by this scope. `exit` stays through the wait that
+    // establishes the client is gone, which is exactly why it is removed with
+    // the resource rather than after one delivery.
+    const onSpawn = (): void => {
       if (child?.pid !== undefined) {
         started.resolve(child.pid);
       }
-    });
-    child.once("error", (error: Error) => failed.reject(error));
-    child.once("exit", () => {
+    };
+    const onError = (error: Error): void => failed.reject(error);
+    const onExit = (): void => {
       gone = true;
       exited.resolve();
+    };
+    child.on("spawn", onSpawn);
+    child.on("error", onError);
+    child.on("exit", onExit);
+    yield* ensure(() => {
+      child?.off("spawn", onSpawn);
+      child?.off("error", onError);
+      child?.off("exit", onExit);
     });
 
     // The pid, or whatever arrived instead of a start.
