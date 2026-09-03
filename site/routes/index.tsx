@@ -63,7 +63,7 @@ setTimeout(function(){b.textContent=prev;},1200);
  * panels scroll rather than reflow, so the wrap points are part of the
  * example: a continuation is indented under the text, not under the number.
  */
-const PLAN_LINES = [
+const PLAN_STEPS = [
   "1. Read package.json and",
   "  CHANGELOG.md.",
   "2. Ask an agent to recommend the",
@@ -72,7 +72,19 @@ const PLAN_LINES = [
   "3. Validate the answer.",
   "4. Ask me to approve it.",
   "5. Write RELEASE.md.",
-].join("\n");
+];
+
+/** The shell form: the quoted argument `xmd plan` is given. */
+const PLAN_LINES = PLAN_STEPS.join("\n");
+
+/** The document form: the same instructions, written where they land. */
+const PLAN_XMD: Tok[][] = [
+  [key("<File"), " path", dim("="), str('"release.md"'), key(">")],
+  ["  ", key("<Plan>")],
+  ...PLAN_STEPS.map((step): Tok[] => [`  ${step}`]),
+  ["  ", key("</Plan>")],
+  [key("</File>")],
+];
 
 const RELEASE_MD: Tok[][] = [
   [bold("# Release")],
@@ -498,12 +510,11 @@ export default define.page(function Home({ url }) {
               <Prompt />
               {" xmd plan "}
               <span class="tok-str">{`"${PLAN_LINES}"`}</span>
+              {" > release.md"}
             </CodeBlock>
 
             <CodeBlock filename="XMD" copy>
-              <span class="tok-key">{"<Plan>"}</span>
-              {`\n${PLAN_LINES}\n`}
-              <span class="tok-key">{"</Plan>"}</span>
+              <Source lines={PLAN_XMD} />
             </CodeBlock>
           </div>
 
