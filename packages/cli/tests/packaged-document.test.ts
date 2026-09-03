@@ -47,11 +47,11 @@ const INTRODUCTION = [
   "plan must be interpreted again before its steps can happen. An XMD Plan already",
   "contains those executable steps, so running it simply executes them.",
   "",
-  "A draft remains text while this workflow reviews it. Nothing in it runs before",
-  "you approve it. After approval, `xmd plan` validates the exact source again. By",
-  "default it prints the approved XMD source. `--output` writes that source to a",
-  "file instead, and `--run` executes the Plan. With both options, the command",
-  "writes the source before running it.",
+  "A draft remains text while this workflow reviews it, and nothing in it ever runs",
+  "here. After approval, `xmd plan` validates the exact source again and hands it",
+  "over: by default it prints the approved XMD source, and `--output` writes that",
+  "source to a file instead. Running the program is a separate command, so you",
+  "decide whether and when it happens.",
 ].join("\n");
 
 /** What every turn that asks for a Plan has to say, on its own. */
@@ -165,15 +165,18 @@ describe("packaged documents", () => {
     // A branch decided in TypeScript would put half of what a person reads
     // somewhere a person reading the workflow cannot see it.
     expect(source).toContain(
-      '<Let as="unresolved" value="xmd plan ended without an approved Plan. Nothing was output or run." />',
+      '<Let as="unresolved" value="xmd plan ended unexpectedly without an approved Plan. Nothing was output." />',
     );
     expect(source).toContain(
       '<Let as="unresolved" value="Plan authorship ended without an approved Plan. No Plan was returned." />',
     );
-    // Twice, once per surface: the automatic explanation is the only ending
-    // that says it. The authored exhaustion sentence went with the review a
-    // tenth invalid draft no longer reaches.
-    expect(source.split("reviewed ten drafts without an approved Plan").length - 1).toBe(2);
+    // The automatic explanation is the only ending that says it, and each
+    // surface says it in its own words: the command names the ten attempts and
+    // what was not output, and the Component names the Plan it did not return.
+    expect(source.split("reviewed ten drafts without an approved Plan").length - 1).toBe(1);
+    expect(
+      source.split("xmd plan could not generate an approved Plan after 10 attempts.").length - 1,
+    ).toBe(1);
     // The closing branch is an unexpected-no-decision fallback, not a second
     // copy of exhaustion: exhaustion is decided inside review, and saying it
     // twice would make the two endings indistinguishable to a reader.

@@ -223,6 +223,25 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     for (const name of ["PlanInputs", "PlanAuthorship", "CheckDraft", "AdmitPlan"]) {
       expect(entries.map((entry: { name?: string }) => entry?.name)).not.toContain(name);
     }
+
+    // The command's public grammar travels with those bytes. `--run` is gone,
+    // and this directory has no agent to reach and no `DEFAULT_AGENT_NAME` that
+    // resolves here — so a build that still accepted the switch would fail on
+    // the agent instead of answering with the migration, which is what makes
+    // this a check on preflight rather than on the exit status.
+    const removed = yield* runEmittedBinIn(elsewhere, [
+      "plan",
+      "prepare the release program",
+      "--run",
+    ]);
+    expect(removed.code).toBe(1);
+    expect(removed.stdout).toBe("");
+    expect(removed.stderr).toContain(
+      "xmd plan --run was removed because xmd plan only produces approved source.",
+    );
+    expect(removed.stderr).toContain('xmd plan "..." | xmd run -');
+    expect(removed.stderr).toContain('xmd plan "..." --output release.md && xmd run release.md');
+    expect(removed.stderr).not.toContain("unavailable");
     // The same for the upgrade command's program. The npm build discovers the
     // directory rather than listing files, so this is the check that the
     // discovery really covered the second document too.

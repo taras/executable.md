@@ -61,7 +61,7 @@ const CANDIDATE = [
   "",
 ].join("\n");
 
-/** What the command document asked the validator about, in order. */
+/** What the command document asked the structural check about, in order. */
 interface CommandRun {
   validated: string[];
   reviews: ElicitationRequest[];
@@ -157,8 +157,11 @@ describe("the packaged plan command document", () => {
     expect(run.prompts).toHaveLength(1);
     expect(run.reviews).toHaveLength(1);
 
-    // The checker saw the Agent's complete close value, once, unaltered.
-    expect(run.validated).toEqual([CANDIDATE]);
+    // Both gates inside the Component saw the Agent's complete close value,
+    // unaltered: the draft check while the conversation was still standing, and
+    // the admission after the whole authorship frame had gone. They are the same
+    // question asked twice, of the same exact bytes.
+    expect(run.validated).toEqual([CANDIDATE, CANDIDATE]);
 
     // The document settled with a value rather than an authored failure. Before
     // the control-flow correction this was the ten-draft exhaustion message: a

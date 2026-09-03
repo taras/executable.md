@@ -90,6 +90,53 @@ export const PLAN_COMPONENT = "Plan";
  */
 export const PLAN_IDENTITY = "<plan>";
 
+/**
+ * How this host decides whether one candidate is structurally a program.
+ *
+ * One dependency rather than three call sites that happen to agree. `<CheckDraft>`
+ * answers a draft with it, `<AdmitPlan>` admits the approved bytes with it, and
+ * on the command surface the host asks it once more after everything the
+ * conversation built has gone. Three questions, one environment — so two of them
+ * cannot come to differ for a reason nobody chose, and the last one is still a
+ * separate question about a tree that may have moved since.
+ */
+export type StructuralValidation = (candidate: string) => Operation<DocumentValidation>;
+
+/**
+ * The canonical answer: `validateDocumentStructure` under the ordinary run
+ * profile, the `<plan>` identity, these includes and these declarations.
+ *
+ * Structure alone — the declarations, the source, the component resolution, the
+ * forms and everything else decidable without the property values a later run
+ * will supply. A Plan whose root declares required properties is a Plan, and
+ * refusing it for not having been given arguments nobody has offered it yet
+ * would refuse a program for being one.
+ *
+ * The declarations are read when the question is asked rather than when this is
+ * built, because the `<Plan>` declaration has to be able to describe itself: the
+ * profile a Plan will run in contains `<Plan>`, and the catalog the agent was
+ * shown says so.
+ */
+export function structuralValidation(
+  includes: readonly string[],
+  declarations: readonly DeclaredMarkdownComponent[],
+): StructuralValidation {
+  return (candidate: string) =>
+    // The registry is installed around the question rather than around the
+    // Component: what a Plan may write is the run profile's whole vocabulary —
+    // `<Testing>`, `<Test>` and the assertions included — and the Component
+    // itself has no business reaching a vocabulary it only describes.
+    scoped(function* (): Operation<DocumentValidation> {
+      yield* useRunProfileRegistry();
+      return yield* validateDocumentStructure({
+        ...retainedSource(PLAN_IDENTITY, candidate),
+        includes: [...includes],
+        components: agentIdentityComponents(),
+        declarations: [...declarations],
+      });
+    });
+}
+
 /** Which surface reached the Component. Sealed: it is never a public prop. */
 export type PlanSurface = "command" | "component";
 
@@ -100,8 +147,8 @@ export interface PlanComponentAssembly {
    *
    * Fixed in the execution's declaration before the root is imported, so the
    * thin command adapter cannot accept it, derive it, or pass it on. A Plan
-   * later executed by `xmd plan --run` is a new ordinary run and receives
-   * `component`, because that run builds its own declaration.
+   * a later `xmd run` executes is an ordinary run and receives `component`,
+   * because that run builds its own declaration.
    */
   readonly surface: PlanSurface;
   /** The component search path a Plan's own components resolve against. */
@@ -151,19 +198,14 @@ export interface PlanComponentAssembly {
   /** The run profile's rendered vocabulary, as the first Agent turn receives it. */
   catalog(): Operation<string>;
   /**
-   * The host's answer about one draft.
+   * How this host decides whether one candidate is structurally a program.
    *
-   * A candidate-authored failure comes back as `valid: false` and is repairable.
-   * A caller-source failure raises, which ends the invocation: the Component has
-   * no way to catch it and no way to recategorize it as feedback for an agent that
-   * could not have caused it.
-   *
-   * Omitted is the structural answer the final admission gives, which is what a
-   * document invoking `<Plan>` wants: it has no command line, so there are no
-   * property values for a draft to be checked against and nothing a caller could
-   * have got wrong. `xmd plan` supplies its own, because it does have one.
+   * Omitted is the canonical answer built from `includes` and this declaration,
+   * which is what a document invoking `<Plan>` wants. `xmd plan` supplies its
+   * own so that the draft check, the admission and the gate the command keeps
+   * after teardown are one dependency rather than three.
    */
-  assess?(source: string): Operation<CandidateAssessment>;
+  validate?: StructuralValidation;
 }
 
 /** The frozen inputs `<PlanInputs>` answers with. */
@@ -263,6 +305,10 @@ export function* planComponentDeclaration(
   // assigned back rather than rebuilt: a second copy of these bytes would be a
   // second Component identity.
   const declared: DeclaredMarkdownComponent[] = [];
+  // One structural question for this invocation, asked by the draft check and by
+  // the admission alike — and, when the command supplied it, by the command's own
+  // gate after this declaration is gone.
+  const validate = assembly.validate ?? structuralValidation(assembly.includes, declared);
   const declaration: DeclaredMarkdownComponent = {
     name: PLAN_COMPONENT,
     origin: PLAN_ORIGIN,
@@ -279,8 +325,8 @@ export function* planComponentDeclaration(
     privates: [
       planInputs(assembly),
       planAuthorship(assembly),
-      checkDraft(assembly, declared),
-      admitPlan(assembly, declared),
+      checkDraft(validate),
+      admitPlan(validate),
     ],
   };
   declared.push(declaration);
@@ -539,11 +585,7 @@ function planAuthorship(assembly: PlanComponentAssembly): IdentityComponent {
  * re-deciding it against a working tree that has moved. The candidate itself
  * never reaches the description — only the digest that tells two drafts apart.
  */
-function checkDraft(
-  assembly: PlanComponentAssembly,
-  declared: readonly DeclaredMarkdownComponent[],
-): IdentityComponent {
-  const assess = assembly.assess ?? structuralAssessment(assembly, declared);
+function checkDraft(validate: StructuralValidation): IdentityComponent {
   return {
     name: "CheckDraft",
     origin: `${PLAN_ORIGIN}#CheckDraft`,
@@ -560,7 +602,11 @@ function checkDraft(
         return yield* durablePlanOperation<Json>(
           `plan:check:${id}:${sourceDigest(candidate)}`,
           function* () {
-            const answer = yield* assess(candidate);
+            const validation = yield* validate(candidate);
+            const answer: CandidateAssessment =
+              validation.outcome === "invalid"
+                ? { valid: false, diagnostics: { validation } as unknown as Json }
+                : { valid: true, diagnostics: {} };
             return { valid: answer.valid, diagnostics: answer.diagnostics };
           },
         );
@@ -572,59 +618,9 @@ function checkDraft(
  * Structurally admit the exact approved bytes, after the whole authorship frame
  * has gone.
  *
- * Structure alone: the declarations, the source, the component resolution, the
- * forms and everything else decidable without the property values a later run
- * will supply. A Plan whose root declares required properties is a Plan, and
- * refusing it here would refuse a program for not having been given the
- * arguments nobody has offered it yet. What runs it resolves and validates them
- * then.
- *
  * Nothing is executed, and the string that comes back is the string that went
  * in — no trimming, no fence removal, no normalization, no added newline.
  */
-/**
- * The structural answer about one candidate, against the profile it would run
- * in.
- *
- * Declarations, source, component resolution, forms and everything else
- * decidable without the property values a later run will supply. A Plan whose
- * root declares required properties is a Plan, and refusing it for not having
- * been given arguments nobody has offered it yet would refuse a program for
- * being one.
- */
-function* structurally(
-  assembly: PlanComponentAssembly,
-  declared: readonly DeclaredMarkdownComponent[],
-  candidate: string,
-): Operation<DocumentValidation> {
-  // The registry is installed around the question rather than around the
-  // Component: what a Plan may write is the run profile's whole vocabulary —
-  // `<Testing>`, `<Test>` and the assertions included — and the Component itself
-  // has no business reaching a vocabulary it only describes.
-  return yield* scoped(function* (): Operation<DocumentValidation> {
-    yield* useRunProfileRegistry();
-    return yield* validateDocumentStructure({
-      ...retainedSource(PLAN_IDENTITY, candidate),
-      includes: [...assembly.includes],
-      components: agentIdentityComponents(),
-      declarations: [...declared],
-    });
-  });
-}
-
-/** What a surface that states no assessment of its own answers with. */
-function structuralAssessment(
-  assembly: PlanComponentAssembly,
-  declared: readonly DeclaredMarkdownComponent[],
-): (source: string) => Operation<CandidateAssessment> {
-  return function* (source: string): Operation<CandidateAssessment> {
-    const validation = yield* structurally(assembly, declared, source);
-    if (validation.outcome === "invalid") {
-      return { valid: false, diagnostics: { validation } as unknown as Json };
-    }
-    return { valid: true, diagnostics: {} };
-  };
-}
 
 /** What the frozen inputs retained, or nothing when the record is not one. */
 interface RetainedInputs {
@@ -727,10 +723,7 @@ function readArtifact(value: Json): PlanArtifact | undefined {
 const UNREADABLE_ARTIFACT =
   "the retained Plan artifact cannot be read as one, so no Plan source was produced.";
 
-function admitPlan(
-  assembly: PlanComponentAssembly,
-  declared: readonly DeclaredMarkdownComponent[],
-): IdentityComponent {
+function admitPlan(validate: StructuralValidation): IdentityComponent {
   return {
     name: "AdmitPlan",
     origin: `${PLAN_ORIGIN}#AdmitPlan`,
@@ -750,7 +743,7 @@ function admitPlan(
         // instructions moved would author a second Plan rather than meet the one
         // this site already has.
         const retained = yield* durablePlanOperation<Json>(`plan:artifact:${id}`, function* () {
-          const validation = yield* structurally(assembly, declared, candidate);
+          const validation = yield* validate(candidate);
           if (validation.outcome === "invalid") {
             throw new Error(
               "the approved Plan does not validate:\n" +

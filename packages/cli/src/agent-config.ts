@@ -10,9 +10,14 @@
 
 import type { PermissionMode } from "@executablemd/core";
 
-export interface AgentFlags {
+/** What settling who writes needs, and the whole of it. */
+export interface AuthorshipFlags {
   agentProvider: string;
   defaultAgent: string | undefined;
+}
+
+/** The same, plus the flags that select a document execution's permission mode. */
+export interface AgentFlags extends AuthorshipFlags {
   approveAll: boolean;
   approveReads: boolean;
   denyAll: boolean;

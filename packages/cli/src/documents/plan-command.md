@@ -22,11 +22,11 @@ The result is the XMD version of a coding agent’s plan. A conventional Markdow
 plan must be interpreted again before its steps can happen. An XMD Plan already
 contains those executable steps, so running it simply executes them.
 
-A draft remains text while this workflow reviews it. Nothing in it runs before
-you approve it. After approval, `xmd plan` validates the exact source again. By
-default it prints the approved XMD source. `--output` writes that source to a
-file instead, and `--run` executes the Plan. With both options, the command
-writes the source before running it.
+A draft remains text while this workflow reviews it, and nothing in it ever runs
+here. After approval, `xmd plan` validates the exact source again and hands it
+over: by default it prints the approved XMD source, and `--output` writes that
+source to a file instead. Running the program is a separate command, so you
+decide whether and when it happens.
 
 <Plan session={props.session} as="approved">{props.request}</Plan>
 

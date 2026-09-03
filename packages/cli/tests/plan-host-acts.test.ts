@@ -26,8 +26,7 @@ import type { Operation } from "effection";
 
 import { runPlan } from "../src/plan.ts";
 import type { PlanCommand } from "../src/plan.ts";
-import { scanPlanArgs } from "../src/plan-args.ts";
-import type { AgentStack } from "../src/agent-stack.ts";
+import type { AuthorshipStack } from "../src/agent-stack.ts";
 import { ADAPTERS, AGENT, createPlanHarness, useWorkingDirectory } from "./support/plan-harness.ts";
 import type { PlanHarness } from "./support/plan-harness.ts";
 
@@ -36,16 +35,14 @@ const REQUEST = "write a greeting";
 /** A Plan the host's validator accepts. */
 const PLAN = ['<File path="drafted.txt">the draft ran</File>', ""].join("\n");
 
-const STACK: AgentStack = {
+const STACK: AuthorshipStack = {
   provider: "acpx",
   defaultAgent: AGENT,
-  permissionMode: "deny-all",
   adapters: ADAPTERS,
 };
 
 function writing(dir: string, output: string): PlanCommand {
-  const argv = ["plan", REQUEST];
-  return { argv, scan: scanPlanArgs(argv), include: [dir], output, run: false, stack: STACK };
+  return { request: REQUEST, include: [dir], output, stack: STACK };
 }
 
 /** Every command this invocation reached, answered rather than spawned. */

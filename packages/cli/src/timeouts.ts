@@ -52,12 +52,34 @@ export function findFlagText(args: string[], flag: string): string | undefined {
  * invocation before it prepares a document.
  */
 export function resolveRunTimeouts(args: string[]): RunTimeouts | { error: string } {
+  return resolveTimeouts(args, OPTIONS);
+}
+
+/**
+ * The whole-invocation deadline alone.
+ *
+ * `xmd plan` writes a program and runs none, so the two options that configure
+ * an execution's effects are not its to read: they are refused by name in its
+ * own grammar, and a duration check here would answer one of them with a
+ * different complaint first.
+ */
+export function resolvePlanTimeout(args: string[]): RunTimeouts | { error: string } {
+  return resolveTimeouts(
+    args,
+    OPTIONS.filter(([, field]) => field === "timeout"),
+  );
+}
+
+function resolveTimeouts(
+  args: string[],
+  options: readonly (readonly [string, keyof RunTimeouts])[],
+): RunTimeouts | { error: string } {
   const resolved: RunTimeouts = {
     timeout: undefined,
     timeoutExec: undefined,
     timeoutFetch: undefined,
   };
-  for (const [flag, field] of OPTIONS) {
+  for (const [flag, field] of options) {
     const text = findFlagText(args, flag);
     if (text === undefined) {
       continue;
