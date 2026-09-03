@@ -20,6 +20,7 @@ import * as net from "node:net";
 import { API, Config, Service, fetch, useHostFiles } from "@executablemd/runtime";
 import { runXmd } from "../src/cli.ts";
 import { SOURCE_UPGRADE } from "./support/upgrade-assembly.ts";
+import { refusedStandardInput } from "./support/standard-input.ts";
 
 import { unsupportedRepositories } from "../src/run-repositories.ts";
 /**
@@ -126,6 +127,7 @@ function* drive(args: string[], options: DriveOptions = {}): Operation<Driven> {
       },
       SOURCE_UPGRADE,
       unsupportedRepositories,
+      refusedStandardInput,
     );
 
     return { status, stderr, reads, events, serviceInstalled, deadlineReads };

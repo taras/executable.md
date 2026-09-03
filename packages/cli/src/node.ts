@@ -17,6 +17,7 @@ import process from "node:process";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { compileTempFile } from "@executablemd/core";
 import { runXmd, XMD_VERSION } from "./cli.ts";
+import { readInputStream } from "./standard-input.ts";
 import type { UpgradeAssembly } from "./upgrade.ts";
 import { unassembledMachineSessions } from "./session-coordinator.ts";
 import { unsupportedWorkflowHost } from "./workflow.ts";
@@ -78,6 +79,7 @@ await main(function* (args) {
     useNodeService,
     UPGRADE,
     unsupportedRepositories,
+    () => readInputStream(process.stdin),
     unsupportedWorkflowHost,
     unassembledMachineSessions(),
   );

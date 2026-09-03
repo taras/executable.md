@@ -89,9 +89,14 @@ describe(
     });
 
     it("IE5: `-e -` does not read stdin", function* () {
-      const { code, stderr } = yield* runCli(["-e", "-"]).join();
+      // Standard input really is supplied, and really would run if anything
+      // read it: `-e -` refusing on an empty pipe proves only that it refuses.
+      const { code, stdout, stderr } = yield* runCli(["-e", "-"], {
+        stdin: "STDIN_SHOULD_NOT_RUN\n",
+      }).join();
       expect(code).toBe(1);
       expect(stderr).toContain("does not read from stdin");
+      expect(stdout).not.toContain("STDIN_SHOULD_NOT_RUN");
     });
 
     it("IE6: the alias has no inline value form", function* () {
@@ -103,11 +108,11 @@ describe(
     it("IE7: no source at all fails, in both command forms", function* () {
       const bare = yield* runCli([]).join();
       expect(bare.code).toBe(1);
-      expect(bare.stderr).toContain("requires a document path or an inline document");
+      expect(bare.stderr).toContain("xmd run requires a root document");
 
       const explicit = yield* runCli(["run"]).join();
       expect(explicit.code).toBe(1);
-      expect(explicit.stderr).toContain("requires a document path or an inline document");
+      expect(explicit.stderr).toContain("xmd run requires a root document");
     });
 
     /**
@@ -287,6 +292,53 @@ describe(
       expect(stdout).toContain("--props-name <string>");
       expect(stdout).not.toContain("Targets in");
       expect(stdout).not.toContain("What this section does.");
+    });
+
+    /**
+     * The stdin sentinel is one exact spelling of one exact argument on one
+     * exact command. These three rows supply real standard input to the
+     * spellings that are not it, and prove none of them executes what was
+     * piped in.
+     *
+     * What each of them does instead is unchanged: configliere refuses any
+     * positional beginning with `-`, so `-` and `-#Section` reach no document
+     * argument at all and the run refuses for want of a root. Only `xmd run -`
+     * gives that token a meaning.
+     */
+    it("IE29: the shorthand form does not read stdin", function* () {
+      const root = yield* useWorkspace({ "-": "FILE_NAMED_DASH\n" });
+      const { code, stdout } = yield* runCli(["-", "--raw"], {
+        cwd: root,
+        stdin: "STDIN_SHOULD_NOT_RUN\n",
+      }).join();
+
+      expect(code).toBe(1);
+      expect(stdout).not.toContain("STDIN_SHOULD_NOT_RUN");
+    });
+
+    it("IE30: a reference is not the sentinel argument", function* () {
+      const root = yield* useWorkspace({ "-": "# Dash\n\n## Section\n\nSECTION_BODY\n" });
+      const { code, stdout } = yield* runCli(["run", "-#Section", "--raw"], {
+        cwd: root,
+        stdin: "STDIN_SHOULD_NOT_RUN\n",
+      }).join();
+
+      expect(code).toBe(1);
+      expect(stdout).not.toContain("STDIN_SHOULD_NOT_RUN");
+    });
+
+    it("IE31: another command's `-` keeps that command's meaning", function* () {
+      const root = yield* useWorkspace({});
+      const { stdout, stderr } = yield* runCli(["test", "-"], {
+        cwd: root,
+        stdin: "STDIN_SHOULD_NOT_RUN\n",
+      }).join();
+
+      expect(stdout).not.toContain("STDIN_SHOULD_NOT_RUN");
+      expect(stderr).not.toContain("STDIN_SHOULD_NOT_RUN");
+      // The test command searched for documents, which is what it does with an
+      // argument it could not read as a path.
+      expect(`${stdout}${stderr}`).toContain("**/*.test.md");
     });
 
     /**

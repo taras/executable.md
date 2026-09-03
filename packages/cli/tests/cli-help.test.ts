@@ -72,7 +72,10 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     expect(stdout).toContain("Usage: xmd run [OPTIONS] [path]");
     expect(stdout).toContain("markdown document to execute");
     expect(stdout).toContain("-e, --eval");
-    expect(stdout).toContain("Exactly one root document is required");
+    expect(stdout).toContain(
+      "Exactly one root document is required: a path, standard input through " +
+        "`xmd run -`, or one --eval value.",
+    );
     expect(stdout).toContain("--include");
     expect(stderr).not.toContain("Invalid input");
   });
@@ -151,8 +154,11 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     const { code, stderr } = yield* runCli(["run"]).join();
     expect(code).toBe(1);
     // Once `path` became optional the parser stopped raising, so the diagnostic
-    // is the CLI's own and names both ways to supply a root document.
-    expect(stderr).toContain("requires a document path or an inline document");
+    // is the CLI's own and names all three ways to supply a root document.
+    expect(stderr).toContain(
+      "xmd run requires a root document — `xmd run <document.md>`, `xmd run -`, or " +
+        "`xmd run --eval '<markdown>'`",
+    );
   });
 
   it("CH6: no command named targets is registered", function* () {
@@ -174,6 +180,15 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
       expect(stdout).not.toContain("Usage: xmd targets");
       expect(stderr).toBe("");
     });
+  });
+
+  it("CH15: run help states the standard-input form and the pipeline it serves", function* () {
+    const { stdout } = yield* runCli(["run", "--help"]).expect();
+    expect(stdout).toContain("`xmd run -` reads standard input to end of file");
+    expect(stdout).toContain('xmd plan "prepare the release" | xmd run -');
+    // The argument's own description says it too, so a reader scanning the
+    // option list finds the form without reading to the epilogue.
+    expect(stdout).toContain("`xmd run -` reads the document from standard input instead");
   });
 
   it("CH8: run help teaches the document-reference grammar", function* () {
