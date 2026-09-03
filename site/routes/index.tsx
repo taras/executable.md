@@ -27,6 +27,13 @@ import {
 
 const GITHUB = "https://github.com/taras/executable.md";
 const SPEC = `${GITHUB}/blob/main/specs/executable-mdx-spec.md`;
+/**
+ * The planner is an ordinary XMD document, and its source is the evidence.
+ * `?plain=1` shows the Markdown as written rather than GitHub's render, so
+ * the components stay visible.
+ */
+const PLANNER_SOURCE =
+  "https://github.com/taras/executable.md/blob/main/packages/cli/src/documents/Plan.md?plain=1";
 const VERSION = "v0.11.0";
 
 const STEP_NUMBER =
@@ -401,13 +408,9 @@ export default define.page(function Home({ url }) {
           </div>
 
           <div style="display:flex;flex-direction:column;gap:1.125rem;min-width:0;">
-            <div class="panel">
-              <div class="panel-body">
-                <CodeBlock filename="release.md" copy>
-                  <Source lines={RELEASE_MD} />
-                </CodeBlock>
-              </div>
-            </div>
+            <CodeBlock filename="release.md" copy>
+              <Source lines={RELEASE_MD} />
+            </CodeBlock>
           </div>
         </section>
 
@@ -508,9 +511,9 @@ export default define.page(function Home({ url }) {
           <div class="grid" style={PAIR}>
             <CodeBlock filename="CLI" copy>
               <Prompt />
-              {" xmd plan "}
+              <span>{" xmd plan "}</span>
               <span class="tok-str">{`"${PLAN_LINES}"`}</span>
-              {" > release.md"}
+              <span>{" > release.md"}</span>
             </CodeBlock>
 
             <CodeBlock filename="XMD" copy>
@@ -532,6 +535,15 @@ export default define.page(function Home({ url }) {
             {" "}
             Then run the program instead of asking an agent to figure the
             workflow out again.
+          </p>
+
+          <p style={P_MD}>
+            <strong style={STRONG}>
+              <Term heavy>{"<Plan>"}</Term> is itself written in XMD.
+            </strong>{" "}
+            <a href={PLANNER_SOURCE} target="_blank" rel="noopener">
+              Read the planner source ↗
+            </a>
           </p>
 
           <p style={P_MD}>
