@@ -9,9 +9,10 @@
  */
 
 import { env, runInDurableObject } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { ExecutorObject } from "./support/executor-object.ts";
 import { POLICY, VALID_CLAIMS } from "./support/executor-object.ts";
+import { generateKeys, signToken, tamper, type TestKeys } from "./support/tokens.ts";
 
 let unique = 0;
 
@@ -29,18 +30,46 @@ function on<T>(
 
 const RUN_ID = "5cktgrv2zyutngh7bbddr2tyg2b5a567cg725hu5e7u42orerxaa";
 
+/** The clock the owner is configured with, so expiry is exact. */
+const NOW = 1_800_000_000;
+
+let keys: TestKeys;
+let otherKeys: TestKeys;
+
+beforeAll(async () => {
+  keys = await generateKeys();
+  otherKeys = await generateKeys("other-key");
+});
+
+/** Claims a correctly issued token carries, plus any override. */
+function claims(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return { ...VALID_CLAIMS, iat: NOW - 10, nbf: NOW - 10, exp: NOW + 600, ...overrides };
+}
+
+/** An owner configured with the real public key, ready to be connected to. */
+async function admitted(
+  stub: ReturnType<typeof executor>,
+  request: Record<string, unknown> = {},
+  signWith: TestKeys = keys,
+  header: Record<string, unknown> = {},
+): Promise<string> {
+  await on(stub, (o) => o.configure([{ kid: keys.kid, jwk: keys.publicJwk }], NOW));
+  const token = "token" in request ? request["token"] : await signToken(signWith, claims(), header);
+  return await on(stub, (o) => o.admitConnection({ ...request, token }));
+}
+
 describe("admitting an executor", () => {
   it("admits a matching build with authenticated claims", async () => {
     const stub = executor();
-    expect(await on(stub, (o) => o.admitConnection({}))).toBe("admitted");
+    expect(await admitted(stub)).toBe("admitted");
     expect(await on(stub, (o) => o.holders())).toBe(1);
   });
 
   it("refuses a build the owner did not agree to, before reading the token", async () => {
     const stub = executor();
-    // The claims are deliberately unusable. If the release were checked after
-    // them, the refusal would name the token rather than the build.
-    expect(await on(stub, (o) => o.admitConnection({ release: "other-build", claims: null }))).toBe(
+    // The token is deliberately unusable. If the release were checked after it,
+    // the refusal would name the token rather than the build.
+    expect(await admitted(stub, { release: "other-build", token: "not a token" })).toBe(
       "release:release-mismatch",
     );
     expect(await on(stub, (o) => o.holders())).toBe(0);
@@ -85,29 +114,66 @@ describe("admitting an executor", () => {
     ];
     for (const [expected, overrides] of cases) {
       const stub = executor();
-      const claims = { ...VALID_CLAIMS, ...overrides };
-      expect(await on(stub, (o) => o.admitConnection({ claims }))).toBe(expected);
+      const token = await signToken(keys, claims(overrides));
+      expect(await admitted(stub, { token })).toBe(expected);
       expect(await on(stub, (o) => o.holders())).toBe(0);
     }
   });
 
   it("accepts an audience array containing the configured one", async () => {
     const stub = executor();
-    const claims = { ...VALID_CLAIMS, aud: ["https://other", POLICY.audience] };
-    expect(await on(stub, (o) => o.admitConnection({ claims }))).toBe("admitted");
+    const token = await signToken(keys, claims({ aud: ["https://other", POLICY.audience] }));
+    expect(await admitted(stub, { token })).toBe("admitted");
   });
 
-  it("refuses a token that is not a claim set at all", async () => {
+  it("refuses a token whose payload was edited after signing", async () => {
     const stub = executor();
-    expect(await on(stub, (o) => o.admitConnection({ claims: "a string" }))).toBe(
-      "admission:token-malformed",
-    );
+    const token = tamper(await signToken(keys, claims()), claims({ repository_id: "999" }));
+    expect(await admitted(stub, { token })).toBe("token:bad-signature");
+    expect(await on(stub, (o) => o.holders())).toBe(0);
+  });
+
+  it("refuses a token naming a key the deployment does not hold", async () => {
+    const stub = executor();
+    // Signed by another issuer, and saying so: no configured key is even a
+    // candidate, which is a different refusal from one that failed to verify.
+    expect(await admitted(stub, {}, otherKeys)).toBe("token:unknown-key");
+  });
+
+  it("refuses a token signed with the wrong key under a configured key id", async () => {
+    const stub = executor();
+    const token = await signToken(otherKeys, claims(), { kid: keys.kid });
+    expect(await admitted(stub, { token })).toBe("token:bad-signature");
+    expect(await on(stub, (o) => o.holders())).toBe(0);
+  });
+
+  it("refuses an algorithm it does not support", async () => {
+    const stub = executor();
+    const token = await signToken(keys, claims(), { alg: "none" });
+    expect(await admitted(stub, { token })).toBe("token:unsupported-algorithm");
+  });
+
+  it("refuses a token that is absent or not a compact JWS", async () => {
+    const stub = executor();
+    expect(await admitted(stub, { token: undefined })).toBe("token:token-absent");
+    expect(await admitted(stub, { token: "one.two" })).toBe("token:token-malformed");
+  });
+
+  it("refuses a token outside its validity window", async () => {
+    const expired = executor();
+    expect(
+      await admitted(expired, { token: await signToken(keys, claims({ exp: NOW - 3600 })) }),
+    ).toBe("token:expired");
+    const early = executor();
+    expect(
+      await admitted(early, { token: await signToken(keys, claims({ nbf: NOW + 3600 })) }),
+    ).toBe("token:not-yet-valid");
   });
 
   it("refuses a run id that could not address an owner", async () => {
     const stub = executor();
-    expect(await on(stub, (o) => o.admitConnection({ runId: "" }))).toBe("run-id:run-id-empty");
-    expect(await on(stub, (o) => o.admitConnection({ runId: 42 }))).toBe("run-id:run-id-absent");
+    expect(await admitted(stub, { runId: "" })).toBe("run-id:run-id-empty");
+    expect(await admitted(stub, { runId: 42 })).toBe("run-id:run-id-absent");
     expect(await on(stub, (o) => o.holders())).toBe(0);
   });
 });
@@ -115,14 +181,30 @@ describe("admitting an executor", () => {
 describe("holding an acquisition", () => {
   it("refuses a second healthy executor rather than following it", async () => {
     const stub = executor();
-    expect(await on(stub, (o) => o.admitConnection({}))).toBe("admitted");
-    expect(await on(stub, (o) => o.admitConnection({}))).toBe("acquisition:already-running");
+    expect(await admitted(stub)).toBe("admitted");
+    expect(await admitted(stub)).toBe("acquisition:already-running");
     expect(await on(stub, (o) => o.holders())).toBe(1);
+  });
+
+  it("mints its own correlation, which no caller can select or reuse", async () => {
+    const first = executor();
+    await admitted(first);
+    const one = await on(first, (o) => o.acquisitionId());
+    await on(first, (o) => o.closeConnection(1));
+    await admitted(first);
+    const two = await on(first, (o) => o.acquisitionId());
+
+    // Bounded, unpredictable, and different for a second acquisition of the
+    // same run — so private staging belonging to the first cannot be addressed
+    // by the second.
+    expect(one).toMatch(/^[0-9a-f]{32}$/);
+    expect(two).toMatch(/^[0-9a-f]{32}$/);
+    expect(two).not.toBe(one);
   });
 
   it("lets the admitted connection send, and answers what it performed", async () => {
     const stub = executor();
-    await on(stub, (o) => o.admitConnection({}));
+    await admitted(stub);
     expect(
       await on(stub, (o) => o.send(1, JSON.stringify({ id: "1", command: "frontier" }))),
     ).toEqual({ id: "1", outcome: "performed", value: { performed: "frontier" } });
@@ -130,7 +212,7 @@ describe("holding an acquisition", () => {
 
   it("refuses a socket it never admitted", async () => {
     const stub = executor();
-    await on(stub, (o) => o.admitConnection({}));
+    await admitted(stub);
     expect(
       await on(stub, (o) => o.sendAsStranger(JSON.stringify({ id: "1", command: "frontier" }))),
     ).toEqual({ id: "", outcome: "refused", refusal: "acquisition:foreign-connection" });
@@ -138,11 +220,11 @@ describe("holding an acquisition", () => {
 
   it("owns nothing once the connection ends, and rolls nothing back", async () => {
     const stub = executor();
-    await on(stub, (o) => o.admitConnection({}));
+    await admitted(stub);
     await on(stub, (o) => o.closeConnection(1));
     expect(await on(stub, (o) => o.holders())).toBe(0);
     // And the next executor may take it, with no lease having expired.
-    expect(await on(stub, (o) => o.admitConnection({}))).toBe("admitted");
+    expect(await admitted(stub)).toBe("admitted");
   });
 
   it("proves the acquisition before it reads a command", async () => {
@@ -158,7 +240,7 @@ describe("holding an acquisition", () => {
 describe("reading a runner command", () => {
   it("refuses what it cannot read as one", async () => {
     const stub = executor();
-    await on(stub, (o) => o.admitConnection({}));
+    await admitted(stub);
     const refuse = async (raw: string) =>
       (await on(stub, (o) => o.send(1, raw))) as { refusal: string };
     expect((await refuse("not json")).refusal).toBe("command:not-an-object");
@@ -179,7 +261,7 @@ describe("reading a runner command", () => {
 
   it("reads a commit intent whole", async () => {
     const stub = executor();
-    await on(stub, (o) => o.admitConnection({}));
+    await admitted(stub);
     const raw = JSON.stringify({
       id: "7",
       command: "commit",

@@ -7,10 +7,12 @@
  * allowed to send one, not what each one means.
  */
 
+import { run } from "effection";
 import { acquisitionHolders } from "../../../src/cloudflare/acquisition.ts";
 import { WorkflowOwnerObject } from "../../../src/cloudflare/owner.ts";
 import type { AdmissionRequest, OwnerConfiguration } from "../../../src/cloudflare/owner.ts";
 import type { AdmissionPolicy } from "../../../src/cloudflare/admission.ts";
+import type { TokenVerification, VerificationKey } from "../../../src/cloudflare/token.ts";
 import type { RunnerCommand } from "../../../src/cloudflare/commands.ts";
 import { refusalOf } from "../../../src/cloudflare/owner.ts";
 
@@ -27,7 +29,7 @@ export const POLICY: AdmissionPolicy = {
   release: "factory-2026.09.02-abcdef",
 };
 
-/** Claims a verifier would have authenticated for the policy above. */
+/** The claims a correctly issued token carries for the policy above. */
 export const VALID_CLAIMS: Record<string, unknown> = {
   iss: POLICY.issuer,
   aud: POLICY.audience,
@@ -42,10 +44,30 @@ export const VALID_CLAIMS: Record<string, unknown> = {
 const RUN_ID = "5cktgrv2zyutngh7bbddr2tyg2b5a567cg725hu5e7u42orerxaa";
 
 export class ExecutorObject extends WorkflowOwnerObject {
-  #acquisitions = 0;
+  /**
+   * The verification material this owner is configured with.
+   *
+   * Installed by a test before it connects, exactly as a deployment would
+   * install a fetched JWKS. It is closure state on the object, never something
+   * an admission request can name.
+   */
+  #keys: VerificationKey[] = [];
+  #now = 1_800_000_000;
+
+  configure(keys: VerificationKey[], now?: number): void {
+    this.#keys = keys;
+    if (now !== undefined) {
+      this.#now = now;
+    }
+  }
 
   protected configuration(): OwnerConfiguration {
-    return { policy: POLICY };
+    const verification: TokenVerification = {
+      keys: this.#keys,
+      skewSeconds: 60,
+      now: () => this.#now,
+    };
+    return { policy: POLICY, verification };
   }
 
   protected perform(_socket: WebSocket, _runId: string, command: RunnerCommand): unknown {
@@ -55,27 +77,30 @@ export class ExecutorObject extends WorkflowOwnerObject {
   /**
    * Admit one connection, answering what happened rather than raising.
    *
-   * The client half of the pair is kept so a later call can drive it; the
-   * server half is what the object admitted.
+   * The server half of the pair is what the object admitted. Verification is
+   * asynchronous, so this drives the admission operation through one Effection
+   * scope — the runtime callback boundary this host adapts at.
    */
-  admitConnection(request: Partial<AdmissionRequest>): string {
+  async admitConnection(request: Partial<AdmissionRequest>): Promise<string> {
     const pair = new WebSocketPair();
     const server = pair[1];
-    this.#acquisitions += 1;
+    const presented: AdmissionRequest = {
+      runId: "runId" in request ? request.runId : RUN_ID,
+      release: "release" in request ? request.release : POLICY.release,
+      token: "token" in request ? request.token : undefined,
+    };
     try {
-      this.admit(
-        {
-          runId: "runId" in request ? request.runId : RUN_ID,
-          release: "release" in request ? request.release : POLICY.release,
-          claims: "claims" in request ? request.claims : VALID_CLAIMS,
-        },
-        server,
-        `acquisition-${this.#acquisitions}`,
-      );
+      await run(() => this.admit(presented, server));
       return "admitted";
     } catch (error) {
       return refusalOf(error);
     }
+  }
+
+  /** The correlation the live acquisition is partitioned by. */
+  acquisitionId(): string {
+    const held = acquisitionHolders(this.ctx)[0];
+    return held === undefined ? "" : held.held.acquisitionId;
   }
 
   /** How many live connections currently hold this run's executor. */

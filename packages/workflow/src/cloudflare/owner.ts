@@ -21,6 +21,7 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
+import type { Operation } from "effection";
 import {
   acquireExecutor,
   type AcquisitionAttachment,
@@ -28,7 +29,8 @@ import {
   releaseExecutor,
   requireAcquisition,
 } from "./acquisition.ts";
-import { admitClaims, type AdmissionPolicy, AdmissionError, parseClaims } from "./admission.ts";
+import { admitToken, type AdmissionPolicy, AdmissionError } from "./admission.ts";
+import { TokenError, type TokenVerification } from "./token.ts";
 import { CommandError, type CommandResult, parseCommand, type RunnerCommand } from "./commands.ts";
 import {
   declaredObjects,
@@ -41,17 +43,26 @@ import { ReleaseIdentityError, requireSameRelease } from "./release.ts";
 import { admitRunId, RunIdError } from "./routing.ts";
 import type { OwnerStorage } from "./storage.ts";
 
-/** What one admission presents. */
+/**
+ * What one admission presents.
+ *
+ * Bytes and identifiers, all of them untrusted. There is deliberately no member
+ * for a verified result, a claim set, an acquisition identity or verification
+ * material: a request that could name any of those would be a request choosing
+ * what it is allowed to be.
+ */
 export interface AdmissionRequest {
   readonly runId: unknown;
   readonly release: unknown;
-  /** Claims a verifier has already authenticated. */
-  readonly claims: unknown;
+  /** The raw short-lived OIDC token, exactly as presented. */
+  readonly token: unknown;
 }
 
 /** Everything a deployment must state before this object admits anybody. */
 export interface OwnerConfiguration {
   readonly policy: AdmissionPolicy;
+  /** The issuer's keys and clock. Trusted closure state, never request data. */
+  readonly verification: TokenVerification;
 }
 
 /** Name a refusal without repeating what caused it. */
@@ -61,6 +72,9 @@ export function refusalOf(error: unknown): string {
   }
   if (error instanceof AdmissionError) {
     return `admission:${error.refusal}`;
+  }
+  if (error instanceof TokenError) {
+    return `token:${error.refusal}`;
   }
   if (error instanceof ReleaseIdentityError) {
     return `release:${error.refusal}`;
@@ -95,22 +109,21 @@ export abstract class WorkflowOwnerObject extends DurableObject {
   /**
    * Admit one executor connection.
    *
-   * The order is the contract: the build is compared before the token is read,
-   * the token before the run is touched, and the acquisition is taken last. A
-   * refusal at any step leaves no acquisition and no object state — which is
-   * what makes "a mismatched build cannot reach run state" a fact about the
-   * code rather than a hope about it.
+   * The order is the contract: the build is compared before any token work, the
+   * token is verified before the run is touched, and the acquisition is taken
+   * last. A refusal at any step leaves no acquisition and no object state.
+   *
+   * The correlation value is minted here, after both checks pass, and never
+   * taken from the request. A caller-selected one would let a later connection
+   * reuse an abandoned identifier and collide with the private staging that
+   * identifier partitions.
    */
-  admit(
-    request: AdmissionRequest,
-    socket: WebSocket,
-    acquisitionId: string,
-  ): AcquisitionAttachment {
-    const { policy } = this.configuration();
+  *admit(request: AdmissionRequest, socket: WebSocket): Operation<AcquisitionAttachment> {
+    const { policy, verification } = this.configuration();
     requireSameRelease(policy.release, request.release);
-    admitClaims(policy, parseClaims(request.claims));
+    yield* admitToken(policy, verification, request.token);
     const runId = admitRunId(request.runId);
-    return acquireExecutor(this.ctx, socket, runId, acquisitionId);
+    return acquireExecutor(this.ctx, socket, runId, mintAcquisitionId());
   }
 
   /**
@@ -159,4 +172,18 @@ export abstract class WorkflowOwnerObject extends DurableObject {
     }
     recognizeObject(this.owned);
   }
+}
+
+/**
+ * A fresh correlation value for one acquisition.
+ *
+ * Bounded and unpredictable, and used only to partition acquisition-private
+ * staging and duplicate handling. It is not a bearer credential, a lease, a
+ * generation record or a durable identity: what proves a message may act is the
+ * exact live socket, and this value proves nothing on its own.
+ */
+function mintAcquisitionId(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
