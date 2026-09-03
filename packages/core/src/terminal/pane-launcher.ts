@@ -1,0 +1,73 @@
+/**
+ * How a native UI reaches a pane's terminal instead of the run's
+ * (architecture.md §Terminal authority, spec §Terminal-grid composition).
+ *
+ * `<Session.Launch>` written at the root takes the one foreground-terminal
+ * lease, and every other launch waits for it. Written inside a pane it must
+ * not: panes stay interactive at the same time, which is the whole reason a
+ * grid exists. So core installs this in the pane's own scope, and the launch
+ * finds it simply by being there.
+ *
+ * Nothing about the launch changes. It is handed no pane prop, token,
+ * identifier or mode; its request, its result and its retained phases are the
+ * ones a root launch would have. What changes is which terminal answers
+ * `reserve` and `flush`, and that is a composition fact rather than something
+ * the document or the provider can see.
+ *
+ * The claim is the authority, and it is closed over rather than passed on. A
+ * pane claim buys one interactive terminal at one ordinal — it says nothing
+ * about which Agent session that pane may own, which stays the session
+ * coordinator's to answer.
+ */
+
+import { resource } from "effection";
+import type { Operation } from "effection";
+import { NativeLauncher } from "@executablemd/runtime";
+
+import type { TerminalPaneClaim } from "./authority.ts";
+
+/**
+ * Install one pane's native launcher for the scope that runs that pane's work.
+ *
+ * `flush` is how this pane catches the reader up. A pane's rendered text
+ * belongs to the pane, so it goes where the pane's text goes rather than to the
+ * root's streams — which the native UI is not drawing over.
+ */
+export function* usePaneNativeLauncher(
+  claim: TerminalPaneClaim,
+  flush: () => Operation<void>,
+): Operation<void> {
+  yield* NativeLauncher.around({
+    /**
+     * This pane, for as long as the launch holds it.
+     *
+     * Deliberately not delegated: delegating would ask for the root lease,
+     * which the grid itself is already holding, and two panes would contend
+     * over a terminal neither of them is using. The claim refuses a second live
+     * launch on *this* pane and does not contend with any other, which is
+     * exactly the exclusivity a pane has.
+     *
+     * It is released when the launch's scope ends, so the pane is free only
+     * after the launcher has finished with the child it started.
+     */
+    reserve() {
+      return resource<void>(function* (provide) {
+        yield* claim.admit(function* () {
+          yield* provide();
+        });
+      });
+    },
+    *flush() {
+      yield* flush();
+    },
+    *launch([request, spawned], next) {
+      // The exact request, untouched, to whichever host launcher is installed.
+      // What this adds is a listener: the pane is ready when the runtime says
+      // the child started, and at no earlier moment.
+      return yield* next(request, () => {
+        claim.ready();
+        spawned();
+      });
+    },
+  });
+}
