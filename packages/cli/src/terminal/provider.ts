@@ -20,7 +20,7 @@
  * have to be kept honest separately.
  */
 
-import { ensure, race, resource, spawn, withResolvers } from "effection";
+import { ensure, resource } from "effection";
 import process from "node:process";
 import type { Operation } from "effection";
 import { TerminalGrids } from "@executablemd/runtime";
@@ -35,10 +35,11 @@ import type {
 import { registerTerminalProvider } from "@executablemd/core";
 import type { TerminalProviderFactory } from "@executablemd/core";
 import { usePaneChannels } from "./pane-channel.ts";
+import { requireQuiescent } from "./pane-worker.ts";
 import type { PaneLink } from "./pane-channel.ts";
 import { useTmuxGrid } from "./tmux-grid.ts";
 import type { TmuxGrid, VisibleClient } from "./tmux-grid.ts";
-import { paneEnvironment, probeTmux, tmuxAt, TmuxUnavailableError } from "./tmux.ts";
+import { probeTmux, TerminalTeardownFailed, tmuxAt, TmuxUnavailableError } from "./tmux.ts";
 import type { Tmux } from "./tmux.ts";
 
 /** The name a host installs this provider under. */
@@ -58,10 +59,10 @@ export interface TmuxProviderDependencies {
   workerCommand(ordinal: number, directory: string): Operation<readonly string[]>;
   /** The window to lay panes out in. */
   size(): { columns: number; rows: number };
-  /** Settles when the host's own terminal goes away. */
-  hangup(): Operation<void>;
   /** How a private server is reached. Substituted only by this package's tests. */
   createTmux?: (socket: string, env: Record<string, string>) => Tmux;
+  /** What asking tmux its version does. Substituted only by this package. */
+  askVersion?: () => Operation<{ code: number; stdout: string }>;
 }
 
 /**
@@ -101,7 +102,11 @@ function usePresentedGrid(
   request: TerminalGridRequest,
 ): Operation<TerminalComposite> {
   return resource<TerminalComposite>(function* (provide) {
-    const probed = yield* probeTmux({ isTerminal: deps.isTerminal, env: deps.env });
+    const probed = yield* probeTmux({
+      isTerminal: deps.isTerminal,
+      env: deps.env,
+      ...(deps.askVersion === undefined ? {} : { askVersion: deps.askVersion }),
+    });
     if (!probed.ok) {
       // Before a directory, a socket, a token, a server or a pane exists, so a
       // host that cannot present a grid leaves nothing behind for having tried.
@@ -134,30 +139,79 @@ function usePresentedGrid(
       links.push(yield* channels.link(ordinal));
     }
 
-    // The reader leaving, and the host's terminal going away, are the same kind
-    // of event: something outside the document decided this grid is over. Both
-    // settle `closed()`, and core takes it from there through its ordinary
-    // close — there is no second teardown path to keep honest.
-    const left = withResolvers<void>();
-    yield* spawn(function* () {
-      yield* deps.hangup();
-      left.resolve();
-    });
-
     let shown = 0;
     let visible: VisibleClient | undefined;
+    let torn = false;
 
-    yield* ensure(function* () {
-      // Asked to leave before anything else comes down, so the reader's
-      // terminal is restored by the client that took it.
+    /**
+     * The one teardown, in the one order, however this grid ends.
+     *
+     * Core calls it through `destroy()`; the finalizer calls it when core never
+     * got that far, which is what a preparation that failed halfway leaves.
+     * Idempotent, so both happening is one teardown rather than two half ones.
+     *
+     * The order is the contract, and every step is a proof rather than a
+     * request:
+     *
+     *   detach the reader's client and establish it stopped
+     *     → ask every worker to shut down
+     *     → await each one's settlement, its terminal sweep and its goodbye
+     *     → refuse if any of that could not be proved
+     *     → stop the server and establish it is gone
+     *
+     * The private sockets, their servers and the directory come down after
+     * this, in the scopes that own them — which is why they are acquired
+     * outside it rather than closed here.
+     */
+    function* tearDown(): Operation<void> {
+      if (torn) {
+        return;
+      }
+      torn = true;
+      // The reader's client first, and asked rather than told: a client that
+      // detaches restores the terminal, and one that is killed cannot.
       if (visible !== undefined) {
         yield* grid.detach(visible);
+        visible = undefined;
       }
       for (const link of links) {
-        if (link.connected()) {
-          yield* link.send({ type: "shutdown" });
+        if (!link.connected()) {
+          continue;
+        }
+        yield* link.send({ type: "shutdown" });
+        // Its settlement, its final terminal sweep, and its goodbye. A worker
+        // that could not prove its pane free refuses here, and a channel that
+        // ended before saying so is a failure rather than a silent success.
+        let quiesced = false;
+        while (true) {
+          const frame = yield* link.next();
+          if (frame === undefined) {
+            if (!quiesced) {
+              throw new TerminalTeardownFailed(
+                "a terminal pane stopped answering before it was proved free",
+              );
+            }
+            break;
+          }
+          if (frame.type === "quiet") {
+            requireQuiescent(frame.settlement);
+            quiesced = true;
+            continue;
+          }
+          if (frame.type === "bye") {
+            if (frame.holders.some((holder) => !holder.gone)) {
+              throw new TerminalTeardownFailed("something still holds a terminal pane");
+            }
+            break;
+          }
         }
       }
+      // And only now the server, which `stop()` proves gone rather than reports.
+      yield* grid.stop();
+    }
+
+    yield* ensure(function* () {
+      yield* tearDown();
     });
 
     yield* provide({
@@ -192,10 +246,13 @@ function usePresentedGrid(
         return yield* runInPane(links[ordinal], request, spawned);
       },
       *closed() {
-        yield* race([left.operation, grid.detached()]);
+        // The reader leaving, and nothing else. A host hangup is not a reader
+        // close — it is the terminal going away, which cancels the grid through
+        // the ordinary structured path rather than selecting a close outcome.
+        yield* grid.detached();
       },
       *destroy() {
-        yield* grid.stop();
+        yield* tearDown();
       },
     });
   });
@@ -233,9 +290,35 @@ export function* runInPane(
     // for refuses, rather than putting a native UI on the root terminal.
     throw new Error("this terminal grid cannot run that pane's launch");
   }
+  const id = `launch-${link.ordinal}-${++started}`;
+  let settled = false;
+  // Registered before the launch is asked for: a cancellation between asking
+  // and hearing back must still end the child. Cancelling is not "stop waiting"
+  // — it is "ask the pane to stop, and do not come back until it has", because
+  // this operation returning is what lets the grid above it come down.
+  yield* ensure(function* () {
+    if (settled || !link.connected()) {
+      return;
+    }
+    yield* link.send({ type: "cancel", id });
+    while (true) {
+      const frame = yield* link.next();
+      if (frame === undefined) {
+        throw new Error("the terminal pane stopped answering before its child was settled");
+      }
+      if (frame.type === "quiet") {
+        requireQuiescent(frame.settlement);
+        return;
+      }
+      if (frame.type === "exited") {
+        requireQuiescent(frame.settlement);
+        return;
+      }
+    }
+  });
   yield* link.send({
     type: "launch",
-    id: `launch-${link.ordinal}-${++started}`,
+    id,
     argv: [...request.command],
     cwd: request.cwd,
     env: request.env ?? {},
@@ -254,12 +337,16 @@ export function* runInPane(
       continue;
     }
     if (frame.type === "busy") {
+      settled = true;
       throw new Error("that terminal pane already has a live child");
     }
     if (frame.type === "start-failed") {
+      settled = true;
       throw new Error("the terminal pane's child could not be started");
     }
     if (frame.type === "exited") {
+      // The worker sends this only once its settlement proved the pane free.
+      settled = true;
       const outcome: NativeLaunchOutcome = {};
       if (frame.exitCode !== undefined) {
         outcome.exitCode = frame.exitCode;

@@ -16,20 +16,35 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { all, ensure, race, resource, scoped, sleep, until, withResolvers } from "effection";
+import {
+  all,
+  ensure,
+  Ok,
+  race,
+  resource,
+  scoped,
+  sleep,
+  spawn,
+  until,
+  withResolvers,
+} from "effection";
 import type { Operation } from "effection";
 import { spawn as spawnChild } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import net from "node:net";
 import * as path from "node:path";
 import { cliCommand } from "@executablemd/test-support/launch";
-import { exists, readTextFile, rm, stat, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, readTextFile, rm, stat, writeTextFile } from "@effectionx/fs";
 import { realpath } from "node:fs/promises";
 import { installControlledLauncher, nativeLaunch, reserveTerminal } from "@executablemd/runtime";
 import type { TerminalComposite } from "@executablemd/runtime";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { installPosixTerminalProcesses, TerminalProcesses } from "@executablemd/runtime";
+import {
+  installDenoTerminalProcesses,
+  processReachable,
+  TerminalProcesses,
+} from "@executablemd/runtime";
 import type { SignalDelivery } from "@executablemd/runtime";
 import { useTmuxGrid } from "../src/terminal/tmux-grid.ts";
 import type { ControlEvent, TmuxGrid } from "../src/terminal/tmux-grid.ts";
@@ -43,7 +58,15 @@ import {
 } from "../src/terminal/layout.ts";
 import type { LayoutCell } from "../src/terminal/layout.ts";
 import { usePaneChannels } from "../src/terminal/pane-channel.ts";
-import { runInPane } from "../src/terminal/provider.ts";
+import { runInPane, tmuxGridProvider } from "../src/terminal/provider.ts";
+import { unsupportedTerminalGrid } from "../src/terminal/host.ts";
+import {
+  installTerminalProvider,
+  registerTerminalProvider,
+  useTerminalInstallation,
+} from "@executablemd/core";
+import { TerminalGrids } from "@executablemd/runtime";
+import { readdir } from "node:fs/promises";
 import type { PaneChannels, PaneLink } from "../src/terminal/pane-channel.ts";
 import {
   FromWorkerSchema,
@@ -52,10 +75,14 @@ import {
   writeFrame,
 } from "../src/terminal/pane-protocol.ts";
 import {
+  foregroundSignalListeners,
   PANE_WORKER_COMMAND,
   paneWorkerInvocation,
-  requireQuiescent,
+  runPaneWorker,
+  useForegroundSignals,
 } from "../src/terminal/pane-worker.ts";
+import { usePaneChild } from "../src/terminal/pane-child.ts";
+import type { PaneChild, PaneChildOutcome } from "../src/terminal/pane-child.ts";
 import type { FromWorker, Settlement, ToWorker } from "../src/terminal/pane-protocol.ts";
 
 /** The cells a layout string describes, read back out of it. */
@@ -98,6 +125,93 @@ function clientCommand(mode: "control" | "attach", script: string): readonly str
   const invocation = cliCommand([]);
   // The same runtime the CLI runs under, pointed at the fixture instead.
   return [invocation.command, "run", "--allow-all", fixture, mode, script];
+}
+
+/** Every listener this process holds, across the names this code installs. */
+function processListeners(): number {
+  return (["SIGINT", "SIGQUIT", "SIGTSTP", "SIGHUP"] as NodeJS.Signals[]).reduce(
+    (total, name) => total + foregroundSignalListeners(name),
+    0,
+  );
+}
+
+/**
+ * Open a grid through the provider, with the host's prerequisites answered by
+ * this row rather than by the machine.
+ *
+ * Goes through the real factory and the real installation handshake, so what a
+ * refusal proves is what a document would meet.
+ */
+function useProbedProvider(options: {
+  isTerminal: () => boolean;
+  version?: string;
+}): Operation<void> {
+  return (function* (): Operation<void> {
+    const authority = yield* useTerminalInstallation();
+    yield* registerTerminalProvider(
+      "tmux",
+      tmuxGridProvider({
+        isTerminal: options.isTerminal,
+        env: { PATH: "/usr/bin:/bin" },
+        // deno-lint-ignore require-yield
+        *workerCommand() {
+          return [];
+        },
+        size: () => ({ columns: 80, rows: 24 }),
+        ...(options.version === undefined
+          ? {}
+          : {
+              // deno-lint-ignore require-yield
+              *askVersion() {
+                return { code: 0, stdout: options.version ?? "" };
+              },
+            }),
+      }),
+    );
+    yield* installTerminalProvider("tmux", { label: "tmux" }, authority);
+    yield* TerminalGrids.operations.open({
+      columns: 1,
+      rows: 1,
+      panes: [{ ordinal: 0, title: "Only", row: 0, column: 0, form: "paired" }],
+    });
+  })();
+}
+
+/** A directory a row can leave markers in. */
+function useScratch(): Operation<string> {
+  return resource<string>(function* (provide) {
+    const room = path.join(tmpdir(), `xmd-tg20-${randomUUID()}`);
+    yield* ensureDir(room);
+    yield* ensure(function* () {
+      yield* rm(room, { recursive: true, force: true });
+    });
+    yield* provide(room);
+  });
+}
+
+/** Everything gone, for rows whose subject is not the observation. */
+function useDeadObserver(): Operation<void> {
+  return TerminalProcesses.around(
+    {
+      // deno-lint-ignore require-yield
+      *table() {
+        return [];
+      },
+      // deno-lint-ignore require-yield
+      *holders() {
+        return [];
+      },
+      // deno-lint-ignore require-yield
+      *deliver(): Operation<SignalDelivery> {
+        return "absent";
+      },
+      // deno-lint-ignore require-yield
+      *reachable() {
+        return false;
+      },
+    },
+    { at: "min" },
+  );
 }
 
 /** A composite whose pane endpoint is the production one, over these links. */
@@ -505,45 +619,142 @@ describe("Tier TW — the pane worker and its private channel", () => {
     expect(bye.type).toBe("bye");
   });
 
-  it("TW13: a settlement that proved nothing frees no pane", function* () {
-    // The rule every downstream step is conditional on: clearing the pane,
-    // reporting a launch settled, admitting the next one, letting teardown
-    // succeed. Stated here rather than end-to-end, because a pane whose sweep
-    // cannot come back empty is not something a suite can arrange in another
-    // process without putting a fault switch in the worker itself.
-    const proved: Settlement = { method: "exited", quiet: true, swept: [], holders: [] };
-    requireQuiescent(proved);
+  it("TW13: after a settlement that proved nothing, the pane stays unavailable", function* () {
+    // The worker itself, run in this process against a real channel, with the
+    // one thing a suite cannot arrange in another process substituted: a child
+    // whose settlement cannot say the pane is free. A real SIGKILL always
+    // works, and a sweep of a pane with no terminal always comes back empty.
+    const channels = yield* usePaneChannels(1);
+    const stopping = withResolvers<PaneChildOutcome>();
+    const started: string[] = [];
+    let refusal = "";
 
-    const survivor: Settlement = {
-      method: "killed",
-      quiet: false,
-      child: 100,
-      swept: [{ pid: 200, gone: false }],
-      holders: [],
+    const held: PaneChild = {
+      started: (function* () {
+        return Ok(4242);
+      })(),
+      exited: stopping.operation,
+      // Everything the worker can do has been done, and something still holds
+      // the pane's terminal.
+      *settle(): Operation<Settlement> {
+        return {
+          method: "killed",
+          quiet: false,
+          child: 4242,
+          swept: [],
+          holders: [{ pid: 900, gone: false }],
+        };
+      },
     };
-    const held: Settlement = {
-      method: "exited",
-      quiet: false,
-      child: 100,
-      swept: [],
-      holders: [{ pid: 900, gone: false }],
-    };
-    for (const [what, settlement] of [
-      ["a survivor", survivor],
-      ["a holder", held],
-    ] as [string, Settlement][]) {
-      let refusal = "";
+
+    yield* spawn(function* () {
       try {
-        requireQuiescent(settlement);
+        yield* runPaneWorker(0, channels.directory, {
+          observe: false,
+          // deno-lint-ignore require-yield
+          *useChild(request) {
+            started.push(request.argv.join(" "));
+            return held;
+          },
+        });
       } catch (error) {
+        // Read as a value: the refusal *is* the behaviour under test, so it
+        // must not end the row that is testing for it.
         refusal = error instanceof Error ? error.message : String(error);
       }
-      expect(`${what}: ${refusal.includes("could not be proved free")}`).toBe(`${what}: true`);
-      // Provider-neutral: it says what is still true, not which pane, session,
-      // socket or command it was.
-      expect(`${what}: ${/\bpane \d|socket|session/.test(refusal)}`).toBe(`${what}: false`);
+    });
+    yield* useDeadObserver();
+    const link = yield* channels.link(0);
+
+    yield* link.send({
+      type: "launch",
+      id: "first",
+      argv: ["/bin/sleep", "30"],
+      cwd: path.resolve("."),
+      env: {},
+    });
+    yield* untilFrame(link, "started");
+
+    // Cancelled, and the settlement cannot prove the pane free. Nothing
+    // downstream may follow: no success frame, no cleared pane, no next child.
+    yield* link.send({ type: "cancel", id: "first" });
+    yield* link.send({
+      type: "launch",
+      id: "second",
+      argv: ["/bin/sleep", "30"],
+      cwd: path.resolve("."),
+      env: {},
+    });
+
+    const said: string[] = [];
+    while (true) {
+      const frame = yield* link.next();
+      if (frame === undefined) {
+        break;
+      }
+      said.push(frame.type);
     }
-    expect(() => requireQuiescent(held)).toThrow();
+
+    expect(refusal).toContain("could not be proved free");
+    expect(said).not.toContain("quiet");
+    expect(said).not.toContain("exited");
+    // One child was ever started: the pane was never cleared, so the second
+    // launch had nothing to start in.
+    expect(started).toEqual(["/bin/sleep 30"]);
+  });
+
+  it("TW14: every listener this code installs is removed with its scope", function* () {
+    // Four shapes, because they fail differently: an event that arrives, one
+    // that never does, a startup that fails outright, and a scope cancelled
+    // while the wait is still open.
+    yield* installDenoTerminalProcesses();
+    const before = foregroundSignalListeners("SIGINT");
+    yield* scoped(function* () {
+      yield* useForegroundSignals();
+      expect(foregroundSignalListeners("SIGINT")).toBe(before + 1);
+      expect(foregroundSignalListeners("SIGTSTP")).toBeGreaterThan(0);
+    });
+    expect(foregroundSignalListeners("SIGINT")).toBe(before);
+
+    // A child whose events arrive: the resource ends normally.
+    const counts: number[] = [];
+    yield* scoped(function* () {
+      const child = yield* usePaneChild(
+        { argv: ["/bin/echo", "listener"], cwd: path.resolve("."), env: { PATH: "/usr/bin:/bin" } },
+        undefined,
+      );
+      yield* child.started;
+      yield* child.exited;
+      counts.push(processListeners());
+    });
+    // A child that never starts: `error` arrives instead of `spawn`.
+    yield* scoped(function* () {
+      const child = yield* usePaneChild(
+        { argv: [path.join(tmpdir(), "not-a-program")], cwd: path.resolve("."), env: {} },
+        undefined,
+      );
+      yield* child.started;
+      counts.push(processListeners());
+    });
+    // A scope cancelled while the child is still live and its wait still open.
+    yield* scoped(function* () {
+      const running = yield* spawn(function* () {
+        yield* scoped(function* () {
+          const child = yield* usePaneChild(
+            { argv: ["/bin/sleep", "30"], cwd: path.resolve("."), env: { PATH: "/usr/bin:/bin" } },
+            undefined,
+          );
+          yield* child.started;
+          yield* child.exited;
+        });
+      });
+      yield* sleep(120);
+      yield* running.halt();
+      counts.push(processListeners());
+    });
+
+    // Every one of them left the process as it found it.
+    expect(new Set(counts).size).toBe(1);
   });
 
   it("TW12: naming the worker invocation is the only way to be one", function* () {
@@ -1180,7 +1391,7 @@ describe("Tier TG20 — a pane launch reaches its own worker", () => {
     return (function* () {
       // The observer a foreground host installs beside the provider: teardown
       // proves what it claims, and refuses without it.
-      yield* installPosixTerminalProcesses();
+      yield* installDenoTerminalProcesses();
       const script = yield* useScript();
       const tmux = createFakeTmux({ script, clientCommand, spawnPanes: true });
       yield* ensure(() => {
@@ -1281,37 +1492,81 @@ describe("Tier TG20 — a pane launch reaches its own worker", () => {
 
   it("TG20c: distinct panes launch concurrently", function* () {
     const { composite } = yield* useLiveComposite(2);
-    const both = withResolvers<void>();
-    let live = 0;
+    const room = yield* useScratch();
 
-    // Each launch blocks until the other has started. A pair that had to share
-    // a terminal would wait for a start that cannot happen.
+    // Each child announces itself and then blocks until *both* have. Two
+    // children that ran one after the other could never get past this: the
+    // first would be waiting for a second that had not been started yet.
+    const child = (ordinal: number): string[] => [
+      "/bin/sh",
+      "-c",
+      `printf '' > "${room}/started-${ordinal}"; ` +
+        `while [ ! -f "${room}/go" ]; do sleep 0.02; done`,
+    ];
+
+    const releasing = yield* spawn(function* () {
+      // Released by the starts themselves, never by elapsed time.
+      while (true) {
+        if ((yield* exists(`${room}/started-0`)) && (yield* exists(`${room}/started-1`))) {
+          yield* writeTextFile(`${room}/go`, "");
+          return;
+        }
+        yield* sleep(15);
+      }
+    });
+
     const outcomes = yield* all([
       composite.launch(
         0,
-        { command: ["/bin/sleep", "0.2"], cwd: path.resolve("."), env: { PATH: "/usr/bin:/bin" } },
-        () => {
-          live++;
-          if (live === 2) {
-            both.resolve();
-          }
-        },
+        { command: child(0), cwd: room, env: { PATH: "/usr/bin:/bin" } },
+        () => {},
       ),
       composite.launch(
         1,
-        { command: ["/bin/sleep", "0.2"], cwd: path.resolve("."), env: { PATH: "/usr/bin:/bin" } },
-        () => {
-          live++;
-          if (live === 2) {
-            both.resolve();
-          }
-        },
+        { command: child(1), cwd: room, env: { PATH: "/usr/bin:/bin" } },
+        () => {},
       ),
     ]);
+    yield* releasing;
 
-    yield* both.operation;
-    expect(live).toBe(2);
     expect(outcomes.map((outcome) => outcome.exitCode)).toEqual([0, 0]);
+    // Both were live at the same moment: the release only happened once both
+    // had announced themselves, and neither could finish before it.
+    expect(yield* exists(`${room}/go`)).toBe(true);
+  });
+
+  it("TG20e: a cancelled pane launch does not return while its child lives", function* () {
+    const { composite } = yield* useLiveComposite(1);
+    const room = yield* useScratch();
+    yield* installDenoTerminalProcesses();
+
+    // Writes its pid, then stays. Nothing here ends it but the cancellation.
+    const launching = yield* spawn(() =>
+      composite.launch(
+        0,
+        {
+          command: ["/bin/sh", "-c", `echo $$ > "${room}/pid"; while true; do sleep 0.05; done`],
+          cwd: room,
+          env: { PATH: "/usr/bin:/bin" },
+        },
+        () => {},
+      ),
+    );
+
+    // Live, and known by pid — a fact this run produced.
+    while (!(yield* exists(`${room}/pid`))) {
+      yield* sleep(15);
+    }
+    const pid = Number((yield* readTextFile(`${room}/pid`)).trim());
+    expect(pid).toBeGreaterThan(0);
+    expect(yield* processReachable(pid)).toBe(true);
+
+    yield* launching.halt();
+
+    // The cancellation asked the pane to stop and waited for it to prove that
+    // it had. Returning while the child was still live is the failure this row
+    // exists for.
+    expect(yield* processReachable(pid)).toBe(false);
   });
 
   it("TG20d: a composite that cannot run a pane's launch refuses", function* () {
@@ -1329,5 +1584,73 @@ describe("Tier TG20 — a pane launch reaches its own worker", () => {
       refusal = error instanceof Error ? error.message : String(error);
     }
     expect(refusal).toContain("cannot run that pane's launch");
+  });
+});
+
+/**
+ * Tier TH — which hosts open a grid, and which only describe one
+ * (architecture.md §Interactive terminal grids).
+ *
+ * The Deno source entrypoint and the compiled binary present grids when the
+ * invocation has a terminal and a usable tmux. Node and Bun keep the same
+ * language and validation and install no operational provider, so a document
+ * that asks for a grid there is refused before a pane starts.
+ */
+describe("Tier TH — host installation", () => {
+  it("TH1: without a terminal, a grid refuses before anything exists", function* () {
+    const before = yield* until(readdir(tmpdir()));
+    let refusal = "";
+    try {
+      yield* scoped(function* () {
+        yield* installDenoTerminalProcesses();
+        yield* useProbedProvider({ isTerminal: () => false });
+      });
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(refusal).toContain("cannot open a terminal grid");
+    expect(refusal).toContain("no terminal");
+    // Before a directory, a socket, a token, a worker, a server or a pane: the
+    // host left nothing behind for having tried.
+    const after = yield* until(readdir(tmpdir()));
+    expect(after.filter((name) => name.startsWith("xmd-grid-")).length).toBe(
+      before.filter((name) => name.startsWith("xmd-grid-")).length,
+    );
+  });
+
+  it("TH2: without a usable tmux, a grid refuses the same way", function* () {
+    let refusal = "";
+    try {
+      yield* scoped(function* () {
+        yield* installDenoTerminalProcesses();
+        yield* useProbedProvider({
+          isTerminal: () => true,
+          // A tmux far too old for an explicit layout string.
+          version: "tmux 1.8",
+        });
+      });
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+    expect(refusal).toContain("cannot open a terminal grid");
+    expect(refusal).toContain("older than tmux");
+  });
+
+  it("TH3: a host that installs no provider still validates the grid", function* () {
+    // Node and Bun: the same language and the same validation, and core's own
+    // refusal rather than a provider that half-works.
+    yield* unsupportedTerminalGrid();
+    let refusal = "";
+    try {
+      yield* TerminalGrids.operations.open({
+        columns: 1,
+        rows: 1,
+        panes: [{ ordinal: 0, title: "Only", row: 0, column: 0, form: "paired" }],
+      });
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+    expect(refusal).toContain("no terminal provider is installed");
   });
 });

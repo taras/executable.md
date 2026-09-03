@@ -14,11 +14,11 @@
  * already gives when no provider is installed.
  */
 
-import { ensure, resource, withResolvers } from "effection";
+import { ensure, race, resource, withResolvers } from "effection";
 import type { Operation } from "effection";
 import process from "node:process";
-import { installTerminalGridProfile } from "@executablemd/core";
-import { command as hostCommand } from "@executablemd/runtime";
+import { Execution, installTerminalGridProfile } from "@executablemd/core";
+import { command as hostCommand, installDenoTerminalProcesses } from "@executablemd/runtime";
 import { installTmuxGridProvider, TMUX_PROVIDER } from "./provider.ts";
 import type { TmuxProviderDependencies } from "./provider.ts";
 import { paneEnvironment } from "./tmux.ts";
@@ -36,6 +36,51 @@ export type TerminalGridInstaller = () => Operation<void>;
  */
 export function* unsupportedTerminalGrid(): Operation<void> {
   yield* installTerminalGridProfile();
+}
+
+/**
+ * Make the host's terminal going away cancel the document.
+ *
+ * Not a reader close. A reader who detaches has finished with a grid, and the
+ * grid settles with a reader-close outcome and the document carries on. A
+ * terminal that is *gone* is not a decision about this grid — it is the run
+ * losing the thing every part of it was drawing on, so the document is
+ * cancelled through the ordinary structured path: the grid's whole teardown
+ * runs, and no following sibling gets to go.
+ */
+export function useHangupCancellation(hangup: Operation<void>): Operation<void> {
+  return Execution.around({
+    *document([request], next) {
+      const outcome = yield* race([
+        (function* () {
+          yield* next(request);
+          return "done";
+        })(),
+        (function* () {
+          yield* hangup;
+          return "hangup";
+        })(),
+      ]);
+      if (outcome === "hangup") {
+        // The losing side of the race is cancelled, which is the whole point:
+        // the grid comes down through the same teardown a reader close uses,
+        // and this run stops rather than continuing on a terminal it no longer
+        // has.
+        throw new TerminalLost();
+      }
+    },
+  });
+}
+
+/** The host's terminal went away while the document was still running. */
+export class TerminalLost extends Error {
+  override name = "TerminalLost";
+  constructor() {
+    super(
+      "this run's terminal went away, so the document was stopped. Anything it " +
+        "had shown is gone with the terminal; nothing after the point it stopped ran.",
+    );
+  }
 }
 
 /** The terminal this run is drawing on, as tmux needs to know it. */
@@ -65,6 +110,8 @@ export function useHangup(): Operation<Operation<void>> {
     const onHangup = (): void => hung.resolve();
     process.on("SIGHUP", onHangup);
     yield* ensure(() => {
+      // Removed with the run that installed it. A listener that outlived its
+      // grid would answer for a terminal the next one is using.
       process.off("SIGHUP", onHangup);
     });
     yield* provide(hung.operation);
@@ -83,15 +130,19 @@ export function foregroundTerminalGrid(
 ): TerminalGridInstaller {
   return function* (): Operation<void> {
     const hangup = yield* useHangup();
+    // The observer goes in beside the provider, in the same scope: a host that
+    // presents grids is exactly the host that has to prove a pane is free, and
+    // one that installs neither refuses rather than guessing at either.
+    yield* installDenoTerminalProcesses();
     yield* installTmuxGridProvider({
       isTerminal: () => process.stdout.isTTY === true,
       env: paneEnvironment(process.env),
       workerCommand: (ordinal, directory) =>
         hostCommand([PANE_WORKER_COMMAND, String(ordinal), directory]),
       size: windowSize,
-      hangup: () => hangup,
       ...overrides,
     });
     yield* installTerminalGridProfile({ provider: TMUX_PROVIDER, label: TMUX_PROVIDER });
+    yield* useHangupCancellation(hangup);
   };
 }

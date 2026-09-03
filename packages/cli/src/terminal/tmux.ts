@@ -119,11 +119,16 @@ const REQUIRED_TMUX = { major: 3, minor: 0 };
 export function* probeTmux(options: {
   readonly isTerminal: () => boolean;
   readonly env: Record<string, string>;
+  /** What asking tmux its version does. Substituted only by this package. */
+  readonly askVersion?: () => Operation<{ code: number; stdout: string }>;
 }): Operation<Result<string>> {
   if (!options.isTerminal()) {
     return Err(new TmuxUnavailableError("this invocation has no terminal"));
   }
-  const result = yield* exec("tmux", { arguments: ["-V"], env: options.env }).join();
+  const result =
+    options.askVersion === undefined
+      ? yield* exec("tmux", { arguments: ["-V"], env: options.env }).join()
+      : yield* options.askVersion();
   if (result.code !== 0) {
     return Err(new TmuxUnavailableError("tmux is not installed or would not run"));
   }

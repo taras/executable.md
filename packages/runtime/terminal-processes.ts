@@ -24,10 +24,7 @@
  */
 
 import { type Api, createApi } from "@effectionx/context-api";
-import { until } from "effection";
 import type { Operation } from "effection";
-import { execFile } from "node:child_process";
-import process from "node:process";
 
 /** One process, as the host's table describes it. */
 export interface ProcessFacts {
@@ -246,118 +243,4 @@ export function establishQuiescence(occupants: PaneOccupants): Operation<PaneQui
       occupants.device === undefined ? [] : [...(yield* terminalHolders(occupants.device))];
     return { quiet: running.length === 0 && holding.length === 0, running, holding };
   })();
-}
-
-/**
- * Install the POSIX observer: `ps` for the table, `lsof` for terminal holders.
- *
- * `ps` rather than `/proc`, because macOS is a supported foreground host. The
- * `lsof` sweep is the expensive half and grows with the process count, which is
- * why it is behind this seam: a host with a cheaper way to enumerate holders
- * replaces the handler and changes nothing about what has to be established.
- */
-export function* installPosixTerminalProcesses(): Operation<void> {
-  yield* TerminalProcesses.around(
-    {
-      *table(): Operation<readonly ProcessFacts[]> {
-        const output = yield* until(run("ps", ["-axo", "pid=,ppid=,pgid=,tty=,tpgid=,command="]));
-        return readTable(output);
-      },
-      *holders([device]): Operation<readonly number[]> {
-        // `lsof -t` answers with pids and nothing else, and exits non-zero when
-        // nobody holds the file — which is an answer, not a failure.
-        const output = yield* until(run("lsof", ["-t", device]));
-        return output
-          .split("\n")
-          .map((line) => line.trim())
-          .filter((line) => /^\d+$/.test(line))
-          .map(Number);
-      },
-      // deno-lint-ignore require-yield
-      *deliver([pid, signal]): Operation<SignalDelivery> {
-        try {
-          process.kill(pid, signal);
-          return "delivered";
-        } catch (error) {
-          // Gone already is the outcome the signal was asking for. Anything
-          // else is a delivery that did not happen, and is not evidence that
-          // the process stopped.
-          return noSuchProcess(error) ? "absent" : "refused";
-        }
-      },
-      // deno-lint-ignore require-yield
-      *reachable([pid]): Operation<boolean> {
-        try {
-          // Signal 0 delivers nothing: it asks the kernel whether the pid is
-          // reachable, which is the whole question here.
-          process.kill(pid, 0);
-          return true;
-        } catch {
-          return false;
-        }
-      },
-    },
-    { at: "min" },
-  );
-}
-
-/** One reading of `ps`, parsed row by row; anything unreadable is dropped. */
-function readTable(output: string): readonly ProcessFacts[] {
-  const rows: ProcessFacts[] = [];
-  for (const line of output.split("\n")) {
-    const row = readRow(line);
-    if (row !== undefined) {
-      rows.push(row);
-    }
-  }
-  return rows;
-}
-
-function readRow(line: string): ProcessFacts | undefined {
-  const match = /^\s*(\d+)\s+(\d+)\s+(-?\d+)\s+(\S+)\s+(-?\d+)\s+(.*)$/.exec(line);
-  if (match === null) {
-    return undefined;
-  }
-  const [, pid, ppid, pgid, tty, tpgid, command] = match;
-  if (
-    pid === undefined ||
-    ppid === undefined ||
-    pgid === undefined ||
-    tty === undefined ||
-    tpgid === undefined ||
-    command === undefined
-  ) {
-    return undefined;
-  }
-  return {
-    pid: Number(pid),
-    ppid: Number(ppid),
-    pgid: Number(pgid),
-    tty,
-    tpgid: Number(tpgid),
-    command,
-  };
-}
-
-function run(command: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(command, args, { maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
-      // A non-zero status with output is an answer: `lsof -t` exits 1 when
-      // nothing holds the file. A failure to run the tool at all is not.
-      if (error && !("code" in error && typeof error.code === "number")) {
-        reject(error);
-        return;
-      }
-      resolve(stdout);
-    });
-  });
-}
-
-function noSuchProcess(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    Reflect.get(error, "code") === "ESRCH"
-  );
 }
