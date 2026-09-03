@@ -21,13 +21,13 @@ import type { Operation } from "effection";
 import { spawn as spawnChild } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import net from "node:net";
-import { stat } from "node:fs/promises";
 import * as path from "node:path";
 import { cliCommand } from "@executablemd/test-support/launch";
+import { exists, rm, stat, writeTextFile } from "@effectionx/fs";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { rm, writeFile } from "node:fs/promises";
 import { TerminalProcesses } from "@executablemd/runtime";
+import type { SignalDelivery } from "@executablemd/runtime";
 import { useTmuxGrid } from "../src/terminal/tmux-grid.ts";
 import type { ControlEvent, TmuxGrid } from "../src/terminal/tmux-grid.ts";
 import { createFakeTmux } from "./fixtures/fake-tmux.ts";
@@ -48,7 +48,7 @@ import {
   writeFrame,
 } from "../src/terminal/pane-protocol.ts";
 import { PANE_WORKER_COMMAND, paneWorkerInvocation } from "../src/terminal/pane-worker.ts";
-import type { FromWorker } from "../src/terminal/pane-protocol.ts";
+import type { FromWorker, ToWorker } from "../src/terminal/pane-protocol.ts";
 
 /** The cells a layout string describes, read back out of it. */
 function readCells(layout: string): LayoutCell[] {
@@ -76,12 +76,13 @@ describe("Tier TX — the tmux grid's geometry", () => {
   it("TX1: an authored column count survives every terminal size", function* () {
     // Four panes in two columns is 2×2 whatever the terminal is. `tiled` would
     // have made the wide one 4×1 and the tall one 1×4.
-    for (const [width, height] of [
+    const sizes: [number, number][] = [
       [80, 24],
       [200, 24],
       [80, 60],
       [211, 51],
-    ] as const) {
+    ];
+    for (const [width, height] of sizes) {
       const cells = rowMajorCells(width, height, 2, 4);
       const rows = new Set(cells.map((cell) => cell.top));
       const columns = new Set(cells.map((cell) => cell.left));
@@ -261,14 +262,14 @@ function closedWithin(socket: net.Socket, limitMs: number): Operation<boolean> {
 describe("Tier TW — the pane worker and its private channel", () => {
   it("TW1: the private directory is 0700 and its tokens 0600", function* () {
     const channels: PaneChannels = yield* usePaneChannels(2);
-    const directory = yield* until(stat(channels.directory));
+    const directory = yield* stat(channels.directory);
     expect(directory.mode & 0o777).toBe(0o700);
     for (const ordinal of [0, 1]) {
-      const token = yield* until(stat(paneTokenPath(channels.directory, ordinal)));
+      const token = yield* stat(paneTokenPath(channels.directory, ordinal));
       expect(`pane ${ordinal}: ${(token.mode & 0o777).toString(8)}`).toBe(`pane ${ordinal}: 600`);
       // The socket exists before any pane does, so a worker that starts finds
       // it listening rather than racing it.
-      yield* until(stat(paneSocketPath(channels.directory, ordinal)));
+      expect(yield* exists(paneSocketPath(channels.directory, ordinal))).toBe(true);
     }
   });
 
@@ -278,13 +279,7 @@ describe("Tier TW — the pane worker and its private channel", () => {
       const channels = yield* usePaneChannels(1);
       directory = channels.directory;
     });
-    const gone = yield* until(
-      stat(directory).then(
-        () => false,
-        () => true,
-      ),
-    );
-    expect(gone).toBe(true);
+    expect(yield* exists(directory)).toBe(false);
   });
 
   it("TW3: a real worker connects, proves which pane it is, and spends its token", function* () {
@@ -296,13 +291,7 @@ describe("Tier TW — the pane worker and its private channel", () => {
     expect(link.hello.pid).toBeGreaterThan(0);
     // Spent as it was read: a second worker for this pane finds no token, so
     // it has nothing to present.
-    const spent = yield* until(
-      stat(paneTokenPath(channels.directory, 0)).then(
-        () => false,
-        () => true,
-      ),
-    );
-    expect(spent).toBe(true);
+    expect(yield* exists(paneTokenPath(channels.directory, 0))).toBe(false);
     expect(channels.refusals()).toEqual([]);
   });
 
@@ -410,8 +399,8 @@ describe("Tier TW — the pane worker and its private channel", () => {
     yield* useWorker(channels.directory, 0);
     const link = yield* channels.link(0);
 
-    const sleeper = {
-      type: "launch" as const,
+    const sleeper: ToWorker = {
+      type: "launch",
       id: "first",
       argv: ["/bin/sleep", "30"],
       cwd: path.resolve("."),
@@ -510,14 +499,47 @@ describe("Tier TW — the pane worker and its private channel", () => {
  * gives the reader's terminal back when asked to detach is #726's evidence, on
  * real tmux, and nothing here stands in for it.
  */
+/** Planted where a diagnostic could pick one up, and nowhere a reader looks. */
+const SESSION_MARKER = "sessionmarker7f3a";
+const DIR_MARKER = "/tmp/dirmarker7f3a";
+const CLIENT_MARKER = "clientmarker7f3a";
+const TITLE_MARKER = "titlemarker7f3a";
+const ENV_MARKER = "envmarker7f3a";
+const STDERR_MARKER = "stderrmarker7f3a";
+
 describe("Tier TG — the tmux composite", () => {
+  /** A host whose processes are all gone, so teardown proves itself. */
+  function useDeadServer(): Operation<void> {
+    return TerminalProcesses.around(
+      {
+        // deno-lint-ignore require-yield
+        *table() {
+          return [];
+        },
+        // deno-lint-ignore require-yield
+        *holders() {
+          return [];
+        },
+        // deno-lint-ignore require-yield
+        *deliver(): Operation<SignalDelivery> {
+          return "absent";
+        },
+        // deno-lint-ignore require-yield
+        *reachable() {
+          return false;
+        },
+      },
+      { at: "min" },
+    );
+  }
+
   /** Where a fake server and its client fixtures meet. */
   function useScript(): Operation<string> {
     return resource<string>(function* (provide) {
       const file = path.join(tmpdir(), `xmd-tmux-script-${randomUUID()}.txt`);
-      yield* until(writeFile(file, ""));
+      yield* writeTextFile(file, "");
       yield* ensure(function* () {
-        yield* until(rm(file, { force: true }));
+        yield* rm(file, { force: true });
       });
       yield* provide(file);
     });
@@ -559,8 +581,8 @@ describe("Tier TG — the tmux composite", () => {
             return [];
           },
           // deno-lint-ignore require-yield
-          *deliver() {
-            return "absent" as const;
+          *deliver(): Operation<SignalDelivery> {
+            return "absent";
           },
           // deno-lint-ignore require-yield
           *reachable([pid]) {
@@ -694,11 +716,11 @@ describe("Tier TG — the tmux composite", () => {
     expect(tmux.alive()).toBe(false);
   });
 
-  it("TG8: a server that will not go away is not reported gone", function* () {
+  it("TG8: a server that will not go away is a teardown failure, not a report", function* () {
     const script = yield* useScript();
     const tmux = createFakeTmux({ script, clientCommand });
-    // The server answers `kill-server` and stays anyway. Nothing about the
-    // command having been accepted is evidence that it worked.
+    // The server answers `kill-server` and stays anyway. That the command was
+    // accepted is not evidence that it worked.
     yield* TerminalProcesses.around(
       {
         // deno-lint-ignore require-yield
@@ -710,8 +732,8 @@ describe("Tier TG — the tmux composite", () => {
           return [];
         },
         // deno-lint-ignore require-yield
-        *deliver() {
-          return "delivered" as const;
+        *deliver(): Operation<SignalDelivery> {
+          return "delivered";
         },
         // deno-lint-ignore require-yield
         *reachable() {
@@ -720,22 +742,190 @@ describe("Tier TG — the tmux composite", () => {
       },
       { at: "min" },
     );
-    const grid = yield* useTmuxGrid(tmux, {
-      session: "grid",
-      columns: 1,
-      panes: 1,
-      width: 160,
-      height: 48,
-      titles: ["only"],
-      workerCommand: (ordinal) => ["xmd", "terminal-worker", String(ordinal), "/private/dir"],
-      cwd: path.resolve("."),
-      env: {},
-    });
 
-    const stopped = yield* grid.stop();
-    expect(stopped.gone).toBe(false);
+    let refusal = "";
+    try {
+      yield* scoped(function* () {
+        const grid = yield* useTmuxGrid(tmux, {
+          session: SESSION_MARKER,
+          columns: 1,
+          panes: 1,
+          width: 160,
+          height: 48,
+          titles: ["only"],
+          workerCommand: (ordinal) => ["xmd", "terminal-worker", String(ordinal), DIR_MARKER],
+          cwd: path.resolve("."),
+          env: {},
+        });
+        yield* grid.stop();
+      });
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+
+    // The document stops rather than continuing while a terminal may be held,
+    // and it is told which fact could not be established — never the session or
+    // socket that would name this invocation's private server.
+    expect(refusal).toContain("could not be proved torn down");
+    expect(refusal).toContain("did not stop");
+    for (const marker of [SESSION_MARKER, DIR_MARKER, tmux.socket]) {
+      expect(`${marker}: ${refusal.includes(marker)}`).toBe(`${marker}: false`);
+    }
   });
 
+  it("TG10: nothing private reaches a surfaced failure", function* () {
+    // A marker in every place a tmux diagnostic could pick one up: the socket,
+    // the session, the pane and client identifiers, the worker's private
+    // directory, the arguments, and what the command wrote to stderr.
+    const script = yield* useScript();
+    const tmux = createFakeTmux({
+      script,
+      clientCommand,
+      clientName: `/dev/${CLIENT_MARKER}`,
+      failOnce: { command: "split-window", message: `stderr ${STDERR_MARKER}` },
+    });
+    yield* useDeadServer();
+
+    let failure = "";
+    try {
+      yield* scoped(function* () {
+        yield* useTmuxGrid(tmux, {
+          session: SESSION_MARKER,
+          columns: 2,
+          panes: 2,
+          width: 160,
+          height: 48,
+          titles: [TITLE_MARKER, TITLE_MARKER],
+          workerCommand: (ordinal) => ["xmd", "terminal-worker", String(ordinal), DIR_MARKER],
+          cwd: path.resolve("."),
+          env: { PRIVATE: ENV_MARKER },
+        });
+      });
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+
+    // It says which step failed, because that is what a reader can act on.
+    expect(failure).toContain("split-window");
+    // And nothing else. A provider's private topology is private on the paths
+    // taken when something goes wrong too — which are the paths a diagnostic
+    // is actually read on.
+    for (const marker of [
+      SESSION_MARKER,
+      DIR_MARKER,
+      CLIENT_MARKER,
+      TITLE_MARKER,
+      ENV_MARKER,
+      STDERR_MARKER,
+      tmux.socket,
+      ...tmux.panes.map((pane) => pane.id),
+    ]) {
+      expect(`${marker}: ${failure.includes(marker)}`).toBe(`${marker}: false`);
+    }
+  });
+
+  it("TG11: ending the visible client signals that process and nothing else", function* () {
+    const script = yield* useScript();
+    // A client that is asked to leave and does not, so the escalation that
+    // follows the ask is actually reached.
+    const tmux = createFakeTmux({ script, clientCommand, stubbornClient: true });
+    const signalled: string[] = [];
+    let clientPid = -1;
+
+    // A process table with company: XMD itself, its parent, and two more
+    // processes sharing XMD's foreground group. A settlement of a pane's shape
+    // pointed at this client would reach every one of them.
+    yield* TerminalProcesses.around(
+      {
+        // deno-lint-ignore require-yield
+        *table() {
+          return [
+            { pid: 900, ppid: 1, pgid: 900, tty: "ttys000", tpgid: 900, command: "shell" },
+            { pid: 901, ppid: 900, pgid: 900, tty: "ttys000", tpgid: 900, command: "xmd" },
+            { pid: 902, ppid: 901, pgid: 900, tty: "ttys000", tpgid: 900, command: "sibling" },
+            { pid: 903, ppid: 1, pgid: 900, tty: "ttys000", tpgid: 900, command: "cousin" },
+          ];
+        },
+        // deno-lint-ignore require-yield
+        *holders() {
+          // Everything holding the reader's terminal. None of it is this
+          // client's to end.
+          return [900, 901, 902, 903];
+        },
+        // deno-lint-ignore require-yield
+        *deliver([pid, signal]): Operation<SignalDelivery> {
+          signalled.push(`${pid}:${signal}`);
+          return "delivered";
+        },
+        // deno-lint-ignore require-yield
+        *reachable([pid]) {
+          // The client refuses to leave until it has been signalled once.
+          return pid === clientPid && !signalled.some((entry) => entry.startsWith(`${pid}:`));
+        },
+      },
+      { at: "min" },
+    );
+
+    yield* scoped(function* () {
+      const grid = yield* useTmuxGrid(tmux, {
+        session: "visible",
+        columns: 1,
+        panes: 1,
+        width: 160,
+        height: 48,
+        titles: ["only"],
+        workerCommand: (ordinal) => ["xmd", "terminal-worker", String(ordinal), "/d"],
+        cwd: path.resolve("."),
+        env: {},
+      });
+      const visible = yield* grid.attach();
+      clientPid = visible.client.pid;
+      yield* grid.detach(visible);
+    });
+
+    // Asked first, and then exactly one process insisted on: not XMD, not its
+    // parent, not a sibling in the same group, and not a holder of the
+    // reader's terminal.
+    expect(tmux.issued.some((line) => line.startsWith("detach-client"))).toBe(true);
+    expect(signalled.length).toBeGreaterThan(0);
+    for (const entry of signalled) {
+      expect(entry.split(":")[0]).toBe(String(clientPid));
+    }
+    for (const bystander of [900, 901, 902, 903]) {
+      expect(signalled.some((entry) => entry.startsWith(`${bystander}:`))).toBe(false);
+    }
+  });
+
+  it("TG12: every socket and server closes before the private directory goes", function* () {
+    const order: string[] = [];
+    let directory = "";
+    let atRemoval: { closed: number; total: number } | undefined;
+
+    yield* scoped(function* () {
+      const channels = yield* usePaneChannels(2, {
+        onClosed: () => order.push("closed"),
+        onRemoved: (facts) => {
+          atRemoval = facts;
+          order.push("removed");
+        },
+      });
+      directory = channels.directory;
+      // A worker on one of them, so there is an accepted connection to close as
+      // well as the servers themselves.
+      yield* useWorker(channels.directory, 0);
+      yield* channels.link(0);
+    });
+
+    // Counted from the sockets' and servers' own close events, not from having
+    // asked them to close: every one of them had actually closed by the time
+    // the directory was removed.
+    expect(order).toEqual(["closed", "removed"]);
+    expect(atRemoval?.total).toBeGreaterThan(0);
+    expect(`${atRemoval?.closed}/${atRemoval?.total}`).toBe(
+      `${atRemoval?.total}/${atRemoval?.total}`,
+    );
+    expect(yield* exists(directory)).toBe(false);
+  });
   it("TG9: a composite that fails while being built still takes the server down", function* () {
     const script = yield* useScript();
     let stopping = 0;
@@ -756,8 +946,8 @@ describe("Tier TG — the tmux composite", () => {
           return [];
         },
         // deno-lint-ignore require-yield
-        *deliver() {
-          return "absent" as const;
+        *deliver(): Operation<SignalDelivery> {
+          return "absent";
         },
         // deno-lint-ignore require-yield
         *reachable() {

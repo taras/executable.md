@@ -21,41 +21,54 @@
  * the terminal back when asked to detach is #726's evidence, on real tmux.
  */
 
-import { readFile } from "node:fs/promises";
 import process from "node:process";
+import { exists, readTextFile } from "@effectionx/fs";
+import { run, sleep, withResolvers } from "effection";
+import type { Operation } from "effection";
 
 const POLL_MS = 15;
+
+type Mode = "control" | "attach";
+
+/** Everything the script says so far, or nothing while it does not exist. */
+function* said(script: string): Operation<string[]> {
+  if (!(yield* exists(script))) {
+    return [];
+  }
+  const text = yield* readTextFile(script);
+  return text.split("\n").filter((line) => line.length > 0);
+}
+
+function write(text: string): Operation<void> {
+  const written = withResolvers<void>();
+  process.stdout.write(text, () => written.resolve());
+  return written.operation;
+}
+
+/** Follow the script until it says this client is finished. */
+export function* followScript(mode: Mode, script: string): Operation<void> {
+  let seen = 0;
+  while (true) {
+    const lines = yield* said(script);
+    for (const line of lines.slice(seen)) {
+      if (mode === "control") {
+        yield* write(`${line}\n`);
+        if (line.startsWith("%exit")) {
+          return;
+        }
+      } else if (line === "detached") {
+        // The reader left. A real client would restore the terminal here.
+        return;
+      }
+    }
+    seen = lines.length;
+    yield* sleep(POLL_MS);
+  }
+}
 
 const [mode, script] = process.argv.slice(2);
 if ((mode !== "control" && mode !== "attach") || script === undefined) {
   process.stderr.write("usage: tmux-client.ts <control|attach> <script-file>\n");
   process.exit(2);
 }
-
-/** Everything the script says so far, or nothing while it does not exist. */
-async function read(): Promise<string[]> {
-  try {
-    const text = await readFile(script, "utf8");
-    return text.split("\n").filter((line) => line.length > 0);
-  } catch {
-    return [];
-  }
-}
-
-let seen = 0;
-for (;;) {
-  const said = await read();
-  for (const line of said.slice(seen)) {
-    if (mode === "control") {
-      process.stdout.write(`${line}\n`);
-      if (line.startsWith("%exit")) {
-        process.exit(0);
-      }
-    } else if (line === "detached") {
-      // The reader left. A real client would restore the terminal here.
-      process.exit(0);
-    }
-  }
-  seen = said.length;
-  await new Promise((resolve) => setTimeout(resolve, POLL_MS));
-}
+await run(() => followScript(mode, script));

@@ -112,7 +112,8 @@ interface Live {
  * dispositions across `exec`, so it receives the same signal and acts on it.
  */
 export function ignoreForegroundSignals(): void {
-  for (const name of ["SIGINT", "SIGQUIT", "SIGTSTP"] as const) {
+  const foreground: NodeJS.Signals[] = ["SIGINT", "SIGQUIT", "SIGTSTP"];
+  for (const name of foreground) {
     process.on(name, () => {});
   }
 }

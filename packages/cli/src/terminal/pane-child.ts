@@ -94,9 +94,15 @@ export function usePaneChild(
       }
       settling = withResolvers<Settlement>();
       try {
+        const nothingStarted: Settlement = {
+          method: "exited",
+          quiet: true,
+          swept: [],
+          holders: [],
+        };
         const settlement =
           child === undefined || child.pid === undefined
-            ? { method: "exited" as const, quiet: true, swept: [], holders: [] }
+            ? nothingStarted
             : yield* escalate(child, child.pid, tty, () => outcome !== undefined);
         settling.resolve(settlement);
         return settlement;
