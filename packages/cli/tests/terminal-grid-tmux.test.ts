@@ -24,6 +24,14 @@ import net from "node:net";
 import { stat } from "node:fs/promises";
 import * as path from "node:path";
 import { cliCommand } from "@executablemd/test-support/launch";
+import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
+import { rm, writeFile } from "node:fs/promises";
+import { TerminalProcesses } from "@executablemd/runtime";
+import { useTmuxGrid } from "../src/terminal/tmux-grid.ts";
+import type { ControlEvent, TmuxGrid } from "../src/terminal/tmux-grid.ts";
+import { createFakeTmux } from "./fixtures/fake-tmux.ts";
+import type { FakeTmux } from "./fixtures/fake-tmux.ts";
 import {
   layoutString,
   placementProblems,
@@ -485,3 +493,321 @@ describe("Tier TW — the pane worker and its private channel", () => {
     }
   });
 });
+
+/**
+ * Tier TG — the hidden composite's lifecycle
+ * (architecture.md §Atomic presentation and settlement).
+ *
+ * Against a fake server, deliberately. What is faked is tmux's *behaviour* —
+ * including the one this code exists to work around, that a layout string's
+ * leaves are filled in window-list order and the pane ids in them are ignored.
+ * What is not faked is the composite: the same layout string, the same swap
+ * decisions, the same control-mode line splitting and the same classifier run
+ * here as on a real server.
+ *
+ * One thing this tier deliberately does not claim. A client fixture inherits a
+ * pipe, so it cannot restore a terminal it never had; that a real `tmux attach`
+ * gives the reader's terminal back when asked to detach is #726's evidence, on
+ * real tmux, and nothing here stands in for it.
+ */
+describe("Tier TG — the tmux composite", () => {
+  /** Where a fake server and its client fixtures meet. */
+  function useScript(): Operation<string> {
+    return resource<string>(function* (provide) {
+      const file = path.join(tmpdir(), `xmd-tmux-script-${randomUUID()}.txt`);
+      yield* until(writeFile(file, ""));
+      yield* ensure(function* () {
+        yield* until(rm(file, { force: true }));
+      });
+      yield* provide(file);
+    });
+  }
+
+  /** The fixture that stands in for one tmux client. */
+  function clientCommand(mode: "control" | "attach", script: string): readonly string[] {
+    const fixture = path.resolve("packages/cli/tests/fixtures/tmux-client.ts");
+    const invocation = cliCommand([]);
+    // The same runtime the CLI runs under, pointed at the fixture instead.
+    return [invocation.command, "run", "--allow-all", fixture, mode, script];
+  }
+
+  /** A composite over a fake server, with the pane workers stubbed out. */
+  function useComposite(options: {
+    panes: number;
+    columns: number;
+    titles?: string[];
+    failOnce?: { command: string; message: string };
+  }): Operation<{ grid: TmuxGrid; tmux: FakeTmux; script: string }> {
+    return (function* () {
+      const script = yield* useScript();
+      const tmux = createFakeTmux({
+        script,
+        clientCommand,
+        ...(options.failOnce === undefined ? {} : { failOnce: options.failOnce }),
+      });
+      // The server's liveness is the fake's to decide, and the composite asks
+      // the runtime seam about it — so "the server did not go away" is a fact a
+      // row can state without a process refusing to die.
+      yield* TerminalProcesses.around(
+        {
+          // deno-lint-ignore require-yield
+          *table() {
+            return [];
+          },
+          // deno-lint-ignore require-yield
+          *holders() {
+            return [];
+          },
+          // deno-lint-ignore require-yield
+          *deliver() {
+            return "absent" as const;
+          },
+          // deno-lint-ignore require-yield
+          *reachable([pid]) {
+            return pid === tmux.serverPid && tmux.alive();
+          },
+        },
+        { at: "min" },
+      );
+      const grid = yield* useTmuxGrid(tmux, {
+        session: "grid",
+        columns: options.columns,
+        panes: options.panes,
+        width: 160,
+        height: 48,
+        titles:
+          options.titles ?? Array.from({ length: options.panes }, (_, index) => `pane ${index}`),
+        workerCommand: (ordinal) => ["xmd", "terminal-worker", String(ordinal), "/private/dir"],
+        cwd: path.resolve("."),
+        env: { PATH: "/usr/bin:/bin" },
+      });
+      return { grid, tmux, script };
+    })();
+  }
+
+  it("TG1: the server is private, unconfigured, and started hidden", function* () {
+    const { tmux } = yield* useComposite({ panes: 2, columns: 2 });
+
+    // Detached, so nothing is shown; sized explicitly, so the layout is
+    // computed against a window rather than a guess.
+    const created = tmux.issued.find((line) => line.startsWith("new-session"));
+    expect(created).toContain("-d");
+    expect(created).toContain("-x 160");
+    expect(created).toContain("-y 48");
+    // Every pane runs a worker, and tmux's parser sees only an ordinal and a
+    // directory — never a launch's argv.
+    expect(tmux.panes.length).toBe(2);
+    for (const [ordinal, pane] of tmux.panes.entries()) {
+      expect(pane.command.join(" ")).toBe(`xmd terminal-worker ${ordinal} /private/dir`);
+    }
+  });
+
+  it("TG2: the authored order survives a server that ignores the layout's ids", function* () {
+    const { grid, tmux } = yield* useComposite({
+      panes: 4,
+      columns: 2,
+      titles: ["Planner", "Implementor", "Reviewer", "Shell"],
+    });
+
+    // The fake fills the leaves in window-list order and ignores the ids, which
+    // is what tmux does. Without the swaps this would be the wrong order.
+    expect(tmux.issued.some((line) => line.startsWith("swap-pane"))).toBe(true);
+    const placed = [...grid.panes].sort(
+      (left, right) => left.cell.top - right.cell.top || left.cell.left - right.cell.left,
+    );
+    expect(placed.map((pane) => pane.ordinal)).toEqual([0, 1, 2, 3]);
+    expect(
+      placementProblems(
+        placed.map((pane) => pane.cell),
+        2,
+      ),
+    ).toEqual([]);
+    // And each pane carries the title the author wrote for that ordinal. Read
+    // by pane id, because the server's window list is not the authored order —
+    // which is the whole reason the swaps above exist.
+    const titles = grid.panes.map(
+      (pane) => tmux.panes.find((entry) => entry.id === pane.id)?.title,
+    );
+    expect(titles).toEqual(["Planner", "Implementor", "Reviewer", "Shell"]);
+    // The window list really is a different order, so this row is not passing
+    // because the two happened to coincide.
+    expect(tmux.panes.map((pane) => pane.id)).not.toEqual(grid.panes.map((pane) => pane.id));
+  });
+
+  it("TG3: nothing is attached while the composite is being built", function* () {
+    const { tmux } = yield* useComposite({ panes: 2, columns: 2 });
+
+    // The control client is not the reader's: it attaches with `-f no-output`,
+    // so pane bytes never reach this process. The visible one has not been
+    // asked for.
+    expect(tmux.issued.some((line) => line.startsWith("attach-session"))).toBe(false);
+    expect(tmux.clients).toEqual([]);
+  });
+
+  it("TG4: attaching shows the grid, and the server lists the reader's client", function* () {
+    const { grid, tmux } = yield* useComposite({ panes: 2, columns: 2 });
+
+    const client = yield* grid.attach();
+    expect(client.name).toBe("/dev/ttys999");
+    expect(tmux.clients).toContain("/dev/ttys999");
+  });
+
+  it("TG5: a reader detach is asked for before anything is signalled", function* () {
+    const { grid, tmux } = yield* useComposite({ panes: 2, columns: 2 });
+    const client = yield* grid.attach();
+
+    yield* grid.detach(client);
+
+    // Asked to leave, and gone from the server's list. A client that was
+    // signalled instead could not have restored the terminal — which is why
+    // the ask comes first.
+    const asked = tmux.issued.findIndex((line) => line.startsWith("detach-client"));
+    expect(asked).toBeGreaterThan(-1);
+    expect(tmux.clients).not.toContain("/dev/ttys999");
+    expect(tmux.issued.slice(0, asked).some((line) => line.startsWith("kill-server"))).toBe(false);
+  });
+
+  it("TG6: reader detach, control loss and server stop are separate events", function* () {
+    const { grid, tmux } = yield* useComposite({ panes: 1, columns: 1 });
+
+    yield* tmux.say("%client-detached /dev/ttys999");
+    yield* untilEvent(grid, "client-detached");
+    yield* tmux.say("%sessions-changed");
+    yield* untilEvent(grid, "sessions-changed");
+    // `%exit` ends the control channel, and its EOF is its own event — an
+    // attach client's exit code could not tell these three apart.
+    yield* tmux.say("%exit");
+    yield* untilEvent(grid, "closed");
+
+    const kinds = grid.events.map((event) => event.kind);
+    expect(kinds).toContain("client-detached");
+    expect(kinds).toContain("sessions-changed");
+    expect(kinds.indexOf("exit")).toBeLessThan(kinds.lastIndexOf("closed"));
+  });
+
+  it("TG7: stopping establishes the server is gone and refuses its session", function* () {
+    const { grid, tmux } = yield* useComposite({ panes: 2, columns: 2 });
+
+    const stopped = yield* grid.stop();
+    expect(stopped.gone).toBe(true);
+    expect(stopped.refuses).toBe(true);
+    expect(tmux.alive()).toBe(false);
+  });
+
+  it("TG8: a server that will not go away is not reported gone", function* () {
+    const script = yield* useScript();
+    const tmux = createFakeTmux({ script, clientCommand });
+    // The server answers `kill-server` and stays anyway. Nothing about the
+    // command having been accepted is evidence that it worked.
+    yield* TerminalProcesses.around(
+      {
+        // deno-lint-ignore require-yield
+        *table() {
+          return [];
+        },
+        // deno-lint-ignore require-yield
+        *holders() {
+          return [];
+        },
+        // deno-lint-ignore require-yield
+        *deliver() {
+          return "delivered" as const;
+        },
+        // deno-lint-ignore require-yield
+        *reachable() {
+          return true;
+        },
+      },
+      { at: "min" },
+    );
+    const grid = yield* useTmuxGrid(tmux, {
+      session: "grid",
+      columns: 1,
+      panes: 1,
+      width: 160,
+      height: 48,
+      titles: ["only"],
+      workerCommand: (ordinal) => ["xmd", "terminal-worker", String(ordinal), "/private/dir"],
+      cwd: path.resolve("."),
+      env: {},
+    });
+
+    const stopped = yield* grid.stop();
+    expect(stopped.gone).toBe(false);
+  });
+
+  it("TG9: a composite that fails while being built still takes the server down", function* () {
+    const script = yield* useScript();
+    let stopping = 0;
+    const tmux = createFakeTmux({
+      script,
+      clientCommand,
+      // The split for the second pane fails, half-way through preparation.
+      failOnce: { command: "split-window", message: "no room" },
+    });
+    yield* TerminalProcesses.around(
+      {
+        // deno-lint-ignore require-yield
+        *table() {
+          return [];
+        },
+        // deno-lint-ignore require-yield
+        *holders() {
+          return [];
+        },
+        // deno-lint-ignore require-yield
+        *deliver() {
+          return "absent" as const;
+        },
+        // deno-lint-ignore require-yield
+        *reachable() {
+          return false;
+        },
+      },
+      { at: "min" },
+    );
+
+    let failure = "";
+    try {
+      yield* scoped(function* () {
+        yield* useTmuxGrid(tmux, {
+          session: "grid",
+          columns: 2,
+          panes: 2,
+          width: 160,
+          height: 48,
+          titles: ["a", "b"],
+          workerCommand: (ordinal) => ["xmd", "terminal-worker", String(ordinal), "/d"],
+          cwd: path.resolve("."),
+          env: {},
+        });
+      });
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(failure).toContain("split-window");
+    // Registered before the first command, so a half-built composite is still
+    // taken down: no server is left behind for a grid nobody ever saw.
+    stopping = tmux.issued.filter((line) => line.startsWith("kill-server")).length;
+    expect(stopping).toBeGreaterThan(0);
+    expect(tmux.alive()).toBe(false);
+  });
+});
+
+/** Wait until the composite has classified an event of this kind. */
+function untilEvent(grid: TmuxGrid, kind: ControlEvent["kind"]): Operation<void> {
+  return (function* (): Operation<void> {
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      if (grid.events.some((event) => event.kind === kind)) {
+        return;
+      }
+      yield* sleep(15);
+    }
+    throw new Error(
+      `the composite never reported "${kind}"; it reported ` +
+        JSON.stringify(grid.events.map((event) => event.kind)),
+    );
+  })();
+}
