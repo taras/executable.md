@@ -11,14 +11,33 @@ export default define.page(function Reference() {
 
       <h2>CLI</h2>
       <CodeBlock command>
-        {"xmd run <document.md> [options]\nxmd <document.md> [options]   # run is the default command\nxmd -e '<markdown>' [options]  # an inline document, no file needed"}
+        {"xmd run <document.md> [options]\nxmd <document.md> [options]   # run is the default command\nxmd run - [options]           # the document is read from standard input\nxmd -e '<markdown>' [options]  # an inline document, no file needed"}
       </CodeBlock>
+      <p>
+        A run takes its root document from exactly one of three inputs: a path,
+        standard input, or one <code>--eval</code> value.
+      </p>
       <ul>
+        <li>
+          <code>-</code>{" "}
+          — read the whole root document from standard input, to end of file.
+          Only the explicit <code>xmd run -</code> spelling does it. A bare{" "}
+          <code>xmd -</code>{" "}
+          is the shorthand run form and executes the file named <code>-</code>;
+          {" "}
+          <code>xmd run -#Section</code>{" "}
+          selects a section of that same file; and <code>--eval -</code>{" "}
+          is refused rather than read. Printed errors and source positions
+          report the origin as{" "}
+          <code>&lt;stdin&gt;</code>, which is an identity rather than a file:
+          nothing of that name is created, and relative imports and every other
+          relative operation resolve from the directory the command was run in.
+        </li>
         <li>
           <code>--eval</code>, <code>-e</code>{" "}
           — execute the given markdown as the root document instead of a path.
-          Exactly one of the two is required. Quote it so the shell passes one
-          argument; printed errors report the source as{" "}
+          Quote it so the shell passes one argument; printed errors report the
+          source as{" "}
           <code>&lt;eval&gt;</code>, and relative paths resolve from the current
           directory.
         </li>

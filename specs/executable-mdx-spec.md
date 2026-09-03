@@ -4201,7 +4201,8 @@ rather than restating it. It scans no headings, matches no selector, projects no
 body, and defines no error of its own.
 
 **Help describes the document it is given.** `xmd run --help` is generic and
-reads nothing. Each of the three file-backed forms — `xmd run README.md --help`,
+reads nothing — including standard input, which a generic help never asks the
+host for. Each of the three file-backed forms — `xmd run README.md --help`,
 `xmd run --help README.md`, and `xmd README.md --help` — inspects that document
 once and answers with the ordinary run help and source grammar, then the
 document-property section when it has one, then the target catalog when it
@@ -4222,15 +4223,19 @@ Targets in README.md
 Each row is `formatDocumentReference(path, target)`, in source order, duplicates
 retained, so a duplicate canonical path appears twice with its own description.
 A section that states no description is listed all the same, because it is still
-selectable. There is no unqualified whole-document row. A targetless file and an
-inline document have no target section at all — an inline root is not a
-selectable document reference.
+selectable. There is no unqualified whole-document row. A targetless file, an inline document and a
+document read from standard input have no target section at all — neither
+supplied root is a selectable document reference.
 
 A valid selector on the reference is validated and then the whole source
 catalog is described, not only the section it named. An unreadable reference, a
 missing or unreadable file, a parse or schema failure, and an invalid, unmatched
 or ambiguous selector each exit nonzero with the existing diagnostic and
 describe nothing.
+
+`xmd run - --help` is the same response for a supplied root: the document is
+acquired and inspected once, its properties are described under the `<stdin>`
+origin, and nothing runs.
 
 Help is inspection: it expands no body, evaluates no block, imports no body
 component, resolves no property value, checks no required property, installs or
@@ -4247,7 +4252,72 @@ xmd README.md#Release/*
 
 Only a file-backed run argument is read as a reference. An inline `-e` document
 is untargeted, and `xmd test` keeps its own path grammar: a test path containing
-a literal `#` or `%` still names that file.
+a literal `#` or `%` still names that file. A file named `-` is reached through
+the same reference grammar as any other — `xmd -` runs it and `xmd run -#Section`
+selects a section of it — with the one exception described next.
+
+##### Standard input is one document argument
+
+`xmd run -` and `xmd run -- -` read the root document from standard input:
+the whole stream to end of file, once, admitted as one complete root and then
+run through the ordinary run profile. It is what a program-producing command
+composes with:
+
+```text
+xmd plan "Prepare the release program." | xmd run -
+```
+
+The sentinel is one exact argument on one command form, decided by fixed grammar
+before anything is read. Only an invocation that explicitly names `run` and
+whose document argument is exactly `-` selects it. Every other spelling keeps
+the meaning it already had and reads nothing:
+
+- bare `xmd -` is the shorthand run form, and `-` there is a **file reference**:
+  it executes the file named `-` in the contextual working directory;
+- `xmd run -#Section` is that same reference with a target selector, and
+  executes `Section` of the file named `-`;
+- `-` on another command keeps that command's meaning; and
+- `xmd run --eval -` and `xmd -e -` keep their existing refusal.
+
+`-` is the one filename the option grammar leaves unwritable, which is why the
+reference grammar reaches it and why nothing else beginning with `-` is read as
+a document: a mistyped option is still an option, and a run written with one
+refuses for want of a root rather than looking for a file named after the flag.
+
+The end-of-options separator is honoured, so `-` written after `--` is still the
+document argument rather than an option; everything else written around any of
+these forms configures the run as it would around an ordinary path, before it or
+after it.
+
+A run still takes exactly one root, and which of them the parser happened to
+take does not decide that. A command line naming two — a path and `-`, a path
+and a reference, the same one twice — refuses whichever order they were written
+in, before standard input is read and before either candidate is inspected or
+run. An option's value, another command's argument and an option nothing defines
+are none of them document arguments, so `--journal -`, `xmd test -` and a
+mistyped flag each keep the meaning they had.
+
+Acquisition happens before the document is inspected, and therefore before
+target and property preparation, Agent or provider setup, the secret-detection
+announcement, journal creation, root admission and execution. It sits inside the
+run's existing deadline rather than starting a lifecycle of its own. Anything
+the host cannot deliver a whole document through is one fixed sentence:
+
+```text
+xmd run could not read a complete document from standard input
+```
+
+No host error, input content, or substituted path appears in it, and a run that
+reports it has reached none of the phases above. Cancellation while the read is
+waiting is cancellation: the reader is torn down, nothing later is reached, and
+it is never reported as a read failure.
+
+After that the root is ordinary. Empty input is the ordinary empty text root and
+succeeds having emitted and done nothing; complete structural preflight still
+finishes before the first document effect, so a declaration violation later in
+the input costs an effect written above it; and props, output and return
+behavior, journaling, timeouts, permission modes, providers, cancellation and
+presentation are the ones every other root gets.
 
 **The selector is replaced by its answer before anything executes.** The command
 inspects the document to discover its properties, and the run then reads the
@@ -4304,8 +4374,9 @@ children run through the production run host; the tier launcher runs it once
 per runtime corpus. Tier CH covers the help surfaces and the absence of
 a `targets` command, Tier PC properties and targets in one response, Tier VR
 targeted value and `<Output>` roots, Tier IE an inline root's absent target
-section, and Tier DT description extraction, the catalog's agreement with the
-canonical target array, and the unchanged `xmd test` path grammar. Tier IE's
+section, Tier SI the standard-input document argument, and Tier DT description
+extraction, the catalog's agreement with the canonical target array, and the
+unchanged `xmd test` path grammar. Tier IE's
 inline document rows — the empty document, positioned root identities,
 invocation-directory resolution, and `#` as document text — are owned by the
 checked-in Markdown suite at
@@ -8734,6 +8805,7 @@ and cannot describe and run a document under different identities.
 ```typescript
 const fromFile = { path: "hello.md" };
 const inline = inlineSource("# Hello");
+const piped = retainedSource("<stdin>", "# Hello");
 ```
 
 Supplied text reports the stable identity `<eval>`: `inlineSource` attaches it,
@@ -8744,6 +8816,15 @@ operation resolve from the contextual working directory, never from the root's
 identity, and no temporary file is created: the text is captured inside the
 durable root import, so the journal holds it and a replay restores it without
 reading anything.
+
+Text a caller piped in reports `<stdin>` on exactly those terms, through the
+retained form: origin and source travel together, the origin is what positions
+and diagnostics carry, and the exact bytes are what the root binding and the
+durable root import retain. That pair is already the identity of a supplied
+root, so two different programs piped into two runs are two different roots
+without a digest of their own, and there is no stdin variant of
+`RootDocumentSource` and no stdin constructor. `<stdin>` is an origin and never
+a file: nothing of that name is read, created, or used as a base directory.
 
 Text a host generated reports `<plan>` on the same terms. `xmd plan` runs a
 packaged first-party command document that turns a Prompt into a Plan — asking a
@@ -10609,6 +10690,41 @@ itself, so an execution starting anywhere fails the row. Defined in §5.3.
 | DV13 | The no-execution seam | Identity factories, registered bodies, eval and exec, providers, agents, elicitation, journal and document-authored filesystem effects all stay at zero while only root and selected Markdown sources are read |
 | DV14 | One rule catalog | Expansion's aggregate printed error and validation's per-violation diagnostics are two renderings of one extracted body-contract walk |
 | DV15 | The package boundary | The operation and every version-1 type are `@executablemd/core` exports; no consumer reaches a private module |
+
+### Tier SI — Standard-input root documents
+
+The public rows run the real CLI with a document written to a real stdin pipe
+that is then closed, so what the command sees is bytes and an actual end of
+file. The private rows drive `runXmd` in-process: a read that fails, a read that
+is cancelled, and a reader that is never called are facts about a call inside
+the process.
+
+| # | Test | Verify |
+|---|------|--------|
+| SI1 | Explicit pipe | A document piped to `xmd run -` reaches end of file, exits zero, and renders its marker exactly once |
+| SI1b | End of file, not the first chunk | A stream the row owns holds bytes back: the read settles only once the stream ends, joins every chunk, and reassembles a character split across a chunk boundary |
+| SI2 | Separator form | The same boundary works through `xmd run -- -`, where `-` is the document argument rather than an option or a path |
+| SI3 | Complete read and preflight | An input whose last construct is a declaration violation refuses, naming that construct, and the `<File>` written above it never ran |
+| SI4 | Empty input | An immediately closed stdin exits zero with both streams empty and no artifact in the working directory |
+| SI5 | Root identity and retention | A positioned diagnostic reports `(<stdin>:3:1)`, and a `--journal` root import equals the existing closed repository-root shape with `path: "<stdin>"` and the exact supplied source — no stdin kind and no digest |
+| SI6 | Invocation cwd | A stdin root resolving a repository component finds it beside the invocation, and no file named `<stdin>` exists |
+| SI7 | Ordinary run configuration | A declared prop arrives through its generated `--props-*` option; `--verbose` written after the sentinel still echoes; a malformed run timeout is refused before anything is read; a valid one runs; and the permission flags keep their mutual exclusion |
+| SI8 | Read failure boundary | A controlled reader that fails once produces only the approved sentence and a nonzero exit, reaching no read, secret-detection announcement, provider, journal, root or authored effect; the host's own error text is absent. The same argv with a reader that answers does all of it |
+| SI9 | Reader cancellation | Halting the run waits for the waiting reader's own teardown, emits no read-failure diagnostic, and reaches no provider, journal, root or effect |
+| SI9b | Adapter cleanup | The real stream adapter's `data`, `end`, `close` and `error` listeners and its flowing state belong to the read's scope: cancelling it removes all four and pauses the stream |
+| SI10 | Help boundary | Generic run help calls the reader zero times; selected-root help calls it once, describes the properties `<stdin>` declares, and installs no provider and creates no journal. Proven for the controlled call count and again through a real pipe |
+| SI11 | Ordinary result behavior | A value root read from stdin puts its JSON result alone on stdout, with the rendered body on stderr under `--verbose` |
+| SI12 | Cancelling the launcher | A cancelled run whose command ignores `SIGTERM` returns only once the process group the launcher owns has reached its own `close`: teardown asks the group to terminate, escalates when the grace period passes, and is measurably neither instant nor unbounded. The command the run deliberately let escape is the test's to end, not the launcher's |
+| SI13 | Two roots, either order | A path written with `-`, with `-- -`, or with `-#Section` refuses, and so does each of them written the other way round, before standard input is read and before either candidate is inspected or run — neither marker is rendered and neither document's effect reaches the directory |
+| SI14 | One root written twice | Two `-` sentinels, and two `-#Section` references, each refuse as one root supplied more than once, with neither copy run |
+| SI15 | What is not a document argument | An option's value (`--journal -`), another command's argument (`xmd test -`), `--eval -` and an option nothing defines each keep the meaning they had: none is recovered as a root, none produces a conflict, and none executes what was piped in |
+
+The sentinel's negative controls belong to Tier IE, where the file and `--eval`
+roots they are held against live, and each of them supplies real standard input
+and proves it unread: `-e -` refuses; bare `xmd -` executes the file named `-`
+and renders that file's marker; `xmd run -#Section` executes `Section` of that
+same file, rendering its marker and not its sibling section's; and `xmd test -`
+keeps the test command's own path behavior.
 
 ### Tier SX — The `xmd syntax` command
 

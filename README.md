@@ -62,6 +62,15 @@ It answers with the properties this document declares and every target you can
 invoke, each named by the reference that selects it and described by what
 selecting it does.
 
+A run takes its root document from a path, from standard input, or from one
+`--eval` value. Writing `-` as the document reads standard input to end of file
+and runs what it read, so a command that produces a complete document composes
+with a run without a file in between:
+
+```bash
+deno task xmd plan "prepare the release" | deno task xmd run -
+```
+
 Preparation is common to all of them, so the block above is the document's own
 preamble: whichever target you select runs it first, and the checkout is
 prepared again before the work you asked for.

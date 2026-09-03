@@ -3,6 +3,7 @@
  *
  * Usage:
  *   xmd run <document-reference> [options]
+ *   xmd run - [options]                  (the document is read from stdin)
  *   xmd <document-reference> [options]   (run is the default command)
  *   xmd plan "<request>" [options]
  *   xmd upgrade [<tag>] [--status] [--allow-downgrade] [--allow-prerelease] [--journal <path>]
@@ -18,6 +19,7 @@
  *
  * Examples:
  *   xmd run packages/core/examples/hello-world.md
+ *   xmd plan "prepare the release" | xmd run -
  *   xmd plan "ask me for my age and write the result to a file"
  *   xmd packages/core/examples/hello-world.md --verbose
  *   xmd run packages/core/examples/hello-world.md --journal events.jsonl
@@ -138,6 +140,8 @@ import { unsupportedRepositories } from "./run-repositories.ts";
 import type { RepositoryInstaller } from "./run-repositories.ts";
 import { EVAL_ALIAS, EVAL_OPTION, evalGrammarError, readEvalFlags } from "./eval-source.ts";
 import type { EvalFlags } from "./eval-source.ts";
+import { STANDARD_INPUT_FAILURE, STANDARD_INPUT_PATH } from "./standard-input.ts";
+import type { StandardInputReader } from "./standard-input.ts";
 import {
   parseWorkflowRequest,
   runWorkflow,
@@ -244,7 +248,9 @@ const executionFields = {
 
 const runConfig = object({
   path: {
-    description: "markdown document to execute, optionally `#` and one target selector",
+    description:
+      "markdown document to execute, optionally `#` and one target selector; " +
+      "`xmd run -` reads the document from standard input instead",
     ...field(z.string().optional(), cli.argument()),
   },
   // Declared so `xmd run --help` lists it with every other option. The value is
@@ -1566,14 +1572,143 @@ interface PropsPhase {
   established?: EstablishedDefinition;
 }
 
+/** The document argument that names standard input, and nothing else. */
+const STANDARD_INPUT_ARGUMENT = "-";
+
+/**
+ * Whether these arguments select the `run` command by naming it.
+ *
+ * Read from argv rather than from a parse, exactly as `workflow` and `plan`
+ * are: the shorthand form resolves to the same parsed command, and the two have
+ * to stay distinguishable for the standard-input sentinel below.
+ */
+function namesRun(args: string[]): boolean {
+  return args[0] === "run";
+}
+
+interface DocumentArgument {
+  /** The reference the caller wrote, as they wrote it. */
+  reference: string;
+  /** argv with that token, and the separator protecting it, removed. */
+  rest: string[];
+}
+
+/** A reference's path half: everything before its first raw `#`. */
+function referencePath(reference: string): string {
+  const fragment = reference.indexOf("#");
+  return fragment === -1 ? reference : reference.slice(0, fragment);
+}
+
+/**
+ * The document argument a run named that the parser could not take.
+ *
+ * Configliere refuses every positional beginning with `-` and defines no
+ * end-of-options separator, so `-` is the one filename its option grammar
+ * leaves unwritable — and a reference selecting a section of that file is
+ * written the same way. Both are read out of the parser's own remainder, the
+ * tokens it did not consume, rather than out of raw argv, where a `-` another
+ * option took as its value (`--journal -`) looks identical.
+ *
+ * Nothing else beginning with `-` is one. A mistyped option stays an option the
+ * parser does not define, so a run written with one still refuses for want of a
+ * root rather than going looking for a file named after the flag.
+ *
+ * Removing the token is what lets everything written around it — before it or
+ * after it — parse as it would around an ordinary path.
+ */
+function takeDocumentArgument(args: string[], remainder: string[]): DocumentArgument | undefined {
+  const separated = remainder[0] === "--";
+  const [reference] = separated ? remainder.slice(1, 2) : remainder;
+  if (reference === undefined || referencePath(reference) !== STANDARD_INPUT_ARGUMENT) {
+    return undefined;
+  }
+  const at = args.length - remainder.length;
+  if (args[at] !== remainder[0]) {
+    return undefined;
+  }
+  return { reference, rest: [...args.slice(0, at), ...remainder.slice(separated ? 2 : 1)] };
+}
+
+interface RunGrammar {
+  /** Every reference the parser could not take, in the order written. */
+  references: string[];
+  /** argv with all of them removed. */
+  args: string[];
+  /** The parse of that argv. */
+  parsed: ReturnType<typeof xmd.parse>;
+}
+
+/**
+ * Read every document argument a run named, not just the first.
+ *
+ * The parser stops at the first token it does not define, so one pass sees one
+ * of them. A run that named two roots — a path and a `-`, two `-`s, a reference
+ * and a path — has to refuse whichever order they were written in, and it can
+ * only do that once all of them are known. Each pass removes one token, so this
+ * terminates; what comes back is what the run actually wrote.
+ */
+function readDocumentArguments(head: string[], recover: boolean): RunGrammar {
+  let args = head;
+  let parsed = xmd.parse({ args });
+  const references: string[] = [];
+  while (recover) {
+    const config = parsed.ok && !parsed.value.config.help ? parsed.value.config : undefined;
+    if (config?.name !== "run") {
+      break;
+    }
+    const taken = takeDocumentArgument(args, parsed.remainder.args ?? []);
+    if (taken === undefined) {
+      break;
+    }
+    references.push(taken.reference);
+    args = taken.rest;
+    parsed = xmd.parse({ args });
+  }
+  return { references, args, parsed };
+}
+
+/**
+ * Every root document this command line named, in the order it was written.
+ *
+ * The parsed path and each recovered reference stay separate facts until here,
+ * because which of them the parser happened to take depends on where the caller
+ * wrote them and a conflict does not.
+ */
+function writtenRoots(
+  head: string[],
+  references: readonly string[],
+  path: string | undefined,
+): string[] {
+  const pending = path === undefined ? [...references] : [...references, path];
+  const roots: string[] = [];
+  for (const token of head) {
+    const at = pending.indexOf(token);
+    if (at !== -1) {
+      pending.splice(at, 1);
+      roots.push(token);
+    }
+  }
+  return roots;
+}
+
 /**
  * Locate the root document, read what it declares, and lift its generated
  * options out of argv. A provisional parse finds the path: it stops at
  * the first token it does not define, which is exactly where
  * document-derived options begin. The inline document was already lifted out
  * of argv, so it needs no parse at all.
+ *
+ * Standard input is acquired here, before the document is inspected and
+ * therefore before every later phase of a run. Fixed grammar decides that it is
+ * the source — the command form the caller wrote, plus the sentinel document
+ * argument — and every grammar failure that could make the read pointless is
+ * answered first, so the host reads once or not at all.
  */
-function* preparePropsPhase(args: string[], evalFlags: EvalFlags): Operation<PropsPhase> {
+function* preparePropsPhase(
+  args: string[],
+  evalFlags: EvalFlags,
+  readStandardInput: StandardInputReader,
+): Operation<PropsPhase> {
   // `xmd plan` declares its own grammar and has no document to inspect: the
   // schema its generated options come from is written by an agent that has not
   // been asked anything yet. Everything below that reads a document, and every
@@ -1603,14 +1738,26 @@ function* preparePropsPhase(args: string[], evalFlags: EvalFlags): Operation<Pro
   // is what decides whether a later token is a third positional.
   const workflow = namesWorkflow(args);
   const separated = separateArgs(args);
-  const parsed = workflow ? separated.head : args;
-  const provisional = xmd.parse({ args: parsed });
+  const head = workflow ? separated.head : args;
+  // A run's parse takes at most one path, and a token beginning with `-` it
+  // takes none of. Every other command keeps whatever `-` already means to it.
+  const recovered = readDocumentArguments(head, !workflow);
+  const fixed = recovered.references.length === 0 ? args : recovered.args;
+  const parsed = recovered.args;
+  const provisional = recovered.parsed;
   // `program` short-circuits on `--version` and leaves no configuration
   // behind, so there is nothing to inspect.
   const selected = provisional.ok ? provisional.value.config : undefined;
   const command = selected && !selected.help ? selected.name : undefined;
-  const documentPath =
+  const parsedPath =
     selected && !selected.help && selected.name === "run" ? selected.config.path : undefined;
+  const roots = writtenRoots(head, recovered.references, parsedPath);
+  // The sentinel is one exact argument on one command form. Only the form the
+  // caller wrote separates `xmd run -` from the shorthand `xmd -`, which
+  // resolves to the same parsed command and names a file called `-`.
+  const standardInput = namesRun(args) && recovered.references.includes(STANDARD_INPUT_ARGUMENT);
+  const describeRoot = (root: string): string =>
+    standardInput && root === STANDARD_INPUT_ARGUMENT ? "standard input" : root;
   const [supplied] = evalFlags.values;
 
   if (selected && !selected.help && selected.name === "workflow") {
@@ -1624,40 +1771,78 @@ function* preparePropsPhase(args: string[], evalFlags: EvalFlags): Operation<Pro
 
   if (supplied !== undefined && command !== undefined && command !== "run") {
     return {
-      args,
+      args: fixed,
       bindings: [],
       error: `unrecognized option for xmd ${command}: ${EVAL_OPTION} — inline documents are exclusive to xmd run`,
     };
   }
 
-  if (supplied !== undefined && typeof documentPath === "string") {
+  if (supplied !== undefined && standardInput) {
     return {
-      args,
+      args: fixed,
       bindings: [],
       error:
-        `${documentPath} and ${EVAL_OPTION} both supply a root document — a run takes exactly one, ` +
-        `either \`xmd run ${documentPath}\` or \`xmd run ${EVAL_ALIAS} '<markdown>'\``,
+        `standard input and ${EVAL_OPTION} both supply a root document — a run takes exactly one, ` +
+        `either \`xmd run -\` or \`xmd run ${EVAL_ALIAS} '<markdown>'\``,
+    };
+  }
+
+  const [first, second] = roots;
+
+  if (supplied !== undefined && first !== undefined) {
+    return {
+      args: fixed,
+      bindings: [],
+      error:
+        `${first} and ${EVAL_OPTION} both supply a root document — a run takes exactly one, ` +
+        `either \`xmd run ${first}\` or \`xmd run ${EVAL_ALIAS} '<markdown>'\``,
+    };
+  }
+
+  // Decided from what was written rather than from what the parser managed to
+  // take, so the two orders of the same pair refuse alike — and neither
+  // candidate is read, inspected or run.
+  if (second !== undefined) {
+    const one = describeRoot(first);
+    const other = describeRoot(second);
+    return {
+      args: fixed,
+      bindings: [],
+      error:
+        one === other
+          ? `${one} supplies the root document more than once — a run takes exactly one`
+          : `${one} and ${other} both supply a root document — a run takes exactly one`,
     };
   }
 
   // A file path is a document reference: the first raw `#` starts a target
-  // selector. An inline document addresses nothing, so it is read as it is.
+  // selector. Supplied text addresses nothing, so it is read as it is.
   let root: RootDocumentSource | undefined;
   if (supplied !== undefined) {
     root = inlineSource(supplied);
-  } else if (typeof documentPath === "string") {
-    const reference = readReference(documentPath);
+  } else if (standardInput) {
+    // The one read, before this phase inspects anything. What came back is the
+    // whole document and its origin together, on the existing supplied-source
+    // terms: `<stdin>` is what positions and diagnostics report, and the exact
+    // text is what the root binding and the durable root import retain.
+    const input = yield* readStandardInput();
+    if (!input.ok) {
+      return { args: fixed, bindings: [], error: STANDARD_INPUT_FAILURE };
+    }
+    root = retainedSource(STANDARD_INPUT_PATH, input.value);
+  } else if (first !== undefined) {
+    const reference = readReference(first);
     if (!reference.ok) {
-      return { args, bindings: [], error: describeError(reference.error) };
+      return { args: fixed, bindings: [], error: describeError(reference.error) };
     }
     root = reference.value;
   }
 
   if (!root) {
-    const stray = findPropsFlag(args);
+    const stray = findPropsFlag(fixed);
     if (stray && command && command !== "run") {
       return {
-        args,
+        args: fixed,
         bindings: [],
         error:
           `unrecognized option for xmd ${command}: ${stray} — document properties are ` +
@@ -1666,18 +1851,18 @@ function* preparePropsPhase(args: string[], evalFlags: EvalFlags): Operation<Pro
     }
     if (stray) {
       return {
-        args,
+        args: fixed,
         bindings: [],
         error: `unrecognized option: ${stray} — document properties follow the document, as in \`xmd run <document> ${stray} …\``,
       };
     }
-    return { args, bindings: [] };
+    return { args: fixed, bindings: [] };
   }
 
   try {
     const document = yield* inspectDocument(root);
     const bindings = buildBindings(document.props);
-    const extraction = extractPropsArgs(args, bindings);
+    const extraction = extractPropsArgs(fixed, bindings);
     const addressable = root.source === undefined && document.targetInfo.length > 0;
     return {
       args: extraction.rest,
@@ -1690,7 +1875,7 @@ function* preparePropsPhase(args: string[], evalFlags: EvalFlags): Operation<Pro
     };
   } catch (error) {
     return {
-      args,
+      args: fixed,
       bindings: [],
       root,
       error: targetFailureReport(root, error) ?? describeError(error),
@@ -2008,9 +2193,18 @@ const REFERENCE_GRAMMAR_HELP = [
  * here beside the document-property section.
  */
 const RUN_SOURCE_HELP = [
-  `Exactly one root document is required: a path, or one ${EVAL_OPTION} value.`,
+  "Exactly one root document is required: a path, standard input through " +
+    `\`xmd run -\`, or one ${EVAL_OPTION} value.`,
   "Quote the document so the shell passes it as a single argument:",
   `  xmd ${EVAL_ALIAS} '# Hello'`,
+  "",
+  "`xmd run -` reads standard input to end of file and runs what it read, so a",
+  "command that writes a complete document composes with a run:",
+  '  xmd plan "prepare the release" | xmd run -',
+  "",
+  "Only that exact spelling reads it. A bare `xmd -` names a file called `-`,",
+  `\`xmd run -#Section\` selects a section of that file, and ${EVAL_OPTION} takes`,
+  "its document as the value.",
   "",
   "A path is a document reference, and everything after its first `#` selects",
   "one section of the document to run:",
@@ -2179,10 +2373,11 @@ function* dispatch(
   installService: HostServiceInstaller,
   upgrade: UpgradeAssembly,
   installRepositories: RepositoryInstaller,
+  readStandardInput: StandardInputReader,
   workflowHost: WorkflowHost | undefined,
   sessions: MachineSessionAssembly | undefined,
 ): Operation<void> {
-  const propsPhase = yield* preparePropsPhase(helpRequest.args, evalFlags);
+  const propsPhase = yield* preparePropsPhase(helpRequest.args, evalFlags, readStandardInput);
 
   if (propsPhase.error) {
     console.error(propsPhase.error);
@@ -2233,8 +2428,8 @@ function* dispatch(
       // above.
       if (!propsPhase.root) {
         console.error(
-          `xmd run requires a document path or an inline document — ` +
-            `\`xmd run <document.md>\` or \`xmd run ${EVAL_ALIAS} '<markdown>'\``,
+          "xmd run requires a root document — `xmd run <document.md>`, `xmd run -`, or " +
+            `\`xmd run ${EVAL_OPTION} '<markdown>'\``,
         );
         yield* exit(1);
         break;
@@ -2580,6 +2775,11 @@ export function* runXmd(
   // that installs nothing, so those runtimes describe the same vocabulary and
   // operate none of it.
   installRepositories: RepositoryInstaller,
+  // How this host reads a whole document from its own standard input, for the
+  // one command form that asks for one. The shared CLI reaches no stdin global
+  // of its own, and nothing a document can write reaches this: it is a value
+  // the entrypoint supplies, called at most once per invocation.
+  readStandardInput: StandardInputReader,
   // Defaults to the host that refuses. A caller driving this without naming a
   // workflow host has no run store, and inheriting one by omission is the
   // failure mode the whole boundary exists to prevent — so the default is the
@@ -2656,6 +2856,7 @@ export function* runXmd(
       installService,
       upgrade,
       installRepositories,
+      readStandardInput,
       workflowHost,
       sessions,
     );
@@ -2675,6 +2876,7 @@ export function* runXmd(
       installService,
       upgrade,
       installRepositories,
+      readStandardInput,
       workflowHost,
       sessions,
     ),

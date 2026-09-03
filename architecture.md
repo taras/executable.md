@@ -2757,6 +2757,47 @@ Forwarding, completion, cancellation and teardown belong to the executable
 block's own Effection scope. Cancelling the block stops the child and the tasks
 forwarding its output before the block settles.
 
+## The root document a run is given
+
+An `xmd run` starts from exactly one root document, and it comes from one of
+three places: a path, standard input, or one `--eval` value. Which one is fixed
+grammar — decided from the command form the caller wrote, before anything is
+read — so a run never discovers its source part-way through preparation.
+
+The command form is what separates the three, because a path and standard input
+can be written the same way. `-` is the one filename the option grammar leaves
+unwritable, so it reaches the reference grammar through the parser's own
+unconsumed tokens: bare `xmd -` names that file, `xmd run -#Section` selects a
+section of it, and only an invocation that explicitly names `run` with a
+document argument of exactly `-` means standard input instead.
+
+Standard input is the one of the three the shared CLI cannot reach for itself. A
+process's own stdin is host-specific state, so each runtime-named entrypoint
+supplies the operation that reads it, as a value passed into the CLI beside the
+service installer, the upgrade assembly and the repository installer. It is not
+a Context, a contextual Api, a public export, a syntax entry, a component or a
+document capability: nothing an authored document can name reaches it, replaces
+it, or asks it for a second read. The CLI calls it at most once per invocation,
+and only for the one command form that selected it.
+
+What comes back is admitted through the existing supplied-source protocol rather
+than a form of its own. The origin `<stdin>` and the exact text travel together,
+which is what source positions, diagnostics, the root binding and the durable
+root import all carry — so replay restores the retained source without reading
+anything, and two different programs are two different roots without a second
+identity field. `<stdin>` is an origin and never a path: no file of that name is
+read or created, and every relative operation still resolves from the contextual
+working directory.
+
+Acquisition is the first thing the run does. The complete input is in hand
+before document inspection, target and property preparation, Agent-stack or
+provider setup, the secret-detection announcement, journal creation, root
+admission and execution — so a host that cannot deliver a whole document reports
+one fixed sentence, exits nonzero and has reached none of them. It happens
+inside the run's existing deadline rather than opening a lifecycle of its own,
+and a waiting read is cancellable: cancellation tears the reader down and stays
+cancellation, never a read failure.
+
 ## Contextual run configuration
 
 Nothing has a timeout by default. Three contextual values bound three different
@@ -3803,6 +3844,7 @@ Status is measured against main.
 | `Expansion` / `getExpansion()` | describes the current logical element expansion | built on main |
 | document targets | catalogs a root document's addressable static headings, resolves one selector to one exact target, and projects the document to it before expansion | built on the #412 stack |
 | document-aware `xmd run … --help` | describes what one document declares and every target it addresses, each as a full document reference with the description its section states, by inspection alone | built on the #463 stack |
+| standard-input root documents | `xmd run -` and `xmd run -- -` read the whole root document from standard input, once, to end of file, and run it through the ordinary run profile. Fixed grammar selects it — the explicit `run` command form plus a document argument that is exactly `-`, read from the parser's own unconsumed remainder so a `-` another option took as its value is not one — and every other spelling keeps the meaning it had: the shorthand `xmd -` executes the file named `-`, `xmd run -#Section` executes that file's `Section`, another command's `-` is that command's, and `--eval -` keeps its refusal. `-` is the one filename the option grammar leaves unwritable, so the reference grammar reaches it and nothing else beginning with `-` is read as a document. The parsed path and every recovered reference stay separate facts until the grammar is settled, so a command line naming two roots refuses in either order, before the read and before either candidate is inspected. The reader is a value each runtime-named entrypoint supplies and the shared CLI never reaches a stdin global; what comes back is `retainedSource("<stdin>", source)`, adding no root-source variant, constructor, digest member or public API. The complete input is acquired before inspection, provider setup, the secret-detection announcement, journal creation, root admission and execution, inside the run's existing deadline; a failed read is one fixed sentence carrying no host error, input or path, and cancellation tears the reader down without becoming one | built on this stack |
 | targeted `xmd run` | reads a file argument as a document reference and executes the one exact target its selector resolved to, replacing the selector before execution rereads the file | built on the #412 stack |
 | targeted workflow definition | the V1 workflow definition optionally carries the exact canonical document target, which takes part in definition identity and in compatible reuse | built on the #412 stack; the workflow CLI does not supply one yet |
 | declared Markdown component | a trusted host declares exact first-party Markdown to one execution as immutable data on an `ExecutionInstallation`: name, origin, source, its SHA-256, the accepted forms, an optional statement of the props and return that must agree with the parsed source, and an optional private component closure. Admission parses the bytes and refuses a mismatched digest or schema, a non-canonical form, a name that is not a component name or is structural, a duplicate, a reserved-registration collision and a private name a registration also claims. Resolution places it in the protected tier with reserved registrations, above the workflow component bundle, repository files and every registered default. Live import and retained history are held to the declared origin, digest and bytes, private names resolve only while canonical core expands the declaring bytes' own body — by the authored occurrence rather than by the name, so an answer kept from a legitimate private import authorizes no later site, no alias, no copy of the definition, no invocation that is over and no later execution — including one that declares no Markdown at all — while a private name written anywhere else resolves to nothing before the bundle, the repository or a registration can answer for it — and `xmd syntax` and document validation describe the declared contract from the same declaration without describing the closure. Closure is per name: only the declared component and its private closure become canonical imports, and every other name in the execution stays the ordinary open import middleware may still answer | built on the #660 stack; no public component uses it yet (#660 PR 2) |

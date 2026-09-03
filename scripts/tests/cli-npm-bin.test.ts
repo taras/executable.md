@@ -14,6 +14,7 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { runShell, shellQuote } from "@executablemd/test-support/launch";
 import { ensure, until } from "effection";
 import { readTextFile, rm } from "@effectionx/fs";
 import { createHash } from "node:crypto";
@@ -126,6 +127,51 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
         yield* readTextFile(path.join(ROOT, PKG_DIR, "src/documents", asset)),
       );
     }
+  });
+
+  /**
+   * A program piped into the emitted bin, through a pipe that really closes.
+   *
+   * `xmd run -` reads standard input to end of file, and end of file is what a
+   * distribution can get wrong while every other test stays green: the shared
+   * CLI asks the host for the read, and each runtime entrypoint answers with
+   * its own stdin. This is the emitted Node entrypoint's answer, exercised the
+   * way a caller composes it rather than through argv.
+   */
+  it("runs a complete program piped into the emitted bin", function* () {
+    yield* ensure(removeNpmOutput);
+    const { version } = yield* readManifest(PKG_DIR, "deno.json");
+    const built = yield* buildCliPackage(version ?? "0.0.0-dev");
+    if (built.code !== 0) {
+      throw new Error(`build-npm.ts exited ${built.code}\n${built.stderr}`);
+    }
+
+    // Run from a directory that is not the package, so nothing the program
+    // renders could have come from a file beside the bin.
+    const elsewhere = yield* until(mkdtemp(path.join(tmpdir(), "xmd-npm-stdin-")));
+    yield* ensure(() => rm(elsewhere, { recursive: true, force: true }));
+    const line = `${shellQuote("node")} ${shellQuote(BIN)} run - --raw`;
+
+    const run = yield* runShell(line, {
+      cwd: elsewhere,
+      inheritEnv: true,
+      stdin: "# Piped\n\nNPM_STDIN_MARKER\n",
+    }).join();
+    if (run.code !== 0) {
+      throw new Error(`the emitted npm bin exited ${run.code}\n${run.stderr}`);
+    }
+    expect(run.stdout).toContain("NPM_STDIN_MARKER");
+    expect(run.stdout).not.toContain("ERROR");
+
+    // The origin travels with the text: a positioned diagnostic from this
+    // entrypoint names `<stdin>` rather than a path nothing could read back.
+    const positioned = yield* runShell(line, {
+      cwd: elsewhere,
+      inheritEnv: true,
+      stdin: "PREFIX\n\n<Else>stray</Else>\n",
+    }).join();
+    expect(positioned.code).toBe(1);
+    expect(positioned.stderr).toContain("(<stdin>:3:1)");
   });
 
   /**
