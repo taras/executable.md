@@ -39,28 +39,40 @@ const PAIR =
 /**
  * The release-link hover inverts the base rule: it inherits the eyebrow's
  * dim until hover, where it picks up the accent.
- *
- * The plan panels wrap rather than scroll, so every line is its own block
- * instead of a newline in the source — an instruction that wraps then takes a
- * 3ch hanging indent and its continuation aligns under the text rather than
- * under the number. Both panels take the same treatment: the two examples
- * differ only in the syntax around them.
  */
 const PAGE_CSS = ".release-link{color:inherit;letter-spacing:inherit;}" +
-  ".release-link:hover{color:var(--green);}" +
-  "#plan .code-panel pre{white-space:pre-wrap;overflow-wrap:break-word;}" +
-  "#plan .plan-line{display:block;}" +
-  "#plan .plan-step{display:block;padding-left:3ch;text-indent:-3ch;}" +
-  "#plan strong code{font-weight:800;}";
+  ".release-link:hover{color:var(--green);}";
 
-/** The instruction list both plan examples are built from, verbatim. */
-const PLAN_STEPS = [
-  "1. Read package.json and CHANGELOG.md.",
-  "2. Ask an agent to recommend the next semantic version and explain why.",
+/**
+ * One delegated listener serves every `copy` panel on the page. A terminal
+ * slab's lines carry a `$` the reader never wants pasted, so those are
+ * stripped; document source is copied as it stands.
+ */
+const COPY_SCRIPT = `document.addEventListener("click",function(e){
+var b=e.target.closest?e.target.closest("[data-copy]"):null;if(!b)return;
+var p=b.closest(".code-panel"),c=p&&p.querySelector("code");if(!c)return;
+var t=c.innerText;
+if(p.classList.contains("code-panel-terminal")){t=t.split("\\n").map(function(l){return l.replace(/^\\$ /,"");}).join("\\n");}
+navigator.clipboard.writeText(t).catch(function(){});
+var prev=b.textContent;b.textContent="✓";
+setTimeout(function(){b.textContent=prev;},1200);
+});`;
+
+/**
+ * The instruction list both plan examples are built from, verbatim. The
+ * panels scroll rather than reflow, so the wrap points are part of the
+ * example: a continuation is indented under the text, not under the number.
+ */
+const PLAN_LINES = [
+  "1. Read package.json and",
+  "  CHANGELOG.md.",
+  "2. Ask an agent to recommend the",
+  "  next semantic version and",
+  "  explain why.",
   "3. Validate the answer.",
   "4. Ask me to approve it.",
   "5. Write RELEASE.md.",
-];
+].join("\n");
 
 const RELEASE_MD: Tok[][] = [
   [bold("# Release")],
@@ -68,59 +80,19 @@ const RELEASE_MD: Tok[][] = [
   ["Run the tests."],
   [],
   ["```bash ", mod("exec")],
-  ["deno task test"],
+  ["npm test"],
   ["```"],
   [],
-  ["Now decide how these changes should be"],
-  ["versioned."],
+  ["Choose the next version."],
   [],
-  [key("<Let"), " value", dim("="), mod("{{")],
-  ["  ", "type", dim(": "), str('"object"'), dim(",")],
-  ["  ", "required", dim(": ["), str('"bump"'), dim("],")],
-  ["  ", "properties", dim(": {")],
-  ["    ", "bump", dim(": { "), "enum", dim(": [")],
-  [
-    "      ",
-    str('"patch"'),
-    dim(", "),
-    str('"minor"'),
-    dim(", "),
-    str('"major"'),
-  ],
-  ["    ", dim("] }")],
-  ["  ", dim("}")],
-  [mod("}}"), " as", dim("="), str('"schema"'), " ", key("/>")],
+  [key("<Prompt>")],
+  ["  Current version and release history:"],
   [],
-  [
-    key("<Parse"),
-    " schema",
-    dim("="),
-    mod("{schema}"),
-    " as",
-    dim("="),
-    str('"release"'),
-    key(">"),
-  ],
-  ["  ", key("<Prompt>")],
-  ["  Which version bump do these changes"],
-  ["  require? Return JSON matching:"],
+  ["  ", key("<File"), " path", dim("="), str('"package.json"'), " ", key("/>")],
+  ["  ", key("<File"), " path", dim("="), str('"CHANGELOG.md"'), " ", key("/>")],
   [],
-  ["  ", key("<Json"), " value", dim("="), mod("{schema}"), " ", key("/>")],
-  [],
-  ["  ```bash ", mod("exec")],
-  ["  git log --oneline main..HEAD"],
-  ["  ```"],
-  ["  ", key("</Prompt>")],
-  [key("</Parse>")],
-  [],
-  [
-    key("<Publish"),
-    " bump",
-    dim("="),
-    mod("{release.bump}"),
-    " ",
-    key("/>"),
-  ],
+  ["  What should the next version be: patch, minor, or major?"],
+  [key("</Prompt>")],
 ];
 
 const LOOP_MD: Tok[][] = [
@@ -333,25 +305,12 @@ const RUNTIMES: { name: string; body: string; lines: string[][] }[] = [
   },
 ];
 
-/** The plan instructions, one block per line. */
-function PlanSteps() {
-  return (
-    <>
-      {PLAN_STEPS.map((step) => (
-        <span key={step} class="plan-step">
-          {step}
-        </span>
-      ))}
-    </>
-  );
-}
-
 /** A terminal slab whose lines each open with a prompt. */
 function Terminal(
   { lines, noWrap }: { lines: string[][]; noWrap?: boolean },
 ) {
   return (
-    <CodeBlock command noWrap={noWrap}>
+    <CodeBlock command noWrap={noWrap} copy>
       {lines.map((parts, i) => (
         <Fragment key={i}>
           {i > 0 ? "\n" : null}
@@ -378,34 +337,31 @@ export default define.page(function Home({ url }) {
               <a
                 class="release-link"
                 href={`${GITHUB}/releases`}
+                target="_blank"
                 rel="noopener"
               >
                 {VERSION}
               </a>{" "}
               ·{" "}
-              <a class="release-link" href={GITHUB} rel="noopener">
+              <a class="release-link" href={GITHUB} target="_blank" rel="noopener">
                 Star on GitHub ↗
               </a>
             </span>
 
             <h1 style="margin:0;font-size:clamp(2.4rem,5vw,3.9rem);line-height:1.02;font-weight:800;letter-spacing:-0.03em;">
-              Stop rolling the dice in your workflows.
+              Minimize agentic work.
             </h1>
 
             <p style="margin:0;max-width:50ch;font-size:clamp(1.05rem,2.2vw,1.2rem);line-height:1.5;color:var(--body);">
-              A workflow written in prose has to be interpreted before anything
-              happens. <Term>xmd</Term> runs the document instead.{" "}
-              <strong style={STRONG}>
-                Turn what you've done before into a program. Leave only the
-                judgment to agents.
-              </strong>
+              Turn what you've done before into a program. Use agents only for
+              the judgment that remains.
             </p>
 
             <div style="display:flex;flex-wrap:wrap;align-items:center;gap:0.75rem 1.25rem;">
               <a class="btn btn-primary btn-lg push" href="#install">
                 Install xmd →
               </a>
-              <a class="link-rule" href={SPEC} rel="noopener">
+              <a class="link-rule" href={SPEC} target="_blank" rel="noopener">
                 Read the spec ↗
               </a>
             </div>
@@ -414,16 +370,7 @@ export default define.page(function Home({ url }) {
           <div style="display:flex;flex-direction:column;gap:1.125rem;min-width:0;">
             <div class="panel">
               <div class="panel-body">
-                <p style={P_SM}>
-                  <strong style={STRONG}>
-                    Markdown describes the workflow. XMD makes it run like a
-                    program.
-                  </strong>{" "}
-                  The fenced block marked <Term>exec</Term> runs, and{" "}
-                  <Term>{"<Parse>"}</Term>{" "}
-                  turns the model's answer into a value the next step uses.
-                </p>
-                <CodeBlock filename="release.md">
+                <CodeBlock filename="release.md" copy>
                   <Source lines={RELEASE_MD} />
                 </CodeBlock>
               </div>
@@ -450,7 +397,7 @@ export default define.page(function Home({ url }) {
             <div style={COLUMN}>
               <span class="eyebrow">AGENTS</span>
               <Terminal
-                lines={[[" xmd AGENTS.md#Implement --props-issue=41"]]}
+                lines={[[" xmd AGENTS.md#Implement --props-issue=342"]]}
               />
               <p style={P_SM}>
                 Load the issue, files, and other known context before the agent
@@ -482,8 +429,9 @@ export default define.page(function Home({ url }) {
             <div class="panel-head">The point</div>
             <div class="panel-body">
               <p style={CLAIM}>
-                The goal isn't autonomous agents. It's to minimize how much work
-                needs to remain agentic.
+                <strong style="font-weight:800;">
+                  Use the least autonomy that gets the job done.
+                </strong>
               </p>
             </div>
           </div>
@@ -517,6 +465,43 @@ export default define.page(function Home({ url }) {
           </a>
         </section>
 
+        {/* Plan */}
+        <section id="plan" class="section" style="gap:1.5rem;">
+          <div class="section-head">
+            <h2>Plans are made to be followed.</h2>
+          </div>
+
+          {/* Same instructions, two surfaces: the row states the equivalence. */}
+          <div class="grid" style={PAIR}>
+            <CodeBlock filename="CLI" copy>
+              <Prompt />
+              {" xmd plan "}
+              <span class="tok-str">{`"${PLAN_LINES}"`}</span>
+            </CodeBlock>
+
+            <CodeBlock filename="XMD" copy>
+              <span class="tok-key">{"<Plan>"}</span>
+              {`\n${PLAN_LINES}\n`}
+              <span class="tok-key">{"</Plan>"}</span>
+            </CodeBlock>
+          </div>
+
+          <p style={P_MD}>
+            <strong style={STRONG}>
+              <Term heavy>xmd plan</Term> is command-line shorthand for{" "}
+              <Term heavy>{"<Plan>"}</Term>.
+            </strong>{" "}
+            It turns your instructions into an XMD program using the components
+            available from <Term>xmd syntax</Term>.
+          </p>
+
+          <p style={P_MD}>
+            <strong style={STRONG}>Review it. Change it. Commit it.</strong>{" "}
+            Then run the program instead of asking an agent to figure the
+            workflow out again.
+          </p>
+        </section>
+
         {/* Compose */}
         <section id="compose" class="section" style="gap:1.5rem;">
           <div class="section-head">
@@ -540,14 +525,14 @@ export default define.page(function Home({ url }) {
                 is in the document, so the runtime knows when to stop trying.
               </p>
             </div>
-            <CodeBlock>
+            <CodeBlock copy>
               <Source lines={LOOP_MD} />
             </CodeBlock>
           </div>
 
           <div class="grid" style={`${PAIR}padding-top:0.5rem;`}>
             <div style={STACK}>
-              <CodeBlock>
+              <CodeBlock copy>
                 <Source lines={[...PARSE_MD, [], ...ELICIT_MD]} />
               </CodeBlock>
             </div>
@@ -572,18 +557,22 @@ export default define.page(function Home({ url }) {
               <p style={P_MD}>
                 Memory lives only in this run and its nested scopes.
               </p>
-              <p style={P_MD}>
-                <strong style={STRONG}>
-                  Angle-bracket components resolve to Markdown files.
-                </strong>{" "}
-                <Term>{"<Implementor />"}</Term> can be defined by{" "}
-                <Term>Implementor.md</Term>, so the same mechanism used by the
-                built-ins is available to your own workflows.
-              </p>
             </div>
-            <CodeBlock>
+            <CodeBlock copy>
               <Source lines={HANDOFF_MD} />
             </CodeBlock>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:0.5rem;min-width:0;padding-top:0.5rem;">
+            <h3 style={H3}>Build your own components.</h3>
+            <p style={P_MD}>
+              <strong style={STRONG}>
+                Angle-bracket components resolve to Markdown files.
+              </strong>{" "}
+              <Term>{"<Implementor />"}</Term> can be defined by{" "}
+              <Term>Implementor.md</Term>, so your own components compose
+              exactly like the ones shown here.
+            </p>
           </div>
         </section>
 
@@ -594,7 +583,7 @@ export default define.page(function Home({ url }) {
           </div>
 
           <div class="grid" style={PAIR}>
-            <CodeBlock filename="draft.md">
+            <CodeBlock filename="draft.md" copy>
               <Source lines={DRAFT_MD} />
             </CodeBlock>
 
@@ -617,66 +606,6 @@ export default define.page(function Home({ url }) {
               </p>
             </div>
           </div>
-        </section>
-
-        {/* Plan */}
-        <section id="plan" class="section" style="gap:1.5rem;">
-          <div class="section-head">
-            <h2>Plans are made to be followed.</h2>
-          </div>
-
-          {/* Same instructions, two surfaces: the row states the equivalence. */}
-          <div
-            class="grid"
-            style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr));align-items:start;"
-          >
-            <div style="display:flex;flex-direction:column;gap:0.625rem;min-width:0;">
-              <span class="eyebrow">CLI</span>
-              <CodeBlock command>
-                <span class="plan-line">
-                  <Prompt /> xmd plan "
-                </span>
-                <PlanSteps />
-                <span class="plan-line">"</span>
-              </CodeBlock>
-            </div>
-
-            <div style="display:flex;flex-direction:column;gap:0.625rem;min-width:0;">
-              <span class="eyebrow">XMD</span>
-              <CodeBlock>
-                <span class="plan-line">
-                  <Source lines={[[key("<Plan>")]]} />
-                </span>
-                <PlanSteps />
-                <span class="plan-line">
-                  <Source lines={[[key("</Plan>")]]} />
-                </span>
-              </CodeBlock>
-            </div>
-          </div>
-
-          <p style={P_MD}>
-            <strong style={STRONG}>
-              <Term>xmd plan</Term> is command-line shorthand for{" "}
-              <Term>{"<Plan>"}</Term>.
-            </strong>{" "}
-            Underneath, it expands <Term>{"<Plan>"}</Term>{" "}
-            with your instructions to produce an XMD program you can review,
-            change, commit, and run.
-          </p>
-
-          <p style={P_MD}>
-            <strong style={STRONG}>Planning is part of the language.</strong>
-            {" "}
-            <Term>{"<Plan>"}</Term> uses the components exposed by{" "}
-            <Term>xmd syntax</Term>, so it plans with the same vocabulary
-            available to you.
-          </p>
-
-          <p style={P_MD}>
-            Once the workflow says what you mean, run the program instead of
-            asking an agent to figure it out again.
-          </p>
         </section>
 
         {/* Durability */}
@@ -798,6 +727,7 @@ export default define.page(function Home({ url }) {
           <a
             class="btn btn-primary push"
             href={GITHUB}
+            target="_blank"
             rel="noopener"
             style="align-self:flex-start;"
           >
@@ -809,6 +739,7 @@ export default define.page(function Home({ url }) {
       <PageFooter />
 
       <style dangerouslySetInnerHTML={{ __html: PAGE_CSS }} />
+      <script dangerouslySetInnerHTML={{ __html: COPY_SCRIPT }} />
     </>
   );
 });

@@ -31,7 +31,9 @@ export function Header(
           <a href="/docs" style={active === "docs" ? LINK_ACTIVE : LINK}>
             Docs
           </a>
-          <a href={GITHUB} style={LINK} rel="noopener">GitHub ↗</a>
+          <a href={GITHUB} style={LINK} target="_blank" rel="noopener">
+            GitHub ↗
+          </a>
           <ThemeToggle />
         </nav>
       </div>
