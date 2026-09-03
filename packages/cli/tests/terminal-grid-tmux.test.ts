@@ -61,7 +61,7 @@ import {
 } from "../src/terminal/layout.ts";
 import type { LayoutCell } from "../src/terminal/layout.ts";
 import { usePaneChannels } from "../src/terminal/pane-channel.ts";
-import { runInPane, tmuxGridProvider } from "../src/terminal/provider.ts";
+import { createGridTeardown, runInPane, tmuxGridProvider } from "../src/terminal/provider.ts";
 import {
   foregroundTerminalGrid,
   underHangup,
@@ -83,6 +83,8 @@ import {
   FromWorkerSchema,
   paneSocketPath,
   paneTokenPath,
+  readFrames,
+  ToWorkerSchema,
   writeFrame,
 } from "../src/terminal/pane-protocol.ts";
 import {
@@ -1664,6 +1666,604 @@ describe("Tier TG20 — a pane launch reaches its own worker", () => {
  * language and validation and install no operational provider, so a document
  * that asks for a grid there is refused before a pane starts.
  */
+/** Settle once this child has gone, whether or not it already had. */
+function exited(child: ChildProcess): Operation<void> {
+  const done = withResolvers<void>();
+  const onExit = (): void => done.resolve();
+  if (child.exitCode !== null || child.signalCode !== null) {
+    done.resolve();
+  } else {
+    child.on("exit", onExit);
+  }
+  return (function* (): Operation<void> {
+    try {
+      yield* done.operation;
+    } finally {
+      child.off("exit", onExit);
+    }
+  })();
+}
+
+/** A shell that says when it started, and stays until it is signalled. */
+function useShellFixture(room: string): Operation<string> {
+  return resource<string>(function* (provide) {
+    const file = path.join(room, "shell");
+    yield* writeTextFile(
+      file,
+      ["#!/bin/sh", `echo $$ > "${room}/shell-pid"`, "while true; do sleep 0.05; done", ""].join(
+        "\n",
+      ),
+    );
+    yield* until(chmod(file, 0o755));
+    yield* provide(file);
+  });
+}
+
+/** A settlement that proved its pane free. */
+function quietSettlement(): Settlement {
+  return { method: "exited", quiet: true, swept: [], holders: [] };
+}
+
+/** How one scripted worker answers what the parent tells it. */
+type Reply = (
+  frame: ToWorker,
+  say: (message: FromWorker) => Operation<void>,
+  socket: Socket,
+) => Operation<void>;
+
+interface ScriptedWorker {
+  readonly socket: Socket;
+  /** Everything the parent told this worker, in order. */
+  readonly heard: ToWorker["type"][];
+}
+
+/**
+ * One pane's worker, over that pane's real socket, saying what a row scripts.
+ *
+ * A real connection through the real admission handshake, because the order
+ * being frozen is the order frames actually arrive in. What is scripted is the
+ * worker's *answers* — which is where the protocol failures live, and the one
+ * thing a real worker will not do on request.
+ */
+function useScriptedWorker(
+  directory: string,
+  ordinal: number,
+  reply: Reply,
+): Operation<ScriptedWorker> {
+  return resource<ScriptedWorker>(function* (provide) {
+    const socket = yield* useImpostor(directory, ordinal);
+    const token = (yield* readTextFile(paneTokenPath(directory, ordinal))).trim();
+    const heard: ToWorker["type"][] = [];
+    const frames = yield* readFrames(socket, (value) => ToWorkerSchema.parse(value));
+    yield* writeFrame(socket, {
+      type: "hello",
+      ordinal,
+      token,
+      pid: process.pid,
+      pgid: process.pid,
+      tty: "??",
+      isatty: [false, false, false],
+    });
+    yield* spawn(function* () {
+      let next = yield* frames.next();
+      while (!next.done) {
+        heard.push(next.value.type);
+        yield* reply(next.value, (message) => writeFrame(socket, message), socket);
+        next = yield* frames.next();
+      }
+    });
+    yield* provide({ socket, heard });
+  });
+}
+
+/** A worker that shuts down the way one that worked is supposed to. */
+function quiesces(hold?: Operation<void>): Reply {
+  return function* (frame, say, socket) {
+    if (frame.type !== "shutdown") {
+      return;
+    }
+    if (hold !== undefined) {
+      yield* hold;
+    }
+    yield* say({ type: "quiet", settlement: quietSettlement() });
+    yield* say({ type: "bye", holders: [] });
+    // A worker that has said goodbye is leaving, and its channel closing is the
+    // third thing the teardown requires. One that stayed would be a pane still
+    // holding a connection to a grid that is going away.
+    socket.destroy();
+  };
+}
+
+/** The link the teardown drives, wrapped so the row sees what it observed. */
+function loggedLink(link: PaneLink, log: string[]): PaneLink {
+  return {
+    ordinal: link.ordinal,
+    hello: link.hello,
+    *send(message) {
+      log.push(`${message.type}:${link.ordinal}`);
+      yield* link.send(message);
+    },
+    *next() {
+      const frame = yield* link.next();
+      log.push(frame === undefined ? `eof:${link.ordinal}` : `${frame.type}:${link.ordinal}`);
+      return frame;
+    },
+    connected: () => link.connected(),
+  };
+}
+
+interface Teardown {
+  readonly log: string[];
+  readonly directory: string;
+  readonly run: () => Operation<void>;
+  /** Every private socket and server this grid opened. */
+  readonly handles: (Socket | Server)[];
+}
+
+/**
+ * A teardown over real private channels, with the reader's client and the
+ * server standing in for what tmux does with them.
+ *
+ * The channels are real, so the closures and the path removal in the frozen
+ * order are the production ones. The two ends this fixture supplies are the two
+ * whose failures a row has to be able to choose.
+ */
+function useTeardown(options: {
+  readonly workers: readonly (Reply | undefined)[];
+  readonly detach?: () => Operation<void>;
+  readonly stop?: () => Operation<void>;
+}): Operation<Teardown> {
+  return resource<Teardown>(function* (provide) {
+    const log: string[] = [];
+    const handles: (Socket | Server)[] = [];
+    // One server per pane, created in pane order. Which pane a closure belongs
+    // to is read from the server that accepted the connection, so the order
+    // this row freezes is per-pane rather than per-event.
+    let panes = 0;
+    const belongs = new Map<Socket, number>();
+    const detachments: (() => void)[] = [];
+    const noteSocket = (socket: Socket, what: () => string): void => {
+      handles.push(socket);
+      const onClose = (): void => {
+        log.push(what());
+      };
+      socket.on("close", onClose);
+      detachments.push(() => socket.off("close", onClose));
+    };
+    const noteServer = (server: Server, what: () => string): void => {
+      handles.push(server);
+      const onClose = (): void => {
+        log.push(what());
+      };
+      server.on("close", onClose);
+      detachments.push(() => server.off("close", onClose));
+    };
+    yield* ensure(() => {
+      // This row's own listeners, off the emitters this row put them on.
+      for (const detach of detachments) {
+        detach();
+      }
+    });
+    const channels = yield* usePaneChannels(options.workers.length, {
+      onSocket: (socket) => noteSocket(socket, () => `socket-closed:${belongs.get(socket) ?? -1}`),
+      onServer: (server) => {
+        const ordinal = panes++;
+        const onConnection = (socket: Socket): void => {
+          belongs.set(socket, ordinal);
+        };
+        server.on("connection", onConnection);
+        detachments.push(() => server.off("connection", onConnection));
+        noteServer(server, () => `server-closed:${ordinal}`);
+      },
+    });
+    for (const [ordinal, reply] of options.workers.entries()) {
+      if (reply !== undefined) {
+        yield* useScriptedWorker(channels.directory, ordinal, reply);
+      }
+    }
+    const links: PaneLink[] = [];
+    for (const [ordinal, reply] of options.workers.entries()) {
+      if (reply !== undefined) {
+        links.push(loggedLink(yield* channels.link(ordinal), log));
+      }
+    }
+    const run = createGridTeardown({
+      detachReader:
+        options.detach ??
+        function* () {
+          log.push("detach");
+        },
+      links,
+      *closeChannels() {
+        yield* channels.close();
+      },
+      stopServer:
+        options.stop ??
+        function* () {
+          log.push("server-stopped");
+        },
+    });
+    yield* provide({ log, directory: channels.directory, run, handles });
+  });
+}
+
+describe("Tier TD — the combined teardown", () => {
+  it("TD1: concurrent destroys share one teardown, and every phase happens once", function* () {
+    const held = withResolvers<void>();
+    const fixture = yield* useTeardown({ workers: [quiesces(held.operation), quiesces()] });
+
+    const first = yield* spawn(() => fixture.run());
+    // Held inside the first worker's settlement, so the second destroy arrives
+    // while the first teardown is genuinely part-way through rather than
+    // racing it.
+    while (!fixture.log.includes("shutdown:0")) {
+      yield* sleep(5);
+    }
+    const second = yield* spawn(() => fixture.run());
+    held.resolve();
+    yield* first;
+    yield* second;
+
+    const once = (entry: string): number => fixture.log.filter((line) => line === entry).length;
+    for (const entry of ["detach", "shutdown:0", "shutdown:1", "server-stopped"]) {
+      expect([entry, once(entry)]).toEqual([entry, 1]);
+    }
+    // The channels too: one closure each, not one per caller.
+    for (const ordinal of [0, 1]) {
+      expect([ordinal, once(`socket-closed:${ordinal}`)]).toEqual([ordinal, 1]);
+      expect([ordinal, once(`server-closed:${ordinal}`)]).toEqual([ordinal, 1]);
+    }
+  });
+
+  it("TD2: a worker that was gone before it was asked refuses the teardown", function* () {
+    const fixture = yield* useTeardown({ workers: [quiesces()] });
+    fixture.handles.find((handle): handle is Socket => "destroy" in handle)?.destroy();
+    while (!fixture.log.includes("socket-closed:0")) {
+      yield* sleep(5);
+    }
+
+    let refusal = "";
+    try {
+      yield* fixture.run();
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+    expect(refusal).toContain("gone before it was asked to stop");
+  });
+
+  it("TD3: a goodbye before a settlement refuses", function* () {
+    const fixture = yield* useTeardown({
+      workers: [
+        function* (frame, say) {
+          if (frame.type === "shutdown") {
+            yield* say({ type: "bye", holders: [] });
+          }
+        },
+      ],
+    });
+
+    let refusal = "";
+    try {
+      yield* fixture.run();
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+    expect(refusal).toContain("said goodbye before it was proved free");
+  });
+
+  it("TD4: a settlement with no goodbye after it refuses", function* () {
+    const fixture = yield* useTeardown({
+      workers: [
+        function* (frame, say, socket) {
+          if (frame.type !== "shutdown") {
+            return;
+          }
+          yield* say({ type: "quiet", settlement: quietSettlement() });
+          // EOF where the goodbye belongs: settled, and never established free.
+          socket.destroy();
+        },
+      ],
+    });
+
+    let refusal = "";
+    try {
+      yield* fixture.run();
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+    expect(refusal).toContain("stopped answering before it was proved free");
+    expect(fixture.log).toContain("eof:0");
+  });
+
+  it("TD5: one pane's failure strands neither the next pane, the channels, nor the server", function* () {
+    const fixture = yield* useTeardown({
+      workers: [
+        function* (frame, say) {
+          if (frame.type === "shutdown") {
+            yield* say({ type: "bye", holders: [] });
+          }
+        },
+        quiesces(),
+      ],
+    });
+
+    let refusal = "";
+    try {
+      yield* fixture.run();
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+
+    // The first pane's failure is what surfaced, and everything acquired after
+    // it was still taken down.
+    expect(refusal).toContain("said goodbye before it was proved free");
+    expect(fixture.log).toContain("shutdown:1");
+    expect(fixture.log).toContain("bye:1");
+    for (const ordinal of [0, 1]) {
+      expect(fixture.log).toContain(`socket-closed:${ordinal}`);
+      expect(fixture.log).toContain(`server-closed:${ordinal}`);
+    }
+    expect(fixture.log).toContain("server-stopped");
+  });
+
+  it("TD6: the first failure is the one that surfaces", function* () {
+    const fixture = yield* useTeardown({
+      workers: [
+        function* (frame, say) {
+          if (frame.type === "shutdown") {
+            yield* say({ type: "bye", holders: [] });
+          }
+        },
+      ],
+      // deno-lint-ignore require-yield
+      *stop() {
+        throw new Error("the server would not stop");
+      },
+    });
+
+    let refusal = "";
+    try {
+      yield* fixture.run();
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+    // The pane, not the server: a later failure does not replace the reason the
+    // teardown could not establish this grid was gone.
+    expect(refusal).toContain("said goodbye before it was proved free");
+    expect(refusal).not.toContain("would not stop");
+  });
+
+  /** A worker that stays connected and says nothing. */
+  // deno-lint-ignore require-yield
+  const silent: Reply = function* () {};
+
+  it("TD10: a retry resumes at the phase that failed and re-asks no finished one", function* () {
+    const stops: string[] = [];
+    let refuse = true;
+    const fixture = yield* useTeardown({
+      workers: [quiesces()],
+      // deno-lint-ignore require-yield
+      *stop() {
+        stops.push("asked");
+        if (refuse) {
+          refuse = false;
+          throw new Error("the server would not stop");
+        }
+      },
+    });
+
+    let refusal = "";
+    try {
+      yield* fixture.run();
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+    expect(refusal).toContain("would not stop");
+
+    // The retry finishes the grid, and the phases that were proved done are not
+    // asked again: a worker that has already said goodbye and gone would answer
+    // the second ask as "a worker that was gone", which would replace the
+    // reason the first attempt could not finish with an artifact of its
+    // succeeding.
+    yield* fixture.run();
+    expect(stops.length).toBe(2);
+    expect(fixture.log.filter((line) => line === "shutdown:0").length).toBe(1);
+    expect(fixture.log.filter((line) => line === "bye:0").length).toBe(1);
+  });
+
+  it("TD8: a close request that fails is retried, and what closed stays closed", function* () {
+    const closed: string[] = [];
+    let panes = 0;
+    let refuse = true;
+    const channels = yield* usePaneChannels(2, {
+      onSocket(socket) {
+        socket.on("close", () => closed.push("socket"));
+      },
+      onServer(server) {
+        const ordinal = panes++;
+        server.on("close", () => closed.push(`server:${ordinal}`));
+        if (ordinal !== 0) {
+          return;
+        }
+        // One handle that refuses to be *asked*, once. A close request is as
+        // capable of failing as the wait after it, and the two have to be
+        // inside the same boundary or the failure escapes the retry.
+        const ask = server.close.bind(server);
+        server.close = (callback?: (error?: Error) => void) => {
+          if (refuse) {
+            refuse = false;
+            throw new Error("this handle refused to be closed");
+          }
+          return ask(callback);
+        };
+      },
+    });
+    yield* useScriptedWorker(channels.directory, 0, silent);
+    yield* useScriptedWorker(channels.directory, 1, silent);
+    yield* channels.link(0);
+    yield* channels.link(1);
+
+    let refusal = "";
+    try {
+      yield* channels.close();
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+    expect(refusal).toContain("refused to be closed");
+    // The handles after the failure were still asked, and closed.
+    expect(closed.filter((name) => name === "socket").length).toBe(2);
+    expect(closed).toContain("server:1");
+    expect(closed).not.toContain("server:0");
+
+    // The published settlement was cleared rather than remembered, so this call
+    // asks the handle that refused again — and nothing that already closed is
+    // closed a second time.
+    yield* channels.close();
+    for (const [name, times] of [
+      ["socket", 2],
+      ["server:0", 1],
+      ["server:1", 1],
+    ] as const) {
+      expect([name, closed.filter((entry) => entry === name).length]).toEqual([name, times]);
+    }
+  });
+
+  it("TD9: a teardown that fails refuses the run, and nothing after the grid goes", function* () {
+    // The document-level end of the same claim: a grid whose teardown could not
+    // establish the terminal was given back is a failed run, not a run with a
+    // warning in it.
+    const room = yield* useScratch();
+    const shell = yield* useShellFixture(room);
+    const script = yield* useScript();
+    const invocation = cliCommand([]);
+    // The server refuses to be killed the first time it is asked, so the last
+    // phase of the teardown cannot establish it is gone.
+    const tmux = createFakeTmux({
+      script,
+      clientCommand,
+      spawnPanes: true,
+      failOnce: { command: "kill-server", message: "refused" },
+    });
+    yield* ensure(() => {
+      tmux.stopPanes();
+    });
+    yield* writeTextFile(
+      path.join(room, "doc.md"),
+      [
+        "<Terminal.Grid columns={1}>",
+        '<Terminal title="Only" />',
+        "</Terminal.Grid>",
+        "",
+        "AFTER_THE_GRID",
+        "",
+      ].join("\n"),
+    );
+    yield* installControlledLauncher({ outcome: () => ({ exitCode: 0 }) });
+
+    let outcome: Result<Json> | undefined;
+    let output = "";
+    yield* scoped(function* () {
+      yield* foregroundTerminalGrid({
+        isTerminal: () => true,
+        createTmux: () => tmux,
+        env: { PATH: "/usr/bin:/bin", SHELL: shell },
+        // deno-lint-ignore require-yield
+        *askVersion() {
+          return { code: 0, stdout: "tmux 3.6a" };
+        },
+        workerCommand: function* (ordinal, at) {
+          return [
+            invocation.command,
+            ...invocation.arguments,
+            PANE_WORKER_COMMAND,
+            String(ordinal),
+            at,
+          ];
+        },
+      })();
+
+      yield* spawn(function* () {
+        while (!(yield* exists(`${room}/shell-pid`))) {
+          yield* sleep(15);
+        }
+        while (tmux.clients.length === 0) {
+          yield* sleep(15);
+        }
+        yield* tmux.say(`%client-detached ${tmux.clients[0] ?? ""}`);
+      });
+
+      const execution = yield* execute({
+        path: path.join(room, "doc.md"),
+        stream: new InMemoryStream(),
+        includes: [room],
+      });
+      const subscription = yield* execution.output;
+      let next = yield* subscription.next();
+      while (!next.done) {
+        output = next.value;
+        next = yield* subscription.next();
+      }
+      outcome = yield* execution;
+    });
+
+    expect(outcome?.ok).toBe(false);
+    const refusal = outcome?.ok === false ? String(outcome.error) : "";
+    expect(refusal).toContain("terminal server");
+    // Nothing private in it, and nothing after the grid ran.
+    expect(refusal).not.toContain(room);
+    expect(output).not.toContain("AFTER_THE_GRID");
+  });
+
+  it("TD7: the combined order is the frozen one", function* () {
+    const order: string[] = [];
+    let directory = "";
+    yield* scoped(function* () {
+      // Registered before the channels exist, so it runs after they are gone:
+      // the private paths are removed by the channels' own scope, last, once
+      // everything inside it has closed.
+      yield* ensure(function* () {
+        if (directory !== "" && !(yield* exists(directory))) {
+          order.push("paths-removed");
+        }
+      });
+      const fixture = yield* useTeardown({ workers: [quiesces(), quiesces()] });
+      directory = fixture.directory;
+      yield* fixture.run();
+      order.push(...fixture.log);
+    });
+
+    const at = (entry: string): number => order.indexOf(entry);
+    const last = (entry: string): number => order.lastIndexOf(entry);
+    // visible detach → worker settlements → holder-free goodbyes → worker
+    // channel closures → channel servers closed → server disappearance →
+    // private path removal.
+    expect(at("detach")).toBe(0);
+    for (const ordinal of [0, 1]) {
+      expect(at(`shutdown:${ordinal}`)).toBeGreaterThan(at("detach"));
+      expect(at(`quiet:${ordinal}`)).toBeGreaterThan(at(`shutdown:${ordinal}`));
+      expect(at(`bye:${ordinal}`)).toBeGreaterThan(at(`quiet:${ordinal}`));
+    }
+    // Each pane's four phases are that pane's, in order — panes are quiesced
+    // one at a time, so pane zero's channel closes while pane one has not been
+    // asked yet. What is global is the boundary after them: no server closes
+    // until every worker channel has.
+    for (const ordinal of [0, 1]) {
+      expect(at(`socket-closed:${ordinal}`)).toBeGreaterThan(at(`bye:${ordinal}`));
+      expect(at("server-closed:0")).toBeGreaterThan(at(`socket-closed:${ordinal}`));
+    }
+    expect(at("server-closed:1")).toBeGreaterThan(at("server-closed:0") - 1);
+    expect(at("server-stopped")).toBeGreaterThan(
+      Math.max(at("server-closed:0"), at("server-closed:1")),
+    );
+    expect(at("paths-removed")).toBe(order.length - 1);
+  });
+});
+
+/** One entrypoint's source, for the rows about what a host assembles. */
+function entrypointSource(name: string): Operation<string> {
+  return readTextFile(path.resolve("packages/cli/src", name));
+}
+
 describe("Tier TH — host installation", () => {
   it("TH1: without a terminal, a grid refuses before anything exists", function* () {
     const before = yield* until(readdir(tmpdir()));
@@ -1704,39 +2304,6 @@ describe("Tier TH — host installation", () => {
     expect(refusal).toContain("cannot open a terminal grid");
     expect(refusal).toContain("older than tmux");
   });
-
-  /** Settle once this child has gone, whether or not it already had. */
-  function exited(child: ChildProcess): Operation<void> {
-    const done = withResolvers<void>();
-    const onExit = (): void => done.resolve();
-    if (child.exitCode !== null || child.signalCode !== null) {
-      done.resolve();
-    } else {
-      child.on("exit", onExit);
-    }
-    return (function* (): Operation<void> {
-      try {
-        yield* done.operation;
-      } finally {
-        child.off("exit", onExit);
-      }
-    })();
-  }
-
-  /** A shell that says when it started, and stays until it is signalled. */
-  function useShellFixture(room: string): Operation<string> {
-    return resource<string>(function* (provide) {
-      const file = path.join(room, "shell");
-      yield* writeTextFile(
-        file,
-        ["#!/bin/sh", `echo $$ > "${room}/shell-pid"`, "while true; do sleep 0.05; done", ""].join(
-          "\n",
-        ),
-      );
-      yield* until(chmod(file, 0o755));
-      yield* provide(file);
-    });
-  }
 
   it("TH4: the installed SIGHUP listener cancels the run and tears the grid down", function* () {
     const room = yield* useScratch();
@@ -1837,6 +2404,118 @@ describe("Tier TH — host installation", () => {
     expect(tmux.alive()).toBe(false);
     expect(directory).not.toBe("");
     expect(yield* exists(directory)).toBe(false);
+  });
+
+  it("TH5: an ordinary run shows the grid, and the reader's detach ends it", function* () {
+    // The same host, the same document and the same live grid as TH4. What
+    // differs is the ending: the reader leaves rather than the terminal going
+    // away, so the grid settles and the document carries on — which is the
+    // branch `useHangupCancellation()` has to hand the result back through.
+    const room = yield* useScratch();
+    const shell = yield* useShellFixture(room);
+    const script = yield* useScript();
+    const invocation = cliCommand([]);
+    const tmux = createFakeTmux({ script, clientCommand, spawnPanes: true });
+    yield* ensure(() => {
+      tmux.stopPanes();
+    });
+    yield* writeTextFile(
+      path.join(room, "doc.md"),
+      [
+        "<Terminal.Grid columns={1}>",
+        '<Terminal title="Only" />',
+        "</Terminal.Grid>",
+        "",
+        "AFTER_THE_GRID",
+        "",
+      ].join("\n"),
+    );
+    yield* installControlledLauncher({ outcome: () => ({ exitCode: 0 }) });
+
+    let directory = "";
+    let outcome: Result<Json> | undefined;
+    let output = "";
+    yield* scoped(function* () {
+      yield* foregroundTerminalGrid({
+        isTerminal: () => true,
+        createTmux: () => tmux,
+        env: { PATH: "/usr/bin:/bin", SHELL: shell },
+        // deno-lint-ignore require-yield
+        *askVersion() {
+          return { code: 0, stdout: "tmux 3.6a" };
+        },
+        workerCommand: function* (ordinal, at) {
+          directory = at;
+          return [
+            invocation.command,
+            ...invocation.arguments,
+            PANE_WORKER_COMMAND,
+            String(ordinal),
+            at,
+          ];
+        },
+      })();
+
+      yield* spawn(function* () {
+        // Driven by the grid's own progress: the pane child started, and the
+        // server has a reader's client to report the detach of. No SIGHUP.
+        while (!(yield* exists(`${room}/shell-pid`))) {
+          yield* sleep(15);
+        }
+        while (tmux.clients.length === 0) {
+          yield* sleep(15);
+        }
+        yield* tmux.say(`%client-detached ${tmux.clients[0] ?? ""}`);
+      });
+
+      const execution = yield* execute({
+        path: path.join(room, "doc.md"),
+        stream: new InMemoryStream(),
+        includes: [room],
+      });
+      const subscription = yield* execution.output;
+      let next = yield* subscription.next();
+      while (!next.done) {
+        output = next.value;
+        next = yield* subscription.next();
+      }
+      outcome = yield* execution;
+    });
+
+    // The exact result, handed back through the hangup wrapper rather than
+    // swallowed by it: a handler that answered with nothing would be refused
+    // for having returned before the document produced a result.
+    expect(outcome).toEqual(Ok("\n\nAFTER_THE_GRID\n"));
+    // The reader closed the grid; the document went on.
+    expect(output).toContain("AFTER_THE_GRID");
+
+    // And it went on over a grid that had actually been taken down: the pane's
+    // child, the workers, the server and the private directory are all gone.
+    const shellPid = Number((yield* readTextFile(`${room}/shell-pid`)).trim());
+    expect(shellPid).toBeGreaterThan(0);
+    yield* installDenoTerminalProcesses();
+    expect(yield* processReachable(shellPid)).toBe(false);
+    for (const child of tmux.started) {
+      yield* exited(child);
+    }
+    expect(tmux.alive()).toBe(false);
+    expect(directory).not.toBe("");
+    expect(yield* exists(directory)).toBe(false);
+  });
+
+  it("TH6: the Deno and compiled entrypoints present grids; Node and Bun do not", function* () {
+    for (const name of ["deno.ts", "compiled.ts"]) {
+      expect((yield* entrypointSource(name)).includes("foregroundTerminalGrid()")).toBe(true);
+    }
+    for (const name of ["node.ts", "bun.ts"]) {
+      // Not a different grid: no grid at all, and therefore the default the
+      // shared entry declares — which is the installation that validates a grid
+      // and presents none.
+      expect((yield* entrypointSource(name)).includes("foregroundTerminalGrid")).toBe(false);
+    }
+    expect(yield* entrypointSource("cli.ts")).toContain(
+      "installTerminalGrid: TerminalGridInstaller = unsupportedTerminalGrid",
+    );
   });
 
   it("TH3: a host that installs no provider still validates the grid", function* () {

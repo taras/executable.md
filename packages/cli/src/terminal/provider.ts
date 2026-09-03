@@ -97,6 +97,97 @@ export function tmuxGridProvider(deps: TmuxProviderDependencies): TerminalProvid
  *   ├─ the tmux server and its panes (`kill-server`, proved)
  *   └─ the admitted worker links
  */
+/** Everything one grid's teardown has to take down, in the order it does. */
+export interface GridParts {
+  /** Ask the reader's client to leave, and establish that it did. */
+  detachReader(): Operation<void>;
+  /** Every admitted worker link, in pane order. */
+  readonly links: readonly PaneLink[];
+  /** Close every private socket and server. */
+  closeChannels(): Operation<void>;
+  /** Stop the server, and establish it is gone. */
+  stopServer(): Operation<void>;
+}
+
+/**
+ * The one teardown, in the one order, however a grid ends.
+ *
+ * Core calls it through `destroy()`; the composite's finalizer calls it when
+ * core never got that far, which is what a preparation that failed halfway
+ * leaves. A second caller waits on the first rather than skipping past
+ * unfinished work, and a teardown that *failed* is retried rather than
+ * remembered as done — marking it complete before it succeeded would let the
+ * run continue past a pane it never established was free.
+ *
+ * The order is the contract, and every step is a proof rather than a request:
+ *
+ *   detach the reader's client and establish it stopped
+ *     → ask every acquired worker to shut down
+ *     → require its settlement, its holder-free goodbye, and its channel
+ *       closing, in that order
+ *     → close every private channel
+ *     → stop the server and establish it is gone
+ *
+ * Every acquired resource is attempted even after an earlier one failed, so one
+ * bad worker does not strand the server, the channels or the paths. The first
+ * failure is what surfaces.
+ */
+export function createGridTeardown(parts: GridParts): () => Operation<void> {
+  /** The one teardown in flight, so repeat callers observe it rather than skip it. */
+  let tearing: ReturnType<typeof withResolvers<void>> | undefined;
+  let complete = false;
+  const steps: (() => Operation<void>)[] = [
+    () => parts.detachReader(),
+    ...parts.links.map((link) => () => quiesceWorker(link)),
+    // Channels before the server: a socket still open onto a pane of a server
+    // that has gone is a handle onto nothing.
+    () => parts.closeChannels(),
+    () => parts.stopServer(),
+  ];
+  /** Phases already proved done, so a retry resumes rather than restarts. */
+  const settled = new Set<number>();
+
+  return function* tearDown(): Operation<void> {
+    if (complete) {
+      return;
+    }
+    if (tearing) {
+      return yield* tearing.operation;
+    }
+    tearing = withResolvers<void>();
+    let failure: Error | undefined;
+    const failed = (error: unknown): void => {
+      failure = failure ?? (error instanceof Error ? error : new Error(String(error)));
+    };
+
+    for (const [index, step] of steps.entries()) {
+      if (settled.has(index)) {
+        // A phase that succeeded is not asked again. Re-asking would fail for
+        // the wrong reason — a worker that has already said goodbye and gone is
+        // "a worker that was gone" the second time — and that answer would
+        // replace the reason the first attempt actually could not finish.
+        continue;
+      }
+      try {
+        yield* step();
+        settled.add(index);
+      } catch (error) {
+        failed(error);
+      }
+    }
+
+    if (failure !== undefined) {
+      // Retryable: `tearing` is cleared, so a later caller runs the phases that
+      // did not finish rather than being told a teardown that failed had.
+      tearing.reject(failure);
+      tearing = undefined;
+      throw failure;
+    }
+    complete = true;
+    tearing.resolve();
+  };
+}
+
 function usePresentedGrid(
   deps: TmuxProviderDependencies,
   request: TerminalGridRequest,
@@ -141,91 +232,24 @@ function usePresentedGrid(
 
     let shown = 0;
     let visible: VisibleClient | undefined;
-    /** The one teardown in flight, so repeat callers observe it rather than skip it. */
-    let tearing: ReturnType<typeof withResolvers<void>> | undefined;
-    let complete = false;
 
-    /**
-     * The one teardown, in the one order, however this grid ends.
-     *
-     * Core calls it through `destroy()`; the finalizer calls it when core never
-     * got that far, which is what a preparation that failed halfway leaves. A
-     * second caller waits on the first rather than skipping past unfinished
-     * work, and a teardown that *failed* is retried rather than remembered as
-     * done — marking it complete before it succeeded would let the run continue
-     * past a pane it never established was free.
-     *
-     * The order is the contract, and every step is a proof rather than a
-     * request:
-     *
-     *   detach the reader's client and establish it stopped
-     *     → ask every acquired worker to shut down
-     *     → require its settlement, its holder-free goodbye, and its channel
-     *       closing, in that order
-     *     → close every private channel
-     *     → stop the server and establish it is gone
-     *
-     * Every acquired resource is attempted even after an earlier one failed, so
-     * one bad worker does not strand the server, the channels or the paths. The
-     * first failure is what surfaces.
-     */
-    function* tearDown(): Operation<void> {
-      if (complete) {
-        return;
-      }
-      if (tearing) {
-        return yield* tearing.operation;
-      }
-      tearing = withResolvers<void>();
-      let failure: Error | undefined;
-      const failed = (error: unknown): void => {
-        failure = failure ?? (error instanceof Error ? error : new Error(String(error)));
-      };
-
-      // The reader's client first, and asked rather than told: a client that
-      // detaches restores the terminal, and one that is killed cannot.
-      if (visible !== undefined) {
+    const tearDown = createGridTeardown({
+      *detachReader(): Operation<void> {
+        // The reader's client first, and asked rather than told: a client that
+        // detaches restores the terminal, and one that is killed cannot.
+        if (visible === undefined) {
+          return;
+        }
         const client = visible;
         visible = undefined;
-        try {
-          yield* grid.detach(client);
-        } catch (error) {
-          failed(error);
-        }
-      }
-
-      for (const link of links) {
-        try {
-          yield* quiesceWorker(link);
-        } catch (error) {
-          failed(error);
-        }
-      }
-
-      // Channels before the server: a socket still open onto a pane of a server
-      // that has gone is a handle onto nothing.
-      try {
-        yield* channels.close();
-      } catch (error) {
-        failed(error);
-      }
-
-      try {
+        yield* grid.detach(client);
+      },
+      links,
+      closeChannels: () => channels.close(),
+      stopServer: function* (): Operation<void> {
         yield* grid.stop();
-      } catch (error) {
-        failed(error);
-      }
-
-      if (failure !== undefined) {
-        // Retryable: `tearing` is cleared, so a later caller runs it again
-        // rather than being told a teardown that failed had finished.
-        tearing.reject(failure);
-        tearing = undefined;
-        throw failure;
-      }
-      complete = true;
-      tearing.resolve();
-    }
+      },
+    });
 
     yield* ensure(function* () {
       yield* tearDown();
