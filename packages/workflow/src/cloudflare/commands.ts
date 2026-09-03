@@ -14,6 +14,11 @@
  * would be a runner deciding what the owner does.
  */
 
+import {
+  type DocumentExecutionCompletion,
+  parseDocumentExecutionCompletion,
+} from "../storage/record.ts";
+
 /** The commands a runner may send. */
 export type CommandName = "frontier" | "materialize" | "commit" | "settle";
 
@@ -23,7 +28,6 @@ export type CommandRefusal =
   | "unknown-command"
   | "unknown-member"
   | "malformed-member"
-  | "duplicate-conflict"
   | "too-large";
 
 export class CommandError extends Error {
@@ -69,10 +73,19 @@ export interface CommitCommand extends CommandEnvelope {
   readonly events: readonly string[];
 }
 
-/** Publish the run's resulting status. */
+/**
+ * Publish how a document execution ended, and what the run becomes.
+ *
+ * The completion is the shared provider-neutral record, parsed with the shared
+ * parser rather than a private approximation — the owner and the local host
+ * have to agree about what a completion *is*, and two readers of one shape is
+ * how they stop agreeing. The expected root is carried so the owner can refuse
+ * a settlement proposed against a frontier that has moved.
+ */
 export interface SettleCommand extends CommandEnvelope {
   readonly command: "settle";
-  readonly status: string;
+  readonly completion: DocumentExecutionCompletion;
+  readonly expectedWorkspaceRootId: string;
 }
 
 export interface ContentChunk {
@@ -102,7 +115,7 @@ const MEMBERS: Record<CommandName, readonly string[]> = {
     "proposedWorkspaceRootId",
     "events",
   ],
-  settle: [...ENVELOPE, "status"],
+  settle: [...ENVELOPE, "completion", "expectedWorkspaceRootId"],
 };
 
 function object(value: unknown): Record<string, unknown> {
@@ -185,7 +198,19 @@ export function parseCommand(raw: string): RunnerCommand {
     return { id, command, workspaceRootId: text(members, "workspaceRootId") };
   }
   if (command === "settle") {
-    return { id, command, status: text(members, "status") };
+    // The shared parser decides what a completion is. Its failure becomes this
+    // transport's own closed refusal: the parser's message names members and
+    // values a request supplied, and none of that belongs on the wire.
+    const completion = parseDocumentExecutionCompletion(members["completion"]);
+    if (!completion.ok) {
+      throw new CommandError("malformed-member");
+    }
+    return {
+      id,
+      command,
+      completion: completion.value,
+      expectedWorkspaceRootId: text(members, "expectedWorkspaceRootId"),
+    };
   }
   const expectedJournalEventId = members["expectedJournalEventId"];
   if (expectedJournalEventId !== null && typeof expectedJournalEventId !== "string") {

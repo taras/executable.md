@@ -17,6 +17,9 @@ import type { Context, Operation } from "effection";
 import { Component } from "../component-api.ts";
 import { updateOwn } from "../scope-local.ts";
 import { RESERVED_STRUCTURAL } from "../structural.ts";
+import { isComponentName } from "../component-name.ts";
+
+export { isComponentName };
 import { compilePropsSchema, compileReturnsSchema } from "../validate.ts";
 import type {
   ComponentRegistry,
@@ -78,20 +81,6 @@ const OwnContributions: Context<OwnIndex> = createContext<OwnIndex>(
   "component.registry.own",
   new Map(),
 );
-
-const SEGMENT = /^[A-Z][A-Za-z0-9_]*$/;
-
-/**
- * Whether `name` is spelled the way a document writes a component name.
- *
- * The grammar registration is held to, offered as a predicate so a host
- * deciding what a name may be does not restate it. It answers about spelling
- * alone: a name that passes may still be structural syntax, a reserved
- * registration, or a name nothing supplies.
- */
-export function isComponentName(name: string): boolean {
-  return name.length > 0 && name.split(".").every((segment) => SEGMENT.test(segment));
-}
 
 function kindOf(registration: ComponentRegistration): Kind {
   return registration.reserved === true ? "reserved" : "default";
