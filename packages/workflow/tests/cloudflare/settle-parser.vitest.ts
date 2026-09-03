@@ -116,8 +116,17 @@ describe("a root identity in a command", () => {
 
   /** Every root field in the private command shapes, by the request it sits in. */
   const fields: Record<string, (root: unknown) => string> = {
-    "materialize.workspaceRootId": (root) =>
-      JSON.stringify({ id: "m1", command: "materialize", workspaceRootId: root }),
+    "root.workspaceRootId": (root) =>
+      JSON.stringify({ id: "m1", command: "root", workspaceRootId: root }),
+    "content.workspaceRootId": (root) =>
+      JSON.stringify({
+        id: "r1",
+        command: "content",
+        workspaceRootId: root,
+        kind: "blob",
+        digest: ROOT,
+        sourceManifest: ROOT,
+      }),
     "commit.expectedWorkspaceRootId": (root) => commit({ expectedWorkspaceRootId: root }),
     "commit.proposedWorkspaceRootId": (root) => commit({ proposedWorkspaceRootId: root }),
     "settle.expectedWorkspaceRootId": (root) => settle({ expectedWorkspaceRootId: root }),
@@ -129,7 +138,6 @@ describe("a root identity in a command", () => {
       command: "commit",
       expectedWorkspaceRootId: ROOT,
       expectedJournalEventId: null,
-      content: [],
       proposedWorkspaceRootId: ROOT,
       events: [],
       ...overrides,

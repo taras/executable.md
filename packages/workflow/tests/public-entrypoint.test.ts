@@ -22,6 +22,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { until } from "effection";
+import { readTextFile } from "@effectionx/fs";
 import { spawnSync } from "node:child_process";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -52,6 +53,7 @@ const PROBE = fileURLToPath(new URL("./support/public-entrypoint-probe.ts", impo
 const HELPER_MODULE = fileURLToPath(
   new URL("./support/credential-helper-entry.ts", import.meta.url),
 );
+const CLOUDFLARE_ENTRYPOINT = fileURLToPath(new URL("../cloudflare.ts", import.meta.url));
 
 describe("workflow published Deno entrypoint", () => {
   it("offers no route from the entrypoint to an authenticated invocation", function* () {
@@ -153,10 +155,25 @@ describe("workflow published Deno entrypoint", () => {
       "useGitComposition",
       "denoGitAuthentication",
       "denoCredentialBroker",
+      "RemoteReadLink",
+      "cloudflareReadLink",
+      "stageCloudflareContent",
     ]) {
       expect(reachable).not.toContain(seam);
     }
     expect(COMPOSITION_IS_NOT_A_KEY).toBe(false);
     expect(yield* until(Promise.resolve(true))).toBe(true);
+  });
+
+  it("keeps the Cloudflare private protocol out of its host entrypoint", function* () {
+    const source = yield* readTextFile(CLOUDFLARE_ENTRYPOINT);
+    for (const privateModule of [
+      "commands.ts",
+      "acquisition.ts",
+      "dispatcher.ts",
+      "private-schema.ts",
+    ]) {
+      expect(source).not.toContain(privateModule);
+    }
   });
 });

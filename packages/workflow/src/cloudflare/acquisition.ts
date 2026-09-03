@@ -105,10 +105,12 @@ export function acquireExecutor(
   socket: WebSocket,
   runId: string,
   acquisitionId: string,
+  beforeAccept: () => void = () => undefined,
 ): AcquisitionAttachment {
   if (acquisitionHolders(ctx).length > 0) {
     throw new AcquisitionError("already-running");
   }
+  beforeAccept();
   const attachment: AcquisitionAttachment = { kind: "executor", runId, acquisitionId };
   ctx.acceptWebSocket(socket, [EXECUTOR_TAG]);
   // Bounded, and only what admission needs to be reconstructed after an
@@ -130,6 +132,17 @@ export function requireAcquisition(
   socket: WebSocket,
   runId: string,
 ): AcquisitionAttachment {
+  const mine = requireExecutorSocket(ctx, socket);
+  if (mine.runId !== runId) {
+    throw new AcquisitionError("wrong-run");
+  }
+  return mine;
+}
+
+export function requireExecutorSocket(
+  ctx: AcquisitionContext,
+  socket: WebSocket,
+): AcquisitionAttachment {
   const live = acquisitionHolders(ctx);
   if (live.length === 0) {
     throw new AcquisitionError("not-acquired");
@@ -142,9 +155,6 @@ export function requireAcquisition(
   if (live.length > 1) {
     // Two live holders is a state this module refuses to choose between.
     throw new AcquisitionError("already-running");
-  }
-  if (mine.held.runId !== runId) {
-    throw new AcquisitionError("wrong-run");
   }
   return mine.held;
 }

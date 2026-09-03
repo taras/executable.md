@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import { z } from "zod";
 import type { Database as CloudflareDatabase } from "../../../vendor/cloudflare-computer-dofs/generated/storage.js";
 import { buildManifest } from "../../../vendor/cloudflare-computer-dofs/generated/sync/manifests.js";
 import type { RunConnection, RunTransaction } from "../connections.ts";
@@ -25,33 +24,18 @@ import {
   workspaceRoot,
   WORKSPACE_ROOT_FORMAT,
 } from "./manifest.ts";
-
-const decoder = new TextDecoder("utf-8", { fatal: true });
-const SHA256 = /^[0-9a-f]{64}$/;
-
-const dofsManifestSchema = z
-  .object({
-    version: z.literal(1),
-    chunks: z.array(
-      z
-        .object({
-          hash: z.string().regex(SHA256),
-          size: z.number().int().safe().positive(),
-        })
-        .strict(),
-    ),
-  })
-  .strict();
+import {
+  decodeDofsManifest as decodeSharedDofsManifest,
+  type DofsManifest,
+  SHA256,
+} from "../../workspace/root-manifest.ts";
 
 export interface DofsChunk {
   readonly hash: Uint8Array;
   readonly size: number;
 }
 
-export interface DofsManifest {
-  readonly size: number;
-  readonly chunks: readonly { readonly hash: string; readonly size: number }[];
-}
+export type { DofsManifest } from "../../workspace/root-manifest.ts";
 
 interface NodeRow {
   readonly inode: number;
@@ -216,9 +200,12 @@ export function snapshotWorkspace(
   for (const [index, paths] of groups.entries()) {
     const group = `h${index}`;
     const members = new Set(paths);
-    for (const item of entries) {
+    for (const [position, item] of entries.entries()) {
       if (item.entry.kind === "file" && members.has(item.entry.path)) {
-        item.entry.hardlink = group;
+        // Rebuilt rather than mutated: a manifest entry is what a root is
+        // hashed over, and a value nobody can edit in place is one nobody can
+        // edit after it has been counted.
+        entries[position] = { ...item, entry: { ...item.entry, hardlink: group } };
       }
     }
   }
@@ -468,23 +455,7 @@ export function readDofsManifest(
  * size the chunks it lists add up to.
  */
 export function decodeDofsManifest(encoded: Uint8Array, reject: WorkspaceRejection): DofsManifest {
-  let text: string;
-  let offered: unknown;
-  try {
-    text = decoder.decode(encoded);
-    offered = JSON.parse(text);
-  } catch {
-    reject("a DOFS manifest is not canonical UTF-8 JSON");
-  }
-  const parsed = dofsManifestSchema.safeParse(offered);
-  if (!parsed.success || JSON.stringify(parsed.data) !== text) {
-    reject("a DOFS manifest is not canonically encoded");
-  }
-  const total = parsed.data.chunks.reduce((sum, chunk) => sum + chunk.size, 0);
-  if (!Number.isSafeInteger(total)) {
-    reject("a DOFS manifest names more bytes than a size can hold");
-  }
-  return Object.freeze({ size: total, chunks: Object.freeze(parsed.data.chunks) });
+  return decodeSharedDofsManifest(encoded, reject);
 }
 
 function parseStoredRoot(

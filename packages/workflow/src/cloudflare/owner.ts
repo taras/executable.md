@@ -29,10 +29,14 @@ import {
   AcquisitionError,
   releaseExecutor,
   requireAcquisition,
+  requireExecutorSocket,
 } from "./acquisition.ts";
 import { admitToken, type AdmissionPolicy, AdmissionError } from "./admission.ts";
 import { TokenError, type TokenVerification } from "./token.ts";
 import { CommandError, type CommandResult, parseCommand, type RunnerCommand } from "./commands.ts";
+import { dispatchCommand } from "./dispatcher.ts";
+import { WorkflowRecordMalformedError } from "../storage/errors.ts";
+import { discardPriorAcquisitions, PRIVATE_OBJECT_NAMES } from "./private-schema.ts";
 import {
   declaredObjects,
   initializeObject,
@@ -89,6 +93,17 @@ export function refusalOf(error: unknown): string {
   if (error instanceof WorkflowObjectStorageError) {
     return `storage:${error.failure.kind}`;
   }
+  if (error instanceof WorkflowRecordMalformedError) {
+    return "storage:corrupt";
+  }
+  if (
+    error instanceof Error &&
+    (error.message.startsWith("private protocol storage") ||
+      error.message.startsWith("private staging") ||
+      error.message.startsWith("stored bytes"))
+  ) {
+    return "storage:corrupt";
+  }
   return "internal";
 }
 
@@ -132,7 +147,16 @@ export abstract class WorkflowOwnerObject extends DurableObject {
     requireSameRelease(policy.release, request.release);
     yield* admitToken(policy, verification, request.token);
     const runId = admitRunId(request.runId);
-    return acquireExecutor(this.ctx, socket, runId, mintAcquisitionId());
+    const acquisitionId = mintAcquisitionId();
+    return acquireExecutor(this.ctx, socket, runId, acquisitionId, () => {
+      const names = new Set(declaredObjects(this.owned).map((object) => object.name));
+      if (PRIVATE_OBJECT_NAMES.every((name) => names.has(name))) {
+        recognizeObject(this.owned);
+        this.transactions.run(this.owned, () => {
+          discardPriorAcquisitions(this.owned, acquisitionId);
+        });
+      }
+    });
   }
 
   /**
@@ -147,14 +171,36 @@ export abstract class WorkflowOwnerObject extends DurableObject {
     try {
       requireAcquisition(this.ctx, socket, runId);
       command = parseCommand(raw);
-      return { id: command.id, outcome: "performed", value: this.perform(socket, runId, command) };
+      return dispatchCommand(this.ctx, this.transactions, socket, runId, command);
     } catch (error) {
       return { id: command?.id ?? "", outcome: "refused", refusal: refusalOf(error) };
     }
   }
 
-  /** What each command does. Subclasses supply the behavior this owner has. */
-  protected abstract perform(socket: WebSocket, runId: string, command: RunnerCommand): unknown;
+  webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): void {
+    let answer: CommandResult;
+    if (typeof message !== "string") {
+      answer = { id: "", outcome: "refused", refusal: "command:malformed-member" };
+    } else {
+      try {
+        const held = requireExecutorSocket(this.ctx, socket);
+        answer = this.onRunnerMessage(socket, held.runId, message);
+      } catch (error) {
+        answer = { id: "", outcome: "refused", refusal: refusalOf(error) };
+      }
+    }
+    try {
+      socket.send(JSON.stringify(answer));
+    } catch {
+      releaseExecutor(socket);
+      socket.close(1011, "send failed");
+      return;
+    }
+    if (fatal(answer)) {
+      releaseExecutor(socket);
+      socket.close(1002, "protocol refused");
+    }
+  }
 
   /** A connection that ended owns nothing, and rolled nothing back. */
   webSocketClose(socket: WebSocket): void {
@@ -195,4 +241,13 @@ function mintAcquisitionId(): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function fatal(answer: CommandResult): boolean {
+  if (answer.outcome === "performed") {
+    return false;
+  }
+  return (
+    answer.refusal !== "command:duplicate-conflict" && answer.refusal !== "command:unavailable"
+  );
 }

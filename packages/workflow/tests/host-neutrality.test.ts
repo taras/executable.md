@@ -96,6 +96,15 @@ describe("the shared workflow package", () => {
     expect(modules.some((path) => path.endsWith("/src/lifecycle/execution.ts"))).toEqual(true);
     expect(modules.some((path) => path.endsWith("/src/software-factory/run-id.ts"))).toEqual(true);
     expect(modules.some((path) => path.endsWith("/src/sqlite/workflow-schema.ts"))).toEqual(true);
+    // The remote seam is ordinary shared code. It is the runner's half of a
+    // connection to a provider, which is exactly why it must name none: an
+    // exemption here would let the provider's vocabulary back in through the
+    // one module whose whole purpose is to keep it out.
+    expect(modules.some((path) => path.endsWith("/src/remote/read.ts"))).toEqual(true);
+    expect(modules.some((path) => path.endsWith("/src/remote/client.ts"))).toEqual(true);
+    expect(modules.some((path) => path.endsWith("/src/remote/records.ts"))).toEqual(true);
+    expect(modules.some((path) => path.endsWith("/src/workspace/root-manifest.ts"))).toEqual(true);
+    expect(modules.some((path) => path.endsWith("/src/workspace/sha256.ts"))).toEqual(true);
     expect(modules.some((path) => path.includes("/src/deno/"))).toEqual(false);
     expect(modules.some((path) => path.includes("/src/cloudflare/"))).toEqual(false);
   });

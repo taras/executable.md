@@ -25,6 +25,11 @@ import {
   type SchemaObject,
 } from "../sqlite/workflow-schema.ts";
 import { isSchemaMarker, MARKER_SQL, MARKER_TABLE, readMarker } from "./marker.ts";
+import {
+  initializePrivateSchema,
+  PRIVATE_OBJECT_NAMES,
+  privateStructureFailure,
+} from "./private-schema.ts";
 import type { OwnerTransactions } from "./owner-transaction.ts";
 import type { OwnerStorage } from "./storage.ts";
 
@@ -101,6 +106,7 @@ export function initializeObject(
   transactions.run(storage, ({ dofs }) => {
     storage.sql.exec(SCHEMA_SQL);
     initializeDofsSchema(dofs, () => 0);
+    initializePrivateSchema(storage);
     initializeRun();
     storage.sql.exec(MARKER_SQL);
     storage.sql.exec(
@@ -161,7 +167,22 @@ export function recognizeObject(storage: OwnerStorage): void {
     });
   }
 
-  const declared = objects.filter((object) => object.name !== MARKER_TABLE);
+  const privateObjects = objects.filter((object) => PRIVATE_OBJECT_NAMES.includes(object.name));
+  const privateFailure = privateStructureFailure(privateObjects);
+  if (privateFailure !== undefined) {
+    throw new WorkflowObjectStorageError({
+      kind: "corrupt",
+      detail:
+        privateFailure.kind === "missing"
+          ? `it is missing the table ${privateFailure.name}`
+          : `its ${privateFailure.name} object is not shaped the way version ${SCHEMA_VERSION} declares it`,
+    });
+  }
+
+  const privateNames = new Set(PRIVATE_OBJECT_NAMES);
+  const declared = objects.filter(
+    (object) => object.name !== MARKER_TABLE && !privateNames.has(object.name),
+  );
   const failure = declaredStructureFailure(declared);
   if (failure === undefined) {
     return;

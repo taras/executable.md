@@ -61,7 +61,7 @@ import {
   holdsTransactionOn,
   useTransactionSavepoints,
 } from "./transaction.ts";
-import { readDocumentExecution, readRetrieval, readRunRecord } from "./rows.ts";
+import { readDocumentExecution, readRetrieval, readRunRecord } from "../sqlite/rows.ts";
 import { reading } from "./reading.ts";
 import { translateSqliteError } from "./schema.ts";
 

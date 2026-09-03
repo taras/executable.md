@@ -268,10 +268,12 @@ describe("holding an acquisition", () => {
 
   it("lets the admitted connection send, and answers what it performed", async () => {
     const stub = executor();
+    await on(stub, (o) => o.initialize());
     await admitted(stub);
-    expect(
-      await on(stub, (o) => o.send(1, JSON.stringify({ id: "1", command: "frontier" }))),
-    ).toEqual({ id: "1", outcome: "performed", value: { performed: "frontier" } });
+    const answer = await on(stub, (o) =>
+      o.send(1, JSON.stringify({ id: "1", command: "frontier" })),
+    );
+    expect(answer).toMatchObject({ id: "1", outcome: "performed" });
   });
 
   it("refuses a socket it never admitted", async () => {
@@ -279,6 +281,16 @@ describe("holding an acquisition", () => {
     await admitted(stub);
     expect(
       await on(stub, (o) => o.sendAsStranger(JSON.stringify({ id: "1", command: "frontier" }))),
+    ).toEqual({ id: "", outcome: "refused", refusal: "acquisition:foreign-connection" });
+  });
+
+  it("does not treat copied attachment bytes as an acquisition", async () => {
+    const stub = executor();
+    await admitted(stub);
+    expect(
+      await on(stub, (o) =>
+        o.sendWithCopiedAttachment(JSON.stringify({ id: "1", command: "frontier" })),
+      ),
     ).toEqual({ id: "", outcome: "refused", refusal: "acquisition:foreign-connection" });
   });
 
@@ -318,28 +330,34 @@ describe("reading a runner command", () => {
     expect((await refuse(JSON.stringify({ command: "frontier" }))).refusal).toBe(
       "command:malformed-member",
     );
-    expect((await refuse(JSON.stringify({ id: "1", command: "materialize" }))).refusal).toBe(
+    expect((await refuse(JSON.stringify({ id: "1", command: "root" }))).refusal).toBe(
       "command:malformed-member",
     );
   });
 
-  it("reads a commit intent whole", async () => {
+  it("reads a commit intent whole, then refuses to act on it in this release", async () => {
     const stub = executor();
+    await on(stub, (o) => o.initialize());
     await admitted(stub);
     const raw = JSON.stringify({
       id: "7",
       command: "commit",
       expectedWorkspaceRootId: `a${"0".repeat(63)}`,
       expectedJournalEventId: null,
-      content: [{ digest: "d1", bytes: "AAAA" }],
       proposedWorkspaceRootId: `b${"1".repeat(63)}`,
       events: ["event-1"],
     });
+    // The shape is read — an unknown member or a malformed root would refuse
+    // differently — and then declined, because applying one is a later
+    // checkpoint's work and a performed placeholder would be a lie.
     expect(await on(stub, (o) => o.send(1, raw))).toEqual({
       id: "7",
-      outcome: "performed",
-      value: { performed: "commit" },
+      outcome: "refused",
+      refusal: "command:unavailable",
     });
+    expect(
+      await on(stub, (o) => o.send(1, JSON.stringify({ ...JSON.parse(raw), id: "8", extra: 1 }))),
+    ).toEqual({ id: "", outcome: "refused", refusal: "command:unknown-member" });
   });
 });
 

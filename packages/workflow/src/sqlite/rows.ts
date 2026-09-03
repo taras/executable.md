@@ -10,6 +10,12 @@
  * A failure names the column and never the value. Props and journal payloads
  * are retained history, and a row that does not parse is not a reason to print
  * what it held.
+ *
+ * It lives beside the schema rather than under a host because two adapters read
+ * the same rows back. The Deno host opens a file with `node:sqlite`; the
+ * Cloudflare owner reads the storage of one Durable Object. What a stored row
+ * *means* is the same question in both, and a second copy of these parsers
+ * would be the place the two hosts quietly stopped agreeing.
  */
 
 import type { Json } from "@executablemd/durable-streams";

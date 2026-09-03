@@ -19,9 +19,6 @@
  *   protected configuration() {
  *     return { policy: POLICY };
  *   }
- *   protected perform(socket, runId, command) {
- *     // …
- *   }
  * }
  * ```
  *
@@ -42,16 +39,6 @@ export type { ReleaseRefusal } from "./src/cloudflare/release.ts";
 
 export { admitRunId, ownerFor, RunIdError } from "./src/cloudflare/routing.ts";
 export type { OwnerNamespace, RunIdRefusal } from "./src/cloudflare/routing.ts";
-
-export {
-  AcquisitionError,
-  acquisitionHolders,
-  EXECUTOR_TAG,
-} from "./src/cloudflare/acquisition.ts";
-export type { AcquisitionAttachment, AcquisitionRefusal } from "./src/cloudflare/acquisition.ts";
-
-export { CommandError } from "./src/cloudflare/commands.ts";
-export type { CommandRefusal, CommandResult, RunnerCommand } from "./src/cloudflare/commands.ts";
 
 export { WorkflowObjectStorageError } from "./src/cloudflare/recognition.ts";
 export type { RecognitionFailure } from "./src/cloudflare/recognition.ts";

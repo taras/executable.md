@@ -1,117 +1,121 @@
-/**
- * What a runner asks its owner, and what comes back.
- *
- * These records are private to one software-factory release. They are not
- * journaled, exported, authored, or supported across independently versioned
- * builds — admission has already proved both sides are the same build, which is
- * what a wire contract would otherwise be for. Their decomposition is
- * implementation detail and may change with the release that contains it.
- *
- * What is not private is the parsing discipline. Everything arriving from the
- * connection is parsed strictly before it reaches storage: an unknown command,
- * an unknown member, a value of the wrong kind and a value past its bound are
- * each refused whole, and nothing is partially adopted. A permissive read here
- * would be a runner deciding what the owner does.
- */
-
 import {
   type DocumentExecutionCompletion,
   parseDocumentExecutionCompletion,
 } from "../storage/record.ts";
+import { SHA256 } from "../workspace/root-manifest.ts";
 
-/** The commands a runner may send. */
-export type CommandName = "frontier" | "materialize" | "commit" | "settle";
+export const MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
+export const MAX_CONTENT_BYTES = 1024 * 1024;
+export const MAX_STAGED_BYTES = 2 * 1024 * 1024;
+export const MAX_COMMANDS = 256;
+export const MAX_LEDGER_BYTES = 2 * 1024 * 1024;
+export const JOURNAL_PAGE_ENTRIES = 128;
+export const JOURNAL_PAGE_BYTES = 512 * 1024;
 
-/** Why a message was refused before it reached the run. */
+export type CommandName =
+  | "frontier"
+  | "journal"
+  | "root"
+  | "content"
+  | "stage"
+  | "commit"
+  | "settle";
+
 export type CommandRefusal =
   | "not-an-object"
   | "unknown-command"
   | "unknown-member"
   | "malformed-member"
-  | "too-large";
+  | "too-large"
+  | "duplicate-conflict"
+  | "capacity"
+  | "unavailable";
 
 export class CommandError extends Error {
   override name = "CommandError";
 
   constructor(readonly refusal: CommandRefusal) {
-    // The message a runner sent is not repeated: it arrived from outside and a
-    // member name can carry as much as a member value.
     super(`this owner refused a runner command (${refusal})`);
   }
 }
 
-/** The envelope every command shares. */
 export interface CommandEnvelope {
-  /** Distinguishes one request from a retry of the same request. */
   readonly id: string;
   readonly command: CommandName;
 }
 
-/** Read the committed run record and current Workspace root. */
 export interface FrontierCommand extends CommandEnvelope {
   readonly command: "frontier";
 }
 
-/** Ask for the content-addressed bytes of one retained root. */
-export interface MaterializeCommand extends CommandEnvelope {
-  readonly command: "materialize";
+export interface JournalCommand extends CommandEnvelope {
+  readonly command: "journal";
+  readonly anchorEventId: string | null;
+  readonly afterEventId: string | null;
+}
+
+export interface RootCommand extends CommandEnvelope {
+  readonly command: "root";
   readonly workspaceRootId: string;
 }
 
-/** One closed mutation intent, submitted once, applied atomically or not at all. */
+export type ContentKind = "manifest" | "blob";
+
+export interface ContentCommand extends CommandEnvelope {
+  readonly command: "content";
+  readonly workspaceRootId: string;
+  readonly kind: ContentKind;
+  readonly digest: string;
+  readonly sourceManifest: string | null;
+}
+
+export interface StageCommand extends CommandEnvelope {
+  readonly command: "stage";
+  readonly kind: ContentKind;
+  readonly digest: string;
+  readonly bytes: string;
+}
+
 export interface CommitCommand extends CommandEnvelope {
   readonly command: "commit";
-  /** The root the runner started from; the owner refuses if it has moved. */
   readonly expectedWorkspaceRootId: string;
-  /** The journal frontier the runner read; the owner refuses if it has moved. */
   readonly expectedJournalEventId: string | null;
-  /** Content-addressed additions, each named by its own digest. */
-  readonly content: readonly ContentChunk[];
-  /** The canonical root the runner proposes, recomputed by the owner. */
   readonly proposedWorkspaceRootId: string;
-  /** Already-filtered journal events to append, in order. */
   readonly events: readonly string[];
 }
 
-/**
- * Publish how a document execution ended, and what the run becomes.
- *
- * The completion is the shared provider-neutral record, parsed with the shared
- * parser rather than a private approximation — the owner and the local host
- * have to agree about what a completion *is*, and two readers of one shape is
- * how they stop agreeing. The expected root is carried so the owner can refuse
- * a settlement proposed against a frontier that has moved.
- */
 export interface SettleCommand extends CommandEnvelope {
   readonly command: "settle";
   readonly completion: DocumentExecutionCompletion;
   readonly expectedWorkspaceRootId: string;
 }
 
-export interface ContentChunk {
-  readonly digest: string;
-  /** Base64, because a private transport still carries text. */
-  readonly bytes: string;
-}
+export type RunnerCommand =
+  | FrontierCommand
+  | JournalCommand
+  | RootCommand
+  | ContentCommand
+  | StageCommand
+  | CommitCommand
+  | SettleCommand;
 
-export type RunnerCommand = FrontierCommand | MaterializeCommand | CommitCommand | SettleCommand;
+export type CommandResult =
+  | { readonly id: string; readonly outcome: "performed"; readonly value: unknown }
+  | { readonly id: string; readonly outcome: "refused"; readonly refusal: string };
 
-/** The largest message this owner reads at all. */
-const MAX_MESSAGE = 8 * 1024 * 1024;
-
-/** The most chunks one commit may carry. */
-const MAX_CHUNKS = 4096;
-
-const ENVELOPE = ["id", "command"] as const;
-
+const MAX_ID = 128;
+const MAX_EVENTS = 4096;
+const ENVELOPE = ["id", "command"];
 const MEMBERS: Record<CommandName, readonly string[]> = {
-  frontier: [...ENVELOPE],
-  materialize: [...ENVELOPE, "workspaceRootId"],
+  frontier: ENVELOPE,
+  journal: [...ENVELOPE, "anchorEventId", "afterEventId"],
+  root: [...ENVELOPE, "workspaceRootId"],
+  content: [...ENVELOPE, "workspaceRootId", "kind", "digest", "sourceManifest"],
+  stage: [...ENVELOPE, "kind", "digest", "bytes"],
   commit: [
     ...ENVELOPE,
     "expectedWorkspaceRootId",
     "expectedJournalEventId",
-    "content",
     "proposedWorkspaceRootId",
     "events",
   ],
@@ -122,34 +126,7 @@ function object(value: unknown): Map<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new CommandError("not-an-object");
   }
-  const members: Map<string, unknown> = new Map(Object.entries(value));
-  return members;
-}
-
-/**
- * A retained Workspace root, as the schema spells one.
- *
- * The lowercase SHA-256 of a canonical manifest: 64 hexadecimal characters and
- * nothing else. Admitting any non-empty string would let three commands hold
- * three different notions of what a root is, and the owner would be the first
- * to find out.
- */
-const ROOT_ID = /^[0-9a-f]{64}$/;
-
-function rootId(members: Map<string, unknown>, key: string): string {
-  const value = text(members, key);
-  if (!ROOT_ID.test(value)) {
-    throw new CommandError("malformed-member");
-  }
-  return value;
-}
-
-function text(members: Map<string, unknown>, key: string): string {
-  const value = members.get(key);
-  if (typeof value !== "string" || value === "") {
-    throw new CommandError("malformed-member");
-  }
-  return value;
+  return new Map(Object.entries(value));
 }
 
 function closed(members: Map<string, unknown>, allowed: readonly string[]): void {
@@ -158,25 +135,58 @@ function closed(members: Map<string, unknown>, allowed: readonly string[]): void
       throw new CommandError("unknown-member");
     }
   }
+  if (members.size !== allowed.length) {
+    throw new CommandError("malformed-member");
+  }
 }
 
-function chunks(value: unknown): ContentChunk[] {
+function text(
+  members: Map<string, unknown>,
+  key: string,
+  maximum = Number.MAX_SAFE_INTEGER,
+): string {
+  const value = members.get(key);
+  if (typeof value !== "string" || value === "" || value.length > maximum) {
+    throw new CommandError(
+      value !== "" && typeof value === "string" ? "too-large" : "malformed-member",
+    );
+  }
+  return value;
+}
+
+function nullableText(members: Map<string, unknown>, key: string): string | null {
+  const value = members.get(key);
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== "string" || value === "") {
+    throw new CommandError("malformed-member");
+  }
+  return value;
+}
+
+function digest(members: Map<string, unknown>, key: string): string {
+  const value = members.get(key);
+  if (typeof value !== "string" || !SHA256.test(value)) {
+    throw new CommandError("malformed-member");
+  }
+  return value;
+}
+
+function kind(members: Map<string, unknown>): ContentKind {
+  const value = members.get("kind");
+  if (value !== "manifest" && value !== "blob") {
+    throw new CommandError("malformed-member");
+  }
+  return value;
+}
+
+function eventRecords(value: unknown): string[] {
   if (!Array.isArray(value)) {
     throw new CommandError("malformed-member");
   }
-  if (value.length > MAX_CHUNKS) {
+  if (value.length > MAX_EVENTS) {
     throw new CommandError("too-large");
-  }
-  return value.map((entry) => {
-    const members = object(entry);
-    closed(members, ["digest", "bytes"]);
-    return { digest: text(members, "digest"), bytes: text(members, "bytes") };
-  });
-}
-
-function events(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    throw new CommandError("malformed-member");
   }
   return value.map((entry) => {
     if (typeof entry !== "string" || entry === "") {
@@ -186,9 +196,8 @@ function events(value: unknown): string[] {
   });
 }
 
-/** Read one command out of a message nothing has inspected yet. */
 export function parseCommand(raw: string): RunnerCommand {
-  if (raw.length > MAX_MESSAGE) {
+  if (new TextEncoder().encode(raw).length > MAX_MESSAGE_BYTES) {
     throw new CommandError("too-large");
   }
   let decoded: unknown;
@@ -198,11 +207,14 @@ export function parseCommand(raw: string): RunnerCommand {
     throw new CommandError("not-an-object");
   }
   const members = object(decoded);
-  const id = text(members, "id");
+  const id = text(members, "id", MAX_ID);
   const command = members.get("command");
   if (
     command !== "frontier" &&
-    command !== "materialize" &&
+    command !== "journal" &&
+    command !== "root" &&
+    command !== "content" &&
+    command !== "stage" &&
     command !== "commit" &&
     command !== "settle"
   ) {
@@ -213,13 +225,42 @@ export function parseCommand(raw: string): RunnerCommand {
   if (command === "frontier") {
     return { id, command };
   }
-  if (command === "materialize") {
-    return { id, command, workspaceRootId: rootId(members, "workspaceRootId") };
+  if (command === "journal") {
+    return {
+      id,
+      command,
+      anchorEventId: nullableText(members, "anchorEventId"),
+      afterEventId: nullableText(members, "afterEventId"),
+    };
+  }
+  if (command === "root") {
+    return { id, command, workspaceRootId: digest(members, "workspaceRootId") };
+  }
+  if (command === "content") {
+    const contentKind = kind(members);
+    if (contentKind === "manifest" && members.get("sourceManifest") !== null) {
+      throw new CommandError("malformed-member");
+    }
+    const sourceManifest = contentKind === "manifest" ? null : digest(members, "sourceManifest");
+    return {
+      id,
+      command,
+      workspaceRootId: digest(members, "workspaceRootId"),
+      kind: contentKind,
+      digest: digest(members, "digest"),
+      sourceManifest,
+    };
+  }
+  if (command === "stage") {
+    return {
+      id,
+      command,
+      kind: kind(members),
+      digest: digest(members, "digest"),
+      bytes: text(members, "bytes", Math.ceil((MAX_CONTENT_BYTES * 4) / 3) + 4),
+    };
   }
   if (command === "settle") {
-    // The shared parser decides what a completion is. Its failure becomes this
-    // transport's own closed refusal: the parser's message names members and
-    // values a request supplied, and none of that belongs on the wire.
     const completion = parseDocumentExecutionCompletion(members.get("completion"));
     if (!completion.ok) {
       throw new CommandError("malformed-member");
@@ -228,32 +269,15 @@ export function parseCommand(raw: string): RunnerCommand {
       id,
       command,
       completion: completion.value,
-      expectedWorkspaceRootId: rootId(members, "expectedWorkspaceRootId"),
+      expectedWorkspaceRootId: digest(members, "expectedWorkspaceRootId"),
     };
-  }
-  const expectedJournalEventId = members.get("expectedJournalEventId");
-  if (expectedJournalEventId !== null && typeof expectedJournalEventId !== "string") {
-    throw new CommandError("malformed-member");
   }
   return {
     id,
     command,
-    expectedWorkspaceRootId: rootId(members, "expectedWorkspaceRootId"),
-    expectedJournalEventId,
-    content: chunks(members.get("content")),
-    proposedWorkspaceRootId: rootId(members, "proposedWorkspaceRootId"),
-    events: events(members.get("events")),
+    expectedWorkspaceRootId: digest(members, "expectedWorkspaceRootId"),
+    expectedJournalEventId: nullableText(members, "expectedJournalEventId"),
+    proposedWorkspaceRootId: digest(members, "proposedWorkspaceRootId"),
+    events: eventRecords(members.get("events")),
   };
 }
-
-/**
- * What the owner answers with.
- *
- * A serialized record rather than an Effection `Result`: this crosses a
- * connection, and an `Error` does not survive that. The discriminant is
- * `outcome` for the same reason — there is no in-process result being modelled
- * here, only what one side told the other.
- */
-export type CommandResult =
-  | { readonly id: string; readonly outcome: "performed"; readonly value: unknown }
-  | { readonly id: string; readonly outcome: "refused"; readonly refusal: string };

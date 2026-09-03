@@ -88,6 +88,7 @@ export interface OwnerConnection {
     id: string,
     command: Record<string, unknown>,
     parse: AnswerParser<T>,
+    parseRefusal?: (refusal: string) => string,
   ): Operation<OwnerAnswer<T>>;
 }
 
@@ -295,6 +296,7 @@ export function useOwnerConnection(socket: OwnerSocket): Operation<OwnerConnecti
         id: string,
         command: Record<string, unknown>,
         parse: AnswerParser<T>,
+        parseRefusal: (refusal: string) => string = (refusal) => refusal,
       ): Operation<OwnerAnswer<T>> {
         if (closed) {
           throw new OwnerLinkError("closed");
@@ -311,8 +313,13 @@ export function useOwnerConnection(socket: OwnerSocket): Operation<OwnerConnecti
         waiting.set(id, {
           deliver(answer: RawAnswer): boolean {
             if (answer.outcome === "refused") {
-              // A refusal is an answer. Nothing is parsed and nothing fails.
-              settle.resolve(answer);
+              let refusal: string;
+              try {
+                refusal = parseRefusal(answer.refusal);
+              } catch {
+                return false;
+              }
+              settle.resolve({ outcome: "refused", refusal });
               return true;
             }
             let value: T;

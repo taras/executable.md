@@ -104,7 +104,7 @@ import {
   readRetrievalMetadata,
 } from "./artifact-frontier.ts";
 import type { WorkflowExportRequest, WorkflowExportResult } from "../lifecycle/export.ts";
-import { readDocumentExecution, readRetrieval, readRunRecord } from "./rows.ts";
+import { readDocumentExecution, readRetrieval, readRunRecord } from "../sqlite/rows.ts";
 import { translateSqliteError, verifySchema, WorkflowReadonlyRollbackError } from "./schema.ts";
 import { holdRecoveryCoordination } from "./recovery-coordination.ts";
 

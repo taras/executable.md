@@ -44,7 +44,7 @@ import type { RetainedBlob, RetainedManifest } from "./fork-source.ts";
 import { readForkLineage } from "./fork-write.ts";
 import { readRepositories, readRetainedRows, readWorktrees } from "./fork-source.ts";
 import { reading } from "./reading.ts";
-import { readDocumentExecution, readRetrieval } from "./rows.ts";
+import { readDocumentExecution, readRetrieval } from "../sqlite/rows.ts";
 import { readAllAgentSessions } from "./workspace/agent-sessions.ts";
 import { bytes, integer } from "./workspace/manifest.ts";
 import {

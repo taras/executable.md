@@ -1,58 +1,43 @@
 import { createHash } from "node:crypto";
-import { z } from "zod";
 import { WorkflowDatabaseCorruptError } from "../../storage/errors.ts";
+import {
+  hasUnpairedSurrogate,
+  parseWorkspaceRootManifest,
+  SHA256,
+  validateCanonicalWorkspacePath,
+  validateWorkspaceRootEntries,
+  WORKSPACE_ROOT_DOMAIN,
+  WORKSPACE_ROOT_FORMAT,
+  type WorkspaceRejection,
+  type WorkspaceRootEntry,
+  type WorkspaceRootManifest,
+} from "../../workspace/root-manifest.ts";
 
-export const WORKSPACE_ROOT_FORMAT = 1;
-export const WORKSPACE_ROOT_DOMAIN = "xmd-workspace-root\0v1\0";
+export {
+  compareUtf8,
+  hasUnpairedSurrogate,
+  parentFirst,
+  parentPath,
+  WORKSPACE_ROOT_DOMAIN,
+  WORKSPACE_ROOT_FORMAT,
+} from "../../workspace/root-manifest.ts";
+export type {
+  WorkspaceRejection,
+  WorkspaceRootEntry,
+  WorkspaceRootManifest,
+} from "../../workspace/root-manifest.ts";
 
-const SHA256 = /^[0-9a-f]{64}$/;
-const encoder = new TextEncoder();
-
-const directoryEntrySchema = z
-  .object({
-    path: z.string(),
-    kind: z.literal("directory"),
-    mode: z.number().int().min(0).max(0o7777),
-    mtime: z.number().int().safe(),
-  })
-  .strict();
-
-const fileEntrySchema = z
-  .object({
-    path: z.string(),
-    kind: z.literal("file"),
-    mode: z.number().int().min(0).max(0o7777),
-    mtime: z.number().int().safe(),
-    size: z.number().int().safe().nonnegative(),
-    manifest: z.string().regex(SHA256),
-    hardlink: z
-      .string()
-      .regex(/^h[0-9]+$/)
-      .nullable(),
-  })
-  .strict();
-
-const symlinkEntrySchema = z
-  .object({
-    path: z.string(),
-    kind: z.literal("symlink"),
-    mode: z.number().int().min(0).max(0o7777),
-    mtime: z.number().int().safe(),
-    target: z.string(),
-  })
-  .strict();
-
-const rootManifestSchema = z
-  .object({
-    format: z.literal(WORKSPACE_ROOT_FORMAT),
-    entries: z.array(
-      z.discriminatedUnion("kind", [directoryEntrySchema, fileEntrySchema, symlinkEntrySchema]),
-    ),
-  })
-  .strict();
-
-export type WorkspaceRootEntry = z.infer<typeof rootManifestSchema>["entries"][number];
-export type WorkspaceRootManifest = z.infer<typeof rootManifestSchema>;
+/**
+ * How a caller other than a live run reports a Workspace root it cannot accept.
+ *
+ * The default names the run database the root was read from, which is what
+ * every live caller is holding. A sealed XMD artifact is not a run database and
+ * says so in its own words, so it supplies one of these rather than borrowing a
+ * sentence that would tell an operator to restore a run from a backup.
+ */
+function rejecting(databasePath: string): WorkspaceRejection {
+  return (reason: string) => corrupt(databasePath, reason);
+}
 
 export interface StoredWorkspaceRoot {
   readonly rootId: string;
@@ -96,40 +81,12 @@ export function encodeWorkspaceManifest(
   return JSON.stringify(manifest);
 }
 
-/**
- * How a caller other than a live run reports a Workspace root it cannot accept.
- *
- * The default names the run database the root was read from, which is what
- * every live caller is holding. A sealed XMD artifact is not a run database and
- * says so in its own words, so it supplies one of these rather than borrowing a
- * sentence that would tell an operator to restore a run from a backup.
- */
-export type WorkspaceRejection = (reason: string) => never;
-
-function rejecting(databasePath: string): WorkspaceRejection {
-  return (reason: string) => corrupt(databasePath, reason);
-}
-
 export function parseWorkspaceManifest(
   manifest: string,
   databasePath: string,
   reject: WorkspaceRejection = rejecting(databasePath),
 ): WorkspaceRootManifest {
-  let offered: unknown;
-  try {
-    offered = JSON.parse(manifest);
-  } catch {
-    reject("one of its retained Workspace roots is not JSON");
-  }
-  const parsed = rootManifestSchema.safeParse(offered);
-  if (!parsed.success) {
-    reject("one of its retained Workspace roots has an invalid manifest");
-  }
-  validateWorkspaceEntries(parsed.data.entries, databasePath, reject);
-  if (JSON.stringify(parsed.data) !== manifest) {
-    reject("one of its retained Workspace roots is not canonically encoded");
-  }
-  return parsed.data;
+  return parseWorkspaceRootManifest(manifest, reject);
 }
 
 export function validateWorkspaceEntries(
@@ -137,60 +94,7 @@ export function validateWorkspaceEntries(
   databasePath: string,
   reject: WorkspaceRejection = rejecting(databasePath),
 ): void {
-  if (entries.length === 0 || entries[0]?.path !== "/" || entries[0]?.kind !== "directory") {
-    reject("a Workspace root does not begin with its root directory");
-  }
-
-  let previous: string | undefined;
-  let nextHardlink = 0;
-  const directories = new Set<string>();
-  const hardlinkMembers = new Map<string, number>();
-  const hardlinkFirst = new Map<string, WorkspaceRootEntry & { kind: "file" }>();
-
-  for (const entry of entries) {
-    validateCanonicalPath(entry.path, databasePath, reject);
-    if (previous !== undefined && compareUtf8(previous, entry.path) >= 0) {
-      reject("a Workspace root's paths are duplicated or out of canonical order");
-    }
-    previous = entry.path;
-
-    if (entry.path !== "/" && !directories.has(parentPath(entry.path))) {
-      reject("a Workspace root contains an entry without a parent directory");
-    }
-    if (entry.kind === "directory") {
-      directories.add(entry.path);
-    }
-    if (
-      entry.kind === "symlink" &&
-      (entry.target.includes("\0") || hasUnpairedSurrogate(entry.target))
-    ) {
-      reject("a Workspace root contains an invalid symbolic-link target");
-    }
-    if (entry.kind === "file" && entry.hardlink !== null) {
-      const first = hardlinkFirst.get(entry.hardlink);
-      if (first === undefined) {
-        if (entry.hardlink !== `h${nextHardlink}`) {
-          reject("a Workspace root's hardlinks are not canonically numbered");
-        }
-        nextHardlink += 1;
-        hardlinkFirst.set(entry.hardlink, entry);
-      } else if (
-        first.mode !== entry.mode ||
-        first.mtime !== entry.mtime ||
-        first.size !== entry.size ||
-        first.manifest !== entry.manifest
-      ) {
-        reject("a Workspace root's hardlink group has inconsistent metadata");
-      }
-      hardlinkMembers.set(entry.hardlink, (hardlinkMembers.get(entry.hardlink) ?? 0) + 1);
-    }
-  }
-
-  for (const count of hardlinkMembers.values()) {
-    if (count < 2) {
-      reject("a Workspace root contains a one-member hardlink group");
-    }
-  }
+  validateWorkspaceRootEntries(entries, reject);
 }
 
 export function validateCanonicalPath(
@@ -198,22 +102,7 @@ export function validateCanonicalPath(
   databasePath: string,
   reject: WorkspaceRejection = rejecting(databasePath),
 ): void {
-  if (value === "/") {
-    return;
-  }
-  if (
-    !value.startsWith("/") ||
-    value.endsWith("/") ||
-    value.includes("\0") ||
-    hasUnpairedSurrogate(value)
-  ) {
-    reject("a Workspace root contains a noncanonical path");
-  }
-  for (const part of value.slice(1).split("/")) {
-    if (part === "" || part === "." || part === "..") {
-      reject("a Workspace root contains a noncanonical path component");
-    }
-  }
+  validateCanonicalWorkspacePath(value, reject);
 }
 
 export function validatePathName(name: string, databasePath: string): void {
@@ -227,20 +116,6 @@ export function validatePathName(name: string, databasePath: string): void {
   ) {
     corrupt(databasePath, "its live Workspace contains a noncanonical name");
   }
-}
-
-export function compareUtf8(left: string, right: string): number {
-  return Buffer.compare(encoder.encode(left), encoder.encode(right));
-}
-
-export function parentFirst(left: WorkspaceRootEntry, right: WorkspaceRootEntry): number {
-  const depth = left.path.split("/").length - right.path.split("/").length;
-  return depth === 0 ? compareUtf8(left.path, right.path) : depth;
-}
-
-export function parentPath(path: string): string {
-  const boundary = path.lastIndexOf("/");
-  return boundary === 0 ? "/" : path.slice(0, boundary);
 }
 
 export function sha256(value: Uint8Array): Uint8Array {
@@ -291,20 +166,4 @@ export function mode(value: unknown, databasePath: string): number {
 
 export function corrupt(databasePath: string, reason: string): never {
   throw new WorkflowDatabaseCorruptError(databasePath, reason);
-}
-
-function hasUnpairedSurrogate(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      if (next < 0xdc00 || next > 0xdfff) {
-        return true;
-      }
-      index += 1;
-    } else if (code >= 0xdc00 && code <= 0xdfff) {
-      return true;
-    }
-  }
-  return false;
 }

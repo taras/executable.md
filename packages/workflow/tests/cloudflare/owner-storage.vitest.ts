@@ -82,6 +82,13 @@ describe("recognizing an owner object", () => {
     await on(stub, (o) => o.damage("workflow_suspension_answers"));
     expect(await on(stub, (o) => o.recognize())).toBe("refused:corrupt");
   });
+
+  it("refuses a missing Cloudflare-private protocol table", async () => {
+    const stub = owner();
+    await on(stub, (o) => o.initialize());
+    await on(stub, (o) => o.damage("_xmd_executor_commands"));
+    expect(await on(stub, (o) => o.recognize())).toBe("refused:corrupt");
+  });
 });
 
 describe("an owner commit", () => {

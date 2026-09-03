@@ -460,7 +460,7 @@ function base64(content: Uint8Array): string {
 function artifactWorkspace(
   artifact: VerifiedXmdArtifact,
   rootId: string,
-): { nodes: Map<string, WorkspaceNode>; entries: WorkspaceRootEntry[] } {
+): { nodes: Map<string, WorkspaceNode>; entries: readonly WorkspaceRootEntry[] } {
   const root = artifact.roots.find((candidate) => candidate.rootId === rootId);
   if (root === undefined) {
     throw new Error(`the artifact holds no Workspace root ${rootId}`);
