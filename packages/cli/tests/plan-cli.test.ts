@@ -981,6 +981,25 @@ function* journalEvents(path: string): Operation<DurableEvent[]> {
 }
 
 /**
+ * The records a journal file has certainly committed.
+ *
+ * Only the newline-terminated ones. An append this command made and the
+ * filesystem then failed is not a transaction — `appendFile` can write some of
+ * a record and stop — so what a case about a *failed* append may claim is the
+ * sequence that committed before it, and anything after the last terminator is
+ * not part of that sequence. A case about an ending where no append failed
+ * reads the whole file instead, and compares its bytes.
+ */
+function* committedJournal(path: string): Operation<DurableEvent[]> {
+  const text = yield* readTextFile(path);
+  const terminated = text.slice(0, text.lastIndexOf("\n") + 1);
+  return terminated
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line));
+}
+
+/**
  * Tier PO — observable `xmd plan` authorship
  * (specs/plan-command-spec.md).
  *
@@ -1100,11 +1119,26 @@ describe(
       // `HOME`, so reaching the catalog, the provider or a session placement
       // would each leave a trace. None of them does — and neither does the
       // filesystem: the switch that was about to become a filename is not one.
-      const { stderr } = yield* refusedEarly(
-        [REQUEST, "--journal", "--verbose"],
-        JOURNAL_PATH_REFUSAL,
-      );
-      expect(complaints(stderr)).toBe(JOURNAL_PATH_REFUSAL);
+      //
+      // Every retained spelling that reaches this command's own grammar. Help
+      // is not among them and is the case after next: it is lifted out of the
+      // command line before any command's grammar runs.
+      for (const swallowed of [
+        ["--verbose"],
+        ["--output", "out.md"],
+        ["--session", "ada"],
+        ["--include", "lib"],
+        ["--timeout", "5s"],
+        ["--version"],
+      ]) {
+        const { stderr } = yield* refusedEarly(
+          [REQUEST, "--journal", ...swallowed],
+          JOURNAL_PATH_REFUSAL,
+        );
+        expect(`${swallowed.join(" ")}: ${complaints(stderr)}`).toBe(
+          `${swallowed.join(" ")}: ${JOURNAL_PATH_REFUSAL}`,
+        );
+      }
 
       yield* useWorkingDirectory(function* (dir) {
         const home = join(dir, "home");
@@ -1128,6 +1162,43 @@ describe(
         expect(result.stderr).not.toContain("unavailable");
         expect(yield* exists(join(home, ".xmd"))).toBe(false);
       });
+
+      // Help is not one of them. `--help` and `-h` are removed from the command
+      // line before any command's own grammar runs, and this missing-value
+      // check is deliberately not moved ahead of that: ordinary help stays
+      // ordinary help, and pre-help refusal is reserved for the options this
+      // command removed. So help wins, exits successfully, and still creates no
+      // journal and begins no authorship.
+      for (const argv of [
+        [REQUEST, "--journal", "--help"],
+        [REQUEST, "--journal", "-h"],
+        [REQUEST, "--help", "--journal"],
+      ]) {
+        yield* useWorkingDirectory(function* (dir) {
+          const home = join(dir, "home");
+          yield* ensureDir(home);
+          const result = yield* runCli(
+            ["plan", ...argv, "--default-agent", "xmd-nonexistent-agent"],
+            { cwd: dir, env: { HOME: home } },
+          ).join();
+
+          const written = argv.join(" ");
+          expect(`${written}: ${result.code}`).toBe(`${written}: 0`);
+          expect(result.stdout).toContain("Usage: xmd plan [OPTIONS] [request]");
+          expect(result.stdout).toContain("--journal [JOURNAL]");
+          // The scan's refusal is never reported: help answered instead.
+          expect(`${written}: ${result.stderr.includes(JOURNAL_PATH_REFUSAL)}`).toBe(
+            `${written}: false`,
+          );
+          // And help created nothing and reached nothing, exactly as it does
+          // beside every other option: no journal under any name, no catalog,
+          // no provider and no session directory.
+          expect((yield* until(readdir(dir))).sort()).toEqual(["home"]);
+          expect(result.stdout).not.toContain("## Built-in components");
+          expect(result.stderr).not.toContain("unavailable");
+          expect(yield* exists(join(home, ".xmd"))).toBe(false);
+        });
+      }
 
       // The valid orderings still reach authorship rather than the grammar.
       yield* useWorkingDirectory(function* (dir) {
@@ -1442,9 +1513,14 @@ describe(
           "The journal still contains the entries recorded before this failure.",
         );
         // The entries that committed before the refusal are still there and
-        // still parse — a prefix, not a truncated record. The last of them is
-        // the turn whose result the file would not take.
-        const prefix = yield* journalEvents(journal);
+        // still parse — a preserved prefix. The last of them is the turn whose
+        // result the file would not take.
+        //
+        // Read as terminated records rather than as the whole file: a failed
+        // filesystem append is not atomic, so what this row is entitled to
+        // claim is what committed before it, not that the refused append left
+        // no bytes at all.
+        const prefix = yield* committedJournal(journal);
         expect(prefix.length).toBeGreaterThan(0);
         expect(prefix.at(-1)?.type).toBe("yield");
         // Teardown completed and nothing was delivered.

@@ -272,11 +272,17 @@ describe("Tier PR — xmd plan fixed grammar", () => {
     );
   });
 
-  it("PO7: a retained option after --journal is that option, not a path", function* () {
-    // The reported hole. Every retained spelling this command defines, written
-    // where the path goes: reading one as a filename would exclusively create a
-    // file called `--verbose` and drop what the caller actually asked for, and
-    // the scan used to accept all of it in silence.
+  it("PO7: an option that reaches this grammar after --journal is that option, not a path", function* () {
+    // The reported hole. Every retained spelling that reaches this grammar,
+    // written where the path goes: reading one as a filename would exclusively
+    // create a file called `--verbose` and drop what the caller actually asked
+    // for, and the scan used to accept all of it in silence.
+    //
+    // `--help` and `-h` are deliberately absent. They are lifted out of the
+    // command line before any command's own grammar runs, so this scan never
+    // sees them and help keeps its ordinary precedence — which is a claim about
+    // the command rather than about this function, and is proven as one in
+    // `plan-cli.test.ts`.
     for (const swallowed of [
       ["--verbose"],
       ["--output", "out.md"],
@@ -285,8 +291,6 @@ describe("Tier PR — xmd plan fixed grammar", () => {
       ["--agent-provider", "acpx"],
       ["--default-agent", "codex"],
       ["--timeout", "5s"],
-      ["--help"],
-      ["-h"],
       ["--version"],
       // Including a valued spelling, whose name is read up to its first `=`.
       ["--session=ada"],
