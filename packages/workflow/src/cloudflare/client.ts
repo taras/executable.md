@@ -46,12 +46,12 @@ import {
   startingFrontier,
 } from "../remote/read.ts";
 import {
-  decodeDofsManifest,
   parseWorkspaceRootManifest,
   SHA256,
   WORKSPACE_ROOT_DOMAIN,
   type WorkspaceRootManifest,
 } from "../workspace/root-manifest.ts";
+import { decodeContentManifest } from "../workspace/content-manifest.ts";
 import { JOURNAL_PAGE_ENTRIES, MAX_CONTENT_BYTES } from "./commands.ts";
 import { decodeBase64, encodeBase64, sha256Hex } from "./encoding.ts";
 
@@ -266,7 +266,7 @@ function parseContent(value: unknown): RemoteContent {
     return fail("the content disagreed with its identity or size");
   }
   if (kind === "manifest") {
-    decodeDofsManifest(bytes, fail);
+    decodeContentManifest(bytes, fail);
   }
   return { kind, digest, bytes };
 }

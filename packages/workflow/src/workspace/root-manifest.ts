@@ -79,17 +79,6 @@ export interface WorkspaceRootManifest {
   readonly entries: readonly WorkspaceRootEntry[];
 }
 
-/** One DOFS manifest: the ordered chunks one file's bytes are stored as. */
-export interface DofsChunkReference {
-  readonly hash: string;
-  readonly size: number;
-}
-
-export interface DofsManifest {
-  readonly size: number;
-  readonly chunks: readonly DofsChunkReference[];
-}
-
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false });
 
@@ -364,62 +353,4 @@ export function validateCanonicalWorkspacePath(value: string, reject: WorkspaceR
       reject("a Workspace root contains a noncanonical path component");
     }
   }
-}
-
-/**
- * The DOFS manifest one encoding describes, without a store to look anything up
- * in.
- *
- * The same bytes are validated in more than one place — by a live run reading
- * its own content store, by a reader checking a detached copy, and by an owner
- * about to send a copy to a runner. What is decided here is only whether these
- * bytes are a canonically encoded DOFS manifest at all, and what size the
- * chunks it names add up to. That the chunks exist is whoever called's to prove.
- */
-export function decodeDofsManifest(encoded: Uint8Array, reject: WorkspaceRejection): DofsManifest {
-  let text: string;
-  let offered: unknown;
-  try {
-    text = decoder.decode(encoded);
-    offered = JSON.parse(text);
-  } catch {
-    reject("a DOFS manifest is not canonical UTF-8 JSON");
-  }
-  const found = members(offered);
-  const chunks = found?.get("chunks");
-  if (
-    found === undefined ||
-    !declares(found, ["version", "chunks"]) ||
-    found.get("version") !== 1 ||
-    !Array.isArray(chunks)
-  ) {
-    reject("a DOFS manifest is not canonically encoded");
-  }
-  const references: DofsChunkReference[] = [];
-  for (const chunk of chunks) {
-    const entry = members(chunk);
-    const hash = entry?.get("hash");
-    const size = entry?.get("size");
-    if (
-      entry === undefined ||
-      !declares(entry, ["hash", "size"]) ||
-      typeof hash !== "string" ||
-      !SHA256.test(hash) ||
-      !isSafeInteger(size) ||
-      size < 1
-    ) {
-      // A zero-length chunk names no bytes, so a manifest that lists one is
-      // describing content it does not have.
-      reject("a DOFS manifest is not canonically encoded");
-    }
-    references.push({ hash, size });
-  }
-  if (JSON.stringify({ version: 1, chunks: references }) !== text) {
-    reject("a DOFS manifest is not canonically encoded");
-  }
-  const total = references.reduce((sum, chunk) => sum + chunk.size, 0);
-  if (!Number.isSafeInteger(total)) {
-    reject("a DOFS manifest names more bytes than a size can hold");
-  }
-  return Object.freeze({ size: total, chunks: Object.freeze(references) });
 }

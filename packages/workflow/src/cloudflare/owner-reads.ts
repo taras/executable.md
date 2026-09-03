@@ -29,13 +29,12 @@ import { parseDurableEvent } from "@executablemd/durable-streams";
 import { readRetrieval, readRunRecord, type Row } from "../sqlite/rows.ts";
 import { WorkflowRecordMalformedError } from "../storage/errors.ts";
 import {
-  decodeDofsManifest,
-  type DofsManifest,
   parseWorkspaceRootManifest,
   SHA256,
   WORKSPACE_ROOT_DOMAIN,
   type WorkspaceRootManifest,
 } from "../workspace/root-manifest.ts";
+import { type ContentManifest, decodeContentManifest } from "../workspace/content-manifest.ts";
 import {
   CommandError,
   JOURNAL_PAGE_BYTES,
@@ -86,7 +85,7 @@ export interface ContentValue {
 interface StoredRoot {
   readonly manifest: string;
   readonly parsed: WorkspaceRootManifest;
-  readonly manifests: ReadonlyMap<string, DofsManifest>;
+  readonly manifests: ReadonlyMap<string, ContentManifest>;
   readonly blobs: ReadonlySet<string>;
 }
 
@@ -162,7 +161,7 @@ function validatedManifest(
   storage: OwnerStorage,
   parsed: WorkspaceRootManifest,
   digest: string,
-): { bytes: Uint8Array; manifest: DofsManifest } {
+): { bytes: Uint8Array; manifest: ContentManifest } {
   const row = exactlyOne(
     byteRows(storage, "SELECT size, encoded FROM vfs_manifests WHERE lower(hex(hash)) = ?", digest),
     "DOFS manifest",
@@ -171,7 +170,7 @@ function validatedManifest(
   if (bytes.length > MAX_CONTENT_BYTES || sha256Hex(bytes) !== digest) {
     return corrupt("a retained DOFS manifest disagrees with its identity");
   }
-  const manifest = decodeDofsManifest(bytes, corrupt);
+  const manifest = decodeContentManifest(bytes, corrupt);
   if (safeInteger(row["size"], "manifest size") !== manifest.size) {
     return corrupt("a retained DOFS manifest disagrees with its recorded size");
   }
@@ -187,7 +186,7 @@ function validatedManifest(
 function validatedBlob(
   storage: OwnerStorage,
   rootId: string,
-  manifests: ReadonlyMap<string, DofsManifest>,
+  manifests: ReadonlyMap<string, ContentManifest>,
   digest: string,
 ): Uint8Array {
   const row = exactlyOne(
@@ -274,7 +273,7 @@ function referencedRoot(storage: OwnerStorage, rootId: string): StoredRoot {
     "manifest",
   );
 
-  const manifests = new Map<string, DofsManifest>();
+  const manifests = new Map<string, ContentManifest>();
   for (const digest of named) {
     manifests.set(digest, validatedManifest(storage, parsed, digest).manifest);
   }

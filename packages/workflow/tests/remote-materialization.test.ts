@@ -40,7 +40,7 @@ import {
 import type { RemoteContent, RemoteContentRequest, RemoteReadLink } from "../src/remote/read.ts";
 import type { WorkspaceRootManifest } from "../src/workspace/root-manifest.ts";
 import { parseWorkspaceRootManifest } from "../src/workspace/root-manifest.ts";
-import { encodeDofsManifest } from "../src/workspace/capture.ts";
+import { encodeContentManifest } from "../src/workspace/content-manifest.ts";
 
 function reject(reason: string): never {
   throw new Error(reason);
@@ -222,13 +222,13 @@ describe("materializing a retained Workspace root", () => {
     expect([...again.root.blobs]).toEqual([...captured.root.blobs]);
   });
 
-  it("encodes a DOFS manifest the way the content store stores one", function* () {
+  it("encodes a content manifest the way the store stores one", function* () {
     // The runner and the owner must name identical bytes identically, and the
     // encoding is what decides that.
-    expect(new TextDecoder().decode(encodeDofsManifest([{ hash: "a".repeat(64), size: 3 }]))).toBe(
-      `{"version":1,"chunks":[{"hash":"${"a".repeat(64)}","size":3}]}`,
-    );
-    expect(new TextDecoder().decode(encodeDofsManifest([]))).toBe('{"version":1,"chunks":[]}');
+    expect(
+      new TextDecoder().decode(encodeContentManifest([{ hash: "a".repeat(64), size: 3 }])),
+    ).toBe(`{"version":1,"chunks":[{"hash":"${"a".repeat(64)}","size":3}]}`);
+    expect(new TextDecoder().decode(encodeContentManifest([]))).toBe('{"version":1,"chunks":[]}');
   });
 
   it("removes the materialization when its scope ends, however it ends", function* () {

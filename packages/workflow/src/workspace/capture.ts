@@ -21,23 +21,18 @@
 
 import {
   compareUtf8,
-  type DofsChunkReference,
   type WorkspaceRejection,
   type WorkspaceRootEntry,
   validateWorkspaceRootEntries,
   WORKSPACE_ROOT_DOMAIN,
   WORKSPACE_ROOT_FORMAT,
 } from "./root-manifest.ts";
+import {
+  CHUNK_SIZE,
+  type ContentChunkReference,
+  encodeContentManifest,
+} from "./content-manifest.ts";
 import { sha256Hex } from "./sha256.ts";
-
-/**
- * The size a file's bytes are split at.
- *
- * Pinned to what the vendored DOFS layer uses. A runner that chunked
- * differently would compute different manifest identities for identical bytes,
- * and the owner would then hold two names for one file.
- */
-export const CHUNK_SIZE = 512 * 1024;
 
 /** One node a walk found, before anything is ordered or numbered. */
 export type CapturedNode =
@@ -60,7 +55,7 @@ export type CapturedNode =
       readonly mode: number;
       readonly mtime: number;
       readonly size: number;
-      /** The DOFS manifest identity of this file's bytes. */
+      /** The content manifest identity of this file's bytes. */
       readonly manifest: string;
       /**
        * What makes two paths the same file rather than two copies.
@@ -78,7 +73,7 @@ export type CapturedNode =
 export interface CapturedContent {
   readonly manifest: string;
   readonly manifestBytes: Uint8Array;
-  readonly chunks: readonly DofsChunkReference[];
+  readonly chunks: readonly ContentChunkReference[];
 }
 
 /** The root one capture describes, and the content it closes over. */
@@ -86,23 +81,13 @@ export interface CapturedRoot {
   readonly rootId: string;
   readonly manifest: string;
   readonly entries: readonly WorkspaceRootEntry[];
-  /** Every DOFS manifest identity this root names, in canonical order. */
+  /** Every content manifest identity this root names, in canonical order. */
   readonly manifests: readonly string[];
   /** Every blob identity those manifests name, in canonical order. */
   readonly blobs: readonly string[];
 }
 
 const encoder = new TextEncoder();
-
-/** The bytes a DOFS manifest is stored and identified as. */
-export function encodeDofsManifest(chunks: readonly DofsChunkReference[]): Uint8Array {
-  return encoder.encode(
-    JSON.stringify({
-      version: 1,
-      chunks: chunks.map((chunk) => ({ hash: chunk.hash, size: chunk.size })),
-    }),
-  );
-}
 
 /**
  * Split one file's bytes the way the content store splits them.
@@ -112,12 +97,12 @@ export function encodeDofsManifest(chunks: readonly DofsChunkReference[]): Uint8
  * empty file in a Workspace shares it.
  */
 export function captureContent(bytes: Uint8Array): CapturedContent {
-  const chunks: DofsChunkReference[] = [];
+  const chunks: ContentChunkReference[] = [];
   for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
     const slice = bytes.subarray(offset, Math.min(offset + CHUNK_SIZE, bytes.length));
     chunks.push({ hash: sha256Hex(slice), size: slice.length });
   }
-  const manifestBytes = encodeDofsManifest(chunks);
+  const manifestBytes = encodeContentManifest(chunks);
   return { manifest: sha256Hex(manifestBytes), manifestBytes, chunks };
 }
 

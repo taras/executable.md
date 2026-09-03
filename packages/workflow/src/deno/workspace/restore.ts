@@ -13,7 +13,7 @@ import {
 } from "./manifest.ts";
 import {
   loadWorkspaceRoot,
-  readDofsManifest,
+  readContentManifest,
   setCurrentWorkspaceRoot,
   snapshotWorkspace,
   verifyWorkspace,
@@ -131,7 +131,7 @@ function materializeNode(
       .run(entry.mode, entry.mtime, revision, entry.target);
     inode = Number(result.lastInsertRowid);
   } else {
-    const manifest = readDofsManifest(database, entry.manifest, databasePath);
+    const manifest = readContentManifest(database, entry.manifest, databasePath);
     if (manifest.size !== entry.size) {
       corrupt(databasePath, "a retained file size differs from its DOFS manifest");
     }

@@ -24,18 +24,18 @@ import {
   workspaceRoot,
   WORKSPACE_ROOT_FORMAT,
 } from "./manifest.ts";
+import { SHA256 } from "../../workspace/root-manifest.ts";
 import {
-  decodeDofsManifest as decodeSharedDofsManifest,
-  type DofsManifest,
-  SHA256,
-} from "../../workspace/root-manifest.ts";
+  type ContentManifest,
+  decodeContentManifest as decodeSharedContentManifest,
+} from "../../workspace/content-manifest.ts";
 
 export interface DofsChunk {
   readonly hash: Uint8Array;
   readonly size: number;
 }
 
-export type { DofsManifest } from "../../workspace/root-manifest.ts";
+export type { ContentManifest } from "../../workspace/content-manifest.ts";
 
 interface NodeRow {
   readonly inode: number;
@@ -412,11 +412,11 @@ export function verifyWorkspace(
   }
 }
 
-export function readDofsManifest(
+export function readContentManifest(
   database: DatabaseSync,
   hash: string,
   databasePath: string,
-): DofsManifest {
+): ContentManifest {
   const hashBytes = fromHex(hash, databasePath, "DOFS manifest identity");
   const row = reading(
     database,
@@ -434,7 +434,7 @@ export function readDofsManifest(
   if (toHex(sha256(encoded)) !== hash) {
     corrupt(databasePath, "a DOFS manifest hash does not match its bytes");
   }
-  const decoded = decodeDofsManifest(encoded, (reason) => corrupt(databasePath, reason));
+  const decoded = decodeContentManifest(encoded, (reason) => corrupt(databasePath, reason));
   if (decoded.size !== size) {
     corrupt(databasePath, "a DOFS manifest size does not equal its chunks");
   }
@@ -454,8 +454,11 @@ export function readDofsManifest(
  * whether these bytes are a canonically encoded DOFS manifest at all, and what
  * size the chunks it lists add up to.
  */
-export function decodeDofsManifest(encoded: Uint8Array, reject: WorkspaceRejection): DofsManifest {
-  return decodeSharedDofsManifest(encoded, reject);
+export function decodeContentManifest(
+  encoded: Uint8Array,
+  reject: WorkspaceRejection,
+): ContentManifest {
+  return decodeSharedContentManifest(encoded, reject);
 }
 
 function parseStoredRoot(
@@ -488,12 +491,12 @@ function rootFromManifest(
   parsed: ReturnType<typeof parseWorkspaceManifest>,
   databasePath: string,
 ): StoredWorkspaceRoot {
-  const manifests = new Map<string, DofsManifest>();
+  const manifests = new Map<string, ContentManifest>();
   for (const entry of parsed.entries) {
     if (entry.kind === "file") {
       let manifest = manifests.get(entry.manifest);
       if (manifest === undefined) {
-        manifest = readDofsManifest(database, entry.manifest, databasePath);
+        manifest = readContentManifest(database, entry.manifest, databasePath);
         manifests.set(entry.manifest, manifest);
       }
       if (entry.size !== manifest.size) {
@@ -547,7 +550,7 @@ function validateFile(
     corrupt(databasePath, "a Workspace file has an invalid DOFS manifest identity");
   }
   const manifest = toHex(manifestHash);
-  const encoded = readDofsManifest(database, manifest, databasePath);
+  const encoded = readContentManifest(database, manifest, databasePath);
   if (
     encoded.size !== node.size ||
     !equalChunks(
@@ -587,7 +590,7 @@ function validateDofsContentStore(database: DatabaseSync, databasePath: string):
     if (hash.byteLength !== 32) {
       corrupt(databasePath, "a DOFS manifest has an invalid hash length");
     }
-    readDofsManifest(database, toHex(hash), databasePath);
+    readContentManifest(database, toHex(hash), databasePath);
   }
 }
 

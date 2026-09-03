@@ -33,10 +33,10 @@ import {
 } from "../workspace/capture.ts";
 import {
   compareUtf8,
-  decodeDofsManifest,
   type WorkspaceRejection,
   type WorkspaceRootManifest,
 } from "../workspace/root-manifest.ts";
+import { decodeContentManifest } from "../workspace/content-manifest.ts";
 import { sha256Hex } from "../workspace/sha256.ts";
 import type { RemoteReadLink } from "./read.ts";
 
@@ -242,7 +242,7 @@ function* fetchFile(
     kind: "manifest",
     digest: manifestDigest,
   });
-  const manifest = decodeDofsManifest(encoded.bytes, reject);
+  const manifest = decodeContentManifest(encoded.bytes, reject);
   if (manifest.size !== size) {
     reject("a retained Workspace file size disagrees with the manifest it names");
   }
