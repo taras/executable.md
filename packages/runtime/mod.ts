@@ -170,7 +170,6 @@ export {
   deliverSignal,
   establishQuiescence,
   groupMembers,
-  installPosixTerminalProcesses,
   paneOccupants,
   processReachable,
   processTable,
@@ -188,6 +187,8 @@ export type {
   TerminalProcessHandler,
   TerminalSignal,
 } from "./terminal-processes.ts";
+export { installDenoTerminalProcesses, posixProcessProbes } from "./deno-terminal-processes.ts";
+export type { ProcessProbes } from "./deno-terminal-processes.ts";
 export { hostFilesHandler, useHostFiles } from "./host-files.ts";
 export type { HostFilesEvent, HostFilesObserver, HostFilesOptions } from "./host-files.ts";
 export {
