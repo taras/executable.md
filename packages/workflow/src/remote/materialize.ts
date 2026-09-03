@@ -70,8 +70,27 @@ export interface RunnerFiles {
   writeFile(path: string, bytes: Uint8Array, mode: number): Operation<void>;
   makeSymlink(target: string, path: string): Operation<void>;
   makeHardlink(existing: string, path: string): Operation<void>;
+  /**
+   * Set permissions exactly, after creation.
+   *
+   * Creation modes are narrowed by the process umask, and a retained mode is
+   * durable identity rather than a preference. Applied to a directory only once
+   * its children exist, because a mode that forbids writing would otherwise
+   * forbid filling it.
+   */
+  setMode(path: string, mode: number): Operation<void>;
   /** Applied last, because writing into a directory moves its own time. */
   setModifiedAt(path: string, mtime: number): Operation<void>;
+  /**
+   * Set a link's own time without following it.
+   *
+   * Separate because a link's target may not exist, may be outside the tree, or
+   * may be something this code must never touch. `undefined` when the host
+   * cannot do it at all, which materialization reports rather than works around.
+   */
+  readonly setLinkModifiedAt: ((path: string, mtime: number) => Operation<void>) | undefined;
+  /** The same, for a link's own permissions. `undefined` where unsupported. */
+  readonly setLinkMode: ((path: string, mode: number) => Operation<void>) | undefined;
   readFile(path: string): Operation<Uint8Array>;
   /** One directory's entries, described without following a link. */
   list(path: string): Operation<RunnerNode[]>;
@@ -104,8 +123,17 @@ export function* materializeWorkspaceRoot(
   reject: WorkspaceRejection,
 ): Operation<WorkspaceRootManifest> {
   const manifest = yield* reads.root(workspaceRootId);
-  const written = new Map<string, string>();
-  const times: { path: string; mtime: number }[] = [];
+  /**
+   * The first path written for each hardlink group.
+   *
+   * Keyed by the group the root declares, never by the content digest. Two
+   * groups may legally hold identical bytes and therefore share one manifest,
+   * and linking the second to the first would merge two files into one — a
+   * different Workspace, arriving under the identity of this one.
+   */
+  const groups = new Map<string, string>();
+  const modes: { path: string; mode: number; link: boolean }[] = [];
+  const times: { path: string; mtime: number; link: boolean }[] = [];
 
   for (const entry of manifest.entries) {
     const path = at(entry.path);
@@ -113,7 +141,8 @@ export function* materializeWorkspaceRoot(
       if (entry.path !== "/") {
         yield* files.makeDirectory(path, entry.mode);
       }
-      times.push({ path, mtime: entry.mtime });
+      modes.push({ path, mode: entry.mode, link: false });
+      times.push({ path, mtime: entry.mtime, link: false });
       continue;
     }
     if (entry.kind === "symlink") {
@@ -121,27 +150,84 @@ export function* materializeWorkspaceRoot(
       // outside the tree, and resolving one here would be this code deciding to
       // read something the Workspace merely mentions.
       yield* files.makeSymlink(entry.target, path);
+      modes.push({ path, mode: entry.mode, link: true });
+      times.push({ path, mtime: entry.mtime, link: true });
       continue;
     }
 
-    const first = written.get(entry.manifest);
-    if (entry.hardlink !== null && first !== undefined) {
+    const first = entry.hardlink === null ? undefined : groups.get(entry.hardlink);
+    if (first !== undefined) {
+      // One inode reached by a second name. Its mode and time belong to the
+      // file, which the first member already carries.
       yield* files.makeHardlink(first, path);
       continue;
     }
     const bytes = yield* fetchFile(reads, workspaceRootId, entry.manifest, entry.size, reject);
     yield* files.writeFile(path, bytes, entry.mode);
     if (entry.hardlink !== null) {
-      written.set(entry.manifest, path);
+      groups.set(entry.hardlink, path);
     }
-    times.push({ path, mtime: entry.mtime });
+    modes.push({ path, mode: entry.mode, link: false });
+    times.push({ path, mtime: entry.mtime, link: false });
   }
 
-  // Deepest first, so filling a directory cannot move a time already set.
-  for (const entry of times.toReversed()) {
-    yield* files.setModifiedAt(entry.path, entry.mtime);
+  // Modes before times and both deepest-first: a mode that forbids writing must
+  // not be applied while children are still arriving, and filling a directory
+  // moves a time that was already restored.
+  for (const entry of modes.toReversed()) {
+    if (!entry.link) {
+      yield* files.setMode(entry.path, entry.mode);
+      continue;
+    }
+    if (files.setLinkMode !== undefined) {
+      yield* files.setLinkMode(entry.path, entry.mode);
+    }
   }
+  for (const entry of times.toReversed()) {
+    if (!entry.link) {
+      yield* files.setModifiedAt(entry.path, entry.mtime);
+      continue;
+    }
+    if (files.setLinkModifiedAt !== undefined) {
+      yield* files.setLinkModifiedAt(entry.path, entry.mtime);
+    }
+  }
+
+  // Proved rather than assumed. A host that cannot represent a legal retained
+  // mode or time must say so here, before anything executes against this tree —
+  // silently normalizing one would hand the run a Workspace with a different
+  // durable identity than the history it accepted.
+  yield* requireExactMaterialization(files, at, manifest, reject);
   return manifest;
+}
+
+/**
+ * Whether what is on disk is what the root said.
+ *
+ * Every entry's kind, mode and time, read back without following a link. This
+ * is not defensive duplication: umask, platform link semantics and filesystem
+ * timestamp granularity are all real, and each of them turns one retained root
+ * into a different one quietly. The refusal names what disagreed, not where the
+ * tree happens to live.
+ */
+function* requireExactMaterialization(
+  files: RunnerFiles,
+  at: HostPath,
+  manifest: WorkspaceRootManifest,
+  reject: WorkspaceRejection,
+): Operation<void> {
+  for (const entry of manifest.entries) {
+    const found = yield* files.describe(at(entry.path));
+    if (found.kind !== entry.kind) {
+      reject(`this host materialized a ${entry.kind} as a ${found.kind}`);
+    }
+    if (found.mode !== entry.mode) {
+      reject(`this host cannot preserve the retained mode of a ${entry.kind}`);
+    }
+    if (found.mtime !== entry.mtime) {
+      reject(`this host cannot preserve the retained modification time of a ${entry.kind}`);
+    }
+  }
 }
 
 /** One file's bytes, assembled from the chunks its manifest names. */

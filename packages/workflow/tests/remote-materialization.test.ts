@@ -17,9 +17,20 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, type Operation, resource, scoped, until } from "effection";
-import { mkdir, mkdtemp, rm, symlink, link, utimes, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  link,
+  lutimes,
+  mkdir,
+  mkdtemp,
+  rm,
+  symlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import process from "node:process";
 import { runnerFiles } from "../src/deno/remote-files.ts";
 import {
   captureWorkspace,
@@ -108,9 +119,27 @@ function* buildTree(root: string): Operation<void> {
     }),
   );
   yield* until(symlink("../README.md", join(root, "docs", "link")));
-  // Two names for one file: a hardlink group the capture must number.
+
+  // Two hardlink groups holding *identical* bytes. They share one DOFS
+  // manifest and are still two files, so a materializer that indexed by
+  // content would link the second group to the first and merge them.
   yield* until(writeFile(join(root, "shared-a"), "shared bytes\n", { mode: 0o644 }));
   yield* until(link(join(root, "shared-a"), join(root, "shared-b")));
+  yield* until(writeFile(join(root, "other-a"), "shared bytes\n", { mode: 0o644 }));
+  yield* until(link(join(root, "other-a"), join(root, "other-b")));
+
+  // And two independent files with the same bytes, which must stay two files
+  // with no hardlink group at all.
+  yield* until(writeFile(join(root, "loose-a"), "loose bytes\n", { mode: 0o644 }));
+  yield* until(writeFile(join(root, "loose-b"), "loose bytes\n", { mode: 0o644 }));
+
+  // Modes the usual 0022 umask narrows at creation, set explicitly so the
+  // retained root genuinely carries them. Materialization then has to restore
+  // them under the same umask, which is only possible by setting them.
+  yield* until(writeFile(join(root, "group-writable"), "wide\n"));
+  yield* until(chmod(join(root, "group-writable"), 0o666));
+  yield* until(mkdir(join(root, "wide-dir")));
+  yield* until(chmod(join(root, "wide-dir"), 0o777));
 
   for (const [path, mtime] of [
     [join(root, "README.md"), 1_700_000_001],
@@ -118,16 +147,26 @@ function* buildTree(root: string): Operation<void> {
     [join(root, "docs", "guide.md"), 1_700_000_003],
     [join(root, "docs", "deep", "large.bin"), 1_700_000_004],
     [join(root, "shared-a"), 1_700_000_005],
+    [join(root, "other-a"), 1_700_000_009],
+    [join(root, "loose-a"), 1_700_000_010],
+    [join(root, "loose-b"), 1_700_000_011],
+    [join(root, "group-writable"), 1_700_000_012],
+    [join(root, "wide-dir"), 1_700_000_013],
     [join(root, "docs", "deep"), 1_700_000_006],
     [join(root, "docs"), 1_700_000_007],
     [root, 1_700_000_008],
   ] as const) {
     yield* until(utimes(path, mtime, mtime));
   }
+  // The link's own time, well in the past and set without following it.
+  yield* until(lutimes(join(root, "docs", "link"), 1_600_000_000, 1_600_000_000));
 }
 
 describe("materializing a retained Workspace root", () => {
   it("captures an untouched materialization back to the exact root it came from", function* () {
+    // A umask that would narrow a created mode, so the restoration has to be
+    // explicit rather than incidental.
+    const previous = process.umask(0o022);
     const files: RunnerFiles = runnerFiles();
     const source = yield* useTemporaryDirectory();
     yield* buildTree(source);
@@ -135,11 +174,28 @@ describe("materializing a retained Workspace root", () => {
     const captured = yield* captureWorkspace(files, at(source), reject);
     const entries = captured.root.entries;
     // The tree really does exercise what the format carries.
-    expect(entries.filter((entry) => entry.kind === "directory")).toHaveLength(3);
+    expect(entries.filter((entry) => entry.kind === "directory")).toHaveLength(4);
     expect(entries.filter((entry) => entry.kind === "symlink")).toHaveLength(1);
-    expect(
-      entries.filter((entry) => entry.kind === "file" && entry.hardlink !== null),
-    ).toHaveLength(2);
+    // Two groups of two, holding identical bytes and still two groups.
+    const linked = entries.filter((entry) => entry.kind === "file" && entry.hardlink !== null);
+    expect(linked).toHaveLength(4);
+    expect(new Set(linked.map((entry) => (entry.kind === "file" ? entry.hardlink : "")))).toEqual(
+      new Set(["h0", "h1"]),
+    );
+    // And they share one manifest, which is what makes this discriminating:
+    // a materializer indexing by content would merge them.
+    expect(new Set(linked.map((entry) => (entry.kind === "file" ? entry.manifest : ""))).size).toBe(
+      1,
+    );
+    // Equal bytes did not make the independent pair into a group.
+    for (const path of ["/loose-a", "/loose-b"]) {
+      const loose = entries.find((entry) => entry.path === path);
+      expect(loose?.kind === "file" && loose.hardlink).toBe(null);
+    }
+    // The wide modes survived the umask rather than being narrowed by it.
+    expect(entries.find((entry) => entry.path === "/group-writable")?.mode).toBe(0o666);
+    expect(entries.find((entry) => entry.path === "/wide-dir")?.mode).toBe(0o777);
+    expect(entries.find((entry) => entry.path === "/docs/link")?.mtime).toBe(1_600_000_000);
     expect(entries.some((entry) => entry.kind === "file" && entry.size === 0)).toBe(true);
     // 700 KiB is two chunks at the pinned chunk size, so a file crosses the
     // transport as more than one piece.
@@ -159,6 +215,7 @@ describe("materializing a retained Workspace root", () => {
     );
 
     const again = yield* captureWorkspace(files, at(destination), reject);
+    process.umask(previous);
     expect(again.root.rootId).toBe(captured.root.rootId);
     expect(again.root.manifest).toBe(captured.root.manifest);
     expect([...again.root.manifests]).toEqual([...captured.root.manifests]);

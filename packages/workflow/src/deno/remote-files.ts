@@ -16,8 +16,11 @@
  */
 
 import {
+  chmod,
   link,
   lstat,
+  lchmod,
+  lutimes,
   mkdir,
   readdir,
   readFile,
@@ -65,6 +68,22 @@ function describeStats(
   };
 }
 
+/**
+ * `lchmod`, when the platform actually has it.
+ *
+ * BSD-derived systems do; Linux does not, and Node exposes the export
+ * regardless on some releases. Probing the export is the only honest test
+ * available before a real call.
+ */
+function lchmodOf(): ((path: string, mode: number) => Operation<void>) | undefined {
+  if (typeof lchmod !== "function") {
+    return undefined;
+  }
+  return function* (path: string, mode: number): Operation<void> {
+    yield* until(lchmod(path, mode));
+  };
+}
+
 /** The runner's filesystem operations, for one materialized tree. */
 export function runnerFiles(): RunnerFiles {
   return {
@@ -84,9 +103,37 @@ export function runnerFiles(): RunnerFiles {
       yield* until(link(existing, path));
     },
 
+    *setMode(path: string, mode: number): Operation<void> {
+      // Explicit rather than relying on the creation mode, which the process
+      // umask narrows. A retained mode is durable identity.
+      yield* until(chmod(path, mode));
+    },
+
     *setModifiedAt(path: string, mtime: number): Operation<void> {
       yield* until(utimes(path, mtime, mtime));
     },
+
+    /**
+     * A link's own time, set without following it.
+     *
+     * `lutimes` is what makes this possible at all: `utimes` would follow the
+     * link and rewrite whatever it points at, which may be outside the tree
+     * entirely.
+     */
+    *setLinkModifiedAt(path: string, mtime: number): Operation<void> {
+      yield* until(lutimes(path, mtime, mtime));
+    },
+
+    /**
+     * A link's own permissions, where the platform has them.
+     *
+     * Linux ignores symbolic-link permission bits and offers no `lchmod`, so
+     * this is deliberately absent there rather than faked. Materialization
+     * checks what it actually got and refuses a root this host cannot
+     * represent, which is the honest outcome; quietly writing a different mode
+     * would change durable identity.
+     */
+    setLinkMode: lchmodOf(),
 
     *readFile(path: string): Operation<Uint8Array> {
       return new Uint8Array(yield* until(readFile(path)));
