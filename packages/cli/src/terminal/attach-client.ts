@@ -21,6 +21,7 @@ import type { ChildProcess } from "node:child_process";
 import { ensure, race, resource, sleep, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { deliverSignal, processReachable } from "@executablemd/runtime";
+import { TerminalTeardownFailed } from "./tmux.ts";
 
 export interface AttachClient {
   /** The client process, once the runtime says it started. */
@@ -98,18 +99,32 @@ export function useAttachClient(options: {
         return;
       }
       yield* deliverSignal(pid, "SIGKILL");
-      yield* leftWithin(KILL_SETTLE_MS, pid);
+      if (yield* leftWithin(KILL_SETTLE_MS, pid)) {
+        return;
+      }
+      // Everything this may do has been done, and the client is still there.
+      // Saying "torn down" now would be saying it about a process still holding
+      // the reader's terminal — so the document stops instead. Provider-neutral
+      // by construction: no socket, session, client name, argv, environment,
+      // terminal or host message goes into it.
+      throw new TerminalTeardownFailed("the terminal grid's visible client did not stop");
     }
 
     function* leftWithin(limitMs: number, pid: number): Operation<boolean> {
       const deadline = Date.now() + limitMs;
-      while (Date.now() < deadline) {
+      while (true) {
         if (gone || !(yield* processReachable(pid))) {
           return true;
         }
+        if (Date.now() >= deadline) {
+          break;
+        }
         yield* sleep(POLL_MS);
       }
-      return gone;
+      // One more look, at the boundary itself. A client that left during the
+      // last interval is gone, and reporting it as still there on the strength
+      // of a cached event would be reporting a stale reading.
+      return gone || !(yield* processReachable(pid));
     }
 
     // Registered before the spawn: a halt between starting a client and

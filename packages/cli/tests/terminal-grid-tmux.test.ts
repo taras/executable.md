@@ -896,6 +896,94 @@ describe("Tier TG — the tmux composite", () => {
     }
   });
 
+  it("TG13: a visible client that survives every step refuses the teardown", function* () {
+    const script = yield* useScript();
+    // Asked to detach and stays; signalled and stays; killed and stays. There
+    // is nothing further this may do, and nothing further it may claim.
+    const tmux = createFakeTmux({
+      script,
+      clientCommand,
+      clientName: `/dev/${CLIENT_MARKER}`,
+      stubbornClient: true,
+    });
+    const signalled: string[] = [];
+    let clientPid = -1;
+
+    yield* TerminalProcesses.around(
+      {
+        // deno-lint-ignore require-yield
+        *table() {
+          return [
+            { pid: 900, ppid: 1, pgid: 900, tty: "ttys000", tpgid: 900, command: "shell" },
+            { pid: 901, ppid: 900, pgid: 900, tty: "ttys000", tpgid: 900, command: "xmd" },
+            { pid: 902, ppid: 901, pgid: 900, tty: "ttys000", tpgid: 900, command: "sibling" },
+          ];
+        },
+        // deno-lint-ignore require-yield
+        *holders() {
+          return [900, 901, 902];
+        },
+        // deno-lint-ignore require-yield
+        *deliver([pid, signal]): Operation<SignalDelivery> {
+          signalled.push(`${pid}:${signal}`);
+          return "delivered";
+        },
+        // deno-lint-ignore require-yield
+        *reachable([pid]) {
+          // The client never goes. The server does, so the refusal that
+          // surfaces is the client's rather than the server's.
+          return pid === clientPid;
+        },
+      },
+      { at: "min" },
+    );
+
+    let refusal = "";
+    try {
+      yield* scoped(function* () {
+        const grid = yield* useTmuxGrid(tmux, {
+          session: SESSION_MARKER,
+          columns: 1,
+          panes: 1,
+          width: 160,
+          height: 48,
+          titles: [TITLE_MARKER],
+          workerCommand: (ordinal) => ["xmd", "terminal-worker", String(ordinal), DIR_MARKER],
+          cwd: path.resolve("."),
+          env: { PRIVATE: ENV_MARKER },
+        });
+        const visible = yield* grid.attach();
+        clientPid = visible.client.pid;
+      });
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+
+    // It refuses rather than continuing: a document that carried on here would
+    // carry on while a process still holds the reader's terminal.
+    expect(refusal).toContain("could not be proved torn down");
+    expect(refusal).toContain("visible client did not stop");
+    // Nothing private in it.
+    for (const marker of [
+      SESSION_MARKER,
+      DIR_MARKER,
+      CLIENT_MARKER,
+      TITLE_MARKER,
+      ENV_MARKER,
+      tmux.socket,
+      "ttys000",
+    ]) {
+      expect(`${marker}: ${refusal.includes(marker)}`).toBe(`${marker}: false`);
+    }
+    // The boundary held all the way through the escalation: it was asked
+    // first, and every signal after that named the client alone.
+    expect(tmux.issued.some((line) => line.startsWith("detach-client"))).toBe(true);
+    expect(signalled).toEqual([`${clientPid}:SIGTERM`, `${clientPid}:SIGKILL`]);
+    for (const bystander of [900, 901, 902]) {
+      expect(signalled.some((entry) => entry.startsWith(`${bystander}:`))).toBe(false);
+    }
+  });
+
   it("TG12: every socket and server closes before the private directory goes", function* () {
     const order: string[] = [];
     let directory = "";
