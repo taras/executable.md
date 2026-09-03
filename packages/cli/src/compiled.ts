@@ -18,6 +18,7 @@ import {
   isCredentialHelperMode,
   runCredentialHelper,
 } from "@executablemd/workflow/credential-helper";
+import { paneWorkerInvocation, runPaneWorkerProcess } from "./terminal/pane-worker.ts";
 import type { HelperAssembly } from "@executablemd/workflow/credential-helper";
 import { useCompiledService } from "./compiled-service.ts";
 
@@ -49,7 +50,13 @@ const UPGRADE = compiledUpgradeAssembly({
 });
 
 // Before anything public is parsed, and absent from every public surface.
-if (isCredentialHelperMode(process.argv.slice(2))) {
+const paneWorker = paneWorkerInvocation(process.argv.slice(2));
+if (paneWorker !== undefined) {
+  // Not `main()`: it would bind SIGINT to its own shutdown and exit 130 on the
+  // first `^C` typed into the pane, which is the keystroke the foreground child
+  // is supposed to receive.
+  await runPaneWorkerProcess(paneWorker);
+} else if (isCredentialHelperMode(process.argv.slice(2))) {
   await main(() => runCredentialHelper(process.argv.slice(2)));
 } else {
   await main(function* (args) {

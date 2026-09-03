@@ -21,6 +21,7 @@ import {
   isCredentialHelperMode,
   runCredentialHelper,
 } from "@executablemd/workflow/credential-helper";
+import { paneWorkerInvocation, runPaneWorkerProcess } from "./terminal/pane-worker.ts";
 import type { HelperAssembly } from "@executablemd/workflow/credential-helper";
 import { useDenoService } from "./deno-service.ts";
 
@@ -65,7 +66,13 @@ const UPGRADE: UpgradeAssembly = {
 // The internal helper mode runs before anything public is parsed. It is not a
 // command: it appears in no help and in no public grammar, and a caller who did
 // not select it gets the ordinary command line unchanged.
-if (isCredentialHelperMode(process.argv.slice(2))) {
+const paneWorker = paneWorkerInvocation(process.argv.slice(2));
+if (paneWorker !== undefined) {
+  // Not `main()`: it would bind SIGINT to its own shutdown and exit 130 on the
+  // first `^C` typed into the pane, which is the keystroke the foreground child
+  // is supposed to receive.
+  await runPaneWorkerProcess(paneWorker);
+} else if (isCredentialHelperMode(process.argv.slice(2))) {
   await main(() => runCredentialHelper(process.argv.slice(2)));
 } else {
   await main(function* (args) {
