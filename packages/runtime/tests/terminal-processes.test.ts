@@ -120,17 +120,21 @@ describe("Tier TP — proving a terminal pane is free", () => {
 
   /** Probes a row answers for, in place of the machine's. */
   function probes(answers: {
-    ps?: { code: number; stdout: string };
-    lsof?: { code: number; stdout: string };
+    ps?: { code: number; stdout: string; stderr?: string };
+    lsof?: { code: number; stdout: string; stderr?: string };
     kill?: (pid: number) => void;
   }): ProcessProbes {
+    const said = (
+      answer: { code: number; stdout: string; stderr?: string } | undefined,
+    ): { code: number; stdout: string; stderr: string } => ({
+      code: answer?.code ?? 0,
+      stdout: answer?.stdout ?? "",
+      stderr: answer?.stderr ?? "",
+    });
     return {
       // deno-lint-ignore require-yield
       *run(command) {
-        if (command === "ps") {
-          return answers.ps ?? { code: 0, stdout: "" };
-        }
-        return answers.lsof ?? { code: 0, stdout: "" };
+        return said(command === "ps" ? answers.ps : answers.lsof);
       },
       kill(pid) {
         answers.kill?.(pid);
@@ -191,6 +195,54 @@ describe("Tier TP — proving a terminal pane is free", () => {
     yield* scoped(function* () {
       yield* installDenoTerminalProcesses(probes({ lsof: { code: 0, stdout: "900\n901\n" } }));
       expect(yield* terminalHolders("/dev/ttys003")).toEqual([900, 901]);
+    });
+  });
+
+  it("TP2f: exit 1 with a diagnostic is not the empty result", function* () {
+    // `lsof -t` exits 1 saying nothing when a file has no holders, and exits 1
+    // *with a diagnostic* when it could not look. Without reading stderr those
+    // are the same status, and one means "nobody" while the other means "I do
+    // not know".
+    yield* installDenoTerminalProcesses(
+      probes({ lsof: { code: 1, stdout: "", stderr: "lsof: WARNING: can't stat()" } }),
+    );
+
+    let raised = "";
+    try {
+      yield* terminalHolders("/dev/ttys003");
+    } catch (error) {
+      raised = error instanceof Error ? error.message : String(error);
+    }
+    expect(raised).toContain("could not enumerate the holders");
+  });
+
+  it("TP2g: output this host cannot read is never an empty set", function* () {
+    // A successful run whose lines are not all readable. Dropping the ones it
+    // does not understand would turn a partial answer into a confident one —
+    // and a sweep would be satisfied by the processes it happened to recognise.
+    yield* scoped(function* () {
+      yield* installDenoTerminalProcesses(
+        probes({ lsof: { code: 0, stdout: "900\nlsof: no pwd entry\n" } }),
+      );
+      let raised = "";
+      try {
+        yield* terminalHolders("/dev/ttys003");
+      } catch (error) {
+        raised = error instanceof Error ? error.message : String(error);
+      }
+      expect(raised).toContain("terminal holders it could not read");
+    });
+    yield* scoped(function* () {
+      yield* installDenoTerminalProcesses(
+        probes({ ps: { code: 0, stdout: "1 0 1 ?? -1 launchd\nps: bad output\n" } }),
+      );
+      let raised = "";
+      try {
+        yield* processTable();
+      } catch (error) {
+        raised = error instanceof Error ? error.message : String(error);
+      }
+      expect(raised).toContain("process table it could not read");
     });
   });
 
