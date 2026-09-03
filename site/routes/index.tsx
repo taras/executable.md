@@ -401,13 +401,9 @@ export default define.page(function Home({ url }) {
           </div>
 
           <div style="display:flex;flex-direction:column;gap:1.125rem;min-width:0;">
-            <div class="panel">
-              <div class="panel-body">
-                <CodeBlock filename="release.md" copy>
-                  <Source lines={RELEASE_MD} />
-                </CodeBlock>
-              </div>
-            </div>
+            <CodeBlock filename="release.md" copy>
+              <Source lines={RELEASE_MD} />
+            </CodeBlock>
           </div>
         </section>
 
@@ -508,9 +504,9 @@ export default define.page(function Home({ url }) {
           <div class="grid" style={PAIR}>
             <CodeBlock filename="CLI" copy>
               <Prompt />
-              {" xmd plan "}
+              <span>{" xmd plan "}</span>
               <span class="tok-str">{`"${PLAN_LINES}"`}</span>
-              {" > release.md"}
+              <span>{" > release.md"}</span>
             </CodeBlock>
 
             <CodeBlock filename="XMD" copy>
