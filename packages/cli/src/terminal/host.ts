@@ -51,7 +51,10 @@ export function* unsupportedTerminalGrid(): Operation<void> {
 export function useHangupCancellation(hangup: Operation<void>): Operation<void> {
   return Execution.around({
     *document([request], next) {
-      yield* underHangup(hangup, () => next(request));
+      // The result is returned, not swallowed: canonical execution is what
+      // produces a document result, and a handler that answered with nothing
+      // would be refused for having returned before one existed.
+      return yield* underHangup(hangup, () => next(request));
     },
   });
 }
@@ -63,11 +66,8 @@ export function useHangupCancellation(hangup: Operation<void>): Operation<void> 
  * comes down through the same teardown a reader close uses, and the run stops
  * rather than continuing on a terminal it no longer has.
  */
-export function underHangup<T>(
-  hangup: Operation<void>,
-  body: () => Operation<T>,
-): Operation<T | undefined> {
-  return (function* (): Operation<T | undefined> {
+export function underHangup<T>(hangup: Operation<void>, body: () => Operation<T>): Operation<T> {
+  return (function* (): Operation<T> {
     const outcome = yield* race([
       (function* (): Operation<{ done: true; value: T }> {
         return { done: true, value: yield* body() };
