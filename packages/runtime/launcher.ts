@@ -62,7 +62,21 @@ export interface NativeLaunchOutcome {
 export interface NativeLauncherHandler {
   reserve(): Operation<void>;
   flush(): Operation<void>;
-  launch(request: NativeLaunchRequest): Operation<NativeLaunchOutcome>;
+  /**
+   * Start the native UI, wait for it, and report how it ended.
+   *
+   * `spawned` is the runtime's child-start event, reported as a parameter
+   * rather than through the request or the result. A host calls it once the
+   * child has actually started and before it waits for the exit, so a UI that
+   * starts and closes at once has still started. Preparation, a reservation, an
+   * allocated PID and the child's first output are not that event, and a launch
+   * that never starts never calls it.
+   *
+   * At the root nobody is listening and it does nothing. Composed middleware —
+   * a terminal pane's launcher — is what gives it a meaning, which is why it
+   * travels here instead of in `NativeLaunchRequest`.
+   */
+  launch(request: NativeLaunchRequest, spawned: () => void): Operation<NativeLaunchOutcome>;
 }
 
 export const NATIVE_LAUNCHER_UNAVAILABLE =
@@ -88,7 +102,7 @@ export const NativeLauncher: Api<NativeLauncherHandler> = createApi<NativeLaunch
       throw new NativeLauncherUnavailableError();
     },
     // deno-lint-ignore require-yield
-    *launch(_request: NativeLaunchRequest): Operation<NativeLaunchOutcome> {
+    *launch(_request: NativeLaunchRequest, _spawned: () => void): Operation<NativeLaunchOutcome> {
       throw new NativeLauncherUnavailableError();
     },
   },
@@ -104,9 +118,15 @@ export function flushOutput(): Operation<void> {
   return NativeLauncher.operations.flush();
 }
 
-/** Run one native UI as a foreground child and report how it ended. */
+/**
+ * Run one native UI as a foreground child and report how it ended.
+ *
+ * A provider adapter calls this and hears nothing about the child's start: the
+ * spawn event is the host's to report and a pane's to act on, and an adapter
+ * that could observe it could also fake it.
+ */
 export function nativeLaunch(request: NativeLaunchRequest): Operation<NativeLaunchOutcome> {
-  return NativeLauncher.operations.launch(request);
+  return NativeLauncher.operations.launch(request, () => {});
 }
 
 export const NO_TERMINAL =
@@ -179,8 +199,8 @@ export function* installForegroundLauncher(
         yield* drainStream(process.stdout);
         yield* drainStream(process.stderr);
       },
-      *launch([request]) {
-        return yield* runForeground(request);
+      *launch([request, spawned]) {
+        return yield* runForeground(request, spawned);
       },
     },
     { at: "min" },
@@ -212,7 +232,10 @@ function drainStream(stream: DrainableStream): Operation<void> {
   );
 }
 
-function runForeground(request: NativeLaunchRequest): Operation<NativeLaunchOutcome> {
+function runForeground(
+  request: NativeLaunchRequest,
+  spawned: () => void,
+): Operation<NativeLaunchOutcome> {
   return scoped(function* (): Operation<NativeLaunchOutcome> {
     const [command, ...args] = request.command;
     if (command === undefined) {
@@ -239,6 +262,10 @@ function runForeground(request: NativeLaunchRequest): Operation<NativeLaunchOutc
       stdio: "inherit",
     });
 
+    // The runtime's own start event, and the only thing reported as one. A
+    // spawn that fails emits `error` instead, so a child that never ran never
+    // reports having started.
+    child.once("spawn", () => spawned());
     child.once("error", (error: Error) => failed.reject(error));
     child.once("exit", (code: number | null, signal: string | null) => {
       const outcome: NativeLaunchOutcome = {};
@@ -396,6 +423,16 @@ export interface ControlledLauncherOptions {
   record?: (request: NativeLaunchRequest) => void;
   outcome?: (request: NativeLaunchRequest) => NativeLaunchOutcome;
   wait?: (request: NativeLaunchRequest) => Operation<void>;
+  /**
+   * Start the child, in place of a runtime that would.
+   *
+   * It receives the spawn report, so a test decides whether this launch starts
+   * at all: reporting is what a successful start does, and throwing without
+   * reporting is what a failure before the start does. Left out, the child
+   * starts at once — a test that says nothing about starting wants a launch
+   * that started.
+   */
+  start?: (request: NativeLaunchRequest, spawned: () => void) => Operation<void>;
   onReserve?: () => void;
   onFlush?: () => void;
 }
@@ -427,8 +464,13 @@ export function* installControlledLauncher(
       *flush() {
         options.onFlush?.();
       },
-      *launch([request]) {
+      *launch([request, spawned]) {
         options.record?.(request);
+        if (options.start) {
+          yield* options.start(request, spawned);
+        } else {
+          spawned();
+        }
         if (options.wait) {
           yield* options.wait(request);
         }

@@ -13,7 +13,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { ensure, scoped, spawn, until, withResolvers } from "effection";
+import { ensure, resource, scoped, spawn, until, withResolvers } from "effection";
 import type { Operation, Result, WithResolvers } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { createHash, randomUUID } from "node:crypto";
@@ -38,9 +38,17 @@ import {
   installControlledLauncher,
   NATIVE_LAUNCHER_UNAVAILABLE,
   nativeLaunch,
+  prepareControlledComposite,
+  reserveTerminal,
+  TerminalGrids,
+  terminalProviderLog,
   useHostFiles,
 } from "@executablemd/runtime";
 import type { NativeLaunchOutcome, NativeLaunchRequest } from "@executablemd/runtime";
+import { createTerminalGridClaims } from "../src/terminal/authority.ts";
+import { usePaneNativeLauncher } from "../src/terminal/pane-launcher.ts";
+import { installTerminalGridProfile } from "../src/terminal/profile.ts";
+import { registerTerminalProvider } from "../src/terminal/provider-api.ts";
 import type { Json } from "../src/types.ts";
 
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -216,6 +224,19 @@ interface RunOptions {
     next: (request: AgentLaunchRequest) => Operation<unknown>,
   ) => Operation<unknown>;
   secretDetection?: boolean;
+  /**
+   * Install a controlled terminal provider, so the document can open a grid.
+   *
+   * The reader stays until every pane has settled, so a row about what a pane
+   * launched is not racing the close that would cancel it.
+   */
+  grid?: boolean;
+  /** Start the native child, in place of a runtime that would. */
+  start?: (request: NativeLaunchRequest, spawned: () => void) => Operation<void>;
+  /** Called as the composite shows each pane state, in order. */
+  onPaneState?: (ordinal: number, state: string) => void;
+  /** Called when the composite is shown to the reader. */
+  onAttach?: () => void;
 }
 
 interface Run {
@@ -224,6 +245,8 @@ interface Run {
   stub: LaunchStub;
   launcher: LauncherLog;
   events: DurableEvent[];
+  /** Everything the controlled composite did, in order. */
+  composite: string[];
 }
 
 function* runDoc(doc: string, options: RunOptions = {}): Operation<Run> {
@@ -277,8 +300,52 @@ function* runDoc(doc: string, options: RunOptions = {}): Operation<Run> {
                 })(),
             }
           : {}),
+        ...(options.start === undefined ? {} : { start: options.start }),
         outcome: () => options.outcome ?? { exitCode: 0 },
       });
+    }
+
+    const providerLog = terminalProviderLog();
+    if (options.grid === true) {
+      // The reader leaves once every pane has settled. Leaving sooner is a real
+      // thing a reader does — TG12 owns that — but a row about what a pane
+      // launched must not race the close that cancels it.
+      const settled = withResolvers<void>();
+      let panes = 0;
+      let done = 0;
+      yield* registerTerminalProvider("controlled", function* (_settings, authority) {
+        yield* TerminalGrids.around(
+          {
+            *open([request]) {
+              const composite = yield* prepareControlledComposite(request, {
+                log: providerLog,
+                close: () => settled.operation,
+                // deno-lint-ignore require-yield
+                *onPrepare(asked) {
+                  panes = asked.panes.length;
+                },
+                // deno-lint-ignore require-yield
+                *onAttach() {
+                  options.onAttach?.();
+                },
+                onUpdate(ordinal, state) {
+                  options.onPaneState?.(ordinal, state);
+                  if (state === "succeeded" || state === "failed" || state === "closed") {
+                    done++;
+                    if (done >= panes) {
+                      settled.resolve();
+                    }
+                  }
+                },
+              });
+              yield* authority.present(request, composite);
+              return undefined;
+            },
+          },
+          { at: "min" },
+        );
+      });
+      yield* installTerminalGridProfile({ provider: "controlled" });
     }
 
     yield* installAgentComponents({
@@ -317,6 +384,7 @@ function* runDoc(doc: string, options: RunOptions = {}): Operation<Run> {
       stub,
       launcher,
       events: yield* stream.readAll(),
+      composite: providerLog.events,
     };
   });
 }
@@ -765,6 +833,221 @@ describe("Tier SL — native session launch", () => {
       "flush",
       "launch",
     ]);
+  });
+});
+
+/**
+ * Tier SP — `<Session.Launch>` inside a terminal pane
+ * (specs/native-agent-session-launch-spec.md §Terminal-grid composition).
+ *
+ * The launch is the same launch. Nothing here passes a pane to it, and its
+ * request, result and retained phases are the ones a root launch would have.
+ * What changes is which terminal answers, and these rows are about that: a
+ * pane's own lease instead of the run's, panes that do not contend with each
+ * other, one that is exclusive to itself, and a readiness latch nothing but a
+ * started child can trip.
+ */
+describe("Tier SP — a launch inside a terminal pane", () => {
+  /** Two panes, each launching a session of its own. */
+  const PANES = [
+    "<Terminal.Grid columns={2}>",
+    '<Terminal title="Left">',
+    '<Session.Launch session="left">left work</Session.Launch>',
+    "</Terminal>",
+    '<Terminal title="Right">',
+    '<Session.Launch session="right">right work</Session.Launch>',
+    "</Terminal>",
+    "</Terminal.Grid>",
+    "",
+  ].join("\n");
+
+  it("SP1: a pane launch takes that pane, not the run's foreground lease", function* () {
+    const run = yield* runDoc(PANES, { grid: true });
+
+    expect(run.result.ok ? "" : run.result.error.message).toBe("");
+    // The grid took the one root lease, and the two launches inside it did not
+    // ask for it. Had either delegated, the host launcher would have refused
+    // the second holder and the document would have failed here.
+    expect(run.launcher.reserved).toBe(1);
+    expect(run.launcher.requests.length).toBe(2);
+    // Both went to the provider unchanged: same argv a root launch builds, and
+    // nothing about a pane in it.
+    for (const request of run.launcher.requests) {
+      expect(request.command).toEqual(["stub-ui", "--resume", run.stub.nativeSessionId]);
+      expect(JSON.stringify(request)).not.toContain("pane");
+      expect(JSON.stringify(request)).not.toContain("ordinal");
+    }
+  });
+
+  it("SP2: launches in distinct panes hold their terminals at the same time", function* () {
+    // Each launch waits for the other to have started. Two launches sharing one
+    // lease would serialise, and the first would wait for a second that cannot
+    // begin — so this row hangs rather than passing if they contend.
+    const both = withResolvers<void>();
+    let started = 0;
+    const run = yield* runDoc(PANES, {
+      grid: true,
+      start: function* (_request, spawned) {
+        spawned();
+        started++;
+        if (started === 2) {
+          both.resolve();
+        }
+        yield* both.operation;
+      },
+    });
+
+    expect(run.result.ok ? "" : run.result.error.message).toBe("");
+    expect(started).toBe(2);
+    expect(run.launcher.requests.length).toBe(2);
+  });
+
+  it("SP3: a pane is ready only once its native child has started", function* () {
+    const order: string[] = [];
+    const bothPrepared = withResolvers<void>();
+    let prepared = 0;
+    const run = yield* runDoc(PANES, {
+      grid: true,
+      start: function* (_request, spawned) {
+        // Prepared, reserved, flushed and routed to the provider — and none of
+        // that is a start. Both launches get this far before either child does.
+        order.push("prepare");
+        prepared++;
+        if (prepared === 2) {
+          bothPrepared.resolve();
+        }
+        yield* bothPrepared.operation;
+        order.push("spawn");
+        spawned();
+      },
+      onPaneState: (_ordinal, state) => {
+        if (state === "running") {
+          order.push("running");
+        }
+      },
+      onAttach: () => order.push("attach"),
+    });
+
+    expect(run.result.ok ? "" : run.result.error.message).toBe("");
+    // Neither pane was running, and nothing was shown, while both launches sat
+    // one step short of starting a child.
+    expect(order.slice(0, 4)).toEqual(["prepare", "prepare", "spawn", "spawn"]);
+    expect(order.filter((event) => event === "running").length).toBe(2);
+    expect(order.indexOf("attach")).toBeGreaterThan(order.lastIndexOf("spawn"));
+  });
+
+  it("SP4: a launch that fails before the spawn keeps its phases and shows nothing", function* () {
+    let started = 0;
+    const run = yield* runDoc(PANES, {
+      grid: true,
+      start: function* (_request, spawned) {
+        // One pane's child never starts, and nothing is reported: the readiness
+        // latch belongs to a child that started.
+        started++;
+        if (started === 1) {
+          yield* until(Promise.resolve());
+          throw new Error("the native UI could not be started");
+        }
+        spawned();
+      },
+    });
+
+    expect(run.result.ok).toBe(false);
+    // Nothing was ever shown: a grid whose pane failed to start attaches no
+    // partial composite.
+    expect(run.composite.includes("attach:0")).toBe(false);
+    // And what the launch had already made durable is still there. The grid
+    // does not roll a completed preparation back.
+    expect(retainedPhases(run.events)).toContain("prepared");
+    expect(preparedRecord(run.events).nativeSessionId).toBe(run.stub.nativeSessionId);
+  });
+
+  /**
+   * A lease that outlives the child it protects, and unwinds slowly.
+   *
+   * This is the shape a session acquisition has: the provider takes ownership,
+   * performs the whole launch inside it, and releases it as the launch's scope
+   * comes down — *inside* the terminal reservation, so the pane is still held
+   * while it happens. `entered` says the unwinding has begun; `release` lets it
+   * finish.
+   */
+  function heldLease(entered: WithResolvers<void>, release: WithResolvers<void>): Operation<void> {
+    return resource<void>(function* (provide) {
+      yield* ensure(function* () {
+        entered.resolve();
+        yield* release.operation;
+      });
+      yield* provide();
+    });
+  }
+
+  /** Ask this pane for its terminal, and report the refusal if there is one. */
+  function reserveOnce(): Operation<string> {
+    return (function* (): Operation<string> {
+      try {
+        yield* scoped(() => reserveTerminal());
+        return "admitted";
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    })();
+  }
+
+  it("SP5: a pane is held until both the child and the lease around it are done", function* () {
+    const claims = createTerminalGridClaims({
+      columns: 1,
+      rows: 1,
+      panes: [{ ordinal: 0, title: "Only", row: 0, column: 0, form: "paired" }],
+    });
+    const claim = claims.claims[0]!;
+    const childLive = withResolvers<void>();
+    const childMayExit = withResolvers<void>();
+    const unwinding = withResolvers<void>();
+    const release = withResolvers<void>();
+    const asked: string[] = [];
+
+    yield* scoped(function* () {
+      yield* installControlledLauncher({
+        wait: () =>
+          (function* () {
+            childLive.resolve();
+            yield* childMayExit.operation;
+          })(),
+      });
+      yield* usePaneNativeLauncher(claim, function* () {});
+
+      const first = yield* spawn(function* () {
+        // The order a launch composes in: this pane, then the lease, then the
+        // child. Which is also the order they come back in, reversed.
+        yield* scoped(function* () {
+          yield* reserveTerminal();
+          yield* heldLease(unwinding, release);
+          yield* nativeLaunch({ command: ["ui"], cwd: "." });
+        });
+      });
+
+      // 1. The native child is live.
+      yield* childLive.operation;
+      asked.push(yield* reserveOnce());
+
+      // 2. The child has gone, but the lease around it is still unwinding —
+      //    which is the half a launch that merely returned would never show.
+      childMayExit.resolve();
+      yield* unwinding.operation;
+      asked.push(yield* reserveOnce());
+
+      // 3. Both are done.
+      release.resolve();
+      yield* first;
+      asked.push(yield* reserveOnce());
+    });
+
+    expect(asked.length).toBe(3);
+    expect(asked[0]).toContain("already has a live interactive operation");
+    expect(asked[1]).toContain("already has a live interactive operation");
+    expect(asked[2]).toBe("admitted");
+    // The child that started is what made the pane ready, and it did.
+    expect(claims.readiness[0]?.acknowledged).toBe(true);
   });
 });
 
