@@ -33,8 +33,9 @@ import type { Operation } from "effection";
 import { processReachable } from "@executablemd/runtime";
 import { layoutString, swapsInto } from "./layout.ts";
 import type { LayoutCell } from "./layout.ts";
-import { usePaneChild } from "./pane-child.ts";
-import type { PaneChild } from "./pane-child.ts";
+import { useAttachClient } from "./attach-client.ts";
+import type { AttachClient } from "./attach-client.ts";
+import { TerminalTeardownFailed } from "./tmux.ts";
 import type { Tmux } from "./tmux.ts";
 
 /** What one prepared pane is, from the composite's side. */
@@ -80,7 +81,7 @@ export interface ServerStopped {
 }
 
 export interface VisibleClient {
-  readonly child: PaneChild;
+  readonly client: AttachClient;
   /** tmux's name for this client once attached: its tty. */
   readonly name: string;
 }
@@ -95,7 +96,13 @@ export interface TmuxGrid {
   attach(): Operation<VisibleClient>;
   /** Ask the visible client to leave, so it restores the terminal itself. */
   detach(client: VisibleClient): Operation<void>;
-  /** Stop the server, and establish that it is gone. */
+  /**
+   * Stop the server, and establish that it is gone.
+   *
+   * Refuses rather than reporting: an unproved teardown throws, because a
+   * document that continued past one would be continuing while a terminal may
+   * still be held.
+   */
   stop(): Operation<ServerStopped>;
 }
 
@@ -116,16 +123,21 @@ export function useTmuxGrid(tmux: Tmux, request: TmuxGridRequest): Operation<Tmu
     const target = `${request.session}:0`;
     let serverPid = -1;
 
+    /**
+     * Take the server down, and prove it.
+     *
+     * `kill-server` succeeding is not the proof. What is asked afterwards, and
+     * kept asking until both are true, is whether the process this grid started
+     * is unreachable and whether the server refuses to answer for its own
+     * session. The socket file is not part of it: it outlives the server.
+     */
     function* stop(): Operation<ServerStopped> {
       yield* tmux.tryRun(["kill-server"]);
       const deadline = Date.now() + STOP_LIMIT_MS;
-      let stopped: ServerStopped;
+      let stopped: ServerStopped = { gone: false, refuses: false };
       do {
         stopped = {
           gone: serverPid < 0 || !(yield* processReachable(serverPid)),
-          // The socket file outlives the server, so "gone" is the pid being
-          // unreachable and nothing answering for the session — never the
-          // socket file's absence.
           refuses: (yield* tmux.tryRun(["has-session", "-t", request.session])) === undefined,
         };
         if (stopped.gone && stopped.refuses) {
@@ -133,9 +145,19 @@ export function useTmuxGrid(tmux: Tmux, request: TmuxGridRequest): Operation<Tmu
         }
         yield* sleep(CLIENT_POLL_MS);
       } while (Date.now() < deadline);
-      return stopped;
+      // Provider-neutral, deliberately: a reader is told which fact could not
+      // be established, never the session name or socket that would identify
+      // this invocation's private server.
+      throw new TerminalTeardownFailed(
+        stopped.gone
+          ? "the terminal server still answers for its session"
+          : "the terminal server did not stop",
+      );
     }
 
+    // Registered before the first command, so a preparation that fails halfway
+    // is torn down under the same rule — and one that cannot be proved torn
+    // down says so rather than passing quietly.
     yield* ensure(function* () {
       yield* stop();
     });
@@ -266,36 +288,29 @@ export function useTmuxGrid(tmux: Tmux, request: TmuxGridRequest): Operation<Tmu
         return (yield* readPanes(tmux, target, paneIds)).map((pane) => pane.cell);
       },
       *attach() {
-        const child = yield* usePaneChild(
-          {
-            argv: tmux.argv(["attach-session", "-t", request.session]),
-            cwd: request.cwd,
-            env: request.env,
+        // Its own lifecycle, not a pane child's. A pane child is settled by
+        // sweeping its process group and its terminal; this client's terminal
+        // is the reader's, and everything holding it is the run.
+        let named: string | undefined;
+        const client = yield* useAttachClient({
+          argv: tmux.argv(["attach-session", "-t", request.session]),
+          cwd: request.cwd,
+          env: request.env,
+          *askToLeave() {
+            if (named === undefined) {
+              return;
+            }
+            yield* tmux.tryRun(["detach-client", "-t", named]);
           },
-          // No terminal sweep for this one. Its terminal is the reader's, and
-          // the processes holding it are the run itself.
-          undefined,
-        );
-        const started = yield* child.started;
-        if (!started.ok) {
-          throw started.error;
-        }
-        const name = yield* awaitClient(tmux);
-        return { child, name };
+        });
+        named = yield* awaitClient(tmux);
+        return { client, name: named };
       },
       *detach(client) {
-        // Asked to leave before being signalled: a client that detaches
-        // restores the terminal itself, and one that is killed cannot.
-        yield* tmux.tryRun(["detach-client", "-t", client.name]);
-        const deadline = Date.now() + DETACH_LIMIT_MS;
-        while (Date.now() < deadline) {
-          if (!(yield* clientNames(tmux)).includes(client.name)) {
-            break;
-          }
-          yield* sleep(CLIENT_POLL_MS);
-        }
-        // Whatever the client did about it, the process is this scope's.
-        yield* client.child.settle();
+        // The ask is inside `stop()`, which is what makes the order the same
+        // however the grid ends: asked first, and only this exact process
+        // insisted on afterwards.
+        yield* client.client.stop();
       },
       stop,
     });
