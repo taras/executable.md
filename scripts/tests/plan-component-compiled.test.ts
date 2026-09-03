@@ -90,7 +90,13 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
     // And the private capabilities are not syntax any build lets a document
     // write.
     const names = entries.map((entry: { name?: string }) => entry?.name);
-    for (const name of ["PlanInputs", "PlanAuthorship", "CheckDraft", "AdmitPlan"]) {
+    for (const name of [
+      "PlanInputs",
+      "PlanAuthorship",
+      "PlanProgress",
+      "CheckDraft",
+      "AdmitPlan",
+    ]) {
       expect(names).not.toContain(name);
     }
 
@@ -109,8 +115,24 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
     expect(helped.value.stdout).toContain(
       'xmd plan "Prepare the release program." --output release.md && xmd run release.md',
     );
-    for (const option of ["--run", "--props", "--journal", "--raw", "--verbose", "--deny-all"]) {
-      expect(helped.value.stdout).not.toContain(option);
+    // The two options that observe this command's own authorship travel with
+    // those bytes too, in full, and so does what a journal costs.
+    expect(helped.value.stdout).toContain(
+      "--verbose                 show generated drafts and XMD check diagnostics on stderr",
+    );
+    expect(helped.value.stdout).toContain(
+      "--journal [JOURNAL]       record the planning process as diagnostic JSONL " +
+        "(path must not exist)",
+    );
+    expect(helped.value.stdout).toContain(
+      "Secret detection checks journal entries before they are recorded",
+    );
+    // And nothing that would run the approved program. Matched as whole tokens,
+    // because `-j` is a substring of the `--journal` this command does define.
+    for (const option of ["--run", "--props", "--raw", "--deny-all", "-V", "-j"]) {
+      expect(`${option}: ${new RegExp(`(^|\\s)${option}\\b`, "m").test(helped.value.stdout)}`).toBe(
+        `${option}: false`,
+      );
     }
   });
 });
