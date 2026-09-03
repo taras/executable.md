@@ -14,7 +14,8 @@
     "packages/workflow/src/cloudflare",
     "packages/workflow/tests/cloudflare",
     "vitest.config.ts",
-    "packages/workflow/tsconfig.cloudflare.json"
+    "packages/workflow/tsconfig.cloudflare.json",
+    "packages/workflow/cloudflare.ts"
   ],
   "nodeModulesDir": "auto",
   "lock": {

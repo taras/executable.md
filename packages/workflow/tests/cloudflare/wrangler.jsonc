@@ -7,7 +7,10 @@
     "bindings": [
       { "name": "STORAGE_PROBE", "class_name": "StorageProbeObject" },
       { "name": "OWNER", "class_name": "OwnerObject" },
+      { "name": "EXECUTOR", "class_name": "ExecutorObject" },
     ],
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["StorageProbeObject", "OwnerObject"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["StorageProbeObject", "OwnerObject", "ExecutorObject"] },
+  ],
 }

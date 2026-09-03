@@ -15,5 +15,5 @@
     "skipLibCheck": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src/cloudflare/**/*.ts", "tests/cloudflare/**/*.ts"]
+  "include": ["cloudflare.ts", "src/cloudflare/**/*.ts", "tests/cloudflare/**/*.ts"]
 }
