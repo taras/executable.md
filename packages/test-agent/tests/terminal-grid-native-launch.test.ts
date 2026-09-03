@@ -20,7 +20,7 @@
  */
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, Err, scoped, spawn, withResolvers } from "effection";
+import { ensure, Err, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation, Result, Task } from "effection";
 import { copyFile, ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
@@ -265,6 +265,10 @@ function* runJourney(options: RunOptions = {}): Operation<Run> {
                   *onAttach() {
                     order.push("attach");
                   },
+                  // deno-lint-ignore require-yield
+                  *onDestroy() {
+                    order.push("destroy");
+                  },
                   onUpdate(ordinal: number, state: TerminalPaneState) {
                     states.push(`${ordinal}:${state}`);
                     options.onState?.(ordinal, state);
@@ -444,9 +448,9 @@ const CLOSE_THEN_CONTINUE = [
   "</Terminal>",
   "</Terminal.Grid>",
   "",
-  '<Session.Launch session="planner">',
-  "You are the repository planner.",
-  "</Session.Launch>",
+  // The same prepared instructions the pane launched, so this is the same
+  // conversation continuing rather than a second one asking for the name.
+  '<Session.Launch session="planner">You are the repository planner.</Session.Launch>',
   "</Test>",
   "</TestAgent>",
   "",
@@ -688,63 +692,68 @@ describe(
       expect(run.results.filter((result) => result.status === "fail").length).toBe(1);
     });
 
-    it("GN8: reader close cancels every live launch and gives both leases back", function* () {
-      const closing = withResolvers<void>();
-      const bothLive = withResolvers<void>();
-      let live = 0;
+    it("GN8: reader close finishes both launches, and the document goes on", function* () {
+      const bothStarted = withResolvers<void>();
+      let started = 0;
       const run = yield* runJourney({
         source: CLOSE_THEN_CONTINUE,
         children: 2,
         child: (_marker, marks) =>
           (function* () {
-            live++;
-            if (live === 2) {
-              bothLive.resolve();
+            started++;
+            if (started > 2) {
+              // The launch after the grid. It is the sibling this row is
+              // waiting to see run, so it runs.
+              return;
             }
-            // Held until the reader leaves, and then cancelled through the
-            // ordinary launch path rather than returning an outcome.
+            if (started === 2) {
+              bothStarted.resolve();
+            }
             try {
-              yield* closing.operation;
+              // Nothing here ever completes it. The only thing that stops this
+              // child is the reader closing the grid, so a close that did not
+              // cancel it would hang this row rather than pass it.
+              yield* suspend();
             } finally {
-              marks.push("cancelled");
+              // Reached as the child is torn down: this is the child actually
+              // being gone, not the request that it stop.
+              marks.push("gone");
             }
           })(),
         close: (marks) =>
           (function* () {
-            yield* bothLive.operation;
+            yield* bothStarted.operation;
             marks.push("close");
-            closing.resolve();
           })(),
       });
 
-      // Both launches were cancelled where they stood, and neither pane failed:
-      // a reader leaving is not a pane failure.
-      expect(run.order.filter((mark) => mark === "cancelled").length).toBe(2);
+      // Both children were cancelled and both are gone, and neither pane
+      // failed: a reader leaving is not a pane failure.
+      expect(run.order.filter((mark) => mark === "gone").length).toBe(2);
       expect(run.states.filter((state) => state.endsWith(":failed"))).toEqual([]);
-      // Which panes, not how many messages — see GN7.
       expect(new Set(run.states.filter((state) => state.endsWith(":closed")))).toEqual(
         new Set(["0:closed", "1:closed"]),
       );
-      // The composite came down before the document went on.
-      expect(run.composite).toContain("destroy:0");
+      // Teardown finished after they were gone, not merely after they were
+      // asked to stop.
+      const destroyed = run.order.indexOf("destroy");
+      expect(destroyed).toBeGreaterThan(-1);
+      expect(run.order.lastIndexOf("gone")).toBeLessThan(destroyed);
 
       // The sibling after the grid is a *root* launch naming a session one of
-      // those panes was holding, so it needs both leases back: the run's
-      // foreground terminal, and that session's ownership.
-      //
-      // Which refusal it gets is what proves it got them. A grid still holding
-      // the terminal refuses with "already holds this run's terminal"; a
-      // session still held refuses with "another owner is using session". It
-      // reaches neither. What it reaches is the #517 recovery tombstone — a
-      // native UI that was cancelled never proved it stopped, so the record
-      // stays active and the next owner is told to recover it deliberately
-      // rather than inferring safety from a lock being free.
-      const message = run.result.ok ? "" : run.result.error.message;
-      expect(message).toContain("was left owned by work that did not finish");
-      expect(message).not.toContain("already holds this run's terminal");
-      expect(message).not.toContain("another owner is using session");
-      // And it started nothing: the refusal comes before a native child.
-      expect(run.launches.length).toBe(2);
+      // those panes was holding. It needs three things back: the run's
+      // foreground terminal, that pane's terminal, and that session's
+      // ownership — and it gets them, so the grid released every one.
+      expect(run.result.ok ? "" : run.result.error.message).toBe("");
+      expect(run.results.map((result) => result.status)).toEqual(["pass"]);
+      expect(run.launches.length).toBe(3);
+      // Neither refusal: not one still held by another owner, and not one left
+      // owned by work that did not finish. An orderly close that finished is a
+      // finish, and the session it used is ordinarily usable afterwards.
+      const written = JSON.stringify(run.results);
+      expect(written).not.toContain("another owner is using session");
+      expect(written).not.toContain("was left owned by work that did not finish");
+      expect(written).not.toContain("already holds this run's terminal");
       expect(run.hostLaunches).toEqual([]);
     });
 

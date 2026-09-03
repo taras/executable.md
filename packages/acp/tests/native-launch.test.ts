@@ -27,7 +27,12 @@ import type {
   PreparedLaunchRecord,
   Session,
 } from "@executablemd/core";
-import { flushOutput, installControlledLauncher, reserveTerminal } from "@executablemd/runtime";
+import {
+  flushOutput,
+  installControlledLauncher,
+  NativeLauncher,
+  reserveTerminal,
+} from "@executablemd/runtime";
 import type { AgentSessionCoordinator, NativeLaunchRequest } from "@executablemd/runtime";
 import { createAcpxProvider } from "../src/provider.ts";
 import type { AcpxProviderDependencies } from "../src/provider.ts";
@@ -206,6 +211,14 @@ interface ProviderOptions {
   withSessionRoute?: AcpxProviderDependencies["withSessionRoute"];
   /** Blocks the native child until this resolves. */
   hold?: Operation<void>;
+  /**
+   * Make the launch's own teardown fail, in place of a child that cannot be
+   * proven stopped.
+   *
+   * Composed in front of the launcher rather than replacing it, so what fails
+   * is the cleanup of a launch that was otherwise ordinary.
+   */
+  cleanupFails?: string;
   onLaunch?: () => void;
   exitCode?: number;
   /**
@@ -327,6 +340,20 @@ function* installLaunchStack(
     ...(options.hold ? { wait: () => options.hold! } : {}),
     outcome: () => ({ exitCode: options.exitCode ?? 0 }),
   });
+
+  if (options.cleanupFails !== undefined) {
+    const reason = options.cleanupFails;
+    yield* NativeLauncher.around({
+      *launch([request, spawned], next) {
+        // Registered inside the launch, so it unwinds with it — and refuses to
+        // say the child is gone.
+        yield* ensure(function* () {
+          throw new Error(reason);
+        });
+        return yield* next(request, spawned);
+      },
+    });
+  }
 
   const factory = createAcpxProvider({
     createRuntime: harness.create,
@@ -2518,11 +2545,51 @@ describe("Tier CX — cancellation before ownership ends", () => {
         ),
       ),
     ).toBe(false);
-    const released = trace.ownership.events.indexOf("released-active");
+    const released = trace.ownership.events.indexOf("released-idle");
     expect(trace.ownership.events.indexOf("cancelling") < released).toBe(true);
-    // A launch that stopped on the way never proved the session stopped, so it
-    // stays owned rather than looking finished.
+    // An orderly stop that finished is a stop. The child was proven gone, its
+    // cleanup settled, and this provider held no handle for the session — so
+    // nothing this owner started can still act on it, which is exactly what
+    // quiescence acknowledges. Withholding it here would leave a recovery
+    // tombstone for a cancellation that had already proved everything a normal
+    // return proves.
+    expect(trace.ownership.events).toContain("quiesced");
+    expect(trace.ownership.events).not.toContain("released-active");
+  });
+
+  it("CX2: a cancellation whose cleanup could not finish stays owned", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const hold = withResolvers<void>();
+    const started = withResolvers<void>();
+    let halting = "";
+
+    yield* scoped(function* () {
+      yield* installLaunchStack(harness, trace, {
+        routeStore: createMemorySessionRouteStore(),
+        cleanupFails: "the native child could not be proven stopped",
+        hold: (function* () {
+          started.resolve();
+          yield* hold.operation;
+        })(),
+      });
+
+      const launching = yield* spawn(() => Agent.operations.launch(launchRequest(INSTRUCTIONS)));
+      yield* started.operation;
+      try {
+        yield* launching.halt();
+      } catch (error) {
+        halting = error instanceof Error ? error.message : String(error);
+      }
+    });
+
+    // The teardown failed, and said so rather than passing quietly.
+    expect(halting).toContain("could not be proven stopped");
+    // So nothing was acknowledged: a cancellation is not evidence on its own,
+    // and neither is the lease coming back. The session stays owned, and the
+    // next owner is told to recover it deliberately.
     expect(trace.ownership.events).not.toContain("quiesced");
+    expect(trace.ownership.events).toContain("released-active");
   });
 });
 
