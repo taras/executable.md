@@ -31,7 +31,7 @@ const VERSION = "v0.11.0";
 
 const STEP_NUMBER =
   `${MONO}font-size:0.8125rem;font-weight:700;letter-spacing:0.1em;color:var(--green);`;
-const SPLIT = "display:flex;flex-direction:column;gap:0.5rem;min-width:0;";
+const COLUMN = "display:flex;flex-direction:column;gap:0.625rem;min-width:0;";
 const STACK = "display:flex;flex-direction:column;gap:0.75rem;min-width:0;";
 const PAIR =
   "grid-template-columns:repeat(auto-fit,minmax(320px,1fr));align-items:start;";
@@ -121,117 +121,6 @@ const RELEASE_MD: Tok[][] = [
     " ",
     key("/>"),
   ],
-];
-
-const README_MD: Tok[][] = [
-  [dim("---")],
-  [dim("props:")],
-  [dim("  package:")],
-  [dim("    type:"), " ", str("string")],
-  [dim("    pattern:"), " ", str('"^packages/[a-z0-9._-]+$"')],
-  [dim("---")],
-  [],
-  [bold("## Setup")],
-  [],
-  ["```bash ", mod("exec")],
-  ["deno task setup"],
-  ["```"],
-  [],
-  [bold("## Test")],
-  [],
-  [bold("### Complete")],
-  [],
-  ["```bash ", mod("timeout=30m exec")],
-  ["deno task verify"],
-  ["```"],
-  [],
-  [bold("## Bootstrap")],
-  [],
-  [key("<BootstrapNpmPackage")],
-  ["  package", dim("="), mod("{props.package}"), " ", key("/>")],
-];
-
-const AGENTS_MD: Tok[][] = [
-  [bold("## Architect")],
-  [key("<Architect"), " ", key("/>")],
-  [],
-  [bold("## Implementor")],
-  [
-    key("<Implementor"),
-    " issue",
-    dim("="),
-    mod("{props.issue}"),
-    " ",
-    key("/>"),
-  ],
-  [],
-  [bold("## Reviewer")],
-  [key("<Reviewer"), " ", key("/>")],
-];
-
-const IMPLEMENTOR_MD: Tok[][] = [
-  [key("<Agent>")],
-  ["  ", key("<Session"), " name", dim("="), str('"implementor"'), key(">")],
-  ["    ", key("<Session.Launch>")],
-  ["      You're an implementor agent."],
-  [
-    "      ",
-    key("<If"),
-    " condition",
-    dim("="),
-    mod("{props.issue}"),
-    key(">"),
-  ],
-  ["        Implement this ticket:"],
-  [
-    "        ",
-    key("<Issue"),
-    " url",
-    dim("="),
-    mod("{props.issue}"),
-    " ",
-    key("/>"),
-  ],
-  ["      ", key("</If>")],
-  [
-    "      ",
-    key("<File"),
-    " path",
-    dim("="),
-    str('"coding-standards.md"'),
-    " ",
-    key("/>"),
-  ],
-  [
-    "      ",
-    key("<File"),
-    " path",
-    dim("="),
-    str('"security-standards.md"'),
-    " ",
-    key("/>"),
-  ],
-  ["    ", key("</Session.Launch>")],
-  ["  ", key("</Session>")],
-  [key("</Agent>")],
-];
-
-const SCOPES_MD: Tok[][] = [
-  [key("<Repository"), " name", dim("="), str('"project"')],
-  ["            url", dim("="), mod("{props.repository}"), key(">")],
-  ["  ", key("<Worktree"), " name", dim("="), str('"implementation"')],
-  ["            branch", dim("="), mod("{props.branch}"), key(">")],
-  [
-    "    ",
-    key("<Implementor"),
-    " issue",
-    dim("="),
-    mod("{props.issue}"),
-    " ",
-    key("/>"),
-  ],
-  ["  ", key("</Worktree>")],
-  [key("</Repository>")],
 ];
 
 const LOOP_MD: Tok[][] = [
@@ -505,9 +394,11 @@ export default define.page(function Home({ url }) {
 
             <p style="margin:0;max-width:50ch;font-size:clamp(1.05rem,2.2vw,1.2rem);line-height:1.5;color:var(--body);">
               A workflow written in prose has to be interpreted before anything
-              happens. <Term>xmd</Term>{" "}
-              runs the document instead: the Markdown stays readable, and the
-              operations it describes execute as a program.
+              happens. <Term>xmd</Term> runs the document instead.{" "}
+              <strong style={STRONG}>
+                Turn what you've done before into a program. Leave only the
+                judgment to agents.
+              </strong>
             </p>
 
             <div style="display:flex;flex-wrap:wrap;align-items:center;gap:0.75rem 1.25rem;">
@@ -522,15 +413,14 @@ export default define.page(function Home({ url }) {
 
           <div style="display:flex;flex-direction:column;gap:1.125rem;min-width:0;">
             <div class="panel">
-              <div class="panel-head">What you read is what runs</div>
               <div class="panel-body">
-                <p style={CLAIM}>
-                  The document is the workflow. There is nothing behind it.
-                </p>
                 <p style={P_SM}>
-                  The prose stays prose in any Markdown viewer. The fenced block
-                  marked <Term>exec</Term> runs, and <Term>{"<Parse>"}</Term>
-                  {" "}
+                  <strong style={STRONG}>
+                    Markdown describes the workflow. XMD makes it run like a
+                    program.
+                  </strong>{" "}
+                  The fenced block marked <Term>exec</Term> runs, and{" "}
+                  <Term>{"<Parse>"}</Term>{" "}
                   turns the model's answer into a value the next step uses.
                 </p>
                 <CodeBlock filename="release.md">
@@ -541,74 +431,40 @@ export default define.page(function Home({ url }) {
           </div>
         </section>
 
-        {/* The README as a CLI */}
-        <section id="readme" class="section">
+        {/* README and AGENTS: two examples of one capability. */}
+        <section id="instructions" class="section" style="gap:1.5rem;">
           <div class="section-head">
-            <h2>The README as a CLI.</h2>
+            <h2>Make instructions executable.</h2>
           </div>
-          <p style={P_MD}>
-            A README already has useful executable structure: headings name the
-            things you want to do. <Term>xmd</Term>{" "}
-            turns them into CLI entrypoints. Add frontmatter to expose
-            arguments. The explanation and the command stay in the same file.
-          </p>
 
-          <div
-            class="grid"
-            style="grid-template-columns:repeat(auto-fit,minmax(330px,1fr));align-items:start;"
-          >
-            <CodeBlock filename="README.md">
-              <Source lines={README_MD} />
-            </CodeBlock>
+          <div class="grid" style={PAIR}>
+            <div style={COLUMN}>
+              <span class="eyebrow">README</span>
+              <Terminal lines={[[" xmd README.md#Test/Complete"]]} />
+              <p style={P_SM}>
+                Headings become entrypoints. Add frontmatter for typed
+                arguments.
+              </p>
+            </div>
 
-            <div style="display:flex;flex-direction:column;gap:1.5rem;min-width:0;">
-              <div style="display:flex;flex-direction:column;gap:0.625rem;">
-                <div>
-                  <Terminal lines={[[" xmd README.md --help"]]} />
-                </div>
-                <span class="eyebrow">Help for the README</span>
-                <p style={P_SM}>
-                  Help works as it does on any other CLI, and what it lists
-                  comes from the document: the entrypoints it can run and the
-                  inputs they accept.
-                </p>
-              </div>
-
-              <div style="display:flex;flex-direction:column;gap:0.625rem;">
-                <div>
-                  <Terminal
-                    lines={[[
-                      " xmd README.md#Bootstrap \\\n    --props-package packages/web",
-                    ]]}
-                  />
-                </div>
-                <span class="eyebrow">Props → CLI arguments</span>
-                <p style={P_SM}>
-                  <Term>package</Term> becomes{" "}
-                  <Term>--props-package</Term>. The flag, its type, and its
-                  pattern all come from the frontmatter, so an invalid value
-                  fails before anything runs.
-                </p>
-              </div>
-
-              <div style="display:flex;flex-direction:column;gap:0.625rem;">
-                <div>
-                  <Terminal
-                    lines={[
-                      [" xmd README.md#Setup"],
-                      [" xmd README.md#Test"],
-                      [" xmd README.md#Test/Complete"],
-                    ]}
-                  />
-                </div>
-                <span class="eyebrow">Headings → entrypoints</span>
-                <p style={P_SM}>
-                  Every heading is a runnable entrypoint. Nested headings become
-                  nested paths like <Term>README.md#Test/Complete</Term>.
-                </p>
-              </div>
+            <div style={COLUMN}>
+              <span class="eyebrow">AGENTS</span>
+              <Terminal
+                lines={[[" xmd AGENTS.md#Implement --props-issue=41"]]}
+              />
+              <p style={P_SM}>
+                Load the issue, files, and other known context before the agent
+                starts instead of asking it to rediscover them.
+              </p>
             </div>
           </div>
+
+          <p style={P_MD}>
+            <strong style={STRONG}>
+              The instructions become part of the program instead of something
+              humans, CI, or agents have to remember to follow.
+            </strong>
+          </p>
         </section>
 
         {/* Principles */}
@@ -661,94 +517,6 @@ export default define.page(function Home({ url }) {
           </a>
         </section>
 
-        {/* Agents */}
-        <section id="agent" class="section" style="gap:1.5rem;">
-          <div class="section-head">
-            <h2>Stop hoping the agent reads the instructions.</h2>
-          </div>
-          <p style={P_MD}>
-            A file like <Term>AGENTS.md</Term>{" "}
-            is advisory. The agent may read it, skim it, or decide it isn't
-            relevant to the task.
-          </p>
-
-          <div style="display:flex;flex-direction:column;gap:2rem;">
-            <div class="grid" style={PAIR}>
-              <Terminal lines={[[" xmd AGENTS.md"]]} />
-              <div style={SPLIT}>
-                <h3 style={H3}>Run AGENTS.md.</h3>
-                <p style={P_SM}>
-                  Run the agent from the file instead of leaving it as context
-                  the agent may or may not read.
-                </p>
-              </div>
-            </div>
-
-            <div class="grid" style={PAIR}>
-              <div style={SPLIT}>
-                <h3 style={H3}>Give each role a purpose</h3>
-                <p style={P_SM}>
-                  Architect, Implementor, and Reviewer are semantic roles, not
-                  fixed models. Choose the model or provider when you invoke the
-                  workflow.
-                </p>
-              </div>
-              <CodeBlock filename="AGENTS.md">
-                <Source lines={AGENTS_MD} />
-              </CodeBlock>
-            </div>
-
-            <div class="grid" style={PAIR}>
-              <CodeBlock filename=".agents/implementor.md">
-                <Source lines={IMPLEMENTOR_MD} />
-              </CodeBlock>
-              <div style={SPLIT}>
-                <h3 style={H3}>
-                  If you know what context the agent needs, load it explicitly.
-                </h3>
-                <p style={P_SM}>
-                  <Term>xmd</Term>{" "}
-                  reads the issue and the files first, then expands{" "}
-                  <Term>{"<Session.Launch>"}</Term>{" "}
-                  with them already in hand, so the agent starts with them
-                  loaded rather than searching for them. Context construction
-                  becomes part of the program instead of something the agent has
-                  to rediscover.
-                </p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Runtime */}
-        <section id="runtime" class="section" style="gap:1.5rem;">
-          <div class="section-head">
-            <h2>The runtime handles the effects.</h2>
-          </div>
-          <p style={P_MD}>
-            You declare the repository, worktree, and inputs; the runtime
-            handles ordering, cancellation, and cleanup. The workflow owns the
-            structure — which repository, which branch, which issue. The agent
-            owns the judgment inside it.
-          </p>
-
-          <div style="display:flex;flex-direction:column;gap:2rem;">
-            <div class="grid" style={PAIR}>
-              <CodeBlock>
-                <Source lines={SCOPES_MD} />
-              </CodeBlock>
-              <div style={SPLIT}>
-                <h3 style={H3}>The workflow sets up the work.</h3>
-                <p style={P_SM}>
-                  The repository, the branch, and the issue are known, so the
-                  document names them. <Term>Implementor</Term>{" "}
-                  is left with the judgment.
-                </p>
-              </div>
-            </div>
-          </div>
-        </section>
-
         {/* Compose */}
         <section id="compose" class="section" style="gap:1.5rem;">
           <div class="section-head">
@@ -784,28 +552,10 @@ export default define.page(function Home({ url }) {
               </CodeBlock>
             </div>
             <div style={STACK}>
-              <h3 style={H3}>Schemas make answers usable.</h3>
+              <h3 style={H3}>Schemas make judgment usable.</h3>
               <p style={P_MD}>
-                Agents return text, and the next step needs a value. The same
-                schema does two jobs.
-              </p>
-              <p style={P_MD}>
-                <strong style={STRONG}>
-                  Tell the agent what shape to return.
-                </strong>{" "}
-                <Term>Json</Term> puts the schema directly in the prompt.
-              </p>
-              <p style={P_MD}>
-                <strong style={STRONG}>Validate what comes back.</strong>{" "}
-                <Term>Parse</Term>{" "}
-                checks the response against that same schema before binding it
-                as a value the workflow can use.
-              </p>
-              <p style={P_MD}>
-                <strong style={STRONG}>Ask a person instead.</strong>{" "}
-                <Term>Elicit</Term>{" "}
-                uses a schema for human input too, and validates the answer
-                before the run continues.
+                Whether the answer comes from an agent or a person, XMD
+                validates it before the workflow continues.
               </p>
             </div>
           </div>
@@ -822,6 +572,14 @@ export default define.page(function Home({ url }) {
               <p style={P_MD}>
                 Memory lives only in this run and its nested scopes.
               </p>
+              <p style={P_MD}>
+                <strong style={STRONG}>
+                  Angle-bracket components resolve to Markdown files.
+                </strong>{" "}
+                <Term>{"<Implementor />"}</Term> can be defined by{" "}
+                <Term>Implementor.md</Term>, so the same mechanism used by the
+                built-ins is available to your own workflows.
+              </p>
             </div>
             <CodeBlock>
               <Source lines={HANDOFF_MD} />
@@ -829,14 +587,10 @@ export default define.page(function Home({ url }) {
           </div>
         </section>
 
-        {/* The nesting is the model */}
+        {/* The runtime owns the workflow */}
         <section id="model" class="section" style="gap:1.5rem;">
           <div class="section-head">
-            <h2>The nesting is the model.</h2>
-            <p>
-              Components can establish context for everything nested inside
-              them.
-            </p>
+            <h2>The runtime owns the workflow.</h2>
           </div>
 
           <div class="grid" style={PAIR}>
@@ -845,36 +599,21 @@ export default define.page(function Home({ url }) {
             </CodeBlock>
 
             <div style="display:flex;flex-direction:column;gap:1rem;min-width:0;">
-              <ul class="marks">
-                <li>
-                  <Term>{"<TempDir>"}</Term>{" "}
-                  gives its contents an isolated working directory.
-                </li>
-                <li>
-                  <Term>{"<File>"}</Term>{" "}
-                  writes text at a path relative to that directory, creating the
-                  parents the path names.
-                </li>
-                <li>
-                  The <Term>exec</Term>{" "}
-                  block runs in the same directory, so the shell finds the file
-                  {" "}
-                  <Term>File</Term> wrote.
-                </li>
-                <li>
-                  <Term>{"<Glob>"}</Term> searches that directory too, and{" "}
-                  <Term>as</Term> binds the paths it found.
-                </li>
-              </ul>
-              <p style={CLAIM}>
-                Read the nesting as context. Each component establishes
-                something for the components inside it.
+              <p style={P_MD}>
+                <strong style={STRONG}>The nesting is the model.</strong>{" "}
+                Components establish context for everything inside them, and the
+                enclosing scope owns their lifetime.
               </p>
               <p style={P_MD}>
-                Move the <Term>File</Term> outside the <Term>TempDir</Term>{" "}
-                and it writes somewhere else. And when the enclosing scope ends,
-                the runtime removes what that scope owns — the directory goes
-                with it. Nesting is context, scope, and lifecycle.
+                <strong style={STRONG}>
+                  Effects become execution history.
+                </strong>{" "}
+                Component expansions, evaluations, and <Term>exec</Term>{" "}
+                operations are journaled automatically, without adding logging
+                statements.
+              </p>
+              <p style={P_MD}>
+                When the scope ends, XMD cleans up what it owns.
               </p>
             </div>
           </div>
@@ -1050,24 +789,20 @@ export default define.page(function Home({ url }) {
           >
             Standalone binary · Deno · Node · Bun
           </p>
+        </section>
 
-          <div
-            class="card"
-            style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:1rem;"
+        {/* Star */}
+        <section id="star" class="section" style="gap:1rem;">
+          <span class="eyebrow eyebrow-mark">Open source · {VERSION}</span>
+          <p style={P_MD}>Star the repository to follow releases.</p>
+          <a
+            class="btn btn-primary push"
+            href={GITHUB}
+            rel="noopener"
+            style="align-self:flex-start;"
           >
-            <div style="display:flex;flex-direction:column;gap:0.375rem;min-width:0;">
-              <span class="eyebrow">Open source · {VERSION}</span>
-              <p style={CLAIM}>Star the repository to follow releases.</p>
-            </div>
-            <a
-              class="btn push"
-              href={GITHUB}
-              rel="noopener"
-              style="font-size:0.875rem;font-weight:800;letter-spacing:0.07em;text-transform:uppercase;"
-            >
-              Star on GitHub ↗
-            </a>
-          </div>
+            Star on GitHub ↗
+          </a>
         </section>
       </div>
 
