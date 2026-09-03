@@ -94,20 +94,6 @@ describe("a connection to a run's owner", () => {
     yield* sleep(0);
   });
 
-  it("drops an answer it cannot attribute, and still answers the caller", function* () {
-    const wire = fakeSocket();
-    yield* scoped(function* () {
-      const owner = yield* useOwnerConnection(wire.socket);
-      yield* sleep(0);
-      const asking = yield* spawn(() => owner.ask("a1", { command: "frontier" }));
-      wire.answer("not json at all");
-      wire.answer({ id: "somebody-else", outcome: "performed", value: 1 });
-      wire.answer({ id: "a1", outcome: "performed", value: "mine" });
-      expect(yield* asking).toEqual({ outcome: "performed", value: "mine" });
-    });
-    yield* sleep(0);
-  });
-
   it("fails a request still waiting when the connection ends", function* () {
     const wire = fakeSocket();
     let raised: unknown;
@@ -161,5 +147,86 @@ describe("a connection to a run's owner", () => {
       wire.answer({ id: "a1", outcome: "performed", value: null });
     });
     expect((raised as OwnerLinkError).refusal).toBe("duplicate-answer");
+  });
+
+  it("fails every waiter when it cannot read an answer", function* () {
+    const wire = fakeSocket();
+    const raised: unknown[] = [];
+    yield* scoped(function* () {
+      const owner = yield* useOwnerConnection(wire.socket);
+      yield* sleep(0);
+      const first = yield* spawn(function* () {
+        try {
+          yield* owner.ask("a1", { command: "frontier" });
+        } catch (error) {
+          raised.push(error);
+        }
+      });
+      const second = yield* spawn(function* () {
+        try {
+          yield* owner.ask("a2", { command: "settle" });
+        } catch (error) {
+          raised.push(error);
+        }
+      });
+      yield* sleep(0);
+      // A commit may already have landed on the owner. Dropping this and
+      // leaving both callers waiting is the failure mode being refused.
+      wire.answer("not json at all");
+      yield* first;
+      yield* second;
+    });
+    expect(raised).toHaveLength(2);
+    for (const error of raised) {
+      expect((error as OwnerLinkError).refusal).toBe("malformed-answer");
+    }
+  });
+
+  it("fails closed on an answer naming a request nobody made", function* () {
+    const wire = fakeSocket();
+    let raised: unknown;
+    yield* scoped(function* () {
+      const owner = yield* useOwnerConnection(wire.socket);
+      yield* sleep(0);
+      const asking = yield* spawn(function* () {
+        try {
+          yield* owner.ask("a1", { command: "frontier" });
+        } catch (error) {
+          raised = error;
+        }
+      });
+      yield* sleep(0);
+      wire.answer({ id: "somebody-else", outcome: "performed", value: 1 });
+      yield* asking;
+    });
+    expect((raised as OwnerLinkError).refusal).toBe("unknown-answer");
+  });
+
+  it("fails closed on a second answer to a request already settled", function* () {
+    const wire = fakeSocket();
+    let answered: unknown;
+    let refused: unknown;
+    yield* scoped(function* () {
+      const owner = yield* useOwnerConnection(wire.socket);
+      yield* sleep(0);
+      const first = yield* spawn(() => owner.ask("a1", { command: "frontier" }));
+      yield* sleep(0);
+      wire.answer({ id: "a1", outcome: "performed", value: "once" });
+      answered = yield* first;
+
+      const second = yield* spawn(function* () {
+        try {
+          yield* owner.ask("a2", { command: "settle" });
+        } catch (error) {
+          refused = error;
+        }
+      });
+      yield* sleep(0);
+      // The owner answers `a1` again. Correlation has broken.
+      wire.answer({ id: "a1", outcome: "performed", value: "twice" });
+      yield* second;
+    });
+    expect(answered).toEqual({ outcome: "performed", value: "once" });
+    expect((refused as OwnerLinkError).refusal).toBe("duplicate-answer");
   });
 });

@@ -12,12 +12,25 @@
  * answer rather than a transport failure. What the owner does with a command is
  * the owner's, and a client that interpreted a refusal would be a second place
  * deciding what a run may do.
+ *
+ * What it will not do is carry on after the two sides disagree about which
+ * command completed. An answer it cannot read, an answer naming a request
+ * nobody made, and a second answer to a request already settled are each
+ * evidence that correlation has broken — and a commit may have landed on the
+ * owner while the caller waits for a reply that will never be attributed. So
+ * the channel fails closed: it stops, and every waiter learns, rather than
+ * dropping the answer and leaving somebody blocked forever.
  */
 
 import { createSignal, each, type Operation, resource, spawn, withResolvers } from "effection";
 
 /** Why the connection itself could not carry a request. */
-export type LinkRefusal = "closed" | "malformed-answer" | "duplicate-answer";
+export type LinkRefusal =
+  | "closed"
+  | "malformed-answer"
+  | "unknown-answer"
+  | "duplicate-answer"
+  | "too-large";
 
 export class OwnerLinkError extends Error {
   override name = "OwnerLinkError";
@@ -46,9 +59,15 @@ export interface OwnerConnection {
   ask(id: string, command: Record<string, unknown>): Operation<OwnerAnswer>;
 }
 
+/** The most bytes one answer may carry. */
+const MAX_ANSWER = 8 * 1024 * 1024;
+
 function readAnswer(raw: unknown): { id: string; answer: OwnerAnswer } {
   if (typeof raw !== "string") {
     throw new OwnerLinkError("malformed-answer");
+  }
+  if (raw.length > MAX_ANSWER) {
+    throw new OwnerLinkError("too-large");
   }
   let decoded: unknown;
   try {
@@ -88,6 +107,8 @@ function readAnswer(raw: unknown): { id: string; answer: OwnerAnswer } {
 export function useOwnerConnection(socket: OwnerSocket): Operation<OwnerConnection> {
   return resource(function* (provide) {
     const waiting = new Map<string, ReturnType<typeof withResolvers<OwnerAnswer>>>();
+    /** Requests already answered, so a second answer is recognized as one. */
+    const settled = new Set<string>();
     const messages = createSignal<unknown, void>();
     let closed = false;
 
@@ -97,22 +118,40 @@ export function useOwnerConnection(socket: OwnerSocket): Operation<OwnerConnecti
       messages.close();
     });
 
+    /** Stop the channel and tell everyone waiting why. */
+    const fail = (refusal: LinkRefusal) => {
+      closed = true;
+      for (const pending of waiting.values()) {
+        pending.reject(new OwnerLinkError(refusal));
+      }
+      waiting.clear();
+      socket.close();
+    };
+
     yield* spawn(function* () {
       for (const raw of yield* each(messages)) {
-        // A malformed answer fails the request it names when it names one, and
-        // is otherwise dropped: it cannot be attributed to a caller.
+        let read: { id: string; answer: OwnerAnswer } | undefined;
         try {
-          const { id, answer } = readAnswer(raw);
-          const pending = waiting.get(id);
-          if (pending !== undefined) {
-            waiting.delete(id);
-            pending.resolve(answer);
-          }
+          read = readAnswer(raw);
         } catch {
-          // Nothing to attribute it to.
+          // The owner said something this build cannot read. Whether it was
+          // meant for a waiter is exactly what cannot be established.
+          fail("malformed-answer");
+          break;
         }
+        const pending = waiting.get(read.id);
+        if (pending === undefined) {
+          // Either a request nobody made, or a second answer to one already
+          // settled. Both mean the two sides disagree about what completed.
+          fail(settled.has(read.id) ? "duplicate-answer" : "unknown-answer");
+          break;
+        }
+        waiting.delete(read.id);
+        settled.add(read.id);
+        pending.resolve(read.answer);
         yield* each.next();
       }
+      closed = true;
       for (const pending of waiting.values()) {
         pending.reject(new OwnerLinkError("closed"));
       }
@@ -124,7 +163,7 @@ export function useOwnerConnection(socket: OwnerSocket): Operation<OwnerConnecti
         if (closed) {
           throw new OwnerLinkError("closed");
         }
-        if (waiting.has(id)) {
+        if (waiting.has(id) || settled.has(id)) {
           throw new OwnerLinkError("duplicate-answer");
         }
         const pending = withResolvers<OwnerAnswer>();

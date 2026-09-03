@@ -32,7 +32,9 @@ export type CollectorRefusal =
   | "nested-transaction"
   | "transaction-closed"
   | "operation-inside-body"
-  | "too-many-events";
+  | "too-many-events"
+  | "events-too-large"
+  | "malformed-event";
 
 export class RemoteTransactionError extends Error {
   override name = "RemoteTransactionError";
@@ -66,6 +68,37 @@ export interface OwnerLink {
 
 /** The most events one intent may carry. */
 const MAX_EVENTS = 4096;
+
+/** The most serialized bytes one intent may carry. */
+const MAX_EVENT_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Admit one event and detach it from whoever handed it over.
+ *
+ * Cloning on the way in is not enough on its own: a caller that reads an event
+ * back and mutates what it received would otherwise change what this
+ * transaction commits. So every crossing — in, out, and into the intent — is a
+ * fresh copy, and the collector's own array is never handed to anybody.
+ */
+function admitEvent(event: DurableEvent): DurableEvent {
+  if (event === null || typeof event !== "object") {
+    throw new RemoteTransactionError("malformed-event");
+  }
+  if (!("type" in event) || typeof event.type !== "string") {
+    throw new RemoteTransactionError("malformed-event");
+  }
+  try {
+    return structuredClone(event);
+  } catch {
+    // A value that cannot be cloned cannot be sent either.
+    throw new RemoteTransactionError("malformed-event");
+  }
+}
+
+/** The serialized size of what has been collected so far. */
+function serializedBytes(events: readonly DurableEvent[]): number {
+  return new TextEncoder().encode(JSON.stringify(events)).length;
+}
 
 /**
  * Whether a transaction is open on this handle.
@@ -105,61 +138,75 @@ export function transactRemotely<T>(
   body: (transaction: WorkflowRunTransaction) => Operation<T>,
 ): Operation<Result<T>> {
   return call(function* (): Operation<Result<T>> {
+    // Taken synchronously, before the first suspension. Checking and then
+    // suspending in `frontier()` would let two calls on one handle both pass
+    // the check and act from the same starting frontier.
     if (gate.open) {
       throw new RemoteTransactionError("nested-transaction");
     }
-    const starting = yield* link.frontier();
-    const appended: DurableEvent[] = [];
-    let live = true;
-
-    const journal: DurableStream = {
-      *readAll(): Operation<DurableEvent[]> {
-        if (!live) {
-          throw new RemoteTransactionError("transaction-closed");
-        }
-        // Read-your-writes: the starting prefix, then this transaction's own
-        // appends, in order. A body that reads back what it just wrote sees it
-        // even though the owner has not been told yet.
-        return [...starting.events, ...appended];
-      },
-      *append(event: DurableEvent): Operation<void> {
-        if (!live) {
-          throw new RemoteTransactionError("transaction-closed");
-        }
-        if (appended.length >= MAX_EVENTS) {
-          throw new RemoteTransactionError("too-many-events");
-        }
-        // Cloned on the way in, so a caller that keeps mutating the value it
-        // handed over cannot change what this transaction will commit.
-        appended.push(structuredClone(event));
-      },
-    };
-
     gate.open = true;
-    let outcome: T;
+    // Released once, and only after nothing from this transaction can still
+    // affect the handle — which is after the commit answer, not after the body.
+    // Between those two the outcome is undecided, and later work must not run
+    // as though it had been decided.
     try {
-      // Everything the body started tears down before the intent is built. A
-      // failure or cancellation leaves through here without a commit, which is
-      // what makes "no commit was sent" the same statement as "the body did not
-      // finish".
-      outcome = yield* call(() => body({ journal }));
+      return yield* run();
     } finally {
-      live = false;
       gate.open = false;
     }
 
-    const committed = yield* link.commit({
-      expectedWorkspaceRootId: starting.workspaceRootId,
-      expectedJournalEventId: starting.journalEventId,
-      events: appended,
-    });
-    if (!committed.ok) {
-      return committed;
+    function* run(): Operation<Result<T>> {
+      const starting = yield* link.frontier();
+      const appended: DurableEvent[] = [];
+      let live = true;
+
+      const journal: DurableStream = {
+        *readAll(): Operation<DurableEvent[]> {
+          if (!live) {
+            throw new RemoteTransactionError("transaction-closed");
+          }
+          // Read-your-writes, as fresh copies. The starting prefix then this
+          // transaction's own appends, in order.
+          return [...starting.events, ...appended].map((event) => structuredClone(event));
+        },
+        *append(event: DurableEvent): Operation<void> {
+          if (!live) {
+            throw new RemoteTransactionError("transaction-closed");
+          }
+          if (appended.length >= MAX_EVENTS) {
+            throw new RemoteTransactionError("too-many-events");
+          }
+          const admitted = admitEvent(event);
+          if (serializedBytes([...appended, admitted]) > MAX_EVENT_BYTES) {
+            throw new RemoteTransactionError("events-too-large");
+          }
+          appended.push(admitted);
+        },
+      };
+
+      let outcome: T;
+      try {
+        // Everything the body started tears down before the intent is built, so
+        // "no commit was sent" and "the body did not finish" are one statement.
+        outcome = yield* call(() => body({ journal }));
+      } finally {
+        // The handle is closed before the commit goes out, so a retained
+        // transaction object refuses while the handle-level gate is still held.
+        live = false;
+      }
+
+      const committed = yield* link.commit({
+        expectedWorkspaceRootId: starting.workspaceRootId,
+        expectedJournalEventId: starting.journalEventId,
+        // A private snapshot. The collector's own array never leaves.
+        events: appended.map((event) => structuredClone(event)),
+      });
+      if (!committed.ok) {
+        return committed;
+      }
+      // Only now. `T` is the body's own value and never crossed the connection.
+      return Ok(outcome);
     }
-    // Only now. `T` is the body's own value and never crossed the connection;
-    // returning it before the owner committed would be a caller holding a
-    // result for work that did not happen.
-    return Ok(outcome);
   });
 }
 

@@ -15,7 +15,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { Err, Ok, sleep, type Operation, type Result } from "effection";
+import { Err, Ok, sleep, spawn, withResolvers, type Operation, type Result } from "effection";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import {
   type CommitIntent,
@@ -65,6 +65,8 @@ function link(
   options: {
     frontier?: StartingFrontier;
     commit?: (intent: CommitIntent) => Result<void>;
+    blockFrontier?: { operation: Operation<void> };
+    blockCommit?: { operation: Operation<void> };
   } = {},
 ) {
   const sent: CommitIntent[] = [];
@@ -75,10 +77,16 @@ function link(
   };
   const owner: OwnerLink = {
     *frontier(): Operation<StartingFrontier> {
+      if (options.blockFrontier !== undefined) {
+        yield* options.blockFrontier.operation;
+      }
       return starting;
     },
     *commit(intent: CommitIntent): Operation<Result<void>> {
       sent.push(intent);
+      if (options.blockCommit !== undefined) {
+        yield* options.blockCommit.operation;
+      }
       return options.commit === undefined ? Ok(undefined) : options.commit(intent);
     },
   };
@@ -228,6 +236,162 @@ describe("a remote transaction", () => {
       raised = error;
     }
     expect((raised as RemoteTransactionError).refusal).toBe("transaction-closed");
+  });
+
+  it("owns the handle from before the first suspension until after the commit", function* () {
+    const held = withResolvers<void>();
+    const { owner, sent } = link({ blockFrontier: held });
+    const gate = createTransactionGate();
+
+    const first = yield* spawn(() =>
+      transactRemotely(owner, gate, function* () {
+        return "first";
+      }),
+    );
+    yield* sleep(0);
+
+    // The first transaction is suspended inside `frontier()`. A second must not
+    // pass the gate and act from the same starting frontier.
+    let raised: unknown;
+    try {
+      yield* transactRemotely(owner, gate, function* () {
+        return "second";
+      });
+    } catch (error) {
+      raised = error;
+    }
+    expect((raised as RemoteTransactionError).refusal).toBe("nested-transaction");
+
+    held.resolve();
+    yield* first;
+    expect(sent).toHaveLength(1);
+  });
+
+  it("keeps the handle while the commit is still undecided", function* () {
+    const held = withResolvers<void>();
+    const { owner } = link({ blockCommit: held });
+    const gate = createTransactionGate();
+
+    const first = yield* spawn(() =>
+      transactRemotely(owner, gate, function* (transaction) {
+        yield* transaction.journal.append(event("one"));
+        return "first";
+      }),
+    );
+    yield* sleep(0);
+
+    // The body has finished, but which state won is not yet established.
+    expect(gate.open).toBe(true);
+    let raised: unknown;
+    try {
+      requireNoOpenTransaction(gate);
+    } catch (error) {
+      raised = error;
+    }
+    expect((raised as RemoteTransactionError).refusal).toBe("operation-inside-body");
+
+    held.resolve();
+    yield* first;
+    expect(gate.open).toBe(false);
+  });
+
+  it("releases the handle however the transaction ends", function* () {
+    const gate = createTransactionGate();
+
+    const succeeded = link();
+    yield* transactRemotely(succeeded.owner, gate, function* () {
+      return undefined;
+    });
+    expect(gate.open).toBe(false);
+
+    const refused = link({ commit: () => Err(new Error("refused")) });
+    yield* transactRemotely(refused.owner, gate, function* () {
+      return undefined;
+    });
+    expect(gate.open).toBe(false);
+
+    const failed = link();
+    try {
+      yield* transactRemotely(failed.owner, gate, function* () {
+        throw new Error("body failed");
+      });
+    } catch {
+      // The refusal is the subject of another test; this one is about the gate.
+    }
+    expect(gate.open).toBe(false);
+
+    const broken: OwnerLink = {
+      *frontier(): Operation<StartingFrontier> {
+        throw new Error("transport failed");
+      },
+      *commit(): Operation<Result<void>> {
+        return Ok(undefined);
+      },
+    };
+    try {
+      yield* transactRemotely(broken, gate, function* () {
+        return undefined;
+      });
+    } catch {
+      // Likewise.
+    }
+    expect(gate.open).toBe(false);
+  });
+
+  it("refuses an event it cannot admit, and sends nothing", function* () {
+    const { owner, sent } = link();
+    const gate = createTransactionGate();
+
+    let raised: unknown;
+    try {
+      yield* transactRemotely(owner, gate, function* (transaction) {
+        yield* transaction.journal.append({ nothing: true } as unknown as DurableEvent);
+        return undefined;
+      });
+    } catch (error) {
+      raised = error;
+    }
+    expect((raised as RemoteTransactionError).refusal).toBe("malformed-event");
+    expect(sent).toEqual([]);
+  });
+
+  it("refuses more bytes than one intent may carry", function* () {
+    const { owner, sent } = link();
+    const gate = createTransactionGate();
+    const wide = event("x".repeat(200_000));
+
+    let raised: unknown;
+    try {
+      yield* transactRemotely(owner, gate, function* (transaction) {
+        for (let index = 0; index < 40; index += 1) {
+          yield* transaction.journal.append(wide);
+        }
+        return undefined;
+      });
+    } catch (error) {
+      raised = error;
+    }
+    expect((raised as RemoteTransactionError).refusal).toBe("events-too-large");
+    expect(sent).toEqual([]);
+  });
+
+  it("commits what it admitted, not what a reader mutated afterwards", function* () {
+    const { owner, sent } = link();
+    const gate = createTransactionGate();
+
+    yield* transactRemotely(owner, gate, function* (transaction) {
+      yield* transaction.journal.append(event("admitted"));
+      // Read it back and edit what came out. The collector handed over a copy,
+      // so the intent still carries what `append()` admitted.
+      const read = yield* transaction.journal.readAll();
+      const mine = read[read.length - 1];
+      if (mine !== undefined) {
+        rename(mine, "changed by a reader");
+      }
+      return undefined;
+    });
+
+    expect(nameOf(sent[0]?.events[0])).toBe("admitted");
   });
 
   it("commits what it was handed, not what the caller mutated afterwards", function* () {
