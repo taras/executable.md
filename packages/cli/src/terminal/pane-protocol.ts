@@ -21,7 +21,7 @@
 
 import { join } from "node:path";
 import type { Socket } from "node:net";
-import { createQueue, withResolvers } from "effection";
+import { createQueue, ensure, resource, withResolvers } from "effection";
 import type { Operation, Queue } from "effection";
 import { z } from "zod";
 
@@ -125,27 +125,52 @@ export function paneTokenPath(directory: string, ordinal: number): string {
  * A frame that does not parse destroys the socket. There is no partial credit
  * on this channel.
  */
-export function readFrames<T>(socket: Socket, parse: (value: unknown) => T): Queue<T, void> {
-  const queue = createQueue<T, void>();
-  let remainder = "";
-  socket.setEncoding("utf8");
-  socket.on("data", (chunk: string) => {
-    const lines = (remainder + chunk).split("\n");
-    remainder = lines.pop() ?? "";
-    for (const line of lines) {
-      if (line.length === 0) {
-        continue;
+export function readFrames<T>(
+  socket: Socket,
+  parse: (value: unknown) => T,
+): Operation<Queue<T, void>> {
+  return resource<Queue<T, void>>(function* (provide) {
+    const queue = createQueue<T, void>();
+    let remainder = "";
+    socket.setEncoding("utf8");
+
+    // Named, and all three removed together: on delivery, on a frame that does
+    // not parse, on the socket erroring, on cancellation, and on ordinary scope
+    // exit. A reader left attached to a socket its scope has finished with is a
+    // reader answering for somebody else's conversation.
+    const onData = (chunk: string): void => {
+      const lines = (remainder + chunk).split("\n");
+      remainder = lines.pop() ?? "";
+      for (const line of lines) {
+        if (line.length === 0) {
+          continue;
+        }
+        try {
+          queue.add(parse(JSON.parse(line)));
+        } catch {
+          // A frame that is not the protocol ends the conversation. This socket
+          // is how one process is asked to start a program with inherited
+          // terminal streams; "close to what I expected" is not good enough.
+          socket.destroy();
+        }
       }
-      try {
-        queue.add(parse(JSON.parse(line)));
-      } catch {
-        socket.destroy();
-      }
-    }
+    };
+    const onClose = (): void => queue.close();
+    const onError = (): void => {
+      socket.destroy();
+    };
+
+    socket.on("data", onData);
+    socket.on("close", onClose);
+    socket.on("error", onError);
+    yield* ensure(() => {
+      socket.off("data", onData);
+      socket.off("close", onClose);
+      socket.off("error", onError);
+    });
+
+    yield* provide(queue);
   });
-  socket.on("close", () => queue.close());
-  socket.on("error", () => socket.destroy());
-  return queue;
 }
 
 /** Write one frame, and settle once the socket has taken it. */
