@@ -20,7 +20,7 @@
  */
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped, spawn, withResolvers } from "effection";
+import { ensure, Err, scoped, spawn, withResolvers } from "effection";
 import type { Operation, Result, Task } from "effection";
 import { copyFile, ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
@@ -323,7 +323,7 @@ function* runJourney(options: RunOptions = {}): Operation<Run> {
         yield* options.interruptWhen(order);
         yield* running.halt();
         return {
-          result: { ok: false, error: new Error("interrupted") } as Result<Json>,
+          result: Err(new Error("interrupted")),
           results: yield* testing.results,
           launches,
           hostLaunches,
