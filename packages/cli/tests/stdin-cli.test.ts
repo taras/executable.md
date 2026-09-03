@@ -26,7 +26,7 @@ import {
 import type { Operation, Result, Task } from "effection";
 import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
-import { readFile, readdir } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import process from "node:process";
@@ -111,6 +111,28 @@ const POSITIONED_DOCUMENT = "PREFIX\n\n<Else>stray</Else>\n";
 
 /** A document that writes one file, so an execution is visible on disk. */
 const EFFECTFUL_DOCUMENT = '<File path="written.txt">content</File>\n';
+
+/**
+ * Two roots on disk and one on standard input, each of which leaves a file
+ * behind when it runs, so "nothing executed" is observable rather than assumed.
+ */
+const CONFLICT_FIXTURE = {
+  "ordinary.md": '<File path="ordinary-ran.txt">x</File>\n\nORDINARY_MARKER\n',
+  "-": [
+    "# Dash",
+    "",
+    '<File path="dash-ran.txt">x</File>',
+    "",
+    "DASH_MARKER",
+    "",
+    "## Section",
+    "",
+    "SECTION_MARKER",
+    "",
+  ].join("\n"),
+};
+
+const STDIN_EFFECT = '<File path="stdin-ran.txt">x</File>\n\nSTDIN_MARKER\n';
 
 describe(
   "Tier SI — standard-input root documents",
@@ -409,6 +431,107 @@ describe(
       expect(settled).toEqual(Ok("# One\né"));
     });
 
+    /**
+     * Which of two roots the parser happened to take depends on where the
+     * caller wrote them; a run naming two does not. Every pair is written both
+     * ways round, and each half is a document that would leave a file behind if
+     * anything ran it.
+     */
+    it("SI13: two roots refuse in either order, before anything is read", function* () {
+      const pairs: string[][] = [
+        ["run", "ordinary.md", "-"],
+        ["run", "-", "ordinary.md"],
+        ["run", "ordinary.md", "--", "-"],
+        ["run", "--", "-", "ordinary.md"],
+        ["run", "ordinary.md", "-#Section"],
+        ["run", "-#Section", "ordinary.md"],
+      ];
+
+      for (const argv of pairs) {
+        yield* useFixture(CONFLICT_FIXTURE, function* (dir) {
+          const { code, stdout, stderr } = yield* runCli([...argv, "--raw"], {
+            cwd: dir,
+            stdin: STDIN_EFFECT,
+          }).join();
+
+          expect(code).toBe(1);
+          expect(stderr).toContain("both supply a root document");
+          // No candidate executed: neither marker was rendered, and neither
+          // document's `<File>` reached the directory.
+          expect(stdout).not.toContain("ORDINARY_MARKER");
+          expect(stdout).not.toContain("DASH_MARKER");
+          expect(stdout).not.toContain("STDIN_MARKER");
+          expect(yield* exists(path.join(dir, "ordinary-ran.txt"))).toBe(false);
+          expect(yield* exists(path.join(dir, "dash-ran.txt"))).toBe(false);
+          expect(yield* exists(path.join(dir, "stdin-ran.txt"))).toBe(false);
+        });
+      }
+    });
+
+    it("SI14: one root written twice refuses, and neither copy runs", function* () {
+      for (const argv of [
+        ["run", "-", "-"],
+        ["run", "-#Section", "-#Section"],
+      ]) {
+        yield* useFixture(CONFLICT_FIXTURE, function* (dir) {
+          const { code, stdout, stderr } = yield* runCli([...argv, "--raw"], {
+            cwd: dir,
+            stdin: STDIN_EFFECT,
+          }).join();
+
+          expect(code).toBe(1);
+          expect(stderr).toContain("supplies the root document more than once");
+          expect(stdout).not.toContain("DASH_MARKER");
+          expect(stdout).not.toContain("STDIN_MARKER");
+          expect(yield* exists(path.join(dir, "dash-ran.txt"))).toBe(false);
+          expect(yield* exists(path.join(dir, "stdin-ran.txt"))).toBe(false);
+        });
+      }
+    });
+
+    /**
+     * A `-` is only a document argument where the grammar has nowhere else to
+     * put it. These four spellings each keep their own meaning, and the run
+     * they name is still the one root a run takes.
+     */
+    it("SI15: an option's value, another command's argument and a typo are not roots", function* () {
+      yield* useFixture(CONFLICT_FIXTURE, function* (dir) {
+        const trace = path.join(dir, "trace.jsonl");
+        // `--journal -` names a file called `-` to write, so the run has the
+        // one root it was given and the conflict never arises.
+        const journal = yield* runCli(["run", "--journal", trace, "ordinary.md", "--raw"], {
+          cwd: dir,
+          stdin: STDIN_EFFECT,
+        }).join();
+        expect(journal.code).toBe(0);
+        expect(journal.stdout).toContain("ORDINARY_MARKER");
+        expect(journal.stdout).not.toContain("STDIN_MARKER");
+
+        const evaluated = yield* runCli(["run", "--eval", "-"], {
+          cwd: dir,
+          stdin: STDIN_EFFECT,
+        }).join();
+        expect(evaluated.code).toBe(1);
+        expect(evaluated.stderr).toContain("does not read from stdin");
+        expect(evaluated.stderr).not.toContain("both supply a root document");
+
+        const other = yield* runCli(["test", "-"], { cwd: dir, stdin: STDIN_EFFECT }).join();
+        expect(`${other.stdout}${other.stderr}`).not.toContain("both supply a root document");
+        expect(other.stdout).not.toContain("STDIN_MARKER");
+
+        // An option nothing defines is still an option: the run refuses for
+        // want of a root rather than looking for a file named after the flag.
+        const typo = yield* runCli(["run", "--raww", "ordinary.md"], {
+          cwd: dir,
+          stdin: STDIN_EFFECT,
+        }).join();
+        expect(typo.code).toBe(1);
+        expect(typo.stderr).toContain("requires a root document");
+
+        expect(yield* exists(path.join(dir, "stdin-ran.txt"))).toBe(false);
+      });
+    });
+
     it("SI12: cancelling a stdin run returns only once its child is gone", function* () {
       yield* useFixture({}, function* (dir) {
         const idsPath = path.join(dir, "ids.txt");
@@ -432,12 +555,13 @@ describe(
           }).join();
         });
 
-        const [command, owned] = yield* until(waitForIds(idsPath));
-        // `@effectionx/process` detaches an exec child into a group of its own,
-        // so the command is the running CLI's to reap while it unwinds and
-        // never the launcher's. One written to survive that unwinding survives
-        // it; this suite still leaves nothing behind.
-        yield* ensure(() => signalGroup(command));
+        // `escaped` is not `owned`. `@effectionx/process` detaches an exec child
+        // into a process group of its own, so the command belongs to the
+        // running CLI, to be reaped while it unwinds — and a command written to
+        // survive that unwinding survives it. The launcher owns the CLI's group
+        // and nothing else; this suite cleans up the escapee itself.
+        const [escaped, owned] = yield* waitForIds(idsPath);
+        yield* ensure(() => killGroup(escaped));
 
         const at = Date.now();
         yield* run.halt();
@@ -451,7 +575,7 @@ describe(
         expect(elapsed).toBeGreaterThanOrEqual(1_500);
         expect(elapsed).toBeLessThan(10_000);
         // And the group the launcher owns is gone by the time it returns.
-        expect(yield* until(waitForGroupExit(owned))).toBe(true);
+        expect(yield* waitForGroupExit(owned)).toBe(true);
       });
     });
 
@@ -639,23 +763,30 @@ function* cancellableRun(
 }
 
 /** The command's own pid and the CLI's, once the run has reached the command. */
-async function waitForIds(idsPath: string): Promise<[number, number]> {
+function* waitForIds(idsPath: string): Operation<[number, number]> {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    try {
-      const [command, cli] = (await readFile(idsPath, "utf8"))
-        .trim()
-        .split(/\s+/)
-        .map((value) => Number.parseInt(value, 10));
-      if (Number.isInteger(command) && Number.isInteger(cli)) {
-        return [command, cli];
-      }
-    } catch {
-      // Not written yet.
+    const ids = yield* readIds(idsPath);
+    if (ids !== undefined) {
+      return ids;
     }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    yield* sleep(50);
   }
-  throw new Error(`the run never reached its command: ${idsPath} holds no pids`);
+  throw new Error(`the run never reached its command: ${idsPath} names no pids`);
+}
+
+function* readIds(idsPath: string): Operation<[number, number] | undefined> {
+  let written: string;
+  try {
+    written = yield* readTextFile(idsPath);
+  } catch {
+    return undefined;
+  }
+  const [command, cli] = written
+    .trim()
+    .split(/\s+/)
+    .map((value) => Number.parseInt(value, 10));
+  return Number.isInteger(command) && Number.isInteger(cli) ? [command, cli] : undefined;
 }
 
 /**
@@ -664,20 +795,28 @@ async function waitForIds(idsPath: string): Promise<[number, number]> {
  * Bounded rather than instantaneous: the group dies together, so the kernel may
  * still be reaping a member as the launcher's own child closes.
  */
-async function waitForGroupExit(leader: number): Promise<boolean> {
+function* waitForGroupExit(leader: number): Operation<boolean> {
   const deadline = Date.now() + 3_000;
   while (Date.now() < deadline) {
-    try {
-      process.kill(-leader, 0);
-    } catch {
+    if (!isReachable(-leader)) {
       return true;
     }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    yield* sleep(50);
   }
   return false;
 }
 
-function signalGroup(leader: number): void {
+/** Signal 0 delivers nothing: it asks the kernel whether the target is there. */
+function isReachable(target: number): boolean {
+  try {
+    process.kill(target, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function killGroup(leader: number): void {
   try {
     process.kill(-leader, "SIGKILL");
   } catch {

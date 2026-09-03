@@ -4289,6 +4289,14 @@ document argument rather than an option; everything else written around any of
 these forms configures the run as it would around an ordinary path, before it or
 after it.
 
+A run still takes exactly one root, and which of them the parser happened to
+take does not decide that. A command line naming two — a path and `-`, a path
+and a reference, the same one twice — refuses whichever order they were written
+in, before standard input is read and before either candidate is inspected or
+run. An option's value, another command's argument and an option nothing defines
+are none of them document arguments, so `--journal -`, `xmd test -` and a
+mistyped flag each keep the meaning they had.
+
 Acquisition happens before the document is inspected, and therefore before
 target and property preparation, Agent or provider setup, the secret-detection
 announcement, journal creation, root admission and execution. It sits inside the

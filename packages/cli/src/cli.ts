@@ -1629,6 +1629,60 @@ function takeDocumentArgument(args: string[], remainder: string[]): DocumentArgu
   return { reference, rest: [...args.slice(0, at), ...remainder.slice(separated ? 2 : 1)] };
 }
 
+interface RunGrammar {
+  /** Every reference the parser could not take, in the order written. */
+  references: string[];
+  /** argv with all of them removed. */
+  args: string[];
+  /** The parse of that argv. */
+  parsed: ReturnType<typeof xmd.parse>;
+}
+
+/**
+ * Read every document argument a run named, not just the first.
+ *
+ * The parser stops at the first token it does not define, so one pass sees one
+ * of them. A run that named two roots — a path and a `-`, two `-`s, a reference
+ * and a path — has to refuse whichever order they were written in, and it can
+ * only do that once all of them are known. Each pass removes one token, so this
+ * terminates; what comes back is what the run actually wrote.
+ */
+function readDocumentArguments(head: string[], recover: boolean): RunGrammar {
+  let args = head;
+  let parsed = xmd.parse({ args });
+  const references: string[] = [];
+  while (recover) {
+    const config = parsed.ok && !parsed.value.config.help ? parsed.value.config : undefined;
+    if (config?.name !== "run") {
+      break;
+    }
+    const taken = takeDocumentArgument(args, parsed.remainder.args ?? []);
+    if (taken === undefined) {
+      break;
+    }
+    references.push(taken.reference);
+    args = taken.rest;
+    parsed = xmd.parse({ args });
+  }
+  return { references, args, parsed };
+}
+
+/**
+ * Every root document this command line named, in the order it was written.
+ *
+ * The parsed path and each recovered reference stay separate facts until here,
+ * because which of them the parser happened to take depends on where the caller
+ * wrote them and a conflict does not.
+ */
+function writtenRoots(
+  head: string[],
+  references: readonly string[],
+  path: string | undefined,
+): string[] {
+  const roots = path === undefined ? [...references] : [...references, path];
+  return roots.toSorted((left, right) => head.indexOf(left) - head.indexOf(right));
+}
+
 /**
  * Locate the root document, read what it declares, and lift its generated
  * options out of argv. A provisional parse finds the path: it stops at
@@ -1677,30 +1731,25 @@ function* preparePropsPhase(
   const workflow = namesWorkflow(args);
   const separated = separateArgs(args);
   const head = workflow ? separated.head : args;
-  const scanned = xmd.parse({ args: head });
-  // A run whose parse took no path may still have named one the parser refuses
-  // to read. Every other command keeps whatever `-` already means to it.
-  const scannedRun = scanned.ok && !scanned.value.config.help ? scanned.value.config : undefined;
-  const document =
-    !workflow && scannedRun?.name === "run" && scannedRun.config.path === undefined
-      ? takeDocumentArgument(head, scanned.remainder.args ?? [])
-      : undefined;
-  // The sentinel is one exact argument on one command form. Only the form the
-  // caller wrote separates `xmd run -` from the shorthand `xmd -`, which
-  // resolves to the same parsed command and names a file called `-`.
-  const standardInput = document?.reference === STANDARD_INPUT_ARGUMENT && namesRun(args);
-  const fixed = document?.rest ?? args;
-  const parsed = document?.rest ?? head;
-  const provisional = document === undefined ? scanned : xmd.parse({ args: parsed });
+  // A run's parse takes at most one path, and a token beginning with `-` it
+  // takes none of. Every other command keeps whatever `-` already means to it.
+  const recovered = readDocumentArguments(head, !workflow);
+  const fixed = recovered.references.length === 0 ? args : recovered.args;
+  const parsed = recovered.args;
+  const provisional = recovered.parsed;
   // `program` short-circuits on `--version` and leaves no configuration
   // behind, so there is nothing to inspect.
   const selected = provisional.ok ? provisional.value.config : undefined;
   const command = selected && !selected.help ? selected.name : undefined;
   const parsedPath =
     selected && !selected.help && selected.name === "run" ? selected.config.path : undefined;
-  // The reference this run names, however it was written. Standard input is not
-  // one: it has an origin rather than a path.
-  const documentPath = standardInput ? parsedPath : (document?.reference ?? parsedPath);
+  const roots = writtenRoots(head, recovered.references, parsedPath);
+  // The sentinel is one exact argument on one command form. Only the form the
+  // caller wrote separates `xmd run -` from the shorthand `xmd -`, which
+  // resolves to the same parsed command and names a file called `-`.
+  const standardInput = namesRun(args) && recovered.references.includes(STANDARD_INPUT_ARGUMENT);
+  const describeRoot = (root: string): string =>
+    standardInput && root === STANDARD_INPUT_ARGUMENT ? "standard input" : root;
   const [supplied] = evalFlags.values;
 
   if (selected && !selected.help && selected.name === "workflow") {
@@ -1730,23 +1779,31 @@ function* preparePropsPhase(
     };
   }
 
-  if (supplied !== undefined && typeof documentPath === "string") {
+  const [first, second] = roots;
+
+  if (supplied !== undefined && first !== undefined) {
     return {
       args: fixed,
       bindings: [],
       error:
-        `${documentPath} and ${EVAL_OPTION} both supply a root document — a run takes exactly one, ` +
-        `either \`xmd run ${documentPath}\` or \`xmd run ${EVAL_ALIAS} '<markdown>'\``,
+        `${first} and ${EVAL_OPTION} both supply a root document — a run takes exactly one, ` +
+        `either \`xmd run ${first}\` or \`xmd run ${EVAL_ALIAS} '<markdown>'\``,
     };
   }
 
-  if (standardInput && typeof documentPath === "string") {
+  // Decided from what was written rather than from what the parser managed to
+  // take, so the two orders of the same pair refuse alike — and neither
+  // candidate is read, inspected or run.
+  if (second !== undefined) {
+    const one = describeRoot(first);
+    const other = describeRoot(second);
     return {
       args: fixed,
       bindings: [],
       error:
-        `${documentPath} and standard input both supply a root document — a run takes exactly ` +
-        `one, either \`xmd run ${documentPath}\` or \`xmd run -\``,
+        one === other
+          ? `${one} supplies the root document more than once — a run takes exactly one`
+          : `${one} and ${other} both supply a root document — a run takes exactly one`,
     };
   }
 
@@ -1765,8 +1822,8 @@ function* preparePropsPhase(
       return { args: fixed, bindings: [], error: STANDARD_INPUT_FAILURE };
     }
     root = retainedSource(STANDARD_INPUT_PATH, input.value);
-  } else if (typeof documentPath === "string") {
-    const reference = readReference(documentPath);
+  } else if (first !== undefined) {
+    const reference = readReference(first);
     if (!reference.ok) {
       return { args: fixed, bindings: [], error: describeError(reference.error) };
     }

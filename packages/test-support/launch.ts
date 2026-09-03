@@ -284,26 +284,89 @@ function* withInput(
  * asked to terminate, given a bounded chance to close, then killed — and either
  * way this waits for the `close` event, which is the only thing that says the
  * process and its pipes are actually finished.
+ *
+ * A kill that was refused is not a process that stopped, so a group nothing
+ * could be delivered to while the child is still reachable ends the run with
+ * that fact rather than waiting on a `close` that is never coming.
  */
 function* reap(child: ChildProcess, closed: Operation<void>): Operation<void> {
-  if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) {
+  const pid = child.pid;
+  if (pid === undefined || child.exitCode !== null || child.signalCode !== null) {
     yield* closed;
     return;
   }
-  signalGroup(child.pid, "SIGTERM");
+
+  end(pid, "SIGTERM");
   const graceful = yield* timebox(TERMINATION_GRACE, () => closed);
   if (!graceful.timeout) {
     return;
   }
-  signalGroup(child.pid, "SIGKILL");
+
+  const killed = end(pid, "SIGKILL");
+  if (killed === "refused" && isReachable(pid)) {
+    throw new Error(`the launched process ${pid} could not be stopped: SIGKILL was refused`);
+  }
   yield* closed;
 }
 
-function signalGroup(pid: number, signal: "SIGTERM" | "SIGKILL"): void {
+/** What one signal delivery established about what it was aimed at. */
+type Delivery = "delivered" | "absent" | "refused";
+
+/**
+ * Signal the child's whole process group, falling back to the child itself.
+ *
+ * The group is the target, because a child that spawned its own children is
+ * only gone once they are. But a group that reported nothing is not a group
+ * that is empty: `detached` can fail, and the process may simply not lead one.
+ * So a delivery the group did not accept, while the child is still reachable,
+ * is retried against the child directly.
+ */
+function end(pid: number, name: "SIGTERM" | "SIGKILL"): Delivery {
+  const group = deliver(-pid, name);
+  if (group === "delivered" || !isReachable(pid)) {
+    return group;
+  }
+  return deliver(pid, name);
+}
+
+/**
+ * Send one signal by pid and report what that established.
+ *
+ * Deliberately not `child.kill()`. Deno's `node:child_process` marks a child as
+ * killed after the first call and delivers nothing on any later one, so a child
+ * that ignores the first signal could never be escalated through the handle.
+ */
+function deliver(target: number, name: "SIGTERM" | "SIGKILL"): Delivery {
   try {
-    process.kill(-pid, signal);
+    process.kill(target, name);
+    return "delivered";
+  } catch (error) {
+    // Gone between the decision and the delivery is the outcome this was
+    // asking for. Anything else is a delivery that did not happen, and is not
+    // evidence of termination.
+    return isNoSuchProcess(error) ? "absent" : "refused";
+  }
+}
+
+function isNoSuchProcess(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    Reflect.get(error, "code") === "ESRCH"
+  );
+}
+
+/**
+ * Whether a process still exists. Signal 0 delivers nothing: it asks the kernel
+ * whether the pid is reachable, which is the whole question here.
+ */
+function isReachable(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
   } catch {
-    // Already gone, which is the ordinary case once `close` has fired.
+    return false;
   }
 }
 
