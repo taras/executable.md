@@ -10609,6 +10609,48 @@ Each row names the derivation it kills.
 | AF23 | A `<Session>` joins what a launch constructed | The same named `<Session>` after a client-native `<Session.Launch>` attaches to the conversation the native process made, and a `<Prompt>` in it answers from that conversation's history rather than from a new one. The route is unchanged: not republished, not converted, and no second identity allocated. Authored whole in `packages/test-agent/src/NativeSessionLaunch.test.md`; a provider that reported another conversation fails it |
 | AF24 | A Session pins the exact value it was issued | A fresh `<Session>` calls `session()` once and hands the same object — by identity, not by key — to every `<Prompt>` nested inside it. A provider decides whether a session may be acted on by that identity, so a rebuilt look-alike is a value nobody issued |
 | AF25 | A fresh Session performs no provider effect | A self-closing `<Session />` places one and renders nothing: no prompt is started, and nothing about the placement appears in the document where the element stood |
+| AF25a | A launch needs a session that outlives the invocation | `<Session.Launch>` naming an agent this host serves only for the invocation is refused as `unsupported-capability` before placement, ownership, an adapter lookup, an ensure, a detach or a native process, and a `<Session>` wrapped around it stays inert before the same refusal (Tier AI) |
+
+### Tier AI/DV — Devin as an invocation-scoped Agent session
+
+Defined in [ACP client](./acp-client-spec.md) §Session lifetime. Tier AI drives
+the provider through its dependencies with the scriptable fake runtime, stating
+the host's lifetime declaration exactly as `packages/cli/src/agent-stack.ts`
+states it, so no agent process starts. Tier DV is the black-box half: it puts a
+real ACP agent named `devin` on a child's `PATH` and runs the production `xmd
+run` against it, which is the only way to reach the command string and ACPX's
+own Windsurf compatibility shim. Neither needs a credential or spends a model
+turn. The refusals this lifetime causes belong to the tiers that own those
+surfaces — AF25a for native launch, C16 for `<Plan>` and `xmd plan`, and WAL17
+for a workflow. Nothing here certifies the live provider: qualifying an agent
+against a real backend is a provider-neutral agent-ACP capability that does not
+exist yet, so what these tiers cover is this host's decisions and the wire the
+vendored ACPX shim speaks, and no evidence in them depends on a Devin
+account.
+
+The host's own two decisions — which command `devin` resolves to, and which
+lifetime each agent gets — are read from the dependencies each path hands
+`createAcpxProvider`, because what a provider was built from is not observable
+through a provider.
+
+| # | Test | Verify |
+|---|------|--------|
+| AE7 | The production command | The run path resolves `devin` to exactly `devin acp`, lists the name once beside the ones already there, and leaves this build's Codex and Claude snapshots and ACPX's answer for every other name unchanged |
+| AE8 | The run host's declaration | `devin` is invocation-scoped and every other agent durable, decided from the agent name alone |
+| AE9 | The workflow host's declaration | A workflow attachment answers `Err` for `devin`, naming the continuation it cannot give, and `durable` for every other name |
+| AE10 | The Plan host's declaration | An invocation-scoped default agent produces no Plan Agent context, while a durable one still produces the ordinary production context |
+| AI1 | Same-session continuity | Two sequential Prompts under one Devin `<Session>` perform one ensure and one handle, run FIFO, ask for `persistent` mode without first-turn-acceptance materialization, and retain nothing through the host's `established` callback |
+| AI2 | Session independence | Two distinct Devin `<Session>` elements get distinct handles and hold turns in flight at the same time |
+| AI3 | Cancellation and teardown | Halting a live turn cancels that turn and no other; teardown attempts every owned handle close through the runtime that made it, and reports a failed close only after the rest were attempted |
+| AI4 | No cross-invocation retention | The durable store is never loaded from, saved to or used as a runtime's store for a Devin session, and a second provider with the identical placement establishes the conversation again |
+| AI5 | Lifetime isolation | A mixed Devin/durable run creates two unbound runtimes with two stores; Codex still constructs through first-turn acceptance and its records still reach the durable store |
+| AI6 | Native launch refuses first | A launch naming Devin is retained as `unsupported-capability` with no `perform`, no runtime created, no doctor call, no ensure and no turn |
+| AI7 | No inferred identity | A handle carrying an ACPX record id and a backend session id, and a terminal result carrying `cognition.ai/userMessageId`, produce no route, no retained identity, no checkpoint token and no durable record |
+| AI8/AI9 | Lifetime is Session compatibility | Two agent names mapped to one command and declared with opposite lifetimes refuse in both directions when a Session placed under one is consumed through the other, naming the consuming agent's lifetime and the Session's; the store, route, ensure, turn and establishment observations taken after the Session was created are unchanged |
+| AI10 | Agreement crosses the alias | With both of those names declared the same lifetime, a Session placed through one and consumed through the other reaches one ensure, one live handle and both turns, on the key their shared command derives — so what AI8 and AI9 refuse is disagreement about the lifetime, not the alias |
+| DV1 | The production command and the ACPX shim | `xmd run --default-agent devin` starts the `devin` on `PATH` as exactly `devin acp` — an agent that records any other argument vector records none — with Windsurf `clientInfo`, the `cognition.ai/requestDiagnostics` client capability, a `{}` answer to `_cognition.ai/request_diagnostics` and a quietly ignored vendor notification; two Prompts in one Session reach one live child, and a second invocation from the same directory and home reaches a fresh one |
+| DV2 | Trace-only journal | The same run under `--journal` creates its trace and retains no ACPX session record under the home it was given, and the invocation after it still starts a fresh conversation |
+| DV3 | The production alias shape | An outer `<Agent name="devin acp">`, its `<Session name="review">` and an inner `<Prompt agent="devin">` fail the run closed; the retained Prompt record names the lifetime mismatch, no turn reaches the agent, and no ACPX record is written under the home the run was given |
 
 ### Tier CR — Component registration and resolution
 
@@ -10785,6 +10827,7 @@ every refusal is proven by the phase tripwires that stayed at zero.
 | PS6–PS9 | Validation, delivery and endings | The invocation settles one structural check, and the host asks it again after the command document has completely torn down — a component removed immediately after a successful `<AdmitPlan>` is refused there and nowhere else; the exact bytes then reach exactly one of stdout or an exclusively created `--output` file, and an existing path is refused unchanged; stopping, exhaustion, a failed turn, missing Agent context, cancellation, teardown failure and that host refusal each deliver nothing at all |
 | PS10, C14 | No execution, and the result | A named session continues the planning conversation and still starts no program, and no execution callback, program journal or second-root identity exists; the shipped generation, repair and revision instructions each carry the complete titled-Plan rule, and a titled Plan of prose interleaved with components survives approval byte for byte into stdout and a file alike |
 | PS12 | Product copy | Architecture, specifications, README and the homepage state that Plan produces source, Run executes source, and composition decides when it runs |
+| PS13 | Durable-only authorship | A settled default agent whose sessions end with the invocation gives `xmd plan` and `<Plan>` no Agent context: both refuse on the existing no-context sentence with the directory, provider, session, turn and review phases at zero, and naming the session changes nothing |
 
 ### Tier UG — The `xmd upgrade` command
 
@@ -11377,6 +11420,11 @@ against the production Deno adapter, on real run files.
 
 Defined in [ACP client](./acp-client-spec.md) §The workflow Agent profile.
 
+Which agents this profile can serve at all is a separate clause of the same
+ceiling: it declares a session lifetime, and refuses an agent whose sessions end
+with the invocation. The declaration is AE9 and what it does to a live run is
+WAL17.
+
 | # | Test | Verify |
 |---|------|--------|
 | WAP1 | Strict inputs | The runtime is created with the host's own directory and `mcpServers: []`, each session with `allowedTools: []`, under `deny-all` and non-interactive denial; no Workspace or caller path appears in any provider input |
@@ -11484,6 +11532,7 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.
 | WAL8 | ACP-only Claude | The profile states both ordinary-run native capability sets empty, so an agent `xmd run` would own machine-wide is served here over ACP alone. A provider handed a coordinator, a route store and an executable observer under those empty sets reaches none of them for a Claude prompt |
 | WAL8 | An observed response reaches the next turn | An admitted `<Fetch>`'s complete retained response — name, status, headers and body — is rendered into the next `<Prompt>` with `<Json>`, and a completed replay restores it without asking the server or the agent again |
 | WAL9 | Authored approval | The same proposal under the production profile: the approved branch reaches `<Evaluate allow={["write"]}>`, records one admission naming both write identities and the class, and leaves the change where an ordinary read in the run's Workspace finds it; the refused branch never expands the element, so no admission and no file effect exist |
+| WAL17 | Durable-only continuation | A workflow whose `<Agent>` names an agent this host serves only for the invocation is refused before any provider contact — no runtime created, no doctor, no ensure, no turn and no retained record — on the run's first use and again on the partial continuation whose next live operation is that Prompt, which journals nothing new |
 
 ### Tier WFX — A killed run resumes from its frontier
 

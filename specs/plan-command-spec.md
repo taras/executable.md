@@ -418,6 +418,17 @@ authorship carries a provider and a default agent and nothing else. A provider
 that cannot establish this ceiling refuses before session materialization or a
 turn; there is no silent downgrade.
 
+Both authorship surfaces also require an agent whose sessions can be continued.
+A Plan is written in a conversation a caller may name and return to — that is
+what `--session` and `<Plan session>` are for, and what the durable session
+directory below exists to serve — so an **invocation-scoped Agent session**
+cannot hold one. When the settled default agent is invocation-scoped this host
+supplies no Agent context, and the command and the Component both take the
+existing no-context refusal path: no session directory is established, no
+provider is built, no session is placed and no turn is taken. Naming the session
+explicitly does not change that answer, because a name asks for exactly the
+continuation this agent has no way to give.
+
 The profile's working directory is
 `~/.xmd/plan/sessions/<sha256(logical-session-name)>`. It is dedicated to that
 one logical session rather than shared by every invocation, so two conversations
@@ -717,7 +728,9 @@ grammar), `packages/cli/tests/plan-command-document.test.ts` (the packaged
 document executed as itself), `packages/cli/tests/plan.test.ts` (the host and
 the packaged document writing a Plan together) and
 `packages/cli/tests/plan-cli.test.ts` (the command lifecycle, its grammar as an
-operator meets it, and the artifact).
+operator meets it, and the artifact) and
+`packages/cli/tests/plan-component.test.ts` (the same Component reached from an
+ordinary document).
 
 The ACPX runtime is a scriptable fake, the review provider is a scripted
 `Elicitation` handler, and the contextual working directory is a temporary one:
@@ -742,3 +755,4 @@ neither observation never interpreted what it wrote.
 | PS11 | Adapter and Component | The command document remains the exact thin adapter, and `<Plan>` remains a bare-or-captured exact text component |
 | PS12 | Product copy | Architecture, specifications, README and the homepage state that Plan produces source, Run executes source, and composition decides when it runs |
 | C2–C5, C8, C9, C13, C14 | Authorship | The packaged adapter and Component, one Session, the profile ceiling, the repair and review bounds, safe presentation, the authored endings, directory lifetime and narrative preservation are unchanged by this command producing source only, and keep their evidence |
+| PS13 | Durable-only authorship | A settled default agent whose sessions end with the invocation gives `xmd plan` and `<Plan>` no Agent context: both refuse on the existing no-context sentence with the directory, provider, session, turn and review phases at zero, and naming the session changes nothing |

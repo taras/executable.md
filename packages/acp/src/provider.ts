@@ -150,6 +150,17 @@ export interface AcpxSessionPlacement {
   readonly state: "pending" | "established";
 }
 
+/**
+ * How long a session with one agent can be continued.
+ *
+ * `durable` is what every agent this provider serves has always been: the
+ * conversation outlives the invocation that created it, and a later run
+ * continues the one its record names. `invocation` is the opposite claim — the
+ * conversation exists only while this provider does, and nothing about it may
+ * be retained, resumed, or handed to another process.
+ */
+export type AcpxSessionLifetime = "durable" | "invocation";
+
 /** What ACPX asserted about a session it established. */
 export interface AcpxSessionIdentity {
   readonly agentSessionId?: string;
@@ -212,6 +223,20 @@ export interface AcpxProviderDependencies {
    * asks for one prepares nothing.
    */
   prepareAgent?: (agentName: string) => Operation<void>;
+  /**
+   * How long this host can continue one agent's sessions.
+   *
+   * Asked with the resolved agent name before this provider prepares an
+   * adapter, probes availability, reads a store, places a session, or starts a
+   * child. Only a successful answer is remembered; a host that cannot serve the
+   * lifetime an agent needs answers `Err`, and the operation refuses before the
+   * agent is contacted at all.
+   *
+   * Absent means `durable`, which is what a host with no opinion has always
+   * been saying. Nothing infers a lifetime from a command, adapter metadata, a
+   * session record, a title, or anything an agent answered.
+   */
+  sessionLifetime?: (agentName: string) => Result<AcpxSessionLifetime>;
   /**
    * The native adapters this host has proven and is therefore willing to hand
    * a session to. Absent means none: knowing an adapter's command shape is not
@@ -344,6 +369,14 @@ interface RuntimeEntry {
   runtime: ProbeCapableRuntime;
   /** The `(agent command, binding)` partition, or nothing for the unbound one. */
   partition: string | undefined;
+  /**
+   * The lifetime whose store this runtime was built with.
+   *
+   * Part of the runtime's identity rather than of the work it serves: a runtime
+   * carries one session store, and durable and invocation-scoped work must
+   * never see each other's records through a shared one.
+   */
+  lifetime: AcpxSessionLifetime;
   /** Handles created through this runtime that have not been closed. */
   handles: number;
   /**
@@ -368,6 +401,22 @@ interface RuntimeEntry {
  * is what reattaches ACP to whatever holds the session now — a native UI it was
  * handed to, or nothing at all.
  */
+/**
+ * What this provider holds about one placement.
+ *
+ * `pending` and `established` keep their durable meanings: where a session will
+ * live, and one whose construction route and durable identity both exist.
+ * `live-invocation` is neither. The conversation exists right now, inside this
+ * provider, and nothing durable names it — so it is never promoted, retained or
+ * reported as established.
+ */
+type ManagedState = "pending" | "established" | "live-invocation";
+
+/** What a placement may say about an entry. A live invocation names nothing durable. */
+function placementStateOf(state: ManagedState): "pending" | "established" {
+  return state === "established" ? "established" : "pending";
+}
+
 interface DetachedSession {
   agentCommand: string;
   cwd: string;
@@ -379,7 +428,15 @@ interface DetachedSession {
    * structural copy carrying the same key was issued by nobody.
    */
   session: Session;
-  state: "pending" | "established";
+  state: ManagedState;
+  /**
+   * The lifetime this placement was made under.
+   *
+   * Carried on the entry rather than looked up again, so every later record
+   * read, runtime election, refresh and close reaches the store this session
+   * was placed in rather than whichever one a caller happens to resolve to.
+   */
+  lifetime: AcpxSessionLifetime;
 }
 
 interface ManagedSession extends DetachedSession {
@@ -405,10 +462,11 @@ interface ManagedSession extends DetachedSession {
 
 /** Read-only session resolution; the placement linearization point. */
 type Prepared =
-  | { kind: "existing"; sessionKey: string; entry: ManagedSession }
+  | { kind: "existing"; sessionKey: string; lifetime: AcpxSessionLifetime; entry: ManagedSession }
   | {
       kind: "placement";
       sessionKey: string;
+      lifetime: AcpxSessionLifetime;
       agentCommand: string;
       placement: AcpxSessionPlacement;
       /** The exact value already issued for this placement, when there is one. */
@@ -417,6 +475,26 @@ type Prepared =
 
 function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value));
+}
+
+/**
+ * An ACPX session store that exists only in memory, for one provider scope.
+ *
+ * Keyed exactly as ACPX's own file store is — by the record id it saves under
+ * and loads by — so the runtime built on it behaves the same way, and nothing
+ * it writes reaches a disk, another store, or another invocation.
+ */
+function createInvocationStore(): AcpSessionStore {
+  const records = new Map<string, AcpSessionRecord>();
+  return {
+    load(sessionId: string): Promise<AcpSessionRecord | undefined> {
+      return Promise.resolve(records.get(sessionId));
+    },
+    save(record: AcpSessionRecord): Promise<void> {
+      records.set(record.acpxRecordId, record);
+      return Promise.resolve();
+    },
+  };
 }
 
 /** The provider identity retained in a launch record. */
@@ -818,6 +896,7 @@ function* useAcpxProviderState(
   const executableObserver = dependencies?.executableObserver;
   const agentCwd = dependencies?.agentCwd ?? cwd;
   const prepareAgent = dependencies?.prepareAgent;
+  const sessionLifetime = dependencies?.sessionLifetime;
   const mcpServers = dependencies?.mcpServers;
   const newSessionOptions = dependencies?.newSessionOptions;
   const sessions = dependencies?.sessions;
@@ -843,14 +922,57 @@ function* useAcpxProviderState(
   );
 
   /**
-   * One ACP runtime per `(agent command, executable build)`, plus the unbound
-   * one ordinary ACP-first work has always used.
+   * The store an invocation-scoped session's records live in.
+   *
+   * Memory this provider state owns, reachable through nothing else: it is not
+   * exported, not written to disk, not copied into the durable store, and gone
+   * when this scope closes. A second provider — another invocation, or a
+   * sibling partition — starts with an empty one, which is what makes a Devin
+   * placement fresh however it is spelled.
+   */
+  const invocationStore = createInvocationStore();
+
+  /** Which store one lifetime's records are read from and written to. */
+  function storeFor(lifetime: AcpxSessionLifetime): AcpSessionStore {
+    return lifetime === "invocation" ? invocationStore : store;
+  }
+
+  /**
+   * What this host says about one agent's sessions, asked once.
+   *
+   * Only a successful answer is remembered: a host that could not answer is
+   * asked again rather than having its refusal cached as a decision.
+   */
+  const lifetimes = new Map<string, AcpxSessionLifetime>();
+  function lifetimeFor(agentName: string): AcpxSessionLifetime {
+    if (sessionLifetime === undefined) {
+      return "durable";
+    }
+    const remembered = lifetimes.get(agentName);
+    if (remembered !== undefined) {
+      return remembered;
+    }
+    const declared = sessionLifetime(agentName);
+    if (!declared.ok) {
+      throw declared.error;
+    }
+    lifetimes.set(agentName, declared.value);
+    return declared.value;
+  }
+
+  /**
+   * One ACP runtime per `(agent command, executable build)`, plus one unbound
+   * runtime per lifetime.
    *
    * Sessions established against different builds never share an ACP child.
    * That is what observing a build is for: a child running the wrong Claude
    * accepts the session identity and disagrees silently about what it names.
+   *
+   * The unbound runtimes are separated the same way, because a runtime carries
+   * one session store: durable and invocation-scoped work sharing one would be
+   * sharing every record either of them wrote.
    */
-  let unbound: RuntimeEntry | undefined;
+  const unbound = new Map<AcpxSessionLifetime, RuntimeEntry>();
   const runtimes = new Map<string, RuntimeEntry>();
   /**
    * Every handle this provider created and has not successfully closed.
@@ -866,11 +988,11 @@ function* useAcpxProviderState(
   const activeTurns = new Set<AcpRuntimeTurn>();
   const cleanupErrors: Error[] = [];
 
-  function* runtimeOptions(): Operation<AcpRuntimeOptions> {
+  function* runtimeOptions(lifetime: AcpxSessionLifetime): Operation<AcpRuntimeOptions> {
     const dir = yield* agentCwd();
     const options: AcpRuntimeOptions = {
       cwd: dir,
-      sessionStore: store,
+      sessionStore: storeFor(lifetime),
       agentRegistry: registry,
       permissionMode: providerOptions.permissionMode,
       nonInteractivePermissions: "deny",
@@ -915,8 +1037,11 @@ function* useAcpxProviderState(
    * step: an election that suspends part-way through is an election another
    * operation can act between.
    */
-  function* runtimeBlueprint(build?: BoundBuild): Operation<AcpRuntimeOptions> {
-    const base = yield* runtimeOptions();
+  function* runtimeBlueprint(
+    lifetime: AcpxSessionLifetime,
+    build?: BoundBuild,
+  ): Operation<AcpRuntimeOptions> {
+    const base = yield* runtimeOptions(lifetime);
     const options: AcpRuntimeOptions = {
       ...base,
       // The acpx callback boundary: `scope.run` returns a Promise-compatible
@@ -946,8 +1071,12 @@ function* useAcpxProviderState(
    * longer names and the next operation builds a second child for the same
    * build. Here the entry is published already claimed.
    */
-  function electRuntime(partition: string | undefined, options: AcpRuntimeOptions): RuntimeEntry {
-    const held = partition === undefined ? unbound : runtimes.get(partition);
+  function electRuntime(
+    partition: string | undefined,
+    lifetime: AcpxSessionLifetime,
+    options: AcpRuntimeOptions,
+  ): RuntimeEntry {
+    const held = partition === undefined ? unbound.get(lifetime) : runtimes.get(partition);
     if (held) {
       held.active++;
       return held;
@@ -955,11 +1084,12 @@ function* useAcpxProviderState(
     const entry: RuntimeEntry = {
       runtime: createRuntime(options),
       partition,
+      lifetime,
       handles: 0,
       active: 1,
     };
     if (partition === undefined) {
-      unbound = entry;
+      unbound.set(lifetime, entry);
     } else {
       runtimes.set(partition, entry);
     }
@@ -985,6 +1115,7 @@ function* useAcpxProviderState(
       cwd: entry.cwd,
       session: entry.session,
       state: entry.state,
+      lifetime: entry.lifetime,
     });
   }
 
@@ -1061,15 +1192,26 @@ function* useAcpxProviderState(
    * yields between the handle arriving and that flag being set.
    */
   function ensureThrough(
+    lifetime: AcpxSessionLifetime,
     build: BoundBuild | undefined,
     input: AcpRuntimeEnsureInput,
     toSession: (handle: AcpRuntimeHandle, entry: RuntimeEntry) => ManagedSession,
   ): Operation<ManagedSession> {
     return scoped(function* (): Operation<ManagedSession> {
+      if (build !== undefined && lifetime === "invocation") {
+        // A build binding is retained history: it says which executable
+        // established a conversation a later run may continue. An
+        // invocation-scoped session has no such history, so there is no
+        // combination to fall back to — the two claims contradict each other.
+        throw new Error(
+          `agent "${build.agentName}" keeps its sessions only for this invocation, so its ` +
+            `sessions cannot be bound to an executable build`,
+        );
+      }
       const partition = build ? partitionOf(build) : undefined;
       // Every suspension this needs, taken before anything is decided. What
       // follows must not yield, so nothing it depends on may.
-      const options = yield* runtimeBlueprint(build);
+      const options = yield* runtimeBlueprint(lifetime, build);
       let claimed: RuntimeEntry | undefined;
       let pending: Promise<AcpRuntimeHandle> | undefined;
       let settled = false;
@@ -1121,7 +1263,7 @@ function* useAcpxProviderState(
       // claimed if this is the first work to want one, and the ensure is
       // started. Nothing yields in here, so no sibling runs between the
       // publication and the claim that keeps it alive.
-      const entry = electRuntime(partition, options);
+      const entry = electRuntime(partition, lifetime, options);
       claimed = entry;
       pending = entry.runtime.ensureSession(input);
 
@@ -1163,12 +1305,25 @@ function* useAcpxProviderState(
 
   function* resolveAgent(name: string | undefined): Operation<string> {
     const selected = name ?? providerOptions.defaultAgent;
+    // First, and before anything is put on disk or spawned. What this host can
+    // serve for this agent decides whether the rest of resolution happens at
+    // all, and a host that cannot serve it refuses here rather than after
+    // preparing an adapter for a session it will not allow.
+    const lifetime = lifetimeFor(selected);
     // Before the probe, because the probe spawns this agent's command: a host
     // that materializes its own adapter has to have done so by now, and a
     // failure here refuses the agent rather than reporting it unavailable for a
     // reason that names the wrong cause.
     if (prepareAgent !== undefined) {
       yield* prepareAgent(selected);
+    }
+    // An invocation-scoped agent is not probed here. Probing spawns it, and the
+    // operations that cannot support such a session — a native launch, a
+    // workflow turn, Plan authorship — have to be able to refuse before this
+    // agent is contacted at all. A Prompt is the one operation that can support
+    // it, and it probes at its own placement.
+    if (lifetime === "invocation") {
+      return selected;
     }
     // Resolution is read-only for an agent whose sessions XMD names. Probing
     // spawns an ACP child, and that is provider work on a session whose
@@ -1177,18 +1332,26 @@ function* useAcpxProviderState(
     // before a host missing either capability has said so. Nothing on that path
     // needs the answer: the session is created by a native process, and where
     // ACP does serve one, the establishment itself reports being unable to.
-    if (!validatedAgents.has(selected) && !namesOwnSessions(selected)) {
-      const base = yield* runtimeOptions();
-      const probe = createRuntime({ ...base, probeAgent: selected });
-      const report = yield* until(probe.doctor());
-      if (!report.ok) {
-        const code = report.code ? ` [${report.code}]` : "";
-        const details = report.details?.length ? ` (${report.details.join("; ")})` : "";
-        throw new Error(`agent "${selected}" is unavailable${code}: ${report.message}${details}`);
-      }
-      validatedAgents.add(selected);
+    if (!namesOwnSessions(selected)) {
+      yield* probeAvailability(selected, lifetime);
     }
     return selected;
+  }
+
+  /** Spawn this agent once to find out whether it is there, and remember that it is. */
+  function* probeAvailability(agentName: string, lifetime: AcpxSessionLifetime): Operation<void> {
+    if (validatedAgents.has(agentName)) {
+      return;
+    }
+    const base = yield* runtimeOptions(lifetime);
+    const probe = createRuntime({ ...base, probeAgent: agentName });
+    const report = yield* until(probe.doctor());
+    if (!report.ok) {
+      const code = report.code ? ` [${report.code}]` : "";
+      const details = report.details?.length ? ` (${report.details.join("; ")})` : "";
+      throw new Error(`agent "${agentName}" is unavailable${code}: ${report.message}${details}`);
+    }
+    validatedAgents.add(agentName);
   }
 
   // Read-only session resolution. For a Session value it validates the
@@ -1199,6 +1362,7 @@ function* useAcpxProviderState(
     agentName: string,
     option: string | Session | undefined,
     callerCwd: string,
+    lifetime: AcpxSessionLifetime,
     sessionIdentity?: string,
   ): Operation<Prepared> {
     if (typeof option === "object") {
@@ -1211,6 +1375,23 @@ function* useAcpxProviderState(
         throw new Error(
           `unknown or stale agent session "${option.sessionKey}" — a Session value must ` +
             `come from this provider's session()`,
+        );
+      }
+      // Before the command, because two agent names can resolve to one command
+      // and still be served under opposite lifetimes: ACPX falls back to the
+      // agent name itself as the command, so a document naming the raw
+      // `devin acp` reaches the same child as the canonical `devin` while this
+      // host declares only the canonical name invocation-scoped. Reading the
+      // lifetime off the retained entry would let that placement decide what
+      // this Prompt is, which is how a session would silently change store,
+      // runtime and retention half way through.
+      //
+      // Refused here, where nothing has been touched yet: no second store
+      // access, no route, no ensure, no turn, no retention.
+      if (entry.lifetime !== lifetime) {
+        throw new Error(
+          `agent "${agentName}" (${lifetime} sessions) does not match session ` +
+            `"${option.sessionKey}" (${entry.lifetime} sessions)`,
         );
       }
       const agentCommand = registry.resolve(agentName);
@@ -1228,16 +1409,17 @@ function* useAcpxProviderState(
         return {
           kind: "placement",
           sessionKey: entry.session.sessionKey,
+          lifetime: entry.lifetime,
           agentCommand: entry.agentCommand,
           placement: {
             sessionKey: entry.session.sessionKey,
             cwd: entry.cwd,
-            state: entry.state,
+            state: placementStateOf(entry.state),
           },
           issued: entry.session,
         };
       }
-      return { kind: "existing", sessionKey: option.sessionKey, entry };
+      return { kind: "existing", sessionKey: option.sessionKey, lifetime: entry.lifetime, entry };
     }
     const agentCommand = registry.resolve(agentName);
     if (sessions) {
@@ -1247,10 +1429,18 @@ function* useAcpxProviderState(
         session: option,
         ...(sessionIdentity === undefined ? {} : { sessionIdentity }),
       });
-      return placedPrepared(agentCommand, placed);
+      return placedPrepared(agentCommand, placed, lifetime);
     }
-    const placement = yield* resolveSessionPlacement(store, agentCommand, callerCwd, option);
-    return placedPrepared(agentCommand, placement);
+    // The store this lifetime's records live in, never a generic current one:
+    // asking the durable store where an invocation-scoped session lives would
+    // place it on another lifetime's history.
+    const placement = yield* resolveSessionPlacement(
+      storeFor(lifetime),
+      agentCommand,
+      callerCwd,
+      option,
+    );
+    return placedPrepared(agentCommand, placement, lifetime);
   }
 
   /**
@@ -1260,11 +1450,16 @@ function* useAcpxProviderState(
    * the exact object is what provenance is, and minting a replacement would
    * leave the first one unusable.
    */
-  function placedPrepared(agentCommand: string, placement: AcpxSessionPlacement): Prepared {
+  function placedPrepared(
+    agentCommand: string,
+    placement: AcpxSessionPlacement,
+    lifetime: AcpxSessionLifetime,
+  ): Prepared {
     const held = managed.get(placement.sessionKey);
     const prepared: Prepared = {
       kind: "placement",
       sessionKey: placement.sessionKey,
+      lifetime,
       agentCommand,
       placement,
     };
@@ -1306,12 +1501,12 @@ function* useAcpxProviderState(
     const sessionKey = prepared.sessionKey;
     const held = managed.get(sessionKey);
     if (held && isLive(held)) {
-      return { kind: "existing", sessionKey, entry: held };
+      return { kind: "existing", sessionKey, lifetime: held.lifetime, entry: held };
     }
     const agentCommand = agentCommandOf(prepared);
     const cwd =
       held?.cwd ?? (prepared.kind === "existing" ? prepared.entry.cwd : prepared.placement.cwd);
-    const record = yield* until(store.load(sessionKey));
+    const record = yield* until(storeFor(prepared.lifetime).load(sessionKey));
     const established =
       held?.state === "established" ||
       (record !== undefined && record.sessionMaterialization?.state !== "pending");
@@ -1320,7 +1515,7 @@ function* useAcpxProviderState(
       cwd,
       state: established ? "established" : "pending",
     };
-    return placedPrepared(agentCommand, placement);
+    return placedPrepared(agentCommand, placement, prepared.lifetime);
   }
 
   /**
@@ -1344,6 +1539,7 @@ function* useAcpxProviderState(
       cwd: prepared.placement.cwd,
       session,
       state: "pending",
+      lifetime: prepared.lifetime,
     });
     return session;
   }
@@ -1360,7 +1556,7 @@ function* useAcpxProviderState(
   interface EnsureIntent {
     attachment?: { build: BoundBuild; resumeSessionId: string };
     /** The placement's state, as the caller resolved it. */
-    state: "pending" | "established";
+    state: ManagedState;
     /**
      * Let ACPX hold this record as occupancy until the backend accepts the
      * first turn, rather than asserting an identity the moment it is created.
@@ -1394,6 +1590,7 @@ function* useAcpxProviderState(
     let managedEntry: ManagedSession;
     try {
       managedEntry = yield* ensureThrough(
+        prepared.lifetime,
         attachment?.build,
         {
           sessionKey: prepared.placement.sessionKey,
@@ -1424,6 +1621,7 @@ function* useAcpxProviderState(
             cwd: prepared.placement.cwd,
             session,
             state: intent.state,
+            lifetime: prepared.lifetime,
           };
         },
       );
@@ -1458,7 +1656,13 @@ function* useAcpxProviderState(
           `did not report, so a turn taken here would not belong to it`,
       });
     }
-    if (sessions?.established && intent.deferEstablished !== true) {
+    // Never for an invocation-scoped session: retention is what a host does
+    // with a durable identity, and this session has none to hand it.
+    if (
+      prepared.lifetime === "durable" &&
+      sessions?.established &&
+      intent.deferEstablished !== true
+    ) {
       const identity: AcpxSessionIdentity = {
         ...(handle.agentSessionId === undefined ? {} : { agentSessionId: handle.agentSessionId }),
         ...(handle.acpxRecordId === undefined ? {} : { acpxRecordId: handle.acpxRecordId }),
@@ -1742,8 +1946,12 @@ function* useAcpxProviderState(
    * disagree — a record asserting another conversation, or asserting none at
    * all, describes provider state this session cannot account for.
    */
-  function* retainedAssertion(sessionKey: string, nativeSessionId: string): Operation<void> {
-    const record = yield* until(store.load(sessionKey));
+  function* retainedAssertion(
+    lifetime: AcpxSessionLifetime,
+    sessionKey: string,
+    nativeSessionId: string,
+  ): Operation<void> {
+    const record = yield* until(storeFor(lifetime).load(sessionKey));
     if (record === undefined) {
       return;
     }
@@ -1788,7 +1996,8 @@ function* useAcpxProviderState(
       },
       // An existing managed entry, or a durable record ACPX already kept, is
       // provider state — and existing history is never reclassified.
-      prepared.kind === "existing" || (yield* until(store.load(prepared.sessionKey))) !== undefined,
+      prepared.kind === "existing" ||
+        (yield* until(storeFor(prepared.lifetime).load(prepared.sessionKey))) !== undefined,
     );
     if (route.route !== "client-native") {
       return undefined;
@@ -1821,7 +2030,7 @@ function* useAcpxProviderState(
         buildDrift(prepared.sessionKey, route.executableBinding, build.binding),
       );
     }
-    yield* retainedAssertion(prepared.sessionKey, route.nativeSessionId);
+    yield* retainedAssertion(prepared.lifetime, prepared.sessionKey, route.nativeSessionId);
     return { build, resumeSessionId: route.nativeSessionId };
   }
 
@@ -2020,6 +2229,14 @@ function* useAcpxProviderState(
     return {
       *[Symbol.iterator]() {
         const agentName = yield* Agent.operations.agent(options?.agent);
+        const lifetime = lifetimeFor(agentName);
+        // The probe an invocation-scoped agent did not run at resolution, taken
+        // here because a Prompt is the one operation that can serve such a
+        // session — and taken before its placement, so an unreachable agent is
+        // still an availability failure rather than a failed turn.
+        if (lifetime === "invocation") {
+          yield* probeAvailability(agentName, lifetime);
+        }
         const callerCwd = resolve(yield* agentCwd());
         const context: SessionRouteContext = {
           agentName,
@@ -2030,7 +2247,7 @@ function* useAcpxProviderState(
         // Where this prompt lands. Resolving it constructs nothing, which is
         // what lets the queue below be entered before any provider effect.
         const placed = yield* withSessionRoute(context, () =>
-          prepare(agentName, options?.session, callerCwd),
+          prepare(agentName, options?.session, callerCwd, lifetime),
         );
 
         // The session's FIFO first, and before ownership. Two prompts on one
@@ -2072,15 +2289,22 @@ function* useAcpxProviderState(
           // continues what its predecessor established instead of constructing
           // a second conversation beside it.
           const prepared = yield* requeried(placed);
-          const state =
+          // An invocation-scoped placement is live or it is nothing. It never
+          // becomes pending occupancy waiting for acceptance, and it never
+          // becomes established: no route, no host mapping, no durable
+          // identity, and therefore nothing to publish before the turn runs.
+          const state: ManagedState =
             prepared.kind === "existing"
               ? prepared.entry.state
-              : yield* placementState(agentName, prepared.agentCommand, prepared.placement);
+              : lifetime === "invocation"
+                ? "live-invocation"
+                : yield* placementState(agentName, prepared.agentCommand, prepared.placement);
           // Inside ownership, before the runtime exists and before a turn: a
           // first Prompt constructs this session through ACP, so that is what
           // its construction route says — and a session a native process
           // constructed is attached to under the identity it already has.
-          const attachment = yield* constructRoute(agentName, prepared);
+          const attachment =
+            lifetime === "invocation" ? undefined : yield* constructRoute(agentName, prepared);
           // The pending ACP-first branch, and the only one that defers: an
           // attachment resumes an identity that already exists, and an
           // established placement has one of its own.
@@ -2103,7 +2327,7 @@ function* useAcpxProviderState(
           // scope's policy.
           const refresh = () =>
             (function* () {
-              const record = yield* until(store.load(recordKey));
+              const record = yield* until(storeFor(entry.lifetime).load(recordKey));
               if (!record) {
                 return undefined;
               }
@@ -2271,7 +2495,7 @@ function* useAcpxProviderState(
     let existing;
     let route: AgentSessionRoute | undefined;
     try {
-      existing = yield* until(store.load(sessionKey));
+      existing = yield* until(storeFor(prepared.lifetime).load(sessionKey));
       route = yield* routeStore!.read(sessionKeyOf(agentCommand, sessionKey));
 
       // A session ACP already established, from before this session had a route
@@ -2507,7 +2731,7 @@ function* useAcpxProviderState(
     // return — a store read that fails, an instruction layer this provider will
     // not replace — and a claim taken before them is one those exits would have
     // to remember to give back.
-    const existing = yield* until(store.load(sessionKey));
+    const existing = yield* until(storeFor(prepared.lifetime).load(sessionKey));
     let sessionState: "created" | "resumed" = existing ? "resumed" : "created";
     let reconciliation: InstructionReconciliation = existing ? "resumed" : "installed";
 
@@ -2537,6 +2761,7 @@ function* useAcpxProviderState(
     // can refuse, and a handle only the managed map knew about is one teardown
     // could not close through its creator.
     const managedEntry = yield* ensureThrough(
+      prepared.lifetime,
       undefined,
       {
         sessionKey,
@@ -2559,6 +2784,7 @@ function* useAcpxProviderState(
           cwd: sessionCwd,
           session,
           state: "established" as const,
+          lifetime: prepared.lifetime,
         };
       },
     );
@@ -2721,6 +2947,24 @@ function* useAcpxProviderState(
   function launch(request: AgentLaunchRequest, authority: AgentProviderAuthority): Operation<void> {
     return scoped(function* (): Operation<void> {
       const agentName = request.agent;
+      const lifetime = lifetimeFor(agentName);
+      if (lifetime === "invocation") {
+        // Retained before placement, ownership, an adapter lookup, an ensure, a
+        // detach or a native process. A native UI resumes a session by its
+        // durable identity, and an invocation-scoped session has none — so
+        // preparing one to find that out would be contacting the agent to learn
+        // what this host already knows.
+        yield* authority.refuse(
+          request,
+          refusal(
+            "unsupported-capability",
+            `agent "${agentName}" keeps a session only for the invocation that created it, so ` +
+              `there is no conversation a native UI could be handed or resume`,
+            { agent: agentName },
+          ),
+        );
+        return;
+      }
       const callerCwd = resolve(yield* agentCwd());
       const context: SessionRouteContext = {
         agentName,
@@ -2729,7 +2973,7 @@ function* useAcpxProviderState(
       };
 
       const placement = yield* withSessionRoute(context, () =>
-        prepare(agentName, request.session, callerCwd),
+        prepare(agentName, request.session, callerCwd, lifetime),
       );
 
       // This launch's own state, reachable only through the phase callbacks
@@ -3050,14 +3294,24 @@ function* useAcpxProviderState(
     }
 
     const agentName = yield* Agent.operations.agent();
+    const lifetime = lifetimeFor(agentName);
     const callerCwd = resolve(yield* agentCwd());
     const context: SessionRouteContext = { agentName, session: named, cwd: callerCwd };
     const prepared = yield* withSessionRoute(context, () =>
-      prepare(agentName, named, callerCwd, sessionIdentity),
+      prepare(agentName, named, callerCwd, lifetime, sessionIdentity),
     );
+    if (lifetime === "invocation") {
+      // An invocation-scoped `<Session>` names where a conversation would live
+      // and constructs nothing. There is no durable identity to validate
+      // eagerly and no ownership to take, so the element stays inert until a
+      // Prompt subscribes — and a live one is already open, so its own value
+      // comes back rather than a second ensure.
+      requireAssembly(agentName, prepared.sessionKey);
+      return prepared.kind === "existing" ? prepared.entry.session : placePending(prepared);
+    }
     const state =
       prepared.kind === "existing"
-        ? prepared.entry.state
+        ? placementStateOf(prepared.entry.state)
         : yield* placementState(agentName, prepared.agentCommand, prepared.placement);
     if (prepared.kind === "placement" && state === "pending") {
       // A fresh <Session> places a session; it does not create one. It has

@@ -23,12 +23,17 @@ import {
 import type { AgentProviderFactory, PermissionMode } from "@executablemd/core";
 import { installForegroundLauncher, env as readEnv } from "@executablemd/runtime";
 import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
-import type { AcpxProviderDependencies } from "@executablemd/acp";
+import type {
+  AcpAgentRegistry,
+  AcpxProviderDependencies,
+  AcpxSessionLifetime,
+} from "@executablemd/acp";
 // A separate entrypoint because the embedded adapters are temporary (#636) and
 // must not become part of the package's stable surface.
 import {
   createEmbeddedAdapters,
   embeddedAdapterDependencies,
+  overlaidAdapterRegistry,
 } from "@executablemd/acp/embedded-adapters";
 import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import { Err, Ok } from "effection";
@@ -49,6 +54,80 @@ import type { MachineSessionAssembly } from "./session-coordinator.ts";
  * different directory instead of deciding whether this one is current.
  */
 export const DEFAULT_ADAPTER_ROOT: string = join(homedir(), ".xmd", "adapters");
+
+/** The agent name a document writes for Devin. */
+const DEVIN_AGENT = "devin";
+
+/**
+ * The command Devin's ACP mode is started with.
+ *
+ * Stated by this host rather than resolved: ACPX's registry has no Devin entry,
+ * so the name would otherwise fall through to the bare command `devin`, which
+ * is Devin's interactive CLI and speaks no protocol. ACPX recognizes exactly
+ * this shape and answers it as Windsurf, which is what Devin's backend expects
+ * (specs/acp-client-spec.md §Command-line configuration).
+ */
+const DEVIN_COMMAND = "devin acp";
+
+/**
+ * The baseline registry with Devin's command over the top.
+ *
+ * An overlay, like this build's embedded adapters beneath it: `devin` resolves
+ * to the one command that speaks ACP, it appears once in the list, and every
+ * other name keeps the answer it already had.
+ */
+function withDevinCommand(baseline: AcpAgentRegistry): AcpAgentRegistry {
+  return {
+    resolve: (agentName: string) =>
+      agentName === DEVIN_AGENT ? DEVIN_COMMAND : baseline.resolve(agentName),
+    list: () => [...new Set([...baseline.list(), DEVIN_AGENT])],
+  };
+}
+
+/** The agent registry every non-workflow command resolves through. */
+export function hostAgentRegistry(adapters: EmbeddedAdapters): AcpAgentRegistry {
+  return withDevinCommand(overlaidAdapterRegistry(adapters));
+}
+
+/**
+ * How long an ordinary `xmd run` can continue one agent's sessions.
+ *
+ * Devin's ACP surface publishes no acceptance event and no provider-native
+ * conversation identity, so nothing about one of its sessions can be written
+ * down and continued later. This host says so before the agent is prepared or
+ * spawned, which is what lets a durable-only operation refuse without
+ * contacting it. Every other agent is durable, exactly as it was.
+ */
+export function runAgentSessionLifetime(agentName: string): Result<AcpxSessionLifetime> {
+  return Ok(agentName === DEVIN_AGENT ? "invocation" : "durable");
+}
+
+/**
+ * How long a workflow attachment can continue one agent's sessions.
+ *
+ * A workflow continues its conversation across executions by reattaching the
+ * session its run database names, so an agent whose sessions end with the
+ * invocation cannot serve one at all. Refusing here is what keeps that refusal
+ * ahead of adapter preparation, the availability probe and any turn.
+ */
+export function workflowAgentSessionLifetime(agentName: string): Result<AcpxSessionLifetime> {
+  if (agentName === DEVIN_AGENT) {
+    return Err(
+      new Error(
+        `agent "${agentName}" keeps a session only for the invocation that created it, and a ` +
+          `workflow continues one across executions. Run it with xmd run, or name a workflow ` +
+          `agent whose sessions can be continued.`,
+      ),
+    );
+  }
+  return Ok("durable");
+}
+
+/** Whether this host serves `agentName` only for the invocation that asks. */
+export function invocationScopedAgent(agentName: string): boolean {
+  const declared = runAgentSessionLifetime(agentName);
+  return declared.ok && declared.value === "invocation";
+}
 
 /**
  * Who writes, and what this host launches them with.
@@ -136,7 +215,16 @@ export function* resolveAgentStack(
  */
 export function hostAcpDependencies(stack: AuthorshipStack): AcpxProviderDependencies {
   const { sessions } = stack;
-  const adapters = embeddedAdapterDependencies(stack.adapters);
+  const adapters: AcpxProviderDependencies = {
+    ...embeddedAdapterDependencies(stack.adapters),
+    // Over the embedded overlay, so `devin` resolves to the one command that
+    // speaks ACP while Codex and Claude keep this build's own snapshots.
+    agentRegistry: hostAgentRegistry(stack.adapters),
+    // Declared here rather than at each consumer: a run, a Plan and a nested
+    // execution all assemble their provider from this one answer, and a
+    // consumer that stated its own could state a weaker one.
+    sessionLifetime: runAgentSessionLifetime,
+  };
   if (sessions === undefined) {
     return adapters;
   }

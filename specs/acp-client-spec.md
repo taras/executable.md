@@ -310,6 +310,14 @@ interrupted launch resumes the provider session it already prepared rather than
 creating a replacement; the shape is specified in
 specs/native-agent-session-launch-spec.md.
 
+An ordinary `xmd run --journal` remains valid for an invocation-scoped Agent
+session, because it is a trace of this invocation rather than continuation
+state: the run creates a new journal file and loads no earlier one. Nothing
+treats an `agent_prompt` record as provider continuation — the conversation it
+describes ended with the provider that held it, and a later run establishes a
+new one. Replay that needs another live turn from such a session is a different
+question, and the profiles that need it refuse the agent instead.
+
 ## Config
 
 `Config` (`@executablemd/runtime`, re-exported from `@executablemd/core`) is the
@@ -398,6 +406,15 @@ received.
 
 `allowedTools` and `mcpServers` are stated as empty arrays rather than omitted:
 omission is ACPX's own default, and this host is making a different statement.
+
+The profile also states which agents it can serve at all. A workflow continues
+its conversation across executions by reattaching the session its run database
+names, so an agent whose sessions end with the invocation can serve none: this
+profile's `sessionLifetime` answers `Err` for one, and agent resolution refuses
+there — ahead of adapter preparation, the availability probe and any turn. That
+holds on a first use and on a partial continuation whose next unrecorded
+operation is a Prompt: the completed work replays from the journal, and the live
+Prompt that follows it refuses without contacting anything.
 
 The profile states both native capability sets empty for the same reason. A
 workflow session belongs to a run — named by a row in the run's own database,
@@ -553,6 +570,20 @@ what the first put there. An embedded agent never falls through to the published
 adapter ACPX's own table pins: a snapshot that cannot be verified or materialized
 refuses that agent.
 
+Both commands also resolve `devin` to exactly `devin acp`, over ACPX's baseline
+table rather than instead of it: the name appears once in the agent list, and
+every other name keeps the command it already resolved to. ACPX has no Devin
+entry, so the bare name would otherwise reach Devin's interactive CLI, which
+speaks no protocol; `devin acp` is the shape ACPX recognizes, and recognizing it
+is what makes it identify as Windsurf, advertise
+`_meta["cognition.ai/requestDiagnostics"]`, answer
+`_cognition.ai/request_diagnostics` with `{}` and ignore Devin's vendor
+notifications.
+
+`xmd run` also declares `devin` an **invocation-scoped Agent session** and every
+other agent durable. That declaration is the host's, made from the resolved
+agent name alone, and it decides what follows for every surface below.
+
 ### The `xmd plan` authorship profile
 
 `xmd plan` resolves that configuration once, for the one document it executes:
@@ -582,6 +613,16 @@ intervene. So `--approve-all`, `--approve-reads` and `--deny-all` cannot widen a
 ceiling that has nothing in it; they configure the approved document later. A
 provider that cannot establish this ceiling refuses before session
 materialization or a turn.
+
+Writing a Plan is a conversation a caller may name and return to, so the settled
+default agent has to be one whose sessions can be continued. When it is
+invocation-scoped, this host supplies **no Agent context**: the same refusal a
+host that supplies none gives, settled before the session directory, the
+provider or any session exists. One decision covers both surfaces, because
+`xmd plan` and a `<Plan>` written in an ordinary run settle their Agent context
+through the same path, and an explicit `--session` or `<Plan session>` names a
+conversation that still could not be continued, so it does not change the
+answer.
 
 The command document itself is given no Files, command, service or XMD-mediated
 network capability, and the host decides for that whole execution that a failing
@@ -653,6 +694,13 @@ the failed operation does not render, no prompt failure is aggregated, and the
 run exits non-zero. A turn that fails for any other reason remains an ordinary
 prompt failure.
 
+An invocation-scoped agent is not probed at resolution. Probing spawns the
+agent, and the operations that cannot serve such a session — a native launch, a
+workflow turn, Plan authorship — have to be able to refuse before it is
+contacted at all. A `<Prompt>` is the one operation that can serve one, and it
+probes at its own placement, immediately before the ensure: an unreachable agent
+is still an availability failure rather than a failed turn.
+
 ## ACPX provider
 
 `@executablemd/acp` implements the `rootProvider` seam over the `acpx` runtime.
@@ -666,9 +714,76 @@ prompt nobody bounded. A prompt carries the duration its caller supplied, from
 `<Prompt timeout>` or the enclosing `<AgentProvider timeout>`, and otherwise
 none.
 
+- **Session lifetime.** `sessionLifetime(agentName)` is a host-owned
+  `Result<AcpxSessionLifetime>` on `AcpxProviderDependencies`, answering
+  `"durable"` or `"invocation"`. The provider asks it with the resolved agent
+  name before it prepares an adapter, probes availability, reads a store, places
+  a session or starts any child, and remembers only a successful answer. An
+  absent dependency is `Ok("durable")`, which is what every existing host and
+  agent already was. An `Err` refuses the operation there, before the agent is
+  contacted. Nothing infers a lifetime from a command string, adapter metadata,
+  a session record, a title, an ACP identifier or anything an agent answered.
+
+  A durable session behaves exactly as the rest of this section describes. An
+  **invocation-scoped Agent session** exists only while the provider that opened
+  it does. The provider owns one private in-memory ACPX store for that lifetime,
+  keyed as ACPX's own file store is, reachable from nothing else and gone with
+  the provider scope; placement, the ensure, every later record read, the
+  permission-routing refresh and teardown all use the store and the runtime the
+  session was placed with, and no load or save crosses between lifetimes. The
+  unbound runtime is partitioned by lifetime for the same reason: a runtime
+  carries one store. Durable build-bound partitions are unchanged, and an
+  invocation-scoped session never enters one — a build binding is retained
+  history, and this session has none.
+
+  A fresh invocation-scoped `<Session>` is inert: it places a key, takes no
+  ownership, builds no runtime and contacts nothing, and a second `<Session>`
+  naming the same placement is answered with the value already issued. The first
+  subscribed `<Prompt>` probes availability, then ensures in `persistent` mode
+  **without** `materialization: "first-turn-acceptance"`. It waits on no
+  `materialized` barrier, calls no `sessions.established()`, publishes no
+  construction route and retains no provider or checkpoint identity. The handle
+  stays live until provider teardown, so a second `<Prompt>` under the same
+  `<Session>` continues that conversation behind the first on the session's own
+  queue, while a different `<Session>` gets its own handle and may hold a turn at
+  the same time. Internally such a session carries its own state; `pending` and
+  `established` keep their durable meanings and are never used for one.
+
+  **Lifetime is part of a Session's compatibility, independently of its
+  command.** A `Session` retains the lifetime it was placed under, and consuming
+  one requires the consuming agent's declared lifetime to equal it — even when
+  both agent names resolve to the same command. They can: ACPX resolves an agent
+  name it does not know to the name itself, so a document naming the raw
+  `devin acp` reaches the same child as the canonical `devin` while a host
+  declares only the canonical name invocation-scoped, because a lifetime is
+  never inferred from a command. Taking the lifetime from the placement instead
+  would let one session change store, runtime and retention half way through.
+
+  The lifetime is compared before the resolved command, and the exact-object,
+  lifetime and command tests are three independent guards. What they refuse is
+  disagreement, not the alias: two names a host declares the same lifetime for
+  reach one placement, so a Session placed through one and consumed through the
+  other continues that one conversation. A mismatch is an
+  ordinary Session compatibility refusal naming the consuming agent with its
+  lifetime and the Session's retained lifetime, raised before any further store
+  access, route publication, ensure, turn or `sessions.established()` call.
+
+  Nothing an invocation-scoped session reports becomes durable identity: not a
+  display title, an ACP session id, an ACPX record id, or Devin's
+  `cognition.ai/userMessageId`, which `checkpoint.ts` continues not to recognize
+  beside its explicit Codex and Claude namespaces.
+
+  Cancellation and teardown are the ordinary ones. Halting an unfinished turn
+  removes it from the active set, sends ACP cancellation and waits for it;
+  provider teardown attempts every remaining cancellation and every distinct
+  owned handle close through the runtime that created it, reports a failed close
+  only after the rest were attempted, and leaves the store unreachable. There is
+  no background cleanup and no global registry.
 - **Availability.** The first use of an agent validates it through a disposable
   probe runtime's `doctor()`; a non-ok report throws with the agent's code and
-  details. Results are cached per agent.
+  details. Results are cached per agent. An invocation-scoped agent is probed at
+  its first supported `<Prompt>` instead, through runtime options carrying that
+  lifetime's store.
 - **Sessions.** `session()` places a session by (agent, logical session,
   contextual cwd): placement walks from the cwd up to the Git root and reuses the
   nearest existing record for the same agent command and cwd, otherwise names the
@@ -696,13 +811,14 @@ none.
   the exact object it issued rather than the key inside it: a structural copy, a
   value another provider copy produced, and one whose provider scope has been
   torn down are all refused before any provider work, as is a value used with a
-  different resolved agent. The provider keeps that object for the placement's
+  different resolved agent or a different session lifetime. The provider keeps that object for the placement's
   life, so a second `<Session>` naming the same placement is answered with it and
   a `<Prompt>` given it is acting on the thing that was pinned.
 
-- **Materialization.** A pending ACP-first placement is constructed by the first
-  subscribed `<Prompt>`, and only the backend's acceptance of that turn makes it
-  a conversation. The provider ensures with
+- **Materialization.** Materialization is a durable session's contract; an
+  invocation-scoped one is never materialized and never established. A pending
+  ACP-first placement is constructed by the first subscribed `<Prompt>`, and only
+  the backend's acceptance of that turn makes it a conversation. The provider ensures with
   `materialization: "first-turn-acceptance"`, which makes ACPX persist a
   provisional record: the key is occupied and the serialized `agentSessionId` is
   absent, so the record is occupancy rather than an assertion.
@@ -762,8 +878,9 @@ none.
   Promise-returning leaves are consumed with `until`; the provider's only
   Promise-producing adapter is the `onPermissionRequest` callback, and the bridge
   itself is operation-based.
-- **Runtime partitions.** Ordinary ACP-first work uses one unbound runtime. A
-  bound attachment uses one runtime per `(resolved agent command, executable
+- **Runtime partitions.** Ordinary ACP-first work uses one unbound runtime per
+  session lifetime, so durable and invocation-scoped work never share the store a
+  runtime carries. A bound attachment uses one runtime per `(resolved agent command, executable
   build binding)`, created with the observed path in `agentProcessEnv` and torn
   down when its last handle closes. Acquiring a runtime to ensure through claims
   the partition, and an `ensureSession()` that rejects gives that claim up — so
@@ -786,7 +903,9 @@ none.
   vendored ACP runtime; `packages/acp/vendor/acpx/PROVENANCE.md` records why it
   exists and what removes it.
 - **Host-owned dependencies.** `AcpxProviderDependencies` carries what a host,
-  rather than a document, decides: `advertiseNativeLaunch` and
+  rather than a document, decides: `sessionLifetime` says how long this host can
+  continue one agent's sessions, and is asked before anything else;
+  `advertiseNativeLaunch` and
   `advertiseClientNativeAttachment` are two separate lists, and a profile whose
   session authority differs from ordinary `xmd run` states both explicitly
   rather than inheriting the package's defaults by omission;
@@ -803,4 +922,5 @@ none.
   them defaults to the `xmd run` behavior above.
 - **Teardown.** Provider-scope teardown cancels active turns and closes each
   distinct runtime handle with an all-settled strategy, throwing a single error or
-  an `AggregateError` from the provider scope.
+  an `AggregateError` from the provider scope. An invocation-scoped session's
+  handle is one of them, and its store becomes unreachable with the provider.

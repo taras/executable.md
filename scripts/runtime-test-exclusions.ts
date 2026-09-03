@@ -54,6 +54,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "packages/cli/tests/devin-agent.test.ts",
+    reason:
+      "runs the real `xmd run` Deno source entrypoint as a subprocess against an ACP agent it installs on the child's PATH, and both are started as `<execPath> run --allow-all <module>` — an argument vector only the Deno CLI understands; the provider decisions it fences are proved portably by Tier AI",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "scripts/tests/adapter-npm-package.test.ts",
     reason:
       "builds packages/acp with dnt before driving the artifact under Node, and that build is spawned as `<execPath> run -A scripts/build-npm.ts` — an argument vector only the Deno CLI understands; the materialization it then proves is covered portably by Tier AM",

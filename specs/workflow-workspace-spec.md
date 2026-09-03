@@ -2144,6 +2144,18 @@ owns a session, how it was constructed and which executable build accepted its
 identity; a workflow session is named by the row below instead, and an agent
 served here is served over ACP alone. Composing the two is a separate design.
 
+**Only an agent whose sessions can be continued is served here.** Continuing a
+run reattaches the session its row names, so an agent this host serves only for
+the invocation that asked can hold no workflow session at all. The profile
+declares that to the provider as its session lifetime, and the provider refuses
+from agent resolution — ahead of adapter preparation, the availability probe,
+any placement and any turn. That is true on the run's first use of the agent and
+on a partial continuation whose next unrecorded operation is a Prompt: the
+completed work replays from the journal, and the live Prompt that follows it
+refuses without contacting anything. The refusal names the run's own
+continuation as the reason and points at `xmd run`, which is where such an agent
+is supported.
+
 **The mapping lives in the run.** It is a row in the run's own database,
 committed in the run's own transaction — a mapping that could commit while the
 run did not would describe a session the run never had. The table is part of the

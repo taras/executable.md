@@ -850,6 +850,42 @@ describe(
       expect("PlanExecutionConfig" in cliModule).toBe(false);
     });
 
+    it("PS11: an agent whose sessions end with the invocation writes no Plan", function* () {
+      // Both spellings, because the point is that naming the conversation
+      // changes nothing: a name asks for a conversation to return to, and this
+      // agent has none to return to.
+      for (const session of [undefined, "release"]) {
+        yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+          const harness = createPlanHarness({ authorshipRoot });
+
+          const { value: code, lines } = yield* reported(() =>
+            runPlan(
+              {
+                ...planning(dir, "out.md", session),
+                stack: { ...STACK, defaultAgent: "devin" },
+              },
+              harness.deps,
+            ),
+          );
+
+          expect(code).toBe(1);
+          expect(lines.join("\n")).toContain("did not provide an Agent context");
+          // Settled before the profile exists, so every phase the provider owns
+          // is at zero and no artifact reached either sink. The catalog is not
+          // one of them: `runPlan` renders it before it asks for an Agent
+          // context, so it is built and then thrown away with the invocation.
+          expect({
+            runtimes: harness.fake.created.length,
+            started: harness.fake.started,
+            turns: harness.fake.prompts.length,
+            reviews: harness.reviews.length,
+          }).toEqual({ runtimes: 0, started: false, turns: 0, reviews: 0 });
+          expect(yield* exists(join(dir, "out.md"))).toBe(false);
+          expect(yield* until(readdir(authorshipRoot))).toEqual([]);
+        });
+      }
+    });
+
     it("PS12: the shipped documentation states what each command does", function* () {
       // The defect this catches is prose, and prose is what a person reads
       // before they type anything: a page still promising `xmd plan --run`

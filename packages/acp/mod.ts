@@ -25,6 +25,7 @@ export type {
   AcpxProviderDependencies,
   AcpxSessionContext,
   AcpxSessionIdentity,
+  AcpxSessionLifetime,
   AcpxSessionPlacement,
   AcpxSessionPolicy,
   SessionRouteContext,
