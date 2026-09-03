@@ -559,9 +559,10 @@ describe(
         // into a process group of its own, so the command belongs to the
         // running CLI, to be reaped while it unwinds — and a command written to
         // survive that unwinding survives it. The launcher owns the CLI's group
-        // and nothing else; this suite cleans up the escapee itself.
+        // and nothing else; this row owns the escapee, and ends it on the way
+        // out however the assertions below turn out.
         const [escaped, owned] = yield* waitForIds(idsPath);
-        yield* ensure(() => killGroup(escaped));
+        yield* ensure(() => endEscapedGroup(escaped));
 
         const at = Date.now();
         yield* run.halt();
@@ -816,6 +817,26 @@ function isReachable(target: number): boolean {
   }
 }
 
+/**
+ * End the process group this row deliberately let escape, and wait for it.
+ *
+ * Registered with `ensure`, so it runs whether the assertions passed, failed or
+ * were cancelled. A signal that was sent is not a process that stopped, so this
+ * waits for the group to become unreachable and fails the row when it cannot
+ * establish that — a suite that left something running would otherwise say so
+ * nowhere.
+ */
+function* endEscapedGroup(leader: number): Operation<void> {
+  if (!isReachable(-leader)) {
+    return;
+  }
+  killGroup(leader);
+  if (!(yield* waitForGroupExit(leader))) {
+    throw new Error(`the escaped process group ${leader} did not stop after SIGKILL`);
+  }
+}
+
+/** Send the signal. Establishing that it worked is `endEscapedGroup`'s job. */
 function killGroup(leader: number): void {
   try {
     process.kill(-leader, "SIGKILL");

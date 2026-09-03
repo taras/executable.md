@@ -10714,6 +10714,10 @@ the process.
 | SI9b | Adapter cleanup | The real stream adapter's `data`, `end`, `close` and `error` listeners and its flowing state belong to the read's scope: cancelling it removes all four and pauses the stream |
 | SI10 | Help boundary | Generic run help calls the reader zero times; selected-root help calls it once, describes the properties `<stdin>` declares, and installs no provider and creates no journal. Proven for the controlled call count and again through a real pipe |
 | SI11 | Ordinary result behavior | A value root read from stdin puts its JSON result alone on stdout, with the rendered body on stderr under `--verbose` |
+| SI12 | Cancelling the launcher | A cancelled run whose command ignores `SIGTERM` returns only once the process group the launcher owns has reached its own `close`: teardown asks the group to terminate, escalates when the grace period passes, and is measurably neither instant nor unbounded. The command the run deliberately let escape is the test's to end, not the launcher's |
+| SI13 | Two roots, either order | A path written with `-`, with `-- -`, or with `-#Section` refuses, and so does each of them written the other way round, before standard input is read and before either candidate is inspected or run — neither marker is rendered and neither document's effect reaches the directory |
+| SI14 | One root written twice | Two `-` sentinels, and two `-#Section` references, each refuse as one root supplied more than once, with neither copy run |
+| SI15 | What is not a document argument | An option's value (`--journal -`), another command's argument (`xmd test -`), `--eval -` and an option nothing defines each keep the meaning they had: none is recovered as a root, none produces a conflict, and none executes what was piped in |
 
 The sentinel's negative controls belong to Tier IE, where the file and `--eval`
 roots they are held against live, and each of them supplies real standard input
