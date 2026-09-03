@@ -13,7 +13,7 @@
  * middleware installation) execute before children's code blocks.
  */
 
-import { ensure, Err, scoped, useScope, withResolvers } from "effection";
+import { ensure, Err, Ok, scoped, useScope, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import type {
   FunctionComponent,
@@ -57,9 +57,17 @@ import {
   strayCaseMessage,
   strayElseMessage,
   strayStructuralMessage,
+  strayTerminalMessage,
   switchStructure,
+  terminalColumns,
+  terminalColumnsMissingMessage,
+  terminalGridStructure,
+  terminalTitle,
+  terminalTitleMissingMessage,
 } from "./structural-rules.ts";
-import type { StructuralViolation, SwitchCase } from "./structural-rules.ts";
+import type { StructuralViolation, SwitchCase, TerminalPane } from "./structural-rules.ts";
+import { terminalGridLayout } from "./terminal-grid.ts";
+import type { PlacedPane } from "./terminal-grid.ts";
 import {
   asBindingViolation,
   asExpressionViolation,
@@ -1170,6 +1178,28 @@ function* expandListSegments(
           break;
         }
 
+        if (segment.name === "Terminal.Grid") {
+          // No raise() here, like the branches above: expandTerminalGrid
+          // reports every error it creates.
+          yield* expandTerminalGrid(segment, result);
+          break;
+        }
+
+        if (segment.name === "Terminal") {
+          // A well-placed <Terminal> is consumed by its <Terminal.Grid> and
+          // never expanded on its own. Reaching this branch means the pane sits
+          // outside every grid, so it names no component and is diagnosed
+          // rather than resolved from the filesystem.
+          result.push(
+            yield* raise({
+              type: "error",
+              message: positioned(strayTerminalMessage(), segment),
+              source: "Terminal",
+            }),
+          );
+          break;
+        }
+
         if (segment.name === "Break") {
           result.push(...(yield* expandBreak(segment, loop)));
           break;
@@ -2022,6 +2052,128 @@ function* expandSwitch(
     checkedFailures,
     authority,
     returnBody,
+  );
+}
+
+function terminalGridError(segment: ComponentElement, message: string): ErrorSegment {
+  return { type: "error", message: positioned(message, segment), source: "Terminal.Grid" };
+}
+
+function terminalPaneError(segment: ComponentElement, message: string): ErrorSegment {
+  return { type: "error", message: positioned(message, segment), source: "Terminal" };
+}
+
+/**
+ * The value one prop of a terminal-grid construct produced, or why evaluating
+ * it failed. A missing prop is `undefined`, which is also what an expression
+ * evaluating to `undefined` leaves behind (§6.5) — absence either way, and the
+ * caller says what its construct requires instead.
+ */
+function* resolveStructuralProp(
+  segment: ComponentElement,
+  construct: string,
+  prop: string,
+): Operation<Result<Json | undefined>> {
+  const expression = segment.expressions[prop];
+  if (expression === undefined) {
+    return Ok(segment.props[prop]);
+  }
+  try {
+    const resolved = yield* resolveExpressionProps(
+      {},
+      { [prop]: expression },
+      construct,
+      segment.projectedEnv,
+    );
+    return Ok(resolved[prop]);
+  } catch (error) {
+    return Err(error instanceof Error ? error : new Error(String(error)));
+  }
+}
+
+/**
+ * Open the grid the author wrote (spec §6.21).
+ *
+ * The whole layout is decided before anything opens: the panes and their forms
+ * from source, then `columns` and each pane's `title` from the values the
+ * document computes. Only once the concrete grid is complete is a terminal
+ * provider anything's business — and this build has none, so the grid refuses
+ * there. Nothing beneath a pane has expanded and no shell has started when it
+ * does, which is what makes the refusal a closed one rather than a partial grid
+ * left behind.
+ */
+function* expandTerminalGrid(segment: ComponentElement, owner: Segment[]): Operation<void> {
+  const structure = terminalGridStructure(segment);
+  if (structure.violations.length > 0) {
+    for (const violation of structure.violations) {
+      owner.push(yield* raise(structuralErrorSegment(violation, segment)));
+    }
+    return;
+  }
+
+  const columnsValue = yield* resolveStructuralProp(segment, "Terminal.Grid", "columns");
+  if (!columnsValue.ok) {
+    owner.push(yield* raise(terminalGridError(segment, columnsValue.error.message)));
+    return;
+  }
+  if (columnsValue.value === undefined) {
+    owner.push(yield* raise(terminalGridError(segment, terminalColumnsMissingMessage())));
+    return;
+  }
+  const columns = terminalColumns(columnsValue.value);
+  if (!columns.ok) {
+    owner.push(yield* raise(terminalGridError(segment, columns.error.message)));
+    return;
+  }
+
+  const placed: PlacedPane[] = [];
+  for (const pane of structure.panes) {
+    const title = yield* resolvePaneTitle(pane);
+    if (!title.ok) {
+      owner.push(yield* raise(terminalPaneError(pane.element, title.error.message)));
+      return;
+    }
+    placed.push({ title: title.value, form: pane.form });
+  }
+
+  const layout = terminalGridLayout(columns.value, placed);
+  owner.push(
+    yield* raise({
+      type: "error",
+      message: positioned(noTerminalProviderMessage(), segment),
+      source: "Terminal.Grid",
+      // The grid the author asked for, carried beside the sentence so an
+      // assertion is about the layout that was derived rather than about the
+      // wording of a refusal.
+      cause: {
+        layout: {
+          columns: layout.columns,
+          rows: layout.rows,
+          cells: layout.cells.map((cell) => ({ ...cell })),
+        },
+      },
+    }),
+  );
+}
+
+/** The label one pane displays, from the value its own `title` prop produced. */
+function* resolvePaneTitle(pane: TerminalPane): Operation<Result<string>> {
+  const value = yield* resolveStructuralProp(pane.element, "Terminal", "title");
+  if (!value.ok) {
+    return value;
+  }
+  if (value.value === undefined) {
+    return Err(new Error(terminalTitleMissingMessage()));
+  }
+  return terminalTitle(value.value);
+}
+
+/** What a complete grid says on a host where nothing can open one. */
+function noTerminalProviderMessage(): string {
+  return (
+    "no terminal provider opened this grid. A host installs the terminal-grid capability " +
+    "explicitly, and this one installs none, so no pane expanded its content and no default " +
+    "shell started."
   );
 }
 
