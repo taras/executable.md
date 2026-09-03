@@ -8655,6 +8655,35 @@ acknowledges. The self-closing shell does the same. The latch is absent for a
 root launch and appears in no prop, binding, contextual API, public request,
 provider return, process result, or durable record.
 
+For a paired pane, core closes the pane-scoped native launcher over the
+composite and that pane's authored ordinal. After claim admission and the pane
+output flush, delegation reaches the composite's required provider-neutral
+operation:
+
+```ts
+launch(
+  ordinal: number,
+  request: NativeLaunchRequest,
+  spawned: () => void,
+): Operation<NativeLaunchOutcome>;
+```
+
+The request is the exact native command vector, working directory, and
+environment supplied by the Agent provider. The ordinal stays in core's live
+closure and enters no native request, Agent request, session key, construction
+route, durable phase, result, or diagnostic. Native-launch middleware installed
+nearer the authored launch may observe, wrap, refuse, or short-circuit before it
+delegates. The pane launcher is the physical-terminal endpoint: it calls the
+composite operation and never delegates to the root foreground launcher. A
+provider unable to execute the pane request refuses explicitly instead of
+falling back to the wrong terminal. A root `<Session.Launch>` keeps the existing
+root foreground route unchanged.
+
+The composite invokes `spawned` only for the child's runtime spawn event. Its
+separate `shell()` operation remains the self-closing-pane path because that
+operation derives the executable from live host policy rather than accepting an
+authored or Agent-provided native launch request.
+
 When a persistent process owns a pane endpoint, the launcher sends the exact
 argv vector, working directory, and environment over the provider's private
 authenticated channel to that pane owner. The presentation provider's command
@@ -10798,6 +10827,7 @@ test derives a core result from a provider identifier.
 | TG17 | Replay divergence and retained shape | A resolved layout change — `columns` or a `title`, reached through a prop-borne value, because a continuation executes the retained root — refuses before the lease and before provider contact, with zero provider observation. Pane count, order and form cannot differ under a fixed retained root, so they are proved retained and honoured rather than refused: the complete authored structure appears in the record, and a continuation whose supplied file differs in count, order or form opens the retained structure rather than the file's. Retained layout, close kind and pane outcomes contain no provider command, socket, process, session, window or pane identifier, path, argv, environment or terminal bytes |
 | TG18 | Provider neutrality | The controlled non-tmux provider passes TG1–TG17 and TG19; the tmux adapter prepares one hidden invocation-private server with authenticated persistent pane workers, transmits exact child creation outside tmux parsing, applies explicit row-major layout, distinguishes visible detach from control loss and server stop, attaches only after runtime spawn readiness, and satisfies TG14 without leaking provider identifiers; Node and Bun validate the same document and refuse before pane start with no provider installed |
 | TG19 | Reader close crossed with parent cancellation | A controlled live pane enters a signal-held finalizer after reader close takes effect. Parent cancellation begins while teardown is blocked; releasing the finalizer lets pane and provider teardown complete, retains the pane as `closed` and the grid with its reader-close result, and only then delivers cancellation to the parent. A continuation neither contacts the provider nor enters pane work, does not hang, and proceeds from the retained grid outcome. Provider-resource and following-sibling observations prove both sides of the ordering; no elapsed duration is evidence |
+| TG20 | Pane-native physical endpoint | A paired pane's native launch passes through nearer launcher middleware and then the required composite operation for its authored ordinal. Production tmux evidence observes the exact argv, cwd, and environment at that pane's authenticated worker while a root-foreground-launcher sentinel is never entered. Distinct pane workers accept concurrent launches. Cancellation settles only after worker-reported child settlement and pane-terminal quiescence. A root launch still enters the root foreground launcher unchanged, and a composite unable to execute a pane launch refuses without fallback |
 
 ### Tier CR — Component registration and resolution
 
