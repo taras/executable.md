@@ -80,7 +80,20 @@ interface Slot {
  * temporary directory is world-writable still gets a private grid, because the
  * mode is set on the directory this creates rather than inherited from it.
  */
-export function usePaneChannels(count: number): Operation<PaneChannels> {
+export function usePaneChannels(
+  count: number,
+  options: {
+    onClosed?: () => void;
+    /**
+     * Called as the directory is removed, with how many of the sockets and
+     * servers had actually reported closing by then.
+     *
+     * Counted from their own `close` events rather than from having asked, so a
+     * caller can tell "closed" from "told to close".
+     */
+    onRemoved?: (facts: { closed: number; total: number }) => void;
+  } = {},
+): Operation<PaneChannels> {
   return resource(function* (provide) {
     // Directly under `$TMPDIR`: a socket path is capped at 104 bytes, and a
     // directory named after a repository path spends most of that before the
@@ -88,7 +101,13 @@ export function usePaneChannels(count: number): Operation<PaneChannels> {
     const directory = path.join(os.tmpdir(), `xmd-grid-${randomBytes(6).toString("hex")}`);
     yield* ensureDir(directory);
     yield* until(chmod(directory, 0o700));
-    yield* ensure(() => rm(directory, { recursive: true, force: true }));
+    // Registered first, so it runs last: the directory goes only after every
+    // socket and server below has actually closed. Removing it while a server
+    // still listened would leave a socket bound to a path nothing can name.
+    yield* ensure(function* () {
+      options.onRemoved?.({ closed: closedCount, total: closable });
+      yield* rm(directory, { recursive: true, force: true });
+    });
 
     const tokens = new Map<number, string>();
     const slots = new Map<number, Slot>();
@@ -96,14 +115,26 @@ export function usePaneChannels(count: number): Operation<PaneChannels> {
     const live = new Set<Socket>();
     const refusals: string[] = [];
     const arrivals = createSignal<{ ordinal: number; socket: Socket }, never>();
+    /** Closures that have actually happened, by their own events. */
+    let closedCount = 0;
+    let closable = 0;
 
-    yield* ensure(() => {
+    // Awaited, not asked for. `destroy()` and `close()` are requests; what the
+    // directory's removal has to wait for is the closures themselves.
+    yield* ensure(function* () {
+      const closings: Operation<void>[] = [];
       for (const socket of live) {
+        closings.push(closed(socket));
         socket.destroy();
       }
       for (const server of servers) {
+        closings.push(shut(server));
         server.close();
       }
+      for (const closing of closings) {
+        yield* closing;
+      }
+      options.onClosed?.();
     });
 
     // Subscribed before a single server listens, so no arrival is missed.
@@ -118,10 +149,18 @@ export function usePaneChannels(count: number): Operation<PaneChannels> {
 
       const server = net.createServer((socket) => {
         live.add(socket);
-        socket.once("close", () => live.delete(socket));
+        closable++;
+        socket.once("close", () => {
+          live.delete(socket);
+          closedCount++;
+        });
         arrivals.send({ ordinal, socket });
       });
       servers.push(server);
+      closable++;
+      server.once("close", () => {
+        closedCount++;
+      });
       const listening = withResolvers<void>();
       server.once("error", (error: Error) => listening.reject(error));
       server.listen(paneSocketPath(directory, ordinal), () => listening.resolve());
@@ -187,6 +226,28 @@ export function usePaneChannels(count: number): Operation<PaneChannels> {
       refusals: () => [...refusals],
     });
   });
+}
+
+/** Settle once this socket has closed, whether or not it already had. */
+function closed(socket: Socket): Operation<void> {
+  const done = withResolvers<void>();
+  if (socket.destroyed) {
+    done.resolve();
+  } else {
+    socket.once("close", () => done.resolve());
+  }
+  return done.operation;
+}
+
+/** Settle once this server has stopped listening. */
+function shut(server: Server): Operation<void> {
+  const done = withResolvers<void>();
+  if (!server.listening) {
+    done.resolve();
+  } else {
+    server.once("close", () => done.resolve());
+  }
+  return done.operation;
 }
 
 /** A connection that has said nothing for long enough to be nobody. */

@@ -38,12 +38,37 @@ export interface Tmux {
   argv(args: readonly string[]): readonly string[];
 }
 
+/**
+ * One tmux command did not work.
+ *
+ * The message names the command and nothing else. Not the arguments — they
+ * carry the socket path, the session name, pane and client identifiers and the
+ * worker's private directory. Not the exit status text — tmux writes paths into
+ * it. A provider's private topology is private on every path out of it,
+ * including the ones only taken when something has gone wrong, which are
+ * exactly the paths a diagnostic is read on.
+ */
 export class TmuxCommandFailed extends Error {
   override name = "TmuxCommandFailed";
-  constructor(args: readonly string[], stderr: string, code: number | undefined) {
-    // The command, not the socket: a diagnostic names what was asked for and
-    // never where this invocation's private server lives.
-    super(`tmux ${args.join(" ")} failed (${code ?? "signal"}): ${stderr.trim()}`);
+  constructor(readonly command: string) {
+    super(`the terminal provider's "${command}" step failed`);
+  }
+}
+
+/**
+ * A grid could not be proved taken down.
+ *
+ * Distinct from a command that failed: this is the provider having done
+ * everything it can and still being unable to say that nothing is left running.
+ * The document does not continue past it.
+ */
+export class TerminalTeardownFailed extends Error {
+  override name = "TerminalTeardownFailed";
+  constructor(unproved: string) {
+    super(
+      `the terminal grid could not be proved torn down: ${unproved}. The document ` +
+        `stops rather than continuing while a terminal may still be held.`,
+    );
   }
 }
 
@@ -70,7 +95,7 @@ export function tmuxAt(socket: string, env: Record<string, string>): Tmux {
     *run(args) {
       const result = yield* exec("tmux", { arguments: [...base, ...args], env }).join();
       if (result.code !== 0) {
-        throw new TmuxCommandFailed(args, result.stderr, result.code);
+        throw new TmuxCommandFailed(args[0] ?? "");
       }
       return result.stdout.trim();
     },
