@@ -30,9 +30,10 @@ import {
   DEFAULT_ADAPTER_ROOT,
   hostAcpDependencies,
   resolveAgentStack,
+  workflowAgentSessionLifetime,
 } from "../src/agent-stack.ts";
 import type { AgentStack } from "../src/agent-stack.ts";
-import { authorshipDependencies } from "../src/authorship-profile.ts";
+import { authorshipDependencies, planAgentContext } from "../src/authorship-profile.ts";
 import type { AuthorshipProviderInputs } from "../src/authorship-profile.ts";
 import { runPlan } from "../src/plan.ts";
 import { AGENT, createPlanHarness, useWorkingDirectory } from "./support/plan-harness.ts";
@@ -213,6 +214,72 @@ describe("Tier AE — embedded adapters on the run and plan paths", () => {
       expect(code).toBe(0);
       expect(yield* exists(join(dir, "plan.md"))).toBe(true);
     });
+  });
+
+  it("AE7: the run path resolves Devin to the one command that speaks ACP", function* () {
+    const root = adapterRoot();
+    const dependencies = hostAcpDependencies(stackWith(createEmbeddedAdapters(root)));
+    const registry = dependencies.agentRegistry;
+    if (registry === undefined) {
+      throw new Error("the run path handed its provider no agent registry");
+    }
+
+    // ACPX's registry has no Devin entry, so the bare name falls through to the
+    // interactive CLI, which speaks no protocol. This host states the exact
+    // command ACPX recognizes and answers as Windsurf.
+    expect(registry.resolve("devin")).toBe("devin acp");
+    // Once, beside the names that were already there rather than instead of
+    // them: an overlay, like this build's own adapters underneath it.
+    expect(registry.list().filter((agent) => agent === "devin")).toEqual(["devin"]);
+    for (const agent of EMBEDDED) {
+      expect(registry.resolve(agent)).toBe(createEmbeddedAdapters(root).command(agent));
+    }
+    expect(registry.resolve("gemini")).not.toContain(root);
+    expect(registry.resolve("gemini")).not.toBe("devin acp");
+  });
+
+  it("AE8: the run path declares Devin invocation-scoped and everything else durable", function* () {
+    const dependencies = hostAcpDependencies(stackWith(createEmbeddedAdapters(adapterRoot())));
+    const declare = dependencies.sessionLifetime;
+    if (declare === undefined) {
+      throw new Error("the run path told its provider nothing about session lifetimes");
+    }
+
+    // The decision is the host's, and it is made from the agent name alone —
+    // before an adapter is prepared, before a probe, and before any store.
+    expect(declare("devin")).toEqual({ ok: true, value: "invocation" });
+    for (const agent of [...EMBEDDED, "gemini"]) {
+      expect(declare(agent)).toEqual({ ok: true, value: "durable" });
+    }
+  });
+
+  it("AE9: a workflow attachment refuses Devin and keeps every other agent durable", function* () {
+    // The other half of the same decision, and the reason it is a `Result`: a
+    // workflow continues its conversation across executions, so an agent whose
+    // sessions end with the invocation cannot serve one at all.
+    const refused = workflowAgentSessionLifetime("devin");
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.error.message).toContain("invocation that created it");
+    }
+    for (const agent of [...EMBEDDED, "gemini"]) {
+      expect(workflowAgentSessionLifetime(agent)).toEqual({ ok: true, value: "durable" });
+    }
+  });
+
+  it("AE10: an invocation-scoped default agent gives a Plan no Agent context", function* () {
+    const adapters = createEmbeddedAdapters(adapterRoot());
+    // Settled before a directory, a provider or a session exists, which is what
+    // makes `<Plan>` and `xmd plan` refuse before either contacts Devin.
+    const refused = planAgentContext({ ...stackWith(adapters), defaultAgent: "devin" });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.error.message).toBe(
+        "The acpx provider did not provide an Agent context for <Plan>. No Plan was returned.",
+      );
+    }
+    // And a durable default still has one.
+    expect(planAgentContext(stackWith(adapters)).ok).toBe(true);
   });
 
   it("AE5: a settled stack carries this host's own adapter root", function* () {

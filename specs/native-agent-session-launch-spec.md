@@ -132,6 +132,15 @@ interface AgentLaunchRequest {
 }
 ```
 
+An agent whose sessions this host serves only for the invocation that asked has
+no durable identity for a native UI to be handed or to resume. A launch naming
+one is retained as an `unsupported-capability` refusal at the start of the
+provider's launch operation — before placement, ownership, an adapter lookup, an
+ensure, a detach or any native process work — and a `<Session>` wrapped around
+it stays inert and local before the same refusal. That answer is the host's
+session-lifetime declaration, read from the resolved agent name, so nothing is
+probed to reach it (see [Session lifetime](./acp-client-spec.md)).
+
 `launchAgentSession(instructions, options)` is the canonical operation and the
 only owner of what a launch settles on: it reserves the terminal, normalizes
 the request, mints its durable identity, retains every phase, and derives the
@@ -1119,7 +1128,10 @@ Focused tests prove:
     what it answers with before acknowledging quiescence, and a close that
     failed releases nothing and withholds quiescence; and
 23. a canonical version parse accepts exactly one matching line, and refuses
-    zero or several without repeating the output.
+    zero or several without repeating the output; and
+24. a launch of an invocation-scoped agent is refused as
+    `unsupported-capability` with the doctor, ensure, turn and native-process
+    counters at zero.
 
 The authored half of this is one executable Markdown document,
 `packages/test-agent/src/NativeSessionLaunch.test.md`, run whole. It authors the
@@ -1288,7 +1300,10 @@ Implementation review checks these frozen invariants:
     separate trusted-host choices, and neither is inferred from the other.
 22. A released V1 route and a completed legacy journal remain readable, and
     neither authorizes ACP attachment or incomplete live replay.
-23. A failed acquisition retains no partition and no live path; a partition is
+23. An agent whose sessions end with the invocation is refused before placement,
+    ownership, adapter lookup, ensure, detach or any native process work, from
+    the host's lifetime declaration rather than from anything the agent said.
+24. A failed acquisition retains no partition and no live path; a partition is
     evicted only when it holds no handle and no work in flight; every
     handle-producing path enters one ownership account bound to its creator the
     moment its handle exists; a cancellation observes and settles an ensure it

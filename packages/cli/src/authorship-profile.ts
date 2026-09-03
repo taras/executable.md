@@ -51,7 +51,7 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { API } from "@executablemd/runtime";
 import { FormOpener } from "@executablemd/web";
 
-import { hostAcpDependencies } from "./agent-stack.ts";
+import { hostAcpDependencies, invocationScopedAgent } from "./agent-stack.ts";
 import type { AuthorshipStack } from "./agent-stack.ts";
 import { PLAN_COMMAND_DOCUMENT, readPackagedDocument } from "./packaged-document.ts";
 
@@ -218,6 +218,16 @@ export function planAgentContext(
     return Err(new Error(NO_AGENT_CONTEXT));
   }
   if (stack.provider !== "acpx") {
+    return Err(new Error(noAgentContextFrom(stack.provider)));
+  }
+  // Before a directory, a provider or a session exists, and therefore before
+  // anything could be placed or spawned. Writing a Plan is a conversation a
+  // caller may name and return to, so an agent whose sessions end with the
+  // invocation cannot hold one — and this is the one path both `xmd plan` and
+  // `<Plan>` in an ordinary run settle their context through. An explicit
+  // `--session` or `<Plan session>` names a conversation that still could not
+  // be continued, so it does not change the answer.
+  if (invocationScopedAgent(stack.defaultAgent)) {
     return Err(new Error(noAgentContextFrom(stack.provider)));
   }
   return Ok({

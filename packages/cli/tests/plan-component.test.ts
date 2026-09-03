@@ -306,6 +306,59 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     });
   });
 
+  it("PC27: an agent whose sessions end with the invocation writes no Plan", function* () {
+    yield* useWorkingDirectory(function* () {
+      const root = yield* authorshipRoot();
+      const run = yield* runDocument({
+        source: ['<Plan as="approved">Write a program.</Plan>', ""].join("\n"),
+        root,
+        reviews: [],
+        stack: {
+          provider: "acpx",
+          defaultAgent: "devin",
+          permissionMode: "deny-all",
+          adapters: ADAPTERS,
+        },
+      });
+
+      // A Plan is a conversation about text that a caller may name and return
+      // to, and an agent whose sessions end with the invocation can hold none.
+      // The provider that would have served it is named, as it is for any other
+      // configuration it cannot serve.
+      expect(run.failure).toBe(
+        "The acpx provider did not provide an Agent context for <Plan>. No Plan was returned.",
+      );
+      // Before placement: no directory was made, and no turn was taken.
+      expect(run.leftover).toEqual([]);
+      expect(run.harness.fake.prompts).toEqual([]);
+    });
+  });
+
+  it("PC28: naming the session does not change that answer", function* () {
+    yield* useWorkingDirectory(function* () {
+      const root = yield* authorshipRoot();
+      const harness = yield* planDeclarationHarness({
+        surface: "component",
+        authorshipRoot: root,
+        stack: { provider: "acpx", defaultAgent: "devin", adapters: ADAPTERS },
+      });
+      const run = yield* runDocument({
+        source: ['<Plan as="approved" session="release">Write a program.</Plan>', ""].join("\n"),
+        root,
+        harness,
+        reviews: [],
+      });
+
+      // A named session asks for a conversation to be continued later, which is
+      // exactly what this agent cannot do — so naming one narrows nothing.
+      expect(run.failure).toBe(
+        "The acpx provider did not provide an Agent context for <Plan>. No Plan was returned.",
+      );
+      expect(run.leftover).toEqual([]);
+      expect(run.harness.fake.prompts).toEqual([]);
+    });
+  });
+
   it("PC6: the private capabilities resolve nowhere a document can write", function* () {
     yield* useWorkingDirectory(function* () {
       for (const name of ["PlanInputs", "PlanAuthorship", "CheckDraft", "AdmitPlan"]) {

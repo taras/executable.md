@@ -6,13 +6,14 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, sleep, spawn, until, withResolvers } from "effection";
-import type { Operation } from "effection";
+import { Ok, scoped, sleep, spawn, until, withResolvers } from "effection";
+import type { Operation, Result } from "effection";
 import { Agent, Config } from "@executablemd/core";
 import type {
   AgentLaunchRequest,
   AgentPromptEvent,
   AgentProviderAuthority,
+  PreparedLaunchRecord,
   PromptOptions,
   Session,
 } from "@executablemd/core";
@@ -23,8 +24,10 @@ import {
 } from "../src/provider.ts";
 import { TOOL_PERMISSION_REFUSED } from "../src/permission-bridge.ts";
 import type {
+  AcpxProviderDependencies,
   AcpxSessionContext,
   AcpxSessionIdentity,
+  AcpxSessionLifetime,
   AcpxSessionPlacement,
   AcpxSessionPolicy,
 } from "../src/provider.ts";
@@ -39,7 +42,12 @@ import {
   useFlatWorld,
   useGitWorld,
 } from "./helpers.ts";
-import type { AcpPermissionRequest, AcpRuntimeTurnResult } from "../src/acpx-runtime.ts";
+import type {
+  AcpPermissionRequest,
+  AcpRuntimeTurnResult,
+  AcpSessionRecord,
+  AcpSessionStore,
+} from "../src/acpx-runtime.ts";
 import type { FakeRuntimeHarness } from "./helpers.ts";
 
 const CWD = "/work";
@@ -1778,5 +1786,504 @@ describe("Tier APC — Prompt checkpoint metadata", () => {
     // turn the document is about to be told failed.
     expect(events.at(-1)).toMatchObject({ type: "terminal", status: "failed" });
     expect(checkpoints).toEqual([]);
+  });
+});
+
+/**
+ * Tier AI — invocation-scoped Agent sessions
+ * (specs/acp-client-spec.md §Session lifetime).
+ *
+ * A host declares how long it can continue one agent's sessions, and Devin is
+ * the agent the ordinary run host declares `invocation` for. What this tier is
+ * about is everything that follows from that declaration: which store a session
+ * reads and writes, which runtime it goes through, that a live conversation is
+ * reused within one invocation and reachable from no other, and that every
+ * operation needing durable continuity refuses before Devin is contacted.
+ *
+ * The lifetime is stated to the provider exactly as the CLI states it, so a
+ * case reads this provider's own decision rather than a substitute for one.
+ */
+
+const DEVIN = "devin";
+const DEVIN_COMMAND = "devin acp";
+
+/** The ordinary run host's declaration, as `agent-stack.ts` writes it. */
+function declaredLifetimes(agentName: string): Result<AcpxSessionLifetime> {
+  return Ok(agentName === DEVIN ? "invocation" : "durable");
+}
+
+/** A durable store that remembers every key it was asked about. */
+interface WatchedStore extends AcpSessionStore {
+  records: Map<string, AcpSessionRecord>;
+  loaded: string[];
+  saved: string[];
+}
+
+function watchedStore(): WatchedStore {
+  const inner = makeStore();
+  const loaded: string[] = [];
+  const saved: string[] = [];
+  return {
+    records: inner.records,
+    loaded,
+    saved,
+    load(sessionId: string): Promise<AcpSessionRecord | undefined> {
+      loaded.push(sessionId);
+      return inner.load(sessionId);
+    },
+    save(record: AcpSessionRecord): Promise<void> {
+      saved.push(record.acpxRecordId);
+      return inner.save(record);
+    },
+  };
+}
+
+function* installLifetimeProvider(
+  harness: FakeRuntimeHarness,
+  store: AcpSessionStore,
+  authority: AgentProviderAuthority = stubAuthority(),
+  extra: Partial<AcpxProviderDependencies> = {},
+): Operation<void> {
+  yield* useFlatWorld(CWD);
+  const factory = createAcpxProvider({
+    createRuntime: harness.create,
+    sessionStore: store,
+    agentRegistry: makeRegistry({ [DEVIN]: DEVIN_COMMAND, codex: "codex-cmd" }),
+    sessionLifetime: declaredLifetimes,
+    ...extra,
+  });
+  yield* factory({ defaultAgent: DEVIN, permissionMode: "deny-all" }, authority);
+}
+
+/** Which created runtime each session store belongs to, by index. */
+function storesOf(harness: FakeRuntimeHarness): AcpSessionStore[] {
+  return harness.createdOptions.map((options) => options.sessionStore);
+}
+
+/**
+ * The two agent names one Devin command is reachable through.
+ *
+ * ACPX resolves an unknown agent name to the name itself, so a document that
+ * writes the raw command reaches the same child as the canonical name — while
+ * this host declares only the canonical name invocation-scoped, because a
+ * lifetime is never inferred from a command. That is the production shape, not
+ * a contrivance: `agent-stack.ts` overlays exactly `devin`.
+ */
+const DEVIN_RAW = "devin acp";
+
+function* installAliasedProvider(
+  harness: FakeRuntimeHarness,
+  store: AcpSessionStore,
+  observed: { established: AcpxSessionIdentity[]; routes: string[] },
+  /** Which of the two names places the Session, as an enclosing `<Agent>` decides. */
+  defaultAgent: string,
+  /** What this host declares for each name. The production split by default. */
+  lifetimes: (agentName: string) => Result<AcpxSessionLifetime> = declaredLifetimes,
+): Operation<void> {
+  yield* useFlatWorld(CWD);
+  const factory = createAcpxProvider({
+    createRuntime: harness.create,
+    sessionStore: store,
+    // Both names, one command.
+    agentRegistry: makeRegistry({ [DEVIN]: DEVIN_COMMAND, [DEVIN_RAW]: DEVIN_COMMAND }),
+    sessionLifetime: lifetimes,
+    routeStore: {
+      // deno-lint-ignore require-yield
+      *read() {
+        observed.routes.push("read");
+        return undefined;
+      },
+      // deno-lint-ignore require-yield
+      *publish(route) {
+        observed.routes.push("publish");
+        return route;
+      },
+    },
+    sessions: {
+      // deno-lint-ignore require-yield
+      *place(context: AcpxSessionContext): Operation<AcpxSessionPlacement> {
+        return {
+          sessionKey: deriveSessionKey(context.agentCommand, CWD, context.session),
+          cwd: CWD,
+          state: "pending",
+        };
+      },
+      // deno-lint-ignore require-yield
+      *established(_placement, identity): Operation<void> {
+        observed.established.push(identity);
+      },
+    },
+  });
+  yield* factory({ defaultAgent, permissionMode: "deny-all" }, stubAuthority());
+}
+
+/** Every effect a mismatched consumption must leave exactly as it found it. */
+function effects(
+  harness: FakeRuntimeHarness,
+  store: WatchedStore,
+  observed: { established: AcpxSessionIdentity[]; routes: string[] },
+): string {
+  return JSON.stringify({
+    loaded: store.loaded,
+    saved: store.saved,
+    ensured: harness.ensureCalls,
+    turns: harness.turns.length,
+    established: observed.established,
+    routes: observed.routes,
+  });
+}
+
+/** Consume `session` through `agent`, and answer with the refusal it raised. */
+function* refusedThrough(agent: string, session: Session): Operation<Error> {
+  try {
+    yield* collectPrompt("go", { agent, session });
+  } catch (error) {
+    return error instanceof Error ? error : new Error(String(error));
+  }
+  throw new Error(`consuming the session through "${agent}" was not refused`);
+}
+
+describe("Tier AI — invocation-scoped Agent sessions", () => {
+  it("AI1: two Prompts in one Devin session share one ensure and one live handle", function* () {
+    const harness = createFakeRuntime();
+    const store = watchedStore();
+    const placements: AcpxSessionPlacement[] = [];
+    const retained: AcpxSessionIdentity[] = [];
+    yield* scoped(function* () {
+      const sessions: AcpxSessionPolicy = {
+        *place(context: AcpxSessionContext): Operation<AcpxSessionPlacement> {
+          const placement: AcpxSessionPlacement = {
+            sessionKey: deriveSessionKey(context.agentCommand, CWD, context.session),
+            cwd: CWD,
+            state: "pending",
+          };
+          placements.push(placement);
+          return placement;
+        },
+        // deno-lint-ignore require-yield
+        *established(_placement, identity): Operation<void> {
+          retained.push(identity);
+        },
+      };
+      yield* installLifetimeProvider(harness, store, stubAuthority(), { sessions });
+
+      const first = yield* collectPrompt("one");
+      const second = yield* collectPrompt("two");
+
+      expect(first.close).toBe("hello world");
+      expect(second.close).toBe("hello world");
+      // One ensure, one handle, and both turns went through it. A second ensure
+      // here would be a second live Devin conversation for one session.
+      expect(harness.ensureCalls).toHaveLength(1);
+      expect(harness.handleIds).toHaveLength(1);
+      expect(harness.turns).toHaveLength(2);
+      expect(harness.turns[0]!.input.handle).toBe(harness.turns[1]!.input.handle);
+      // In order: the second turn started only after the first had finished.
+      expect(harness.turns.map((turn) => turn.input.text)).toEqual(["one", "two"]);
+
+      // Persistent, so the conversation is kept — and not deferred
+      // materialization, which waits for an acceptance Devin never publishes.
+      expect(harness.ensureCalls[0]!.mode).toBe("persistent");
+      expect(harness.ensureCalls[0]!.materialization).toBe(undefined);
+      // Nothing was retained: there is no durable identity to hand a host.
+      expect(retained).toEqual([]);
+      expect(placements).toHaveLength(2);
+    });
+  });
+
+  it("AI2: two Devin sessions get their own handles and hold turns at once", function* () {
+    const harness = createFakeRuntime();
+    harness.script({ manual: true });
+    yield* scoped(function* () {
+      yield* installLifetimeProvider(harness, watchedStore());
+
+      const here = yield* spawn(() => collectPrompt("first", { session: "alpha" }));
+      const there = yield* spawn(() => collectPrompt("second", { session: "beta" }));
+      yield* harness.startedTurns(2);
+
+      // Two conversations, two handles, both in flight.
+      expect(harness.ensureCalls).toHaveLength(2);
+      expect(new Set(harness.handleIds).size).toBe(2);
+      expect(harness.turns[0]!.input.handle).not.toBe(harness.turns[1]!.input.handle);
+
+      for (const turn of harness.turns) {
+        turn.finish([{ type: "text_delta", text: "done", stream: "output" }], {
+          status: "completed",
+          stopReason: "end_turn",
+        });
+      }
+      yield* here;
+      yield* there;
+    });
+  });
+
+  it("AI3: halting a live Devin turn cancels it, and teardown attempts every handle", function* () {
+    const harness = createFakeRuntime();
+    harness.script({ manual: true });
+    harness.script({ manual: true });
+    let teardown: Error | undefined;
+    try {
+      yield* scoped(function* () {
+        yield* installLifetimeProvider(harness, watchedStore());
+
+        const cancelled = yield* spawn(() => collectPrompt("hold", { session: "alpha" }));
+        const other = yield* spawn(() => collectPrompt("also", { session: "beta" }));
+        yield* harness.startedTurns(2);
+        yield* cancelled.halt();
+        // The halted turn was told to stop, and the other was left alone.
+        expect(harness.turns[0]!.cancelled).toBe(true);
+        expect(harness.turns[1]!.cancelled).toBe(false);
+
+        harness.turns[1]!.finish([{ type: "text_delta", text: "done", stream: "output" }], {
+          status: "completed",
+          stopReason: "end_turn",
+        });
+        yield* other;
+        // The first close fails; the rest must still be attempted.
+        harness.closeFailure = new Error("this child would not close");
+      });
+    } catch (error) {
+      teardown = error instanceof Error ? error : new Error(String(error));
+    }
+
+    // Both handles were closed through the runtime that made each, and the
+    // failure was reported only after every one had been tried.
+    expect(harness.closeCalls).toHaveLength(2);
+    expect(new Set(harness.closeRuntimeIndexes).size).toBe(1);
+    expect(teardown).toBeDefined();
+  });
+
+  it("AI4: Devin's records never reach the durable store, and a second provider starts fresh", function* () {
+    const harness = createFakeRuntime();
+    const store = watchedStore();
+    yield* scoped(function* () {
+      yield* installLifetimeProvider(harness, store);
+      yield* collectPrompt("one");
+    });
+
+    const sessionKey = deriveSessionKey(DEVIN_COMMAND, CWD);
+    // The durable store was never asked about this session and never written
+    // to. Placement, the ensure, the permission refresh and teardown all went
+    // through the provider's own memory.
+    expect(store.loaded).toEqual([]);
+    expect(store.saved).toEqual([]);
+    expect(store.records.size).toBe(0);
+    expect(storesOf(harness).every((used) => used !== store)).toBe(true);
+
+    // A second provider, same placement, same directory: it establishes the
+    // conversation again rather than continuing one nothing retained.
+    const next = createFakeRuntime();
+    yield* scoped(function* () {
+      yield* installLifetimeProvider(next, store);
+      yield* collectPrompt("one");
+    });
+    expect(next.ensureCalls.map((call) => call.sessionKey)).toEqual([sessionKey]);
+    expect(harness.ensureCalls[0]!.sessionKey).toBe(sessionKey);
+    expect(storesOf(next).every((used) => used !== store)).toBe(true);
+    // Nothing of the first invocation is reachable from the second.
+    expect(store.records.size).toBe(0);
+  });
+
+  it("AI5: a mixed invocation keeps two runtimes with two stores, and Codex is unchanged", function* () {
+    const harness = createFakeRuntime();
+    const store = watchedStore();
+    yield* scoped(function* () {
+      yield* installLifetimeProvider(harness, store);
+
+      yield* collectPrompt("ask devin");
+      yield* collectPrompt("ask codex", { agent: "codex" });
+
+      // Two unbound runtimes, and neither one's store is the other's.
+      const used = storesOf(harness).filter(
+        (_, index) => harness.createdOptions[index]!.probeAgent === undefined,
+      );
+      expect(new Set(used).size).toBe(2);
+      expect(used.filter((one) => one === store)).toHaveLength(1);
+
+      const devinEnsure = harness.ensureCalls.find((call) => call.agent === DEVIN);
+      const codexEnsure = harness.ensureCalls.find((call) => call.agent === "codex");
+      // Codex still constructs through deferred first-turn acceptance; Devin
+      // never does, because Devin publishes no acceptance to wait for.
+      expect(codexEnsure?.materialization).toBe("first-turn-acceptance");
+      expect(devinEnsure?.materialization).toBe(undefined);
+      // Only the durable session's records are on the durable store.
+      expect(store.saved.every((key) => key !== devinEnsure?.sessionKey)).toBe(true);
+      expect(store.saved).toContain(codexEnsure!.sessionKey);
+    });
+  });
+
+  it("AI6: a native launch of Devin refuses before placement, ownership or a probe", function* () {
+    const harness = createFakeRuntime();
+    const refusals: PreparedLaunchRecord[] = [];
+    const authority = stubAuthority();
+    const recording: AgentProviderAuthority = {
+      ...authority,
+      checkpoint: authority.checkpoint,
+      sessionIdentity: authority.sessionIdentity,
+      perform: authority.perform,
+      *refuse(request, record): Operation<void> {
+        refusals.push(record);
+        yield* authority.refuse(request, record);
+      },
+    };
+    yield* scoped(function* () {
+      yield* installLifetimeProvider(harness, watchedStore(), recording);
+
+      yield* Agent.operations.launch({ ...fakeRequest(), agent: DEVIN } as AgentLaunchRequest);
+
+      expect(authority.performed).toBe(0);
+      expect(refusals).toHaveLength(1);
+      expect(refusals[0]!.failure?.class).toBe("unsupported-capability");
+      expect(refusals[0]!.failure?.message).toContain("invocation that created it");
+      // Nothing was created, probed, established, or started.
+      expect(harness.createdOptions).toEqual([]);
+      expect(harness.doctorCalls).toBe(0);
+      expect(harness.ensureCalls).toEqual([]);
+      expect(harness.turns).toEqual([]);
+    });
+  });
+
+  it("AI7: nothing Devin reports becomes a route, a retained identity or a checkpoint", function* () {
+    const harness = createFakeRuntime();
+    harness.script({
+      events: [{ type: "text_delta", text: "ok", stream: "output" }],
+      result: {
+        status: "completed",
+        stopReason: "end_turn",
+        _meta: { "cognition.ai/userMessageId": "user-message-1" },
+      },
+    });
+    const store = watchedStore();
+    const published: string[] = [];
+    const retained: AcpxSessionIdentity[] = [];
+    const authority = stubAuthority();
+    yield* scoped(function* () {
+      yield* installLifetimeProvider(harness, store, authority, {
+        routeStore: {
+          // deno-lint-ignore require-yield
+          *read() {
+            published.push("read");
+            return undefined;
+          },
+          *publish(route) {
+            published.push("publish");
+            return yield* (function* () {
+              return route;
+            })();
+          },
+        },
+        sessions: {
+          // deno-lint-ignore require-yield
+          *place(context: AcpxSessionContext): Operation<AcpxSessionPlacement> {
+            return {
+              sessionKey: deriveSessionKey(context.agentCommand, CWD, context.session),
+              cwd: CWD,
+              state: "pending",
+            };
+          },
+          // deno-lint-ignore require-yield
+          *established(_placement, identity): Operation<void> {
+            retained.push(identity);
+          },
+        },
+      });
+
+      const { close } = yield* collectPrompt("go");
+      expect(close).toBe("ok");
+
+      // The handle carries an ACPX record id and a backend session id, and the
+      // terminal result carries Devin's own user-message metadata. None of the
+      // three is a durable identity, so none of them is written anywhere.
+      expect(published).toEqual([]);
+      expect(retained).toEqual([]);
+      expect(authority.checkpoints).toEqual([]);
+      expect(store.saved).toEqual([]);
+    });
+  });
+
+  it("AI8: a durable Session refuses a Prompt whose agent is invocation-scoped", function* () {
+    const harness = createFakeRuntime();
+    const store = watchedStore();
+    const observed = { established: [] as AcpxSessionIdentity[], routes: [] as string[] };
+    yield* scoped(function* () {
+      yield* installAliasedProvider(harness, store, observed, DEVIN_RAW);
+
+      // Placed under the raw command name, which this host serves durably.
+      const session = yield* Agent.operations.session("review");
+      const before = effects(harness, store, observed);
+
+      // The canonical name reaches the same command and the same child, and is
+      // invocation-scoped. Reading the lifetime off the placement would have
+      // run this turn durably against a session nothing declared that way.
+      const refusal = yield* refusedThrough(DEVIN, session);
+      expect(refusal.message).toContain(`agent "${DEVIN}" (invocation sessions)`);
+      expect(refusal.message).toContain("(durable sessions)");
+
+      // Nothing moved: no second store access, no route, no ensure, no turn,
+      // and nothing retained.
+      expect(effects(harness, store, observed)).toBe(before);
+      expect(harness.ensureCalls).toEqual([]);
+      expect(harness.turns).toEqual([]);
+      expect(observed.established).toEqual([]);
+      expect(observed.routes).toEqual([]);
+    });
+  });
+
+  it("AI9: an invocation-scoped Session refuses a Prompt whose agent is durable", function* () {
+    const harness = createFakeRuntime();
+    const store = watchedStore();
+    const observed = { established: [] as AcpxSessionIdentity[], routes: [] as string[] };
+    yield* scoped(function* () {
+      yield* installAliasedProvider(harness, store, observed, DEVIN);
+
+      const session = yield* Agent.operations.session("review");
+      const before = effects(harness, store, observed);
+
+      // The other direction, which is the one that would have written a Devin
+      // conversation into the durable store.
+      const refusal = yield* refusedThrough(DEVIN_RAW, session);
+      expect(refusal.message).toContain(`agent "${DEVIN_RAW}" (durable sessions)`);
+      expect(refusal.message).toContain("(invocation sessions)");
+
+      expect(effects(harness, store, observed)).toBe(before);
+      expect(store.saved).toEqual([]);
+      expect(harness.ensureCalls).toEqual([]);
+      expect(harness.turns).toEqual([]);
+      expect(observed.established).toEqual([]);
+      expect(observed.routes).toEqual([]);
+    });
+  });
+
+  it("AI10: one lifetime through two names reaches one live conversation", function* () {
+    const harness = createFakeRuntime();
+    const store = watchedStore();
+    const observed = { established: [] as AcpxSessionIdentity[], routes: [] as string[] };
+    yield* scoped(function* () {
+      // Both names on one command, and this time a host that declares the same
+      // lifetime for each. What AI8 and AI9 refuse is disagreement about the
+      // lifetime, not the alias itself, so crossing the alias while agreeing
+      // must still be ordinary.
+      yield* installAliasedProvider(harness, store, observed, DEVIN_RAW, () => Ok("invocation"));
+
+      // Placed through one name...
+      const session = yield* Agent.operations.session("review");
+      // ...and consumed through the other, twice.
+      const first = yield* collectPrompt("one", { agent: DEVIN, session });
+      const second = yield* collectPrompt("two", { agent: DEVIN, session });
+
+      expect(first.close).toBe("hello world");
+      expect(second.close).toBe("hello world");
+      // One ensure and one live handle: the placing name and the consuming name
+      // reached one conversation rather than opening a second beside it.
+      expect(harness.ensureCalls).toHaveLength(1);
+      expect(harness.handleIds).toHaveLength(1);
+      expect(harness.turns).toHaveLength(2);
+      expect(harness.turns[0]!.input.handle).toBe(harness.turns[1]!.input.handle);
+      // And on the key the shared command derives, which is what makes the two
+      // names one placement rather than two that happen to agree.
+      expect(harness.ensureCalls[0]!.sessionKey).toBe(
+        deriveSessionKey(DEVIN_COMMAND, CWD, "review"),
+      );
+    });
   });
 });

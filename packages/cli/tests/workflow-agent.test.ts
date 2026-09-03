@@ -75,6 +75,11 @@ function* baselineAgentSource(): Operation<string> {
   return yield* readTextFile(join(FIXTURES, "baseline-agent.md"));
 }
 
+/** The one-Prompt document that asks an agent whose sessions end with the invocation. */
+function* invocationScopedAgentSource(): Operation<string> {
+  return yield* readTextFile(join(FIXTURES, "invocation-scoped-agent.md"));
+}
+
 function* documentWithNote(): Operation<string> {
   return `<File path="notes.md">${NOTE.trim()}</File>\n\n${yield* documentSource()}`;
 }
@@ -1077,6 +1082,48 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       // with it.
       expect(attempt.failure).toBe(undefined);
       expect(fake.prompts).toHaveLength(2);
+    });
+  });
+
+  it("WAL17: an agent whose sessions end with the invocation is refused before any contact", function* () {
+    const root = yield* useStorageRoot();
+    const source = yield* invocationScopedAgentSource();
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      // One store across both attempts, as a restart would have.
+      const store = makeStore();
+
+      const reached: string[] = [];
+      const first = yield* runFixture(root, database, source, {
+        createRuntime: tripwireAcp((what) => reached.push(what)),
+        sessionStore: store,
+      });
+
+      // A workflow continues its conversation across executions by reattaching
+      // the session its run database names, and there is no such session to
+      // name. The refusal names why, and the provider was never entered — not
+      // even to create a runtime.
+      expect(first.failure).toContain("invocation that created it");
+      expect(reached).toEqual([]);
+      expect(store.records.size).toBe(0);
+      // The Workspace write before the Prompt did commit, so the next live
+      // operation of a continuation is the Prompt itself.
+      const committed = first.events.length;
+      expect(committed).toBeGreaterThan(0);
+
+      const again: string[] = [];
+      const second = yield* runFixture(root, database, source, {
+        createRuntime: tripwireAcp((what) => again.push(what)),
+        sessionStore: store,
+      });
+
+      // The partial journal is restored and the run reaches the same Prompt
+      // live, where it refuses again without contacting anything.
+      expect(second.failure).toContain("invocation that created it");
+      expect(again).toEqual([]);
+      expect(second.events.length).toBe(committed);
+      expect(store.records.size).toBe(0);
     });
   });
 

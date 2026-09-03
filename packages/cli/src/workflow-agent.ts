@@ -114,6 +114,7 @@ import {
   WorkflowAgentSessionError,
 } from "@executablemd/workflow/deno";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
+import { workflowAgentSessionLifetime } from "./agent-stack.ts";
 import type {
   AgentSessionIdentity,
   ProviderAssertion,
@@ -421,6 +422,11 @@ export function* useWorkflowAgentProfile(options: WorkflowAgentProfileOptions): 
 
   const factory: AgentProviderFactory = createAcpxProvider({
     sessionStore: store,
+    // Asked before an adapter is prepared and before the availability probe, so
+    // an agent whose sessions end with the invocation is refused before the
+    // workflow contacts it — on a first use and on a continuation whose next
+    // unrecorded operation is a Prompt alike.
+    sessionLifetime: workflowAgentSessionLifetime,
     // ACPX's own registry with this build's two patched snapshots over the top,
     // and the preparation that puts one on disk. Codex and Claude resolve to the
     // adapter that names its turns; every other agent resolves to the command it
