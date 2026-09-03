@@ -26,9 +26,10 @@ import {
 import type { Operation, Result, Task } from "effection";
 import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
-import { readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import process from "node:process";
 import { PassThrough } from "node:stream";
 import { API, Service, useHostFiles } from "@executablemd/runtime";
 import { runXmd } from "../src/cli.ts";
@@ -408,6 +409,52 @@ describe(
       expect(settled).toEqual(Ok("# One\né"));
     });
 
+    it("SI12: cancelling a stdin run returns only once its child is gone", function* () {
+      yield* useFixture({}, function* (dir) {
+        const idsPath = path.join(dir, "ids.txt");
+        // A command that ignores SIGTERM and holds the run open behind it.
+        // Measured: a group SIGTERM leaves this CLI unclosed indefinitely, so
+        // teardown can only return by escalating and then waiting for the
+        // child's own close boundary. `$$` is the command's shell and `$PPID`
+        // is the CLI the launcher owns.
+        const document = [
+          "```bash exec",
+          `trap "" TERM; echo "$$ $PPID" > ${idsPath}; sleep 20`,
+          "```",
+          "",
+        ].join("\n");
+
+        const run = yield* spawn(function* () {
+          yield* runCli(["run", "-", "--raw"], {
+            cwd: dir,
+            stdin: document,
+            timeout: 60_000,
+          }).join();
+        });
+
+        const [command, owned] = yield* until(waitForIds(idsPath));
+        // `@effectionx/process` detaches an exec child into a group of its own,
+        // so the command is the running CLI's to reap while it unwinds and
+        // never the launcher's. One written to survive that unwinding survives
+        // it; this suite still leaves nothing behind.
+        yield* ensure(() => signalGroup(command));
+
+        const at = Date.now();
+        yield* run.halt();
+        const elapsed = Date.now() - at;
+
+        // A signal that has been sent is not a process that is gone: teardown
+        // returning as soon as it signalled would come back at once. Nor may it
+        // wait forever on a child that is never going to answer SIGTERM — the
+        // command sleeps for twenty seconds, and escalation is what ends this
+        // inside the grace period instead.
+        expect(elapsed).toBeGreaterThanOrEqual(1_500);
+        expect(elapsed).toBeLessThan(10_000);
+        // And the group the launcher owns is gone by the time it returns.
+        expect(yield* until(waitForGroupExit(owned))).toBe(true);
+      });
+    });
+
     it("SI9b: the stream adapter's listeners belong to the read's own scope", function* () {
       const stream = new PassThrough();
       const read = yield* spawn(() => readInputStream(stream));
@@ -589,4 +636,51 @@ function* cancellableRun(
   const state = empty();
   const task = yield* spawn(() => scoped(() => observedRun(args, cwd, reader, state)));
   return { task, state };
+}
+
+/** The command's own pid and the CLI's, once the run has reached the command. */
+async function waitForIds(idsPath: string): Promise<[number, number]> {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    try {
+      const [command, cli] = (await readFile(idsPath, "utf8"))
+        .trim()
+        .split(/\s+/)
+        .map((value) => Number.parseInt(value, 10));
+      if (Number.isInteger(command) && Number.isInteger(cli)) {
+        return [command, cli];
+      }
+    } catch {
+      // Not written yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`the run never reached its command: ${idsPath} holds no pids`);
+}
+
+/**
+ * Whether that whole process group is gone.
+ *
+ * Bounded rather than instantaneous: the group dies together, so the kernel may
+ * still be reaping a member as the launcher's own child closes.
+ */
+async function waitForGroupExit(leader: number): Promise<boolean> {
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(-leader, 0);
+    } catch {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return false;
+}
+
+function signalGroup(leader: number): void {
+  try {
+    process.kill(-leader, "SIGKILL");
+  } catch {
+    // Already gone.
+  }
 }

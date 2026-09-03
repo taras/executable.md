@@ -4252,7 +4252,9 @@ xmd README.md#Release/*
 
 Only a file-backed run argument is read as a reference. An inline `-e` document
 is untargeted, and `xmd test` keeps its own path grammar: a test path containing
-a literal `#` or `%` still names that file.
+a literal `#` or `%` still names that file. A file named `-` is reached through
+the same reference grammar as any other — `xmd -` runs it and `xmd run -#Section`
+selects a section of it — with the one exception described next.
 
 ##### Standard input is one document argument
 
@@ -4267,14 +4269,25 @@ xmd plan "Prepare the release program." | xmd run -
 
 The sentinel is one exact argument on one command form, decided by fixed grammar
 before anything is read. Only an invocation that explicitly names `run` and
-whose document argument is exactly `-` selects it, so a bare `xmd -` — the same
-parsed command, written as the shorthand — does not, `xmd run -#Section` is a
-reference and not the sentinel, `-` on another command keeps that command's
-meaning, and `xmd run --eval -` and `xmd -e -` keep their existing refusal and
-read nothing. The end-of-options separator is honoured, so `-` written after
-`--` is still the document argument rather than an option; everything else
-written around it configures the run as it would around a path, in either
-position.
+whose document argument is exactly `-` selects it. Every other spelling keeps
+the meaning it already had and reads nothing:
+
+- bare `xmd -` is the shorthand run form, and `-` there is a **file reference**:
+  it executes the file named `-` in the contextual working directory;
+- `xmd run -#Section` is that same reference with a target selector, and
+  executes `Section` of the file named `-`;
+- `-` on another command keeps that command's meaning; and
+- `xmd run --eval -` and `xmd -e -` keep their existing refusal.
+
+`-` is the one filename the option grammar leaves unwritable, which is why the
+reference grammar reaches it and why nothing else beginning with `-` is read as
+a document: a mistyped option is still an option, and a run written with one
+refuses for want of a root rather than looking for a file named after the flag.
+
+The end-of-options separator is honoured, so `-` written after `--` is still the
+document argument rather than an option; everything else written around any of
+these forms configures the run as it would around an ordinary path, before it or
+after it.
 
 Acquisition happens before the document is inspected, and therefore before
 target and property preparation, Agent or provider setup, the secret-detection
@@ -10695,9 +10708,11 @@ the process.
 | SI11 | Ordinary result behavior | A value root read from stdin puts its JSON result alone on stdout, with the rendered body on stderr under `--verbose` |
 
 The sentinel's negative controls belong to Tier IE, where the file and `--eval`
-roots they are held against live: `-e -` refuses while real input waits unread,
-and the shorthand `xmd -`, a `-#Section` reference and another command's `-`
-each keep their existing meaning and execute nothing that was piped in.
+roots they are held against live, and each of them supplies real standard input
+and proves it unread: `-e -` refuses; bare `xmd -` executes the file named `-`
+and renders that file's marker; `xmd run -#Section` executes `Section` of that
+same file, rendering its marker and not its sibling section's; and `xmd test -`
+keeps the test command's own path behavior.
 
 ### Tier SX — The `xmd syntax` command
 

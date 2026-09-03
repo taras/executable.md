@@ -297,33 +297,48 @@ describe(
     /**
      * The stdin sentinel is one exact spelling of one exact argument on one
      * exact command. These three rows supply real standard input to the
-     * spellings that are not it, and prove none of them executes what was
-     * piped in.
+     * spellings that are not it, and prove each of them does what it has always
+     * done with what was piped in left unread.
      *
-     * What each of them does instead is unchanged: configliere refuses any
-     * positional beginning with `-`, so `-` and `-#Section` reach no document
-     * argument at all and the run refuses for want of a root. Only `xmd run -`
-     * gives that token a meaning.
+     * `-` is the one filename the option grammar leaves unwritable, so the
+     * shorthand form names that file and a reference selects a section of it.
      */
-    it("IE29: the shorthand form does not read stdin", function* () {
-      const root = yield* useWorkspace({ "-": "FILE_NAMED_DASH\n" });
+    it("IE29: the shorthand form runs the file named `-`, not stdin", function* () {
+      const root = yield* useWorkspace({ "-": "FILE_ROOT_MARKER\n" });
       const { code, stdout } = yield* runCli(["-", "--raw"], {
         cwd: root,
         stdin: "STDIN_SHOULD_NOT_RUN\n",
       }).join();
 
-      expect(code).toBe(1);
+      expect(code).toBe(0);
+      expect(stdout).toContain("FILE_ROOT_MARKER");
       expect(stdout).not.toContain("STDIN_SHOULD_NOT_RUN");
     });
 
-    it("IE30: a reference is not the sentinel argument", function* () {
-      const root = yield* useWorkspace({ "-": "# Dash\n\n## Section\n\nSECTION_BODY\n" });
+    it("IE30: a reference selects a section of that file, not stdin", function* () {
+      const document = [
+        "# Dash",
+        "",
+        "## Section",
+        "",
+        "SECTION_MARKER",
+        "",
+        "## Other",
+        "",
+        "OTHER_MARKER",
+        "",
+      ].join("\n");
+      const root = yield* useWorkspace({ "-": document });
       const { code, stdout } = yield* runCli(["run", "-#Section", "--raw"], {
         cwd: root,
         stdin: "STDIN_SHOULD_NOT_RUN\n",
       }).join();
 
-      expect(code).toBe(1);
+      expect(code).toBe(0);
+      expect(stdout).toContain("SECTION_MARKER");
+      // The selector really selected: the sibling section is excluded, which a
+      // run of the whole file would have rendered.
+      expect(stdout).not.toContain("OTHER_MARKER");
       expect(stdout).not.toContain("STDIN_SHOULD_NOT_RUN");
     });
 

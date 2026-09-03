@@ -1586,27 +1586,47 @@ function namesRun(args: string[]): boolean {
   return args[0] === "run";
 }
 
+interface DocumentArgument {
+  /** The reference the caller wrote, as they wrote it. */
+  reference: string;
+  /** argv with that token, and the separator protecting it, removed. */
+  rest: string[];
+}
+
+/** A reference's path half: everything before its first raw `#`. */
+function referencePath(reference: string): string {
+  const fragment = reference.indexOf("#");
+  return fragment === -1 ? reference : reference.slice(0, fragment);
+}
+
 /**
- * What is left of `xmd run`'s argv once the sentinel document argument is gone.
+ * The document argument a run named that the parser could not take.
  *
- * Present only when the caller wrote `xmd run -` or `xmd run -- -`. Configliere
- * refuses any positional beginning with `-` and defines no end-of-options
- * separator, so the sentinel is read out of the parser's own remainder — the
- * tokens it did not consume — rather than out of raw argv, where `-` could be
- * another option's value (`--journal -`). Removing it lets everything the
- * caller wrote around it parse as it would around a path.
+ * Configliere refuses every positional beginning with `-` and defines no
+ * end-of-options separator, so `-` is the one filename its option grammar
+ * leaves unwritable — and a reference selecting a section of that file is
+ * written the same way. Both are read out of the parser's own remainder, the
+ * tokens it did not consume, rather than out of raw argv, where a `-` another
+ * option took as its value (`--journal -`) looks identical.
+ *
+ * Nothing else beginning with `-` is one. A mistyped option stays an option the
+ * parser does not define, so a run written with one still refuses for want of a
+ * root rather than going looking for a file named after the flag.
+ *
+ * Removing the token is what lets everything written around it — before it or
+ * after it — parse as it would around an ordinary path.
  */
-function takeStandardInputArgument(args: string[], remainder: string[]): string[] | undefined {
+function takeDocumentArgument(args: string[], remainder: string[]): DocumentArgument | undefined {
   const separated = remainder[0] === "--";
-  const [sentinel] = separated ? remainder.slice(1, 2) : remainder;
-  if (sentinel !== STANDARD_INPUT_ARGUMENT) {
+  const [reference] = separated ? remainder.slice(1, 2) : remainder;
+  if (reference === undefined || referencePath(reference) !== STANDARD_INPUT_ARGUMENT) {
     return undefined;
   }
   const at = args.length - remainder.length;
   if (args[at] !== remainder[0]) {
     return undefined;
   }
-  return [...args.slice(0, at), ...remainder.slice(separated ? 2 : 1)];
+  return { reference, rest: [...args.slice(0, at), ...remainder.slice(separated ? 2 : 1)] };
 }
 
 /**
@@ -1658,21 +1678,29 @@ function* preparePropsPhase(
   const separated = separateArgs(args);
   const head = workflow ? separated.head : args;
   const scanned = xmd.parse({ args: head });
-  // Only the command form the caller wrote can tell `xmd run -` from the
-  // shorthand `xmd -`, which resolves to the same parsed command.
-  const withoutSentinel = namesRun(args)
-    ? takeStandardInputArgument(head, scanned.remainder.args ?? [])
-    : undefined;
-  const standardInput = withoutSentinel !== undefined;
-  const fixed = withoutSentinel ?? args;
-  const parsed = withoutSentinel ?? head;
-  const provisional = standardInput ? xmd.parse({ args: parsed }) : scanned;
+  // A run whose parse took no path may still have named one the parser refuses
+  // to read. Every other command keeps whatever `-` already means to it.
+  const scannedRun = scanned.ok && !scanned.value.config.help ? scanned.value.config : undefined;
+  const document =
+    !workflow && scannedRun?.name === "run" && scannedRun.config.path === undefined
+      ? takeDocumentArgument(head, scanned.remainder.args ?? [])
+      : undefined;
+  // The sentinel is one exact argument on one command form. Only the form the
+  // caller wrote separates `xmd run -` from the shorthand `xmd -`, which
+  // resolves to the same parsed command and names a file called `-`.
+  const standardInput = document?.reference === STANDARD_INPUT_ARGUMENT && namesRun(args);
+  const fixed = document?.rest ?? args;
+  const parsed = document?.rest ?? head;
+  const provisional = document === undefined ? scanned : xmd.parse({ args: parsed });
   // `program` short-circuits on `--version` and leaves no configuration
   // behind, so there is nothing to inspect.
   const selected = provisional.ok ? provisional.value.config : undefined;
   const command = selected && !selected.help ? selected.name : undefined;
-  const documentPath =
+  const parsedPath =
     selected && !selected.help && selected.name === "run" ? selected.config.path : undefined;
+  // The reference this run names, however it was written. Standard input is not
+  // one: it has an origin rather than a path.
+  const documentPath = standardInput ? parsedPath : (document?.reference ?? parsedPath);
   const [supplied] = evalFlags.values;
 
   if (selected && !selected.help && selected.name === "workflow") {
@@ -2109,8 +2137,9 @@ const RUN_SOURCE_HELP = [
   "command that writes a complete document composes with a run:",
   '  xmd plan "prepare the release" | xmd run -',
   "",
-  `Only that exact spelling reads it: a bare \`xmd -\` does not, and`,
-  `${EVAL_OPTION} takes its document as the value.`,
+  "Only that exact spelling reads it. A bare `xmd -` names a file called `-`,",
+  `\`xmd run -#Section\` selects a section of that file, and ${EVAL_OPTION} takes`,
+  "its document as the value.",
   "",
   "A path is a document reference, and everything after its first `#` selects",
   "one section of the document to run:",

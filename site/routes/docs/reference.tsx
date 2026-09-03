@@ -21,10 +21,10 @@ export default define.page(function Reference() {
         <li>
           <code>-</code>{" "}
           — read the whole root document from standard input, to end of file.
-          Only the explicit <code>xmd run -</code> spelling does it, so a bare
-          {" "}
-          <code>xmd -</code> and a reference such as <code>-#Section</code>{" "}
-          are not it, and <code>--eval -</code>{" "}
+          Only the explicit <code>xmd run -</code> spelling does it. A bare{" "}
+          <code>xmd -</code> is the shorthand run form and executes the file
+          named <code>-</code>; <code>xmd run -#Section</code>{" "}
+          selects a section of that same file; and <code>--eval -</code>{" "}
           is refused rather than read. Printed errors and source positions
           report the origin as <code>&lt;stdin&gt;</code>, which is an identity
           rather than a file: nothing of that name is created, and relative

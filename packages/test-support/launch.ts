@@ -1,9 +1,10 @@
 import { exec } from "@effectionx/process";
 import type { ProcessResult } from "@effectionx/process";
 import { timebox } from "@effectionx/timebox";
-import { Err, Ok, spawn, withResolvers } from "effection";
+import { Err, Ok, ensure, spawn, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { spawn as spawnChild } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { loadavg } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
@@ -193,6 +194,9 @@ function text(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);
 }
 
+/** How long a terminated child is given to close before the signal escalates. */
+const TERMINATION_GRACE = 2_000;
+
 /**
  * The same bounded run, for a child that has to observe a real end of file.
  *
@@ -201,8 +205,14 @@ function text(bytes: Uint8Array): string {
  * path owns the child instead, writes the supplied text and closes the pipe, so
  * what the CLI observes is the pipeline a caller would build. Everything else
  * is the launcher's: the same environment, the same capture into the caller's
- * accumulators, the same status handling, and a process group killed on the way
- * out however the run ended.
+ * accumulators, and the same status handling.
+ *
+ * Owning the child means owning its exit. Teardown is registered before this
+ * operation can suspend, and it finishes only once the child's own `close`
+ * boundary has been reached — a signal that has been sent is not a process that
+ * is gone. A group that has not closed within the grace period is escalated to
+ * `SIGKILL`, so a child ignoring `SIGTERM` cannot outlive the run that started
+ * it or hold the deadline open.
  */
 function* withInput(
   launch: Launch,
@@ -212,6 +222,7 @@ function* withInput(
   input: string,
 ): Operation<ProcessResult> {
   const settled = withResolvers<Result<{ code?: number; signal?: string }>>();
+  const closed = withResolvers<void>();
   const child = spawnChild(launch.command, launch.arguments ?? [], {
     detached: true,
     shell: launch.shell,
@@ -219,48 +230,80 @@ function* withInput(
     env: cliEnv(options),
     stdio: "pipe",
   });
-  try {
-    child.stdout?.on("data", (chunk: Uint8Array) => {
-      partial.stdout += text(chunk);
-    });
-    child.stderr?.on("data", (chunk: Uint8Array) => {
-      partial.stderr += text(chunk);
-    });
-    child.on("error", (error: Error) => settled.resolve(Err(error)));
-    // A pipe the child could not use is the launcher's problem and not the
-    // run's: the close below is what the whole path exists for, and a broken
-    // one would otherwise raise on a process that is already reporting why.
-    child.stdin?.on("error", () => {});
-    child.on("close", (code: number | null, signal: string | null) =>
-      settled.resolve(
-        Ok({
-          ...(code === null ? {} : { code }),
-          ...(signal === null ? {} : { signal }),
-        }),
-      ),
-    );
-    child.stdin?.end(input);
 
-    const exit = yield* settled.operation;
-    if (!exit.ok) {
-      throw exit.error;
-    }
-    const status = { ...exit.value, stdout: partial.stdout, stderr: partial.stderr };
-    if (mode === "expect" && status.code !== 0) {
-      throw new Error(
-        `${launch.command} exited ${status.code ?? `on ${status.signal}`}\n` +
-          `${channel("stdout", status.stdout)}\n${channel("stderr", status.stderr)}`,
-      );
-    }
-    return status;
-  } finally {
-    try {
-      if (child.pid !== undefined) {
-        process.kill(-child.pid, "SIGTERM");
-      }
-    } catch {
-      // Already gone, which is the ordinary case once `close` has fired.
-    }
+  child.stdout?.on("data", (chunk: Uint8Array) => {
+    partial.stdout += text(chunk);
+  });
+  child.stderr?.on("data", (chunk: Uint8Array) => {
+    partial.stderr += text(chunk);
+  });
+  // A child that never started closes through this rather than through `close`,
+  // so teardown has an end either way.
+  child.on("error", (error: Error) => {
+    settled.resolve(Err(error));
+    closed.resolve();
+  });
+  // A pipe the child could not use is the launcher's problem and not the run's:
+  // the close below is what this whole path exists for, and a broken one would
+  // otherwise raise on a process that is already reporting why.
+  child.stdin?.on("error", () => {});
+  child.on("close", (code: number | null, signal: string | null) => {
+    settled.resolve(
+      Ok({
+        ...(code === null ? {} : { code }),
+        ...(signal === null ? {} : { signal }),
+      }),
+    );
+    closed.resolve();
+  });
+
+  // Registered before the first suspension point, so a run cancelled anywhere
+  // below still ends with its process group gone.
+  yield* ensure(() => reap(child, closed.operation));
+
+  child.stdin?.end(input);
+
+  const exit = yield* settled.operation;
+  if (!exit.ok) {
+    throw exit.error;
+  }
+  const status = { ...exit.value, stdout: partial.stdout, stderr: partial.stderr };
+  if (mode === "expect" && status.code !== 0) {
+    throw new Error(
+      `${launch.command} exited ${status.code ?? `on ${status.signal}`}\n` +
+        `${channel("stdout", status.stdout)}\n${channel("stderr", status.stderr)}`,
+    );
+  }
+  return status;
+}
+
+/**
+ * End the child's whole process group, and do not return until it is gone.
+ *
+ * A child that already closed resolves immediately. Otherwise the group is
+ * asked to terminate, given a bounded chance to close, then killed — and either
+ * way this waits for the `close` event, which is the only thing that says the
+ * process and its pipes are actually finished.
+ */
+function* reap(child: ChildProcess, closed: Operation<void>): Operation<void> {
+  if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) {
+    yield* closed;
+    return;
+  }
+  signalGroup(child.pid, "SIGTERM");
+  const graceful = yield* timebox(TERMINATION_GRACE, () => closed);
+  if (!graceful.timeout) {
+    return;
+  }
+  signalGroup(child.pid, "SIGKILL");
+  yield* closed;
+}
+
+function signalGroup(pid: number, signal: "SIGTERM" | "SIGKILL"): void {
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    // Already gone, which is the ordinary case once `close` has fired.
   }
 }
 
