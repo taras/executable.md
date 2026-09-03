@@ -26,6 +26,7 @@ import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { stat } from "@executablemd/runtime";
 import { Elicitation } from "@executablemd/core";
 import type { DocumentValidation } from "@executablemd/core";
+import { serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { ensure, Ok, scoped, spawn, until } from "effection";
 import type { Operation } from "effection";
@@ -43,6 +44,7 @@ import type { StructuralValidation } from "../src/plan-component.ts";
 import { FileStream } from "../src/file-stream.ts";
 import { createPlanJournal, planJournalStream } from "../src/plan-journal.ts";
 import {
+  JOURNAL_PATH_REFUSAL,
   namesPlan,
   namesRetiredCommand,
   removedOptionRefusal,
@@ -1093,6 +1095,59 @@ describe(
       yield* refusedEarly([REQUEST, "--trace"], "unrecognized option for xmd plan: --trace");
     });
 
+    it("PO7: a retained option written where the journal path goes refuses before any phase", function* () {
+      // `refusedEarly` carries an agent name nothing resolves and an isolated
+      // `HOME`, so reaching the catalog, the provider or a session placement
+      // would each leave a trace. None of them does — and neither does the
+      // filesystem: the switch that was about to become a filename is not one.
+      const { stderr } = yield* refusedEarly(
+        [REQUEST, "--journal", "--verbose"],
+        JOURNAL_PATH_REFUSAL,
+      );
+      expect(complaints(stderr)).toBe(JOURNAL_PATH_REFUSAL);
+
+      yield* useWorkingDirectory(function* (dir) {
+        const home = join(dir, "home");
+        yield* ensureDir(home);
+        const result = yield* runCli(
+          ["plan", REQUEST, "--journal", "--verbose", "--output", "release.md"],
+          { cwd: dir, env: { HOME: home } },
+        ).join();
+
+        expect(result.code).toBe(1);
+        expect(complaints(result.stderr)).toBe(JOURNAL_PATH_REFUSAL);
+        // Named exactly: the option was never exclusively created as a journal,
+        // no journal exists under any name, and the artifact sink was never
+        // reached either.
+        expect(yield* exists(join(dir, "--verbose"))).toBe(false);
+        expect(yield* exists(join(dir, "release.md"))).toBe(false);
+        expect((yield* until(readdir(dir))).sort()).toEqual(["home"]);
+        // And no catalog, provider or session placement happened on the way.
+        expect(result.stdout).toBe("");
+        expect(result.stderr).not.toContain("## Built-in components");
+        expect(result.stderr).not.toContain("unavailable");
+        expect(yield* exists(join(home, ".xmd"))).toBe(false);
+      });
+
+      // The valid orderings still reach authorship rather than the grammar.
+      yield* useWorkingDirectory(function* (dir) {
+        const home = join(dir, "home");
+        yield* ensureDir(home);
+        for (const args of [
+          [REQUEST, "--journal", "kept.jsonl", "--verbose"],
+          ["--verbose", "--journal", "kept.jsonl", REQUEST],
+        ]) {
+          const result = yield* runCli(
+            ["plan", ...args, "--default-agent", "xmd-nonexistent-agent"],
+            { cwd: dir, env: { HOME: home } },
+          ).join();
+          expect(`${args.join(" ")}: ${result.stderr.includes(JOURNAL_PATH_REFUSAL)}`).toBe(
+            `${args.join(" ")}: false`,
+          );
+        }
+      });
+    });
+
     it("PO8: no journal writes no file, and one records authorship as ordinary JSONL", function* () {
       // Without `--journal`, nothing is created anywhere.
       yield* useWorkingDirectory(function* (dir, authorshipRoot) {
@@ -1396,6 +1451,53 @@ describe(
         expect(harness.fake.closes.length).toBeGreaterThan(0);
         expect(chunks).toEqual([]);
         expect((yield* until(readdir(dir))).sort()).toEqual(["partial.jsonl"]);
+      });
+    });
+
+    it("PO16: an ordinary failure leaves a whole, readable journal behind", function* () {
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const journal = join(dir, "ordinary.jsonl");
+        const harness = createPlanHarness({ authorshipRoot });
+        // A turn that produced text and then failed. Nothing about this ending
+        // is a secret rejection or a write failure: the file took every entry
+        // it was offered, and authorship ended for a reason of its own.
+        harness.fake.script({ reply: PLAIN, stopReason: "refusal" });
+
+        const { value, chunks } = yield* delivered(() =>
+          reported(() =>
+            runPlan(planning(dir, join(dir, "release.md"), undefined, { journal }), harness.deps),
+          ),
+        );
+
+        expect(value.value).toBe(1);
+        // The ending is the turn's, and it is neither of the two failures that
+        // have a journal diagnostic of their own.
+        const said = value.lines.join("\n");
+        expect(said).toContain("refusal");
+        expect(said).not.toContain("secret detection rejected content");
+        expect(said).not.toContain("Could not write the next entry to journal file");
+        // No approved source on stdout, and no artifact.
+        expect(chunks).toEqual([]);
+        expect((yield* until(readdir(dir))).sort()).toEqual(["ordinary.jsonl"]);
+        // Teardown completed before `runPlan` returned: the provider closed,
+        // and the invocation's own session directory went back.
+        expect(harness.fake.closes.length).toBeGreaterThan(0);
+        expect(yield* until(readdir(authorshipRoot))).toEqual([]);
+
+        // At least one event committed before the failure, and the whole file
+        // parses: every line is a complete durable event, in commit order.
+        const recorded = yield* readTextFile(journal);
+        const events = yield* journalEvents(journal);
+        expect(events.length).toBeGreaterThan(0);
+        for (const event of events) {
+          expect(typeof event.type).toBe("string");
+        }
+        // And nothing partial is left at the end. Re-serializing what parsed
+        // reproduces the file byte for byte, so there is no truncated record,
+        // no half-written line and no missing terminator — which a `JSON.parse`
+        // sweep alone would not catch, because it never sees dropped bytes.
+        expect(recorded).toBe(events.map(serializeDurableEvent).join(""));
+        expect(recorded.endsWith("\n")).toBe(true);
       });
     });
 

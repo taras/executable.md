@@ -14,6 +14,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 
 import {
+  JOURNAL_PATH_REFUSAL,
   namesPlan,
   namesRetiredCommand,
   removedOptionRefusal,
@@ -235,12 +236,17 @@ describe("Tier PR — xmd plan fixed grammar", () => {
     // parsing: an option the parser reads as absent falls back to the default,
     // so a caller who asked for a journal and named none would silently get
     // none at all.
+    expect(JOURNAL_PATH_REFUSAL).toBe(
+      "--journal needs a path — write `--journal <path>` or leave it out to record no journal",
+    );
     for (const empty of [
       ["plan", REQUEST, "--journal", ""],
       ["plan", REQUEST, "--journal="],
+      // Nothing follows it at all.
+      ["plan", REQUEST, "--journal"],
     ]) {
-      expect(scanPlanArgs(empty).error).toBe(
-        "--journal needs a path — write `--journal <path>` or leave it out to record no journal",
+      expect(`${empty.join(" ")}: ${scanPlanArgs(empty).error}`).toBe(
+        `${empty.join(" ")}: ${JOURNAL_PATH_REFUSAL}`,
       );
     }
 
@@ -264,6 +270,62 @@ describe("Tier PR — xmd plan fixed grammar", () => {
     expect(scanPlanArgs(["plan", REQUEST, "--trace"]).error).toBe(
       "unrecognized option for xmd plan: --trace",
     );
+  });
+
+  it("PO7: a retained option after --journal is that option, not a path", function* () {
+    // The reported hole. Every retained spelling this command defines, written
+    // where the path goes: reading one as a filename would exclusively create a
+    // file called `--verbose` and drop what the caller actually asked for, and
+    // the scan used to accept all of it in silence.
+    for (const swallowed of [
+      ["--verbose"],
+      ["--output", "out.md"],
+      ["--session", "ada"],
+      ["--include", "lib"],
+      ["--agent-provider", "acpx"],
+      ["--default-agent", "codex"],
+      ["--timeout", "5s"],
+      ["--help"],
+      ["-h"],
+      ["--version"],
+      // Including a valued spelling, whose name is read up to its first `=`.
+      ["--session=ada"],
+    ]) {
+      const scan = scanPlanArgs(["plan", REQUEST, "--journal", ...swallowed]);
+      const written = swallowed.join(" ");
+      expect(`${written}: ${scan.error}`).toBe(`${written}: ${JOURNAL_PATH_REFUSAL}`);
+      // And the option was not consumed on the way out: nothing reached the
+      // parser's argv but the command and the request.
+      expect(`${written}: ${scan.fixed.join(" ")}`).toBe(`${written}: plan ${REQUEST}`);
+      expect(scan.request).toBe(REQUEST);
+    }
+
+    // A removed spelling in that position keeps its own refusal, which is the
+    // more specific answer and was already the behavior.
+    expect(scanPlanArgs(["plan", REQUEST, "--journal", "--run"]).error).toBe(RUN_REMOVAL_REFUSAL);
+    expect(scanPlanArgs(["plan", REQUEST, "--journal", "--raw"]).error).toBe(
+      removedOptionRefusal("--raw"),
+    );
+    expect(scanPlanArgs(["plan", REQUEST, "--journal", "-j"]).error).toBe(
+      "unrecognized option for xmd plan: -j — write `--journal <path>`",
+    );
+
+    // And every valid ordering still parses. A path is a path even when it
+    // looks unusual: `-` names a file called `-`, and the inline form takes
+    // whatever follows the `=`.
+    for (const argv of [
+      ["plan", REQUEST, "--journal", "authorship.jsonl", "--verbose"],
+      ["plan", REQUEST, "--verbose", "--journal", "authorship.jsonl"],
+      ["plan", "--journal", "authorship.jsonl", REQUEST, "--verbose"],
+      ["plan", "--verbose", REQUEST, "--journal", "authorship.jsonl"],
+      ["plan", REQUEST, "--journal=authorship.jsonl", "--verbose"],
+      ["plan", REQUEST, "--journal", "-"],
+      ["plan", REQUEST, "--journal=--verbose"],
+    ]) {
+      const scan = scanPlanArgs(argv);
+      expect(`${argv.join(" ")}: ${scan.error}`).toBe(`${argv.join(" ")}: undefined`);
+      expect(scan.request).toBe(REQUEST);
+    }
   });
 
   it("PS2/PS3: the removal is decidable beside --help, in either order", function* () {

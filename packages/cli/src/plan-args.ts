@@ -146,6 +146,27 @@ function optionName(token: string): string {
 }
 
 /**
+ * Whether this token is one of the options this command defines.
+ *
+ * Asked only where a value option would otherwise swallow the token after it.
+ * A removed spelling is already refused where it stands, and a bare `-` is a
+ * file called `-` rather than an option, so what is left is the retained
+ * grammar: the tokens that mean something here and therefore cannot also be a
+ * caller's filename.
+ */
+function namesRetainedOption(token: string): boolean {
+  if (!token.startsWith("-") || token === "-") {
+    return false;
+  }
+  return KNOWN.has(optionName(token));
+}
+
+/** What a `--journal` that named no path is refused with. */
+export const JOURNAL_PATH_REFUSAL: string =
+  `${JOURNAL_OPTION} needs a path — write \`${JOURNAL_OPTION} <path>\` or leave ` +
+  "it out to record no journal";
+
+/**
  * Whether this name binds a root property of the program a Plan describes.
  *
  * Exactly the aggregate and the two generated prefixes. `--propspective`,
@@ -312,12 +333,19 @@ export function scanPlanArgs(args: readonly string[]): PlanScan {
         }
       }
       if (name === JOURNAL_OPTION) {
-        const value = equals === -1 ? separated : token.slice(equals + 1);
+        // A following token that names an option this command defines is that
+        // option, not a filename. `--journal --verbose` asked for a journal and
+        // named none, and reading the switch as a path would exclusively create
+        // a file called `--verbose` and drop the verbosity the caller asked for
+        // — silently, because a path is a path.
+        const value =
+          equals === -1
+            ? separated !== undefined && namesRetainedOption(separated)
+              ? undefined
+              : separated
+            : token.slice(equals + 1);
         if (value === undefined || value.length === 0) {
-          return refuse(
-            `${JOURNAL_OPTION} needs a path — write \`${JOURNAL_OPTION} <path>\` or leave ` +
-              "it out to record no journal",
-          );
+          return refuse(JOURNAL_PATH_REFUSAL);
         }
       }
       fixed.push(token);

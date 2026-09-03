@@ -167,6 +167,22 @@ $ xmd plan "…" -j trace.jsonl
 unrecognized option for xmd plan: -j — write `--journal <path>`
 ```
 
+`--journal` takes exactly one non-empty path, and a token that names an option
+this command defines is that option rather than a filename. Reading one as a
+path would exclusively create a file called `--verbose` and quietly drop the
+verbosity the caller asked for, so the value is read by fixed grammar rather
+than left to the parser:
+
+```console
+$ xmd plan "…" --journal --verbose
+--journal needs a path — write `--journal <path>` or leave it out to record no journal
+```
+
+Only that position is affected. `--journal <path> --verbose` and
+`--verbose --journal <path>` are both ordinary command lines, `--journal=-x`
+takes whatever follows the `=`, and a removed spelling written there keeps its
+own more specific refusal.
+
 ### What the command removed
 
 Everything that configured **running** the approved program is gone, with no
@@ -769,6 +785,27 @@ or treats it as resume authority.
 
 Without `--journal`, no file is created anywhere.
 
+### What the file holds when the invocation ends
+
+**Whatever committed is complete and readable, however the invocation ended.**
+An entry reaches the file only after it has cleared the pre-append gate, and it
+is appended whole. So the file is always a prefix of the sequence this
+authorship would have recorded — never a truncated record, a half-written line
+or a line without its terminator — and every line in it parses as the durable
+event it is. That holds for all four endings:
+
+| Ending | The file holds |
+| --- | --- |
+| the Plan was approved and delivered | the whole authorship, ending in its terminal event |
+| an ordinary failure — a failed turn, a Stop, exhaustion, cancellation, a teardown failure, the final structural refusal | everything that committed before it, complete |
+| an entry the file would not take | everything that committed before that entry, complete |
+| an event the secret gate rejected | everything that committed before that event, complete, and nothing of the rejected one |
+
+The middle two rows are the ones worth stating: an invocation that ends badly
+still leaves usable evidence, which is the whole reason to ask for a journal in
+the first place. An ordinary failure is not a journal failure — the file took
+every entry it was offered, and no journal diagnostic is reported for it.
+
 **Secret detection covers it.** Every live durable event crosses the serialized
 pre-append gate, so a rejected event reaches neither the file nor the in-memory
 committed sequence, and the file prefix recorded before it stays readable. Help
@@ -791,7 +828,7 @@ Choose a different --journal path and try again.
 ```
 
 An entry the file will not take ends authorship. Teardown completes, the
-committed prefix is preserved, and no Plan is delivered:
+committed prefix is preserved complete, and no Plan is delivered:
 
 ```text
 Could not write the next entry to journal file <path>: <reason>
@@ -924,12 +961,13 @@ neither observation never interpreted what it wrote.
 | PO4 | The ordinary surface is silent | A bare `<Plan>` emits only exact approved source, a captured `<Plan as>` binds the same bytes and emits nothing, and neither expands a progress body whatever verbosity the declaration carries |
 | PO5 | Disclosure | Default progress excludes the request, the drafts, the diagnostics, the feedback and every Agent, provider and tool output; verbose adds every cleared draft and each invalid check's exact structured JSON, in phase order, and nothing else |
 | PO6 | Channels | A non-terminal stderr receives normalized Markdown, a stated terminal receives it rendered, and stdout and `--output` stay byte-identical exact source in both |
-| PO7 | The two options | `--verbose` and `--journal` are accepted on either side of the request, help contains them and the journal warning, and `-V`, `-j`, `--trace` and every removed spelling refuse before the catalog or a session exists |
+| PO7 | The two options | `--verbose` and `--journal` are accepted on either side of the request, help contains them and the journal warning, and `-V`, `-j`, `--trace` and every removed spelling refuse before the catalog or a session exists; a retained option written where the journal path goes is that option rather than a filename, and refuses before any catalog, session, provider, filesystem or artifact work |
 | PO8 | The journal file | With no `--journal` no file appears; with one, the path exists before the catalog and the first turn, a successful trace parses as the existing JSONL events in commit order and ends terminally, and it holds no program-execution event |
 | PO9 | Journal refusals | A pre-existing journal is byte-identical and refuses with the exact copy before any catalog, session, turn, review or artifact work; a path that cannot be created reports the other exact copy |
 | PO10 | A secret in a draft | It reaches neither the progress nor the journal, the earlier prefix stays readable, teardown completes, and no source or artifact is delivered — while the same draft without it is displayed and recorded |
 | PO11 | A secret in a diagnostic | The same, for a failed check's structured findings |
 | PO12 | A refused entry | An append failure after a committed entry reports the exact journal-write diagnostic, preserves a readable prefix, completes teardown and delivers no Plan |
+| PO16 | An ordinary failure | A journal-backed invocation that fails for its own reason — a failed turn, with neither a secret rejection nor a write failure — exits non-zero, delivers no source and no artifact, completes teardown, and leaves a file whose every committed entry parses and whose bytes are exactly those entries re-serialized: no partial or unterminated trailing record |
 | PO13 | A failed destination | A consumer that fails while a turn is live cancels that turn, waits for every owned teardown, attempts no artifact sink, keeps the bytes stderr accepted, and uses the exact progress-failure diagnostic |
 | PO14 | Ordering is unchanged | Cancellation, teardown failure, final validation refusal, the `--output` refusal and a successful delivery all keep their order, and no phase claims an artifact was delivered |
 | PO15 | The adapter and the catalog | The packaged adapter emits no prose of its own, and the catalog is built exactly once, from `<PlanInputs>`, after Preparing |
