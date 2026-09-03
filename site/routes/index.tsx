@@ -27,9 +27,13 @@ import {
 
 const GITHUB = "https://github.com/taras/executable.md";
 const SPEC = `${GITHUB}/blob/main/specs/executable-mdx-spec.md`;
-/** The planner is an ordinary XMD document; the raw file is the evidence. */
+/**
+ * The planner is an ordinary XMD document, and its source is the evidence.
+ * `?plain=1` shows the Markdown as written rather than GitHub's render, so
+ * the components stay visible.
+ */
 const PLANNER_SOURCE =
-  "https://raw.githubusercontent.com/taras/executable.md/refs/heads/main/packages/cli/src/documents/Plan.md";
+  "https://github.com/taras/executable.md/blob/main/packages/cli/src/documents/Plan.md?plain=1";
 const VERSION = "v0.11.0";
 
 const STEP_NUMBER =
