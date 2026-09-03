@@ -1831,8 +1831,8 @@ describe("Tier TG — durability and replay", () => {
 
     // The provider's counters went up and came back down. Reading them only at
     // the end would be true of counters that never moved.
-    expect(heldWhenBlocked).toEqual({ composites: 1, attached: 1, shells: 0 });
-    expect(first.live).toEqual({ composites: 0, attached: 0, shells: 0 });
+    expect(heldWhenBlocked).toEqual({ composites: 1, attached: 1, shells: 0, launches: 0 });
+    expect(first.live).toEqual({ composites: 0, attached: 0, shells: 0, launches: 0 });
     // And the foreground lease came back: it was taken and given back twice
     // over once the run was done.
     expect(leases).toBe(2);
