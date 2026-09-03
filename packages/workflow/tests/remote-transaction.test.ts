@@ -16,7 +16,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { Err, Ok, sleep, spawn, withResolvers, type Operation, type Result } from "effection";
-import type { DurableEvent } from "@executablemd/durable-streams";
+import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
 import {
   type CommitIntent,
   createTransactionGate,
@@ -27,6 +27,19 @@ import {
   transactRemotely,
 } from "../src/remote/collector.ts";
 
+/**
+ * What the transaction refused with, having proved it refused at all.
+ *
+ * A caught value is `unknown`; asserting it would let an unrelated failure read
+ * as the refusal a test expected.
+ */
+function refusalOf(error: unknown): string {
+  if (!(error instanceof RemoteTransactionError)) {
+    throw new Error(`expected a RemoteTransactionError, got ${String(error)}`);
+  }
+  return error.refusal;
+}
+
 /** The name a test event carries, read rather than asserted. */
 function nameOf(entry: DurableEvent | undefined): string {
   if (entry === undefined || !("description" in entry)) {
@@ -36,20 +49,23 @@ function nameOf(entry: DurableEvent | undefined): string {
   if (description === null || typeof description !== "object") {
     return "";
   }
-  const name = (description as Record<string, unknown>)["name"];
+  if (!("name" in description)) {
+    return "";
+  }
+  const name: unknown = description["name"];
   return typeof name === "string" ? name : "";
 }
 
 /**
- * A value the collector should refuse, handed over as an event.
+ * The journal as an untrusted caller reaches it.
  *
- * Through `unknown` rather than a double assertion: the point of the test is
- * that the collector parses what it is given, and manufacturing a value that
- * claims to be an event would be asserting the thing under test.
+ * The collector's job is to parse what it is handed, so a test that proves it
+ * refuses junk must be able to hand it junk. Widening the parameter is how that
+ * happens without manufacturing a value that claims to already be an event —
+ * asserting one would assert away the thing under test.
  */
-function malformed(value: unknown): DurableEvent {
-  const offered: unknown = value;
-  return offered as DurableEvent;
+function offering(journal: DurableStream): { append(event: unknown): Operation<void> } {
+  return journal;
 }
 
 /** Rename a test event in place, to prove the collector cloned it. */
@@ -59,7 +75,7 @@ function rename(entry: DurableEvent, name: string): void {
   }
   const description = entry.description;
   if (description !== null && typeof description === "object") {
-    (description as Record<string, unknown>)["name"] = name;
+    Object.assign(description, { name });
   }
 }
 
@@ -69,7 +85,7 @@ function event(name: string): DurableEvent {
     coroutineId: "root",
     description: { type: "test", name },
     result: { status: "ok", value: name },
-  } as DurableEvent;
+  };
 }
 
 /** A link that records what it was asked, and answers how a test tells it to. */
@@ -207,7 +223,7 @@ describe("a remote transaction", () => {
     }
 
     expect(raised).toBeInstanceOf(RemoteTransactionError);
-    expect((raised as RemoteTransactionError).refusal).toBe("nested-transaction");
+    expect(refusalOf(raised)).toBe("nested-transaction");
     expect(sent).toEqual([]);
   });
 
@@ -226,7 +242,7 @@ describe("a remote transaction", () => {
     });
 
     expect(raised).toBeInstanceOf(RemoteTransactionError);
-    expect((raised as RemoteTransactionError).refusal).toBe("operation-inside-body");
+    expect(refusalOf(raised)).toBe("operation-inside-body");
     // And the gate is closed again afterwards, so the next operation is fine.
     requireNoOpenTransaction(gate);
   });
@@ -247,7 +263,7 @@ describe("a remote transaction", () => {
     } catch (error) {
       raised = error;
     }
-    expect((raised as RemoteTransactionError).refusal).toBe("transaction-closed");
+    expect(refusalOf(raised)).toBe("transaction-closed");
   });
 
   it("owns the handle from before the first suspension until after the commit", function* () {
@@ -272,7 +288,7 @@ describe("a remote transaction", () => {
     } catch (error) {
       raised = error;
     }
-    expect((raised as RemoteTransactionError).refusal).toBe("nested-transaction");
+    expect(refusalOf(raised)).toBe("nested-transaction");
 
     held.resolve();
     yield* first;
@@ -300,7 +316,7 @@ describe("a remote transaction", () => {
     } catch (error) {
       raised = error;
     }
-    expect((raised as RemoteTransactionError).refusal).toBe("operation-inside-body");
+    expect(refusalOf(raised)).toBe("operation-inside-body");
 
     held.resolve();
     yield* first;
@@ -357,13 +373,13 @@ describe("a remote transaction", () => {
     let raised: unknown;
     try {
       yield* transactRemotely(owner, gate, function* (transaction) {
-        yield* transaction.journal.append(malformed({ nothing: true }));
+        yield* offering(transaction.journal).append({ nothing: true });
         return undefined;
       });
     } catch (error) {
       raised = error;
     }
-    expect((raised as RemoteTransactionError).refusal).toBe("malformed-event");
+    expect(refusalOf(raised)).toBe("malformed-event");
     expect(sent).toEqual([]);
   });
 
@@ -383,7 +399,7 @@ describe("a remote transaction", () => {
     } catch (error) {
       raised = error;
     }
-    expect((raised as RemoteTransactionError).refusal).toBe("events-too-large");
+    expect(refusalOf(raised)).toBe("events-too-large");
     expect(sent).toEqual([]);
   });
 

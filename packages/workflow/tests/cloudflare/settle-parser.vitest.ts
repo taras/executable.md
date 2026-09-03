@@ -88,9 +88,69 @@ describe("a settle command", () => {
     expect(read(settle({ expectedWorkspaceRootId: "" }))).toBe("malformed-member");
     expect(read(settle({ expectedWorkspaceRootId: 1 }))).toBe("malformed-member");
   });
-
   it("refuses a member the command does not declare", () => {
     expect(read(settle({ status: "completed" }))).toBe("unknown-member");
     expect(read(settle({ somethingElse: true }))).toBe("unknown-member");
+  });
+});
+
+/**
+ * A retained Workspace root is a content identity, and every command that names
+ * one names the same thing. A command shape that admitted "any non-empty text"
+ * would let a request select a root by a spelling the store can never hold, and
+ * would let two commands disagree about what a root is.
+ *
+ * Shape only. Whether a well-spelled root is the one this run is actually at is
+ * the owner's revalidation, in the checkpoint that has a lifecycle to check it
+ * against.
+ */
+describe("a root identity in a command", () => {
+  const wrong: Record<string, unknown> = {
+    "one character short": ROOT.slice(1),
+    "one character long": `${ROOT}0`,
+    "uppercase hexadecimal": ROOT.toUpperCase(),
+    "hexadecimal with a non-hexadecimal letter": `${ROOT.slice(0, 63)}z`,
+    "a plausible-looking name": "root-a",
+    "not text at all": 7,
+  };
+
+  /** Every root field in the private command shapes, by the request it sits in. */
+  const fields: Record<string, (root: unknown) => string> = {
+    "materialize.workspaceRootId": (root) =>
+      JSON.stringify({ id: "m1", command: "materialize", workspaceRootId: root }),
+    "commit.expectedWorkspaceRootId": (root) => commit({ expectedWorkspaceRootId: root }),
+    "commit.proposedWorkspaceRootId": (root) => commit({ proposedWorkspaceRootId: root }),
+    "settle.expectedWorkspaceRootId": (root) => settle({ expectedWorkspaceRootId: root }),
+  };
+
+  function commit(overrides: Record<string, unknown>): string {
+    return JSON.stringify({
+      id: "c1",
+      command: "commit",
+      expectedWorkspaceRootId: ROOT,
+      expectedJournalEventId: null,
+      content: [],
+      proposedWorkspaceRootId: ROOT,
+      events: [],
+      ...overrides,
+    });
+  }
+
+  it("reads the canonical spelling in every command that names one", () => {
+    for (const [field, request] of Object.entries(fields)) {
+      expect([field, read(request(ROOT))]).toEqual([field, field.split(".")[0]]);
+    }
+  });
+
+  it("refuses anything that is not the canonical spelling", () => {
+    for (const [field, request] of Object.entries(fields)) {
+      for (const [description, root] of Object.entries(wrong)) {
+        expect([field, description, read(request(root))]).toEqual([
+          field,
+          description,
+          "malformed-member",
+        ]);
+      }
+    }
   });
 });

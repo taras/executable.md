@@ -22,7 +22,7 @@
  * dropping the answer and leaving somebody blocked forever.
  */
 
-import { createSignal, each, type Operation, resource, spawn, withResolvers } from "effection";
+import { ensure, type Operation, resource, withResolvers } from "effection";
 
 /** Why the connection itself could not carry a request. */
 export type LinkRefusal =
@@ -30,7 +30,10 @@ export type LinkRefusal =
   | "malformed-answer"
   | "unknown-answer"
   | "duplicate-answer"
-  | "too-large";
+  | "too-large"
+  | "malformed-request"
+  | "send-failed"
+  | "socket-error";
 
 export class OwnerLinkError extends Error {
   override name = "OwnerLinkError";
@@ -61,12 +64,15 @@ export type OwnerAnswer<T> =
  */
 export type AnswerParser<T> = (value: unknown) => T;
 
+/** One listener, kept so teardown can remove the exact callback it installed. */
+export type SocketListener = (event: { data?: unknown }) => void;
+
 /** The socket shape this client needs, so a test can supply one. */
 export interface OwnerSocket {
   send(data: string): void;
   close(): void;
-  addEventListener(type: "message", listener: (event: { data: unknown }) => void): void;
-  addEventListener(type: "close", listener: () => void): void;
+  addEventListener(type: "message" | "close" | "error", listener: SocketListener): void;
+  removeEventListener(type: "message" | "close" | "error", listener: SocketListener): void;
 }
 
 /** One live connection to a run's owner. */
@@ -88,17 +94,31 @@ export interface OwnerConnection {
 /** The most bytes one answer may carry. */
 const MAX_ANSWER = 8 * 1024 * 1024;
 
-/** The longest correlation id this reads back. */
+/** The longest correlation id, in either direction. */
 const MAX_ID = 128;
+
+/**
+ * The longest refusal this reads.
+ *
+ * Small and its own bound: a refusal is a category, and the eight-megabyte
+ * envelope bound is for a command's payload rather than for a word.
+ */
+const MAX_REFUSAL = 200;
+
+/** Whether a correlation id is one this client will send or accept. */
+function usableId(value: unknown): value is string {
+  return typeof value === "string" && value !== "" && value.length <= MAX_ID;
+}
 
 /**
  * The shape a refusal category has.
  *
- * The owner answers with a category and an optional detail, both drawn from
- * closed sets it declares. Holding the answer to that shape is what stops an
- * arbitrary remote string becoming this side's public failure identity: a
- * refusal is something a caller may branch on, so it must not be whatever the
- * other end felt like sending.
+ * The owner answers with a category and an optional detail. This proves
+ * *spelling* and nothing more — a syntactically valid category this build has
+ * never heard of still passes here. Narrowing a refusal to the exact declared
+ * union is the Cloudflare adapter's job, where the union is known; what this
+ * bound is for is stopping an arbitrary remote sentence from travelling as
+ * though it were a category at all.
  */
 const REFUSAL = /^[a-z][a-z0-9-]*(:[a-z][a-z0-9-]*)?$/;
 
@@ -126,15 +146,31 @@ function readAnswer(raw: unknown): { id: string; answer: RawAnswer } {
   const members: Map<string, unknown> = new Map(Object.entries(decoded));
   const id = members.get("id");
   const outcome = members.get("outcome");
-  if (typeof id !== "string" || id === "" || id.length > MAX_ID) {
+  if (!usableId(id)) {
     throw new OwnerLinkError("malformed-answer");
   }
+
+  // Each branch declares its whole key set. A performed answer carrying a
+  // `refusal`, or a refused one carrying a `value`, is an answer the two sides
+  // disagree about the shape of — which is the thing this channel refuses to
+  // carry on past.
+  const declared =
+    outcome === "performed" ? ["id", "outcome", "value"] : ["id", "outcome", "refusal"];
+  if (members.size !== declared.length) {
+    throw new OwnerLinkError("malformed-answer");
+  }
+  for (const key of members.keys()) {
+    if (!declared.includes(key)) {
+      throw new OwnerLinkError("malformed-answer");
+    }
+  }
+
   if (outcome === "performed") {
     return { id, answer: { outcome, value: members.get("value") } };
   }
   if (outcome === "refused") {
     const refusal = members.get("refusal");
-    if (typeof refusal !== "string" || !REFUSAL.test(refusal)) {
+    if (typeof refusal !== "string" || refusal.length > MAX_REFUSAL || !REFUSAL.test(refusal)) {
       throw new OwnerLinkError("malformed-answer");
     }
     return { id, answer: { outcome, refusal } };
@@ -145,9 +181,17 @@ function readAnswer(raw: unknown): { id: string; answer: RawAnswer } {
 /**
  * Hold one connection open for the calling scope.
  *
- * Teardown resolves every request still waiting with a closed refusal rather
- * than leaving it pending: a caller blocked on an answer that can never arrive
- * would outlive the connection it was asking through.
+ * The connection *is* the executor acquisition, so the scope that owns it owns
+ * ending it: there is no lease to expire and no heartbeat to miss, and an owner
+ * that still sees a healthy socket still considers this runner the executor. A
+ * scope that walked away without closing would leave the run unadvanceable by
+ * anybody, forever.
+ *
+ * So teardown is one operation with one owner. Scope exit, cancellation, a
+ * remote close, a socket error, a protocol failure and a failed send all reach
+ * it, it runs once, and it removes the exact listeners it installed and closes
+ * the socket. The failure that caused it is what the waiters are told — a close
+ * arriving afterwards must not rewrite `malformed-answer` into `closed`.
  */
 export function useOwnerConnection(socket: OwnerSocket): Operation<OwnerConnection> {
   return resource(function* (provide) {
@@ -165,60 +209,85 @@ export function useOwnerConnection(socket: OwnerSocket): Operation<OwnerConnecti
     const waiting = new Map<string, Waiter>();
     /** Requests already answered, so a second answer is recognized as one. */
     const settled = new Set<string>();
-    const messages = createSignal<unknown, void>();
     let closed = false;
+    let torn = false;
 
-    socket.addEventListener("message", (event) => messages.send(event.data));
-    socket.addEventListener("close", () => {
-      closed = true;
-      messages.close();
-    });
+    /**
+     * Read one incoming answer and settle the request it names.
+     *
+     * Synchronous, and deliberately so. If this queued the message and read it
+     * later, a close arriving in the same turn would reach teardown first and
+     * the caller would be told `closed` for an answer that was actually
+     * unreadable. What went wrong is decided where it is observed.
+     */
+    const onMessage: SocketListener = (event) => {
+      if (torn) {
+        return;
+      }
+      let read: { id: string; answer: RawAnswer };
+      try {
+        read = readAnswer(event.data);
+      } catch (error) {
+        // The owner said something this build cannot read. Whether it was meant
+        // for a waiter is exactly what cannot be established.
+        teardown(error instanceof OwnerLinkError ? error.refusal : "malformed-answer");
+        return;
+      }
+      const pending = waiting.get(read.id);
+      if (pending === undefined) {
+        // Either a request nobody made, or a second answer to one already
+        // settled. Both mean the two sides disagree about what completed.
+        teardown(settled.has(read.id) ? "duplicate-answer" : "unknown-answer");
+        return;
+      }
+      waiting.delete(read.id);
+      settled.add(read.id);
+      if (!pending.deliver(read.answer)) {
+        // The owner performed the command and described the result in a way
+        // this build cannot read. Handing the caller an unparsed value is the
+        // one outcome that must not happen.
+        waiting.set(read.id, pending);
+        teardown("malformed-answer");
+      }
+    };
+    const onClose: SocketListener = () => teardown("closed");
+    const onError: SocketListener = () => teardown("socket-error");
 
-    /** Stop the channel and tell everyone waiting why. */
-    const fail = (refusal: LinkRefusal) => {
+    /**
+     * End the connection, once.
+     *
+     * `refusal` is what the waiters are told. The first caller decides it: a
+     * remote close after a malformed answer is the same teardown, and the
+     * caller waiting on that answer should learn what actually went wrong.
+     */
+    function teardown(refusal: LinkRefusal): void {
+      if (torn) {
+        return;
+      }
+      torn = true;
       closed = true;
       for (const pending of waiting.values()) {
         pending.fail(new OwnerLinkError(refusal));
       }
       waiting.clear();
-      socket.close();
-    };
+      socket.removeEventListener("message", onMessage);
+      socket.removeEventListener("close", onClose);
+      socket.removeEventListener("error", onError);
+      try {
+        socket.close();
+      } catch {
+        // Already closed, or closing threw on the way out. Either way this
+        // connection is over and there is nothing left to tell anybody.
+      }
+    }
 
-    yield* spawn(function* () {
-      for (const raw of yield* each(messages)) {
-        let read: { id: string; answer: RawAnswer } | undefined;
-        try {
-          read = readAnswer(raw);
-        } catch {
-          // The owner said something this build cannot read. Whether it was
-          // meant for a waiter is exactly what cannot be established.
-          fail("malformed-answer");
-          break;
-        }
-        const pending = waiting.get(read.id);
-        if (pending === undefined) {
-          // Either a request nobody made, or a second answer to one already
-          // settled. Both mean the two sides disagree about what completed.
-          fail(settled.has(read.id) ? "duplicate-answer" : "unknown-answer");
-          break;
-        }
-        waiting.delete(read.id);
-        settled.add(read.id);
-        if (!pending.deliver(read.answer)) {
-          // The owner performed the command and described the result in a way
-          // this build cannot read. Handing the caller an unparsed value is the
-          // one outcome that must not happen.
-          waiting.set(read.id, pending);
-          fail("malformed-answer");
-          break;
-        }
-        yield* each.next();
-      }
-      closed = true;
-      for (const pending of waiting.values()) {
-        pending.fail(new OwnerLinkError("closed"));
-      }
-      waiting.clear();
+    socket.addEventListener("message", onMessage);
+    socket.addEventListener("close", onClose);
+    socket.addEventListener("error", onError);
+    // Registered before anything can suspend, so a cancellation between here
+    // and `provide()` still closes the socket it just started listening to.
+    yield* ensure(() => {
+      teardown("closed");
     });
 
     yield* provide({
@@ -229,6 +298,11 @@ export function useOwnerConnection(socket: OwnerSocket): Operation<OwnerConnecti
       ): Operation<OwnerAnswer<T>> {
         if (closed) {
           throw new OwnerLinkError("closed");
+        }
+        // The same contract an incoming answer is held to. An id this client
+        // would refuse to read must never be one it sends.
+        if (!usableId(id)) {
+          throw new OwnerLinkError("malformed-request");
         }
         if (waiting.has(id) || settled.has(id)) {
           throw new OwnerLinkError("duplicate-answer");
@@ -254,7 +328,14 @@ export function useOwnerConnection(socket: OwnerSocket): Operation<OwnerConnecti
             settle.reject(error);
           },
         });
-        socket.send(JSON.stringify({ ...command, id }));
+        try {
+          socket.send(JSON.stringify({ ...command, id }));
+        } catch {
+          // The socket refused the write. This request never left, and the
+          // connection cannot be trusted to carry the next one either.
+          teardown("send-failed");
+          throw new OwnerLinkError("send-failed");
+        }
         return yield* settle.operation;
       },
     });

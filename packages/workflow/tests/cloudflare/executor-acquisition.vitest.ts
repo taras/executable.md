@@ -329,10 +329,10 @@ describe("reading a runner command", () => {
     const raw = JSON.stringify({
       id: "7",
       command: "commit",
-      expectedWorkspaceRootId: "root-a",
+      expectedWorkspaceRootId: `a${"0".repeat(63)}`,
       expectedJournalEventId: null,
       content: [{ digest: "d1", bytes: "AAAA" }],
-      proposedWorkspaceRootId: "root-b",
+      proposedWorkspaceRootId: `b${"1".repeat(63)}`,
       events: ["event-1"],
     });
     expect(await on(stub, (o) => o.send(1, raw))).toEqual({

@@ -126,6 +126,24 @@ function object(value: unknown): Map<string, unknown> {
   return members;
 }
 
+/**
+ * A retained Workspace root, as the schema spells one.
+ *
+ * The lowercase SHA-256 of a canonical manifest: 64 hexadecimal characters and
+ * nothing else. Admitting any non-empty string would let three commands hold
+ * three different notions of what a root is, and the owner would be the first
+ * to find out.
+ */
+const ROOT_ID = /^[0-9a-f]{64}$/;
+
+function rootId(members: Map<string, unknown>, key: string): string {
+  const value = text(members, key);
+  if (!ROOT_ID.test(value)) {
+    throw new CommandError("malformed-member");
+  }
+  return value;
+}
+
 function text(members: Map<string, unknown>, key: string): string {
   const value = members.get(key);
   if (typeof value !== "string" || value === "") {
@@ -196,7 +214,7 @@ export function parseCommand(raw: string): RunnerCommand {
     return { id, command };
   }
   if (command === "materialize") {
-    return { id, command, workspaceRootId: text(members, "workspaceRootId") };
+    return { id, command, workspaceRootId: rootId(members, "workspaceRootId") };
   }
   if (command === "settle") {
     // The shared parser decides what a completion is. Its failure becomes this
@@ -210,7 +228,7 @@ export function parseCommand(raw: string): RunnerCommand {
       id,
       command,
       completion: completion.value,
-      expectedWorkspaceRootId: text(members, "expectedWorkspaceRootId"),
+      expectedWorkspaceRootId: rootId(members, "expectedWorkspaceRootId"),
     };
   }
   const expectedJournalEventId = members.get("expectedJournalEventId");
@@ -220,10 +238,10 @@ export function parseCommand(raw: string): RunnerCommand {
   return {
     id,
     command,
-    expectedWorkspaceRootId: text(members, "expectedWorkspaceRootId"),
+    expectedWorkspaceRootId: rootId(members, "expectedWorkspaceRootId"),
     expectedJournalEventId,
     content: chunks(members.get("content")),
-    proposedWorkspaceRootId: text(members, "proposedWorkspaceRootId"),
+    proposedWorkspaceRootId: rootId(members, "proposedWorkspaceRootId"),
     events: events(members.get("events")),
   };
 }

@@ -53,11 +53,5 @@ export type { AcquisitionAttachment, AcquisitionRefusal } from "./src/cloudflare
 export { CommandError } from "./src/cloudflare/commands.ts";
 export type { CommandRefusal, CommandResult, RunnerCommand } from "./src/cloudflare/commands.ts";
 
-export {
-  OwnerTransactionClosedError,
-  OwnerTransactionNestedError,
-  OwnerTransactions,
-} from "./src/cloudflare/owner-transaction.ts";
-
 export { WorkflowObjectStorageError } from "./src/cloudflare/recognition.ts";
 export type { RecognitionFailure } from "./src/cloudflare/recognition.ts";
