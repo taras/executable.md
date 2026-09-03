@@ -14,7 +14,7 @@
 
 import { Elicitation } from "@executablemd/core";
 import type { DocumentValidation, ElicitationRequest, SyntaxCatalog } from "@executablemd/core";
-import { Ok } from "effection";
+import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
 import { ensure, scoped, useScope } from "effection";
 import { ensureDir, rm } from "@effectionx/fs";
@@ -74,6 +74,14 @@ export interface PlanHarness {
   catalogCalls: string[][];
   /** Every review request a provider was asked, in order. */
   reviews: ElicitationRequest[];
+  /**
+   * Every progress chunk the stated stderr accepted, in arrival order.
+   *
+   * Chunks rather than a joined string, because when a phase arrives is the
+   * whole point of most of these rows: a case that only read the transcript
+   * could not tell progressive delivery from one buffered summary.
+   */
+  progress: string[];
   /** Review answers, taken in order. Running out is a test defect, not a case. */
   script(review: ScriptedReview): void;
   /** The dependencies `runPlan` is driven with. */
@@ -100,20 +108,51 @@ export function createPlanHarness(options: {
    * session is continued or created a second time.
    */
   store?: FakeStore;
+  /** What this case's host states about its own stderr. Absent is a pipe. */
+  terminal?: boolean;
+  /**
+   * Refuse a progress chunk, standing where a broken pipe would.
+   *
+   * An operation rather than a predicate, because a case about failing *while a
+   * turn is live* has to wait for that turn: a synchronous answer would race the
+   * producer, and the row would sometimes prove nothing. Called with every chunk
+   * in arrival order; an error is that write failing, and the chunk is not
+   * recorded as accepted.
+   */
+  refuseProgress?: (chunk: string, index: number) => Operation<Error | undefined>;
 }): PlanHarness {
   const fake = createFakeAcp();
   const catalogCalls: string[][] = [];
   const reviews: ElicitationRequest[] = [];
   const answers: ScriptedReview[] = [];
+  const progress: string[] = [];
+  let offered = 0;
 
   const harness: PlanHarness = {
     fake,
     catalogCalls,
     reviews,
+    progress,
     script(review) {
       answers.push(review);
     },
     deps: {
+      progress: {
+        terminal: options.terminal === true,
+        *write(chunk) {
+          const index = offered;
+          offered += 1;
+          const refusal =
+            options.refuseProgress === undefined
+              ? undefined
+              : yield* options.refuseProgress(chunk, index);
+          if (refusal !== undefined) {
+            return Err(refusal);
+          }
+          progress.push(chunk);
+          return Ok(undefined);
+        },
+      },
       acp: {
         createRuntime: fake.create,
         sessionStore: options.store ?? makeStore(),
@@ -272,6 +311,14 @@ export function* planDeclarationHarness(options: {
   /** The catalog the first turn is built from. */
   syntax?: string;
   /**
+   * Build the catalog, in place of answering with {@link syntax}.
+   *
+   * A case that needs to know *when* the catalog was built supplies this, which
+   * is the only way to tell an authored phase that precedes the preparation from
+   * one that follows it.
+   */
+  catalog?: () => Operation<string>;
+  /**
    * How this case answers the one structural question the Component asks.
    *
    * The default finds every candidate sound, so what a case reading `checked`
@@ -281,6 +328,8 @@ export function* planDeclarationHarness(options: {
   /** The logical name the command surface fixes. */
   session?: string;
   explicitSession?: boolean;
+  /** Whether the command surface asked for drafts and check diagnostics. */
+  verbose?: boolean;
   /** Absent leaves the harness with no stack at all, as `xmd test` has none. */
   stack?: AuthorshipStack | null;
   store?: FakeStore;
@@ -313,6 +362,7 @@ export function* planDeclarationHarness(options: {
     authorshipRoot: options.authorshipRoot,
     ...(options.session === undefined ? {} : { session: options.session }),
     ...(options.explicitSession === undefined ? {} : { explicitSession: options.explicitSession }),
+    ...(options.verbose === undefined ? {} : { verbose: options.verbose }),
     host: yield* useScope(),
     *installElicitation() {
       yield* Elicitation.around(
@@ -336,8 +386,10 @@ export function* planDeclarationHarness(options: {
         { at: "min" },
       );
     },
-    // deno-lint-ignore require-yield
     *catalog() {
+      if (options.catalog !== undefined) {
+        return yield* options.catalog();
+      }
       return options.syntax ?? "## Built-in components\n\n### `<File>`\n";
     },
     // The deterministic seam standing where production's answer goes, recording

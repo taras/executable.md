@@ -36,6 +36,41 @@ nothing reaches no catalog, no session, no agent and no review.
 <Fail message="<Plan> requires its body to render a non-empty Prompt." />
 </If>
 
+## Bound the drafts and the repairs
+
+<Let as="attempts" value={10} />
+<Let as="repairs" value={3} />
+<Let
+  as="ordinal"
+  value={(count) => {
+    const tens = count % 100;
+    const ones = count % 10;
+    const suffix = tens >= 11 && tens <= 13
+      ? "th"
+      : ones === 1
+      ? "st"
+      : ones === 2
+      ? "nd"
+      : ones === 3
+      ? "rd"
+      : "th";
+    return `${count}${suffix}`;
+  }}
+/>
+<Let as="lastAttempt" value={ordinal(attempts)} />
+
+This workflow writes at most {attempts} Plans and repairs each one at most
+{repairs} times. Both bounds are stated once, here, and every loop, condition and
+sentence below is derived from them — so what you are told and what the workflow
+does cannot come to disagree. The ordinal beside them turns a counter into the
+word a person reads, for the same reason.
+
+<PlanProgress>
+## Preparing the Plan
+
+Getting the available XMD components and constructs and setting up the planning session.
+</PlanProgress>
+
 <PlanInputs session={props.session} instruction={prompt} as="inputs" />
 
 ## Say what this surface calls things
@@ -47,16 +82,19 @@ of them is raised.
 
 <If condition={inputs.surface === "command"}>
 <Let as="stopped" value="xmd plan stopped at your request. Nothing was output." />
-<Let as="unresolved" value="xmd plan ended unexpectedly without an approved Plan. Nothing was output." />
+<Let
+   as="unresolved"
+   value={"xmd plan ended unexpectedly without an approved Plan. Nothing was output.\n\nRun the same command again with --journal plan-authorship.jsonl. If the problem repeats, include the journal in the bug report."}
+/>
 <Let
    as="explained"
-   value={"xmd plan could not generate an approved Plan after 10 attempts.\n\nThe coding agent explained why planning was unsuccessful and how to improve the outcome:"}
+   value={`xmd plan could not generate an approved Plan after ${attempts} attempts.\n\nThe coding agent explained why planning was unsuccessful and how to improve the outcome:`}
 />
 <Let as="closing" value="Nothing was output." />
 <Else>
 <Let as="stopped" value="Plan authorship stopped at your request. No Plan was returned." />
 <Let as="unresolved" value="Plan authorship ended without an approved Plan. No Plan was returned." />
-<Let as="explained" value="Plan authorship reviewed ten drafts without an approved Plan. The coding agent explained why:" />
+<Let as="explained" value={`Plan authorship reviewed ${attempts} drafts without an approved Plan. The coding agent explained why:`} />
 <Let as="closing" value="No Plan was returned." />
 </Else>
 </If>
@@ -72,6 +110,16 @@ of them is raised.
 <Session name={inputs.session}>
 
 ## Create the first draft
+
+<Let as="attemptOrdinal" value={ordinal(round + 1)} />
+
+<PlanProgress>
+## Drafting the Plan
+
+The coding agent is turning your request into an XMD program.
+
+This is the {attemptOrdinal} of up to {attempts} attempts.
+</PlanProgress>
 
 <Prompt as="draft">
 Create one complete XMD Plan from this Prompt:
@@ -117,22 +165,60 @@ Reply with the Plan source and nothing else. No enclosing code fence, no
 explanation before or after it.
 </Prompt>
 
-<Loop max={10}>
+<PlanProgress verbose={true}>
+## Generated draft
+
+The coding agent produced this draft:
+
+<CodeBlock value={draft} language="markdown" />
+</PlanProgress>
+
+<Loop max={attempts}>
 <Let as="round" value={round + 1} />
 
 ## Check and repair the draft
 
 Each new draft is checked before it is shown to you. If the check finds problems,
-the coding agent gets up to three repair attempts to replace it with a corrected
-Plan. A revision you request later is a new draft and receives three repair
-attempts of its own.
+the coding agent gets up to {repairs} repair attempts to replace it with a
+corrected Plan. A revision you request later is a new draft and receives
+{repairs} repair attempts of its own.
+
+<PlanProgress>
+## Checking the draft
+
+Checking that it is valid XMD and uses the available components and constructs correctly.
+</PlanProgress>
 
 <CheckDraft source={draft} as="check" />
 
-<Loop max={3}>
+<If condition={!check.valid}>
+<PlanProgress verbose={true}>
+## Problems found in the draft
+
+The XMD check found these problems:
+
+<Json value={check.diagnostics} as="found" />
+<CodeBlock value={found} language="json" />
+</PlanProgress>
+</If>
+
+<Let as="repair" value={0} />
+
+<Loop max={repairs}>
 <If condition={check.valid}>
 <Break />
 </If>
+
+<Let as="repair" value={repair + 1} />
+<Let as="repairOrdinal" value={ordinal(repair)} />
+
+<PlanProgress>
+## Repairing the draft
+
+The coding agent is correcting problems found by the XMD check.
+
+This is the {repairOrdinal} of up to {repairs} repairs for the current Plan attempt.
+</PlanProgress>
 
 <Prompt as="draft">
 That Plan has problems. These are the exact ones:
@@ -159,22 +245,53 @@ Reply with the Plan source and nothing else. No enclosing code fence, no
 explanation before or after it.
 </Prompt>
 
+<PlanProgress verbose={true}>
+## Generated draft
+
+The coding agent produced this draft:
+
+<CodeBlock value={draft} language="markdown" />
+</PlanProgress>
+
+<PlanProgress>
+## Checking the draft
+
+Checking that it is valid XMD and uses the available components and constructs correctly.
+</PlanProgress>
+
 <CheckDraft source={draft} as="check" />
+
+<If condition={!check.valid}>
+<PlanProgress verbose={true}>
+## Problems found in the draft
+
+The XMD check found these problems:
+
+<Json value={check.diagnostics} as="found" />
+<CodeBlock value={found} language="json" />
+</PlanProgress>
+</If>
 </Loop>
 
-## Explain a tenth draft that could not be repaired
+## Explain a last draft that could not be repaired
 
-Ten drafts is the limit, and the tenth cannot be revised into an eleventh. So a
-tenth draft that still has problems after its repair attempts leaves nothing to
-approve and nothing to ask for — there is no decision left for you to make, and
-this workflow does not ask you to make one.
+The limit is {attempts} drafts, and the last of them cannot be revised into
+another. So a {lastAttempt} draft that still has problems after its repair
+attempts leaves nothing to approve and nothing to ask for — there is no decision
+left for you to make, and this workflow does not ask you to make one.
 
 Instead the coding agent is asked once, automatically, why the attempts did not
 work and what would make a future prompt more likely to succeed. That answer is
 explanation and nothing else: it creates no new draft, extends no limit, and
 ends this Plan without a program.
 
-<If condition={round === 10 && !check.valid}>
+<If condition={round === attempts && !check.valid}>
+<PlanProgress>
+## Could not generate a Plan
+
+The draft still has problems after {attempts} attempts. The coding agent is reviewing why planning was unsuccessful and how to improve the outcome of a future attempt.
+</PlanProgress>
+
 <Prompt as="explanation">
 The final Plan still has these problems:
 
@@ -198,8 +315,15 @@ complete draft after its repair attempts.
   new draft.
 - Choose **Stop** to end without returning anything.
 
-A draft with remaining problems cannot be approved, and the tenth draft cannot
-be revised, so on either of those the choices you are offered are narrower.
+A draft with remaining problems cannot be approved, and the {lastAttempt} draft
+cannot be revised, so on either of those the choices you are offered are
+narrower.
+
+<PlanProgress>
+## Waiting for your review
+
+Review the draft and choose what should happen next.
+</PlanProgress>
 
 <Elicit
   as="review"
@@ -209,7 +333,7 @@ be revised, so on either of those the choices you are offered are narrower.
       decision: {
         type: "string",
         enum: check.valid
-          ? (round === 10 ? ["Approve", "Stop"] : ["Approve", "Request changes", "Stop"])
+          ? (round === attempts ? ["Approve", "Stop"] : ["Approve", "Request changes", "Stop"])
           : ["Request changes", "Stop"],
       },
       feedback: { type: "string" },
@@ -239,8 +363,8 @@ be revised, so on either of those the choices you are offered are narrower.
 <If condition={!check.valid}>
 ### Problems that remain
 
-The coding agent used all three repair attempts, but the draft still has these
-problems:
+The coding agent used all {repairs} repair attempts, but the draft still has
+these problems:
 
 <Json value={check.diagnostics} as="problems" />
 <CodeBlock value={problems} language="json" />
@@ -254,12 +378,32 @@ feedback to the coding agent and starts a new draft. Stop ends here.
 
 <If condition={review.decision === "Approve"}>
 <Let as="approved" value={draft} />
+<PlanProgress>
+## Finalizing the Plan
+
+Closing the planning session and producing the final Plan from the approved draft.
+</PlanProgress>
 <Break />
 </If>
 
 <If condition={review.decision === "Stop"}>
+<PlanProgress>
+## Stopping planning
+
+Closing the planning session without producing a Plan.
+</PlanProgress>
 <Fail message={stopped} />
 </If>
+
+<Let as="attemptOrdinal" value={ordinal(round + 1)} />
+
+<PlanProgress>
+## Revising the Plan
+
+The coding agent is applying the changes you requested.
+
+This is the {attemptOrdinal} of up to {attempts} attempts.
+</PlanProgress>
 
 <Prompt as="draft">
 You read that Plan and asked for this to change:
@@ -284,6 +428,14 @@ it did not describe the Plan.
 Reply with the Plan source and nothing else. No enclosing code fence, no
 explanation before or after it.
 </Prompt>
+
+<PlanProgress verbose={true}>
+## Generated draft
+
+The coding agent produced this draft:
+
+<CodeBlock value={draft} language="markdown" />
+</PlanProgress>
 </Loop>
 
 </Session>

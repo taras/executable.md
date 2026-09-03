@@ -195,6 +195,7 @@ describe("Tier AE — embedded adapters on the run and plan paths", () => {
           request: REQUEST,
           include: [dir],
           output: join(dir, "plan.md"),
+          verbose: false,
           stack: { ...stackWith(installingAdapters(prepared)), defaultAgent: AGENT },
         },
         harness.deps,

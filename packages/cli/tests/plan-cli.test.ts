@@ -25,7 +25,9 @@ import { runCli } from "@executablemd/test-support/launch";
 import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { stat } from "@executablemd/runtime";
 import { Elicitation } from "@executablemd/core";
-import { ensure, scoped, spawn, until } from "effection";
+import type { DocumentValidation } from "@executablemd/core";
+import type { DurableEvent } from "@executablemd/durable-streams";
+import { ensure, Ok, scoped, spawn, until } from "effection";
 import type { Operation } from "effection";
 import { join } from "node:path";
 import { readdir } from "node:fs/promises";
@@ -37,6 +39,9 @@ import { runPlan } from "../src/plan.ts";
 import type { PlanCommand } from "../src/plan.ts";
 import type { AuthorshipStack } from "../src/agent-stack.ts";
 import { planComponentDescription, structuralValidation } from "../src/plan-component.ts";
+import type { StructuralValidation } from "../src/plan-component.ts";
+import { FileStream } from "../src/file-stream.ts";
+import { createPlanJournal, planJournalStream } from "../src/plan-journal.ts";
 import {
   namesPlan,
   namesRetiredCommand,
@@ -128,12 +133,19 @@ const STACK: AuthorshipStack = {
 };
 
 /** One invocation, writing its approved source to stdout or to a file. */
-function planning(dir: string, output?: string, session?: string): PlanCommand {
+function planning(
+  dir: string,
+  output?: string,
+  session?: string,
+  observability: { verbose?: boolean; journal?: string } = {},
+): PlanCommand {
   return {
     request: REQUEST,
     include: [dir],
     ...(output === undefined ? {} : { output }),
     ...(session === undefined ? {} : { session }),
+    verbose: observability.verbose === true,
+    ...(observability.journal === undefined ? {} : { journal: observability.journal }),
     stack: STACK,
   };
 }
@@ -218,6 +230,8 @@ const PLAN_HELP = [
   "Options:",
   "   --output [OUTPUT]         write the approved source here instead of to stdout (path must not exist)",
   "   --session [SESSION]       logical name for the assistant session (default: unique to this invocation)",
+  "   --verbose                 show generated drafts and XMD check diagnostics on stderr [default: false]",
+  "   --journal [JOURNAL]       record the planning process as diagnostic JSONL (path must not exist)",
   "   --include <INCLUDE>...    component search directory [default: components,.]",
   "   --agent-provider <AGENTPROVIDER> agent provider for Plan authorship [default: acpx]",
   "   --default-agent [DEFAULTAGENT] default agent name (overrides DEFAULT_AGENT_NAME)",
@@ -246,17 +260,25 @@ const PLAN_HELP = [
   "",
   "A named --session continues the planning conversation. Without it, this",
   "invocation uses a unique session.",
+  "",
+  "Secret detection checks journal entries before they are recorded, but it may not",
+  "catch every sensitive detail. The journal can contain prompts, drafts, and review",
+  "answers.",
 ].join("\n");
 
-/** Every option `xmd plan` removed, as help and a refusal spell them. */
+/**
+ * Every option `xmd plan` removed, as help and a refusal spell them.
+ *
+ * The two short aliases are here and their long spellings are not: `--verbose`
+ * and `--journal` describe writing a Plan and are part of this grammar, while
+ * `-V` and `-j` are `xmd run`'s aliases for options about a program's run.
+ */
 const REMOVED_SPELLINGS = [
   "--run",
   "--props",
   "--no-props",
   "--raw",
-  "--verbose",
   "-V",
-  "--journal",
   "-j",
   "--timeout-exec",
   "--timeout-fetch",
@@ -332,8 +354,12 @@ describe(
         expect(stdout.trimEnd()).toBe(PLAN_HELP);
         // Which is also the whole of it: no removed option is described,
         // mentioned as refused, or listed among the ones this command takes.
+        // Matched as whole tokens, because `-j` is a substring of the
+        // `--journal` this command does define.
         for (const spelling of REMOVED_SPELLINGS) {
-          expect(stdout).not.toContain(spelling);
+          expect(`${spelling}: ${new RegExp(`(^|\\s)${spelling}\\b`, "m").test(stdout)}`).toBe(
+            `${spelling}: false`,
+          );
         }
         expect(stdout).not.toContain("XMD_PROPS");
         // Help reads no catalog and creates nothing.
@@ -424,11 +450,7 @@ describe(
 
     it("PS3: every other removed option refuses before authorship", function* () {
       for (const option of [
-        ["--journal", "trace.jsonl"],
-        ["-j", "trace.jsonl"],
         ["--raw"],
-        ["--verbose"],
-        ["-V"],
         ["--timeout-exec", "5s"],
         ["--timeout-fetch", "5s"],
         ["--approve-all"],
@@ -458,11 +480,11 @@ describe(
 
       // Beside `--help`, in either order, exactly as `--run` is.
       for (const argv of [
-        ["--help", "--journal", "trace.jsonl"],
-        ["--journal", "trace.jsonl", "--help"],
+        ["--help", "--raw"],
+        ["--raw", "--help"],
       ]) {
-        const { stderr } = yield* refusedEarly(argv, removedOptionRefusal("--journal"));
-        expect(complaints(stderr)).toBe(removedOptionRefusal("--journal"));
+        const { stderr } = yield* refusedEarly(argv, removedOptionRefusal("--raw"));
+        expect(complaints(stderr)).toBe(removedOptionRefusal("--raw"));
       }
 
       // A name that merely begins like a property option is an option this
@@ -778,9 +800,11 @@ describe(
           "The other provider did not provide an Agent context for <Plan>. " +
             "No Plan was returned. Nothing was output.",
         );
-        // Refused before a directory, a provider, a turn or a review existed.
+        // Refused before the catalog, a directory, a provider, a turn or a
+        // review existed. The catalog is built by `<PlanInputs>` now, and this
+        // refusal happens before the command document starts at all.
         expect(untouched(harness)).toEqual({
-          catalogs: 1,
+          catalogs: 0,
           runtimes: 0,
           started: false,
           turns: 0,
@@ -908,6 +932,606 @@ describe(
       const expired = yield* runCli(["plan", REQUEST, "--timeout=1ms"]).join();
       expect(expired.code).toBe(1);
       expect(expired.stderr).toContain("exceeded its --timeout of 1ms and was cancelled");
+    });
+  },
+);
+
+/** The escape a terminal renderer introduces and a pipe never sees. */
+const ANSI = "\u001b[";
+
+/**
+ * A synthetic GitHub token, format-realistic and assembled at run time.
+ *
+ * Built rather than written, so no usable-looking literal enters the repository
+ * and this file does not trip the scanning it is about.
+ */
+function canary(): string {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  return ["ghp", "_", alphabet.slice(0, 36)].join("");
+}
+
+/** The same shape, with nothing in it a scanner objects to. */
+const SAFE_VALUE = "not-a-credential-at-all";
+
+/** A draft holding the canary, so the turn that produced it is refused. */
+function canaryDraft(): string {
+  return ["# Uses a token", "", `The value is ${canary()}.`, ""].join("\n");
+}
+
+/** The same draft, clean: the control that shows the verbose branch does run. */
+const CLEAN_DRAFT = ["# Uses a token", "", `The value is ${SAFE_VALUE}.`, ""].join("\n");
+
+/** The phase headings an operator read, in order. */
+function phasesOf(transcript: string): string[] {
+  return transcript
+    .split("\n")
+    .filter((line) => line.startsWith("## "))
+    .map((line) => line.slice(3));
+}
+
+/** One journal file, read back as the NDJSON sequence it is. */
+function* journalEvents(path: string): Operation<DurableEvent[]> {
+  const text = yield* readTextFile(path);
+  return text
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line));
+}
+
+/**
+ * Tier PO — observable `xmd plan` authorship
+ * (specs/plan-command-spec.md).
+ *
+ * Rows PO6-PO15, the half of the tier that is about channels rather than
+ * phases: which stream each thing lands on, what a `--journal` file holds, what
+ * the secret boundary keeps out of both, and what happens when a destination
+ * stops accepting. The authored phases and their counters are proven against
+ * the packaged document itself, in `plan-command-document.test.ts`.
+ *
+ * Progress is observed through the host dependency the CLI supplies, so a case
+ * reads the same chunks `process.stderr` would have been handed, in the same
+ * order, without a real terminal or a real pipe in the evidence.
+ */
+describe(
+  "Tier PO — observable xmd plan authorship",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    it("PO6: progress is stderr's and the approved bytes are stdout's", function* () {
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const piped = createPlanHarness({ authorshipRoot });
+        piped.fake.script({ reply: EFFECT_AND_FAILURE });
+        piped.script({ decision: "Approve" });
+
+        const { value, chunks } = yield* delivered(() => runPlan(planning(dir), piped.deps));
+
+        expect(value).toBe(0);
+        // Stdout carries the approved source and nothing else — no phase, no
+        // heading, no newline this command added.
+        expect(chunks).toEqual([EFFECT_AND_FAILURE]);
+        // A stated pipe receives normalized Markdown with no terminal
+        // formatting in it at all.
+        const transcript = piped.progress.join("");
+        expect(transcript).toContain("## Preparing the Plan");
+        expect(transcript).not.toContain(ANSI);
+        // And the progress channel never carried the source.
+        expect(transcript).not.toContain(EFFECT_AND_FAILURE.trim());
+      });
+
+      // A host that states its stderr is a terminal gets terminal formatting on
+      // that stream, and the artifact stays byte-identical. The observable is
+      // the verbose draft block: rendered for a terminal, a fenced block
+      // becomes indented text, while a pipe receives the fence itself. Colour
+      // is not asserted — chalk decides that from the stream it is writing to,
+      // and in a test process it decides against it.
+      const rendered: Record<string, string> = {};
+      for (const terminal of [false, true]) {
+        yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+          const out = join(dir, "release.md");
+          const harness = createPlanHarness({ authorshipRoot, terminal });
+          harness.fake.script({ reply: EFFECT_AND_FAILURE });
+          harness.script({ decision: "Approve" });
+
+          const { value, chunks } = yield* delivered(() =>
+            runPlan(planning(dir, out, undefined, { verbose: true }), harness.deps),
+          );
+
+          expect(`${terminal}: ${value}`).toBe(`${terminal}: 0`);
+          rendered[String(terminal)] = harness.progress.join("");
+          // Whichever stderr this is, the artifact holds the exact approved
+          // bytes and stdout holds nothing.
+          expect(yield* readTextFile(out)).toBe(EFFECT_AND_FAILURE);
+          expect(chunks).toEqual([]);
+        });
+      }
+
+      // The pipe received the Markdown as written; the terminal received it
+      // rendered, with the fence turned into indentation.
+      expect(rendered.false).toContain("```markdown");
+      expect(rendered.false).toContain("\n## Generated draft");
+      expect(rendered.true).not.toContain("```markdown");
+      expect(rendered.true).toContain("    # A program nobody asked to run");
+      expect(rendered.true).toContain("Generated draft");
+    });
+
+    it("PO7: both authorship options work either side of the request; the aliases do not", function* () {
+      // Accepted before and after the request, together, through the real
+      // parser — and with an impossible agent, so what is proven is that the
+      // grammar let the invocation reach authorship rather than that the
+      // invocation succeeded.
+      yield* useWorkingDirectory(function* (dir) {
+        const home = join(dir, "home");
+        yield* ensureDir(home);
+        for (const args of [
+          [REQUEST, "--verbose", "--journal", "before.jsonl"],
+          ["--verbose", "--journal", "after.jsonl", REQUEST],
+        ]) {
+          const result = yield* runCli(
+            ["plan", ...args, "--default-agent", "xmd-nonexistent-agent"],
+            { cwd: dir, env: { HOME: home } },
+          ).join();
+
+          // Neither spelling was refused by fixed grammar: the invocation got
+          // as far as the agent it cannot start.
+          expect(`${args.join(" ")}: ${result.stderr.includes("unrecognized option")}`).toBe(
+            `${args.join(" ")}: false`,
+          );
+          expect(`${args.join(" ")}: ${result.stdout}`).toBe(`${args.join(" ")}: `);
+        }
+      });
+
+      // The short aliases are answered with the long spelling, and reach no
+      // catalog, session, provider or file.
+      for (const [alias, spelling] of [
+        ["-V", "--verbose"],
+        ["-j", "--journal <path>"],
+      ] as const) {
+        const refusal = `unrecognized option for xmd plan: ${alias} — write \`${spelling}\``;
+        const { stderr } = yield* refusedEarly([REQUEST, alias], refusal);
+        expect(complaints(stderr)).toBe(refusal);
+      }
+      // And `--trace` is nobody's option here.
+      yield* refusedEarly([REQUEST, "--trace"], "unrecognized option for xmd plan: --trace");
+    });
+
+    it("PO8: no journal writes no file, and one records authorship as ordinary JSONL", function* () {
+      // Without `--journal`, nothing is created anywhere.
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const harness = createPlanHarness({ authorshipRoot });
+        harness.fake.script({ reply: PLAIN });
+        harness.script({ decision: "Approve" });
+
+        const { value } = yield* delivered(() => runPlan(planning(dir), harness.deps));
+
+        expect(value).toBe(0);
+        expect(yield* until(readdir(dir))).toEqual([]);
+      });
+
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const journal = join(dir, "authorship.jsonl");
+        const harness = createPlanHarness({ authorshipRoot });
+        // A Plan that writes a file and then fails, so "no later program run"
+        // is a fact about this journal rather than an absence nothing could
+        // have produced.
+        harness.fake.script({ reply: EFFECT_AND_FAILURE });
+        // The file has to exist before the work it records, so this is read
+        // from inside the review — with the turn already committed and the
+        // approval not yet given.
+        const answered = { existed: false, entries: 0 };
+        harness.deps.installElicitation = function* () {
+          yield* Elicitation.around(
+            {
+              *elicit([request], _next) {
+                harness.reviews.push(request);
+                answered.existed = yield* exists(journal);
+                answered.entries = (yield* readTextFile(journal))
+                  .split("\n")
+                  .filter(Boolean).length;
+                return { decision: "Approve" };
+              },
+            },
+            { at: "min" },
+          );
+        };
+
+        const { value, chunks } = yield* delivered(() =>
+          runPlan(planning(dir, undefined, undefined, { journal }), harness.deps),
+        );
+
+        expect(value).toBe(0);
+        expect(chunks.join("")).toBe(EFFECT_AND_FAILURE);
+        // Created before the catalog, the session and the turn: by the review
+        // it already holds the entries those phases committed.
+        expect(answered.existed).toBe(true);
+        expect(answered.entries).toBeGreaterThan(0);
+
+        // The whole trace parses as the existing NDJSON sequence, in commit
+        // order, and ends terminally.
+        const events = yield* journalEvents(journal);
+        expect(events.length).toBeGreaterThan(answered.entries);
+        expect(events.at(-1)?.type).toBe("close");
+        // It records authorship and no later program run. The approved source
+        // is *in* the file, because a draft is retained content — what is not
+        // there is any effect of running it: no execution event, and none of
+        // the file the program writes.
+        expect(yield* until(readdir(dir))).toEqual(["authorship.jsonl"]);
+        const kinds = new Set(
+          events
+            .filter((event) => event.type === "yield")
+            .map((event) => String(Reflect.get(Object(event.description), "type"))),
+        );
+        expect([...kinds].filter((kind) => /exec|process|command|write/.test(kind))).toEqual([]);
+      });
+    });
+
+    it("PO9: an existing journal is refused untouched, before anything else happens", function* () {
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const journal = join(dir, "kept.jsonl");
+        yield* writeTextFile(journal, "keep me\n");
+        const harness = createPlanHarness({ authorshipRoot });
+        harness.fake.script({ reply: PLAIN });
+        harness.script({ decision: "Approve" });
+
+        const { value, lines } = yield* reported(() =>
+          runPlan(planning(dir, join(dir, "release.md"), undefined, { journal }), harness.deps),
+        );
+
+        expect(value).toBe(1);
+        expect(lines.join("\n")).toBe(
+          `Journal file already exists: ${journal}. Choose a different --journal path.`,
+        );
+        // Byte-identical, and nothing downstream of the refusal happened: no
+        // catalog, no provider, no session, no turn, no review and no artifact.
+        expect(yield* readTextFile(journal)).toBe("keep me\n");
+        expect(untouched(harness)).toEqual({
+          catalogs: 0,
+          runtimes: 0,
+          started: false,
+          turns: 0,
+          reviews: 0,
+        });
+        expect(yield* until(readdir(dir))).toEqual(["kept.jsonl"]);
+        expect(harness.progress).toEqual([]);
+      });
+
+      // A path this command cannot create at all gets the other refusal, whole.
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const journal = join(dir, "missing", "trace.jsonl");
+        const harness = createPlanHarness({ authorshipRoot });
+        harness.fake.script({ reply: PLAIN });
+
+        const { value, lines } = yield* reported(() =>
+          runPlan(planning(dir, undefined, undefined, { journal }), harness.deps),
+        );
+
+        expect(value).toBe(1);
+        const paragraphs = lines.join("\n").split("\n\n");
+        expect(paragraphs[0].startsWith(`Could not create journal file ${journal}: `)).toBe(true);
+        expect(paragraphs.slice(1)).toEqual(["Choose a different --journal path and try again."]);
+        expect(untouched(harness)).toEqual({
+          catalogs: 0,
+          runtimes: 0,
+          started: false,
+          turns: 0,
+          reviews: 0,
+        });
+      });
+    });
+
+    it("PO10: a secret in a draft reaches neither the progress nor the journal", function* () {
+      // The control first: the same shape without the canary is visible under
+      // `--verbose`, so an absent draft below is the gate's doing rather than a
+      // verbose branch that never ran.
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const journal = join(dir, "clean.jsonl");
+        const harness = createPlanHarness({ authorshipRoot });
+        harness.fake.script({ reply: CLEAN_DRAFT });
+        harness.script({ decision: "Approve" });
+
+        const { value } = yield* delivered(() =>
+          runPlan(planning(dir, undefined, undefined, { journal, verbose: true }), harness.deps),
+        );
+
+        expect(value).toBe(0);
+        expect(harness.progress.join("")).toContain(SAFE_VALUE);
+        expect(yield* readTextFile(journal)).toContain(SAFE_VALUE);
+      });
+
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const journal = join(dir, "tainted.jsonl");
+        const harness = createPlanHarness({ authorshipRoot });
+        harness.fake.script({ reply: canaryDraft() });
+
+        const { value, chunks } = yield* delivered(() =>
+          reported(() =>
+            runPlan(
+              planning(dir, join(dir, "release.md"), undefined, { journal, verbose: true }),
+              harness.deps,
+            ),
+          ),
+        );
+
+        expect(value.value).toBe(1);
+        // The gate is what ended it, rather than a scenario that stopped for
+        // some other reason: the run reports the rejection, and reports it
+        // without repeating what it found.
+        expect(value.lines.join("\n")).toContain(
+          "secret detection rejected content before it was persisted",
+        );
+        expect(value.lines.join("\n")).not.toContain(canary());
+        // The supplying event never cleared the pre-append gate, so the draft
+        // binding never existed and the verbose phase after it was unreachable.
+        const transcript = harness.progress.join("");
+        expect(transcript).not.toContain(canary());
+        expect(phasesOf(transcript)).not.toContain("Generated draft");
+        // Nor is it in the file — while the prefix committed before it is
+        // still there and still parses.
+        expect(yield* readTextFile(journal)).not.toContain(canary());
+        expect((yield* journalEvents(journal)).length).toBeGreaterThan(0);
+        // Teardown completed and nothing was delivered.
+        expect(harness.fake.closes.length).toBeGreaterThan(0);
+        expect(chunks).toEqual([]);
+        expect((yield* until(readdir(dir))).sort()).toEqual(["tainted.jsonl"]);
+      });
+    });
+
+    it("PO11: a secret in a failed check's diagnostics is kept out of both, too", function* () {
+      /** A structural refusal whose message carries `secret`. */
+      const refusing = (secret: string): StructuralValidation =>
+        // deno-lint-ignore require-yield
+        function* (): Operation<DocumentValidation> {
+          return {
+            version: 1,
+            outcome: "invalid",
+            diagnostics: [
+              { code: "component-unresolved", message: `no component answers ${secret}` },
+            ],
+            invocations: [],
+          };
+        };
+
+      // The control: a clean diagnostic is displayed and recorded.
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const journal = join(dir, "clean.jsonl");
+        const harness = createPlanHarness({ authorshipRoot });
+        harness.deps.validate = refusing(SAFE_VALUE);
+        for (const _draft of [0, 1, 2, 3]) {
+          harness.fake.script({ reply: PLAIN });
+        }
+        harness.script({ decision: "Stop" });
+
+        const { value } = yield* reported(() =>
+          runPlan(planning(dir, undefined, undefined, { journal, verbose: true }), harness.deps),
+        );
+
+        expect(value).toBe(1);
+        expect(harness.progress.join("")).toContain(SAFE_VALUE);
+        expect(yield* readTextFile(journal)).toContain(SAFE_VALUE);
+      });
+
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const journal = join(dir, "tainted.jsonl");
+        const harness = createPlanHarness({ authorshipRoot });
+        harness.deps.validate = refusing(canary());
+        harness.fake.script({ reply: PLAIN });
+
+        const { value, chunks } = yield* delivered(() =>
+          reported(() =>
+            runPlan(
+              planning(dir, join(dir, "release.md"), undefined, { journal, verbose: true }),
+              harness.deps,
+            ),
+          ),
+        );
+
+        expect(value.value).toBe(1);
+        expect(value.lines.join("\n")).toContain(
+          "secret detection rejected content before it was persisted",
+        );
+        expect(value.lines.join("\n")).not.toContain(canary());
+        const transcript = harness.progress.join("");
+        expect(transcript).not.toContain(canary());
+        expect(phasesOf(transcript)).not.toContain("Problems found in the draft");
+        expect(yield* readTextFile(journal)).not.toContain(canary());
+        // The prefix committed before the refused check is readable.
+        expect((yield* journalEvents(journal)).length).toBeGreaterThan(0);
+        expect(chunks).toEqual([]);
+        expect((yield* until(readdir(dir))).sort()).toEqual(["tainted.jsonl"]);
+      });
+    });
+
+    it("PO12: an entry the journal will not take ends authorship and keeps the prefix", function* () {
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const journal = join(dir, "partial.jsonl");
+        const harness: PlanHarness = createPlanHarness({ authorshipRoot });
+        harness.fake.script({ reply: PLAIN });
+        harness.script({ decision: "Approve" });
+
+        // The real exclusive creation, then a backing stream that writes the
+        // same file until the first turn is under way and refuses everything
+        // after it. Refusing by that point rather than by a count is what makes
+        // the row about a journal that failed *during* authorship: a provider
+        // exists to tear down, and a readable prefix is already on disk. The
+        // diagnostic a case reads back is the command's own translation rather
+        // than a message the case wrote.
+        harness.deps.journal = function* (path) {
+          const created = yield* createPlanJournal(path);
+          if (!created.ok) {
+            return created;
+          }
+          const file = new FileStream(path);
+          return Ok(
+            planJournalStream(path, {
+              readAll: () => file.readAll(),
+              *append(event) {
+                if (harness.fake.prompts.length > 0) {
+                  throw new Error("EACCES: permission denied, open 'partial.jsonl'");
+                }
+                yield* file.append(event);
+              },
+            }),
+          );
+        };
+
+        const { value, chunks } = yield* delivered(() =>
+          reported(() =>
+            runPlan(planning(dir, join(dir, "release.md"), undefined, { journal }), harness.deps),
+          ),
+        );
+
+        expect(value.value).toBe(1);
+        expect(value.lines.join("\n")).toContain(
+          `Could not write the next entry to journal file ${journal}: ` +
+            "EACCES: permission denied, open 'partial.jsonl'",
+        );
+        expect(value.lines.join("\n")).toContain(
+          "The journal still contains the entries recorded before this failure.",
+        );
+        // The entries that committed before the refusal are still there and
+        // still parse — a prefix, not a truncated record. The last of them is
+        // the turn whose result the file would not take.
+        const prefix = yield* journalEvents(journal);
+        expect(prefix.length).toBeGreaterThan(0);
+        expect(prefix.at(-1)?.type).toBe("yield");
+        // Teardown completed and nothing was delivered.
+        expect(harness.fake.closes.length).toBeGreaterThan(0);
+        expect(chunks).toEqual([]);
+        expect((yield* until(readdir(dir))).sort()).toEqual(["partial.jsonl"]);
+      });
+    });
+
+    it("PO13: a progress destination that fails cancels authorship and delivers nothing", function* () {
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const harness: PlanHarness = createPlanHarness({
+          authorshipRoot,
+          // The first chunk lands; the second is held until the turn it
+          // announced is actually in flight, and then refused. A destination
+          // that refused everything would prove only that nothing was ever
+          // written, and a synchronous refusal would race the producer.
+          *refuseProgress(_chunk, index) {
+            if (index !== 1) {
+              return undefined;
+            }
+            yield* harness.fake.startedTurns(1);
+            return new Error("EPIPE: broken pipe, write");
+          },
+        });
+        // Never settles on its own: the only way out of this turn is the
+        // cancellation the failed write causes.
+        harness.fake.script({ reply: PLAIN, manual: true });
+
+        const { value, chunks } = yield* delivered(() =>
+          runPlan(planning(dir, join(dir, "release.md")), harness.deps),
+        );
+
+        expect(value).toBe(1);
+        // The live turn was cancelled and every owned teardown finished before
+        // `runPlan` returned: the turn was cancelled, the provider was closed,
+        // and the invocation's own session directory was handed back.
+        expect(harness.fake.cancels).toBeGreaterThanOrEqual(1);
+        expect(harness.fake.closes.length).toBeGreaterThan(0);
+        expect(yield* until(readdir(authorshipRoot))).toEqual([]);
+        // The bytes the destination had already accepted are not rolled back,
+        // and the exact diagnostic reached it once a later write succeeded.
+        expect(harness.progress[0]).toContain("Preparing the Plan");
+        expect(harness.progress.at(-1)).toBe(
+          "Could not write planning progress to stderr: EPIPE: broken pipe, write\n\n" +
+            "Planning was cancelled, and no Plan was output.\n",
+        );
+        // No stdout fallback, no artifact, and no review.
+        expect(chunks).toEqual([]);
+        expect(harness.reviews).toHaveLength(0);
+        expect(yield* until(readdir(dir))).toEqual([]);
+      });
+    });
+
+    it("PO14: every existing ending keeps its order, and progress claims no delivery", function* () {
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const out = join(dir, "release.md");
+        const harness = createPlanHarness({ authorshipRoot });
+        harness.fake.script({ reply: EFFECT_AND_FAILURE });
+
+        // The artifact is still created after the whole authorship frame has
+        // torn down, and the last thing an operator was told is that the
+        // session was closing — never that a file exists.
+        const events: string[] = [];
+        let duringTeardown = true;
+        harness.deps.installElicitation = function* () {
+          yield* ensure(function* () {
+            events.push("teardown");
+            duringTeardown = yield* exists(out);
+          });
+          yield* Elicitation.around(
+            {
+              // deno-lint-ignore require-yield
+              *elicit([request], _next) {
+                harness.reviews.push(request);
+                events.push("review");
+                return { decision: "Approve" };
+              },
+            },
+            { at: "min" },
+          );
+        };
+
+        const { value, chunks } = yield* delivered(() => runPlan(planning(dir, out), harness.deps));
+
+        expect(value).toBe(0);
+        expect(events).toEqual(["review", "teardown"]);
+        expect(duringTeardown).toBe(false);
+        expect(yield* readTextFile(out)).toBe(EFFECT_AND_FAILURE);
+        expect(chunks).toEqual([]);
+
+        // Finalizing is the last phase, and it says the session is closing
+        // rather than that a Plan was produced, written or output.
+        const transcript = harness.progress.join("");
+        expect(phasesOf(transcript).at(-1)).toBe("Finalizing the Plan");
+        for (const claim of ["Plan produced", "Wrote", "written to", "was output"]) {
+          expect(`${claim}: ${transcript.includes(claim)}`).toBe(`${claim}: false`);
+        }
+      });
+
+      // Cancellation mid-turn: the progress already delivered stands, and no
+      // phase after it claims anything.
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const harness = createPlanHarness({ authorshipRoot });
+        harness.fake.script({ reply: PLAIN, manual: true });
+
+        yield* scoped(function* () {
+          const running = yield* spawn(() =>
+            runPlan(planning(dir, join(dir, "release.md")), harness.deps),
+          );
+          yield* harness.fake.startedTurns(1);
+          yield* running.halt();
+        });
+
+        expect(harness.fake.cancels).toBeGreaterThanOrEqual(1);
+        expect(phasesOf(harness.progress.join(""))).not.toContain("Finalizing the Plan");
+        expect(yield* until(readdir(dir))).toEqual([]);
+      });
+    });
+
+    it("PO15: the catalog is built once, from inside the command document", function* () {
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const harness = createPlanHarness({ authorshipRoot });
+        harness.fake.script({ reply: PLAIN });
+        harness.script({ decision: "Approve" });
+
+        // Recorded against the progress the drain had at the time, so what this
+        // observes is that Preparing reached the operator before the catalog
+        // was read rather than merely that both happened.
+        const before: string[][] = [];
+        const catalog = harness.deps.catalog;
+        harness.deps.catalog = function* (includes) {
+          before.push(phasesOf(harness.progress.join("")));
+          return yield* catalog(includes);
+        };
+
+        const { value } = yield* delivered(() => runPlan(planning(dir), harness.deps));
+
+        expect(value).toBe(0);
+        expect(harness.catalogCalls).toEqual([[dir]]);
+        expect(before).toEqual([["Preparing the Plan"]]);
+      });
     });
   },
 );

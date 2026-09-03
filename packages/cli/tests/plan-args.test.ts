@@ -33,21 +33,20 @@ const RETAINED: readonly string[][] = [
   ["--session", "ada"],
   ["--timeout", "5s"],
   ["--output", "plan.md"],
+  ["--verbose"],
+  ["--journal", "authorship.jsonl"],
 ];
 
 /**
  * One representative of every removed option class.
  *
- * Both short aliases are named, because a table of long names alone would leave
- * `-V` and `-j` accepted and dropped by the parser; both secret-detection
- * spellings are named for the same reason.
+ * Both secret-detection spellings are named, because a table holding one of them
+ * would leave the other accepted and dropped by the parser. The two short
+ * aliases are not here: they are refused with the long spelling this command
+ * does define, in {@link ALIASED} below.
  */
 const REMOVED: readonly string[][] = [
-  ["--journal", "trace.jsonl"],
-  ["-j", "trace.jsonl"],
   ["--raw"],
-  ["--verbose"],
-  ["-V"],
   ["--timeout-exec", "5s"],
   ["--timeout-fetch", "5s"],
   ["--approve-all"],
@@ -59,6 +58,19 @@ const REMOVED: readonly string[][] = [
   ["--props-name", "Ada"],
   ["--props-loud"],
   ["--no-props-loud"],
+];
+
+/**
+ * The short spellings the two authorship options deliberately do not have.
+ *
+ * `xmd run` gives `--verbose` and `--journal` these aliases for options about a
+ * program's run. Here they are refused with the long spelling rather than with
+ * the generic removal, because sending a caller to `xmd run` for an option this
+ * command does define would answer a question they did not ask.
+ */
+const ALIASED: readonly (readonly [string, string])[] = [
+  ["-V", "--verbose"],
+  ["-j", "--journal <path>"],
 ];
 
 describe("Tier PR — xmd plan fixed grammar", () => {
@@ -183,8 +195,8 @@ describe("Tier PR — xmd plan fixed grammar", () => {
   });
 
   it("PS3: every other removed option reports the one generic refusal", function* () {
-    expect(removedOptionRefusal("--journal")).toBe(
-      "unrecognized option for xmd plan: --journal — configure the program when you run " +
+    expect(removedOptionRefusal("--raw")).toBe(
+      "unrecognized option for xmd plan: --raw — configure the program when you run " +
         "the approved source with xmd run",
     );
 
@@ -207,18 +219,61 @@ describe("Tier PR — xmd plan fixed grammar", () => {
     }
   });
 
+  it("PO7: the two authorship options are accepted, and their aliases are not", function* () {
+    // Either side of the request, and beside each other.
+    for (const argv of [
+      ["plan", REQUEST, "--verbose", "--journal", "authorship.jsonl"],
+      ["plan", "--verbose", "--journal", "authorship.jsonl", REQUEST],
+      ["plan", "--journal", "authorship.jsonl", REQUEST, "--verbose"],
+    ]) {
+      const scan = scanPlanArgs(argv);
+      expect(`${argv.join(" ")}: ${scan.error}`).toBe(`${argv.join(" ")}: undefined`);
+      expect(scan.request).toBe(REQUEST);
+    }
+
+    // `--journal` takes exactly one non-empty path, read here rather than after
+    // parsing: an option the parser reads as absent falls back to the default,
+    // so a caller who asked for a journal and named none would silently get
+    // none at all.
+    for (const empty of [
+      ["plan", REQUEST, "--journal", ""],
+      ["plan", REQUEST, "--journal="],
+    ]) {
+      expect(scanPlanArgs(empty).error).toBe(
+        "--journal needs a path — write `--journal <path>` or leave it out to record no journal",
+      );
+    }
+
+    // The short aliases are answered with the long spelling, wherever they
+    // stand and whichever form they take — including beside `--help`, which is
+    // lifted out of argv before any command's own grammar runs.
+    for (const [alias, spelling] of ALIASED) {
+      const refusal = `unrecognized option for xmd plan: ${alias} — write \`${spelling}\``;
+      expect(scanPlanArgs(["plan", REQUEST, alias]).error).toBe(refusal);
+      expect(scanPlanArgs(["plan", alias, REQUEST]).error).toBe(refusal);
+      expect(scanPlanArgs(["plan", REQUEST, `${alias}=x`]).error).toBe(refusal);
+      expect(removedPlanOption(["plan", "--help", alias])).toBe(refusal);
+      expect(removedPlanOption(["plan", alias, "--help"])).toBe(refusal);
+      // And it is the same classification both readers make.
+      expect(removedPlanOption(["plan", REQUEST, alias])).toBe(
+        scanPlanArgs(["plan", REQUEST, alias]).error,
+      );
+    }
+
+    // `--trace` is nobody's option here, and is answered as one.
+    expect(scanPlanArgs(["plan", REQUEST, "--trace"]).error).toBe(
+      "unrecognized option for xmd plan: --trace",
+    );
+  });
+
   it("PS2/PS3: the removal is decidable beside --help, in either order", function* () {
     // `--help` is lifted out of argv before any command's own grammar runs, so
     // the classification has to be askable on its own — otherwise the page a
     // caller gets describes a command that would have refused them.
     expect(removedPlanOption(["plan", "--help", "--run"])).toBe(RUN_REMOVAL_REFUSAL);
     expect(removedPlanOption(["plan", "--run", "--help"])).toBe(RUN_REMOVAL_REFUSAL);
-    expect(removedPlanOption(["plan", "--help", "--journal", "trace.jsonl"])).toBe(
-      removedOptionRefusal("--journal"),
-    );
-    expect(removedPlanOption(["plan", "--journal", "trace.jsonl", "--help"])).toBe(
-      removedOptionRefusal("--journal"),
-    );
+    expect(removedPlanOption(["plan", "--help", "--raw"])).toBe(removedOptionRefusal("--raw"));
+    expect(removedPlanOption(["plan", "--raw", "--help"])).toBe(removedOptionRefusal("--raw"));
 
     // And it is the same classification the scan makes, so a spelling cannot be
     // removed to one and unknown to the other.

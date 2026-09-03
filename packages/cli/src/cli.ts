@@ -268,10 +268,15 @@ const PLAN_DESCRIPTION =
  *
  * Every option that configured *running* a Plan is absent, because this command
  * runs nothing: the program it writes is run by a later `xmd run`, and that is
- * where a journal, a permission mode, an exec deadline and a root property are
- * configured. The generated `--props-*` options are absent for the same reason,
- * and for one more — they exist only once a document does, and this command's
- * result is the document.
+ * where a permission mode, an exec deadline and a root property are configured.
+ * The generated `--props-*` options are absent for the same reason, and for one
+ * more — they exist only once a document does, and this command's result is the
+ * document.
+ *
+ * `--verbose` and `--journal` describe writing the Plan rather than running it.
+ * They observe this invocation's own authorship and nothing after it, which is
+ * why they are spelled in full: `-V` and `-j` are `xmd run`'s aliases for
+ * options about a program's run.
  */
 const planConfig = object({
   request: {
@@ -284,6 +289,14 @@ const planConfig = object({
   },
   session: {
     description: "logical name for the assistant session (default: unique to this invocation)",
+    ...field(z.string().optional()),
+  },
+  verbose: {
+    description: "show generated drafts and XMD check diagnostics on stderr",
+    ...field(z.boolean(), field.default(false)),
+  },
+  journal: {
+    description: "record the planning process as diagnostic JSONL (path must not exist)",
     ...field(z.string().optional()),
   },
   include: {
@@ -2211,6 +2224,10 @@ const PLAN_REQUEST_HELP = [
   "",
   "A named --session continues the planning conversation. Without it, this",
   "invocation uses a unique session.",
+  "",
+  "Secret detection checks journal entries before they are recorded, but it may not",
+  "catch every sensitive detail. The journal can contain prompts, drafts, and review",
+  "answers.",
 ].join("\n");
 
 /**
@@ -2488,11 +2505,21 @@ function* dispatch(
           include: config.include,
           ...(config.output === undefined ? {} : { output: config.output }),
           ...(config.session === undefined ? {} : { session: config.session }),
+          verbose: config.verbose,
+          ...(config.journal === undefined ? {} : { journal: config.journal }),
           stack: authorship.value,
         },
         {
           ...(sessions === undefined ? {} : { sessions }),
           catalog: syntaxCatalog,
+          // The two facts about this process's own stderr that nothing further
+          // in may go and read: whether it is a terminal, and whether it took
+          // what it was handed. The approved Plan's sinks are stdout and
+          // `--output`, and progress reaches neither.
+          progress: {
+            terminal: process.stderr.isTTY === true,
+            write: (chunk) => deliverWhole(chunk, process.stderr),
+          },
           // `<Elicit>` reaches a person through the browser form, and the
           // review question is asked by the command rather than by a document.
           // A host that answers installs a provider; one that does not installs

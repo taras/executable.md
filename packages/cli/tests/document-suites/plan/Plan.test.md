@@ -211,7 +211,7 @@ explanation of why none of them worked.
 
 <AssertStringIncludes
   actual={run.result.error.message}
-  expected="reviewed ten drafts without an approved Plan"
+  expected="reviewed 10 drafts without an approved Plan"
 />
 <AssertStringIncludes
   actual={run.result.error.message}

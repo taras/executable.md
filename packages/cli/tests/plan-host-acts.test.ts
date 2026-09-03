@@ -42,7 +42,7 @@ const STACK: AuthorshipStack = {
 };
 
 function writing(dir: string, output: string): PlanCommand {
-  return { request: REQUEST, include: [dir], output, stack: STACK };
+  return { request: REQUEST, include: [dir], output, verbose: false, stack: STACK };
 }
 
 /** Every command this invocation reached, answered rather than spawned. */

@@ -7,8 +7,9 @@
  *
  * ```text
  * fixed command preflight
- *   -> build the run-profile syntax catalog
- *   -> execute the exact packaged plan command document
+ *   -> exclusively create the --journal file, when one was named
+ *   -> execute the exact packaged plan command document, reporting each of its
+ *      phases on stderr as it happens — the catalog is built inside it
  *   -> await that execution and provider teardown
  *   -> structurally validate the returned source again
  *   -> deliver those exact bytes, in exactly one of two ways:
@@ -41,14 +42,19 @@ import process from "node:process";
 
 import type { SyntaxCatalog } from "@executablemd/core";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
+import { InMemoryStream } from "@executablemd/durable-streams";
+import type { DurableStream } from "@executablemd/durable-streams";
 import { cwd } from "@executablemd/runtime";
 
 import type { AuthorshipStack } from "./agent-stack.ts";
 import {
   DEFAULT_AUTHORSHIP_ROOT,
   planAgentContext,
+  ProgressDeliveryError,
   runPlanCommandDocument,
 } from "./authorship-profile.ts";
+import type { ProgressOutput } from "./authorship-profile.ts";
+import { createPlanJournal, journalRefusal } from "./plan-journal.ts";
 import {
   planComponentDeclaration,
   planComponentDescription,
@@ -77,6 +83,10 @@ export interface PlanCommand {
   output?: string;
   /** The logical assistant-session name, when the caller chose one. */
   session?: string;
+  /** Show each generated draft and each failed check's diagnostics. */
+  verbose: boolean;
+  /** Where the diagnostic record of this authorship goes, when one was asked for. */
+  journal?: string;
   /** Who writes the Plan, settled before the command began. */
   stack: AuthorshipStack;
 }
@@ -91,6 +101,23 @@ export interface PlanDependencies {
   catalog(includes: readonly string[]): Operation<SyntaxCatalog>;
   /** Who answers the review question. */
   installElicitation(): Operation<void>;
+  /**
+   * Where planning progress goes, and whether that destination is a terminal.
+   *
+   * Both are the entrypoint's facts about its own `process.stderr`. Nothing
+   * here detects a runtime or inspects a terminal, and no document reaches
+   * either answer.
+   */
+  progress: ProgressOutput;
+  /**
+   * Create the diagnostic journal `--journal` named, or refuse.
+   *
+   * Absent is {@link createPlanJournal}, which exclusively creates the path and
+   * appends the ordinary JSONL — and is what production uses. A harness that
+   * has to prove what a refused entry leaves behind supplies its own, because a
+   * filesystem will not fail a write on request.
+   */
+  journal?(path: string): Operation<Result<DurableStream>>;
   /**
    * Where this host keeps its profile session directories.
    *
@@ -119,12 +146,21 @@ export interface PlanDependencies {
  * phase reads, so a refusal cannot be followed by the work it refused.
  */
 export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operation<number> {
-  let syntax: string;
-  try {
-    syntax = renderSyntaxMarkdown(yield* deps.catalog(command.include));
-  } catch (error) {
-    console.error(describeError(error));
-    return 1;
+  // The journal is the first thing this command establishes, because a path
+  // somebody kept is the one refusal that has to cost nothing: it happens
+  // before the catalog is built, before a session directory is placed, before
+  // the provider starts an agent, before anybody is asked to review and before
+  // any artifact exists, and it leaves that file byte-identical.
+  let stream: DurableStream;
+  if (command.journal === undefined) {
+    stream = new InMemoryStream();
+  } else {
+    const created = yield* (deps.journal ?? createPlanJournal)(command.journal);
+    if (!created.ok) {
+      console.error(created.error.message);
+      return 1;
+    }
+    stream = created.value;
   }
 
   // The command document lives and dies inside that call's scope. Leaving it
@@ -164,26 +200,28 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
       authorshipRoot: root,
       session,
       explicitSession,
+      verbose: command.verbose,
       host,
       installElicitation: deps.installElicitation,
-      // Rendered once, before the document existed, and sealed: the catalog the
-      // agent is shown is the one this command produced, and no prop on the thin
-      // adapter could supply another.
-      // deno-lint-ignore require-yield
+      // Built when `<PlanInputs>` asks, which is what lets an authored phase
+      // announce the preparation before it happens. It is still sealed: the
+      // catalog the agent is shown is the one this command renders, and no prop
+      // on the thin adapter could supply another.
       *catalog() {
-        return syntax;
+        return renderSyntaxMarkdown(yield* deps.catalog(command.include));
       },
       validate,
     });
 
     authored = yield* runPlanCommandDocument({
       request: command.request,
-      syntax,
       session,
       explicitSession,
       root,
       context,
       declaration,
+      stream,
+      progress: deps.progress,
     });
   } catch (error) {
     console.error(describeError(error));
@@ -191,7 +229,21 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
   }
 
   if (!authored.ok) {
-    console.error(authored.error.message);
+    // Progress delivery is the one failure this command cannot report through
+    // the stream that failed to report it. A later write may still land — a
+    // pipe that closed once is not a stream that refuses forever — so the
+    // diagnostic is offered there and nowhere else: an approved Plan's own sink
+    // is not a fallback channel for a message about progress.
+    if (authored.error instanceof ProgressDeliveryError) {
+      yield* deps.progress.write(`${authored.error.message}\n`);
+      return 1;
+    }
+    // A refused journal entry is what ended authorship, and the durable
+    // runtime's own account of it names an event rather than the file a person
+    // asked for. Reported from the cause chain, so this replaces nothing but
+    // the failure it actually is.
+    const refused = journalRefusal(authored.error);
+    console.error((refused ?? authored.error).message);
     return 1;
   }
 
