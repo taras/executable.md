@@ -267,6 +267,72 @@ describe("a connection to a run's owner", () => {
     });
   });
 
+  it("refuses a refusal that is not a category this side can branch on", function* () {
+    const wire = fakeSocket();
+    let raised: unknown;
+    yield* scoped(function* () {
+      const owner = yield* useOwnerConnection(wire.socket);
+      yield* sleep(0);
+      const asking = yield* spawn(function* () {
+        try {
+          yield* owner.ask("a1", { command: "frontier" }, readString);
+        } catch (error) {
+          raised = error;
+        }
+      });
+      yield* sleep(0);
+      // An arbitrary remote sentence must not become this side's public failure
+      // identity, so it is read as an answer this build cannot understand.
+      wire.answer({ id: "a1", outcome: "refused", refusal: "something went wrong!" });
+      yield* asking;
+    });
+    expect((raised as OwnerLinkError).refusal).toBe("malformed-answer");
+  });
+
+  it("refuses an answer whose correlation id is not one", function* () {
+    const wire = fakeSocket();
+    let raised: unknown;
+    yield* scoped(function* () {
+      const owner = yield* useOwnerConnection(wire.socket);
+      yield* sleep(0);
+      const asking = yield* spawn(function* () {
+        try {
+          yield* owner.ask("a1", { command: "frontier" }, readString);
+        } catch (error) {
+          raised = error;
+        }
+      });
+      yield* sleep(0);
+      wire.answer({ id: "x".repeat(200), outcome: "performed", value: 1 });
+      yield* asking;
+    });
+    expect((raised as OwnerLinkError).refusal).toBe("malformed-answer");
+  });
+
+  it("leaves no waiter or listener behind when its scope ends", function* () {
+    const wire = fakeSocket();
+    let answered = false;
+    // The connection's scope ends with a request still in flight. Cancellation
+    // halts the asking task rather than raising into it, so what is observable
+    // is that the scope completes at all — a waiter nothing settled would hang
+    // teardown — and that nothing is left listening afterwards.
+    yield* scoped(function* () {
+      const owner = yield* useOwnerConnection(wire.socket);
+      yield* sleep(0);
+      yield* spawn(function* () {
+        yield* owner.ask("a1", { command: "frontier" }, readString);
+        answered = true;
+      });
+      yield* sleep(0);
+    });
+
+    expect(answered).toBe(false);
+    // A late answer reaches nothing: the listener went with the scope, and
+    // delivering it must not raise out of the socket either.
+    wire.answer({ id: "a1", outcome: "performed", value: "too late" });
+    expect(answered).toBe(false);
+  });
+
   it("fails closed on a second answer to a request already settled", function* () {
     const wire = fakeSocket();
     let answered: unknown;

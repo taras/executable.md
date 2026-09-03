@@ -88,6 +88,20 @@ export interface OwnerConnection {
 /** The most bytes one answer may carry. */
 const MAX_ANSWER = 8 * 1024 * 1024;
 
+/** The longest correlation id this reads back. */
+const MAX_ID = 128;
+
+/**
+ * The shape a refusal category has.
+ *
+ * The owner answers with a category and an optional detail, both drawn from
+ * closed sets it declares. Holding the answer to that shape is what stops an
+ * arbitrary remote string becoming this side's public failure identity: a
+ * refusal is something a caller may branch on, so it must not be whatever the
+ * other end felt like sending.
+ */
+const REFUSAL = /^[a-z][a-z0-9-]*(:[a-z][a-z0-9-]*)?$/;
+
 /** The envelope, before the caller's parser reads the value inside it. */
 type RawAnswer =
   | { readonly outcome: "performed"; readonly value: unknown }
@@ -112,7 +126,7 @@ function readAnswer(raw: unknown): { id: string; answer: RawAnswer } {
   const members: Map<string, unknown> = new Map(Object.entries(decoded));
   const id = members.get("id");
   const outcome = members.get("outcome");
-  if (typeof id !== "string") {
+  if (typeof id !== "string" || id === "" || id.length > MAX_ID) {
     throw new OwnerLinkError("malformed-answer");
   }
   if (outcome === "performed") {
@@ -120,7 +134,7 @@ function readAnswer(raw: unknown): { id: string; answer: RawAnswer } {
   }
   if (outcome === "refused") {
     const refusal = members.get("refusal");
-    if (typeof refusal !== "string") {
+    if (typeof refusal !== "string" || !REFUSAL.test(refusal)) {
       throw new OwnerLinkError("malformed-answer");
     }
     return { id, answer: { outcome, refusal } };
