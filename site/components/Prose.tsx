@@ -36,7 +36,9 @@ export function Term(
   { heavy, children }: { heavy?: boolean; children: ComponentChildren },
 ) {
   return (
-    <code style={`${MONO}font-weight:${heavy ? "800" : "700"};color:var(--ink);`}>
+    <code
+      style={`${MONO}font-weight:${heavy ? "800" : "700"};color:var(--ink);`}
+    >
       {children}
     </code>
   );

@@ -88,8 +88,24 @@ const RELEASE_MD: Tok[][] = [
   [key("<Prompt>")],
   ["  Current version and release history:"],
   [],
-  ["  ", key("<File"), " path", dim("="), str('"package.json"'), " ", key("/>")],
-  ["  ", key("<File"), " path", dim("="), str('"CHANGELOG.md"'), " ", key("/>")],
+  [
+    "  ",
+    key("<File"),
+    " path",
+    dim("="),
+    str('"package.json"'),
+    " ",
+    key("/>"),
+  ],
+  [
+    "  ",
+    key("<File"),
+    " path",
+    dim("="),
+    str('"CHANGELOG.md"'),
+    " ",
+    key("/>"),
+  ],
   [],
   ["  What should the next version be: patch, minor, or major?"],
   [key("</Prompt>")],
@@ -343,7 +359,12 @@ export default define.page(function Home({ url }) {
                 {VERSION}
               </a>{" "}
               ·{" "}
-              <a class="release-link" href={GITHUB} target="_blank" rel="noopener">
+              <a
+                class="release-link"
+                href={GITHUB}
+                target="_blank"
+                rel="noopener"
+              >
                 Star on GitHub ↗
               </a>
             </span>
@@ -496,7 +517,8 @@ export default define.page(function Home({ url }) {
           </p>
 
           <p style={P_MD}>
-            <strong style={STRONG}>Review it. Change it. Commit it.</strong>{" "}
+            <strong style={STRONG}>Review it. Change it. Commit it.</strong>
+            {" "}
             Then run the program instead of asking an agent to figure the
             workflow out again.
           </p>
