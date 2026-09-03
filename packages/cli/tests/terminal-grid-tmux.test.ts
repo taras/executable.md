@@ -16,17 +16,20 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, race, resource, scoped, sleep, until, withResolvers } from "effection";
+import { all, ensure, race, resource, scoped, sleep, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { spawn as spawnChild } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import net from "node:net";
 import * as path from "node:path";
 import { cliCommand } from "@executablemd/test-support/launch";
-import { exists, rm, stat, writeTextFile } from "@effectionx/fs";
+import { exists, readTextFile, rm, stat, writeTextFile } from "@effectionx/fs";
+import { realpath } from "node:fs/promises";
+import { installControlledLauncher, nativeLaunch, reserveTerminal } from "@executablemd/runtime";
+import type { TerminalComposite } from "@executablemd/runtime";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { TerminalProcesses } from "@executablemd/runtime";
+import { installPosixTerminalProcesses, TerminalProcesses } from "@executablemd/runtime";
 import type { SignalDelivery } from "@executablemd/runtime";
 import { useTmuxGrid } from "../src/terminal/tmux-grid.ts";
 import type { ControlEvent, TmuxGrid } from "../src/terminal/tmux-grid.ts";
@@ -40,6 +43,7 @@ import {
 } from "../src/terminal/layout.ts";
 import type { LayoutCell } from "../src/terminal/layout.ts";
 import { usePaneChannels } from "../src/terminal/pane-channel.ts";
+import { runInPane } from "../src/terminal/provider.ts";
 import type { PaneChannels, PaneLink } from "../src/terminal/pane-channel.ts";
 import {
   FromWorkerSchema,
@@ -47,8 +51,12 @@ import {
   paneTokenPath,
   writeFrame,
 } from "../src/terminal/pane-protocol.ts";
-import { PANE_WORKER_COMMAND, paneWorkerInvocation } from "../src/terminal/pane-worker.ts";
-import type { FromWorker, ToWorker } from "../src/terminal/pane-protocol.ts";
+import {
+  PANE_WORKER_COMMAND,
+  paneWorkerInvocation,
+  requireQuiescent,
+} from "../src/terminal/pane-worker.ts";
+import type { FromWorker, Settlement, ToWorker } from "../src/terminal/pane-protocol.ts";
 
 /** The cells a layout string describes, read back out of it. */
 function readCells(layout: string): LayoutCell[] {
@@ -70,6 +78,42 @@ function readCells(layout: string): LayoutCell[] {
     match = leaf.exec(layout);
   }
   return cells;
+}
+
+/** Where a fake server and its client fixtures meet. */
+function useScript(): Operation<string> {
+  return resource<string>(function* (provide) {
+    const file = path.join(tmpdir(), `xmd-tmux-script-${randomUUID()}.txt`);
+    yield* writeTextFile(file, "");
+    yield* ensure(function* () {
+      yield* rm(file, { force: true });
+    });
+    yield* provide(file);
+  });
+}
+
+/** The fixture that stands in for one tmux client. */
+function clientCommand(mode: "control" | "attach", script: string): readonly string[] {
+  const fixture = path.resolve("packages/cli/tests/fixtures/tmux-client.ts");
+  const invocation = cliCommand([]);
+  // The same runtime the CLI runs under, pointed at the fixture instead.
+  return [invocation.command, "run", "--allow-all", fixture, mode, script];
+}
+
+/** A composite whose pane endpoint is the production one, over these links. */
+function paneComposite(links: readonly PaneLink[]): TerminalComposite {
+  const refuse = (): never => {
+    throw new Error("this row drives the pane endpoint only");
+  };
+  return {
+    attach: refuse,
+    update: refuse,
+    display: refuse,
+    shell: refuse,
+    closed: refuse,
+    destroy: refuse,
+    launch: (ordinal, request, spawned) => runInPane(links[ordinal], request, spawned),
+  };
 }
 
 describe("Tier TX — the tmux grid's geometry", () => {
@@ -461,6 +505,47 @@ describe("Tier TW — the pane worker and its private channel", () => {
     expect(bye.type).toBe("bye");
   });
 
+  it("TW13: a settlement that proved nothing frees no pane", function* () {
+    // The rule every downstream step is conditional on: clearing the pane,
+    // reporting a launch settled, admitting the next one, letting teardown
+    // succeed. Stated here rather than end-to-end, because a pane whose sweep
+    // cannot come back empty is not something a suite can arrange in another
+    // process without putting a fault switch in the worker itself.
+    const proved: Settlement = { method: "exited", quiet: true, swept: [], holders: [] };
+    requireQuiescent(proved);
+
+    const survivor: Settlement = {
+      method: "killed",
+      quiet: false,
+      child: 100,
+      swept: [{ pid: 200, gone: false }],
+      holders: [],
+    };
+    const held: Settlement = {
+      method: "exited",
+      quiet: false,
+      child: 100,
+      swept: [],
+      holders: [{ pid: 900, gone: false }],
+    };
+    for (const [what, settlement] of [
+      ["a survivor", survivor],
+      ["a holder", held],
+    ] as [string, Settlement][]) {
+      let refusal = "";
+      try {
+        requireQuiescent(settlement);
+      } catch (error) {
+        refusal = error instanceof Error ? error.message : String(error);
+      }
+      expect(`${what}: ${refusal.includes("could not be proved free")}`).toBe(`${what}: true`);
+      // Provider-neutral: it says what is still true, not which pane, session,
+      // socket or command it was.
+      expect(`${what}: ${/\bpane \d|socket|session/.test(refusal)}`).toBe(`${what}: false`);
+    }
+    expect(() => requireQuiescent(held)).toThrow();
+  });
+
   it("TW12: naming the worker invocation is the only way to be one", function* () {
     // In no command table, so in no help output and no catalog. What makes it
     // safe is not obscurity: a worker that cannot present a pane's single-use
@@ -531,26 +616,6 @@ describe("Tier TG — the tmux composite", () => {
       },
       { at: "min" },
     );
-  }
-
-  /** Where a fake server and its client fixtures meet. */
-  function useScript(): Operation<string> {
-    return resource<string>(function* (provide) {
-      const file = path.join(tmpdir(), `xmd-tmux-script-${randomUUID()}.txt`);
-      yield* writeTextFile(file, "");
-      yield* ensure(function* () {
-        yield* rm(file, { force: true });
-      });
-      yield* provide(file);
-    });
-  }
-
-  /** The fixture that stands in for one tmux client. */
-  function clientCommand(mode: "control" | "attach", script: string): readonly string[] {
-    const fixture = path.resolve("packages/cli/tests/fixtures/tmux-client.ts");
-    const invocation = cliCommand([]);
-    // The same runtime the CLI runs under, pointed at the fixture instead.
-    return [invocation.command, "run", "--allow-all", fixture, mode, script];
   }
 
   /** A composite over a fake server, with the pane workers stubbed out. */
@@ -1089,3 +1154,180 @@ function untilEvent(grid: TmuxGrid, kind: ControlEvent["kind"]): Operation<void>
     );
   })();
 }
+
+/**
+ * Tier TG20 — the pane's physical endpoint
+ * (specs/executable-mdx-spec.md TG20, architecture commit 802b07df).
+ *
+ * A `<Session.Launch>` written inside a paired pane must run on *that pane's*
+ * terminal. Before the amendment it delegated down the launcher chain and
+ * reached the root foreground launcher — which on a real host inherits the root
+ * terminal, the one terminal a pane exists to avoid. It now stops at the
+ * composite's required pane operation.
+ *
+ * Nothing nearer intercepts here: no `<TestAgent>`, no controlled launcher in
+ * front. The request goes to a real worker over a real socket, and a sentinel
+ * stands where the root foreground launcher would be — entering it at all is
+ * the failure this tier exists to catch.
+ */
+describe("Tier TG20 — a pane launch reaches its own worker", () => {
+  /** A composite over a fake server that really starts its pane workers. */
+  function useLiveComposite(panes: number): Operation<{
+    composite: TerminalComposite;
+    tmux: FakeTmux;
+    channels: PaneChannels;
+  }> {
+    return (function* () {
+      // The observer a foreground host installs beside the provider: teardown
+      // proves what it claims, and refuses without it.
+      yield* installPosixTerminalProcesses();
+      const script = yield* useScript();
+      const tmux = createFakeTmux({ script, clientCommand, spawnPanes: true });
+      yield* ensure(() => {
+        tmux.stopPanes();
+      });
+      const channels = yield* usePaneChannels(panes);
+      const invocation = cliCommand([]);
+      const grid = yield* useTmuxGrid(tmux, {
+        session: "live",
+        columns: panes,
+        panes,
+        width: 160,
+        height: 48,
+        titles: Array.from({ length: panes }, (_, index) => `pane ${index}`),
+        workerCommand: (ordinal) => [
+          invocation.command,
+          ...invocation.arguments,
+          PANE_WORKER_COMMAND,
+          String(ordinal),
+          channels.directory,
+        ],
+        cwd: path.resolve("."),
+        env: { PATH: "/usr/bin:/bin" },
+      });
+      void grid;
+      const links: PaneLink[] = [];
+      for (let ordinal = 0; ordinal < panes; ordinal++) {
+        links.push(yield* channels.link(ordinal));
+      }
+      const composite = paneComposite(links);
+      return { composite, tmux, channels };
+    })();
+  }
+
+  it("TG20a: the exact argv, cwd and environment arrive at that pane's worker", function* () {
+    const { composite } = yield* useLiveComposite(1);
+    const evidence = path.join(tmpdir(), `xmd-tg20-${randomUUID()}.json`);
+    yield* ensure(function* () {
+      yield* rm(evidence, { force: true });
+    });
+
+    // Arguments a command parser would ruin, an environment entry only this
+    // launch names, and a working directory that is not the runner's.
+    const marker = "tg20marker";
+    let started = 0;
+    const outcome = yield* composite.launch(
+      0,
+      {
+        command: [
+          "/bin/sh",
+          "-c",
+          `printf '%s' "$XMD_TG20:$PWD:$1" > "${evidence}"`,
+          "sh",
+          `a b;'"$${marker}`,
+        ],
+        cwd: tmpdir(),
+        env: { PATH: "/usr/bin:/bin", XMD_TG20: marker },
+      },
+      () => started++,
+    );
+
+    expect(outcome.exitCode).toBe(0);
+    // The spawn was reported once, by the worker that observed it.
+    expect(started).toBe(1);
+    const seen = yield* readTextFile(evidence);
+    const [env, cwd, argument] = seen.split(":");
+    expect(env).toBe(marker);
+    expect(cwd).toBe(yield* until(realpath(tmpdir())));
+    // Unchanged through the socket and past tmux, whose parser never saw it.
+    expect(argument).toBe(`a b;'"$${marker}`);
+  });
+
+  it("TG20b: the root foreground launcher is never entered", function* () {
+    const { composite } = yield* useLiveComposite(1);
+    const reached: string[] = [];
+    // A sentinel where the root launcher sits. A pane launch that delegated
+    // past its endpoint would arrive here — and on a real host that is the
+    // root terminal.
+    yield* installControlledLauncher({
+      record: (request) => reached.push(request.command.join(" ")),
+      outcome: () => ({ exitCode: 0 }),
+    });
+
+    yield* composite.launch(
+      0,
+      { command: ["/bin/echo", "pane"], cwd: path.resolve("."), env: { PATH: "/usr/bin:/bin" } },
+      () => {},
+    );
+
+    expect(reached).toEqual([]);
+    // And the sentinel is a live one: a *root* launch does reach it.
+    yield* scoped(function* () {
+      yield* reserveTerminal();
+      yield* nativeLaunch({ command: ["/bin/echo", "root"], cwd: path.resolve(".") });
+    });
+    expect(reached).toEqual(["/bin/echo root"]);
+  });
+
+  it("TG20c: distinct panes launch concurrently", function* () {
+    const { composite } = yield* useLiveComposite(2);
+    const both = withResolvers<void>();
+    let live = 0;
+
+    // Each launch blocks until the other has started. A pair that had to share
+    // a terminal would wait for a start that cannot happen.
+    const outcomes = yield* all([
+      composite.launch(
+        0,
+        { command: ["/bin/sleep", "0.2"], cwd: path.resolve("."), env: { PATH: "/usr/bin:/bin" } },
+        () => {
+          live++;
+          if (live === 2) {
+            both.resolve();
+          }
+        },
+      ),
+      composite.launch(
+        1,
+        { command: ["/bin/sleep", "0.2"], cwd: path.resolve("."), env: { PATH: "/usr/bin:/bin" } },
+        () => {
+          live++;
+          if (live === 2) {
+            both.resolve();
+          }
+        },
+      ),
+    ]);
+
+    yield* both.operation;
+    expect(live).toBe(2);
+    expect(outcomes.map((outcome) => outcome.exitCode)).toEqual([0, 0]);
+  });
+
+  it("TG20d: a composite that cannot run a pane's launch refuses", function* () {
+    const { composite } = yield* useLiveComposite(1);
+    let refusal = "";
+    try {
+      // No such pane. There is no fallback to fall back to: putting this on
+      // the root terminal is the one thing that must not happen.
+      yield* composite.launch(
+        3,
+        { command: ["/bin/echo", "nowhere"], cwd: path.resolve("."), env: {} },
+        () => {},
+      );
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+    expect(refusal).toContain("cannot run that pane's launch");
+  });
+});

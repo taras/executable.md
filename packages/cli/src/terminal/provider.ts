@@ -25,6 +25,8 @@ import process from "node:process";
 import type { Operation } from "effection";
 import { TerminalGrids } from "@executablemd/runtime";
 import type {
+  NativeLaunchOutcome,
+  NativeLaunchRequest,
   TerminalComposite,
   TerminalGridRequest,
   TerminalPaneState,
@@ -175,7 +177,19 @@ function usePresentedGrid(
         yield* link.send({ type: "display", seq: ++shown, text });
       },
       *shell(ordinal, spawned) {
-        return yield* runShell(links[ordinal], deps, spawned);
+        // The host's default shell, derived from live policy — never from the
+        // document, and never from a request.
+        return yield* runInPane(
+          links[ordinal],
+          { command: [deps.env.SHELL ?? "/bin/sh"], cwd: process.cwd(), env: deps.env },
+          spawned,
+        );
+      },
+      *launch(ordinal, request, spawned) {
+        // The exact command vector, working directory and environment the Agent
+        // provider supplied, over this pane's authenticated channel. tmux's
+        // parser sees none of it.
+        return yield* runInPane(links[ordinal], request, spawned);
       },
       *closed() {
         yield* race([left.operation, grid.detached()]);
@@ -201,39 +215,52 @@ function* label(
   yield* grid.title(ordinal, `${pane.title} — ${state}`);
 }
 
-/** Start the host's default shell in one pane, through its worker. */
-function* runShell(
+/**
+ * Run one request in one pane, through that pane's authenticated worker.
+ *
+ * The same path for both callers, because they are the same act: a shell whose
+ * executable came from host policy and a native UI whose argv came from the
+ * Agent provider are both "start this, on that pane's terminal". What differs
+ * is who decided the vector, and that is decided before this is called.
+ */
+export function* runInPane(
   link: PaneLink | undefined,
-  deps: TmuxProviderDependencies,
+  request: NativeLaunchRequest,
   spawned: () => void,
-): Operation<TerminalShellOutcome> {
+): Operation<NativeLaunchOutcome> {
   if (link === undefined) {
-    throw new Error("this grid has no such pane");
+    // No fallback. A composite that cannot run this in the pane it was asked
+    // for refuses, rather than putting a native UI on the root terminal.
+    throw new Error("this terminal grid cannot run that pane's launch");
   }
-  const shell = deps.env.SHELL ?? "/bin/sh";
   yield* link.send({
     type: "launch",
-    id: `shell-${link.ordinal}`,
-    argv: [shell],
-    cwd: process.cwd(),
-    env: deps.env,
+    id: `launch-${link.ordinal}-${++started}`,
+    argv: [...request.command],
+    cwd: request.cwd,
+    env: request.env ?? {},
   });
   while (true) {
     const frame = yield* link.next();
     if (frame === undefined) {
-      return {};
+      // The worker's channel ended mid-launch. Nothing about that says the
+      // child stopped, so it is a failure rather than an empty outcome.
+      throw new Error("the terminal pane stopped answering before its launch settled");
     }
     if (frame.type === "started") {
-      // The runtime's own start event, and the only thing that makes this pane
-      // ready.
+      // The worker-observed runtime spawn event, and the only thing that makes
+      // this pane ready.
       spawned();
       continue;
     }
+    if (frame.type === "busy") {
+      throw new Error("that terminal pane already has a live child");
+    }
     if (frame.type === "start-failed") {
-      throw new Error("the pane's shell could not be started");
+      throw new Error("the terminal pane's child could not be started");
     }
     if (frame.type === "exited") {
-      const outcome: TerminalShellOutcome = {};
+      const outcome: NativeLaunchOutcome = {};
       if (frame.exitCode !== undefined) {
         outcome.exitCode = frame.exitCode;
       }
@@ -244,6 +271,9 @@ function* runShell(
     }
   }
 }
+
+/** Distinguishes one pane's launches from the next in this invocation. */
+let started = 0;
 
 /** Install the tmux provider for this host, when this host can present one. */
 export function* installTmuxGridProvider(deps: TmuxProviderDependencies): Operation<void> {

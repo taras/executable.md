@@ -19,6 +19,8 @@
  */
 
 import { appendFile } from "node:fs/promises";
+import { spawn as spawnChild } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { until } from "effection";
 import type { Operation } from "effection";
 import { TmuxCommandFailed } from "../../src/terminal/tmux.ts";
@@ -56,6 +58,15 @@ export interface FakeTmuxOptions {
    * is the only way to reach the escalation that follows the ask.
    */
   readonly stubbornClient?: boolean;
+  /**
+   * Actually start the pane commands, the way a server would.
+   *
+   * With this on, `new-session` and `split-window` spawn the exact worker
+   * command they were given, each in a session of its own — which is what tmux
+   * gives a pane's initial process. That yields real workers on real sockets
+   * with no real tmux anywhere.
+   */
+  readonly spawnPanes?: boolean;
 }
 
 export interface FakeTmux extends Tmux {
@@ -66,6 +77,10 @@ export interface FakeTmux extends Tmux {
   readonly serverPid: number;
   readonly alive: () => boolean;
   readonly clients: readonly string[];
+  /** Every pane process this server actually started. */
+  readonly started: readonly ChildProcess[];
+  /** End every started pane process. */
+  stopPanes(): void;
   /** Say something on the control channel, as the server would. */
   say(line: string): Operation<void>;
 }
@@ -97,6 +112,7 @@ export function createFakeTmux(options: FakeTmuxOptions): FakeTmux {
   /** Window-list order — the order panes were created, which tmux fills by. */
   const panes: FakePane[] = [];
   const clients: string[] = [];
+  const started: ChildProcess[] = [];
   let alive = false;
   let nextPane = 0;
   let nextPid = 4000;
@@ -127,6 +143,20 @@ export function createFakeTmux(options: FakeTmuxOptions): FakeTmux {
       title: "",
       command,
     };
+    if (options.spawnPanes === true && command.length > 0) {
+      const [program, ...argv] = command;
+      if (program !== undefined) {
+        started.push(
+          spawnChild(program, argv, {
+            stdio: ["ignore", "pipe", "pipe"],
+            // A pane's initial process is tmux's session leader, so it is its
+            // own process group — which is also what keeps a worker's own
+            // settlement from sweeping this test runner.
+            detached: true,
+          }),
+        );
+      }
+    }
     const at = after === undefined ? -1 : panes.findIndex((entry) => entry.id === after);
     if (at < 0) {
       panes.push(created);
@@ -274,6 +304,12 @@ export function createFakeTmux(options: FakeTmuxOptions): FakeTmux {
     serverPid,
     alive: () => alive,
     clients,
+    started,
+    stopPanes() {
+      for (const child of started) {
+        child.kill("SIGKILL");
+      }
+    },
     argv(args) {
       const mode = args.includes("-C") ? "control" : "attach";
       if (mode === "attach") {

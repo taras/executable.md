@@ -89,6 +89,42 @@ export function runPaneWorkerProcess(invocation: {
   return run(() => runPaneWorker(invocation.ordinal, invocation.directory));
 }
 
+/**
+ * A pane that could not be proved free.
+ *
+ * Provider-neutral: it names no socket, session, pane, client, argv or
+ * environment, because a settlement that failed is read in exactly the places a
+ * private identifier must not appear.
+ */
+export class PaneNotQuiescent extends Error {
+  override name = "PaneNotQuiescent";
+  constructor(what: string) {
+    super(`this terminal pane could not be proved free: ${what}`);
+  }
+}
+
+/**
+ * What a settlement means for the pane it settled.
+ *
+ * Exported because it is the rule, not an implementation detail: everything
+ * downstream — clearing the pane, reporting a launch settled, admitting the
+ * next one, letting teardown succeed — is conditional on it, and a rule that
+ * several callers depend on is one worth being able to state and test on its
+ * own.
+ */
+export function requireQuiescent(settlement: Settlement): void {
+  if (settlement.quiet) {
+    return;
+  }
+  // Everything the worker can do has been done and something is still there: a
+  // survivor of the escalation, or a holder of the pane's terminal.
+  throw new PaneNotQuiescent(
+    settlement.holders.some((holder) => !holder.gone)
+      ? "something still holds its terminal"
+      : "something it started is still running",
+  );
+}
+
 /** A settlement for a pane that never started anything. */
 const NOTHING_TO_SETTLE: Settlement = {
   method: "exited",
@@ -176,6 +212,9 @@ export function* runPaneWorker(ordinal: number, directory: string): Operation<vo
     try {
       const settlement =
         entry.child === undefined ? NOTHING_TO_SETTLE : yield* entry.child.settle();
+      // Fails closed: a settlement that could not prove the pane free leaves it
+      // uncleared, reports no success, and refuses the next launch.
+      requireQuiescent(settlement);
       // Cleared only after the settlement, so a launch arriving now is refused
       // rather than started beside a sweep that would reach it.
       if (live === entry) {
@@ -231,7 +270,9 @@ export function* runPaneWorker(ordinal: number, directory: string): Operation<vo
           yield* say({ type: "started", id: message.id, pid: started.value });
           const outcome = yield* child.exited;
           // The exit is not the end of it. `exited` is what frees the pane for
-          // the next launch, so it follows the whole settlement.
+          // the next launch, so it follows the whole settlement — and is sent
+          // only when that settlement proved the pane free. A settlement that
+          // did not throws out of here instead, and no success is reported.
           const settlement = yield* settle(entry);
           yield* say({ type: "exited", id: message.id, ...outcome, settlement });
         });

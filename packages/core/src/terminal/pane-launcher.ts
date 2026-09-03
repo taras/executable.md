@@ -23,6 +23,7 @@
 import { resource } from "effection";
 import type { Operation } from "effection";
 import { NativeLauncher } from "@executablemd/runtime";
+import type { NativeLaunchOutcome, NativeLaunchRequest } from "@executablemd/runtime";
 
 import type { TerminalPaneClaim } from "./authority.ts";
 
@@ -33,9 +34,22 @@ import type { TerminalPaneClaim } from "./authority.ts";
  * belongs to the pane, so it goes where the pane's text goes rather than to the
  * root's streams — which the native UI is not drawing over.
  */
+/**
+ * How a pane actually runs a native UI: the composite's operation for this
+ * pane's authored ordinal, bound by core and closed over here.
+ *
+ * The ordinal lives in this closure and nowhere else. It reaches no request, no
+ * Agent request, no session key, no durable phase, no result and no diagnostic.
+ */
+export type RunInPane = (
+  request: NativeLaunchRequest,
+  spawned: () => void,
+) => Operation<NativeLaunchOutcome>;
+
 export function* usePaneNativeLauncher(
   claim: TerminalPaneClaim,
   flush: () => Operation<void>,
+  runInPane: RunInPane,
 ): Operation<void> {
   yield* NativeLauncher.around({
     /**
@@ -60,11 +74,18 @@ export function* usePaneNativeLauncher(
     *flush() {
       yield* flush();
     },
-    *launch([request, spawned], next) {
-      // The exact request, untouched, to whichever host launcher is installed.
-      // What this adds is a listener: the pane is ready when the runtime says
-      // the child started, and at no earlier moment.
-      return yield* next(request, () => {
+    *launch([request, spawned]) {
+      // The end of the chain, and deliberately so. Middleware written nearer
+      // the authored launch composes in front of this and may observe, wrap,
+      // refuse or short-circuit before it delegates here; what it must not do
+      // is reach past it, because past it is the root foreground launcher and
+      // the root terminal is the one thing a pane exists to avoid.
+      //
+      // The request crosses exactly as it arrived. What this adds is the
+      // ordinal — from the closure, never from the request — and a listener, so
+      // the pane is ready when the runtime says the child started and at no
+      // earlier moment.
+      return yield* runInPane(request, () => {
         claim.ready();
         spawned();
       });

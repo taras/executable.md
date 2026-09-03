@@ -26,6 +26,7 @@
 
 import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
+import type { NativeLaunchOutcome, NativeLaunchRequest } from "./launcher.ts";
 
 /** One pane the provider is asked to present, by its authored ordinal. */
 export interface TerminalPaneRequest {
@@ -125,6 +126,32 @@ export interface TerminalComposite {
    */
   shell(ordinal: number, spawned: () => void): Operation<TerminalShellOutcome>;
   /**
+   * Run one native launch in one pane, on that pane's terminal.
+   *
+   * This is the physical endpoint for a `<Session.Launch>` written inside a
+   * paired pane. Core closes its pane-scoped launcher over this operation and
+   * the pane's authored ordinal, so the ordinal stays in a live closure and
+   * enters no request, session key, durable phase, result or diagnostic. What
+   * crosses is the exact command vector, working directory and environment the
+   * Agent provider supplied.
+   *
+   * Required of every composite, and deliberately not optional: a provider that
+   * cannot execute a pane launch refuses here. Falling back would put a native
+   * UI on the root terminal — the one terminal a pane exists to avoid.
+   *
+   * `spawned` is the pane's readiness latch, on the same terms as `shell()`:
+   * called for the child's runtime spawn event and nothing earlier.
+   *
+   * Kept apart from `shell()` because they answer different questions. `shell()`
+   * derives its executable from live host policy; this runs the request it is
+   * given.
+   */
+  launch(
+    ordinal: number,
+    request: NativeLaunchRequest,
+    spawned: () => void,
+  ): Operation<NativeLaunchOutcome>;
+  /**
    * Settle when the reader closes or leaves the composite.
    *
    * A grid stays visible after its panes have settled, so this is what tells
@@ -215,6 +242,8 @@ export interface TerminalProviderResources {
   attached: number;
   /** Shells started whose outcome has not been returned. */
   shells: number;
+  /** Pane launches started whose outcome has not been returned. */
+  launches: number;
 }
 
 /** A fresh, empty record. */
@@ -222,7 +251,7 @@ export function terminalProviderLog(): TerminalProviderLog {
   return {
     events: [],
     shown: new Map<number, string>(),
-    live: { composites: 0, attached: 0, shells: 0 },
+    live: { composites: 0, attached: 0, shells: 0, launches: 0 },
   };
 }
 
@@ -249,6 +278,18 @@ export interface ControlledCompositeOptions {
    */
   onUpdate?: (ordinal: number, state: TerminalPaneState) => void;
   shell?: (ordinal: number, spawned: () => void) => Operation<TerminalShellOutcome>;
+  /**
+   * What a pane launch does, in place of starting a native UI.
+   *
+   * Left out, a launch refuses — which is what a composite that cannot execute
+   * one must do, and what keeps a suite that says nothing about launching from
+   * quietly passing one to the root terminal.
+   */
+  launch?: (
+    ordinal: number,
+    request: NativeLaunchRequest,
+    spawned: () => void,
+  ) => Operation<NativeLaunchOutcome>;
   close?: () => Operation<void>;
 }
 
@@ -308,6 +349,18 @@ export function prepareControlledComposite(
           // cancelled — because a shell a suite can still find is a shell the
           // provider is still holding.
           log.live.shells--;
+        }
+      },
+      *launch(ordinal, request, spawned) {
+        log.events.push(`launch:${generation}:${ordinal}`);
+        if (options.launch === undefined) {
+          throw new Error(`this composite cannot run a native launch in pane ${ordinal}`);
+        }
+        log.live.launches++;
+        try {
+          return yield* options.launch(ordinal, request, spawned);
+        } finally {
+          log.live.launches--;
         }
       },
       *closed() {
