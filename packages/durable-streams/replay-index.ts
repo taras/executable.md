@@ -77,6 +77,23 @@ export class ReplayIndex {
     this.disabled.add(coroutineId);
   }
 
+  /**
+   * Forget the retained Close for one coroutine, keeping its retained yields.
+   *
+   * A spawned region whose run was interrupted continues the work it had left,
+   * so its retained history must stay replayable while its retained
+   * `Close(cancelled)` stops standing in the way — otherwise the divergence
+   * guard reads the extra effects as a coroutine continuing past its own close.
+   *
+   * Deliberately narrower than `disableReplay`, which would throw the history
+   * away and re-run the child from the beginning. Internal: nothing exports
+   * this, because deciding that a closed coroutine may continue is the
+   * combinator's, and never a caller's.
+   */
+  reopen(coroutineId: CoroutineId): void {
+    this.closes.delete(coroutineId);
+  }
+
   /** Returns true if replay has been disabled for this coroutine. */
   isReplayDisabled(coroutineId: CoroutineId): boolean {
     return this.disabled.has(coroutineId);

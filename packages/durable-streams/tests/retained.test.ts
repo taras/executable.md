@@ -15,7 +15,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { detachJson, retainEvents } from "../retained.ts";
+import { consumable, detachJson, retainEvents } from "../retained.ts";
 import { ReplayIndex } from "../replay-index.ts";
 import type { DurableEvent, Json } from "../types.ts";
 
@@ -441,5 +441,48 @@ describe("retained history — detached values stay ordinary JSON", () => {
       caught = error;
     }
     expect(caught).toBeInstanceOf(TypeError);
+  });
+});
+
+describe("retention keeps why a child was cancelled (DEC-040)", () => {
+  const cancelled = (cancellation?: "caller" | "unwound"): DurableEvent => ({
+    type: "close",
+    coroutineId: "root.0",
+    result:
+      cancellation === undefined ? { status: "cancelled" } : { status: "cancelled", cancellation },
+  });
+
+  it("retains both reasons through the settled copy", function* () {
+    for (const reason of ["caller", "unwound"] as const) {
+      const [retained] = retainEvents([cancelled(reason)]);
+      expect(retained?.type).toBe("close");
+      expect(retained?.result).toEqual({ status: "cancelled", cancellation: reason });
+    }
+  });
+
+  it("leaves a legacy absence absent", function* () {
+    const [retained] = retainEvents([cancelled()]);
+    expect(retained?.result).toEqual({ status: "cancelled" });
+    expect(
+      retained !== undefined &&
+        retained.result.status === "cancelled" &&
+        "cancellation" in retained.result,
+    ).toBe(false);
+  });
+
+  it("carries both reasons through an observable copy", function* () {
+    for (const reason of ["caller", "unwound"] as const) {
+      expect(consumable(cancelled(reason).result)).toEqual({
+        status: "cancelled",
+        cancellation: reason,
+      });
+    }
+    expect(consumable(cancelled().result)).toEqual({ status: "cancelled" });
+  });
+
+  it("reaches the replay index with its reason intact", function* () {
+    const index = new ReplayIndex([cancelled("unwound")]);
+    const close = index.getClose("root.0");
+    expect(close?.result).toEqual({ status: "cancelled", cancellation: "unwound" });
   });
 });

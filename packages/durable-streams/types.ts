@@ -23,11 +23,23 @@ export interface SerializedError {
   stack?: string;
 }
 
+/**
+ * Why a cancelled coroutine stopped (DEC-040).
+ *
+ * Two very different things produce a cancelled Close, and a resumed run has to
+ * tell them apart: `"caller"` is an owner deliberately halting the task
+ * `durableSpawn` handed it, and `"unwound"` is anything involuntary — a scope
+ * coming down, a run interrupted, a host going away. A record written before
+ * this evidence existed carries neither, and reads as `"caller"`, because
+ * refusing to revive is the safe direction.
+ */
+export type Cancellation = "caller" | "unwound";
+
 /** Result of an effect or coroutine. */
 export type Result =
   | { status: "ok"; value?: Json }
   | { status: "err"; error: SerializedError }
-  | { status: "cancelled" };
+  | { status: "cancelled"; cancellation?: Cancellation };
 
 /** Dot-delimited hierarchical coroutine path. See spec §3. */
 export type CoroutineId = string;

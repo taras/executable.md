@@ -8,6 +8,7 @@
 
 // Protocol types
 export type {
+  Cancellation,
   Close,
   CoroutineId,
   CoroutineView,
@@ -100,7 +101,7 @@ export type {
 export { durableAction, durableCall, durableSleep, versionCheck } from "./operations.ts";
 
 // Structured concurrency combinators
-export { durableAll, durableRace, durableSpawn } from "./combinators.ts";
+export { durableAll, durableRace, durableSpawn, durableSpawnIn } from "./combinators.ts";
 
 // Durable iteration
 export { durableEach } from "./each.ts";

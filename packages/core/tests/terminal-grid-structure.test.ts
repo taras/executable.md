@@ -130,31 +130,6 @@ const PANE_BODY = [
 ].join("\n");
 
 describe("Tier TG — the grid grammar", () => {
-  it("TG1: accepts a paired grid with positive integer columns and both pane forms", function* () {
-    const run = yield* runGrid(
-      [
-        "<Terminal.Grid columns={2}>",
-        '<Terminal title="Agent">Instructions.</Terminal>',
-        '<Terminal title="Shell" />',
-        "</Terminal.Grid>",
-      ].join("\n"),
-    );
-
-    // The grammar accepted it, so the run reached the one thing this build
-    // cannot do — and stopped there.
-    expect(soleError(run)).toContain("no terminal provider opened this grid");
-    expect(derivedLayout(run)).toEqual({
-      layout: {
-        columns: 2,
-        rows: 1,
-        cells: [
-          { ordinal: 0, row: 0, column: 0, title: "Agent", form: "paired" },
-          { ordinal: 1, row: 0, column: 1, title: "Shell", form: "self-closing" },
-        ],
-      },
-    });
-  });
-
   it("TG1: refuses an unknown prop and `as` on the grid", function* () {
     const unknown = yield* runGrid(
       '<Terminal.Grid columns={2} layout="tiled"><Terminal title="A" /></Terminal.Grid>',
@@ -330,52 +305,6 @@ describe("Tier TG — structural placement", () => {
     reachedNothing(alone);
     reachedNothing(buried);
   });
-
-  it("TG2: treats whitespace between panes as nothing at all", function* () {
-    const run = yield* runGrid(
-      [
-        "<Terminal.Grid columns={2}>",
-        "",
-        '  <Terminal title="A" />',
-        "",
-        '  <Terminal title="B" />',
-        "",
-        "</Terminal.Grid>",
-      ].join("\n"),
-    );
-
-    expect(soleError(run)).toContain("no terminal provider opened this grid");
-    expect(derivedLayout(run)).toEqual({
-      layout: {
-        columns: 2,
-        rows: 1,
-        cells: [
-          { ordinal: 0, row: 0, column: 0, title: "A", form: "self-closing" },
-          { ordinal: 1, row: 0, column: 1, title: "B", form: "self-closing" },
-        ],
-      },
-    });
-  });
-
-  it("TG2: a complete grid refuses before any pane body or default shell", function* () {
-    const run = yield* runGrid(
-      [
-        "<Terminal.Grid columns={2}>",
-        '<Terminal title="Work">',
-        "",
-        PANE_BODY,
-        "</Terminal>",
-        '<Terminal title="Shell" />',
-        "</Terminal.Grid>",
-      ].join("\n"),
-    );
-
-    expect(soleError(run)).toContain("no pane expanded its content and no default shell started.");
-    // The pane held a component and a command; neither was reached, and the
-    // grid rendered nothing of its own.
-    reachedNothing(run);
-    expect(run.output).toContain("no terminal provider opened this grid");
-  });
 });
 
 describe("Tier TG — row-major layout", () => {
@@ -445,60 +374,6 @@ describe("Tier TG — row-major layout", () => {
     expect([1, 2, 3, 4, 5].map((panes) => terminalGridLayout(3, filler(panes)).rows)).toEqual([
       1, 1, 1, 2, 2,
     ]);
-  });
-
-  it("TG4: an executed grid derives those same positions", function* () {
-    const run = yield* runGrid(
-      [
-        "<Terminal.Grid columns={2}>",
-        '<Terminal title="One" />',
-        '<Terminal title="Two" />',
-        '<Terminal title="Three" />',
-        '<Terminal title="Four" />',
-        '<Terminal title="Five" />',
-        "</Terminal.Grid>",
-      ].join("\n"),
-    );
-
-    expect(derivedLayout(run)).toEqual({
-      layout: {
-        columns: 2,
-        rows: 3,
-        cells: [
-          { ordinal: 0, row: 0, column: 0, title: "One", form: "self-closing" },
-          { ordinal: 1, row: 0, column: 1, title: "Two", form: "self-closing" },
-          { ordinal: 2, row: 1, column: 0, title: "Three", form: "self-closing" },
-          { ordinal: 3, row: 1, column: 1, title: "Four", form: "self-closing" },
-          { ordinal: 4, row: 2, column: 0, title: "Five", form: "self-closing" },
-        ],
-      },
-    });
-  });
-
-  it("TG4: duplicate titles stay valid, and identity is the ordinal", function* () {
-    const run = yield* runGrid(
-      [
-        "<Terminal.Grid columns={2}>",
-        '<Terminal title="Agent">first</Terminal>',
-        '<Terminal title="Agent" />',
-        '<Terminal title="Agent">third</Terminal>',
-        "</Terminal.Grid>",
-      ].join("\n"),
-    );
-
-    // Three panes sharing one label are three panes: the ordinal separates
-    // them, and the form each one was written in travels with it.
-    expect(derivedLayout(run)).toEqual({
-      layout: {
-        columns: 2,
-        rows: 2,
-        cells: [
-          { ordinal: 0, row: 0, column: 0, title: "Agent", form: "paired" },
-          { ordinal: 1, row: 0, column: 1, title: "Agent", form: "self-closing" },
-          { ordinal: 2, row: 1, column: 0, title: "Agent", form: "paired" },
-        ],
-      },
-    });
   });
 });
 

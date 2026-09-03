@@ -170,7 +170,17 @@ function detachResult(result: Result): Result {
     }
     return Object.freeze({ status, error: detachError(result.error) });
   }
-  return Object.freeze({ status });
+  // The reason a cancellation carries is retained evidence, not decoration: a
+  // resumed spawned region reads it to tell a deliberate stop from an
+  // interrupted run (DEC-040). Dropping it here would make every retained
+  // cancellation read as deliberate, which is the safe default but the wrong
+  // answer for a run that was interrupted. A value that is not one of the two
+  // it may be is not retained at all, so a malformed record reads as the safe
+  // default rather than as something it never said.
+  const cancellation = result.cancellation;
+  return Object.freeze(
+    cancellation === "caller" || cancellation === "unwound" ? { status, cancellation } : { status },
+  );
 }
 
 /**
@@ -448,5 +458,10 @@ export function consumable(result: Result): Result {
   if (result.status === "err") {
     return { status: "err", error: { ...result.error } };
   }
-  return { status: "cancelled" };
+  // The reason travels with the copy: a resumed spawned region reads it to tell
+  // a deliberate stop from an interrupted run (DEC-040), and dropping it here
+  // would make every retained cancellation look deliberate.
+  return result.cancellation === undefined
+    ? { status: "cancelled" }
+    : { status: "cancelled", cancellation: result.cancellation };
 }

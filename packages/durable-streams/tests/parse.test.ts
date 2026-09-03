@@ -270,3 +270,41 @@ describe("parseDurableEvent", () => {
     expect("polluted" in {}).toBe(false);
   });
 });
+
+describe("a cancelled close carries why it was cancelled (DEC-040)", () => {
+  const cancelled = (cancellation?: "caller" | "unwound"): DurableEvent => ({
+    type: "close",
+    coroutineId: "root.0",
+    result:
+      cancellation === undefined ? { status: "cancelled" } : { status: "cancelled", cancellation },
+  });
+
+  it("round-trips both reasons", function* () {
+    for (const reason of ["caller", "unwound"] as const) {
+      const event = cancelled(reason);
+      const record = serializeDurableEvent(event);
+      expect(accepted(record)).toEqual(event);
+      // And back to the same bytes, so a backend retains the event rather than
+      // an approximation of it.
+      expect(serializeDurableEvent(accepted(record))).toBe(record);
+    }
+  });
+
+  it("keeps a legacy record's absence an absence", function* () {
+    const parsed = accepted(serializeDurableEvent(cancelled()));
+    expect(parsed).toEqual(cancelled());
+    expect(parsed.result.status === "cancelled" && "cancellation" in parsed.result).toBe(false);
+  });
+
+  it("refuses a reason it does not recognise", function* () {
+    const refused = refusal(
+      JSON.stringify({
+        type: "close",
+        coroutineId: "root.0",
+        result: { status: "cancelled", cancellation: "somebody" },
+      }),
+    );
+    expect(refused).toBeInstanceOf(MalformedDurableEventError);
+    expect(refused.message).toContain("$.result.cancellation");
+  });
+});

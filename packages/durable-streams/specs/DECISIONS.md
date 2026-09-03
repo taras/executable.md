@@ -489,6 +489,94 @@ Updated before completion of every phase and committed at the end of each phase.
   finally block skips re-emitting it (checked via `replayIndex.hasClose()`).
 - **Consequences:** Replay of race losers is invisible — they block and
   get cancelled just like the original run. No duplicate Close events.
+- **Superseded in part by DEC-039.** The invariant recorded here assumed every
+  retained `Close(cancelled)` belongs to a child a combinator will cancel
+  again. That is true of `durableRace` and `durableAll`, and false of
+  `durableSpawn`.
+
+## DEC-039: A spawned region resumes a retained cancelled child
+
+- **Phase:** 4 (Structured Concurrency)
+- **Date:** 2026-09-02
+- **Context:** `durableSpawn` hands its task to the caller, so nothing cancels
+  the child on the caller's behalf. Under DEC-024 a retained
+  `Close(cancelled)` made such a child `suspend()` forever, and no combinator
+  was ever going to cancel it a second time — the resumed run hung. The
+  invariant "this branch is only reachable when a parent combinator will cancel
+  this child" was simply not true once regions could be spawned.
+- **Decision:** `runDurableChild` takes an explicit `CancelledChildPolicy`,
+  fixed at each combinator's call site and never chosen by a caller:
+  - `"combinator-cancels"` — `durableRace` and `durableAll` keep DEC-024
+    exactly. A retained race loser or fail-fast sibling still suspends until
+    its combinator cancels it again.
+  - `"resume"` — `durableSpawn`. A retained `Close(cancelled)` under a parent
+    that never completed means the *run* was interrupted, not that a combinator
+    chose against this child, so the child continues the work it had left.
+- **Rationale:** The two cases differ in who is going to act next, which is a
+  fact about the region rather than a preference. Reading a cancelled close as
+  "interrupted" where nothing will cancel it again is the only answer that
+  terminates.
+- **Mechanism:** Resuming calls the internal `ReplayIndex.reopen(coroutineId)`,
+  which forgets that coroutine's retained Close while keeping its retained
+  yields — so the child continues its own history rather than restarting, and
+  the divergence guard does not read the remaining effects as a coroutine
+  continuing past its own close. It is deliberately narrower than
+  `disableReplay`, and neither is exported: deciding that a closed coroutine may
+  continue belongs to the combinator.
+- **Consequences:** A resumed child writes the Close its second life reached,
+  replacing the retained cancelled one. `durableSpawn` also starts its child in
+  the routine's own scope rather than inside the `ephemeral` effect that
+  returns the task, so the task outlives the call and can be awaited or halted;
+  previously every `yield* task` threw `halted`.
+- **Amended by DEC-040.** As first written, `"resume"` fired on *every* retained
+  `Close(cancelled)` under an incomplete parent. That is too wide: a caller may
+  deliberately halt the task it owns, and the record of that is
+  indistinguishable from the record of an interrupted run. DEC-040 supplies the
+  missing evidence and narrows `"resume"` to involuntary cancellation.
+
+## DEC-040: A cancelled child records why it was cancelled
+
+- **Phase:** 4 (Structured Concurrency)
+- **Date:** 2026-09-02
+- **Context:** `durableSpawn` hands the task to its caller, and the caller may
+  call `task.halt()` on purpose — a region it decided to stop. If the run is
+  later interrupted before the parent completes, the journal holds
+  `Close(cancelled)` for that child and nothing else. DEC-039's `"resume"`
+  policy therefore revives work the caller deliberately cancelled, on every
+  subsequent resumed run.
+- **Decision:** The cancelled close carries **why**, written by whichever path
+  cancelled the child:
+  - `cancellation: "caller"` — the owner called `halt()` on the task
+    `durableSpawn` returned. A deliberate stop.
+  - `cancellation: "unwound"` — anything else: the routine's scope unwinding,
+    the run being interrupted, the host going away. Involuntary.
+
+  A record with no `cancellation` member is legacy and reads as `"caller"`,
+  because refusing to revive is the safe direction: it reproduces the original
+  run rather than performing work nobody asked for twice.
+
+  `runDurableChild`'s policies then read:
+  - `"combinator-cancels"` (`durableRace`, `durableAll`) — suspend, whatever the
+    reason. Unchanged from DEC-024.
+  - `"resume"` (`durableSpawn`) — resume **only** `"unwound"`. A `"caller"`
+    cancellation suspends, exactly as a combinator-cancelled child does.
+- **Rationale:** Suspending is the faithful reproduction of a deliberate halt:
+  the caller's control flow is deterministic, so it reaches the same
+  `task.halt()` again and cancels the child a second time — which is DEC-024's
+  argument, applied to a caller instead of a combinator. A caller that instead
+  *awaits* a task it previously halted has diverged, and divergence is the
+  honest answer there rather than a silent revival.
+- **Consequences:** Terminal grids get what they need without reviving anything
+  deliberately stopped. Reader close cooperatively closes each pane inside its
+  durable child and waits for that child to retain `closed`; it does not halt
+  the durable pane task. Once reader close takes effect, later parent
+  cancellation is deferred through pane and grid completion, so a resumed run
+  short-circuits the completed grid and never reaches those panes. The case that
+  must resume — the run interrupted while the grid is still active — unwinds
+  the grid and pane children, retains `"unwound"`, and continues.
+- **Scope:** The reason is retained evidence, not authority. Nothing reads it
+  from outside `runDurableChild`, no public API exposes it, and no caller
+  chooses a policy: the policy stays fixed at each combinator's call site.
 
 ## DEC-025: Test 27 — dynamic spawn count is not a divergence error
 
