@@ -21,6 +21,7 @@
 import { appendFile } from "node:fs/promises";
 import { until } from "effection";
 import type { Operation } from "effection";
+import { TmuxCommandFailed } from "../../src/terminal/tmux.ts";
 import type { Tmux } from "../../src/terminal/tmux.ts";
 
 export interface FakePane {
@@ -46,6 +47,15 @@ export interface FakeTmuxOptions {
   readonly clientCommand: (mode: "control" | "attach", script: string) => readonly string[];
   /** Fail this command once, with this message. */
   readonly failOnce?: { readonly command: string; readonly message: string };
+  /** Name the server gives an attached client. */
+  readonly clientName?: string;
+  /**
+   * A client that does not leave when it is asked.
+   *
+   * The server still reports the detach, but the client's process stays — which
+   * is the only way to reach the escalation that follows the ask.
+   */
+  readonly stubbornClient?: boolean;
 }
 
 export interface FakeTmux extends Tmux {
@@ -236,7 +246,9 @@ export function createFakeTmux(options: FakeTmuxOptions): FakeTmux {
         if (at >= 0) {
           clients.splice(at, 1);
         }
-        yield* until(appendFile(options.script, "detached\n"));
+        if (options.stubbornClient !== true) {
+          yield* until(appendFile(options.script, "detached\n"));
+        }
         yield* until(appendFile(options.script, `%client-detached ${name}\n`));
         return "";
       }
@@ -266,7 +278,7 @@ export function createFakeTmux(options: FakeTmuxOptions): FakeTmux {
       const mode = args.includes("-C") ? "control" : "attach";
       if (mode === "attach") {
         // A visible client the server can list, named the way tmux names one.
-        clients.push("/dev/ttys999");
+        clients.push(options.clientName ?? "/dev/ttys999");
       }
       return options.clientCommand(mode, options.script);
     },
@@ -276,7 +288,9 @@ export function createFakeTmux(options: FakeTmuxOptions): FakeTmux {
     *run(args) {
       const answered = yield* answer(args);
       if (answered === undefined) {
-        throw new Error(`fake tmux refused: ${args.join(" ")}`);
+        // The same failure the real surface raises, so what a caller sees on
+        // this path is what a caller sees on that one.
+        throw new TmuxCommandFailed(args[0] ?? "");
       }
       return answered;
     },
