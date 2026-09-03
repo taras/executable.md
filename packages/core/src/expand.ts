@@ -72,6 +72,7 @@ import { durableGrid, openTerminalGrid, toRequest } from "./terminal/grid.ts";
 import type { PaneWork } from "./terminal/grid.ts";
 import { recordGridLayout } from "./terminal/journal.ts";
 import { usePaneTerminal } from "./terminal/pane.ts";
+import { usePaneNativeLauncher } from "./terminal/pane-launcher.ts";
 import {
   asBindingViolation,
   asExpressionViolation,
@@ -2236,13 +2237,28 @@ function paneWork(pane: TerminalPane, title: string, site: GridSite): PaneWork {
         // in its content has no loop to exit and says so.
         yield* ActiveLoop.set(undefined);
         yield* usePaneTerminal(claim);
+        const shown: Segment[] = [];
+        // What this pane has rendered and not yet shown. A native UI is about
+        // to draw over the pane, so the same rule the root flush follows holds
+        // here: everything the pane has said reaches the reader first.
+        const flushPane = function* (): Operation<void> {
+          const pending = renderSegments(shown);
+          shown.length = 0;
+          if (pending.length > 0) {
+            yield* composite.display(pane.ordinal, pending);
+          }
+        };
+        // A `<Session.Launch>` written in this pane finds this launcher simply
+        // by being here: it reserves and flushes this pane instead of competing
+        // for the run's one foreground lease, and the child it starts is what
+        // makes this pane ready.
+        yield* usePaneNativeLauncher(claim, flushPane);
         const siteEnv = yield* env;
         // Starts from what the grid site can see and keeps its own writes: a
         // binding this pane makes is visible to later work in this pane and to
         // nothing else.
         yield* provideEnv(derivedEnvironment(siteEnv, { ...(siteEnv?.values ?? {}) }));
 
-        const shown: Segment[] = [];
         yield* expandSegmentsWithin(
           pane.element.children,
           site.parentMeta,
@@ -2266,10 +2282,7 @@ function paneWork(pane: TerminalPane, title: string, site: GridSite): PaneWork {
           // one outside the grid.
           undefined,
         );
-        const text = renderSegments(shown);
-        if (text.length > 0) {
-          yield* composite.display(pane.ordinal, text);
-        }
+        yield* flushPane();
       });
     },
   };

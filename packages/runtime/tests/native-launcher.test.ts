@@ -26,6 +26,7 @@ import {
   flushOutput,
   installForegroundLauncher,
   nativeLaunch,
+  NativeLauncher,
   NO_TERMINAL,
   reserveTerminal,
 } from "../launcher.ts";
@@ -201,6 +202,48 @@ describe("Tier FL — the foreground native launcher", () => {
     yield* nativeLaunch({ command: [fake.command, "--resume", "x"], cwd: dir });
 
     expect(order).toEqual(["drain", "launch"]);
+  });
+
+  it("FL8: the runtime's start event is reported once, before the child is waited on", function* () {
+    const dir = yield* useTempDir();
+    const fake = yield* useFake(dir, "claude");
+    const order: string[] = [];
+    yield* installForegroundLauncher({ isTerminal: () => true });
+    yield* reserveTerminal();
+
+    const outcome = yield* NativeLauncher.operations.launch(
+      { command: [fake.command, "--resume", "session-abc"], cwd: dir },
+      () => order.push("started"),
+    );
+    order.push("exited");
+
+    expect(outcome.exitCode).toBe(0);
+    // A start, then an exit. Reported from the runtime's own spawn event, so a
+    // child that starts and closes at once has still started.
+    expect(order).toEqual(["started", "exited"]);
+    expect((yield* fake.read()).argv).toEqual(["--resume", "session-abc"]);
+  });
+
+  it("FL9: a child that never starts never reports a start", function* () {
+    const dir = yield* useTempDir();
+    const order: string[] = [];
+    yield* installForegroundLauncher({ isTerminal: () => true });
+    yield* reserveTerminal();
+
+    let message = "";
+    try {
+      yield* NativeLauncher.operations.launch(
+        { command: [path.join(dir, "not-a-program")], cwd: dir },
+        () => order.push("started"),
+      );
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).not.toBe("");
+    // Nothing ran, so nothing started — which is what keeps a pane whose launch
+    // failed from being presented as one that is running.
+    expect(order).toEqual([]);
   });
 
   it("FL7: cancellation stops a child that ignores the interrupt", function* () {
