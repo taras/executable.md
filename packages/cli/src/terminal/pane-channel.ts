@@ -93,6 +93,10 @@ export function usePaneChannels(
   count: number,
   options: {
     onClosed?: () => void;
+    /** Handed each accepted socket, so a suite can ask what it still holds. */
+    onSocket?: (socket: Socket) => void;
+    /** Handed each listening server, for the same reason. */
+    onServer?: (server: Server) => void;
     /**
      * Called as the directory is removed, with how many of the sockets and
      * servers had actually reported closing by then.
@@ -130,11 +134,15 @@ export function usePaneChannels(
 
     // Awaited, not asked for. `destroy()` and `close()` are requests; what the
     // directory's removal has to wait for is the closures themselves.
-    let closing: Operation<void> | undefined;
+    let closing: ReturnType<typeof withResolvers<void>> | undefined;
     function* closeAll(): Operation<void> {
       if (closing !== undefined) {
-        return yield* closing;
+        // Published before anything is closed, so a second caller arriving
+        // mid-close waits for this one rather than starting its own or being
+        // told it had already finished.
+        return yield* closing.operation;
       }
+      closing = withResolvers<void>();
       const closings: Operation<void>[] = [];
       const counted = (): void => {
         closedCount++;
@@ -149,11 +157,18 @@ export function usePaneChannels(
         closings.push(shut(server, counted));
         server.close();
       }
-      for (const pending of closings) {
-        yield* pending;
+      try {
+        for (const pending of closings) {
+          yield* pending;
+        }
+      } catch (error) {
+        const failure = error instanceof Error ? error : new Error(String(error));
+        closing.reject(failure);
+        closing = undefined;
+        throw failure;
       }
       options.onClosed?.();
-      closing = (function* () {})();
+      closing.resolve();
     }
 
     yield* ensure(function* () {
@@ -170,7 +185,10 @@ export function usePaneChannels(
       yield* writeTextFile(paneTokenPath(directory, ordinal), token);
       yield* until(chmod(paneTokenPath(directory, ordinal), 0o600));
 
-      const server = net.createServer((socket) => {
+      // Named, every one of them. `createServer(cb)` and `listen(cb)` both
+      // register anonymous listeners that nothing can take off again.
+      const server = net.createServer();
+      const onConnection = (socket: Socket): void => {
         live.add(socket);
         closable++;
         const onSocketClose = (): void => {
@@ -178,17 +196,29 @@ export function usePaneChannels(
           socket.off("close", onSocketClose);
         };
         socket.on("close", onSocketClose);
+        options.onSocket?.(socket);
         arrivals.send({ ordinal, socket });
-      });
+      };
+      server.on("connection", onConnection);
       servers.push(server);
+      options.onServer?.(server);
       closable++;
+      yield* ensure(() => {
+        server.off("connection", onConnection);
+      });
+
       const listening = withResolvers<void>();
+      const onListening = (): void => listening.resolve();
       const onListenError = (error: Error): void => listening.reject(error);
+      server.on("listening", onListening);
       server.on("error", onListenError);
-      server.listen(paneSocketPath(directory, ordinal), () => listening.resolve());
+      server.listen(paneSocketPath(directory, ordinal));
       try {
+        // Both stay installed through the wait they resolve.
         yield* listening.operation;
       } finally {
+        // And come off synchronously once it is over, however it ended.
+        server.off("listening", onListening);
         server.off("error", onListenError);
       }
     }

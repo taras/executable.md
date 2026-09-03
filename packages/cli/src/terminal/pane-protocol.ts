@@ -134,11 +134,13 @@ export function readFrames<T>(
     let remainder = "";
     socket.setEncoding("utf8");
 
-    // Named, and all three removed together: on delivery, on a frame that does
-    // not parse, on the socket erroring, on cancellation, and on ordinary scope
-    // exit. A reader left attached to a socket its scope has finished with is a
-    // reader answering for somebody else's conversation.
-    const onData = (chunk: string): void => {
+    /** Take all three off at once. This reader is over. */
+    const detach = (): void => {
+      socket.off("data", onData);
+      socket.off("close", onClose);
+      socket.off("error", onError);
+    };
+    function onData(chunk: string): void {
       const lines = (remainder + chunk).split("\n");
       remainder = lines.pop() ?? "";
       for (const line of lines) {
@@ -151,23 +153,33 @@ export function readFrames<T>(
           // A frame that is not the protocol ends the conversation. This socket
           // is how one process is asked to start a program with inherited
           // terminal streams; "close to what I expected" is not good enough.
+          // The reader is done, so it comes off now rather than at scope exit
+          // — and its consumers are told, or they would wait for frames from a
+          // conversation that has ended.
+          detach();
+          queue.close();
           socket.destroy();
+          return;
         }
       }
-    };
-    const onClose = (): void => queue.close();
-    const onError = (): void => {
+    }
+    function onClose(): void {
+      // Terminal: nothing follows a close, so nothing stays listening for one.
+      detach();
+      queue.close();
+    }
+    function onError(): void {
+      detach();
+      queue.close();
       socket.destroy();
-    };
+    }
 
     socket.on("data", onData);
     socket.on("close", onClose);
     socket.on("error", onError);
-    yield* ensure(() => {
-      socket.off("data", onData);
-      socket.off("close", onClose);
-      socket.off("error", onError);
-    });
+    // Still the resource's, for the paths that terminate nothing: a cancelled
+    // scope, and a socket that simply never says anything.
+    yield* ensure(detach);
 
     yield* provide(queue);
   });
