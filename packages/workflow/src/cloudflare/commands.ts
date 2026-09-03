@@ -4,8 +4,8 @@ import {
 } from "../storage/record.ts";
 import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
 import { SHA256 } from "../workspace/root-manifest.ts";
+import { admitLocator, locatorFingerprintOf } from "../composition/locator.ts";
 import {
-  locatorFingerprintOf,
   parseRepositoryRecord,
   parseWorktreeRecord,
   type RepositoryRecord,
@@ -453,14 +453,17 @@ function mappings(value: unknown): ProposedMapping[] {
     const offered = members.get("record");
     if (which === "repository") {
       const record = parseRepositoryRecord(offered);
-      const locator = members.get("locator");
-      if (record === undefined || typeof locator !== "string" || locator === "") {
+      const offeredLocator = members.get("locator");
+      if (record === undefined || typeof offeredLocator !== "string") {
         throw new CommandError("malformed-member");
       }
-      // The record is journal-safe and names no locator; storage needs the
-      // admitted one. Requiring the fingerprint to follow from it is what stops
-      // a proposal retaining a locator that is not the one it was admitted for.
-      if (locatorFingerprintOf(locator) !== record.locatorFingerprint) {
+      // Admitted first, by the same closed allowlist the local host uses. A
+      // matching fingerprint says the two values agree with each other; it says
+      // nothing about whether the locator is one this system will ever hand to
+      // Git, and an authenticated proposal must not be able to retain a
+      // credential-bearing URL or an executable transport form.
+      const locator = admitLocator(offeredLocator);
+      if (locator === undefined || locatorFingerprintOf(locator) !== record.locatorFingerprint) {
         throw new CommandError("malformed-member");
       }
       return { kind: which, record, locator };

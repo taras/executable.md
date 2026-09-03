@@ -31,7 +31,7 @@ import {
 } from "./support/executor-object.ts";
 import { encodeBase64 } from "../../src/cloudflare/encoding.ts";
 import { sha256Hex } from "../../src/workspace/sha256.ts";
-import { locatorFingerprintOf } from "../../src/composition/records.ts";
+import { locatorFingerprintOf } from "../../src/composition/locator.ts";
 import { generateKeys, signToken, type TestKeys } from "./support/tokens.ts";
 
 let unique = 0;
@@ -572,6 +572,101 @@ describe("publishing one proposal", () => {
         before,
       ]);
     }
+  });
+
+  it("retains only a locator this system would hand to Git", async () => {
+    // A matching fingerprint says the two values agree with each other. It says
+    // nothing about whether the locator is one that may ever be used, and an
+    // authenticated proposal must not be able to retain a credential or an
+    // executable transport form.
+    const refused: Record<string, string> = {
+      "a credential in the URL": "https://user:token@git.example.invalid/octo/app.git",
+      "an executable transport form": "ext::sh -c 'curl example.invalid'",
+      "a query that can carry a token": "https://git.example.invalid/app.git?access_token=abc",
+      "an unknown scheme": "javascript:alert(1)",
+      "a relative path": "../elsewhere",
+    };
+    for (const [description, locator] of Object.entries(refused)) {
+      const stub = executor();
+      await on(stub, (owner) => owner.initialize());
+      const socket = await connect(stub);
+      await stageThrough(socket);
+      const before = await on(stub, (owner) => owner.published());
+      const answer = await ask(
+        socket,
+        "bad-locator",
+        commit({
+          mappings: [
+            {
+              kind: "repository",
+              locator,
+              record: { ...REPOSITORY.record, locatorFingerprint: locatorFingerprintOf(locator) },
+            },
+          ],
+        }),
+      );
+      expect([description, answer["refusal"]]).toEqual([description, "command:malformed-member"]);
+      expect([description, await on(stub, (owner) => owner.published())]).toEqual([
+        description,
+        before,
+      ]);
+    }
+  });
+
+  it("retains the exact admitted locator, not its fingerprint", async () => {
+    const stub = executor();
+    await on(stub, (owner) => owner.initialize());
+    const socket = await connect(stub);
+    await stageThrough(socket);
+    expect(await ask(socket, "publish", commit())).toMatchObject({ outcome: "performed" });
+    // The row a later restoration reads has to name the repository, not a
+    // digest of it.
+    expect(await on(stub, (owner) => owner.repositoryLocator("app"))).toBe(LOCATOR);
+  });
+
+  it("accepts a Repository and its Worktree in either order", async () => {
+    const worktree = {
+      kind: "worktree",
+      record: {
+        repositoryName: "app",
+        name: "feature",
+        requestedBranch: "feature",
+        requestedBase: null,
+        creationCommit: "2".repeat(40),
+        checkoutPath: "/app",
+      },
+    };
+    // Which of the two comes first in an array is not a difference between
+    // proposals, so both spellings of one transaction must be accepted.
+    for (const [description, mappings] of Object.entries({
+      "parent first": [REPOSITORY, worktree],
+      "child first": [worktree, REPOSITORY],
+    })) {
+      const stub = executor();
+      await on(stub, (owner) => owner.initialize());
+      const socket = await connect(stub);
+      await stageThrough(socket);
+      const answer = await ask(socket, "both", commit({ mappings }));
+      expect([description, answer["outcome"]]).toEqual([description, "performed"]);
+      expect([description, await on(stub, (owner) => owner.published())]).toMatchObject([
+        description,
+        { currentRootId: NEXT_ROOT_ID, repositories: [{ name: "app", checkout_path: "/app" }] },
+      ]);
+    }
+  });
+
+  it("refuses a blob whose bytes were never retained beside its metadata", async () => {
+    const stub = executor();
+    await on(stub, (owner) => owner.initialize());
+    // A metadata row with no bytes is a half-written identity. Completing it
+    // from staging would repair authoritative damage as a side effect.
+    await on(stub, (owner) => owner.removeBlobBytesOnly(NEXT_BLOB_ID, NEXT_BYTES.length));
+    const socket = await connect(stub);
+    await stageThrough(socket);
+    const before = await on(stub, (owner) => owner.published());
+    expect(await ask(socket, "half", commit())).toMatchObject({ refusal: "storage:corrupt" });
+    expect(await on(stub, (owner) => owner.published())).toEqual(before);
+    expect(await on(stub, (owner) => owner.scratch())).toMatchObject({ commands: 2 });
   });
 
   it("grants a closed or foreign socket no publication", async () => {

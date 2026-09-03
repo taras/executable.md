@@ -336,6 +336,23 @@ export class ExecutorObject extends WorkflowOwnerObject {
     };
   }
 
+  /** The exact locator a retained Repository row holds. */
+  repositoryLocator(name: string): string {
+    const row = this.ctx.storage.sql
+      .exec("SELECT locator FROM workspace_repositories WHERE name = ?", name)
+      .toArray()[0];
+    return row === undefined ? "" : String(row["locator"]);
+  }
+
+  /** A blob's metadata with no bytes beside it: a half-written identity. */
+  removeBlobBytesOnly(digest: string, size: number): void {
+    this.ctx.storage.sql.exec(
+      "INSERT INTO vfs_blobs (hash, size, last_seen) VALUES (?, ?, 0) ON CONFLICT(hash) DO NOTHING",
+      hexBytes(digest),
+      size,
+    );
+  }
+
   damageRetainedBlob(): void {
     this.ctx.storage.sql.exec(
       "UPDATE vfs_blob_bytes SET bytes = ?",

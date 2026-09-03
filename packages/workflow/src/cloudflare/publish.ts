@@ -145,6 +145,16 @@ function resolve(
     confirmCompanion(storage, kind, digest, bytes);
     return { bytes, authoritative: true };
   }
+  if (kind === "blob") {
+    // A metadata row with no bytes is a half-written identity. Falling through
+    // to staging here would complete it as a side effect of a proposal, and
+    // which durable state won would depend on the write path rather than on
+    // what the store actually holds.
+    const partial = rows(storage, "SELECT size FROM vfs_blobs WHERE lower(hex(hash)) = ?", digest);
+    if (partial.length > 0) {
+      return corrupt("a retained blob has no bytes");
+    }
+  }
   const staged = rows(
     storage,
     `SELECT bytes FROM ${STAGING_TABLE} WHERE acquisition_id = ? AND kind = ? AND digest = ?`,
@@ -223,24 +233,22 @@ export function applyCommit(
       ? command.expectedWorkspaceRootId
       : publish(storage, acquisitionId, command);
 
-  const named = new Set<string>();
-  for (const mapping of command.mappings) {
-    const identity =
-      mapping.kind === "worktree"
-        ? `worktree:${mapping.record.repositoryName}/${mapping.record.name}`
-        : `${mapping.kind}:${mapping.kind === "repository" ? mapping.record.name : mapping.record.sessionKey}`;
-    if (named.has(identity)) {
-      // One proposal naming one mapping twice cannot be applied once and is not
-      // two mappings either.
-      throw new CommandError("mapping-conflict");
-    }
-    named.add(identity);
-  }
   const selectedEntries = directoriesOf(
     command.publication === null ? undefined : command.publication.proposedManifest,
   );
-  for (const mapping of command.mappings) {
-    applyMapping(storage, mapping, selectedEntries);
+  // The whole collection is decided before any of it is written. A Worktree may
+  // name a Repository that arrives in the same proposal, and which of the two
+  // happens to come first in an array is not a difference between proposals —
+  // an owner that applied them in order would accept one spelling of a
+  // transaction and refuse an identical one.
+  validateMappings(storage, command.mappings, selectedEntries);
+  // Applied in dependency order rather than the order they arrived in. A
+  // Worktree row references its Repository, so the parent has to exist when the
+  // child is written — but which one a proposal happens to list first is not a
+  // difference between proposals, and the owner decides that rather than making
+  // the runner arrange an array to suit the schema.
+  for (const mapping of dependencyOrder(command.mappings)) {
+    applyMapping(storage, mapping);
   }
 
   const journalEventIds: string[] = [];
@@ -410,31 +418,126 @@ function publish(storage: OwnerStorage, acquisitionId: string, command: CommitCo
   return proposal.proposedWorkspaceRootId;
 }
 
+/** How one mapping is named within a proposal, whatever order it arrives in. */
+function mappingIdentity(mapping: ProposedMapping): string {
+  if (mapping.kind === "worktree") {
+    return `worktree:${mapping.record.repositoryName}/${mapping.record.name}`;
+  }
+  if (mapping.kind === "repository") {
+    return `repository:${mapping.record.name}`;
+  }
+  return `agent-session:${mapping.record.sessionKey}`;
+}
+
 /**
- * Where a mapping's checkout has to exist, for the mapping to be true.
+ * Decide the whole mapping collection, before any of it is written.
  *
- * A Repository or Worktree row names a checkout path, and the row is only
- * meaningful if the Workspace this commit selects actually contains it. A
- * mapping-only commit that invented a checkout would retain a claim about a
- * directory nothing put there, and the next execution would find the claim and
- * not the files.
+ * Identity, duplication, parent relationships and checkout placement are all
+ * properties of the proposal rather than of one mapping, so they are settled
+ * here — against every mapping the proposal carries and the Workspace it
+ * selects. Deciding them one at a time during application would make acceptance
+ * depend on transport order.
  */
-function requirePlacement(
-  mapping: ProposedMapping,
+function validateMappings(
+  storage: OwnerStorage,
+  mappings: readonly ProposedMapping[],
   selectedEntries: ReadonlySet<string> | undefined,
 ): void {
-  if (mapping.kind === "agent-session") {
-    return;
+  const named = new Set<string>();
+  for (const mapping of mappings) {
+    const identity = mappingIdentity(mapping);
+    if (named.has(identity)) {
+      // One proposal naming one mapping twice cannot be applied once and is not
+      // two mappings either.
+      throw new CommandError("mapping-conflict");
+    }
+    named.add(identity);
   }
-  if (selectedEntries === undefined) {
-    // No publication accompanies this commit, so nothing can have created the
-    // checkout. An exact confirmation of an already-retained mapping is still
-    // admissible — that is decided below, once the existing row is read.
-    return;
+
+  for (const mapping of mappings) {
+    if (mapping.kind === "agent-session") {
+      continue;
+    }
+    if (retainedMapping(storage, mapping) !== undefined) {
+      // Already retained. Whether the proposal agrees with it is confirmed
+      // where the row is read; a mapping that exists needs no new checkout.
+      continue;
+    }
+    // A new checkout mapping is only true if this proposal publishes the
+    // Workspace that contains it.
+    if (selectedEntries === undefined || !selectedEntries.has(mapping.record.checkoutPath)) {
+      throw new CommandError("mapping-conflict");
+    }
+    if (
+      mapping.kind === "worktree" &&
+      rows(
+        storage,
+        "SELECT name FROM workspace_repositories WHERE name = ?",
+        mapping.record.repositoryName,
+      )[0] === undefined &&
+      !proposesRepository(mappings, mapping.record.repositoryName)
+    ) {
+      // A Worktree exists inside a Repository. One that named none — neither
+      // retained nor arriving in this same proposal — would be a checkout
+      // belonging to nothing.
+      throw new CommandError("mapping-conflict");
+    }
   }
-  if (!selectedEntries.has(mapping.record.checkoutPath)) {
-    throw new CommandError("mapping-conflict");
+}
+
+/** The row already retained for one mapping, if there is one. */
+function retainedMapping(
+  storage: OwnerStorage,
+  mapping: ProposedMapping,
+): Record<string, unknown> | undefined {
+  if (mapping.kind === "repository") {
+    return rows(
+      storage,
+      `SELECT locator, locator_fingerprint, requested_base, creation_commit, primary_branch,
+              object_format, checkout_path FROM workspace_repositories WHERE name = ?`,
+      mapping.record.name,
+    )[0];
   }
+  if (mapping.kind === "worktree") {
+    return rows(
+      storage,
+      `SELECT requested_branch, requested_base, creation_commit, checkout_path
+         FROM workspace_worktrees WHERE repository_name = ? AND name = ?`,
+      mapping.record.repositoryName,
+      mapping.record.name,
+    )[0];
+  }
+  return rows(
+    storage,
+    `SELECT provider, agent_command, session_identity, policy,
+            assertion_kind, assertion_value, created_at
+       FROM agent_sessions WHERE session_key = ?`,
+    mapping.record.sessionKey,
+  )[0];
+}
+
+/** Parents before children, so a proposal's array order carries no meaning. */
+const APPLICATION_ORDER: readonly ProposedMapping["kind"][] = [
+  "repository",
+  "worktree",
+  "agent-session",
+];
+
+function dependencyOrder(mappings: readonly ProposedMapping[]): ProposedMapping[] {
+  const ordered: ProposedMapping[] = [];
+  for (const kind of APPLICATION_ORDER) {
+    for (const mapping of mappings) {
+      if (mapping.kind === kind) {
+        ordered.push(mapping);
+      }
+    }
+  }
+  return ordered;
+}
+
+/** Whether this proposal itself supplies the Repository a Worktree names. */
+function proposesRepository(mappings: readonly ProposedMapping[], name: string): boolean {
+  return mappings.some((mapping) => mapping.kind === "repository" && mapping.record.name === name);
 }
 
 /** Every directory the selected root contains, for placement checks. */
@@ -464,11 +567,7 @@ function sameText(row: Record<string, unknown>, column: string, expected: string
  * established, and the disagreement would only surface later, as a checkout
  * that is not what its record says.
  */
-function applyMapping(
-  storage: OwnerStorage,
-  mapping: ProposedMapping,
-  selectedEntries: ReadonlySet<string> | undefined,
-): void {
+function applyMapping(storage: OwnerStorage, mapping: ProposedMapping): void {
   if (mapping.kind === "repository") {
     const record = mapping.record;
     const held = rows(
@@ -478,11 +577,6 @@ function applyMapping(
       record.name,
     )[0];
     if (held === undefined) {
-      requirePlacement(mapping, selectedEntries);
-      if (selectedEntries === undefined) {
-        // A new checkout mapping with no Workspace publication to create it.
-        throw new CommandError("mapping-conflict");
-      }
       storage.sql.exec(
         `INSERT INTO workspace_repositories
           (name, locator, locator_fingerprint, requested_base, creation_commit,
@@ -523,20 +617,6 @@ function applyMapping(
       record.name,
     )[0];
     if (held === undefined) {
-      // A Worktree exists inside a Repository. One that named none would be a
-      // checkout belonging to nothing.
-      const repository = rows(
-        storage,
-        "SELECT name FROM workspace_repositories WHERE name = ?",
-        record.repositoryName,
-      )[0];
-      if (repository === undefined) {
-        throw new CommandError("mapping-conflict");
-      }
-      requirePlacement(mapping, selectedEntries);
-      if (selectedEntries === undefined) {
-        throw new CommandError("mapping-conflict");
-      }
       storage.sql.exec(
         `INSERT INTO workspace_worktrees
           (repository_name, name, requested_branch, requested_base, creation_commit, checkout_path)
