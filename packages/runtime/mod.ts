@@ -165,6 +165,30 @@ export type {
   TerminalProviderResources,
   TerminalShellOutcome,
 } from "./terminal.ts";
+export {
+  descendantsOf,
+  deliverSignal,
+  establishQuiescence,
+  groupMembers,
+  paneOccupants,
+  processReachable,
+  processTable,
+  TERMINAL_PROCESSES_API,
+  TERMINAL_PROCESSES_UNAVAILABLE,
+  TerminalProcesses,
+  TerminalProcessesUnavailableError,
+  terminalHolders,
+} from "./terminal-processes.ts";
+export type {
+  PaneOccupants,
+  PaneQuiescence,
+  ProcessFacts,
+  SignalDelivery,
+  TerminalProcessHandler,
+  TerminalSignal,
+} from "./terminal-processes.ts";
+export { installDenoTerminalProcesses, posixProcessProbes } from "./deno-terminal-processes.ts";
+export type { ProcessProbes } from "./deno-terminal-processes.ts";
 export { hostFilesHandler, useHostFiles } from "./host-files.ts";
 export type { HostFilesEvent, HostFilesObserver, HostFilesOptions } from "./host-files.ts";
 export {

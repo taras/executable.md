@@ -2252,7 +2252,9 @@ function paneWork(pane: TerminalPane, title: string, site: GridSite): PaneWork {
         // by being here: it reserves and flushes this pane instead of competing
         // for the run's one foreground lease, and the child it starts is what
         // makes this pane ready.
-        yield* usePaneNativeLauncher(claim, flushPane);
+        yield* usePaneNativeLauncher(claim, flushPane, (request, spawned) =>
+          composite.launch(pane.ordinal, request, spawned),
+        );
         const siteEnv = yield* env;
         // Starts from what the grid site can see and keeps its own writes: a
         // binding this pane makes is visible to later work in this pane and to

@@ -600,6 +600,32 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
   },
 ];
 
+/**
+ * Tests whose subject is the tmux terminal-grid provider.
+ *
+ * A pane's worker is this executable re-invoked under a hidden
+ * `terminal-worker` subcommand, and only the hosts that present grids register
+ * it — the Deno entrypoint and the compiled binary. Node and Bun install no
+ * grid provider by design, so on those runtimes the same argument vector names
+ * a *document* called `terminal-worker`, the worker exits with ENOENT before it
+ * connects, and the parent waits for a pane that will never say hello. The
+ * suite hangs rather than failing, which would leave a runtime shard running
+ * forever.
+ *
+ * That a runtime without a provider refuses a grid instead of half-presenting
+ * one is covered portably by TG9 in `packages/core/tests/terminal-grid.test.ts`,
+ * which runs everywhere. The excluded file's own TH3 makes the same claim, but
+ * it is excluded along with the rest of it and proves nothing here.
+ */
+const DENO_ONLY_TERMINAL_GRID: RuntimeExclusion[] = [
+  {
+    path: "packages/cli/tests/terminal-grid-tmux.test.ts",
+    reason:
+      "the subject is the tmux provider, whose panes are this executable re-invoked as `terminal-worker` — a subcommand only the grid-presenting entrypoints register; under Node and Bun that vector names a document instead, so the worker exits with ENOENT and the pane's admission never completes",
+    issue: DERIVED_SCOPE,
+  },
+];
+
 const BUN_MISSING_NODE_SQLITE: RuntimeExclusion[] = [
   {
     path: "packages/workflow/tests/xmd-artifact.test.ts",
@@ -611,10 +637,16 @@ const BUN_MISSING_NODE_SQLITE: RuntimeExclusion[] = [
 
 export const exclusions: Record<Runtime, RuntimeExclusion[]> = {
   deno: COMPILED_BINARY,
-  node: [...DENO_ONLY_TOOLING, ...DENO_ONLY_REPOSITORY_PROVIDER, ...COMPILED_BINARY],
+  node: [
+    ...DENO_ONLY_TOOLING,
+    ...DENO_ONLY_REPOSITORY_PROVIDER,
+    ...DENO_ONLY_TERMINAL_GRID,
+    ...COMPILED_BINARY,
+  ],
   bun: [
     ...DENO_ONLY_TOOLING,
     ...DENO_ONLY_REPOSITORY_PROVIDER,
+    ...DENO_ONLY_TERMINAL_GRID,
     ...COMPILED_BINARY,
     ...BUN_MISSING_NODE_SQLITE,
   ],
