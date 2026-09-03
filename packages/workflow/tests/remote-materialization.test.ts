@@ -195,7 +195,7 @@ describe("materializing a retained Workspace root", () => {
     // The wide modes survived the umask rather than being narrowed by it.
     expect(entries.find((entry) => entry.path === "/group-writable")?.mode).toBe(0o666);
     expect(entries.find((entry) => entry.path === "/wide-dir")?.mode).toBe(0o777);
-    expect(entries.find((entry) => entry.path === "/docs/link")?.mtime).toBe(1_600_000_000);
+    expect(entries.find((entry) => entry.path === "/docs/link")?.mtime).toBe(1_600_000_000_000);
     expect(entries.some((entry) => entry.kind === "file" && entry.size === 0)).toBe(true);
     // 700 KiB is two chunks at the pinned chunk size, so a file crosses the
     // transport as more than one piece.

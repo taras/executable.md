@@ -37,9 +37,17 @@ import { ensure, type Operation, resource, until } from "effection";
 import type { RunnerFiles, RunnerNode } from "../remote/materialize.ts";
 import type { TemporaryTrees } from "../remote/invocation.ts";
 
-/** Whole seconds, which is what a retained entry records. */
-function seconds(milliseconds: number): number {
-  return Math.floor(milliseconds / 1000);
+/**
+ * Whole milliseconds, which is the unit a retained entry records.
+ *
+ * Not seconds. The Workspace format carries whatever the retaining host's clock
+ * produced, and that clock is `Date.now`, so an adapter that reported seconds
+ * would describe every retained tree as a different one — and setting a
+ * millisecond value as though it were seconds would put the file tens of
+ * thousands of years from now, where the filesystem cannot keep it.
+ */
+function milliseconds(value: number): number {
+  return Math.round(value);
 }
 
 function describeStats(
@@ -63,7 +71,7 @@ function describeStats(
     // a retained mode that carried them would not round-trip through the
     // format's own bound.
     mode: stats.mode & 0o7777,
-    mtime: seconds(stats.mtimeMs),
+    mtime: milliseconds(stats.mtimeMs),
     size: kind === "file" ? stats.size : 0,
     // Only a file reached by more than one name can be part of a group, so
     // anything else reports no identity and is captured on its own.
@@ -114,7 +122,8 @@ export function runnerFiles(): RunnerFiles {
     },
 
     *setModifiedAt(path: string, mtime: number): Operation<void> {
-      yield* until(utimes(path, mtime, mtime));
+      // `utimes` speaks seconds; the format speaks milliseconds.
+      yield* until(utimes(path, mtime / 1000, mtime / 1000));
     },
 
     /**
@@ -125,7 +134,7 @@ export function runnerFiles(): RunnerFiles {
      * entirely.
      */
     *setLinkModifiedAt(path: string, mtime: number): Operation<void> {
-      yield* until(lutimes(path, mtime, mtime));
+      yield* until(lutimes(path, mtime / 1000, mtime / 1000));
     },
 
     /**
