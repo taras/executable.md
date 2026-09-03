@@ -1,5 +1,5 @@
 /**
- * `<Plan>` — how this host declares the component, and the four private
+ * `<Plan>` — how this host declares the component, and the five private
  * capabilities only its own bytes may write.
  *
  * The Component itself is `src/documents/Plan.md` rather than anything here:
@@ -27,11 +27,12 @@
  *
  * ## Why the capabilities are private
  *
- * `<PlanInputs>`, `<PlanAuthorship>`, `<CheckDraft>` and `<AdmitPlan>` are the
- * phases of one invocation, not components anyone composes with. Freezing the
- * inputs, installing a constrained Agent frame, answering about a draft and
- * admitting the approved bytes are each meaningless outside the workflow that
- * orders them — and each carries authority the enclosing document does not have.
+ * `<PlanInputs>`, `<PlanAuthorship>`, `<PlanProgress>`, `<CheckDraft>` and
+ * `<AdmitPlan>` are the phases of one invocation, not components anyone composes
+ * with. Freezing the inputs, installing a constrained Agent frame, telling an
+ * operator which phase is running, answering about a draft and admitting the
+ * approved bytes are each meaningless outside the workflow that orders them —
+ * and each carries authority the enclosing document does not have.
  * So they resolve only while canonical core is expanding these exact bytes:
  * not from the caller's root, not from the Prompt the caller projected, not from
  * a sibling `<Plan>`, and not from anything middleware can answer.
@@ -45,6 +46,7 @@ import type { Json } from "@executablemd/durable-streams";
 import {
   agentIdentityComponents,
   content,
+  DocumentOutput,
   retainedSource,
   validateDocumentStructure,
 } from "@executablemd/core";
@@ -189,6 +191,15 @@ export interface PlanComponentAssembly {
   readonly session?: string;
   /** Whether that fixed name was one a caller asked for and can ask for again. */
   readonly explicitSession?: boolean;
+  /**
+   * Whether this command selected long-form progress.
+   *
+   * Sealed beside {@link surface}, and read by `<PlanProgress verbose>` alone.
+   * `xmd plan --verbose` is the only thing that sets it: no prop, binding,
+   * middleware answer or authored opt-in reaches it, so a document cannot ask
+   * for the drafts and diagnostics an operator did not.
+   */
+  readonly verbose?: boolean;
   /** The scope the two host acts run in, captured before the frame exists. */
   readonly host: Scope;
   /** A trusted host-only observation after the whole frame is installed. */
@@ -253,6 +264,19 @@ const AUTHORSHIP_PROPS = {
     authoredSession: { type: "string", minLength: 1 },
   },
   required: ["session", "durable"],
+  additionalProperties: false,
+};
+
+/**
+ * What one progress phase is given: whether it is long-form, and nothing else.
+ *
+ * Closed on purpose. A phase says which part of authorship is running, and the
+ * only question about one is whether an operator asked to see the drafts and
+ * diagnostics — which is the host's answer, not a prop's.
+ */
+const PROGRESS_PROPS = {
+  type: "object",
+  properties: { verbose: { type: "boolean" } },
   additionalProperties: false,
 };
 
@@ -325,6 +349,7 @@ export function* planComponentDeclaration(
     privates: [
       planInputs(assembly),
       planAuthorship(assembly),
+      planProgress(assembly),
       checkDraft(validate),
       admitPlan(validate),
     ],
@@ -385,6 +410,7 @@ function describedPrivates(): readonly IdentityComponent[] {
       forms: ["self-closing"],
     },
     { name: "PlanAuthorship", props: AUTHORSHIP_PROPS, forms: ["paired"] },
+    { name: "PlanProgress", props: PROGRESS_PROPS, forms: ["paired"] },
     { name: "CheckDraft", props: SOURCE_PROP, returns: CHECK_RETURNS, forms: ["self-closing"] },
     { name: "AdmitPlan", props: ADMIT_PROPS, returns: { type: "string" }, forms: ["self-closing"] },
   ];
@@ -572,6 +598,48 @@ function planAuthorship(assembly: PlanComponentAssembly): IdentityComponent {
         // The content scope descends from this body's, so the frame covers the
         // turns and the review and nothing outside them.
         yield* content();
+        return "";
+      },
+  };
+}
+
+/**
+ * Say which part of authorship is running, to the operator and to nobody else.
+ *
+ * Progress is a side effect of the command's own output, not something `<Plan>`
+ * produces. The rendered prose is sent through the current `DocumentOutput`
+ * operation and the invocation returns the empty string, which is what keeps it
+ * out of two places at once: `<Plan as="approved">` captures what the Component
+ * *returns*, so returning the prose would put a phase heading inside approved
+ * source, and the declaration is `exact`, so it would also bypass the
+ * whitespace and terminal presentation every other line of progress gets.
+ *
+ * Only the command surface has an operator to tell. An ordinary document that
+ * writes `<Plan>` renders its approved source where the element stands, and a
+ * phase announcement in the middle of that is the same contamination by another
+ * route — so the component surface returns before the content is expanded at
+ * all, and the bindings a phase interpolates are never even read there.
+ *
+ * `verbose` is the same decision one step further in: a phase that carries a
+ * draft or a check's diagnostics renders only when this command was asked for
+ * them. The answer is the host's sealed fact rather than the prop's value; the
+ * prop says which phases the question is about.
+ */
+function planProgress(assembly: PlanComponentAssembly): IdentityComponent {
+  return {
+    name: "PlanProgress",
+    origin: `${PLAN_ORIGIN}#PlanProgress`,
+    forms: ["paired"],
+    props: PROGRESS_PROPS,
+    factory: () =>
+      function* PlanProgress(props: Record<string, Json>): Operation<string> {
+        if (assembly.surface !== "command") {
+          return "";
+        }
+        if (props.verbose === true && assembly.verbose !== true) {
+          return "";
+        }
+        yield* DocumentOutput.operations.output(yield* content());
         return "";
       },
   };

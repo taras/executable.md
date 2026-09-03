@@ -28,6 +28,7 @@
 
 import { ensure, Err, Ok, scoped, until, useScope } from "effection";
 import type { Operation, Result, Scope } from "effection";
+import { forEach } from "@effectionx/stream-helpers";
 import { createHash } from "node:crypto";
 import { mkdir, readdir, rmdir } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -35,19 +36,20 @@ import { join } from "node:path";
 
 import {
   agentIdentityComponents,
-  collect,
   installAgentComponents,
   installPermissionMode,
   installPromptFailurePolicy,
   registerAgentProvider,
   retainedSource,
+  useNormalizedOutput,
+  useTerminalOutput,
 } from "@executablemd/core";
 import type { AgentProviderOptions, Json } from "@executablemd/core";
 import type { DeclaredMarkdownComponent } from "@executablemd/core/host";
 import { executeInstalled, installInvocationAgentProvider } from "@executablemd/core/host";
 import { createAcpxProvider } from "@executablemd/acp";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import type { DurableStream } from "@executablemd/durable-streams";
 import { API } from "@executablemd/runtime";
 import { FormOpener } from "@executablemd/web";
 
@@ -80,14 +82,63 @@ export interface CandidateAssessment {
   diagnostics: Json;
 }
 
+/**
+ * Where this command's planning progress goes, and what that destination is.
+ *
+ * A host dependency, both halves of it. Only the entrypoint that owns
+ * `process.stderr` knows whether it is a terminal, and only it can wait for the
+ * stream to take a chunk — a shared module that detected a runtime, or a
+ * document that inspected a terminal, would be answering a question that is not
+ * its own.
+ */
+export interface ProgressOutput {
+  /** Whether the host's progress destination is a terminal. */
+  readonly terminal: boolean;
+  /**
+   * Write one chunk, completing when the stream has taken all of it.
+   *
+   * A `Result` rather than a throw: a destination that stops accepting bytes is
+   * an outcome this command reports and ends on, not an exception it discovers
+   * somewhere in the middle of authorship.
+   */
+  write(chunk: string): Operation<Result<void>>;
+}
+
+/**
+ * What a progress destination that stopped taking bytes ends the command with.
+ *
+ * Raised out of the consumer, which is what cancels the producer: leaving the
+ * scope that owns the execution takes the live turn, the provider, the
+ * Elicitation, the session directory and the execution down before this is
+ * reported, and no artifact sink is attempted afterwards.
+ */
+export class ProgressDeliveryError extends Error {
+  constructor(reason: Error) {
+    super(
+      `Could not write planning progress to stderr: ${reason.message}\n\n` +
+        "Planning was cancelled, and no Plan was output.",
+    );
+  }
+}
+
 /** What the host supplies to one plan command document execution. */
 export interface AuthorshipProfile {
   /** The request as the person typed it. */
   request: string;
-  /** The rendered syntax catalog for this run profile and these includes. */
-  syntax: string;
   /** The logical name every turn in this invocation belongs to. */
   session: string;
+  /**
+   * Where this invocation's live durable events go.
+   *
+   * The host's choice, because only the host knows whether somebody asked for a
+   * diagnostic trace: one fresh invocation-owned in-memory stream by default,
+   * or the file `--journal` named and the CLI exclusively created. Neither is
+   * opened as input, replayed or read as resume authority — a Plan is written
+   * once, and nothing here runs the program it produces.
+   */
+  stream: DurableStream;
+  /** Who receives the progress this invocation renders, as it is rendered. */
+  progress: ProgressOutput;
   /**
    * Whether the caller named that session.
    *
@@ -112,9 +163,9 @@ export interface AuthorshipProfile {
    * The `<Plan>` declaration this command runs under.
    *
    * Built by the command, from the packaged Component's bytes, before the adapter
-   * root is imported. It carries the sealed surface, the precomputed catalog and
-   * the Agent context this invocation settled — none of which is a prop the adapter
-   * could supply or a document could reach.
+   * root is imported. It carries the sealed surface, the sealed verbosity, the
+   * catalog this invocation will build and the Agent context it settled — none of
+   * which is a prop the adapter could supply or a document could reach.
    */
   declaration: DeclaredMarkdownComponent;
 }
@@ -335,12 +386,18 @@ function* installPlanPromptFailurePolicy(): Operation<void> {
 }
 
 /**
- * Run the packaged plan command document and answer with the Plan it approved.
+ * Run the packaged plan command document, reporting its progress as it happens,
+ * and answer with the Plan it approved.
  *
  * Every resource this builds lives inside one scope, so leaving it is what tears
  * the Prompt tasks, the provider and the Elicitation provider down. A teardown
  * failure raises out of here rather than being folded into the result, because
  * a failure to release is not an outcome the source that was selected survives.
+ *
+ * The progress is drained inside that scope and while the producer is alive, so
+ * a person watches a Plan being written rather than reading an account of work
+ * that already finished — and a destination that fails takes the whole
+ * conversation down with it, in that order, before anything is delivered.
  */
 export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<Result<string>> {
   // Before a directory exists, before a provider exists, and therefore before
@@ -362,44 +419,65 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
     });
     const source = yield* readPackagedDocument(PLAN_COMMAND_DOCUMENT);
     try {
+      // The presentation every phase this command renders passes through. A raw
+      // capture would show an operator whitespace nobody wrote, and terminal
+      // formatting belongs to a terminal — which is the host's fact about its
+      // own stream, not something this module may go and detect.
+      yield* useNormalizedOutput();
+      if (profile.progress.terminal) {
+        yield* useTerminalOutput();
+      }
+
       // The command root is a thin adapter: it projects the request into
       // `<Plan>` and returns what comes back. Everything that used to be
       // installed around it — the directory, the provider, the Elicitation, the
       // refusals — is installed by the Component itself, inside the invocation that
       // owns it, so the command and an ordinary document run one workflow rather
       // than two arrangements of one.
-      const approved = yield* collect(
-        yield* executeInstalled(
-          {
-            ...retainedSource(PLAN_COMMAND_IDENTITY, source),
-            // Invocation-owned and thrown away with the scope. Ordinary
-            // document and Prompt semantics need a durable stream; nothing
-            // about writing a Plan needs a durable one, and `--journal`
-            // belongs to the Plan you approved rather than to the
-            // conversation that wrote it.
-            stream: new InMemoryStream(),
-            // No repository component search. What the adapter may name is
-            // what this command declares, so a file in the caller's tree
-            // cannot answer for `<Plan>` or anything else.
-            includes: [],
-            props: {
-              request: profile.request,
-              syntax: profile.syntax,
-              session: profile.session,
-            },
+      const execution = yield* executeInstalled(
+        {
+          ...retainedSource(PLAN_COMMAND_IDENTITY, source),
+          stream: profile.stream,
+          // No repository component search. What the adapter may name is
+          // what this command declares, so a file in the caller's tree
+          // cannot answer for `<Plan>` or anything else.
+          includes: [],
+          // The one secret boundary this command has. Every live durable event
+          // crosses the serialized pre-append gate, so a draft or a diagnostic
+          // becomes readable — to the journal and to the phase that presents it
+          // — only after the event supplying it has cleared and committed.
+          secretDetection: true,
+          props: {
+            request: profile.request,
+            session: profile.session,
           },
-          [
-            {
-              components: agentIdentityComponents(),
-              declarations: [profile.declaration],
-            },
-          ],
-        ),
+        },
+        [
+          {
+            components: agentIdentityComponents(),
+            declarations: [profile.declaration],
+          },
+        ],
       );
-      if (typeof approved !== "string") {
+
+      // Drains while the document is still producing. A destination that fails
+      // raises here, and leaving this scope cancels the execution and waits for
+      // its teardown before anything is reported.
+      yield* forEach(function* (chunk: string) {
+        const written = yield* profile.progress.write(chunk);
+        if (!written.ok) {
+          throw new ProgressDeliveryError(written.error);
+        }
+      }, execution.output);
+
+      const completed = yield* execution;
+      if (!completed.ok) {
+        return completed;
+      }
+      if (typeof completed.value !== "string") {
         return Err(new Error("the plan command document returned something that is not a Plan"));
       }
-      return Ok(approved);
+      return Ok(completed.value);
     } catch (error) {
       return Err(error instanceof Error ? error : new Error(String(error)));
     }

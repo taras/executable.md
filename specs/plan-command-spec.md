@@ -84,11 +84,13 @@ no second root, no second execution model, no second props model and no journal.
 
 ```text
 fixed command preflight
-  -> build the run-profile syntax catalog
+  -> --journal: exclusively create the named path
   -> execute the exact packaged plan command document, which is an adapter
        -> <Plan>, the packaged Component, with the request as its Prompt
+            -> announce Preparing, then build the run-profile syntax catalog
             -> the authorship frame, and one Session inside it
-            -> generate, check, repair, review, revise, approve, explain or fail
+            -> generate, check, repair, review, revise, approve, explain or fail,
+               announcing each phase on stderr before it happens
             -> teardown, then structural admission of the exact approved bytes
        -> Return what <Plan> approved
   -> await that execution and provider teardown
@@ -101,10 +103,11 @@ Each phase hands the next one a value. No phase after the first failure begins,
 so a refused command line reaches no catalog, a failed turn reaches no review,
 and a review that stopped reaches no stdout and no file.
 
-Writing a Plan is a conversation, and a conversation is not a run: the plan
-command document runs on an invocation-owned in-memory durable stream that is
-never persisted, reused or replayed. No invocation of this command writes a
-journal.
+Writing a Plan is a conversation, and a conversation is not a run. The durable
+stream that conversation records itself on belongs to the host: one fresh
+invocation-owned `InMemoryStream` by default, or the file `--journal` named. It
+is written and never read — no invocation opens a journal as input, resumes from
+one, or runs a program that could be resumed.
 
 ## Command grammar
 
@@ -146,10 +149,47 @@ result.
 | `--session <name>` | the logical assistant session the planning conversation belongs to |
 | `--timeout <duration>` | the deadline for the whole planning invocation |
 | `--output <path>` | the exclusive artifact sink, in place of stdout |
+| `--verbose` | adds the generated drafts and the failed checks' diagnostics to the progress on stderr |
+| `--journal <path>` | records this authorship as diagnostic JSONL at a path that must not exist |
 | `--help`, `--version` | ordinary behaviour |
 
 Every one of them is either about *who writes the Plan*, *what vocabulary they
-write it in*, or *where the approved source goes*.
+write it in*, *where the approved source goes*, or *how much of the writing you
+watch*.
+
+`--verbose` and `--journal` are spelled in full and have no short aliases.
+`xmd run` gives those spellings `-V` and `-j` for options about a *program's*
+run; these two observe this command's own authorship and nothing after it, so
+each short form is refused by naming the long one:
+
+```console
+$ xmd plan "…" -j trace.jsonl
+unrecognized option for xmd plan: -j — write `--journal <path>`
+```
+
+`--journal` takes exactly one non-empty path, and a token that names an option
+this command defines is that option rather than a filename. Reading one as a
+path would exclusively create a file called `--verbose` and quietly drop the
+verbosity the caller asked for, so the value is read by fixed grammar rather
+than left to the parser:
+
+```console
+$ xmd plan "…" --journal --verbose
+--journal needs a path — write `--journal <path>` or leave it out to record no journal
+```
+
+Only that position is affected. `--journal <path> --verbose` and
+`--verbose --journal <path>` are both ordinary command lines, `--journal=-x`
+takes whatever follows the `=`, and a removed spelling written there keeps its
+own more specific refusal.
+
+`--help` and `-h` are the exception, and deliberately so. They are lifted out of
+the command line before any command's own grammar runs, so this check never sees
+them: `xmd plan "…" --journal --help` prints help and exits successfully,
+creating no journal and beginning no authorship. Pre-help refusal is reserved
+for the options this command *removed*, where a page describing a command that
+would refuse the caller is the thing to avoid; a caller who asked for help
+beside an incomplete option is asking for help.
 
 ### What the command removed
 
@@ -160,16 +200,14 @@ alias and no inert placeholder:
 - the root-property options — the aggregate `--props` and every generated
   `--props-*` and `--no-props-*` name;
 - `--raw`;
-- `--verbose` and `-V`;
-- `--journal` and `-j`;
 - `--timeout-exec` and `--timeout-fetch`;
 - `--approve-all`, `--approve-reads` and `--deny-all`; and
 - `--secret-detection` and `--no-secret-detection`.
 
 Each of them describes work this command never performs, and every one of them
 is still `xmd run`'s. Accepting one silently would mean answering a caller who
-asked for a journal, a permission mode or a root property with a command that
-creates none of them.
+asked for a permission mode or a root property with a command that creates none
+of them.
 
 The fixed grammar owns these refusals, before the general parser can drop a
 token, coerce its value, or read it as a second positional. An option's name is
@@ -271,11 +309,18 @@ conversation still produces source and starts no program.
 xmd plan --help
 ```
 
-Help needs no request. It describes the request, `--output`, `--session`, the
-authorship and catalog options and the deadline; it states that the approved
-Plan is the only result, that stdout carries its exact bytes when `--output` is
-absent, and that planning never runs the approved program — and it writes out
-both explicit compositions. No removed option appears anywhere in it.
+Help needs no request. It describes the request, `--output`, `--session`,
+`--verbose`, `--journal`, the authorship and catalog options and the deadline;
+it states that the approved Plan is the only result, that stdout carries its
+exact bytes when `--output` is absent, and that planning never runs the approved
+program — and it writes out both explicit compositions. No removed option
+appears anywhere in it.
+
+It ends with what a journal costs, separated from everything above it:
+
+```text
+Secret detection checks journal entries before they are recorded, but it may not catch every sensitive detail. The journal can contain prompts, drafts, and review answers.
+```
 
 Help reads no catalog, contacts no provider, places no session, asks nobody
 anything, creates no file and runs nothing.
@@ -290,22 +335,25 @@ the working directory and never through the component search path — so the sam
 document is found whatever directory a person stands in, and no repository file
 can answer for it ([release process](./release-process-spec.md)).
 
-The host supplies three fixed internal inputs as that root's props:
+The host supplies two fixed internal inputs as that root's props:
 
-- `request` — the original request text;
-- `syntax` — the rendered syntax catalog for the current run profile and ordered
-  `--include` values; and
+- `request` — the original request text; and
 - `session` — the resolved logical assistant-session name.
 
 They are the adapter's own, and nothing a Plan declares is bound here: the
-properties a Plan's root declares are resolved by whoever runs it.
+properties a Plan's root declares are resolved by whoever runs it. The catalog
+is not among them: it is built inside `<PlanInputs>`, from a closure the host
+captured, so an authored phase can say that the preparation is starting before
+it happens.
 
-**The root is an adapter, not the workflow.** It projects `props.request` into
-`<Plan>` without adding whitespace, supplies `props.session`, captures the exact
-source the Component renders, and returns it. It contains no Prompt, no check, no review, no revision
-and no ending of its own. `props.syntax` is sealed by the host rather than
-forwarded: the catalog the agent is shown is the one this command rendered, and
-no prop on the adapter could supply another.
+**The root is an adapter, not the workflow.** Its whole body is two elements: it
+projects `props.request` into `<Plan>` without adding whitespace, supplies
+`props.session`, captures the exact source the Component renders, and returns it.
+It contains no Prompt, no check, no review, no revision, no ending — and no prose
+of its own. This root's rendered transcript *is* what the command writes to
+stderr as progress, so a sentence the adapter explained itself with would be
+printed to an operator in the middle of a Plan being written. What the command is
+for belongs in its help.
 
 ## The packaged `<Plan>` Component
 
@@ -340,14 +388,16 @@ surfaces' endings, each written once. The command's wording is unchanged; the
 component's says that no Plan was returned rather than that nothing was output or
 run. TypeScript supplies neither the words nor the choice between them.
 
-**The four private capabilities.** The Component's phases are components only these
+**The five private capabilities.** The Component's phases are components only these
 exact bytes may write, declared by the host with the definition and revoked with
-the execution: `<PlanInputs>` freezes the catalog, the instruction identity, the
+the execution: `<PlanInputs>` builds and freezes the catalog, the instruction
+identity, the
 session placement, the surface and whether that placement outlives the
 invocation, and refuses a continuation whose instructions render differently —
 as stale input, before a directory, a provider, a turn or a review exists; paired
 `<PlanAuthorship>` installs the constrained frame and does not return until every
-part of it has torn down; `<CheckDraft>` answers about one draft without
+part of it has torn down; paired `<PlanProgress>` says which phase is running;
+`<CheckDraft>` answers about one draft without
 executing it; and `<AdmitPlan>` structurally admits the approved bytes after that
 teardown and retains them as one Plan artifact — the invocation identity, the
 instruction identity, the approved source, its digest and that successful
@@ -626,9 +676,186 @@ The branch after the Session is only an unexpected-no-decision fallback and says
 so; exhaustion is decided where the tenth draft's check is, not duplicated
 there. Failure is authored in Markdown rather than hidden in the host.
 
-The command document's rendered output is not command output. Everything you see
-while a Plan is written reaches you through Elicitation, and that document's
-successful public result is the approved Plan source and nothing else.
+The command document's rendered output is not the command's result. What it
+renders is the progress an operator reads on stderr, described below; the draft
+itself, the choices and the diagnostics reach you through Elicitation; and that
+document's successful public result is the approved Plan source and nothing
+else.
+
+## Watching a Plan being written
+
+Writing a Plan takes minutes and asks you a question in the middle. So the
+command reports what it is doing while it does it, on stderr, as readable
+Markdown — and stdout stays exactly what it was: the approved source, or
+nothing at all when `--output` was named.
+
+Each phase is announced **before** the work it names, so what you read is what
+is happening rather than an account of what already finished. The phases are:
+
+| Phase | Announced before |
+| --- | --- |
+| Preparing the Plan | the syntax catalog is built and the session is set up |
+| Drafting the Plan | the first Agent turn, naming which of the ten attempts this is |
+| Checking the draft | every structural check, including the ones after a repair |
+| Repairing the draft | each repair turn, naming which of the three repairs this is |
+| Waiting for your review | each actionable review |
+| Revising the Plan | a requested-change turn, naming the attempt it begins |
+| Finalizing the Plan | leaving authorship after an approval |
+| Stopping planning | the authored ending a **Stop** raises |
+| Could not generate a Plan | the automatic explanation turn a tenth unrepaired draft gets |
+
+The counters are the workflow's own. `Plan.md` binds ten attempts and three
+repairs once, and every loop bound, every condition and every sentence above is
+derived from those two bindings — so what you are told and what the workflow
+does cannot come to disagree.
+
+**Finalizing says the session is closing.** It is not a claim that anything was
+delivered: the final host validation and the artifact sink both happen after
+authorship has torn down, and neither has a phase. Nothing on this channel ever
+says a Plan was produced, written or output.
+
+**Default progress discloses nothing.** It holds none of the request, the draft
+source, the structural diagnostics, your review feedback, the Agent's output,
+provider or tool chatter, or the approved source.
+
+`--verbose` adds exactly two blocks, in phase order:
+
+- **Generated draft**, after every Agent result that committed, holding that
+  draft; and
+- **Problems found in the draft**, after every check that committed and found
+  the draft invalid, holding its exact structured JSON.
+
+Both are reachable only *after* the durable event that supplies them has
+cleared the secret gate and committed, which is why a rejected draft or a
+rejected diagnostic is never displayed: the binding the block reads does not
+exist.
+
+### The channel is the command's, not the document's
+
+Progress is a private output side effect of the packaged `<Plan>` Component, not
+something `<Plan>` produces. The paired private `<PlanProgress>` renders its
+content and sends it through the current document-output operation as ordinary
+prose, then returns the empty string.
+
+Returning it instead would put a phase heading inside `<Plan as="approved">`'s
+capture and inside the declaration's exact-source disposition — contaminating
+the approved program and bypassing the presentation every other line of progress
+gets. So:
+
+- on the **component** surface it returns before its content is expanded at all,
+  and an ordinary document that writes `<Plan>` announces nothing;
+- on the **command** surface with `verbose`, while this invocation did not ask
+  for long-form progress, it returns before expanding too; and
+- otherwise it renders, writes, and returns nothing.
+
+Which surface is asking and whether `--verbose` was written are sealed host
+facts the declaration carries. There is no public progress syntax, no segment
+marker, no authored opt-in and no context a document could set.
+
+### Who owns the stream and the terminal
+
+The command execution installs whitespace normalization for every invocation,
+and terminal formatting only when the host says its stderr is a terminal. Both
+the writer and that fact are host dependencies: the CLI owns `process.stderr`
+and the `isTTY` answer, no shared module detects a runtime, and no document
+inspects a terminal. A non-terminal stderr therefore receives normalized
+Markdown, and a terminal one receives it rendered.
+
+The transcript is drained while the document is still producing it, inside the
+scope that owns the execution. A destination that stops accepting bytes fails
+that consumer, which cancels the producer and waits for the provider, the Prompt
+tasks, Elicitation, the session directory and the execution to tear down before
+anything is reported:
+
+```text
+Could not write planning progress to stderr: <reason>
+
+Planning was cancelled, and no Plan was output.
+```
+
+That message is offered to stderr, because a stream that refused once is not a
+stream that refuses forever. A stderr that never recovers gets no stdout
+fallback: an approved Plan's sink is not a channel for a message about progress.
+Bytes stderr already accepted are not rolled back, and no `--output` file is
+created.
+
+## The `--journal` file
+
+`--journal <path>` exclusively creates the named path and records this
+authorship on it. The format is the existing `serializeDurableEvent()` JSONL
+sequence — the command root's ordinary live durable events, in commit order:
+cleared Agent turns, draft checks, review decisions, admission and the terminal
+outcome. There is no curated projection and no format of this command's own.
+
+It records no later program execution, because there is no later program
+execution. It is written and never read: nothing opens it as input, replays it,
+or treats it as resume authority.
+
+Without `--journal`, no file is created anywhere.
+
+### What the file holds when the invocation ends
+
+An invocation that ends badly still leaves usable evidence, which is the whole
+reason to ask for a journal. What that evidence is worth depends on one thing:
+whether an append to the file itself failed.
+
+| Ending | The file holds |
+| --- | --- |
+| the Plan was approved and delivered | the whole authorship, ending in its terminal event |
+| an ordinary failure — a failed turn, a Stop, exhaustion, cancellation, a teardown failure, the final structural refusal | every entry that committed before it |
+| an event the secret gate rejected | every entry that committed before that event, and nothing of the rejected one |
+| an entry the file would not take | every entry that committed **before the failed append** |
+
+**In the first three, no append failed, so the file is wholly parseable.** Every
+record the command offered was taken, each is newline-terminated, and reading
+the file back gives exactly the events it recorded, in commit order. An ordinary
+failure is not a journal failure: the file took everything it was offered, and
+no journal diagnostic is reported for it.
+
+**After a failed append, the guaranteed evidence is the sequence committed
+before it.** The storage primitive is an ordinary appending write, not a
+transaction — a filesystem that fails partway through one can leave part of a
+record behind — so this command promises the committed prefix and nothing about
+the bytes of the append that failed. Reading a journal whose write failed means
+reading up to the last complete record.
+
+Making that stronger would take a genuinely atomic append protocol, which
+producing a Plan does not need and this command does not have. The failure
+diagnostic says what is true: the entries recorded before the failure are still
+there.
+
+**Secret detection covers it.** Every live durable event crosses the serialized
+pre-append gate, so a rejected event reaches neither the file nor the in-memory
+committed sequence — nothing of it is offered to the file, so the records
+recorded before it are the whole of what is there, and it is wholly parseable.
+Help
+says plainly that the gate may not catch every sensitive detail and that the
+journal can contain prompts, drafts and review answers.
+
+An existing path is refused before catalog preparation, session placement, Agent
+startup, review or artifact creation, and is left byte-identical:
+
+```text
+Journal file already exists: <path>. Choose a different --journal path.
+```
+
+A path this command cannot create at all reports why, and where to go next:
+
+```text
+Could not create journal file <path>: <reason>
+
+Choose a different --journal path and try again.
+```
+
+An entry the file will not take ends authorship. Teardown completes, the prefix
+committed before that entry is preserved, and no Plan is delivered:
+
+```text
+Could not write the next entry to journal file <path>: <reason>
+
+The journal still contains the entries recorded before this failure.
+```
+
 
 ## Structural host validation, and the artifact
 
@@ -701,8 +928,11 @@ ending of this command does.
 | Failure | Reaches |
 | --- | --- |
 | a malformed command line, a removed option, an unknown option, or `--save` | nothing |
+| a `--journal` path that exists, or one this command cannot create | no catalog, session, turn, review, stdout or file |
 | an unknown `--agent-provider` | nothing |
-| a catalog an include makes unreadable | no command document |
+| a catalog an include makes unreadable | no turn, review, stdout or file |
+| a `--journal` entry the file will not take | no stdout or file; the committed prefix stays |
+| a progress destination that stops accepting bytes | no stdout or file; accepted bytes stay |
 | a host that supplies no Agent context, or a provider that cannot establish the authorship profile's ceiling | no session, no turn |
 | a turn that did not complete | no review, stdout or file |
 | the command document's authored `<Fail>` — stopping, the automatic explanation, or the unexpected ending after neither | no stdout or file |
@@ -712,12 +942,15 @@ ending of this command does.
 
 ## Acceptance
 
-Tier PR. The evidence lives in `packages/cli/tests/plan-args.test.ts` (fixed
-grammar), `packages/cli/tests/plan-command-document.test.ts` (the packaged
-document executed as itself), `packages/cli/tests/plan.test.ts` (the host and
+Tiers PR and PO. The evidence lives in `packages/cli/tests/plan-args.test.ts`
+(fixed grammar), `packages/cli/tests/plan-command-document.test.ts` (the packaged
+document executed as itself, and the authored phases and counters),
+`packages/cli/tests/plan-component.test.ts` (the ordinary `<Plan>` surface),
+`packages/cli/tests/plan.test.ts` (the host and
 the packaged document writing a Plan together) and
 `packages/cli/tests/plan-cli.test.ts` (the command lifecycle, its grammar as an
-operator meets it, and the artifact).
+operator meets it, the artifact, the channels, the journal and the failures each
+of them can have).
 
 The ACPX runtime is a scriptable fake, the review provider is a scripted
 `Elicitation` handler, and the contextual working directory is a temporary one:
@@ -742,3 +975,19 @@ neither observation never interpreted what it wrote.
 | PS11 | Adapter and Component | The command document remains the exact thin adapter, and `<Plan>` remains a bare-or-captured exact text component |
 | PS12 | Product copy | Architecture, specifications, README and the homepage state that Plan produces source, Run executes source, and composition decides when it runs |
 | C2–C5, C8, C9, C13, C14 | Authorship | The packaged adapter and Component, one Session, the profile ceiling, the repair and review bounds, safe presentation, the authored endings, directory lifetime and narrative preservation are unchanged by this command producing source only, and keep their evidence |
+| PO1 | Progress precedes the work | Preparing arrives before the catalog is built, Drafting before the first turn, Checking before validation, Waiting before review and Finalizing before authorship teardown; an early phase reaches the operator while a turn is still blocked |
+| PO2 | Counters come from the bounds | One invalid attempt uses repair ordinals 1st–3rd with a check before each result; a requested change announces the 2nd attempt; the counters reach the 10th and there is no 11th |
+| PO3 | Terminal phases | Stop announces itself before teardown and keeps its exact final diagnostic; a tenth-attempt exhaustion announces itself before the automatic explanation, opens no review and produces no Plan |
+| PO4 | The ordinary surface is silent | A bare `<Plan>` emits only exact approved source, a captured `<Plan as>` binds the same bytes and emits nothing, and neither expands a progress body whatever verbosity the declaration carries |
+| PO5 | Disclosure | Default progress excludes the request, the drafts, the diagnostics, the feedback and every Agent, provider and tool output; verbose adds every cleared draft and each invalid check's exact structured JSON, in phase order, and nothing else |
+| PO6 | Channels | A non-terminal stderr receives normalized Markdown, a stated terminal receives it rendered, and stdout and `--output` stay byte-identical exact source in both |
+| PO7 | The two options | `--verbose` and `--journal` are accepted on either side of the request, help contains them and the journal warning, and `-V`, `-j`, `--trace` and every removed spelling refuse before the catalog or a session exists; a retained option that reaches this command's grammar, written where the journal path goes, is that option rather than a filename and refuses before any catalog, session, provider, filesystem or artifact work — while `--help` and `-h` keep their ordinary precedence and answer with help, creating no journal and beginning no authorship |
+| PO8 | The journal file | With no `--journal` no file appears; with one, the path exists before the catalog and the first turn, a successful trace parses as the existing JSONL events in commit order and ends terminally, and it holds no program-execution event |
+| PO9 | Journal refusals | A pre-existing journal is byte-identical and refuses with the exact copy before any catalog, session, turn, review or artifact work; a path that cannot be created reports the other exact copy |
+| PO10 | A secret in a draft | It reaches neither the progress nor the journal, the earlier prefix stays readable, teardown completes, and no source or artifact is delivered — while the same draft without it is displayed and recorded |
+| PO11 | A secret in a diagnostic | The same, for a failed check's structured findings |
+| PO12 | A refused entry | An append failure after a committed entry reports the exact journal-write diagnostic, preserves the records committed before it, completes teardown and delivers no Plan |
+| PO16 | An ordinary failure | A journal-backed invocation that fails for its own reason — a failed turn, with neither a secret rejection nor a write failure — exits non-zero, delivers no source and no artifact, completes teardown, and leaves a file whose every entry parses and whose bytes are exactly those entries re-serialized: no append failed, so there is no partial or unterminated trailing record |
+| PO13 | A failed destination | A consumer that fails while a turn is live cancels that turn, waits for every owned teardown, attempts no artifact sink, keeps the bytes stderr accepted, and uses the exact progress-failure diagnostic |
+| PO14 | Ordering is unchanged | Cancellation, teardown failure, final validation refusal, the `--output` refusal and a successful delivery all keep their order, and no phase claims an artifact was delivered |
+| PO15 | The adapter and the catalog | The packaged adapter emits no prose of its own, and the catalog is built exactly once, from `<PlanInputs>`, after Preparing |

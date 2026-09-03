@@ -49,6 +49,8 @@ const AGGREGATE_OPTION = "--props";
 
 export const OUTPUT_OPTION = "--output";
 export const SESSION_OPTION = "--session";
+export const VERBOSE_OPTION = "--verbose";
+export const JOURNAL_OPTION = "--journal";
 
 /** The switch that used to run the approved Plan, and now names its migration. */
 const RUN_OPTION = "--run";
@@ -76,6 +78,25 @@ export function removedOptionRefusal(option: string): string {
   );
 }
 
+/**
+ * The short spellings the two authorship options deliberately do not have.
+ *
+ * They are `xmd run`'s aliases for options that configure a program's run. The
+ * long spellings here describe writing a Plan and observe no later run, so a
+ * caller reaching for the short one is answered with the long one rather than
+ * with the generic removal — which would send them to `xmd run` for an option
+ * this command does define.
+ */
+const SHORT_ALIASES: ReadonlyMap<string, string> = new Map([
+  ["-V", VERBOSE_OPTION],
+  ["-j", `${JOURNAL_OPTION} <path>`],
+]);
+
+/** What a short alias of a retained authorship option is answered with. */
+export function shortAliasRefusal(option: string): string {
+  return `unrecognized option for xmd plan: ${option} — write \`${SHORT_ALIASES.get(option)}\``;
+}
+
 /** The options that take a separated value. */
 const VALUE_OPTIONS: readonly string[] = [
   "--include",
@@ -84,10 +105,11 @@ const VALUE_OPTIONS: readonly string[] = [
   "--timeout",
   OUTPUT_OPTION,
   SESSION_OPTION,
+  JOURNAL_OPTION,
 ];
 
 /** The options that take none. */
-const SWITCH_OPTIONS: readonly string[] = ["--help", "-h", "--version"];
+const SWITCH_OPTIONS: readonly string[] = ["--help", "-h", "--version", VERBOSE_OPTION];
 
 /**
  * The options that configured running the approved Plan, and now configure
@@ -95,8 +117,8 @@ const SWITCH_OPTIONS: readonly string[] = ["--help", "-h", "--version"];
  *
  * `xmd plan` produces source and stops, so each of these describes work this
  * command never performs. Accepting one silently would mean answering a caller
- * who asked for a journal, a permission mode or an exec deadline with a command
- * that creates none of them; `xmd run` still defines every one of them, and the
+ * who asked for a permission mode or an exec deadline with a command that
+ * creates none of them; `xmd run` still defines every one of them, and the
  * refusal says so.
  *
  * The generated `--props-*` and `--no-props-*` names, and the aggregate
@@ -105,10 +127,6 @@ const SWITCH_OPTIONS: readonly string[] = ["--help", "-h", "--version"];
  */
 const REMOVED_OPTIONS: readonly string[] = [
   "--raw",
-  "--verbose",
-  "-V",
-  "--journal",
-  "-j",
   "--timeout-exec",
   "--timeout-fetch",
   "--approve-all",
@@ -126,6 +144,27 @@ function optionName(token: string): string {
   const equals = token.indexOf("=");
   return equals === -1 ? token : token.slice(0, equals);
 }
+
+/**
+ * Whether this token is one of the options this command defines.
+ *
+ * Asked only where a value option would otherwise swallow the token after it.
+ * A removed spelling is already refused where it stands, and a bare `-` is a
+ * file called `-` rather than an option, so what is left is the retained
+ * grammar: the tokens that mean something here and therefore cannot also be a
+ * caller's filename.
+ */
+function namesRetainedOption(token: string): boolean {
+  if (!token.startsWith("-") || token === "-") {
+    return false;
+  }
+  return KNOWN.has(optionName(token));
+}
+
+/** What a `--journal` that named no path is refused with. */
+export const JOURNAL_PATH_REFUSAL: string =
+  `${JOURNAL_OPTION} needs a path — write \`${JOURNAL_OPTION} <path>\` or leave ` +
+  "it out to record no journal";
 
 /**
  * Whether this name binds a root property of the program a Plan describes.
@@ -156,6 +195,9 @@ function generatesProperty(name: string): boolean {
 function removalRefusal(name: string): string | undefined {
   if (name === RUN_OPTION) {
     return RUN_REMOVAL_REFUSAL;
+  }
+  if (SHORT_ALIASES.has(name)) {
+    return shortAliasRefusal(name);
   }
   if (REMOVED.has(name) || generatesProperty(name)) {
     return removedOptionRefusal(name);
@@ -288,6 +330,22 @@ export function scanPlanArgs(args: readonly string[]): PlanScan {
             `${SESSION_OPTION} needs a name — write \`${SESSION_OPTION} <name>\` or leave ` +
               "it out for a session unique to this invocation",
           );
+        }
+      }
+      if (name === JOURNAL_OPTION) {
+        // A following token that names an option this command defines is that
+        // option, not a filename. `--journal --verbose` asked for a journal and
+        // named none, and reading the switch as a path would exclusively create
+        // a file called `--verbose` and drop the verbosity the caller asked for
+        // — silently, because a path is a path.
+        const value =
+          equals === -1
+            ? separated !== undefined && namesRetainedOption(separated)
+              ? undefined
+              : separated
+            : token.slice(equals + 1);
+        if (value === undefined || value.length === 0) {
+          return refuse(JOURNAL_PATH_REFUSAL);
         }
       }
       fixed.push(token);

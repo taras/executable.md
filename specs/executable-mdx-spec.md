@@ -2840,8 +2840,11 @@ what it renders is the exact approved Plan source, after the authorship frame
 has been dismantled and the bytes have been structurally admitted. Written bare
 it emits that source where the component is written, and `as` is ordinary text
 capture: the same bytes are bound and nothing is emitted. Neither form
-evaluates the source. Its four private
-capabilities — `<PlanInputs>`, `<PlanAuthorship>`, `<CheckDraft>` and
+evaluates the source, and neither announces a phase: the progress `xmd plan`
+writes is a private side effect of the command surface, and an ordinary `<Plan>`
+expands no progress body at all. Its five private
+capabilities — `<PlanInputs>`, `<PlanAuthorship>`, `<PlanProgress>`,
+`<CheckDraft>` and
 `<AdmitPlan>` — are the closure those exact bytes carry, and are syntax no
 document may write. [The plan command](./plan-command-spec.md) is the contract.
 
@@ -8840,11 +8843,18 @@ later run is an ordinary supplied-source or file execution with an identity, an
 Agent provider and a journal of its own.
 
 The command document is the one root `xmd plan` executes, under its own stable
-internal identity `<plan-command>`, on an invocation-owned in-memory durable
-stream that is discarded when authorship is over. So nothing about generation,
-repair or approval is journaled or replayed, and no invocation of the command
-writes a journal at all. The command's complete contract is
-[`xmd plan`](./plan-command-spec.md).
+internal identity `<plan-command>`. The durable stream it records itself on is
+the host's choice: a fresh invocation-owned in-memory one that is discarded when
+authorship is over, or the file `--journal` named and the command exclusively
+created. Neither is ever read back — nothing about generation, repair or approval
+is replayed or resumed, and a journal is a diagnostic record of how a Plan came
+to be written rather than a history anything continues from.
+
+That root also reports itself. Its rendered transcript is the progress `xmd plan`
+writes to stderr while it works — one Markdown phase before each piece of work,
+with `--verbose` adding the generated drafts and the failed checks' diagnostics —
+and it reaches neither of the approved source's two sinks. The command's complete
+contract is [`xmd plan`](./plan-command-spec.md).
 
 `xmd upgrade` executes the second packaged root under the stable internal
 identity `<upgrade-command>`. It is an ordinary streaming text root: it declares
@@ -10778,13 +10788,32 @@ every refusal is proven by the phase tripwires that stayed at zero.
 | # | Test | Verify |
 |---|------|--------|
 | PS1–PS3 | Fixed grammar | One request preserved byte for byte and a second positional refused; every retained option accepted before and after it; every `--run` spelling answered with the migration, and every other removed option — both short aliases and the aggregate and generated property names included — answered with the one refusal that names `xmd run`, before any catalog, Agent, session, review or filesystem activity, and before `--help` can short-circuit the dispatch in either order; a name that merely begins like a property option keeps the generic unknown-option refusal; a first token of `prompt` refused in preflight rather than read as a document path, with `xmd run ./prompt` still executing a document of that name |
-| PS4/PS5 | Help | The complete `xmd plan --help` output and the program summary carry only the retained grammar and both explicit compositions, and no removed option appears in either; `xmd run --help` still exposes every option it configures |
+| PS4/PS5 | Help | The complete `xmd plan --help` output and the program summary carry only the retained grammar, both explicit compositions and the journal warning, and no removed option appears in either; `xmd run --help` still exposes every option it configures |
 | C2–C3 | The packaged adapter and Component | The command executes the checked-in Markdown value root under `<plan-command>`, which invokes the packaged `<Plan>` Component, and the turn text is that Component's own words; generation, repair, review, revision, approval, stopping, exhaustion and the final explanation are Markdown under visible headings, every Plan-producing turn states the complete Plan requirements for itself, `<Prompt>` stays one turn, and what a person reads says each thing once however many rounds it took |
 | C4–C6 | Session and ceiling | One enclosing Session carries every turn, defaults differ per invocation and `--session` supplies the exact override; the authorship profile gives the assistant an empty host-owned directory, no MCP servers, no native tools and a private strict denial no command line reaches; a draft is data throughout, and no draft effect ever happens |
 | C7–C9 | Classification, bounds and presentation | Draft defects return structured facts, and a root declaring required properties is not one of them; one base draft plus three repairs, and ten presentations with no revision on the last; arbitrary source cannot close `<CodeBlock>`, the review schemas expose exactly the friendly choices for each round and state, and stopping, exhaustion and the explanation ending each reach their own authored `<Fail>` |
 | PS6–PS9 | Validation, delivery and endings | The invocation settles one structural check, and the host asks it again after the command document has completely torn down — a component removed immediately after a successful `<AdmitPlan>` is refused there and nowhere else; the exact bytes then reach exactly one of stdout or an exclusively created `--output` file, and an existing path is refused unchanged; stopping, exhaustion, a failed turn, missing Agent context, cancellation, teardown failure and that host refusal each deliver nothing at all |
 | PS10, C14 | No execution, and the result | A named session continues the planning conversation and still starts no program, and no execution callback, program journal or second-root identity exists; the shipped generation, repair and revision instructions each carry the complete titled-Plan rule, and a titled Plan of prose interleaved with components survives approval byte for byte into stdout and a file alike |
 | PS12 | Product copy | Architecture, specifications, README and the homepage state that Plan produces source, Run executes source, and composition decides when it runs |
+
+### Tier PO — Observable `xmd plan` authorship
+
+The same one root execution, watched while it happens. Every phase is announced
+on stderr before the work it names, the counters are derived from the two bounds
+`Plan.md` binds once, `--verbose` adds the cleared drafts and the failed checks'
+findings, and `--journal` records the whole authorship as the existing JSONL. The
+approved source's two sinks are untouched by all of it. Defined in
+[`xmd plan`](./plan-command-spec.md), whose acceptance table this points at
+rather than restating.
+
+| # | Test | Verify |
+|---|------|--------|
+| PO1–PO3 | Phases and counters | Each phase precedes the work it names, and one reaches the operator while a turn is still blocked; the repair and attempt ordinals come from the loop bounds and stop at them; Stop and exhaustion announce themselves and keep their exact endings |
+| PO4/PO5 | Surface and disclosure | Neither ordinary `<Plan>` form announces anything or expands a progress body; default progress holds no request, draft, diagnostic, feedback or approved source, and verbose adds exactly the two blocks, in phase order |
+| PO6/PO7 | Channels and grammar | A non-terminal stderr receives normalized Markdown and a stated terminal receives it rendered, while stdout and `--output` stay byte-identical; `--verbose` and `--journal` work on either side of the request, help carries them and the journal warning, and the short aliases, every removed spelling and a retained option that reaches this grammar written where the journal path goes all refuse before any work, while `--help` keeps its ordinary precedence |
+| PO8/PO9/PO16 | The journal file | No `--journal` writes no file; one creates the path before the catalog and the first turn, parses as the existing JSONL in commit order, ends terminally and holds no program execution; an existing path and an uncreatable one each report their exact refusal and reach nothing; and an ordinary failure — where no append failed — leaves a wholly parseable file with no partial trailing record |
+| PO10–PO12 | The secret and persistence boundaries | A secret in a draft or in a failed check's findings reaches neither the progress nor the file while the earlier prefix stays readable, and the same values without it are shown and recorded; a refused entry reports the exact journal-write diagnostic and preserves what committed |
+| PO13–PO15 | Failure and ordering | A progress destination that fails cancels the live turn, waits for every owned teardown and delivers nothing; every existing ending keeps its order and no phase claims delivery; the packaged adapter says nothing of its own and the catalog is built once, from `<PlanInputs>` |
 
 ### Tier UG — The `xmd upgrade` command
 

@@ -27,31 +27,16 @@ import {
 import { useWorkingDirectory } from "./support/plan-harness.ts";
 
 /**
- * The approved introduction, exactly.
+ * The whole of the adapter's body, exactly.
  *
- * Pinned rather than sampled: this is the passage the product contract settled,
- * down to the typographic apostrophe in "coding agent’s plan". A paraphrase that
- * still contained the chosen sentences would pass a looser check while saying
- * something else, and an ASCII apostrophe here would quietly redefine the
- * approved wording around whatever the file happens to hold.
+ * Pinned rather than sampled, because "there is nothing else here" is the claim:
+ * `xmd plan` drains this root's rendered transcript onto stderr as the operator's
+ * progress, so any prose the adapter regained would be printed in the middle of
+ * a Plan being written.
  */
-const INTRODUCTION = [
-  "# `xmd plan` turns steps into a program",
-  "",
-  "This document is a workflow that generates an executable Plan from a sequence of",
-  "steps. It combines the original Prompt, which describes those steps, with the XMD",
-  "components available to carry them out. A coding agent turns both into one",
-  "document that explains and executes the sequence.",
-  "",
-  "The result is the XMD version of a coding agent’s plan. A conventional Markdown",
-  "plan must be interpreted again before its steps can happen. An XMD Plan already",
-  "contains those executable steps, so running it simply executes them.",
-  "",
-  "A draft remains text while this workflow reviews it, and nothing in it ever runs",
-  "here. After approval, `xmd plan` validates the exact source again and hands it",
-  "over: by default it prints the approved XMD source, and `--output` writes that",
-  "source to a file instead. Running the program is a separate command, so you",
-  "decide whether and when it happens.",
+const ADAPTER_BODY = [
+  '<Plan session={props.session} as="approved">{props.request}</Plan>',
+  "<Return value={approved} />",
 ].join("\n");
 
 /** What every turn that asks for a Plan has to say, on its own. */
@@ -86,17 +71,17 @@ describe("packaged documents", () => {
     expect(source).toBe(committed);
     // It is the plan command document, not merely some file that exists.
     expect(source).toContain("returns:");
-    // The approved introduction, pinned whole. It is what a reader meets first
-    // and the only place the command explains itself, so its wording and its
-    // punctuation are part of the contract rather than a paraphrase.
-    expect(source).toContain(INTRODUCTION);
-    // And it is an adapter rather than a second implementation: it hands the request to
+    // The body is the whole adapter, pinned whole: it hands the request to
     // `<Plan>` and returns what comes back. Every phase of authorship — the
     // turns, the checking, the review, the endings — is in the one Component the
     // next case reads, so a second copy of any of it here would be exactly the
     // drift having one Component source exists to prevent.
-    expect(source).toContain('<Plan session={props.session} as="approved">{props.request}</Plan>');
-    expect(source).toContain("<Return value={approved} />");
+    //
+    // And there is nothing else. This root's rendered transcript is what
+    // `xmd plan` writes to stderr, so a sentence of the adapter's own would be
+    // an operator reading the command explaining itself in the middle of the
+    // Plan being written. What the command is for belongs in its help.
+    expect(source.slice(source.lastIndexOf("---\n") + 4).trim()).toBe(ADAPTER_BODY);
     for (const authored of [
       "<CheckDraft",
       "<Prompt",
@@ -143,18 +128,28 @@ describe("packaged documents", () => {
     ).toBe(2);
     // The worked example is itself a titled Plan.
     expect(source).toContain("# Ask for and save your age");
-    // A tenth draft that could not be repaired is not a review at all, and the
+    // A last draft that could not be repaired is not a review at all, and the
     // prose says why: there is no decision left to offer.
     expect(source).toContain(
-      "there is no decision left for you to make, and\nthis workflow does not ask you to make one.",
+      "there is no decision\nleft for you to make, and this workflow does not ask you to make one.",
     );
+    // Both bounds are bound once and every loop, condition and sentence is
+    // derived from them, so the words a person reads cannot drift from the
+    // counters the workflow actually keeps.
+    expect(source).toContain('<Let as="attempts" value={10} />');
+    expect(source).toContain('<Let as="repairs" value={3} />');
+    expect(source).toContain("<Loop max={attempts}>");
+    expect(source).toContain("<Loop max={repairs}>");
+    expect(source).not.toContain("<Loop max={10}>");
+    expect(source).not.toContain("<Loop max={3}>");
     // Every visible stage of the workflow is a heading somebody can audit.
     for (const heading of [
+      "## Bound the drafts and the repairs",
       "## Create the first draft",
       "## Check and repair the draft",
       "## Review the draft",
       "## Continue from your decision",
-      "## Explain a tenth draft that could not be repaired",
+      "## Explain a last draft that could not be repaired",
       "## Produce the approved Plan source",
     ]) {
       expect(source).toContain(`${heading}\n`);
@@ -165,7 +160,9 @@ describe("packaged documents", () => {
     // A branch decided in TypeScript would put half of what a person reads
     // somewhere a person reading the workflow cannot see it.
     expect(source).toContain(
-      '<Let as="unresolved" value="xmd plan ended unexpectedly without an approved Plan. Nothing was output." />',
+      "xmd plan ended unexpectedly without an approved Plan. Nothing was output." +
+        "\\n\\nRun the same command again with --journal plan-authorship.jsonl. If the problem " +
+        "repeats, include the journal in the bug report.",
     );
     expect(source).toContain(
       '<Let as="unresolved" value="Plan authorship ended without an approved Plan. No Plan was returned." />',
@@ -173,9 +170,10 @@ describe("packaged documents", () => {
     // The automatic explanation is the only ending that says it, and each
     // surface says it in its own words: the command names the ten attempts and
     // what was not output, and the Component names the Plan it did not return.
-    expect(source.split("reviewed ten drafts without an approved Plan").length - 1).toBe(1);
+    expect(source.split("reviewed ${attempts} drafts without an approved Plan").length - 1).toBe(1);
     expect(
-      source.split("xmd plan could not generate an approved Plan after 10 attempts.").length - 1,
+      source.split("xmd plan could not generate an approved Plan after ${attempts} attempts.")
+        .length - 1,
     ).toBe(1);
     // The closing branch is an unexpected-no-decision fallback, not a second
     // copy of exhaustion: exhaustion is decided inside review, and saying it

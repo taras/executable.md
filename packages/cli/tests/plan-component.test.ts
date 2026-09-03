@@ -719,6 +719,86 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     });
   });
 
+  it("PO4: neither ordinary form emits a planning phase, whatever verbosity says", function* () {
+    /** Every phase heading a run put on the Output Api. */
+    const announced = (emitted: string): string[] =>
+      emitted.split("\n").filter((line) => line.startsWith("## "));
+
+    yield* useWorkingDirectory(function* (dir) {
+      // Bare: the approved source is emitted where the element stands, and it
+      // is the whole of what the document said.
+      const bare = yield* runDocument({
+        source: ["<Plan>", "Write a program.", "</Plan>", ""].join("\n"),
+        reply: PLAN,
+        normalized: true,
+      });
+
+      expect(bare.failure).toBe(undefined);
+      expect(bare.emitted).toContain(PLAN);
+      expect(announced(bare.emitted)).toEqual([]);
+      for (const phase of ["Preparing the Plan", "Drafting the Plan", "Checking the draft"]) {
+        expect(`bare: ${bare.emitted.includes(phase)}`).toBe("bare: false");
+      }
+
+      // Captured: the same bytes arrive under `as` and the element emits
+      // nothing — so a phase written into the capture would be the approved
+      // program's first line.
+      const captured = yield* runDocument({
+        source: ['<Plan as="approved">Write a program.</Plan>', "", "got: {approved}", ""].join(
+          "\n",
+        ),
+        reply: PLAN,
+        normalized: true,
+      });
+
+      expect(captured.failure).toBe(undefined);
+      expect(captured.output).toContain(`got: ${PLAN}`);
+      expect(announced(captured.emitted)).toEqual([]);
+      expect(captured.emitted).not.toContain("Preparing the Plan");
+
+      // Verbosity is the command's sealed fact and reaches neither form: a
+      // declaration that carries it still announces nothing here.
+      const loud = yield* runDocument({
+        source: ["<Plan>", "Write a program.", "</Plan>", ""].join("\n"),
+        reply: PLAN,
+        normalized: true,
+        harness: yield* planDeclarationHarness({
+          surface: "component",
+          authorshipRoot: yield* authorshipRoot(),
+          verbose: true,
+        }),
+      });
+
+      expect(loud.failure).toBe(undefined);
+      expect(announced(loud.emitted)).toEqual([]);
+
+      // The negative control: this exact scenario does announce its phases when
+      // the surface is the command's. Absence above is the surface's doing, not
+      // a scenario that never reached a phase.
+      const command = yield* runDocument({
+        source: ["<Plan>", "Write a program.", "</Plan>", ""].join("\n"),
+        reply: PLAN,
+        normalized: true,
+        harness: yield* planDeclarationHarness({
+          surface: "command",
+          authorshipRoot: yield* authorshipRoot(),
+        }),
+      });
+
+      expect(command.failure).toBe(undefined);
+      expect(announced(command.emitted)).toEqual([
+        "## Preparing the Plan",
+        "## Drafting the Plan",
+        "## Checking the draft",
+        "## Waiting for your review",
+        "## Finalizing the Plan",
+      ]);
+
+      // And nothing any of them produced was ever run.
+      expect((yield* until(readdir(dir))).sort()).toEqual([]);
+    });
+  });
+
   it("PC20: the retained artifact carries the approved bytes and their digest", function* () {
     yield* useWorkingDirectory(function* () {
       const stream = new InMemoryStream();

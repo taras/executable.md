@@ -148,7 +148,7 @@ function command(
   request: string = REQUEST,
   stack: AuthorshipStack = STACK,
 ): PlanCommand {
-  return { request, include: [dir], stack };
+  return { request, include: [dir], verbose: false, stack };
 }
 
 /**
@@ -951,9 +951,7 @@ describe(
         expect(harness.fake.prompts).toHaveLength(4);
         expect(harness.reviews).toHaveLength(1);
         expect(decisions(harness.reviews[0])).toEqual(["Request changes", "Stop"]);
-        expect(harness.reviews[0].message).toContain(
-          "The coding agent used all three repair attempts",
-        );
+        expect(harness.reviews[0].message).toContain("The coding agent used all 3 repair attempts");
         // The presentation carries the same complete captured JSON the repair
         // turns did, through the same `<Json as>` binding.
         const shown = fencedJson(harness.reviews[0].message);
