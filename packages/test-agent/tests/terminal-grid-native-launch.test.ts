@@ -82,6 +82,14 @@ interface Run {
   launches: NativeLaunchRequest[];
   /** Every launch the *host's* launcher was asked to start. */
   hostLaunches: NativeLaunchRequest[];
+  /**
+   * Every launch `<TestAgent>`'s own launcher was asked to start.
+   *
+   * A pane launch must not reach it: the pane launcher is the physical
+   * endpoint, and anything past it is a terminal that is not the pane's. A
+   * *root* launch does reach it, which is how the two stay distinguishable.
+   */
+  agentLaunches: NativeLaunchRequest[];
   sessions: NativeSessionReport[];
   events: DurableEvent[];
   /** Everything the controlled composite did, in order. */
@@ -157,6 +165,7 @@ function markerOf(request: NativeLaunchRequest, sessions: NativeSessionReport[])
 function* runJourney(options: RunOptions = {}): Operation<Run> {
   const launches: NativeLaunchRequest[] = [];
   const hostLaunches: NativeLaunchRequest[] = [];
+  const agentLaunches: NativeLaunchRequest[] = [];
   const sessions: NativeSessionReport[] = [];
   const providerLog = terminalProviderLog();
   const states: string[] = [];
@@ -217,20 +226,11 @@ function* runJourney(options: RunOptions = {}): Operation<Run> {
       // The launcher `<TestAgent>` installs for its own scope. A pane's
       // launcher composes in front of it, so this is what a pane launch
       // reaches once the pane has answered for the terminal.
+      // `<TestAgent>`'s own launcher. A pane launch must not arrive here — it
+      // stops at the pane endpoint — so this is a sentinel for everything but a
+      // root launch.
       yield* NativeLaunchObserver.set({
-        record: (asked) => launches.push(asked),
-        wait: (asked) =>
-          (function* () {
-            const marker = markerOf(asked, sessions);
-            startedOne(marker);
-            try {
-              yield* child(marker, order);
-            } finally {
-              // Reached however the launch left — returned, or cancelled by the
-              // reader closing the grid.
-              order.push(`left:${marker}`);
-            }
-          })(),
+        record: (asked) => agentLaunches.push(asked),
         outcome: (asked) => options.exits?.[markerOf(asked, sessions)] ?? { exitCode: 0 },
       });
       // A host launcher too, which is the wrong one for any of this to reach:
@@ -293,6 +293,24 @@ function* runJourney(options: RunOptions = {}): Operation<Run> {
                     }
                     return { exitCode: 0 };
                   },
+                  // The pane's physical endpoint. A `<Session.Launch>` written
+                  // in a paired pane arrives here, with the exact request the
+                  // Agent provider built and an ordinal that never left core's
+                  // closure.
+                  *launch(_ordinal, asked, spawned) {
+                    launches.push(asked);
+                    const marker = markerOf(asked, sessions);
+                    spawned();
+                    startedOne(marker);
+                    try {
+                      yield* child(marker, order);
+                    } finally {
+                      // Reached however the launch left — returned, or
+                      // cancelled by the reader closing the grid.
+                      order.push(`left:${marker}`);
+                    }
+                    return options.exits?.[marker] ?? { exitCode: 0 };
+                  },
                 });
                 yield* authority.present(asked, composite);
                 return undefined;
@@ -331,6 +349,7 @@ function* runJourney(options: RunOptions = {}): Operation<Run> {
           results: yield* testing.results,
           launches,
           hostLaunches,
+          agentLaunches,
           sessions,
           events: yield* stream.readAll(),
           composite: providerLog.events,
@@ -351,6 +370,7 @@ function* runJourney(options: RunOptions = {}): Operation<Run> {
         results: yield* testing.results,
         launches,
         hostLaunches,
+        agentLaunches,
         sessions,
         events: yield* stream.readAll(),
         composite: providerLog.events,
@@ -574,6 +594,9 @@ describe(
 
       expect(run.result.ok).toBe(true);
       expect(run.hostLaunches).toEqual([]);
+      // Nor `<TestAgent>`'s own launcher: a pane launch stops at the pane
+      // endpoint, and everything past it is a terminal that is not the pane's.
+      expect(run.agentLaunches).toEqual([]);
       expect(run.launches.length).toBe(3);
     });
 
@@ -746,7 +769,11 @@ describe(
       // ownership — and it gets them, so the grid released every one.
       expect(run.result.ok ? "" : run.result.error.message).toBe("");
       expect(run.results.map((result) => result.status)).toEqual(["pass"]);
-      expect(run.launches.length).toBe(3);
+      // Two at the pane endpoint and one at the root route, which is the
+      // distinction the pane endpoint exists to make: a launch written in a
+      // pane never reaches the terminal a root launch takes.
+      expect(run.launches.length).toBe(2);
+      expect(run.agentLaunches.length).toBe(1);
       // Neither refusal: not one still held by another owner, and not one left
       // owned by work that did not finish. An orderly close that finished is a
       // finish, and the session it used is ordinarily usable afterwards.
