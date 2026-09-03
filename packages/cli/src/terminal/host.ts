@@ -51,25 +51,37 @@ export function* unsupportedTerminalGrid(): Operation<void> {
 export function useHangupCancellation(hangup: Operation<void>): Operation<void> {
   return Execution.around({
     *document([request], next) {
-      const outcome = yield* race([
-        (function* () {
-          yield* next(request);
-          return "done";
-        })(),
-        (function* () {
-          yield* hangup;
-          return "hangup";
-        })(),
-      ]);
-      if (outcome === "hangup") {
-        // The losing side of the race is cancelled, which is the whole point:
-        // the grid comes down through the same teardown a reader close uses,
-        // and this run stops rather than continuing on a terminal it no longer
-        // has.
-        throw new TerminalLost();
-      }
+      yield* underHangup(hangup, () => next(request));
     },
   });
+}
+
+/**
+ * Run `body`, and cancel it if the terminal goes away first.
+ *
+ * The losing side of the race is cancelled, which is the whole point: the grid
+ * comes down through the same teardown a reader close uses, and the run stops
+ * rather than continuing on a terminal it no longer has.
+ */
+export function underHangup<T>(
+  hangup: Operation<void>,
+  body: () => Operation<T>,
+): Operation<T | undefined> {
+  return (function* (): Operation<T | undefined> {
+    const outcome = yield* race([
+      (function* (): Operation<{ done: true; value: T }> {
+        return { done: true, value: yield* body() };
+      })(),
+      (function* (): Operation<{ done: false }> {
+        yield* hangup;
+        return { done: false };
+      })(),
+    ]);
+    if (!outcome.done) {
+      throw new TerminalLost();
+    }
+    return outcome.value;
+  })();
 }
 
 /** The host's terminal went away while the document was still running. */

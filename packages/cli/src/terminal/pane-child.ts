@@ -76,6 +76,8 @@ const POLL_MS = 25;
 export function usePaneChild(
   request: PaneChildRequest,
   tty: string | undefined,
+  /** Handed the process, so a suite can ask the emitter what it still holds. */
+  observe?: (child: ChildProcess) => void,
 ): Operation<PaneChild> {
   return resource(function* (provide) {
     const [command, ...args] = request.argv;
@@ -148,6 +150,7 @@ export function usePaneChild(
       outcome = settled;
       exited.resolve(settled);
     };
+    observe?.(child);
     child.on("spawn", onSpawn);
     child.on("error", onError);
     child.on("exit", onExit);

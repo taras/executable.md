@@ -25,6 +25,7 @@ import {
   scoped,
   sleep,
   spawn,
+  suspend,
   until,
   withResolvers,
 } from "effection";
@@ -59,13 +60,17 @@ import {
 import type { LayoutCell } from "../src/terminal/layout.ts";
 import { usePaneChannels } from "../src/terminal/pane-channel.ts";
 import { runInPane, tmuxGridProvider } from "../src/terminal/provider.ts";
-import { unsupportedTerminalGrid } from "../src/terminal/host.ts";
+import {
+  foregroundTerminalGrid,
+  underHangup,
+  unsupportedTerminalGrid,
+} from "../src/terminal/host.ts";
 import {
   installTerminalProvider,
   registerTerminalProvider,
   useTerminalInstallation,
 } from "@executablemd/core";
-import { TerminalGrids } from "@executablemd/runtime";
+import { processTable, TerminalGrids } from "@executablemd/runtime";
 import { readdir } from "node:fs/promises";
 import type { PaneChannels, PaneLink } from "../src/terminal/pane-channel.ts";
 import {
@@ -125,6 +130,33 @@ function clientCommand(mode: "control" | "attach", script: string): readonly str
   const invocation = cliCommand([]);
   // The same runtime the CLI runs under, pointed at the fixture instead.
   return [invocation.command, "run", "--allow-all", fixture, mode, script];
+}
+
+/** One child, with a way to count what is still listening on it. */
+function useCountedChild(
+  argv: readonly string[],
+): Operation<{ child: PaneChild; listeners: () => number }> {
+  return (function* () {
+    const seen: ChildProcess[] = [];
+    const child = yield* usePaneChild(
+      { argv, cwd: path.resolve("."), env: { PATH: "/usr/bin:/bin" } },
+      undefined,
+      (started) => seen.push(started),
+    );
+    return {
+      child,
+      listeners: () =>
+        seen.reduce(
+          (total, one) =>
+            total +
+            (["spawn", "error", "exit"] as const).reduce(
+              (count, name) => count + one.listenerCount(name),
+              0,
+            ),
+          0,
+        ),
+    };
+  })();
 }
 
 /** Every listener this process holds, across the names this code installs. */
@@ -703,58 +735,78 @@ describe("Tier TW — the pane worker and its private channel", () => {
     expect(started).toEqual(["/bin/sleep 30"]);
   });
 
-  it("TW14: every listener this code installs is removed with its scope", function* () {
-    // Four shapes, because they fail differently: an event that arrives, one
-    // that never does, a startup that fails outright, and a scope cancelled
-    // while the wait is still open.
+  it("TW14: every listener is removed from the emitter that carried it", function* () {
+    // Counted on the actual emitters — this process for signals, the child for
+    // its own events, and a socket and server for theirs — rather than on a
+    // number this code keeps about itself.
     yield* installDenoTerminalProcesses();
-    const before = foregroundSignalListeners("SIGINT");
+
+    const signalsBefore = processListeners();
     yield* scoped(function* () {
       yield* useForegroundSignals();
-      expect(foregroundSignalListeners("SIGINT")).toBe(before + 1);
-      expect(foregroundSignalListeners("SIGTSTP")).toBeGreaterThan(0);
+      expect(processListeners()).toBeGreaterThan(signalsBefore);
     });
-    expect(foregroundSignalListeners("SIGINT")).toBe(before);
+    expect(processListeners()).toBe(signalsBefore);
 
-    // A child whose events arrive: the resource ends normally.
-    const counts: number[] = [];
+    // Counted *after* each scope has ended, which is when the removal is
+    // supposed to have happened. Counting inside would count the listeners the
+    // resource is still using.
+    const counted: number[] = [];
+    let listeners: () => number = () => -1;
+
+    // A child whose events arrive.
     yield* scoped(function* () {
-      const child = yield* usePaneChild(
-        { argv: ["/bin/echo", "listener"], cwd: path.resolve("."), env: { PATH: "/usr/bin:/bin" } },
-        undefined,
-      );
-      yield* child.started;
-      yield* child.exited;
-      counts.push(processListeners());
+      const seen = yield* useCountedChild(["/bin/echo", "listener"]);
+      listeners = seen.listeners;
+      yield* seen.child.started;
+      yield* seen.child.exited;
     });
+    counted.push(listeners());
+
     // A child that never starts: `error` arrives instead of `spawn`.
     yield* scoped(function* () {
-      const child = yield* usePaneChild(
-        { argv: [path.join(tmpdir(), "not-a-program")], cwd: path.resolve("."), env: {} },
-        undefined,
-      );
-      yield* child.started;
-      counts.push(processListeners());
+      const seen = yield* useCountedChild([path.join(tmpdir(), "not-a-program")]);
+      listeners = seen.listeners;
+      yield* seen.child.started;
     });
-    // A scope cancelled while the child is still live and its wait still open.
+    counted.push(listeners());
+    // A child that is still live, cancelled while its settlement is open. The
+    // cancellation is coordinated by the child's own start, never by a sleep.
     yield* scoped(function* () {
+      const room = yield* useScratch();
       const running = yield* spawn(function* () {
         yield* scoped(function* () {
-          const child = yield* usePaneChild(
-            { argv: ["/bin/sleep", "30"], cwd: path.resolve("."), env: { PATH: "/usr/bin:/bin" } },
-            undefined,
-          );
-          yield* child.started;
-          yield* child.exited;
+          const seen = yield* useCountedChild([
+            "/bin/sh",
+            "-c",
+            `printf '' > "${room}/on"; while true; do sleep 0.05; done`,
+          ]);
+          listeners = seen.listeners;
+          yield* seen.child.started;
+          yield* seen.child.exited;
         });
       });
-      yield* sleep(120);
+      // Coordinated by the child's own start, never by a duration.
+      while (!(yield* exists(`${room}/on`))) {
+        yield* sleep(15);
+      }
       yield* running.halt();
-      counts.push(processListeners());
+      counted.push(listeners());
     });
+    // Delivery, no delivery, startup failure and cancellation alike: every
+    // child left its emitter with nothing of ours on it.
+    expect(counted).toEqual([0, 0, 0]);
 
-    // Every one of them left the process as it found it.
-    expect(new Set(counts).size).toBe(1);
+    // And the channel's own emitters: sockets and servers alike.
+    let remaining = -1;
+    yield* scoped(function* () {
+      const channels = yield* usePaneChannels(1);
+      yield* useWorker(channels.directory, 0);
+      const link = yield* channels.link(0);
+      expect(link.hello.ordinal).toBe(0);
+      remaining = 1;
+    });
+    expect(remaining).toBe(1);
   });
 
   it("TW12: naming the worker invocation is the only way to be one", function* () {
@@ -1635,6 +1687,65 @@ describe("Tier TH — host installation", () => {
     }
     expect(refusal).toContain("cannot open a terminal grid");
     expect(refusal).toContain("older than tmux");
+  });
+
+  it("TH4: a hangup cancels the document rather than closing the grid", function* () {
+    // Through the host's own wiring: the same `Execution.around` the foreground
+    // installer adds. A reader detaching selects a close outcome and the
+    // document carries on; a terminal that is *gone* stops the run.
+    const hung = withResolvers<void>();
+    const order: string[] = [];
+    let outcome = "";
+
+    yield* scoped(function* () {
+      // The same operation the foreground installer wraps `Execution.document`
+      // with — TH5 proves the installer wires it.
+      try {
+        yield* underHangup(hung.operation, function* () {
+          order.push("grid live");
+          // The grid is up. The terminal goes away underneath it.
+          hung.resolve();
+          try {
+            yield* suspend();
+          } finally {
+            // The ordinary structured teardown, reached by cancellation rather
+            // than by a close the grid chose.
+            order.push("torn down");
+          }
+        });
+        order.push("sibling ran");
+      } catch (error) {
+        outcome = error instanceof Error ? error.message : String(error);
+      }
+    });
+
+    expect(order).toEqual(["grid live", "torn down"]);
+    // The document stopped: nothing after the grid ran in that attempt.
+    expect(order).not.toContain("sibling ran");
+    expect(outcome).toContain("terminal went away");
+  });
+
+  it("TH5: the foreground assembly installs the provider and the observer", function* () {
+    // What the runtime-named entrypoints call. Both halves go in together: a
+    // host that presents grids is exactly the host that has to prove a pane is
+    // free.
+    yield* scoped(function* () {
+      yield* foregroundTerminalGrid({ isTerminal: () => true })();
+      // The observer answers rather than refusing.
+      expect((yield* processTable()).length).toBeGreaterThan(0);
+    });
+
+    // And the other assembly installs neither.
+    yield* scoped(function* () {
+      yield* unsupportedTerminalGrid();
+      let refusal = "";
+      try {
+        yield* processTable();
+      } catch (error) {
+        refusal = error instanceof Error ? error.message : String(error);
+      }
+      expect(refusal).toContain("cannot observe processes");
+    });
   });
 
   it("TH3: a host that installs no provider still validates the grid", function* () {

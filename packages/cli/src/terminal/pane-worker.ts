@@ -240,7 +240,7 @@ export function* runPaneWorker(
     socket.off("error", onConnectError);
   }
 
-  const inbound = readFrames(socket, (value) => ToWorkerSchema.parse(value));
+  const inbound = yield* readFrames(socket, (value) => ToWorkerSchema.parse(value));
   const say = (message: FromWorker) => writeFrame(socket, message);
 
   const table = yield* processTable();

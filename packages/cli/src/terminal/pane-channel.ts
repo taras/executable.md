@@ -30,6 +30,7 @@ import {
   resource,
   sleep,
   spawn,
+  suspend,
   until,
   withResolvers,
 } from "effection";
@@ -66,6 +67,14 @@ export interface PaneChannels {
   link(ordinal: number): Operation<PaneLink>;
   /** Connections closed without admission, for a diagnostic to name. */
   refusals(): readonly string[];
+  /**
+   * Close every socket and server, and wait for them.
+   *
+   * Callable by a teardown that has to put this in a particular place in its
+   * order; the scope runs it too, so a caller that never gets there still
+   * leaves nothing open. Idempotent.
+   */
+  close(): Operation<void>;
 }
 
 interface Slot {
@@ -121,7 +130,11 @@ export function usePaneChannels(
 
     // Awaited, not asked for. `destroy()` and `close()` are requests; what the
     // directory's removal has to wait for is the closures themselves.
-    yield* ensure(function* () {
+    let closing: Operation<void> | undefined;
+    function* closeAll(): Operation<void> {
+      if (closing !== undefined) {
+        return yield* closing;
+      }
       const closings: Operation<void>[] = [];
       const counted = (): void => {
         closedCount++;
@@ -136,10 +149,15 @@ export function usePaneChannels(
         closings.push(shut(server, counted));
         server.close();
       }
-      for (const closing of closings) {
-        yield* closing;
+      for (const pending of closings) {
+        yield* pending;
       }
       options.onClosed?.();
+      closing = (function* () {})();
+    }
+
+    yield* ensure(function* () {
+      yield* closeAll();
     });
 
     // Subscribed before a single server listens, so no arrival is missed.
@@ -178,7 +196,7 @@ export function usePaneChannels(
     function* admit(ordinal: number, socket: Socket): Operation<void> {
       const slot = slots.get(ordinal);
       const token = tokens.get(ordinal);
-      const frames = readFrames(socket, (value) => FromWorkerSchema.parse(value));
+      const frames = yield* readFrames(socket, (value) => FromWorkerSchema.parse(value));
       const first = yield* race([frames.next(), silence()]);
       if (slot === undefined || token === undefined || first.done || first.value.type !== "hello") {
         refusals.push(`pane ${ordinal}: a connection that did not say hello`);
@@ -218,7 +236,13 @@ export function usePaneChannels(
           return;
         }
         const { ordinal, socket } = next.value;
-        yield* spawn(() => admit(ordinal, socket));
+        yield* spawn(function* () {
+          yield* admit(ordinal, socket);
+          // The frame reader is this task's, so this task has to outlive the
+          // admission: a reader torn down at the handshake would leave a link
+          // that never hears another word.
+          yield* suspend();
+        });
       }
     });
 
@@ -232,6 +256,7 @@ export function usePaneChannels(
         return yield* slot.waiting.operation;
       },
       refusals: () => [...refusals],
+      close: closeAll,
     });
   });
 }

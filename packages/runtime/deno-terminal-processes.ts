@@ -28,8 +28,18 @@ import type { ProcessFacts, SignalDelivery, TerminalSignal } from "./terminal-pr
 
 /** What one observation ran, so a suite can answer for it. */
 export interface ProcessProbes {
-  /** Run a tool, and report its status and output. */
-  run(command: string, args: readonly string[]): Operation<{ code: number; stdout: string }>;
+  /**
+   * Run a tool, and report everything it said.
+   *
+   * `stderr` is part of the answer, not noise: `lsof -t` exits 1 with nothing
+   * at all when a file has no holders, and exits 1 *with a diagnostic* when it
+   * could not look. Without stderr those two are the same result, and one of
+   * them means "nobody" while the other means "I do not know".
+   */
+  run(
+    command: string,
+    args: readonly string[],
+  ): Operation<{ code: number; stdout: string; stderr: string }>;
   /** Deliver a signal. Throws with a `code` the way `process.kill` does. */
   kill(pid: number, signal: number | TerminalSignal): void;
 }
@@ -39,8 +49,8 @@ export function posixProcessProbes(): ProcessProbes {
   return {
     run(command, args) {
       return until(
-        new Promise<{ code: number; stdout: string }>((resolve, reject) => {
-          execFile(command, [...args], { maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
+        new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
+          execFile(command, [...args], { maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
             if (error && !("code" in error && typeof error.code === "number")) {
               // The tool did not run at all. That is not a status.
               reject(error);
@@ -48,7 +58,7 @@ export function posixProcessProbes(): ProcessProbes {
             }
             const code =
               error && "code" in error && typeof error.code === "number" ? error.code : 0;
-            resolve({ code, stdout });
+            resolve({ code, stdout, stderr });
           });
         }),
       );
@@ -88,24 +98,33 @@ export function* installDenoTerminalProcesses(
       },
       *holders([device]): Operation<readonly number[]> {
         const found = yield* probes.run("lsof", ["-t", device]);
-        const pids = found.stdout
+        const said = found.stdout
           .split("\n")
           .map((line) => line.trim())
-          .filter((line) => /^\d+$/.test(line))
-          .map(Number);
-        if (found.code === 0) {
-          return pids;
+          .filter((line) => line.length > 0);
+        // The exact supported empty result, and nothing near it: `lsof -t`
+        // exits 1 saying nothing at all when a file has no holders. Exit 1 with
+        // a diagnostic is a look that did not happen, and "nobody holds it" is
+        // not the safe guess for it.
+        if (found.code !== 0) {
+          if (found.code === 1 && said.length === 0 && found.stderr.trim().length === 0) {
+            return [];
+          }
+          throw new TerminalProcessesUnavailableError(
+            "this host could not enumerate the holders of a terminal, so it is not " +
+              "established that nobody holds it.",
+          );
         }
-        // The one documented failure: `lsof -t` exits 1 with no output when
-        // nothing holds the file. Anything else is a question that was not
-        // answered, and "nobody holds it" is not the safe guess.
-        if (found.code === 1 && pids.length === 0) {
-          return [];
+        // A successful run whose output is not entirely pids is output this
+        // does not understand. Dropping the lines it cannot read would turn a
+        // partial answer into a confident one.
+        if (!said.every((line) => /^\d+$/.test(line))) {
+          throw new TerminalProcessesUnavailableError(
+            "this host answered with terminal holders it could not read, so it is not " +
+              "established who holds it.",
+          );
         }
-        throw new TerminalProcessesUnavailableError(
-          "this host could not enumerate the holders of a terminal, so it is not " +
-            "established that nobody holds it.",
-        );
+        return said.map(Number);
       },
       // deno-lint-ignore require-yield
       *deliver([pid, signal]): Operation<SignalDelivery> {
@@ -146,14 +165,28 @@ export function* installDenoTerminalProcesses(
   );
 }
 
-/** One reading of `ps`, parsed row by row; anything unreadable is dropped. */
+/**
+ * One reading of `ps`, parsed row by row.
+ *
+ * Every non-empty line has to be a row. A reading with lines this cannot parse
+ * is a reading it does not understand, and dropping them would answer a sweep
+ * with the processes it happened to recognise — which is a smaller set than the
+ * ones that are there.
+ */
 function readTable(output: string): readonly ProcessFacts[] {
   const rows: ProcessFacts[] = [];
   for (const line of output.split("\n")) {
-    const row = readRow(line);
-    if (row !== undefined) {
-      rows.push(row);
+    if (line.trim().length === 0) {
+      continue;
     }
+    const row = readRow(line);
+    if (row === undefined) {
+      throw new TerminalProcessesUnavailableError(
+        "this host answered with a process table it could not read, so nothing about " +
+          "a pane's processes has been established.",
+      );
+    }
+    rows.push(row);
   }
   return rows;
 }

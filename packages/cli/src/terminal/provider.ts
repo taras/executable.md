@@ -20,7 +20,7 @@
  * have to be kept honest separately.
  */
 
-import { ensure, resource } from "effection";
+import { ensure, resource, withResolvers } from "effection";
 import process from "node:process";
 import type { Operation } from "effection";
 import { TerminalGrids } from "@executablemd/runtime";
@@ -141,73 +141,90 @@ function usePresentedGrid(
 
     let shown = 0;
     let visible: VisibleClient | undefined;
-    let torn = false;
+    /** The one teardown in flight, so repeat callers observe it rather than skip it. */
+    let tearing: ReturnType<typeof withResolvers<void>> | undefined;
+    let complete = false;
 
     /**
      * The one teardown, in the one order, however this grid ends.
      *
      * Core calls it through `destroy()`; the finalizer calls it when core never
-     * got that far, which is what a preparation that failed halfway leaves.
-     * Idempotent, so both happening is one teardown rather than two half ones.
+     * got that far, which is what a preparation that failed halfway leaves. A
+     * second caller waits on the first rather than skipping past unfinished
+     * work, and a teardown that *failed* is retried rather than remembered as
+     * done — marking it complete before it succeeded would let the run continue
+     * past a pane it never established was free.
      *
      * The order is the contract, and every step is a proof rather than a
      * request:
      *
      *   detach the reader's client and establish it stopped
-     *     → ask every worker to shut down
-     *     → await each one's settlement, its terminal sweep and its goodbye
-     *     → refuse if any of that could not be proved
+     *     → ask every acquired worker to shut down
+     *     → require its settlement, its holder-free goodbye, and its channel
+     *       closing, in that order
+     *     → close every private channel
      *     → stop the server and establish it is gone
      *
-     * The private sockets, their servers and the directory come down after
-     * this, in the scopes that own them — which is why they are acquired
-     * outside it rather than closed here.
+     * Every acquired resource is attempted even after an earlier one failed, so
+     * one bad worker does not strand the server, the channels or the paths. The
+     * first failure is what surfaces.
      */
     function* tearDown(): Operation<void> {
-      if (torn) {
+      if (complete) {
         return;
       }
-      torn = true;
+      if (tearing) {
+        return yield* tearing.operation;
+      }
+      tearing = withResolvers<void>();
+      let failure: Error | undefined;
+      const failed = (error: unknown): void => {
+        failure = failure ?? (error instanceof Error ? error : new Error(String(error)));
+      };
+
       // The reader's client first, and asked rather than told: a client that
       // detaches restores the terminal, and one that is killed cannot.
       if (visible !== undefined) {
-        yield* grid.detach(visible);
+        const client = visible;
         visible = undefined;
+        try {
+          yield* grid.detach(client);
+        } catch (error) {
+          failed(error);
+        }
       }
+
       for (const link of links) {
-        if (!link.connected()) {
-          continue;
-        }
-        yield* link.send({ type: "shutdown" });
-        // Its settlement, its final terminal sweep, and its goodbye. A worker
-        // that could not prove its pane free refuses here, and a channel that
-        // ended before saying so is a failure rather than a silent success.
-        let quiesced = false;
-        while (true) {
-          const frame = yield* link.next();
-          if (frame === undefined) {
-            if (!quiesced) {
-              throw new TerminalTeardownFailed(
-                "a terminal pane stopped answering before it was proved free",
-              );
-            }
-            break;
-          }
-          if (frame.type === "quiet") {
-            requireQuiescent(frame.settlement);
-            quiesced = true;
-            continue;
-          }
-          if (frame.type === "bye") {
-            if (frame.holders.some((holder) => !holder.gone)) {
-              throw new TerminalTeardownFailed("something still holds a terminal pane");
-            }
-            break;
-          }
+        try {
+          yield* quiesceWorker(link);
+        } catch (error) {
+          failed(error);
         }
       }
-      // And only now the server, which `stop()` proves gone rather than reports.
-      yield* grid.stop();
+
+      // Channels before the server: a socket still open onto a pane of a server
+      // that has gone is a handle onto nothing.
+      try {
+        yield* channels.close();
+      } catch (error) {
+        failed(error);
+      }
+
+      try {
+        yield* grid.stop();
+      } catch (error) {
+        failed(error);
+      }
+
+      if (failure !== undefined) {
+        // Retryable: `tearing` is cleared, so a later caller runs it again
+        // rather than being told a teardown that failed had finished.
+        tearing.reject(failure);
+        tearing = undefined;
+        throw failure;
+      }
+      complete = true;
+      tearing.resolve();
     }
 
     yield* ensure(function* () {
@@ -270,6 +287,51 @@ function* label(
     return;
   }
   yield* grid.title(ordinal, `${pane.title} — ${state}`);
+}
+
+/**
+ * Ask one worker to stop, and require what it must say before it has.
+ *
+ * Settlement, then a goodbye that names no surviving holder, then the channel
+ * closing — in that order. A worker that was never there, that has already gone,
+ * or that stops part-way through is a teardown failure: none of those is a pane
+ * proved free.
+ */
+function* quiesceWorker(link: PaneLink): Operation<void> {
+  if (!link.connected()) {
+    throw new TerminalTeardownFailed(
+      "a terminal pane's worker was gone before it was asked to stop",
+    );
+  }
+  yield* link.send({ type: "shutdown" });
+  let quiesced = false;
+  let farewelled = false;
+  while (true) {
+    const frame = yield* link.next();
+    if (frame === undefined) {
+      if (!quiesced || !farewelled) {
+        throw new TerminalTeardownFailed(
+          "a terminal pane stopped answering before it was proved free",
+        );
+      }
+      return;
+    }
+    if (frame.type === "quiet") {
+      requireQuiescent(frame.settlement);
+      quiesced = true;
+      continue;
+    }
+    if (frame.type === "bye") {
+      if (!quiesced) {
+        throw new TerminalTeardownFailed("a terminal pane said goodbye before it was proved free");
+      }
+      if (frame.holders.some((holder) => !holder.gone)) {
+        throw new TerminalTeardownFailed("something still holds a terminal pane");
+      }
+      farewelled = true;
+      continue;
+    }
+  }
 }
 
 /**
