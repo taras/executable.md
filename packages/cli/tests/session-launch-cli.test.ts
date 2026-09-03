@@ -237,7 +237,15 @@ describe(
 
       expect(result.code).toBe(1);
       const reported = `${result.stdout}${result.stderr}`;
+      // The concrete structural refusal, named and located — not merely the
+      // absence of a provider message, which an unrelated failure would also
+      // satisfy.
+      expect(reported).toContain('<Terminal.Grid> requires a "columns" prop');
+      expect(reported).toContain("bad.md:1:1");
+      // And it is the grammar's refusal, reached wherever the document is read
+      // rather than at a provider.
       expect(reported).not.toContain("cannot open a terminal grid");
+      expect(reported).not.toContain("no terminal provider is installed");
     });
 
     it("CL5: no behavior is keyed to the filename", function* () {
