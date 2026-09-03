@@ -91,7 +91,10 @@ export function admitLocator(locator: string): string | undefined {
   return undefined;
 }
 
-/** The stable name an admitted locator is known by everywhere but its own column. */
-export function locatorFingerprint(locator: string): string {
-  return createHash("sha256").update(locator, "utf8").digest("hex");
-}
+/**
+ * The stable name an admitted locator is known by everywhere but its own column.
+ *
+ * The derivation is the shared rule: both hosts retain this fingerprint and a
+ * second derivation would be two names for one repository.
+ */
+export { locatorFingerprintOf as locatorFingerprint } from "../../composition/records.ts";

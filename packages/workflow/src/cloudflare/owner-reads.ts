@@ -240,6 +240,17 @@ function validatedBlob(
  * the transport piece-oriented rather than turning a validated root into one
  * unbounded answer.
  */
+/**
+ * Prove one retained root is complete, for a caller that is about to write.
+ *
+ * The same validator the reads use. Keeping the read boundary and the write
+ * boundary on one proof is what stops a root being publishable by one path and
+ * refused by the other.
+ */
+export function validateRetainedRoot(storage: OwnerStorage, rootId: string): void {
+  referencedRoot(storage, rootId);
+}
+
 function referencedRoot(storage: OwnerStorage, rootId: string): StoredRoot {
   if (!SHA256.test(rootId)) {
     return corrupt("a Workspace root identity is malformed");

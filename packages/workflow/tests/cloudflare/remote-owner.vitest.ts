@@ -233,8 +233,10 @@ describe("the remote owner protocol", () => {
     for (let index = 0; index < 129; index += 1) {
       await on(stub, (owner) => owner.appendJournal(`event-${index}`, `event ${index}`));
     }
-    await admit(stub);
-    const frontier = record((await send(stub, "frontier", { command: "frontier" }))["value"]);
+    // A real accepted connection: this reads across several object round trips
+    // and a pair socket does not survive the object being reset between them.
+    const socket = await connect(stub);
+    const frontier = record((await ask(socket, "frontier", { command: "frontier" }))["value"]);
     expect(frontier["workspaceRootId"]).toBe(ROOT_ID);
     expect(frontier["journalEventId"]).toBe("event-128");
     expect(record(frontier["record"])["runId"]).toBe(RUN_ID);
@@ -242,7 +244,7 @@ describe("the remote owner protocol", () => {
     await on(stub, (owner) => owner.appendJournal("event-later", "later"));
     const first = record(
       (
-        await send(stub, "journal-1", {
+        await ask(socket, "journal-1", {
           command: "journal",
           anchorEventId: "event-128",
           afterEventId: null,
@@ -253,7 +255,7 @@ describe("the remote owner protocol", () => {
     expect(first["done"]).toBe(false);
     const second = record(
       (
-        await send(stub, "journal-2", {
+        await ask(socket, "journal-2", {
           command: "journal",
           anchorEventId: "event-128",
           afterEventId: "event-127",
@@ -269,14 +271,17 @@ describe("the remote owner protocol", () => {
   it("returns only content referenced by one validated root", async () => {
     const stub = executor();
     await on(stub, (owner) => owner.initialize());
-    await admit(stub);
-    expect(await send(stub, "root", { command: "root", workspaceRootId: ROOT_ID })).toEqual({
+    // A real accepted connection: a `WebSocketPair` made inside the object does
+    // not survive the object being reset between calls, and this test reads
+    // across several of them.
+    const socket = await connect(stub);
+    expect(await ask(socket, "root", { command: "root", workspaceRootId: ROOT_ID })).toEqual({
       id: "root",
       outcome: "performed",
       value: { workspaceRootId: ROOT_ID, manifest: ROOT_MANIFEST },
     });
     expect(
-      await send(stub, "manifest", {
+      await ask(socket, "manifest", {
         command: "content",
         workspaceRootId: ROOT_ID,
         kind: "manifest",
@@ -294,7 +299,7 @@ describe("the remote owner protocol", () => {
       },
     });
     expect(
-      await send(stub, "blob", {
+      await ask(socket, "blob", {
         command: "content",
         workspaceRootId: ROOT_ID,
         kind: "blob",
@@ -307,7 +312,7 @@ describe("the remote owner protocol", () => {
       owner.addUnreferencedBlob(new TextEncoder().encode("orphan")),
     );
     expect(
-      await send(stub, "orphan", {
+      await ask(socket, "orphan", {
         command: "content",
         workspaceRootId: ROOT_ID,
         kind: "blob",

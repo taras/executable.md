@@ -100,6 +100,10 @@ export const NEXT_ROOT_MANIFEST = JSON.stringify({
       manifest: MANIFEST_ID,
       hardlink: null,
     },
+    // The checkout a Repository mapping claims, in canonical byte order — a
+    // mapping whose directory the proposed root does not contain is a record
+    // about files nobody wrote.
+    { path: "/app", kind: "directory", mode: 493, mtime: 0 },
   ],
 });
 export const NEXT_ROOT_ID = sha256Hex(`${WORKSPACE_ROOT_DOMAIN}${NEXT_ROOT_MANIFEST}`);

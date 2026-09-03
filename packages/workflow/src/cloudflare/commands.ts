@@ -2,8 +2,10 @@ import {
   type DocumentExecutionCompletion,
   parseDocumentExecutionCompletion,
 } from "../storage/record.ts";
+import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
 import { SHA256 } from "../workspace/root-manifest.ts";
 import {
+  locatorFingerprintOf,
   parseRepositoryRecord,
   parseWorktreeRecord,
   type RepositoryRecord,
@@ -137,7 +139,7 @@ export interface ProposedPiece {
 
 /** One retained mapping the proposal carries, already parsed. */
 export type ProposedMapping =
-  | { readonly kind: "repository"; readonly record: RepositoryRecord }
+  | { readonly kind: "repository"; readonly record: RepositoryRecord; readonly locator: string }
   | { readonly kind: "worktree"; readonly record: WorktreeRecord }
   | { readonly kind: "agent-session"; readonly record: AgentSessionRecord };
 
@@ -239,6 +241,20 @@ function kind(members: Map<string, unknown>): ContentKind {
   return value;
 }
 
+/**
+ * The exact serialized events a proposal appends.
+ *
+ * A record is not admitted because it is a non-empty string, and not because
+ * SQLite will accept it as JSON. It is parsed with the authoritative durable
+ * event parser and then serialized again, and the result must be the same bytes
+ * that arrived, terminating newline included.
+ *
+ * That round trip is the point. Retaining something that parses as JSON but not
+ * as an event would create history a later read cannot understand, and the run
+ * would become unreplayable at exactly the moment it was told it had committed.
+ * Re-encoding a nearly-right record would be worse: the owner would retain
+ * something the runner never proposed.
+ */
 function eventRecords(value: unknown): string[] {
   if (!Array.isArray(value)) {
     throw new CommandError("malformed-member");
@@ -248,6 +264,10 @@ function eventRecords(value: unknown): string[] {
   }
   return value.map((entry) => {
     if (typeof entry !== "string" || entry === "") {
+      throw new CommandError("malformed-member");
+    }
+    const parsed = parseDurableEvent(entry);
+    if (!parsed.ok || serializeDurableEvent(parsed.value) !== entry) {
       throw new CommandError("malformed-member");
     }
     return entry;
@@ -428,15 +448,22 @@ function mappings(value: unknown): ProposedMapping[] {
   }
   return value.map((entry) => {
     const members = object(entry);
-    closed(members, ["kind", "record"]);
     const which = members.get("kind");
+    closed(members, which === "repository" ? ["kind", "record", "locator"] : ["kind", "record"]);
     const offered = members.get("record");
     if (which === "repository") {
       const record = parseRepositoryRecord(offered);
-      if (record === undefined) {
+      const locator = members.get("locator");
+      if (record === undefined || typeof locator !== "string" || locator === "") {
         throw new CommandError("malformed-member");
       }
-      return { kind: which, record };
+      // The record is journal-safe and names no locator; storage needs the
+      // admitted one. Requiring the fingerprint to follow from it is what stops
+      // a proposal retaining a locator that is not the one it was admitted for.
+      if (locatorFingerprintOf(locator) !== record.locatorFingerprint) {
+        throw new CommandError("malformed-member");
+      }
+      return { kind: which, record, locator };
     }
     if (which === "worktree") {
       const record = parseWorktreeRecord(offered);

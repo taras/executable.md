@@ -243,11 +243,32 @@ function mintAcquisitionId(): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+/**
+ * Whether a refusal means the connection itself is finished.
+ *
+ * Two kinds of refusal reach here and they deserve opposite treatment. One says
+ * the channel or the store is not what it claims — a message that would not
+ * parse, an acquisition this socket does not hold, storage that is damaged —
+ * and carrying on would mean guessing what the other side meant.
+ *
+ * The other is an answer about the request. A duplicate id, a frontier that has
+ * moved, a mapping that disagrees with what is already retained, and a command
+ * this release does not implement are all decisions the runner can act on: read
+ * the frontier again, propose against it, or stop. Closing the connection on
+ * those would turn every ordinary disagreement into a lost acquisition and make
+ * the runner reconnect to be told the same thing.
+ */
+const ANSWERED: readonly string[] = [
+  "command:duplicate-conflict",
+  "command:unavailable",
+  "command:stale-root",
+  "command:stale-journal",
+  "command:mapping-conflict",
+];
+
 function fatal(answer: CommandResult): boolean {
   if (answer.outcome === "performed") {
     return false;
   }
-  return (
-    answer.refusal !== "command:duplicate-conflict" && answer.refusal !== "command:unavailable"
-  );
+  return !ANSWERED.includes(answer.refusal);
 }

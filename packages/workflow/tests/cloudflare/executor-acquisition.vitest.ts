@@ -10,6 +10,7 @@
 
 import { env, runInDurableObject } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
+import { serializeDurableEvent } from "@executablemd/durable-streams";
 import type { ExecutorObject } from "./support/executor-object.ts";
 import { POLICY, VALID_CLAIMS } from "./support/executor-object.ts";
 import { generateKeys, signToken, tamper, type TestKeys } from "./support/tokens.ts";
@@ -242,6 +243,16 @@ describe("admitting an executor", () => {
   });
 });
 
+/** A record the owner will accept: exactly what the serializer produces. */
+function serializedEvent(name: string): string {
+  return serializeDurableEvent({
+    type: "yield",
+    coroutineId: "root",
+    description: { type: "test", name },
+    result: { status: "ok", value: name },
+  });
+}
+
 describe("holding an acquisition", () => {
   it("refuses a second healthy executor rather than following it", async () => {
     const stub = executor();
@@ -350,7 +361,7 @@ describe("reading a runner command", () => {
         content: [],
       },
       mappings: [],
-      events: ["event-1"],
+      events: [serializedEvent("read whole")],
     });
     // The shape is read — an unknown member or a malformed root would refuse
     // differently — and then declined on its merits: this run's frontier is not

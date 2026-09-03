@@ -47,8 +47,10 @@ import {
   WORKSPACE_ROOT_DOMAIN,
 } from "../workspace/root-manifest.ts";
 import { decodeContentManifest } from "../workspace/content-manifest.ts";
+import { MAX_CONTENT_BYTES } from "./commands.ts";
 import { sha256Hex } from "../workspace/sha256.ts";
 import { CommandError, type CommitCommand, type ProposedMapping } from "./commands.ts";
+import { validateRetainedRoot } from "./owner-reads.ts";
 import { bytesOf } from "./encoding.ts";
 import { STAGING_TABLE } from "./private-schema.ts";
 import type { OwnerStorage } from "./storage.ts";
@@ -86,13 +88,23 @@ function hexBytes(digest: string): Uint8Array {
   return bytes;
 }
 
-/** The frontier as it is right now, read where the write will happen. */
+/**
+ * The frontier as it is right now, read where the write will happen.
+ *
+ * The current root is proved complete by the same validator the read boundary
+ * uses, not merely read out of the pointer. A commit accepts its starting root
+ * as the run's frontier, and accepting one whose content graph cannot be
+ * materialized would append history against a Workspace nothing can restore —
+ * a proposal is not a licence to repair, so damage is refused here rather than
+ * worked around.
+ */
 function frontier(storage: OwnerStorage): { rootId: string; journalEventId: string | null } {
   const state = rows(storage, "SELECT current_root_id FROM workspace_state WHERE singleton_id = 1");
   const current = state[0]?.["current_root_id"];
   if (state.length !== 1 || typeof current !== "string") {
     return corrupt("the Workspace has no single current root");
   }
+  validateRetainedRoot(storage, current);
   const last = rows(
     storage,
     "SELECT event_id FROM journal_events ORDER BY sequence DESC LIMIT 1",
@@ -113,16 +125,24 @@ function resolve(
 ): { bytes: Uint8Array; authoritative: boolean } {
   const table = kind === "manifest" ? "vfs_manifests" : "vfs_blob_bytes";
   const column = kind === "manifest" ? "encoded" : "bytes";
-  const held = rows(
+  const authoritative = rows(
     storage,
     `SELECT ${column} AS content FROM ${table} WHERE lower(hex(hash)) = ?`,
     digest,
-  )[0];
+  );
+  if (authoritative.length > 1) {
+    return corrupt("retained content is stored more than once under one identity");
+  }
+  const held = authoritative[0];
   if (held !== undefined) {
     const bytes = bytesOf(held["content"]);
-    if (sha256Hex(bytes) !== digest) {
+    if (bytes.length > MAX_CONTENT_BYTES || sha256Hex(bytes) !== digest) {
       return corrupt("retained content disagrees with the identity it is stored under");
     }
+    // The companion row is part of the same fact. A size that disagrees with
+    // the bytes is damage, and adopting a proposal over it would publish a root
+    // whose content the read path refuses.
+    confirmCompanion(storage, kind, digest, bytes);
     return { bytes, authoritative: true };
   }
   const staged = rows(
@@ -143,6 +163,39 @@ function resolve(
     return corrupt("staged content disagrees with the identity it was stored under");
   }
   return { bytes, authoritative: false };
+}
+
+/**
+ * The metadata stored beside one content identity, confirmed rather than fixed.
+ *
+ * A manifest's recorded size must equal what its chunks add up to; a blob's
+ * recorded size must equal its bytes; and a blob's byte row and its `vfs_blobs`
+ * row must both exist. Any disagreement is existing damage, refused here rather
+ * than silently repaired by an `ON CONFLICT DO NOTHING` that leaves the wrong
+ * row in place.
+ */
+function confirmCompanion(
+  storage: OwnerStorage,
+  kind: "manifest" | "blob",
+  digest: string,
+  bytes: Uint8Array,
+): void {
+  if (kind === "manifest") {
+    const row = rows(
+      storage,
+      "SELECT size FROM vfs_manifests WHERE lower(hex(hash)) = ?",
+      digest,
+    )[0];
+    const decoded = decodeContentManifest(bytes, corrupt);
+    if (row === undefined || Number(row["size"]) !== decoded.size) {
+      return corrupt("a retained manifest disagrees with its recorded size");
+    }
+    return;
+  }
+  const row = rows(storage, "SELECT size FROM vfs_blobs WHERE lower(hex(hash)) = ?", digest)[0];
+  if (row === undefined || Number(row["size"]) !== bytes.length) {
+    return corrupt("a retained blob disagrees with its recorded size");
+  }
 }
 
 /**
@@ -170,8 +223,24 @@ export function applyCommit(
       ? command.expectedWorkspaceRootId
       : publish(storage, acquisitionId, command);
 
+  const named = new Set<string>();
   for (const mapping of command.mappings) {
-    applyMapping(storage, mapping);
+    const identity =
+      mapping.kind === "worktree"
+        ? `worktree:${mapping.record.repositoryName}/${mapping.record.name}`
+        : `${mapping.kind}:${mapping.kind === "repository" ? mapping.record.name : mapping.record.sessionKey}`;
+    if (named.has(identity)) {
+      // One proposal naming one mapping twice cannot be applied once and is not
+      // two mappings either.
+      throw new CommandError("mapping-conflict");
+    }
+    named.add(identity);
+  }
+  const selectedEntries = directoriesOf(
+    command.publication === null ? undefined : command.publication.proposedManifest,
+  );
+  for (const mapping of command.mappings) {
+    applyMapping(storage, mapping, selectedEntries);
   }
 
   const journalEventIds: string[] = [];
@@ -319,6 +388,12 @@ function publish(storage: OwnerStorage, acquisitionId: string, command: CommitCo
     return corrupt("a retained Workspace root disagrees with the identity it is stored under");
   }
 
+  // Whether it was just written or was already there, the root the pointer is
+  // about to name is proved to be a complete materializable root — the same
+  // proof the read boundary applies, so a root cannot be publishable by one
+  // path and refused by the other.
+  validateRetainedRoot(storage, proposal.proposedWorkspaceRootId);
+
   // Compare-and-set. Two commits racing one frontier cannot both move it.
   storage.sql.exec(
     "UPDATE workspace_state SET current_root_id = ? WHERE singleton_id = 1 AND current_root_id = ?",
@@ -336,29 +411,85 @@ function publish(storage: OwnerStorage, acquisitionId: string, command: CommitCo
 }
 
 /**
- * One retained mapping, inserted or confirmed.
+ * Where a mapping's checkout has to exist, for the mapping to be true.
  *
- * Creation identity is immutable: a second proposal naming the same Repository
- * must describe the same Repository, and one that does not is refused rather
- * than allowed to rewrite what an earlier execution established.
+ * A Repository or Worktree row names a checkout path, and the row is only
+ * meaningful if the Workspace this commit selects actually contains it. A
+ * mapping-only commit that invented a checkout would retain a claim about a
+ * directory nothing put there, and the next execution would find the claim and
+ * not the files.
  */
-function applyMapping(storage: OwnerStorage, mapping: ProposedMapping): void {
+function requirePlacement(
+  mapping: ProposedMapping,
+  selectedEntries: ReadonlySet<string> | undefined,
+): void {
+  if (mapping.kind === "agent-session") {
+    return;
+  }
+  if (selectedEntries === undefined) {
+    // No publication accompanies this commit, so nothing can have created the
+    // checkout. An exact confirmation of an already-retained mapping is still
+    // admissible — that is decided below, once the existing row is read.
+    return;
+  }
+  if (!selectedEntries.has(mapping.record.checkoutPath)) {
+    throw new CommandError("mapping-conflict");
+  }
+}
+
+/** Every directory the selected root contains, for placement checks. */
+function directoriesOf(manifest: string | undefined): ReadonlySet<string> | undefined {
+  if (manifest === undefined) {
+    return undefined;
+  }
+  const parsed = parseWorkspaceRootManifest(manifest, () => {
+    throw new CommandError("malformed-member");
+  });
+  return new Set(
+    parsed.entries.flatMap((entry) => (entry.kind === "directory" ? [entry.path] : [])),
+  );
+}
+
+function sameText(row: Record<string, unknown>, column: string, expected: string | null): boolean {
+  const value = row[column];
+  return expected === null ? value === null : value === expected;
+}
+
+/**
+ * One retained mapping, inserted or confirmed in full.
+ *
+ * Creation identity is immutable, so an existing row is compared on every field
+ * that establishes it — not on a convenient subset. A partial comparison would
+ * report performed for a proposal that disagrees with what an earlier execution
+ * established, and the disagreement would only surface later, as a checkout
+ * that is not what its record says.
+ */
+function applyMapping(
+  storage: OwnerStorage,
+  mapping: ProposedMapping,
+  selectedEntries: ReadonlySet<string> | undefined,
+): void {
   if (mapping.kind === "repository") {
     const record = mapping.record;
     const held = rows(
       storage,
-      `SELECT name, locator_fingerprint, requested_base, creation_commit, primary_branch,
+      `SELECT locator, locator_fingerprint, requested_base, creation_commit, primary_branch,
               object_format, checkout_path FROM workspace_repositories WHERE name = ?`,
       record.name,
     )[0];
     if (held === undefined) {
+      requirePlacement(mapping, selectedEntries);
+      if (selectedEntries === undefined) {
+        // A new checkout mapping with no Workspace publication to create it.
+        throw new CommandError("mapping-conflict");
+      }
       storage.sql.exec(
         `INSERT INTO workspace_repositories
           (name, locator, locator_fingerprint, requested_base, creation_commit,
            primary_branch, object_format, checkout_path)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         record.name,
-        record.locatorFingerprint,
+        mapping.locator,
         record.locatorFingerprint,
         record.requestedBase,
         record.creationCommit,
@@ -369,7 +500,9 @@ function applyMapping(storage: OwnerStorage, mapping: ProposedMapping): void {
       return;
     }
     if (
+      held["locator"] !== mapping.locator ||
       held["locator_fingerprint"] !== record.locatorFingerprint ||
+      !sameText(held, "requested_base", record.requestedBase) ||
       held["creation_commit"] !== record.creationCommit ||
       held["primary_branch"] !== record.primaryBranch ||
       held["object_format"] !== record.objectFormat ||
@@ -384,12 +517,26 @@ function applyMapping(storage: OwnerStorage, mapping: ProposedMapping): void {
     const record = mapping.record;
     const held = rows(
       storage,
-      `SELECT requested_branch, creation_commit, checkout_path FROM workspace_worktrees
-        WHERE repository_name = ? AND name = ?`,
+      `SELECT requested_branch, requested_base, creation_commit, checkout_path
+         FROM workspace_worktrees WHERE repository_name = ? AND name = ?`,
       record.repositoryName,
       record.name,
     )[0];
     if (held === undefined) {
+      // A Worktree exists inside a Repository. One that named none would be a
+      // checkout belonging to nothing.
+      const repository = rows(
+        storage,
+        "SELECT name FROM workspace_repositories WHERE name = ?",
+        record.repositoryName,
+      )[0];
+      if (repository === undefined) {
+        throw new CommandError("mapping-conflict");
+      }
+      requirePlacement(mapping, selectedEntries);
+      if (selectedEntries === undefined) {
+        throw new CommandError("mapping-conflict");
+      }
       storage.sql.exec(
         `INSERT INTO workspace_worktrees
           (repository_name, name, requested_branch, requested_base, creation_commit, checkout_path)
@@ -405,6 +552,7 @@ function applyMapping(storage: OwnerStorage, mapping: ProposedMapping): void {
     }
     if (
       held["requested_branch"] !== record.requestedBranch ||
+      !sameText(held, "requested_base", record.requestedBase) ||
       held["creation_commit"] !== record.creationCommit ||
       held["checkout_path"] !== record.checkoutPath
     ) {
@@ -416,7 +564,8 @@ function applyMapping(storage: OwnerStorage, mapping: ProposedMapping): void {
   const record = mapping.record;
   const held = rows(
     storage,
-    `SELECT provider, agent_command, session_identity, assertion_kind, assertion_value
+    `SELECT provider, agent_command, session_identity, policy,
+            assertion_kind, assertion_value, created_at
        FROM agent_sessions WHERE session_key = ?`,
     record.sessionKey,
   )[0];
@@ -441,8 +590,10 @@ function applyMapping(storage: OwnerStorage, mapping: ProposedMapping): void {
     held["provider"] !== record.provider ||
     held["agent_command"] !== record.agentCommand ||
     held["session_identity"] !== record.sessionIdentity ||
+    held["policy"] !== record.policy ||
     held["assertion_kind"] !== record.assertion.kind ||
-    held["assertion_value"] !== record.assertion.value
+    held["assertion_value"] !== record.assertion.value ||
+    held["created_at"] !== record.createdAt
   ) {
     throw new CommandError("mapping-conflict");
   }

@@ -58,6 +58,18 @@ export interface WorkspacePublication {
  * the run established; it never contacts or impersonates an Agent provider.
  */
 export type RetainedMapping =
-  | { readonly kind: "repository"; readonly record: RepositoryRecord }
+  | {
+      readonly kind: "repository";
+      readonly record: RepositoryRecord;
+      /**
+       * The admitted locator, which the record deliberately does not carry.
+       *
+       * A record is journal-safe and names only the fingerprint, because a
+       * locator can carry a credential and a journal is history. Storage needs
+       * the real thing to reattach, so it travels beside the record and its
+       * fingerprint must follow from it.
+       */
+      readonly locator: string;
+    }
   | { readonly kind: "worktree"; readonly record: WorktreeRecord }
   | { readonly kind: "agent-session"; readonly record: AgentSessionRecord };

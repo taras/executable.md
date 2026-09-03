@@ -18,6 +18,7 @@ import { env, evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
 import type { ExecutorObject } from "./support/executor-object.ts";
+import type { ExecutorObject as _ExecutorObject } from "./support/executor-object.ts";
 import {
   NEXT_BLOB_ID,
   NEXT_BYTES,
@@ -30,6 +31,7 @@ import {
 } from "./support/executor-object.ts";
 import { encodeBase64 } from "../../src/cloudflare/encoding.ts";
 import { sha256Hex } from "../../src/workspace/sha256.ts";
+import { locatorFingerprintOf } from "../../src/composition/records.ts";
 import { generateKeys, signToken, type TestKeys } from "./support/tokens.ts";
 
 let unique = 0;
@@ -67,14 +69,6 @@ async function admit(stub: ReturnType<typeof executor>): Promise<void> {
   expect(await on(stub, (owner) => owner.admitConnection({ token, release: POLICY.release }))).toBe(
     "admitted",
   );
-}
-
-function send(
-  stub: ReturnType<typeof executor>,
-  id: string,
-  command: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
-  return on(stub, (owner) => record(owner.send(1, JSON.stringify({ id, ...command }))));
 }
 
 /**
@@ -137,11 +131,14 @@ function event(name: string): string {
 }
 
 /** The repository mapping one proposal carries alongside its bytes. */
+const LOCATOR = "https://git.example.invalid/octo/app.git";
+
 const REPOSITORY = {
   kind: "repository",
+  locator: LOCATOR,
   record: {
     name: "app",
-    locatorFingerprint: "c".repeat(64),
+    locatorFingerprint: locatorFingerprintOf(LOCATOR),
     requestedBase: null,
     creationCommit: "9".repeat(40),
     primaryBranch: "main",
@@ -150,27 +147,23 @@ const REPOSITORY = {
   },
 };
 
-/** Stage the one piece the owner does not already hold. */
-async function stageNewContent(stub: ReturnType<typeof executor>): Promise<void> {
-  expect(
-    await send(stub, "stage-blob", {
-      command: "stage",
-      kind: "blob",
-      digest: NEXT_BLOB_ID,
-      bytes: encodeBase64(NEXT_BYTES),
-    }),
-  ).toMatchObject({ outcome: "performed" });
+/** Stage the one missing piece over an accepted connection. */
+async function stageThrough(socket: WebSocket): Promise<void> {
+  await ask(socket, "stage-blob", {
+    command: "stage",
+    kind: "blob",
+    digest: NEXT_BLOB_ID,
+    bytes: encodeBase64(NEXT_BYTES),
+  });
   const manifest = new TextEncoder().encode(
     JSON.stringify({ version: 1, chunks: [{ hash: NEXT_BLOB_ID, size: NEXT_BYTES.length }] }),
   );
-  expect(
-    await send(stub, "stage-manifest", {
-      command: "stage",
-      kind: "manifest",
-      digest: sha256Hex(manifest),
-      bytes: encodeBase64(manifest),
-    }),
-  ).toMatchObject({ outcome: "performed" });
+  await ask(socket, "stage-manifest", {
+    command: "stage",
+    kind: "manifest",
+    digest: sha256Hex(manifest),
+    bytes: encodeBase64(manifest),
+  });
 }
 
 function commit(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -189,14 +182,14 @@ describe("publishing one proposal", () => {
   it("adopts content, root, references, mapping, pointer and journal together", async () => {
     const stub = executor();
     await on(stub, (owner) => owner.initialize());
-    await admit(stub);
-    await stageNewContent(stub);
+    const socket = await connect(stub);
+    await stageThrough(socket);
 
     const before = await on(stub, (owner) => owner.published());
     expect(before).toMatchObject({ currentRootId: ROOT_ID, roots: 1, events: [] });
 
-    const answer = await send(stub, "publish", commit());
-    expect(answer).toMatchObject({ outcome: "performed" });
+    const answer = await ask(socket, "publish", commit());
+    expect(answer).toEqual(expect.objectContaining({ outcome: "performed" }));
     const value = record(answer["value"]);
     expect(value["workspaceRootId"]).toBe(NEXT_ROOT_ID);
     expect(Array.isArray(value["journalEventIds"]) && value["journalEventIds"]).toHaveLength(1);
@@ -215,19 +208,19 @@ describe("publishing one proposal", () => {
     expect(after["blobRefs"]).toBe(3);
 
     // And the new frontier reads back whole.
-    const frontier = record(record(await send(stub, "read", { command: "frontier" }))["value"]);
+    const frontier = record(record(await ask(socket, "read", { command: "frontier" }))["value"]);
     expect(frontier["workspaceRootId"]).toBe(NEXT_ROOT_ID);
     expect(
-      record(await send(stub, "root", { command: "root", workspaceRootId: NEXT_ROOT_ID })),
+      record(await ask(socket, "root", { command: "root", workspaceRootId: NEXT_ROOT_ID })),
     ).toMatchObject({ outcome: "performed" });
   });
 
   it("keeps the expected root current for a journal-only transaction", async () => {
     const stub = executor();
     await on(stub, (owner) => owner.initialize());
-    await admit(stub);
-    const answer = await send(
-      stub,
+    const socket = await connect(stub);
+    const answer = await ask(
+      socket,
       "journal-only",
       commit({ publication: null, mappings: [], events: [event("noted")] }),
     );
@@ -241,9 +234,9 @@ describe("publishing one proposal", () => {
   it("commits an empty transaction without inventing a Workspace change", async () => {
     const stub = executor();
     await on(stub, (owner) => owner.initialize());
-    await admit(stub);
+    const socket = await connect(stub);
     expect(
-      await send(stub, "empty", commit({ publication: null, mappings: [], events: [] })),
+      await ask(socket, "empty", commit({ publication: null, mappings: [], events: [] })),
     ).toMatchObject({ outcome: "performed", value: { workspaceRootId: ROOT_ID } });
     expect(await on(stub, (owner) => owner.published())).toMatchObject({
       currentRootId: ROOT_ID,
@@ -255,8 +248,8 @@ describe("publishing one proposal", () => {
   it("rolls every category back when the transaction fails after applying", async () => {
     const stub = executor();
     await on(stub, (owner) => owner.initialize());
-    await admit(stub);
-    await stageNewContent(stub);
+    const socket = await connect(stub);
+    await stageThrough(socket);
     const before = await on(stub, (owner) => owner.published());
 
     expect(
@@ -269,7 +262,7 @@ describe("publishing one proposal", () => {
     // where they were — and so is the retry decision, so the same id is free.
     expect(await on(stub, (owner) => owner.published())).toEqual(before);
     expect(await on(stub, (owner) => owner.scratch())).toMatchObject({ commands: 2 });
-    expect(await send(stub, "doomed", commit())).toMatchObject({ outcome: "performed" });
+    expect(await ask(socket, "doomed", commit())).toMatchObject({ outcome: "performed" });
   });
 
   it("applies a lost-response retry exactly once, across eviction", async () => {
@@ -341,10 +334,10 @@ describe("publishing one proposal", () => {
     for (const [description, request] of Object.entries(cases)) {
       const stub = executor();
       await on(stub, (owner) => owner.initialize());
-      await admit(stub);
-      await stageNewContent(stub);
+      const socket = await connect(stub);
+      await stageThrough(socket);
       const before = await on(stub, (owner) => owner.published());
-      const answer = await send(stub, "refused", request);
+      const answer = await ask(socket, "refused", request);
       expect([description, answer["outcome"]]).toEqual([description, "refused"]);
       expect([description, await on(stub, (owner) => owner.published())]).toEqual([
         description,
@@ -356,27 +349,27 @@ describe("publishing one proposal", () => {
   it("refuses content this acquisition did not stage", async () => {
     const stub = executor();
     await on(stub, (owner) => owner.initialize());
-    await admit(stub);
+    const socket = await connect(stub);
     // Nothing staged: the proposal names a piece the owner neither holds nor
     // was given by this connection.
     const before = await on(stub, (owner) => owner.published());
-    expect(await send(stub, "unstaged", commit())).toMatchObject({ outcome: "refused" });
+    expect(await ask(socket, "unstaged", commit())).toMatchObject({ outcome: "refused" });
     expect(await on(stub, (owner) => owner.published())).toEqual(before);
   });
 
   it("refuses a mapping that would rewrite an established identity", async () => {
     const stub = executor();
     await on(stub, (owner) => owner.initialize());
-    await admit(stub);
-    await stageNewContent(stub);
-    expect(await send(stub, "first", commit())).toMatchObject({ outcome: "performed" });
+    const socket = await connect(stub);
+    await stageThrough(socket);
+    expect(await ask(socket, "first", commit())).toMatchObject({ outcome: "performed" });
     const published = await on(stub, (owner) => owner.published());
 
     // The same Repository name, a different creation commit. Creation identity
     // is immutable, so this is refused rather than allowed to overwrite it.
     expect(
-      await send(
-        stub,
+      await ask(
+        socket,
         "second",
         commit({
           expectedWorkspaceRootId: NEXT_ROOT_ID,
@@ -394,11 +387,198 @@ describe("publishing one proposal", () => {
     expect(await on(stub, (owner) => owner.published())).toEqual(published);
   });
 
+  it("retains only records that are exactly what the serializer produced", async () => {
+    // A record the database will accept as JSON is not a durable event. One
+    // retained here would be history a later read cannot parse, and the run
+    // would become unreplayable at the moment it was told it had committed.
+    const valid = event("real");
+    const cases: Record<string, string> = {
+      "JSON that is not an event": "{}",
+      "an event without its terminating newline": valid.trimEnd(),
+      "a noncanonical re-encoding": `${JSON.stringify(JSON.parse(valid.trimEnd()), null, 1)}\n`,
+      "not JSON at all": "event-1",
+    };
+    for (const [description, record_] of Object.entries(cases)) {
+      const stub = executor();
+      await on(stub, (owner) => owner.initialize());
+      const socket = await connect(stub);
+      const before = await on(stub, (owner) => owner.published());
+      const answer = await ask(
+        socket,
+        "bad-event",
+        commit({ publication: null, mappings: [], events: [record_] }),
+      );
+      // The id is empty because the command never finished parsing: an id is
+      // echoed once the request has been read, and this one was not.
+      expect([description, answer]).toEqual([
+        description,
+        { id: "", outcome: "refused", refusal: "command:malformed-member" },
+      ]);
+      expect([description, await on(stub, (owner) => owner.published())]).toEqual([
+        description,
+        before,
+      ]);
+      // Nothing recorded a decision for work that never happened. A malformed
+      // member is a broken channel rather than an answer, so the connection is
+      // gone too — which is why the ledger is read through the object.
+      expect([description, await on(stub, (owner) => owner.scratch())]).toEqual([
+        description,
+        { commands: 0, staged: 0 },
+      ]);
+    }
+  });
+
+  it("refuses a mapping that disagrees with retained identity in any field", async () => {
+    const stub = executor();
+    await on(stub, (owner) => owner.initialize());
+    // A real accepted connection: this walks several cases and a pair socket
+    // does not survive the object being reset between them.
+    const socket = await connect(stub);
+    await stageThrough(socket);
+    expect(await ask(socket, "first", commit())).toMatchObject({ outcome: "performed" });
+    const published = await on(stub, (owner) => owner.published());
+    const anchor = String((published["events"] as Record<string, unknown>[])[0]?.["event_id"]);
+
+    // Every field that establishes creation identity, one at a time. A partial
+    // comparison would report performed for a proposal that disagrees with what
+    // an earlier execution established.
+    const conflicts: Record<string, Record<string, unknown>> = {
+      "a different locator, with its own fingerprint": {
+        kind: "repository",
+        locator: "https://git.example.invalid/other.git",
+        record: {
+          ...REPOSITORY.record,
+          locatorFingerprint: locatorFingerprintOf("https://git.example.invalid/other.git"),
+        },
+      },
+      "a different requested base": {
+        ...REPOSITORY,
+        record: { ...REPOSITORY.record, requestedBase: "release" },
+      },
+      "a different creation commit": {
+        ...REPOSITORY,
+        record: { ...REPOSITORY.record, creationCommit: "1".repeat(40) },
+      },
+      "a different primary branch": {
+        ...REPOSITORY,
+        record: { ...REPOSITORY.record, primaryBranch: "trunk" },
+      },
+      "a different checkout path": {
+        ...REPOSITORY,
+        record: { ...REPOSITORY.record, checkoutPath: "/elsewhere" },
+      },
+    };
+    for (const [description, mapping] of Object.entries(conflicts)) {
+      const answer = await ask(
+        socket,
+        `conflict-${description}`,
+        commit({
+          expectedWorkspaceRootId: NEXT_ROOT_ID,
+          expectedJournalEventId: anchor,
+          publication: null,
+          mappings: [mapping],
+          events: [],
+        }),
+      );
+      expect([description, answer["refusal"]]).toEqual([description, "command:mapping-conflict"]);
+      expect([description, await on(stub, (owner) => owner.published())]).toEqual([
+        description,
+        published,
+      ]);
+    }
+  });
+
+  it("refuses a new checkout mapping that no publication creates", async () => {
+    const stub = executor();
+    await on(stub, (owner) => owner.initialize());
+    const socket = await connect(stub);
+    const before = await on(stub, (owner) => owner.published());
+
+    // A mapping-only commit would retain a claim about a directory nothing put
+    // there, and the next execution would find the claim and not the files.
+    expect(
+      await ask(
+        socket,
+        "no-publication",
+        commit({ publication: null, mappings: [REPOSITORY], events: [] }),
+      ),
+    ).toMatchObject({ refusal: "command:mapping-conflict" });
+    expect(await on(stub, (owner) => owner.published())).toEqual(before);
+
+    // A Worktree whose Repository is neither retained nor proposed belongs to
+    // nothing.
+    await stageThrough(socket);
+    expect(
+      await ask(
+        socket,
+        "orphan-worktree",
+        commit({
+          mappings: [
+            {
+              kind: "worktree",
+              record: {
+                repositoryName: "absent",
+                name: "feature",
+                requestedBranch: "feature",
+                requestedBase: null,
+                creationCommit: "2".repeat(40),
+                checkoutPath: "/app",
+              },
+            },
+          ],
+        }),
+      ),
+    ).toMatchObject({ refusal: "command:mapping-conflict" });
+    expect(await on(stub, (owner) => owner.published())).toEqual(before);
+  });
+
+  it("refuses one proposal naming one mapping twice", async () => {
+    const stub = executor();
+    await on(stub, (owner) => owner.initialize());
+    const socket = await connect(stub);
+    await stageThrough(socket);
+    const before = await on(stub, (owner) => owner.published());
+    expect(
+      await ask(socket, "duplicate", commit({ mappings: [REPOSITORY, REPOSITORY] })),
+    ).toMatchObject({ refusal: "command:mapping-conflict" });
+    expect(await on(stub, (owner) => owner.published())).toEqual(before);
+  });
+
+  it("refuses to append history over a current root that is damaged", async () => {
+    // A commit accepts its starting root as the run's frontier. One whose graph
+    // cannot be materialized is not a frontier, and a proposal is not a licence
+    // to repair it.
+    const damage: Record<string, (owner: ExecutorObject) => void> = {
+      "a blob whose bytes are not its identity": (owner) => owner.damageRetainedBlob(),
+      "a blob whose recorded size is wrong": (owner) => owner.damageBlobSize(),
+      "a manifest whose recorded size is wrong": (owner) => owner.damageManifestSize(),
+      "a reference no manifest names": (owner) =>
+        owner.addExtraBlobReference(new TextEncoder().encode("unaccounted for")),
+    };
+    for (const [description, arrange] of Object.entries(damage)) {
+      const stub = executor();
+      await on(stub, (owner) => owner.initialize());
+      await on(stub, arrange);
+      const socket = await connect(stub);
+      const before = await on(stub, (owner) => owner.published());
+      const answer = await ask(
+        socket,
+        "over-damage",
+        commit({ publication: null, mappings: [], events: [event("noted")] }),
+      );
+      expect([description, answer["refusal"]]).toEqual([description, "storage:corrupt"]);
+      expect([description, await on(stub, (owner) => owner.published())]).toEqual([
+        description,
+        before,
+      ]);
+    }
+  });
+
   it("grants a closed or foreign socket no publication", async () => {
     const stub = executor();
     await on(stub, (owner) => owner.initialize());
-    await admit(stub);
-    await stageNewContent(stub);
+    const socket = await connect(stub);
+    await stageThrough(socket);
     const before = await on(stub, (owner) => owner.published());
     expect(
       await on(stub, (owner) =>

@@ -20,6 +20,7 @@
  * a record at all.
  */
 
+import { sha256Hex } from "../workspace/sha256.ts";
 import type { Json } from "@executablemd/durable-streams";
 import { members, optionalText, text } from "./parse.ts";
 
@@ -100,6 +101,17 @@ const WORKTREE_MEMBERS = [
   "creationCommit",
   "checkoutPath",
 ] as const;
+
+/**
+ * The stable name an admitted locator is known by everywhere but its own column.
+ *
+ * Shared because both hosts retain it and both must derive it identically: a
+ * fingerprint is what a journal event carries in place of the locator, and two
+ * derivations would be two names for one repository.
+ */
+export function locatorFingerprintOf(locator: string): string {
+  return sha256Hex(locator);
+}
 
 export function parseObjectFormat(value: unknown): GitObjectFormat | undefined {
   return value === "sha1" || value === "sha256" ? value : undefined;
