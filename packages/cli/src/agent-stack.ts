@@ -1,14 +1,14 @@
 /**
- * The one Agent configuration an invocation resolves, and the two things a
- * host does with it (specs/acp-client-spec.md §Command-line configuration).
+ * The Agent configuration an invocation resolves, and what a host does with it
+ * (specs/acp-client-spec.md §Command-line configuration).
  *
- * `xmd run` and `xmd plan` take the same Agent, permission and provider
- * options, so they resolve them once, here, rather than each reading the flags
- * again. What they do with the result differs, and deliberately: a run installs
- * the registered provider into the Agent Api so a document may reach it, while
- * `xmd plan` hands the same answer to two consumers — the authorship profile, which
- * takes the provider name and the default agent and nothing else, and the
- * approved document, which runs the ordinary run stack.
+ * Two commands ask, and they ask for different amounts. `xmd run` settles the
+ * whole of it and installs the registered provider into the Agent Api so a
+ * document may reach it. `xmd plan` writes a program and runs none, so it
+ * settles only who writes — the provider name, the default agent and the
+ * adapters this build carries — and hands that to the authorship profile.
+ * Resolving it once, here, is what keeps `DEFAULT_AGENT_NAME` from being read
+ * twice and answered differently.
  *
  * `agent-config.ts` stays the pure flag-to-permission mapping. This module is
  * where the environment, the provider registry and the host's own machine
@@ -54,9 +54,9 @@ export const DEFAULT_ADAPTER_ROOT: string = join(homedir(), ".xmd", "adapters");
  * Who writes, and what this host launches them with.
  *
  * The whole of what Plan authorship settles. There is no permission mode here
- * because authorship has none to select: the frame `<Plan>` installs denies
- * every native request outright, and a flag that could widen it would be a
- * command line reaching into a ceiling the host owns.
+ * because the authorship frame installs its own fixed one, and no command line
+ * selects it: the flags that choose a permission mode configure a document
+ * execution, and `xmd plan` starts none.
  */
 export interface AuthorshipStack {
   /** The provider name the caller selected, already known to be registered. */

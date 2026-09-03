@@ -45,6 +45,7 @@ import {
   useWorkingDirectory,
 } from "./support/plan-harness.ts";
 import { makeStore } from "./support/fake-acp.ts";
+import { planComponentDescription, structuralValidation } from "../src/plan-component.ts";
 import type { PlanHarness } from "./support/plan-harness.ts";
 
 const REQUEST = "write a greeting";
@@ -562,8 +563,8 @@ describe(
         expect(lines).toHaveLength(1);
         expect(lines[0]).toContain("was made for this conversation and is already gone");
         expect(lines[0]).not.toContain("does not validate");
-        // The Plan was approved and still reached nothing: no admission that
-        // could have delivered it, no output file, no execution and so no journal.
+        // The Plan was approved and still reached nothing: no host gate that
+        // could have delivered it, and no output file.
         expect(harness.reviews).toHaveLength(1);
         expect(yield* exists(join(dir, "out.md"))).toBe(false);
         expect(yield* until(readdir(dir))).toEqual([]);
@@ -573,7 +574,7 @@ describe(
       // given empty and did not leave empty is preserved and the command fails:
       // something wrote there while the conversation ran, and this host
       // authorized nothing to. The draft was approved first, so what is being
-      // observed is a Plan that would otherwise have been written and run.
+      // observed is a Plan that would otherwise have been delivered.
       yield* useWorkingDirectory(function* (dir, authorshipRoot) {
         const harness = createPlanHarness({ authorshipRoot });
         harness.fake.script({ reply: VALID });
@@ -606,8 +607,8 @@ describe(
         expect(yield* exists(String(workdir))).toBe(true);
         expect(yield* readTextFile(String(planted))).toBe("not this command's doing\n");
 
-        // And nothing after the failure began: no output file, and no execution — so no
-        // journal, which only an execution creates.
+        // And nothing after the failure began: no output file, and nothing else
+        // written beside it.
         expect(yield* exists(join(dir, "out.md"))).toBe(false);
         expect(yield* until(readdir(dir))).toEqual([]);
       });
@@ -1164,31 +1165,49 @@ describe(
       });
     });
 
-    it("C10: final admission vetoes after the profile has torn down", function* () {
+    it("C10: the host's own gate refuses after the command document has settled", function* () {
       yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        // A repository component the draft uses. It exists while the command
-        // document runs, so the same production validator that answers
-        // <CheckDraft> finds the draft sound.
+        // A repository component the draft uses. It is there while the Component
+        // decides — twice, at the draft check and at the admission — and gone by
+        // the time the command asks the same question for itself.
         const widget = join(dir, "Widget.md");
         yield* writeTextFile(widget, "A widget.\n");
         const draft = ["# Uses a widget", "", "<Widget />", ""].join("\n");
+        const out = join(dir, "release.md");
 
         const harness = createPlanHarness({ authorshipRoot });
         harness.fake.script({ reply: draft });
+        harness.script({ decision: "Approve" });
+
+        // The one structural check this invocation has — the same production
+        // answer the command builds, wrapped so the case can see each time it is
+        // asked and act between the last one inside the Component and the one
+        // after. Three answers: the draft check, `<AdmitPlan>`, and the host.
+        const canonical = structuralValidation([dir], [yield* planComponentDescription()]);
         const events: string[] = [];
-        harness.deps.installElicitation = function* () {
-          // Registered inside the profile's scope, so it runs while that scope
-          // is being torn down — after the provider is gone and before the host
-          // looks at what was approved.
-          yield* ensure(function* () {
-            events.push("teardown");
+        const outcomes: string[] = [];
+        harness.deps.validate = function* (candidate) {
+          const validation = yield* canonical(candidate);
+          outcomes.push(validation.outcome);
+          events.push(["draft check", "admission", "host gate"][outcomes.length - 1]);
+          if (outcomes.length === 2) {
+            // Immediately after a real admission that succeeded. The approved
+            // bytes never change; the tree they resolve against does.
+            expect(validation.outcome).toBe("valid");
             yield* rm(widget, { force: true });
+          }
+          return validation;
+        };
+        harness.deps.installElicitation = function* () {
+          yield* ensure(() => {
+            events.push("authorship teardown");
           });
           yield* Elicitation.around(
             {
               // deno-lint-ignore require-yield
               *elicit([request], _next) {
                 harness.reviews.push(request);
+                events.push("review");
                 return { decision: "Approve" };
               },
             },
@@ -1196,40 +1215,40 @@ describe(
           );
         };
 
-        const written = console.error;
-        const lines: string[] = [];
-        const code = yield* scoped(function* (): Operation<number> {
-          yield* ensure(() => {
-            console.error = written;
-          });
-          console.error = (...parts: unknown[]) => {
-            events.push("reported");
-            lines.push(parts.map((part) => String(part)).join(" "));
-          };
-          return yield* runPlan(command(dir), harness.deps);
+        const { value, lines } = yield* reported(function* () {
+          const code = yield* runPlan({ ...command(dir), output: out }, harness.deps);
+          events.push("reported");
+          return code;
         });
 
-        // The draft was sound enough to approve, and the approved bytes are
-        // unchanged — only the tree they resolve against moved.
+        // The draft was sound, the person approved it, and the admission that
+        // followed the whole authorship frame coming down was sound too.
         expect(harness.reviews).toHaveLength(1);
         expect(harness.reviews[0].message).toContain("<Widget />");
+        expect(outcomes).toEqual(["valid", "valid", "invalid"]);
 
-        // The gate is effective on its own: the same bytes now fail, because they
-        // are structurally admitted again rather than being trusted for what the
-        // Component concluded while its own scope was still standing. The veto is
-        // the Component's own `<AdmitPlan>`, which is the first of the two gates to
-        // see these bytes after teardown; the command's property-aware gate
-        // still stands behind it and never gets to run.
-        expect(code).toBe(1);
-        expect(lines.join("\n")).toContain("the approved Plan does not validate");
+        // The order is the claim: the Component decided while the component file
+        // was there, the frame came down, and only then did the host ask again —
+        // about a tree that had moved.
+        expect(events).toEqual([
+          "draft check",
+          "review",
+          "authorship teardown",
+          "admission",
+          "host gate",
+          "reported",
+        ]);
+
+        // So the refusal is the command's own, after everything the conversation
+        // built has gone. Deleting that gate leaves the third answer unasked and
+        // this invocation succeeding with a file on disk.
+        expect(value).toBe(1);
+        expect(lines.join("\n")).toContain("the approved document does not validate");
         expect(lines.join("\n")).toContain("component-unresolved");
         expect(lines.join("\n")).toContain("Widget");
 
-        // And it is ordered: teardown finished first, which is the only reason
-        // the component was missing when the second validation ran.
-        expect(events).toEqual(["teardown", "reported"]);
-
-        // Nothing after the veto happened.
+        // And nothing after it happened: no artifact, and no effect from a
+        // program this command never starts.
         expect((yield* until(readdir(dir))).sort()).toEqual([]);
       });
     });

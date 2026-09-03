@@ -43,7 +43,12 @@ import {
   useWorkingDirectory,
 } from "./support/plan-harness.ts";
 import type { PlanDeclarationHarness } from "./support/plan-harness.ts";
-import { PLAN_ORIGIN, planComponentDescription } from "../src/plan-component.ts";
+import {
+  PLAN_ORIGIN,
+  planComponentDescription,
+  structuralValidation,
+} from "../src/plan-component.ts";
+import type { StructuralValidation } from "../src/plan-component.ts";
 import { syntaxCatalog } from "../src/syntax.ts";
 
 const ROOT = "document.md";
@@ -94,7 +99,7 @@ function* runDocument(options: {
     permissionMode: "deny-all";
     adapters: typeof ADAPTERS;
   } | null;
-  assess?: (source: string) => Operation<{ valid: boolean; diagnostics: Json }>;
+  validate?: StructuralValidation;
   session?: string;
   props?: Record<string, Json>;
   /**
@@ -118,7 +123,7 @@ function* runDocument(options: {
       authorshipRoot: root,
       ...(options.includes === undefined ? {} : { includes: options.includes }),
       ...(options.stack === undefined ? {} : { stack: options.stack }),
-      ...(options.assess === undefined ? {} : { assess: options.assess }),
+      ...(options.validate === undefined ? {} : { validate: options.validate }),
     }));
   if (options.reply !== undefined) {
     harness.fake.script({ reply: options.reply });
@@ -480,16 +485,28 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
 
   it("PC12: a Plan that is not structurally a program binds nothing", function* () {
     yield* useWorkingDirectory(function* () {
+      // The draft check and the admission are one question asked twice, of a
+      // tree that may have moved between them: the draft resolved everything it
+      // names while the conversation was standing, and by the time the
+      // authorship frame had gone it did not. Only the second answer decides
+      // what may be returned.
+      const canonical = structuralValidation([], [yield* planComponentDescription()]);
+      let answered = 0;
       const run = yield* runDocument({
-        // Approved by the check this case scripts, and refused by the admission
-        // that follows teardown: the two are different questions, and only the
-        // second decides what may be returned.
         source: ['<Plan as="approved">Write a program.</Plan>', "", "got: {approved}", ""].join(
           "\n",
         ),
         reply: "<Nonexistent />\n",
+        *validate(candidate) {
+          answered += 1;
+          return answered === 1
+            ? { version: 1, outcome: "valid", diagnostics: [], invocations: [] }
+            : yield* canonical(candidate);
+        },
       });
 
+      // Two answers, and the second is the one that refused.
+      expect(answered).toBe(2);
       expect(run.failure).toContain("the approved Plan does not validate");
       expect(run.failure).toContain("component-unresolved");
       expect(run.output).not.toContain("got:");

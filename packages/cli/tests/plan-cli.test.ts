@@ -36,6 +36,7 @@ import * as cliModule from "../src/cli.ts";
 import { runPlan } from "../src/plan.ts";
 import type { PlanCommand } from "../src/plan.ts";
 import type { AuthorshipStack } from "../src/agent-stack.ts";
+import { planComponentDescription, structuralValidation } from "../src/plan-component.ts";
 import {
   namesPlan,
   namesRetiredCommand,
@@ -304,8 +305,25 @@ describe(
   () => {
     it("PS4: plan help states the retained grammar and both compositions", function* () {
       yield* useWorkingDirectory(function* (dir) {
+        // Every retained option beside `--help`: help is still help, and none
+        // of them turns it into a refusal.
         const { code, stdout, stderr } = yield* runCli(
-          ["plan", "--help", "--output", "out.md", "--default-agent", "xmd-nonexistent-agent"],
+          [
+            "plan",
+            "--help",
+            "--output",
+            "out.md",
+            "--session",
+            "ada",
+            "--include",
+            "lib",
+            "--timeout",
+            "5s",
+            "--agent-provider",
+            "acpx",
+            "--default-agent",
+            "xmd-nonexistent-agent",
+          ],
           { cwd: dir },
         ).join();
 
@@ -390,6 +408,18 @@ describe(
       // option that takes a value, are the two places a hidden switch survives.
       yield* refusedEarly(["--run", REQUEST], RUN_REMOVAL_REFUSAL);
       yield* refusedEarly([REQUEST, "--include", "--run"], RUN_REMOVAL_REFUSAL);
+
+      // Including beside `--help`, in either order. `--help` is lifted out of
+      // argv before any command's own grammar runs, so this is the one place a
+      // removed option could be answered with a page describing a command that
+      // would refuse it.
+      for (const argv of [
+        ["--help", "--run"],
+        ["--run", "--help"],
+      ]) {
+        const { stderr } = yield* refusedEarly(argv, RUN_REMOVAL_REFUSAL);
+        expect(complaints(stderr)).toBe(RUN_REMOVAL_REFUSAL);
+      }
     });
 
     it("PS3: every other removed option refuses before authorship", function* () {
@@ -425,6 +455,21 @@ describe(
         [REQUEST, "--secret-detection=yes"],
         removedOptionRefusal("--secret-detection"),
       );
+
+      // Beside `--help`, in either order, exactly as `--run` is.
+      for (const argv of [
+        ["--help", "--journal", "trace.jsonl"],
+        ["--journal", "trace.jsonl", "--help"],
+      ]) {
+        const { stderr } = yield* refusedEarly(argv, removedOptionRefusal("--journal"));
+        expect(complaints(stderr)).toBe(removedOptionRefusal("--journal"));
+      }
+
+      // A name that merely begins like a property option is an option this
+      // command does not define, and is answered as one.
+      for (const name of ["--propspective", "--no-propspective", "--no-props"]) {
+        yield* refusedEarly([REQUEST, name], `unrecognized option for xmd plan: ${name}`);
+      }
     });
 
     it("PS1: exactly one request, and an unknown option is refused not dropped", function* () {
@@ -691,26 +736,31 @@ describe(
         harness.script({ decision: "Approve" });
       });
 
-      // The bytes stopped validating between the draft check and the gate after
-      // teardown: the component the draft names is removed while the authorship
-      // frame is coming down.
-      yield* ends("structural refusal", function* (harness, dir) {
+      // The host's own gate, after the command document has settled. The draft
+      // check and `<AdmitPlan>` both really validate and both succeed; the
+      // component the draft names is removed immediately after that successful
+      // admission, so the only thing left to catch it is the check this command
+      // keeps for itself.
+      yield* ends("host structural refusal", function* (harness, dir) {
         const widget = join(dir, "Widget.md");
         yield* writeTextFile(widget, "A widget.\n");
         harness.fake.script({ reply: ["# Uses a widget", "", "<Widget />", ""].join("\n") });
-        harness.deps.installElicitation = function* () {
-          yield* ensure(() => rm(widget, { force: true }));
-          yield* Elicitation.around(
-            {
-              // deno-lint-ignore require-yield
-              *elicit([request], _next) {
-                harness.reviews.push(request);
-                return { decision: "Approve" };
-              },
-            },
-            { at: "min" },
-          );
+        harness.script({ decision: "Approve" });
+
+        const canonical = structuralValidation([dir], [yield* planComponentDescription()]);
+        const outcomes: string[] = [];
+        harness.deps.validate = function* (candidate) {
+          const validation = yield* canonical(candidate);
+          outcomes.push(validation.outcome);
+          if (outcomes.length === 2) {
+            yield* rm(widget, { force: true });
+          }
+          return validation;
         };
+        yield* ensure(() => {
+          // Two sound answers inside the Component, and a third that refuses.
+          expect(outcomes).toEqual(["valid", "valid", "invalid"]);
+        });
       });
 
       // A host whose settled provider supplies no Agent context for `<Plan>`.

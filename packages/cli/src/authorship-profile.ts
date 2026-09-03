@@ -108,8 +108,6 @@ export interface AuthorshipProfile {
   root: string;
   /** The Agent context this host can give a Plan, or why it can give none. */
   context: Result<PlanAuthorship>;
-  /** Who answers the review question. */
-  installElicitation(): Operation<void>;
   /**
    * The `<Plan>` declaration this command runs under.
    *
@@ -119,15 +117,6 @@ export interface AuthorshipProfile {
    * could supply or a document could reach.
    */
   declaration: DeclaredMarkdownComponent;
-  /**
-   * The host's assessment of one candidate.
-   *
-   * A candidate-authored failure comes back as `valid: false` and is repairable.
-   * A caller-source failure raises, which ends that execution: the document
-   * has no way to catch it and no way to recategorize it as feedback
-   * for an agent that could not have caused it.
-   */
-  assess(source: string): Operation<CandidateAssessment>;
 }
 
 /** What building the constrained provider needs, and nothing more. */
@@ -145,9 +134,9 @@ export interface AuthorshipProviderInputs {
  * middleware can reach or replace — which is what keeps "who may write a Plan"
  * a question about the host rather than about what a document arranged.
  *
- * Availability is all it decides. What the Plan then runs under — the permission
- * mode, the prompt-failure policy, the capability refusals and the session
- * directory — is {@link installAuthorshipFrame}'s fixed policy, identical for
+ * Availability is all it decides. What writing a Plan then happens under — the
+ * permission mode, the prompt-failure policy, the capability refusals and the
+ * session directory — is {@link installAuthorshipFrame}'s fixed policy, identical for
  * every provider, so a second implementation cannot quietly bring a weaker one.
  */
 export interface PlanAuthorship {
@@ -621,7 +610,7 @@ function* establishDirectory(directory: string): Operation<Result<string>> {
         new Error(
           `${directory} is not empty, and xmd plan writes a Plan in a directory of its own ` +
             "with nothing in it. Move or remove what is in there, or name a different " +
-            "--session; nothing was written",
+            "--session; nothing was written or run",
         ),
       );
     }
@@ -664,14 +653,14 @@ function* releaseSessionDirectory(directory: string, claim: DirectoryClaim): Ope
       throw new Error(
         `${directory} was made for this conversation and is already gone. Something removed ` +
           "it while the conversation was still running, which nothing here is allowed to do; " +
-          "nothing was output",
+          "nothing was output or run",
       );
     }
     if (code === "ENOTEMPTY" || code === "EEXIST") {
       throw new Error(
         `${directory} was empty when this conversation started and is not now. It belongs to ` +
           "one invocation, so nothing should have written there; its contents were left alone " +
-          "and nothing was output",
+          "and nothing was output or run",
       );
     }
     throw error instanceof Error ? error : new Error(String(error));

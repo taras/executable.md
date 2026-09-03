@@ -179,6 +179,19 @@ candidate schema. It is refused wherever it stands — before the request, after
 it, beside a retained option, and in the place a retained option's value would
 otherwise have swallowed it.
 
+**Including beside `--help`.** `--help` is lifted out of the command line before
+any command's own grammar runs, so a removed option written beside it would
+otherwise be answered with a page describing a command that would refuse the
+caller. The removal is decided first, in either order, from the same
+classification the rest of the grammar uses — so a spelling cannot be removed to
+one and unknown to the other. Help that names no removed option is still help.
+
+The root-property options are exactly the aggregate `--props`, the generated
+`--props-<name>` and the generated `--no-props-<name>`. A name that merely
+begins like one — `--propspective`, `--no-propspective`, a bare `--no-props` —
+is an option this command does not define and is answered as one: sending a
+caller to `xmd run` would be answering a question they did not ask.
+
 Every `--run` spelling — the bare switch, `--run=true`, `--run=false`, `--run=`,
 any other valued form, and repeated occurrences — reports the migration:
 
@@ -507,10 +520,13 @@ cannot replace it. Its result is a closed candidate assessment: either
 `{ valid: true, diagnostics: {} }`, or `{ valid: false, diagnostics }` carrying
 the complete versioned `DocumentValidation` core produced.
 
-The component performs no candidate execution. For each source it calls
-`validateDocumentStructure()` with the caller's ordered includes, the run
-profile's identity-component declarations and the packaged `<Plan>` description
-— the same vocabulary the catalog showed the agent.
+The component performs no candidate execution. It asks the invocation's one
+structural check — `validateDocumentStructure()` under the ordinary run-profile
+registry, the `<plan>` identity, the caller's ordered includes and the run
+profile's declarations, which include `<Plan>` itself because the catalog the
+agent was shown says the profile has it. The admission that follows teardown and
+the command's own gate ask that same check, so the three cannot come to differ
+about what a program is for a reason nobody chose.
 
 **Structure, not values.** Every check `validateDocument()` makes is made here
 except one: the root's own props are not validated against values, because there
@@ -619,10 +635,19 @@ successful public result is the approved Plan source and nothing else.
 After the command document has completely torn down, the host treats the
 returned string as untrusted again. It structurally validates the exact returned
 bytes under the `<plan>` identity, the caller's ordered `--include` values and
-the ordinary run profile declarations — the same structural contract `<Plan>`'s
-own `<AdmitPlan>` applies, and for the same reason: what runs a Plan later
-resolves the property values, so this gate asks only whether the source is a
-program.
+the ordinary run profile declarations.
+
+It is not a second contract. The invocation settles **one** structural check and
+hands the same one to the draft check inside `<CheckDraft>`, to the admission
+inside `<AdmitPlan>` and to itself — so what those three can disagree about is
+not the question but *when* it was asked. `<AdmitPlan>` answers while the
+Component still exists; this gate answers after the whole conversation, its
+provider, its Elicitation and its session directory have gone, about a tree that
+had all of that time to move. A component the approved Plan names, removed after
+a successful admission, is refused here and nowhere else.
+
+What it asks is structure alone, for the same reason `<AdmitPlan>` does: what
+runs a Plan later resolves the property values.
 
 A validation failure exits non-zero before any result at all: no stdout and no
 file. It does not re-enter the command document or ask for a repair.
@@ -706,13 +731,13 @@ neither observation never interpreted what it wrote.
 | --- | --- | --- |
 | PS1 | Fixed grammar | Every retained option is accepted before and after the request, one request is preserved byte for byte, and a second positional is refused with the approved sentence |
 | PS2 | The removed switch | Bare, valued, repeated, before-request, after-request and value-position `--run` forms all return the exact migration text, before any catalog, Agent, session, review, filesystem or document activity |
-| PS3 | The removed options | One representative of every other removed class, both short aliases, and the aggregate and generated property names return the exact generic refusal before authorship, ahead of the shared timeout and secret-detection grammar checks |
-| PS4 | Help | The complete `xmd plan --help` output and the program summary contain only the retained grammar and both explicit compositions; no removed option appears anywhere in either |
+| PS3 | The removed options | One representative of every other removed class, both short aliases, and the aggregate and generated property names return the exact generic refusal before authorship, ahead of the shared timeout and secret-detection grammar checks; a name that merely begins like a property option keeps the generic unknown-option refusal |
+| PS4 | Help | The complete `xmd plan --help` output and the program summary contain only the retained grammar and both explicit compositions; no removed option appears anywhere in either. Help beside every retained option is still help; help beside a removed one, in either order, is that option's refusal |
 | PS5 | Run is unchanged | `xmd run --help` still exposes its execution, prop, permission, timeout, presentation, journal and secret-detection options |
 | PS6 | Stdout | Approval without `--output` writes the exact source once, with no wrapper and no added newline, and a source-named effect and runtime failure both stay inert |
 | PS7 | The artifact | Approval with `--output` writes the same exact bytes, keeps stdout empty, creates the path only after authorship teardown and structural validation, and refuses an existing path without changing it |
 | PS8 | Structure, not values | A structurally valid Plan declaring a required root property is produced successfully with no value supplied |
-| PS9 | Endings | Stop, the ten-attempt explanation, a failed Agent turn, missing Agent context, cancellation, teardown failure and structural refusal each return non-zero with no stdout artifact, output file or program effect |
+| PS9 | Endings | Stop, the ten-attempt explanation, a failed Agent turn, missing Agent context, cancellation, teardown failure and the host's own structural refusal each return non-zero with no stdout artifact, output file or program effect. The refusal row drives the one shared structural check: the draft check and `<AdmitPlan>` both really validate and both succeed, the tree moves immediately after that admission, and the gate this command keeps for itself is the only thing left to catch it |
 | PS10 | No execution anywhere | An explicitly named session continues the planning conversation and still starts no program; no execution callback, program journal or second-root identity exists to reach |
 | PS11 | Adapter and Component | The command document remains the exact thin adapter, and `<Plan>` remains a bare-or-captured exact text component |
 | PS12 | Product copy | Architecture, specifications, README and the homepage state that Plan produces source, Run executes source, and composition decides when it runs |

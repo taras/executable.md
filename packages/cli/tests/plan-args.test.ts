@@ -17,6 +17,7 @@ import {
   namesPlan,
   namesRetiredCommand,
   removedOptionRefusal,
+  removedPlanOption,
   RETIRED_COMMAND_REFUSAL,
   RUN_REMOVAL_REFUSAL,
   scanPlanArgs,
@@ -202,6 +203,52 @@ describe("Tier PR — xmd plan fixed grammar", () => {
       expect(scanPlanArgs(["plan", REQUEST, `${name}=value`]).error).toBe(
         removedOptionRefusal(name),
       );
+    }
+  });
+
+  it("PS2/PS3: the removal is decidable beside --help, in either order", function* () {
+    // `--help` is lifted out of argv before any command's own grammar runs, so
+    // the classification has to be askable on its own — otherwise the page a
+    // caller gets describes a command that would have refused them.
+    expect(removedPlanOption(["plan", "--help", "--run"])).toBe(RUN_REMOVAL_REFUSAL);
+    expect(removedPlanOption(["plan", "--run", "--help"])).toBe(RUN_REMOVAL_REFUSAL);
+    expect(removedPlanOption(["plan", "--help", "--journal", "trace.jsonl"])).toBe(
+      removedOptionRefusal("--journal"),
+    );
+    expect(removedPlanOption(["plan", "--journal", "trace.jsonl", "--help"])).toBe(
+      removedOptionRefusal("--journal"),
+    );
+
+    // And it is the same classification the scan makes, so a spelling cannot be
+    // removed to one and unknown to the other.
+    for (const option of REMOVED) {
+      expect(removedPlanOption(["plan", REQUEST, ...option])).toBe(
+        scanPlanArgs(["plan", REQUEST, ...option]).error,
+      );
+    }
+
+    // A command line naming none of them has nothing to say here, whatever else
+    // it holds — including the retained options and `--help` itself.
+    expect(removedPlanOption(["plan", "--help"])).toBe(undefined);
+    expect(removedPlanOption(["plan", REQUEST, ...RETAINED.flat()])).toBe(undefined);
+    // A token after the separator is the request, not an option.
+    expect(removedPlanOption(["plan", "--", "--run"])).toBe(undefined);
+  });
+
+  it("PS3: a name that merely begins like a property option is an unknown one", function* () {
+    // Exactly the aggregate and the two generated prefixes are property
+    // options. Telling a caller who wrote something else to configure their
+    // program with `xmd run` would answer a question they did not ask.
+    for (const name of ["--propspective", "--no-propspective", "--no-props", "--propsy"]) {
+      expect(scanPlanArgs(["plan", REQUEST, name]).error).toBe(
+        `unrecognized option for xmd plan: ${name}`,
+      );
+      expect(removedPlanOption(["plan", REQUEST, name])).toBe(undefined);
+    }
+
+    // While the real spellings are still the removed options they are.
+    for (const name of ["--props", "--props-name", "--no-props-loud"]) {
+      expect(scanPlanArgs(["plan", REQUEST, name]).error).toBe(removedOptionRefusal(name));
     }
   });
 

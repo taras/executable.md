@@ -119,6 +119,7 @@ import type { Binding, Extraction } from "./props.ts";
 import {
   namesPlan,
   namesRetiredCommand,
+  removedPlanOption,
   RETIRED_COMMAND_REFUSAL,
   scanPlanArgs,
 } from "./plan-args.ts";
@@ -1091,7 +1092,8 @@ function* runDocument(
   // Repository authority belongs to document execution too, and it is this
   // execution's own: the provider it installs holds an invocation identity, the
   // leases on the checkouts this document selects, and the evidence of what it
-  // published. `xmd run` and an approved `xmd plan --run` supply the live one;
+  // published. `xmd run` supplies the live one; `xmd plan` executes no document
+  // of a caller's and reaches this line for none.
   // `xmd test` and every runtime without an operational provider supply the one
   // that installs nothing, and every repository operation then reports an
   // absent provider before touching anything.
@@ -2322,6 +2324,20 @@ function* dispatch(
   workflowHost: WorkflowHost | undefined,
   sessions: MachineSessionAssembly | undefined,
 ): Operation<void> {
+  // Before the props phase, and before the help short-circuit below. `--help`
+  // is lifted out of argv early enough that a command's own grammar never sees
+  // the invocation it was written on, so a Plan command line naming a removed
+  // option would be answered with a page describing a command that would refuse
+  // it. It is refused here instead, in either order, having read nothing.
+  if (namesPlan(helpRequest.args)) {
+    const removed = removedPlanOption(helpRequest.args);
+    if (removed !== undefined) {
+      console.error(removed);
+      yield* exit(1);
+      return;
+    }
+  }
+
   const propsPhase = yield* preparePropsPhase(helpRequest.args, evalFlags, readStandardInput);
 
   if (propsPhase.error) {
@@ -2358,9 +2374,10 @@ function* dispatch(
     return;
   }
 
-  // `xmd plan` owns its complete grammar, and it answers first: every option
-  // this command removed is refused by name here, before the shared checks
-  // below could report one of them as something else.
+  // The rest of what `xmd plan` decides on its own — cardinality, an unknown
+  // option, an empty session — answered before the shared checks below could
+  // report one of them as something else. The removed options were answered
+  // above, ahead of help.
   if (propsPhase.plan?.error !== undefined) {
     console.error(propsPhase.plan.error);
     yield* exit(1);

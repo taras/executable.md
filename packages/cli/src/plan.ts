@@ -39,12 +39,7 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import process from "node:process";
 
-import {
-  agentIdentityComponents,
-  retainedSource,
-  validateDocumentStructure,
-} from "@executablemd/core";
-import type { DocumentValidation, Json, SyntaxCatalog } from "@executablemd/core";
+import type { SyntaxCatalog } from "@executablemd/core";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { cwd } from "@executablemd/runtime";
 
@@ -54,15 +49,15 @@ import {
   planAgentContext,
   runPlanCommandDocument,
 } from "./authorship-profile.ts";
-import type { CandidateAssessment } from "./authorship-profile.ts";
 import {
-  PLAN_IDENTITY,
   planComponentDeclaration,
   planComponentDescription,
+  structuralValidation,
 } from "./plan-component.ts";
+import type { StructuralValidation } from "./plan-component.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import { describeError } from "./props.ts";
-import { renderSyntaxMarkdown, useRunProfileRegistry } from "./syntax.ts";
+import { renderSyntaxMarkdown } from "./syntax.ts";
 
 /**
  * The identity approved text runs under.
@@ -105,6 +100,16 @@ export interface PlanDependencies {
    * reach, so a document cannot move where the ceiling lives.
    */
   authorshipRoot?: string;
+  /**
+   * How this invocation decides a candidate is structurally a program.
+   *
+   * Absent is the canonical answer below. One dependency, and the same one the
+   * declaration is built with, so the draft check, the admission inside `<Plan>`
+   * and the gate this command keeps after that document has torn down are the
+   * same question asked three times rather than three questions that happen to
+   * agree today.
+   */
+  validate?: StructuralValidation;
 }
 
 /**
@@ -132,7 +137,12 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
   // invocation, and only the host knows whether somebody named one.
   const explicitSession = command.session !== undefined;
   const root = deps.authorshipRoot ?? DEFAULT_AUTHORSHIP_ROOT;
-  const assessOne = (source: string) => assess(command, source);
+  // Built before the declaration exists, and handed to it: the packaged `<Plan>`
+  // description is the declaration an ordinary run resolves, so what the draft
+  // check, the admission and the gate below all ask about is the profile the
+  // approved program would actually run in.
+  const validate =
+    deps.validate ?? structuralValidation(command.include, [yield* planComponentDescription()]);
 
   let authored: Result<string>;
   try {
@@ -163,7 +173,7 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
       *catalog() {
         return syntax;
       },
-      assess: assessOne,
+      validate,
     });
 
     authored = yield* runPlanCommandDocument({
@@ -173,9 +183,7 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
       explicitSession,
       root,
       context,
-      installElicitation: deps.installElicitation,
       declaration,
-      assess: assessOne,
     });
   } catch (error) {
     console.error(describeError(error));
@@ -188,9 +196,11 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
   }
 
   // The returned Plan is untrusted again. Whatever the command document concluded
-  // about a candidate, these are the bytes a later `xmd run` would execute, and
-  // they are checked as though nothing had ever validated them.
-  const admitted = yield* structurally(command, authored.value);
+  // about a candidate — and however recently `<AdmitPlan>` concluded it — these
+  // are the bytes a later `xmd run` would execute, and the tree they resolve
+  // against has had a whole teardown to move since. So they are checked once
+  // more, as though nothing had ever validated them.
+  const admitted = yield* validate(authored.value);
   if (admitted.outcome === "invalid") {
     console.error(
       `the approved document does not validate:\n` +
@@ -233,50 +243,6 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
  */
 export function invocationSessionName(): string {
   return `xmd-plan:${randomUUID()}`;
-}
-
-/**
- * The host's answer about one draft, in the shape the command document reads.
- *
- * Structure alone, and the same question the final gate asks: a draft is a
- * program or it is not, and the property values a later `xmd run` supplies are
- * that run's business. The command document sees facts about drafts and nothing
- * about the command line.
- */
-function* assess(command: PlanCommand, source: string): Operation<CandidateAssessment> {
-  const validation = yield* structurally(command, source);
-  if (validation.outcome === "invalid") {
-    return { valid: false, diagnostics: { validation } as unknown as Json };
-  }
-  return { valid: true, diagnostics: {} };
-}
-
-/**
- * The structural answer about one candidate, against the profile it would run
- * in.
- *
- * Declarations, source, component resolution, forms and everything else
- * decidable without the property values a later run will supply. A Plan whose
- * root declares required properties is a Plan; `xmd plan` has no property source
- * to resolve it with, and refusing it here would refuse a program for not having
- * been given arguments nobody has offered it yet.
- *
- * The registry and the packaged `<Plan>` description are installed around the
- * question rather than around the command document: what a Plan may write is the
- * ordinary run profile's whole vocabulary, which is the same vocabulary the
- * catalog showed the agent, and that document has no business reaching a
- * vocabulary it only describes.
- */
-function* structurally(command: PlanCommand, candidate: string): Operation<DocumentValidation> {
-  return yield* scoped(function* (): Operation<DocumentValidation> {
-    yield* useRunProfileRegistry();
-    return yield* validateDocumentStructure({
-      ...retainedSource(PLAN_IDENTITY, candidate),
-      includes: command.include,
-      components: agentIdentityComponents(),
-      declarations: [yield* planComponentDescription()],
-    });
-  });
 }
 
 /**

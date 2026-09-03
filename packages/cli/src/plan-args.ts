@@ -44,6 +44,9 @@ export const RETIRED_COMMAND_REFUSAL: string =
   `xmd ${RETIRED_COMMAND} is not a command — use \`xmd ${PLAN_COMMAND} "<Prompt>"\` to create ` +
   `a Plan, or \`xmd run ./${RETIRED_COMMAND}\` to run a document named \`${RETIRED_COMMAND}\``;
 
+/** The aggregate root-property option, and the stem the generated ones share. */
+const AGGREGATE_OPTION = "--props";
+
 export const OUTPUT_OPTION = "--output";
 export const SESSION_OPTION = "--session";
 
@@ -124,9 +127,21 @@ function optionName(token: string): string {
   return equals === -1 ? token : token.slice(0, equals);
 }
 
-/** Whether this name binds a root property of the program a Plan describes. */
+/**
+ * Whether this name binds a root property of the program a Plan describes.
+ *
+ * Exactly the aggregate and the two generated prefixes. `--propspective`,
+ * `--no-propspective` and a bare `--no-props` are options this command does not
+ * define, and an option nobody defines is answered as one: telling a caller to
+ * configure their program with `xmd run` would be answering a question they did
+ * not ask.
+ */
 function generatesProperty(name: string): boolean {
-  return name.startsWith("--props") || name.startsWith("--no-props");
+  return (
+    name === AGGREGATE_OPTION ||
+    name.startsWith(`${AGGREGATE_OPTION}-`) ||
+    name.startsWith("--no-props-")
+  );
 }
 
 /**
@@ -154,6 +169,33 @@ function tokenRemoval(token: string): string | undefined {
     return undefined;
   }
   return removalRefusal(optionName(token));
+}
+
+/**
+ * The refusal a Plan command line earns for naming a removed option, or
+ * `undefined` when it names none.
+ *
+ * Separate from {@link scanPlanArgs} because it has to be askable earlier than
+ * a scan is useful. `--help` short-circuits the general dispatch before any
+ * command's own grammar runs, so `xmd plan --help --run` would otherwise be
+ * answered with a page describing a command that would refuse it. The two share
+ * this classification rather than each keeping their own, so a spelling cannot
+ * become removed in one and unknown in the other.
+ *
+ * Tokens after `--` are positional and are not inspected, exactly as the scan
+ * leaves them.
+ */
+export function removedPlanOption(args: readonly string[]): string | undefined {
+  for (const token of args.slice(1)) {
+    if (token === "--") {
+      return undefined;
+    }
+    const removal = tokenRemoval(token);
+    if (removal !== undefined) {
+      return removal;
+    }
+  }
+  return undefined;
 }
 
 /** What fixed grammar establishes about one `xmd plan` command line. */
