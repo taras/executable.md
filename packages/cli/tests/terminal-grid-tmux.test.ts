@@ -35,6 +35,7 @@ import type { ChildProcess } from "node:child_process";
 import net from "node:net";
 import type { Server, Socket } from "node:net";
 import * as path from "node:path";
+import process from "node:process";
 import { cliCommand } from "@executablemd/test-support/launch";
 import { ensureDir, exists, readTextFile, rm, stat, writeTextFile } from "@effectionx/fs";
 import { realpath } from "node:fs/promises";
@@ -75,7 +76,7 @@ import {
 import type { Json } from "@executablemd/core";
 import type { Result } from "effection";
 import { processTable, TerminalGrids } from "@executablemd/runtime";
-import { readdir } from "node:fs/promises";
+import { chmod, readdir } from "node:fs/promises";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { PaneChannels, PaneLink } from "../src/terminal/pane-channel.ts";
 import {
@@ -1702,6 +1703,140 @@ describe("Tier TH — host installation", () => {
     }
     expect(refusal).toContain("cannot open a terminal grid");
     expect(refusal).toContain("older than tmux");
+  });
+
+  /** Settle once this child has gone, whether or not it already had. */
+  function exited(child: ChildProcess): Operation<void> {
+    const done = withResolvers<void>();
+    const onExit = (): void => done.resolve();
+    if (child.exitCode !== null || child.signalCode !== null) {
+      done.resolve();
+    } else {
+      child.on("exit", onExit);
+    }
+    return (function* (): Operation<void> {
+      try {
+        yield* done.operation;
+      } finally {
+        child.off("exit", onExit);
+      }
+    })();
+  }
+
+  /** A shell that says when it started, and stays until it is signalled. */
+  function useShellFixture(room: string): Operation<string> {
+    return resource<string>(function* (provide) {
+      const file = path.join(room, "shell");
+      yield* writeTextFile(
+        file,
+        ["#!/bin/sh", `echo $$ > "${room}/shell-pid"`, "while true; do sleep 0.05; done", ""].join(
+          "\n",
+        ),
+      );
+      yield* until(chmod(file, 0o755));
+      yield* provide(file);
+    });
+  }
+
+  it("TH4: the installed SIGHUP listener cancels the run and tears the grid down", function* () {
+    const room = yield* useScratch();
+    const shell = yield* useShellFixture(room);
+    const script = yield* useScript();
+    const invocation = cliCommand([]);
+    const tmux = createFakeTmux({ script, clientCommand, spawnPanes: true });
+    yield* ensure(() => {
+      tmux.stopPanes();
+    });
+    yield* writeTextFile(
+      path.join(room, "doc.md"),
+      [
+        "<Terminal.Grid columns={1}>",
+        '<Terminal title="Only" />',
+        "</Terminal.Grid>",
+        "",
+        "AFTER_THE_GRID",
+        "",
+      ].join("\n"),
+    );
+    // The run's foreground lease, which a grid takes before any provider.
+    yield* installControlledLauncher({ outcome: () => ({ exitCode: 0 }) });
+
+    const sighupBefore = foregroundSignalListeners("SIGHUP");
+    let directory = "";
+    let installed = 0;
+    let outcome: Result<Json> | undefined;
+    let output = "";
+    yield* scoped(function* () {
+      yield* foregroundTerminalGrid({
+        isTerminal: () => true,
+        createTmux: () => tmux,
+        env: { PATH: "/usr/bin:/bin", SHELL: shell },
+        // deno-lint-ignore require-yield
+        *askVersion() {
+          return { code: 0, stdout: "tmux 3.6a" };
+        },
+        workerCommand: function* (ordinal, at) {
+          directory = at;
+          return [
+            invocation.command,
+            ...invocation.arguments,
+            PANE_WORKER_COMMAND,
+            String(ordinal),
+            at,
+          ];
+        },
+      })();
+      // The listener is the installer's, and this row uses that one.
+      installed = foregroundSignalListeners("SIGHUP");
+
+      yield* spawn(function* () {
+        // Driven by the pane child's own start: the worker spawned, its channel
+        // authenticated, and the shell it launched said so.
+        while (!(yield* exists(`${room}/shell-pid`))) {
+          yield* sleep(15);
+        }
+        process.kill(process.pid, "SIGHUP");
+      });
+
+      const execution = yield* execute({
+        path: path.join(room, "doc.md"),
+        stream: new InMemoryStream(),
+        includes: [room],
+      });
+      const subscription = yield* execution.output;
+      let next = yield* subscription.next();
+      while (!next.done) {
+        output = next.value;
+        next = yield* subscription.next();
+      }
+      outcome = yield* execution;
+    });
+
+    // The installer put its listener on, and took it off with the run.
+    expect(installed).toBe(sighupBefore + 1);
+    expect(foregroundSignalListeners("SIGHUP")).toBe(sighupBefore);
+
+    // Cancellation, not a reader close: the run failed and nothing after the
+    // grid ran in that attempt.
+    expect(outcome?.ok).toBe(false);
+    expect(output).not.toContain("AFTER_THE_GRID");
+
+    // Every teardown phase completed before the result was observed. The pane's
+    // child is gone, the worker is gone, the server is gone, and the private
+    // directory — which is removed last, after its sockets have closed — is
+    // gone with them.
+    const shellPid = Number((yield* readTextFile(`${room}/shell-pid`)).trim());
+    expect(shellPid).toBeGreaterThan(0);
+    yield* installDenoTerminalProcesses();
+    expect(yield* processReachable(shellPid)).toBe(false);
+    // Awaited on each process's own exit event, not sampled: a worker that had
+    // not quite gone yet would make a sampled check pass or fail by timing.
+    for (const child of tmux.started) {
+      yield* exited(child);
+    }
+    expect(tmux.alive()).toBe(false);
+    expect(directory).not.toBe("");
+    expect(yield* exists(directory)).toBe(false);
   });
 
   it("TH3: a host that installs no provider still validates the grid", function* () {
