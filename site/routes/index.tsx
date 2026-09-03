@@ -31,7 +31,7 @@ const VERSION = "v0.11.0";
 
 const STEP_NUMBER =
   `${MONO}font-size:0.8125rem;font-weight:700;letter-spacing:0.1em;color:var(--green);`;
-const SPLIT = "display:flex;flex-direction:column;gap:0.5rem;min-width:0;";
+const COLUMN = "display:flex;flex-direction:column;gap:0.625rem;min-width:0;";
 const STACK = "display:flex;flex-direction:column;gap:0.75rem;min-width:0;";
 const PAIR =
   "grid-template-columns:repeat(auto-fit,minmax(320px,1fr));align-items:start;";
@@ -39,27 +39,51 @@ const PAIR =
 /**
  * The release-link hover inverts the base rule: it inherits the eyebrow's
  * dim until hover, where it picks up the accent.
- *
- * The plan panels wrap rather than scroll, so every line is its own block
- * instead of a newline in the source — an instruction that wraps then takes a
- * 3ch hanging indent and its continuation aligns under the text rather than
- * under the number. Both panels take the same treatment: the two examples
- * differ only in the syntax around them.
  */
 const PAGE_CSS = ".release-link{color:inherit;letter-spacing:inherit;}" +
-  ".release-link:hover{color:var(--green);}" +
-  "#plan .code-panel pre{white-space:pre-wrap;overflow-wrap:break-word;}" +
-  "#plan .plan-line{display:block;}" +
-  "#plan .plan-step{display:block;padding-left:3ch;text-indent:-3ch;}" +
-  "#plan strong code{font-weight:800;}";
+  ".release-link:hover{color:var(--green);}";
 
-/** The instruction list both plan examples are built from, verbatim. */
+/**
+ * One delegated listener serves every `copy` panel on the page. A terminal
+ * slab's lines carry a `$` the reader never wants pasted, so those are
+ * stripped; document source is copied as it stands.
+ */
+const COPY_SCRIPT = `document.addEventListener("click",function(e){
+var b=e.target.closest?e.target.closest("[data-copy]"):null;if(!b)return;
+var p=b.closest(".code-panel"),c=p&&p.querySelector("code");if(!c)return;
+var t=c.innerText;
+if(p.classList.contains("code-panel-terminal")){t=t.split("\\n").map(function(l){return l.replace(/^\\$ /,"");}).join("\\n");}
+navigator.clipboard.writeText(t).catch(function(){});
+var prev=b.textContent;b.textContent="✓";
+setTimeout(function(){b.textContent=prev;},1200);
+});`;
+
+/**
+ * The instruction list both plan examples are built from, verbatim. The
+ * panels scroll rather than reflow, so the wrap points are part of the
+ * example: a continuation is indented under the text, not under the number.
+ */
 const PLAN_STEPS = [
-  "1. Read package.json and CHANGELOG.md.",
-  "2. Ask an agent to recommend the next semantic version and explain why.",
+  "1. Read package.json and",
+  "  CHANGELOG.md.",
+  "2. Ask an agent to recommend the",
+  "  next semantic version and",
+  "  explain why.",
   "3. Validate the answer.",
   "4. Ask me to approve it.",
   "5. Write RELEASE.md.",
+];
+
+/** The shell form: the quoted argument `xmd plan` is given. */
+const PLAN_LINES = PLAN_STEPS.join("\n");
+
+/** The document form: the same instructions, written where they land. */
+const PLAN_XMD: Tok[][] = [
+  [key("<File"), " path", dim("="), str('"release.md"'), key(">")],
+  ["  ", key("<Plan>")],
+  ...PLAN_STEPS.map((step): Tok[] => [`  ${step}`]),
+  ["  ", key("</Plan>")],
+  [key("</File>")],
 ];
 
 const RELEASE_MD: Tok[][] = [
@@ -68,170 +92,35 @@ const RELEASE_MD: Tok[][] = [
   ["Run the tests."],
   [],
   ["```bash ", mod("exec")],
-  ["deno task test"],
+  ["npm test"],
   ["```"],
   [],
-  ["Now decide how these changes should be"],
-  ["versioned."],
+  ["Choose the next version."],
   [],
-  [key("<Let"), " value", dim("="), mod("{{")],
-  ["  ", "type", dim(": "), str('"object"'), dim(",")],
-  ["  ", "required", dim(": ["), str('"bump"'), dim("],")],
-  ["  ", "properties", dim(": {")],
-  ["    ", "bump", dim(": { "), "enum", dim(": [")],
-  [
-    "      ",
-    str('"patch"'),
-    dim(", "),
-    str('"minor"'),
-    dim(", "),
-    str('"major"'),
-  ],
-  ["    ", dim("] }")],
-  ["  ", dim("}")],
-  [mod("}}"), " as", dim("="), str('"schema"'), " ", key("/>")],
+  [key("<Prompt>")],
+  ["  Current version and release history:"],
   [],
   [
-    key("<Parse"),
-    " schema",
-    dim("="),
-    mod("{schema}"),
-    " as",
-    dim("="),
-    str('"release"'),
-    key(">"),
-  ],
-  ["  ", key("<Prompt>")],
-  ["  Which version bump do these changes"],
-  ["  require? Return JSON matching:"],
-  [],
-  ["  ", key("<Json"), " value", dim("="), mod("{schema}"), " ", key("/>")],
-  [],
-  ["  ```bash ", mod("exec")],
-  ["  git log --oneline main..HEAD"],
-  ["  ```"],
-  ["  ", key("</Prompt>")],
-  [key("</Parse>")],
-  [],
-  [
-    key("<Publish"),
-    " bump",
-    dim("="),
-    mod("{release.bump}"),
-    " ",
-    key("/>"),
-  ],
-];
-
-const README_MD: Tok[][] = [
-  [dim("---")],
-  [dim("props:")],
-  [dim("  package:")],
-  [dim("    type:"), " ", str("string")],
-  [dim("    pattern:"), " ", str('"^packages/[a-z0-9._-]+$"')],
-  [dim("---")],
-  [],
-  [bold("## Setup")],
-  [],
-  ["```bash ", mod("exec")],
-  ["deno task setup"],
-  ["```"],
-  [],
-  [bold("## Test")],
-  [],
-  [bold("### Complete")],
-  [],
-  ["```bash ", mod("timeout=30m exec")],
-  ["deno task verify"],
-  ["```"],
-  [],
-  [bold("## Bootstrap")],
-  [],
-  [key("<BootstrapNpmPackage")],
-  ["  package", dim("="), mod("{props.package}"), " ", key("/>")],
-];
-
-const AGENTS_MD: Tok[][] = [
-  [bold("## Architect")],
-  [key("<Architect"), " ", key("/>")],
-  [],
-  [bold("## Implementor")],
-  [
-    key("<Implementor"),
-    " issue",
-    dim("="),
-    mod("{props.issue}"),
-    " ",
-    key("/>"),
-  ],
-  [],
-  [bold("## Reviewer")],
-  [key("<Reviewer"), " ", key("/>")],
-];
-
-const IMPLEMENTOR_MD: Tok[][] = [
-  [key("<Agent>")],
-  ["  ", key("<Session"), " name", dim("="), str('"implementor"'), key(">")],
-  ["    ", key("<Session.Launch>")],
-  ["      You're an implementor agent."],
-  [
-    "      ",
-    key("<If"),
-    " condition",
-    dim("="),
-    mod("{props.issue}"),
-    key(">"),
-  ],
-  ["        Implement this ticket:"],
-  [
-    "        ",
-    key("<Issue"),
-    " url",
-    dim("="),
-    mod("{props.issue}"),
-    " ",
-    key("/>"),
-  ],
-  ["      ", key("</If>")],
-  [
-    "      ",
+    "  ",
     key("<File"),
     " path",
     dim("="),
-    str('"coding-standards.md"'),
+    str('"package.json"'),
     " ",
     key("/>"),
   ],
   [
-    "      ",
+    "  ",
     key("<File"),
     " path",
     dim("="),
-    str('"security-standards.md"'),
+    str('"CHANGELOG.md"'),
     " ",
     key("/>"),
   ],
-  ["    ", key("</Session.Launch>")],
-  ["  ", key("</Session>")],
-  [key("</Agent>")],
-];
-
-const SCOPES_MD: Tok[][] = [
-  [key("<Repository"), " name", dim("="), str('"project"')],
-  ["            url", dim("="), mod("{props.repository}"), key(">")],
-  ["  ", key("<Worktree"), " name", dim("="), str('"implementation"')],
-  ["            branch", dim("="), mod("{props.branch}"), key(">")],
-  [
-    "    ",
-    key("<Implementor"),
-    " issue",
-    dim("="),
-    mod("{props.issue}"),
-    " ",
-    key("/>"),
-  ],
-  ["  ", key("</Worktree>")],
-  [key("</Repository>")],
+  [],
+  ["  What should the next version be: patch, minor, or major?"],
+  [key("</Prompt>")],
 ];
 
 const LOOP_MD: Tok[][] = [
@@ -444,25 +333,12 @@ const RUNTIMES: { name: string; body: string; lines: string[][] }[] = [
   },
 ];
 
-/** The plan instructions, one block per line. */
-function PlanSteps() {
-  return (
-    <>
-      {PLAN_STEPS.map((step) => (
-        <span key={step} class="plan-step">
-          {step}
-        </span>
-      ))}
-    </>
-  );
-}
-
 /** A terminal slab whose lines each open with a prompt. */
 function Terminal(
   { lines, noWrap }: { lines: string[][]; noWrap?: boolean },
 ) {
   return (
-    <CodeBlock command noWrap={noWrap}>
+    <CodeBlock command noWrap={noWrap} copy>
       {lines.map((parts, i) => (
         <Fragment key={i}>
           {i > 0 ? "\n" : null}
@@ -489,32 +365,36 @@ export default define.page(function Home({ url }) {
               <a
                 class="release-link"
                 href={`${GITHUB}/releases`}
+                target="_blank"
                 rel="noopener"
               >
                 {VERSION}
               </a>{" "}
               ·{" "}
-              <a class="release-link" href={GITHUB} rel="noopener">
+              <a
+                class="release-link"
+                href={GITHUB}
+                target="_blank"
+                rel="noopener"
+              >
                 Star on GitHub ↗
               </a>
             </span>
 
             <h1 style="margin:0;font-size:clamp(2.4rem,5vw,3.9rem);line-height:1.02;font-weight:800;letter-spacing:-0.03em;">
-              Stop rolling the dice in your workflows.
+              Minimize agentic work.
             </h1>
 
             <p style="margin:0;max-width:50ch;font-size:clamp(1.05rem,2.2vw,1.2rem);line-height:1.5;color:var(--body);">
-              A workflow written in prose has to be interpreted before anything
-              happens. <Term>xmd</Term>{" "}
-              runs the document instead: the Markdown stays readable, and the
-              operations it describes execute as a program.
+              Turn what you've done before into a program. Use agents only for
+              the judgment that remains.
             </p>
 
             <div style="display:flex;flex-wrap:wrap;align-items:center;gap:0.75rem 1.25rem;">
               <a class="btn btn-primary btn-lg push" href="#install">
                 Install xmd →
               </a>
-              <a class="link-rule" href={SPEC} rel="noopener">
+              <a class="link-rule" href={SPEC} target="_blank" rel="noopener">
                 Read the spec ↗
               </a>
             </div>
@@ -522,18 +402,8 @@ export default define.page(function Home({ url }) {
 
           <div style="display:flex;flex-direction:column;gap:1.125rem;min-width:0;">
             <div class="panel">
-              <div class="panel-head">What you read is what runs</div>
               <div class="panel-body">
-                <p style={CLAIM}>
-                  The document is the workflow. There is nothing behind it.
-                </p>
-                <p style={P_SM}>
-                  The prose stays prose in any Markdown viewer. The fenced block
-                  marked <Term>exec</Term> runs, and <Term>{"<Parse>"}</Term>
-                  {" "}
-                  turns the model's answer into a value the next step uses.
-                </p>
-                <CodeBlock filename="release.md">
+                <CodeBlock filename="release.md" copy>
                   <Source lines={RELEASE_MD} />
                 </CodeBlock>
               </div>
@@ -541,74 +411,40 @@ export default define.page(function Home({ url }) {
           </div>
         </section>
 
-        {/* The README as a CLI */}
-        <section id="readme" class="section">
+        {/* README and AGENTS: two examples of one capability. */}
+        <section id="instructions" class="section" style="gap:1.5rem;">
           <div class="section-head">
-            <h2>The README as a CLI.</h2>
+            <h2>Make instructions executable.</h2>
           </div>
-          <p style={P_MD}>
-            A README already has useful executable structure: headings name the
-            things you want to do. <Term>xmd</Term>{" "}
-            turns them into CLI entrypoints. Add frontmatter to expose
-            arguments. The explanation and the command stay in the same file.
-          </p>
 
-          <div
-            class="grid"
-            style="grid-template-columns:repeat(auto-fit,minmax(330px,1fr));align-items:start;"
-          >
-            <CodeBlock filename="README.md">
-              <Source lines={README_MD} />
-            </CodeBlock>
+          <div class="grid" style={PAIR}>
+            <div style={COLUMN}>
+              <span class="eyebrow">README</span>
+              <Terminal lines={[[" xmd README.md#Test/Complete"]]} />
+              <p style={P_SM}>
+                Headings become entrypoints. Add frontmatter for typed
+                arguments.
+              </p>
+            </div>
 
-            <div style="display:flex;flex-direction:column;gap:1.5rem;min-width:0;">
-              <div style="display:flex;flex-direction:column;gap:0.625rem;">
-                <div>
-                  <Terminal lines={[[" xmd README.md --help"]]} />
-                </div>
-                <span class="eyebrow">Help for the README</span>
-                <p style={P_SM}>
-                  Help works as it does on any other CLI, and what it lists
-                  comes from the document: the entrypoints it can run and the
-                  inputs they accept.
-                </p>
-              </div>
-
-              <div style="display:flex;flex-direction:column;gap:0.625rem;">
-                <div>
-                  <Terminal
-                    lines={[[
-                      " xmd README.md#Bootstrap \\\n    --props-package packages/web",
-                    ]]}
-                  />
-                </div>
-                <span class="eyebrow">Props → CLI arguments</span>
-                <p style={P_SM}>
-                  <Term>package</Term> becomes{" "}
-                  <Term>--props-package</Term>. The flag, its type, and its
-                  pattern all come from the frontmatter, so an invalid value
-                  fails before anything runs.
-                </p>
-              </div>
-
-              <div style="display:flex;flex-direction:column;gap:0.625rem;">
-                <div>
-                  <Terminal
-                    lines={[
-                      [" xmd README.md#Setup"],
-                      [" xmd README.md#Test"],
-                      [" xmd README.md#Test/Complete"],
-                    ]}
-                  />
-                </div>
-                <span class="eyebrow">Headings → entrypoints</span>
-                <p style={P_SM}>
-                  Every heading is a runnable entrypoint. Nested headings become
-                  nested paths like <Term>README.md#Test/Complete</Term>.
-                </p>
-              </div>
+            <div style={COLUMN}>
+              <span class="eyebrow">AGENTS</span>
+              <Terminal
+                lines={[[" xmd AGENTS.md#Implement --props-issue=342"]]}
+              />
+              <p style={P_SM}>
+                Load the issue, files, and other known context before the agent
+                starts instead of asking it to rediscover them.
+              </p>
             </div>
           </div>
+
+          <p style={P_MD}>
+            <strong style={STRONG}>
+              The instructions become part of the program instead of something
+              humans, CI, or agents have to remember to follow.
+            </strong>
+          </p>
         </section>
 
         {/* Principles */}
@@ -626,8 +462,9 @@ export default define.page(function Home({ url }) {
             <div class="panel-head">The point</div>
             <div class="panel-body">
               <p style={CLAIM}>
-                The goal isn't autonomous agents. It's to minimize how much work
-                needs to remain agentic.
+                <strong style="font-weight:800;">
+                  Use the least autonomy that gets the job done.
+                </strong>
               </p>
             </div>
           </div>
@@ -661,92 +498,52 @@ export default define.page(function Home({ url }) {
           </a>
         </section>
 
-        {/* Agents */}
-        <section id="agent" class="section" style="gap:1.5rem;">
+        {/* Plan */}
+        <section id="plan" class="section" style="gap:1.5rem;">
           <div class="section-head">
-            <h2>Stop hoping the agent reads the instructions.</h2>
+            <h2>Plans are made to be followed.</h2>
           </div>
+
+          {/* Same instructions, two surfaces: the row states the equivalence. */}
+          <div class="grid" style={PAIR}>
+            <CodeBlock filename="CLI" copy>
+              <Prompt />
+              {" xmd plan "}
+              <span class="tok-str">{`"${PLAN_LINES}"`}</span>
+              {" > release.md"}
+            </CodeBlock>
+
+            <CodeBlock filename="XMD" copy>
+              <Source lines={PLAN_XMD} />
+            </CodeBlock>
+          </div>
+
           <p style={P_MD}>
-            A file like <Term>AGENTS.md</Term>{" "}
-            is advisory. The agent may read it, skim it, or decide it isn't
-            relevant to the task.
+            <strong style={STRONG}>
+              <Term heavy>xmd plan</Term> is command-line shorthand for{" "}
+              <Term heavy>{"<Plan>"}</Term>.
+            </strong>{" "}
+            It turns your instructions into an XMD program using the components
+            available from <Term>xmd syntax</Term>.
           </p>
 
-          <div style="display:flex;flex-direction:column;gap:2rem;">
-            <div class="grid" style={PAIR}>
-              <Terminal lines={[[" xmd AGENTS.md"]]} />
-              <div style={SPLIT}>
-                <h3 style={H3}>Run AGENTS.md.</h3>
-                <p style={P_SM}>
-                  Run the agent from the file instead of leaving it as context
-                  the agent may or may not read.
-                </p>
-              </div>
-            </div>
-
-            <div class="grid" style={PAIR}>
-              <div style={SPLIT}>
-                <h3 style={H3}>Give each role a purpose</h3>
-                <p style={P_SM}>
-                  Architect, Implementor, and Reviewer are semantic roles, not
-                  fixed models. Choose the model or provider when you invoke the
-                  workflow.
-                </p>
-              </div>
-              <CodeBlock filename="AGENTS.md">
-                <Source lines={AGENTS_MD} />
-              </CodeBlock>
-            </div>
-
-            <div class="grid" style={PAIR}>
-              <CodeBlock filename=".agents/implementor.md">
-                <Source lines={IMPLEMENTOR_MD} />
-              </CodeBlock>
-              <div style={SPLIT}>
-                <h3 style={H3}>
-                  If you know what context the agent needs, load it explicitly.
-                </h3>
-                <p style={P_SM}>
-                  <Term>xmd</Term>{" "}
-                  reads the issue and the files first, then expands{" "}
-                  <Term>{"<Session.Launch>"}</Term>{" "}
-                  with them already in hand, so the agent starts with them
-                  loaded rather than searching for them. Context construction
-                  becomes part of the program instead of something the agent has
-                  to rediscover.
-                </p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Runtime */}
-        <section id="runtime" class="section" style="gap:1.5rem;">
-          <div class="section-head">
-            <h2>The runtime handles the effects.</h2>
-          </div>
           <p style={P_MD}>
-            You declare the repository, worktree, and inputs; the runtime
-            handles ordering, cancellation, and cleanup. The workflow owns the
-            structure — which repository, which branch, which issue. The agent
-            owns the judgment inside it.
+            <strong style={STRONG}>Review it. Change it. Commit it.</strong>
+            {" "}
+            Then run the program instead of asking an agent to figure the
+            workflow out again.
           </p>
 
-          <div style="display:flex;flex-direction:column;gap:2rem;">
-            <div class="grid" style={PAIR}>
-              <CodeBlock>
-                <Source lines={SCOPES_MD} />
-              </CodeBlock>
-              <div style={SPLIT}>
-                <h3 style={H3}>The workflow sets up the work.</h3>
-                <p style={P_SM}>
-                  The repository, the branch, and the issue are known, so the
-                  document names them. <Term>Implementor</Term>{" "}
-                  is left with the judgment.
-                </p>
-              </div>
-            </div>
-          </div>
+          <p style={P_MD}>
+            <strong style={STRONG}>A Plan is text, so it composes.</strong>{" "}
+            <Term>xmd plan</Term>{" "}
+            writes the approved program to standard output, and{" "}
+            <Term>xmd run -</Term>{" "}
+            takes a whole program from standard input — so the two are one
+            command when you want no file in between.
+          </p>
+
+          <Terminal lines={[[' xmd plan "prepare the release" | xmd run -']]} />
         </section>
 
         {/* Compose */}
@@ -772,40 +569,22 @@ export default define.page(function Home({ url }) {
                 is in the document, so the runtime knows when to stop trying.
               </p>
             </div>
-            <CodeBlock>
+            <CodeBlock copy>
               <Source lines={LOOP_MD} />
             </CodeBlock>
           </div>
 
           <div class="grid" style={`${PAIR}padding-top:0.5rem;`}>
             <div style={STACK}>
-              <CodeBlock>
+              <CodeBlock copy>
                 <Source lines={[...PARSE_MD, [], ...ELICIT_MD]} />
               </CodeBlock>
             </div>
             <div style={STACK}>
-              <h3 style={H3}>Schemas make answers usable.</h3>
+              <h3 style={H3}>Schemas make judgment usable.</h3>
               <p style={P_MD}>
-                Agents return text, and the next step needs a value. The same
-                schema does two jobs.
-              </p>
-              <p style={P_MD}>
-                <strong style={STRONG}>
-                  Tell the agent what shape to return.
-                </strong>{" "}
-                <Term>Json</Term> puts the schema directly in the prompt.
-              </p>
-              <p style={P_MD}>
-                <strong style={STRONG}>Validate what comes back.</strong>{" "}
-                <Term>Parse</Term>{" "}
-                checks the response against that same schema before binding it
-                as a value the workflow can use.
-              </p>
-              <p style={P_MD}>
-                <strong style={STRONG}>Ask a person instead.</strong>{" "}
-                <Term>Elicit</Term>{" "}
-                uses a schema for human input too, and validates the answer
-                before the run continues.
+                Whether the answer comes from an agent or a person, XMD
+                validates it before the workflow continues.
               </p>
             </div>
           </div>
@@ -823,132 +602,54 @@ export default define.page(function Home({ url }) {
                 Memory lives only in this run and its nested scopes.
               </p>
             </div>
-            <CodeBlock>
+            <CodeBlock copy>
               <Source lines={HANDOFF_MD} />
             </CodeBlock>
           </div>
+
+          <div style="display:flex;flex-direction:column;gap:0.5rem;min-width:0;padding-top:0.5rem;">
+            <h3 style={H3}>Build your own components.</h3>
+            <p style={P_MD}>
+              <strong style={STRONG}>
+                Angle-bracket components resolve to Markdown files.
+              </strong>{" "}
+              <Term>{"<Implementor />"}</Term> can be defined by{" "}
+              <Term>Implementor.md</Term>, so your own components compose
+              exactly like the ones shown here.
+            </p>
+          </div>
         </section>
 
-        {/* The nesting is the model */}
+        {/* The runtime owns the workflow */}
         <section id="model" class="section" style="gap:1.5rem;">
           <div class="section-head">
-            <h2>The nesting is the model.</h2>
-            <p>
-              Components can establish context for everything nested inside
-              them.
-            </p>
+            <h2>The runtime owns the workflow.</h2>
           </div>
 
           <div class="grid" style={PAIR}>
-            <CodeBlock filename="draft.md">
+            <CodeBlock filename="draft.md" copy>
               <Source lines={DRAFT_MD} />
             </CodeBlock>
 
             <div style="display:flex;flex-direction:column;gap:1rem;min-width:0;">
-              <ul class="marks">
-                <li>
-                  <Term>{"<TempDir>"}</Term>{" "}
-                  gives its contents an isolated working directory.
-                </li>
-                <li>
-                  <Term>{"<File>"}</Term>{" "}
-                  writes text at a path relative to that directory, creating the
-                  parents the path names.
-                </li>
-                <li>
-                  The <Term>exec</Term>{" "}
-                  block runs in the same directory, so the shell finds the file
-                  {" "}
-                  <Term>File</Term> wrote.
-                </li>
-                <li>
-                  <Term>{"<Glob>"}</Term> searches that directory too, and{" "}
-                  <Term>as</Term> binds the paths it found.
-                </li>
-              </ul>
-              <p style={CLAIM}>
-                Read the nesting as context. Each component establishes
-                something for the components inside it.
+              <p style={P_MD}>
+                <strong style={STRONG}>The nesting is the model.</strong>{" "}
+                Components establish context for everything inside them, and the
+                enclosing scope owns their lifetime.
               </p>
               <p style={P_MD}>
-                Move the <Term>File</Term> outside the <Term>TempDir</Term>{" "}
-                and it writes somewhere else. And when the enclosing scope ends,
-                the runtime removes what that scope owns — the directory goes
-                with it. Nesting is context, scope, and lifecycle.
+                <strong style={STRONG}>
+                  Effects become execution history.
+                </strong>{" "}
+                Component expansions, evaluations, and <Term>exec</Term>{" "}
+                operations are journaled automatically, without adding logging
+                statements.
+              </p>
+              <p style={P_MD}>
+                When the scope ends, XMD cleans up what it owns.
               </p>
             </div>
           </div>
-        </section>
-
-        {/* Plan */}
-        <section id="plan" class="section" style="gap:1.5rem;">
-          <div class="section-head">
-            <h2>Plans are made to be followed.</h2>
-          </div>
-
-          {/* Same instructions, two surfaces: the row states the equivalence. */}
-          <div
-            class="grid"
-            style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr));align-items:start;"
-          >
-            <div style="display:flex;flex-direction:column;gap:0.625rem;min-width:0;">
-              <span class="eyebrow">CLI</span>
-              <CodeBlock command>
-                <span class="plan-line">
-                  <Prompt /> xmd plan "
-                </span>
-                <PlanSteps />
-                <span class="plan-line">"</span>
-              </CodeBlock>
-            </div>
-
-            <div style="display:flex;flex-direction:column;gap:0.625rem;min-width:0;">
-              <span class="eyebrow">XMD</span>
-              <CodeBlock>
-                <span class="plan-line">
-                  <Source lines={[[key("<Plan>")]]} />
-                </span>
-                <PlanSteps />
-                <span class="plan-line">
-                  <Source lines={[[key("</Plan>")]]} />
-                </span>
-              </CodeBlock>
-            </div>
-          </div>
-
-          <p style={P_MD}>
-            <strong style={STRONG}>
-              <Term>xmd plan</Term> is command-line shorthand for{" "}
-              <Term>{"<Plan>"}</Term>.
-            </strong>{" "}
-            Underneath, it expands <Term>{"<Plan>"}</Term>{" "}
-            with your instructions to produce an XMD program you can review,
-            change, commit, and run.
-          </p>
-
-          <p style={P_MD}>
-            <strong style={STRONG}>Planning is part of the language.</strong>
-            {" "}
-            <Term>{"<Plan>"}</Term> uses the components exposed by{" "}
-            <Term>xmd syntax</Term>, so it plans with the same vocabulary
-            available to you.
-          </p>
-
-          <p style={P_MD}>
-            Once the workflow says what you mean, run the program instead of
-            asking an agent to figure it out again.
-          </p>
-
-          <p style={P_MD}>
-            <strong style={STRONG}>A Plan is text, so it composes.</strong>{" "}
-            <Term>xmd plan</Term>{" "}
-            writes the approved program to standard output, and{" "}
-            <Term>xmd run -</Term>{" "}
-            takes a whole program from standard input — so the two are one
-            command when you want no file in between.
-          </p>
-
-          <Terminal lines={[[' xmd plan "prepare the release" | xmd run -']]} />
         </section>
 
         {/* Durability */}
@@ -1061,30 +762,28 @@ export default define.page(function Home({ url }) {
           >
             Standalone binary · Deno · Node · Bun
           </p>
+        </section>
 
-          <div
-            class="card"
-            style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:1rem;"
+        {/* Star */}
+        <section id="star" class="section" style="gap:1rem;">
+          <span class="eyebrow eyebrow-mark">Open source · {VERSION}</span>
+          <p style={P_MD}>Star the repository to follow releases.</p>
+          <a
+            class="btn btn-primary push"
+            href={GITHUB}
+            target="_blank"
+            rel="noopener"
+            style="align-self:flex-start;"
           >
-            <div style="display:flex;flex-direction:column;gap:0.375rem;min-width:0;">
-              <span class="eyebrow">Open source · {VERSION}</span>
-              <p style={CLAIM}>Star the repository to follow releases.</p>
-            </div>
-            <a
-              class="btn push"
-              href={GITHUB}
-              rel="noopener"
-              style="font-size:0.875rem;font-weight:800;letter-spacing:0.07em;text-transform:uppercase;"
-            >
-              Star on GitHub ↗
-            </a>
-          </div>
+            Star on GitHub ↗
+          </a>
         </section>
       </div>
 
       <PageFooter />
 
       <style dangerouslySetInnerHTML={{ __html: PAGE_CSS }} />
+      <script dangerouslySetInnerHTML={{ __html: COPY_SCRIPT }} />
     </>
   );
 });

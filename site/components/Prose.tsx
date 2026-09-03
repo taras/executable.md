@@ -25,10 +25,22 @@ export const STRONG = "font-weight:800;color:var(--ink);";
 export const CHAIN_ITEM =
   `${MONO}font-size:0.8125rem;font-weight:700;color:var(--ink);`;
 
-/** An inline identifier: monospace, at full contrast against body prose. */
-export function Term({ children }: { children: ComponentChildren }) {
+/**
+ * An inline identifier: monospace, at full contrast against body prose.
+ *
+ * `heavy` matches the weight of a bold lead-in the term sits inside. The
+ * weight has to ride on the element: this style is inline, so no stylesheet
+ * rule can raise it from the outside.
+ */
+export function Term(
+  { heavy, children }: { heavy?: boolean; children: ComponentChildren },
+) {
   return (
-    <code style={`${MONO}font-weight:700;color:var(--ink);`}>{children}</code>
+    <code
+      style={`${MONO}font-weight:${heavy ? "800" : "700"};color:var(--ink);`}
+    >
+      {children}
+    </code>
   );
 }
 
@@ -68,17 +80,27 @@ export function PageFooter() {
         style={`${MONO}font-size:0.8125rem;color:var(--dim);display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:0.5rem 1rem;`}
       >
         <span>
-          Made with ❤️{" "}
-          <a href="https://frontside.com/effection/" rel="noopener">
+          Made with ❤️ using{" "}
+          <a
+            href="https://frontside.com/effection/"
+            target="_blank"
+            rel="noopener"
+          >
             Effection
           </a>.
         </span>
         <span style="display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem;">
-          <a href="https://github.com/taras/executable.md" rel="noopener">
+          <a
+            href="https://github.com/taras/executable.md"
+            target="_blank"
+            rel="noopener"
+          >
             GitHub ↗
           </a>
           <span aria-hidden="true">·</span>
-          <a href="https://discord.gg/r9F5QrZrP" rel="noopener">Discord ↗</a>
+          <a href="https://discord.gg/r9F5QrZrP" target="_blank" rel="noopener">
+            Discord ↗
+          </a>
         </span>
       </div>
     </footer>
