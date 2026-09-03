@@ -53,18 +53,22 @@ export class ExecutorObject extends WorkflowOwnerObject {
    */
   #keys: VerificationKey[] = [];
   #now = 1_800_000_000;
+  #skew = 0;
 
-  configure(keys: VerificationKey[], now?: number): void {
+  configure(keys: VerificationKey[], now?: number, skew?: number): void {
     this.#keys = keys;
     if (now !== undefined) {
       this.#now = now;
+    }
+    if (skew !== undefined) {
+      this.#skew = skew;
     }
   }
 
   protected configuration(): OwnerConfiguration {
     const verification: TokenVerification = {
       keys: this.#keys,
-      skewSeconds: 60,
+      skewSeconds: this.#skew,
       now: () => this.#now,
     };
     return { policy: POLICY, verification };

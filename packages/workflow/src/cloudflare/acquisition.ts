@@ -60,12 +60,12 @@ function attachmentOf(socket: WebSocket): AcquisitionAttachment | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
-  const members = value as Record<string, unknown>;
-  if (members["kind"] !== "executor") {
+  const members: Map<string, unknown> = new Map(Object.entries(value));
+  if (members.get("kind") !== "executor") {
     return undefined;
   }
-  const runId = members["runId"];
-  const acquisitionId = members["acquisitionId"];
+  const runId = members.get("runId");
+  const acquisitionId = members.get("acquisitionId");
   if (typeof runId !== "string" || typeof acquisitionId !== "string") {
     return undefined;
   }

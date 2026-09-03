@@ -118,23 +118,24 @@ const MEMBERS: Record<CommandName, readonly string[]> = {
   settle: [...ENVELOPE, "completion", "expectedWorkspaceRootId"],
 };
 
-function object(value: unknown): Record<string, unknown> {
+function object(value: unknown): Map<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new CommandError("not-an-object");
   }
-  return value as Record<string, unknown>;
+  const members: Map<string, unknown> = new Map(Object.entries(value));
+  return members;
 }
 
-function text(members: Record<string, unknown>, key: string): string {
-  const value = members[key];
+function text(members: Map<string, unknown>, key: string): string {
+  const value = members.get(key);
   if (typeof value !== "string" || value === "") {
     throw new CommandError("malformed-member");
   }
   return value;
 }
 
-function closed(members: Record<string, unknown>, allowed: readonly string[]): void {
-  for (const key of Object.keys(members)) {
+function closed(members: Map<string, unknown>, allowed: readonly string[]): void {
+  for (const key of members.keys()) {
     if (!allowed.includes(key)) {
       throw new CommandError("unknown-member");
     }
@@ -180,7 +181,7 @@ export function parseCommand(raw: string): RunnerCommand {
   }
   const members = object(decoded);
   const id = text(members, "id");
-  const command = members["command"];
+  const command = members.get("command");
   if (
     command !== "frontier" &&
     command !== "materialize" &&
@@ -201,7 +202,7 @@ export function parseCommand(raw: string): RunnerCommand {
     // The shared parser decides what a completion is. Its failure becomes this
     // transport's own closed refusal: the parser's message names members and
     // values a request supplied, and none of that belongs on the wire.
-    const completion = parseDocumentExecutionCompletion(members["completion"]);
+    const completion = parseDocumentExecutionCompletion(members.get("completion"));
     if (!completion.ok) {
       throw new CommandError("malformed-member");
     }
@@ -212,7 +213,7 @@ export function parseCommand(raw: string): RunnerCommand {
       expectedWorkspaceRootId: text(members, "expectedWorkspaceRootId"),
     };
   }
-  const expectedJournalEventId = members["expectedJournalEventId"];
+  const expectedJournalEventId = members.get("expectedJournalEventId");
   if (expectedJournalEventId !== null && typeof expectedJournalEventId !== "string") {
     throw new CommandError("malformed-member");
   }
@@ -221,9 +222,9 @@ export function parseCommand(raw: string): RunnerCommand {
     command,
     expectedWorkspaceRootId: text(members, "expectedWorkspaceRootId"),
     expectedJournalEventId,
-    content: chunks(members["content"]),
+    content: chunks(members.get("content")),
     proposedWorkspaceRootId: text(members, "proposedWorkspaceRootId"),
-    events: events(members["events"]),
+    events: events(members.get("events")),
   };
 }
 

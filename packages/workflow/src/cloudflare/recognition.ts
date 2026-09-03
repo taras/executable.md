@@ -25,7 +25,7 @@ import {
   type SchemaObject,
 } from "../sqlite/workflow-schema.ts";
 import { isSchemaMarker, MARKER_SQL, MARKER_TABLE, readMarker } from "./marker.ts";
-import { ownerTransaction } from "./owner-transaction.ts";
+import type { OwnerTransactions } from "./owner-transaction.ts";
 import type { OwnerStorage } from "./storage.ts";
 
 /** Why storage could not be read as a version-1 workflow run. */
@@ -86,7 +86,11 @@ function markerRows(storage: OwnerStorage): Record<string, unknown>[] {
  * ordering, so this is the code saying what the marker means: an identity claim
  * over a schema that is already complete.
  */
-export function initializeObject(storage: OwnerStorage, initializeRun: () => void): void {
+export function initializeObject(
+  storage: OwnerStorage,
+  transactions: OwnerTransactions,
+  initializeRun: () => void,
+): void {
   const objects = declaredObjects(storage);
   if (!isPristine(objects)) {
     throw new WorkflowObjectStorageError({
@@ -94,7 +98,7 @@ export function initializeObject(storage: OwnerStorage, initializeRun: () => voi
       detail: "it already holds objects and carries no workflow schema marker",
     });
   }
-  ownerTransaction(storage, ({ dofs }) => {
+  transactions.run(storage, ({ dofs }) => {
     storage.sql.exec(SCHEMA_SQL);
     initializeDofsSchema(dofs, () => 0);
     initializeRun();

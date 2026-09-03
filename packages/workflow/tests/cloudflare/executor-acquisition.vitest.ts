@@ -159,6 +159,70 @@ describe("admitting an executor", () => {
     expect(await admitted(stub, { token: "one.two" })).toBe("token:token-malformed");
   });
 
+  it("requires every temporal claim, rather than treating an absent one as met", async () => {
+    for (const missing of ["exp", "iat", "nbf"]) {
+      const stub = executor();
+      const without = claims();
+      delete without[missing];
+      expect(await admitted(stub, { token: await signToken(keys, without) })).toBe(
+        "token:malformed-claims",
+      );
+    }
+    // And a claim that is present but not a NumericDate.
+    for (const wrong of [{ exp: "soon" }, { iat: 1.5 }, { nbf: null }]) {
+      const stub = executor();
+      expect(await admitted(stub, { token: await signToken(keys, claims(wrong)) })).toBe(
+        "token:malformed-claims",
+      );
+    }
+  });
+
+  it("treats the expiration boundary itself as expired", async () => {
+    // RFC 7519 wants the current time strictly before `exp`. With no skew, a
+    // token expiring exactly now is spent.
+    const exact = executor();
+    await on(exact, (o) => o.configure([{ kid: keys.kid, jwk: keys.publicJwk }], NOW));
+    const boundary = await signToken(keys, claims({ exp: NOW }));
+    expect(
+      await on(exact, (o) => o.admitConnection({ token: boundary, release: POLICY.release })),
+    ).toBe("token:expired");
+  });
+
+  it("requires a key id naming exactly one configured key", async () => {
+    const absent = executor();
+    expect(
+      await admitted(absent, { token: await signToken(keys, claims(), { kid: undefined }) }),
+    ).toBe("token:unknown-key");
+    const empty = executor();
+    expect(await admitted(empty, { token: await signToken(keys, claims(), { kid: "" }) })).toBe(
+      "token:unknown-key",
+    );
+    const unknown = executor();
+    expect(
+      await admitted(unknown, { token: await signToken(keys, claims(), { kid: "nope" }) }),
+    ).toBe("token:unknown-key");
+  });
+
+  it("requires the header to say it is a JWT", async () => {
+    const stub = executor();
+    const token = await signToken(keys, claims(), { typ: "at+jwt" });
+    expect(await admitted(stub, { token })).toBe("token:unsupported-type");
+  });
+
+  it("refuses a clock configuration it cannot trust", async () => {
+    const negative = executor();
+    await on(negative, (o) => o.configure([{ kid: keys.kid, jwk: keys.publicJwk }], NOW, -1));
+    expect(
+      await on(negative, (o) => o.admitConnection({ release: POLICY.release, token: "a.b.c" })),
+    ).toBe("token:misconfigured-clock");
+
+    const huge = executor();
+    await on(huge, (o) => o.configure([{ kid: keys.kid, jwk: keys.publicJwk }], NOW, 86_400));
+    expect(
+      await on(huge, (o) => o.admitConnection({ release: POLICY.release, token: "a.b.c" })),
+    ).toBe("token:misconfigured-clock");
+  });
+
   it("refuses a token outside its validity window", async () => {
     const expired = executor();
     expect(

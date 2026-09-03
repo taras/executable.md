@@ -15,16 +15,22 @@ import {
   WorkflowObjectStorageError,
 } from "../../../src/cloudflare/recognition.ts";
 import { MARKER_TABLE } from "../../../src/cloudflare/marker.ts";
-import { ownerTransaction } from "../../../src/cloudflare/owner-transaction.ts";
+import {
+  OwnerTransactionNestedError,
+  OwnerTransactions,
+} from "../../../src/cloudflare/owner-transaction.ts";
+import type { OwnerStorage } from "../../../src/cloudflare/storage.ts";
 
 /** One run row, so initialization writes what a real run would. */
 const RUN_ID = "run-under-test";
 
 export class OwnerObject extends DurableObject {
+  readonly #transactions = new OwnerTransactions();
+
   /** Create the schema, DOFS schema, an empty root and the run row, then mark it. */
   initialize(): string {
     try {
-      initializeObject(this.ctx.storage, () => {
+      initializeObject(this.ctx.storage, this.#transactions, () => {
         this.ctx.storage.sql.exec(
           "INSERT INTO workflow_run (run_id, definition, base, props, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
           RUN_ID,
@@ -86,7 +92,7 @@ export class OwnerObject extends DurableObject {
    */
   commitMixedChange(fail: boolean): string {
     try {
-      ownerTransaction(this.ctx.storage, ({ dofs }) => {
+      this.#transactions.run(this.ctx.storage, ({ dofs }) => {
         mkdirPath(dofs, "/published", { recursive: true }, () => 0);
         // oxlint-disable-next-line local/no-sync-filesystem
         writeFileSync(
@@ -107,6 +113,46 @@ export class OwnerObject extends DurableObject {
         }
       });
       return "committed";
+    } catch (error) {
+      return describe(error);
+    }
+  }
+
+  /**
+   * Open an owner transaction inside one, on this object's own storage.
+   *
+   * The runtime admits exactly one, so this must be refused before it reaches
+   * the transaction API rather than by the runtime rejecting a savepoint.
+   */
+  nestOnSameStorage(): string {
+    try {
+      this.#transactions.run(this.ctx.storage, () => {
+        this.#transactions.run(this.ctx.storage, () => undefined);
+      });
+      return "nested";
+    } catch (error) {
+      return error instanceof OwnerTransactionNestedError ? "refused:nested" : describe(error);
+    }
+  }
+
+  /**
+   * Hold a transaction on this object's real storage and open another on a
+   * different storage at the same time.
+   *
+   * The second storage is a local stand-in rather than another object's: the
+   * runtime forbids touching another Durable Object's I/O, which is exactly why
+   * the guard has to be keyed by storage instance rather than shared. What is
+   * being proved is that holding one does not block the other.
+   */
+  transactOnADifferentStorage(): string {
+    const other = standInStorage();
+    try {
+      // A second gate stands for a second Durable Object: what must not happen
+      // is one object's open transaction refusing another object's.
+      const otherObject = new OwnerTransactions();
+      return this.#transactions.run(this.ctx.storage, () =>
+        otherObject.run(other, () => "committed while another storage transacted"),
+      );
     } catch (error) {
       return describe(error);
     }
@@ -134,4 +180,23 @@ function describe(error: unknown): string {
     return `refused:${error.failure.kind}`;
   }
   return `threw:${error instanceof Error ? error.message : String(error)}`;
+}
+
+/**
+ * A second storage that is not this object's.
+ *
+ * It answers nothing useful — the transaction opened on it does no SQL — so it
+ * is only ever asked whether it is a different key than the real one.
+ */
+function standInStorage(): OwnerStorage {
+  return {
+    sql: {
+      exec(): { toArray(): Record<string, unknown>[] } {
+        return { toArray: () => [] };
+      },
+    },
+    transactionSync<T>(closure: () => T): T {
+      return closure();
+    },
+  };
 }

@@ -120,3 +120,31 @@ describe("an owner commit", () => {
     });
   });
 });
+
+describe("owner transaction ownership", () => {
+  it("refuses a nested transaction on the same storage", async () => {
+    const stub = owner();
+    await on(stub, (o) => o.initialize());
+    expect(await on(stub, (o) => o.nestOnSameStorage())).toBe("refused:nested");
+  });
+
+  it("does not couple a transaction on one storage to another storage", async () => {
+    // A module-level flag would refuse the second transaction because the first
+    // was open. Every Durable Object in an isolate shares this module and
+    // shares nothing else, so the guard is keyed by the storage it governs.
+    const stub = owner();
+    await on(stub, (o) => o.initialize());
+    expect(await on(stub, (o) => o.transactOnADifferentStorage())).toBe(
+      "committed while another storage transacted",
+    );
+  });
+
+  it("releases the storage however its transaction ended", async () => {
+    const stub = owner();
+    await on(stub, (o) => o.initialize());
+    // A throwing transaction must leave the storage free for the next one.
+    await on(stub, (o) => o.commitMixedChange(true));
+    expect(await on(stub, (o) => o.commitMixedChange(false))).toBe("committed");
+    expect(await on(stub, (o) => o.nestOnSameStorage())).toBe("refused:nested");
+  });
+});

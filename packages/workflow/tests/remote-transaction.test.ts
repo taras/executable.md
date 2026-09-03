@@ -40,6 +40,18 @@ function nameOf(entry: DurableEvent | undefined): string {
   return typeof name === "string" ? name : "";
 }
 
+/**
+ * A value the collector should refuse, handed over as an event.
+ *
+ * Through `unknown` rather than a double assertion: the point of the test is
+ * that the collector parses what it is given, and manufacturing a value that
+ * claims to be an event would be asserting the thing under test.
+ */
+function malformed(value: unknown): DurableEvent {
+  const offered: unknown = value;
+  return offered as DurableEvent;
+}
+
 /** Rename a test event in place, to prove the collector cloned it. */
 function rename(entry: DurableEvent, name: string): void {
   if (!("description" in entry)) {
@@ -345,7 +357,7 @@ describe("a remote transaction", () => {
     let raised: unknown;
     try {
       yield* transactRemotely(owner, gate, function* (transaction) {
-        yield* transaction.journal.append({ nothing: true } as unknown as DurableEvent);
+        yield* transaction.journal.append(malformed({ nothing: true }));
         return undefined;
       });
     } catch (error) {

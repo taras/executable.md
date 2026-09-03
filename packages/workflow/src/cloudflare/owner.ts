@@ -22,6 +22,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import type { Operation } from "effection";
+import { OwnerTransactions } from "./owner-transaction.ts";
 import {
   acquireExecutor,
   type AcquisitionAttachment,
@@ -99,6 +100,14 @@ export function refusalOf(error: unknown): string {
  * the identities it must satisfy.
  */
 export abstract class WorkflowOwnerObject extends DurableObject {
+  /**
+   * This object's claim on its own storage.
+   *
+   * One per Durable Object, so a transaction here cannot refuse one in another
+   * object and no table outlives the object that owns it.
+   */
+  protected readonly transactions: OwnerTransactions = new OwnerTransactions();
+
   protected abstract configuration(): OwnerConfiguration;
 
   /** This object's storage, as the shared modules expect to see it. */
@@ -167,7 +176,7 @@ export abstract class WorkflowOwnerObject extends DurableObject {
   open(runId: string, initializeRun: () => void): void {
     admitRunId(runId);
     if (isPristine(declaredObjects(this.owned))) {
-      initializeObject(this.owned, initializeRun);
+      initializeObject(this.owned, this.transactions, initializeRun);
       return;
     }
     recognizeObject(this.owned);

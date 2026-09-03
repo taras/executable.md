@@ -13,6 +13,19 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped, sleep, spawn } from "effection";
 import { type OwnerSocket, OwnerLinkError, useOwnerConnection } from "../src/remote/client.ts";
 
+/** These tests are about correlation, so most of them read any value. */
+function readString(value: unknown): unknown {
+  return value;
+}
+
+/** A parser that refuses anything but a string, so a bad value fails the link. */
+function requireString(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new Error("expected a string");
+  }
+  return value;
+}
+
 /** A socket a test drives by hand. */
 function fakeSocket() {
   const sent: Record<string, unknown>[] = [];
@@ -51,7 +64,7 @@ describe("a connection to a run's owner", () => {
     yield* scoped(function* () {
       const owner = yield* useOwnerConnection(wire.socket);
       yield* sleep(0);
-      const asking = yield* spawn(() => owner.ask("a1", { command: "frontier" }));
+      const asking = yield* spawn(() => owner.ask("a1", { command: "frontier" }, readString));
       yield* sleep(0);
       // The request is on the wire before any answer exists.
       expect(wire.sent).toEqual([{ command: "frontier", id: "a1" }]);
@@ -66,8 +79,8 @@ describe("a connection to a run's owner", () => {
     yield* scoped(function* () {
       const owner = yield* useOwnerConnection(wire.socket);
       yield* sleep(0);
-      const first = yield* spawn(() => owner.ask("a1", { command: "frontier" }));
-      const second = yield* spawn(() => owner.ask("a2", { command: "settle" }));
+      const first = yield* spawn(() => owner.ask("a1", { command: "frontier" }, readString));
+      const second = yield* spawn(() => owner.ask("a2", { command: "settle" }, readString));
 
       // Answered in the opposite order to the asking.
       wire.answer({ id: "a2", outcome: "performed", value: "second" });
@@ -84,7 +97,7 @@ describe("a connection to a run's owner", () => {
     yield* scoped(function* () {
       const owner = yield* useOwnerConnection(wire.socket);
       yield* sleep(0);
-      const asking = yield* spawn(() => owner.ask("a1", { command: "commit" }));
+      const asking = yield* spawn(() => owner.ask("a1", { command: "commit" }, readString));
       wire.answer({ id: "a1", outcome: "refused", refusal: "acquisition:already-running" });
       expect(yield* asking).toEqual({
         outcome: "refused",
@@ -102,7 +115,7 @@ describe("a connection to a run's owner", () => {
       yield* sleep(0);
       const asking = yield* spawn(function* () {
         try {
-          yield* owner.ask("a1", { command: "frontier" });
+          yield* owner.ask("a1", { command: "frontier" }, readString);
         } catch (error) {
           raised = error;
         }
@@ -123,7 +136,7 @@ describe("a connection to a run's owner", () => {
       yield* sleep(0);
       wire.end();
       try {
-        yield* owner.ask("a1", { command: "frontier" });
+        yield* owner.ask("a1", { command: "frontier" }, readString);
       } catch (error) {
         raised = error;
       }
@@ -137,10 +150,10 @@ describe("a connection to a run's owner", () => {
     yield* scoped(function* () {
       const owner = yield* useOwnerConnection(wire.socket);
       yield* sleep(0);
-      yield* spawn(() => owner.ask("a1", { command: "frontier" }));
+      yield* spawn(() => owner.ask("a1", { command: "frontier" }, readString));
       yield* sleep(0);
       try {
-        yield* owner.ask("a1", { command: "settle" });
+        yield* owner.ask("a1", { command: "settle" }, readString);
       } catch (error) {
         raised = error;
       }
@@ -157,14 +170,14 @@ describe("a connection to a run's owner", () => {
       yield* sleep(0);
       const first = yield* spawn(function* () {
         try {
-          yield* owner.ask("a1", { command: "frontier" });
+          yield* owner.ask("a1", { command: "frontier" }, readString);
         } catch (error) {
           raised.push(error);
         }
       });
       const second = yield* spawn(function* () {
         try {
-          yield* owner.ask("a2", { command: "settle" });
+          yield* owner.ask("a2", { command: "settle" }, readString);
         } catch (error) {
           raised.push(error);
         }
@@ -190,7 +203,7 @@ describe("a connection to a run's owner", () => {
       yield* sleep(0);
       const asking = yield* spawn(function* () {
         try {
-          yield* owner.ask("a1", { command: "frontier" });
+          yield* owner.ask("a1", { command: "frontier" }, readString);
         } catch (error) {
           raised = error;
         }
@@ -202,6 +215,58 @@ describe("a connection to a run's owner", () => {
     expect((raised as OwnerLinkError).refusal).toBe("unknown-answer");
   });
 
+  it("fails every waiter when a success value cannot be parsed", function* () {
+    const wire = fakeSocket();
+    const raised: unknown[] = [];
+    yield* scoped(function* () {
+      const owner = yield* useOwnerConnection(wire.socket);
+      yield* sleep(0);
+      const first = yield* spawn(function* () {
+        try {
+          yield* owner.ask("a1", { command: "frontier" }, requireString);
+        } catch (error) {
+          raised.push(error);
+        }
+      });
+      const second = yield* spawn(function* () {
+        try {
+          yield* owner.ask("a2", { command: "settle" }, requireString);
+        } catch (error) {
+          raised.push(error);
+        }
+      });
+      yield* sleep(0);
+      // Performed, and the value is not what the command's parser reads. The
+      // caller must not receive it, and the other waiter must not be left.
+      wire.answer({ id: "a1", outcome: "performed", value: { not: "a string" } });
+      yield* first;
+      yield* second;
+    });
+    expect(raised).toHaveLength(2);
+    for (const error of raised) {
+      expect((error as OwnerLinkError).refusal).toBe("malformed-answer");
+    }
+  });
+
+  it("still delivers a refusal without consulting the success parser", function* () {
+    const wire = fakeSocket();
+    yield* scoped(function* () {
+      const owner = yield* useOwnerConnection(wire.socket);
+      yield* sleep(0);
+      const asking = yield* spawn(() =>
+        owner.ask("a1", { command: "commit" }, () => {
+          throw new Error("a refusal must not reach this");
+        }),
+      );
+      yield* sleep(0);
+      wire.answer({ id: "a1", outcome: "refused", refusal: "acquisition:already-running" });
+      expect(yield* asking).toEqual({
+        outcome: "refused",
+        refusal: "acquisition:already-running",
+      });
+    });
+  });
+
   it("fails closed on a second answer to a request already settled", function* () {
     const wire = fakeSocket();
     let answered: unknown;
@@ -209,14 +274,14 @@ describe("a connection to a run's owner", () => {
     yield* scoped(function* () {
       const owner = yield* useOwnerConnection(wire.socket);
       yield* sleep(0);
-      const first = yield* spawn(() => owner.ask("a1", { command: "frontier" }));
+      const first = yield* spawn(() => owner.ask("a1", { command: "frontier" }, readString));
       yield* sleep(0);
       wire.answer({ id: "a1", outcome: "performed", value: "once" });
       answered = yield* first;
 
       const second = yield* spawn(function* () {
         try {
-          yield* owner.ask("a2", { command: "settle" });
+          yield* owner.ask("a2", { command: "settle" }, readString);
         } catch (error) {
           refused = error;
         }

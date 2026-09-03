@@ -112,20 +112,16 @@ function admitClaims(policy: AdmissionPolicy, claims: ActionsClaims): void {
 }
 
 /** Read a claim set out of a verified payload. */
-function parseClaims(payload: unknown): ActionsClaims {
-  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
-    throw new AdmissionError("token-malformed");
-  }
-  const members = payload as Record<string, unknown>;
+function parseClaims(payload: Map<string, unknown>): ActionsClaims {
   return {
-    iss: members["iss"],
-    aud: members["aud"],
-    repository_id: members["repository_id"],
-    repository_owner_id: members["repository_owner_id"],
-    event_name: members["event_name"],
-    workflow_ref: members["workflow_ref"],
-    workflow_sha: members["workflow_sha"],
-    job_workflow_ref: members["job_workflow_ref"],
+    iss: payload.get("iss"),
+    aud: payload.get("aud"),
+    repository_id: payload.get("repository_id"),
+    repository_owner_id: payload.get("repository_owner_id"),
+    event_name: payload.get("event_name"),
+    workflow_ref: payload.get("workflow_ref"),
+    workflow_sha: payload.get("workflow_sha"),
+    job_workflow_ref: payload.get("job_workflow_ref"),
   };
 }
 

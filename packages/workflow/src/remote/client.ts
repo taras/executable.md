@@ -40,10 +40,26 @@ export class OwnerLinkError extends Error {
   }
 }
 
-/** What the owner answered, as the client reads it. */
-export type OwnerAnswer =
-  | { readonly outcome: "performed"; readonly value: unknown }
+/**
+ * What the owner answered, once the caller's own parser has read the value.
+ *
+ * `T` is what the request asked for. A performed answer carries a parsed value
+ * and never an `unknown`: the JSON boundary is inside this module, and letting
+ * it out would make every consumer responsible for remembering to parse — which
+ * is the kind of thing that is remembered until it is not.
+ */
+export type OwnerAnswer<T> =
+  | { readonly outcome: "performed"; readonly value: T }
   | { readonly outcome: "refused"; readonly refusal: string };
+
+/**
+ * How a request reads its own success value.
+ *
+ * Supplied with the request, because what a performed answer means is the
+ * command's business rather than the connection's. Raising is how it says the
+ * owner sent something this build cannot read.
+ */
+export type AnswerParser<T> = (value: unknown) => T;
 
 /** The socket shape this client needs, so a test can supply one. */
 export interface OwnerSocket {
@@ -55,14 +71,29 @@ export interface OwnerSocket {
 
 /** One live connection to a run's owner. */
 export interface OwnerConnection {
-  /** Send one command and wait for the answer that names it. */
-  ask(id: string, command: Record<string, unknown>): Operation<OwnerAnswer>;
+  /**
+   * Send one command and wait for the answer that names it.
+   *
+   * `parse` reads the success value. If it raises, the channel fails closed
+   * like any other disagreement about what completed — a value neither side
+   * agrees on is not something to hand a caller and carry on from.
+   */
+  ask<T>(
+    id: string,
+    command: Record<string, unknown>,
+    parse: AnswerParser<T>,
+  ): Operation<OwnerAnswer<T>>;
 }
 
 /** The most bytes one answer may carry. */
 const MAX_ANSWER = 8 * 1024 * 1024;
 
-function readAnswer(raw: unknown): { id: string; answer: OwnerAnswer } {
+/** The envelope, before the caller's parser reads the value inside it. */
+type RawAnswer =
+  | { readonly outcome: "performed"; readonly value: unknown }
+  | { readonly outcome: "refused"; readonly refusal: string };
+
+function readAnswer(raw: unknown): { id: string; answer: RawAnswer } {
   if (typeof raw !== "string") {
     throw new OwnerLinkError("malformed-answer");
   }
@@ -78,17 +109,17 @@ function readAnswer(raw: unknown): { id: string; answer: OwnerAnswer } {
   if (decoded === null || typeof decoded !== "object" || Array.isArray(decoded)) {
     throw new OwnerLinkError("malformed-answer");
   }
-  const members = decoded as Record<string, unknown>;
-  const id = members["id"];
-  const outcome = members["outcome"];
+  const members: Map<string, unknown> = new Map(Object.entries(decoded));
+  const id = members.get("id");
+  const outcome = members.get("outcome");
   if (typeof id !== "string") {
     throw new OwnerLinkError("malformed-answer");
   }
   if (outcome === "performed") {
-    return { id, answer: { outcome, value: members["value"] } };
+    return { id, answer: { outcome, value: members.get("value") } };
   }
   if (outcome === "refused") {
-    const refusal = members["refusal"];
+    const refusal = members.get("refusal");
     if (typeof refusal !== "string") {
       throw new OwnerLinkError("malformed-answer");
     }
@@ -106,7 +137,18 @@ function readAnswer(raw: unknown): { id: string; answer: OwnerAnswer } {
  */
 export function useOwnerConnection(socket: OwnerSocket): Operation<OwnerConnection> {
   return resource(function* (provide) {
-    const waiting = new Map<string, ReturnType<typeof withResolvers<OwnerAnswer>>>();
+    /**
+     * One waiting request, as the reader sees it.
+     *
+     * The command's own type stays inside the closure `ask()` built, so the
+     * reader settles an answer without naming it and nothing here has to assert
+     * what a value is. `deliver` answers whether the value could be read.
+     */
+    interface Waiter {
+      deliver(answer: RawAnswer): boolean;
+      fail(error: OwnerLinkError): void;
+    }
+    const waiting = new Map<string, Waiter>();
     /** Requests already answered, so a second answer is recognized as one. */
     const settled = new Set<string>();
     const messages = createSignal<unknown, void>();
@@ -122,7 +164,7 @@ export function useOwnerConnection(socket: OwnerSocket): Operation<OwnerConnecti
     const fail = (refusal: LinkRefusal) => {
       closed = true;
       for (const pending of waiting.values()) {
-        pending.reject(new OwnerLinkError(refusal));
+        pending.fail(new OwnerLinkError(refusal));
       }
       waiting.clear();
       socket.close();
@@ -130,7 +172,7 @@ export function useOwnerConnection(socket: OwnerSocket): Operation<OwnerConnecti
 
     yield* spawn(function* () {
       for (const raw of yield* each(messages)) {
-        let read: { id: string; answer: OwnerAnswer } | undefined;
+        let read: { id: string; answer: RawAnswer } | undefined;
         try {
           read = readAnswer(raw);
         } catch {
@@ -148,28 +190,58 @@ export function useOwnerConnection(socket: OwnerSocket): Operation<OwnerConnecti
         }
         waiting.delete(read.id);
         settled.add(read.id);
-        pending.resolve(read.answer);
+        if (!pending.deliver(read.answer)) {
+          // The owner performed the command and described the result in a way
+          // this build cannot read. Handing the caller an unparsed value is the
+          // one outcome that must not happen.
+          waiting.set(read.id, pending);
+          fail("malformed-answer");
+          break;
+        }
         yield* each.next();
       }
       closed = true;
       for (const pending of waiting.values()) {
-        pending.reject(new OwnerLinkError("closed"));
+        pending.fail(new OwnerLinkError("closed"));
       }
       waiting.clear();
     });
 
     yield* provide({
-      *ask(id: string, command: Record<string, unknown>): Operation<OwnerAnswer> {
+      *ask<T>(
+        id: string,
+        command: Record<string, unknown>,
+        parse: AnswerParser<T>,
+      ): Operation<OwnerAnswer<T>> {
         if (closed) {
           throw new OwnerLinkError("closed");
         }
         if (waiting.has(id) || settled.has(id)) {
           throw new OwnerLinkError("duplicate-answer");
         }
-        const pending = withResolvers<OwnerAnswer>();
-        waiting.set(id, pending);
+        const settle = withResolvers<OwnerAnswer<T>>();
+        waiting.set(id, {
+          deliver(answer: RawAnswer): boolean {
+            if (answer.outcome === "refused") {
+              // A refusal is an answer. Nothing is parsed and nothing fails.
+              settle.resolve(answer);
+              return true;
+            }
+            let value: T;
+            try {
+              value = parse(answer.value);
+            } catch {
+              return false;
+            }
+            settle.resolve({ outcome: "performed", value });
+            return true;
+          },
+          fail(error: OwnerLinkError): void {
+            settle.reject(error);
+          },
+        });
         socket.send(JSON.stringify({ ...command, id }));
-        return yield* pending.operation;
+        return yield* settle.operation;
       },
     });
   });
