@@ -69,6 +69,65 @@ export const ROOT_MANIFEST = JSON.stringify({
   ],
 });
 export const ROOT_ID = sha256Hex(`${WORKSPACE_ROOT_DOMAIN}${ROOT_MANIFEST}`);
+
+/** A second root: the same tree with one more file, as a proposal would be. */
+export const NEXT_BYTES = new TextEncoder().encode("published by the runner");
+export const NEXT_BLOB_ID = sha256Hex(NEXT_BYTES);
+export const NEXT_DOFS_MANIFEST = JSON.stringify({
+  version: 1,
+  chunks: [{ hash: NEXT_BLOB_ID, size: NEXT_BYTES.length }],
+});
+export const NEXT_MANIFEST_ID = sha256Hex(new TextEncoder().encode(NEXT_DOFS_MANIFEST));
+export const NEXT_ROOT_MANIFEST = JSON.stringify({
+  format: 1,
+  entries: [
+    { path: "/", kind: "directory", mode: 493, mtime: 0 },
+    {
+      path: "/NOTES.md",
+      kind: "file",
+      mode: 420,
+      mtime: 0,
+      size: NEXT_BYTES.length,
+      manifest: NEXT_MANIFEST_ID,
+      hardlink: null,
+    },
+    {
+      path: "/README.md",
+      kind: "file",
+      mode: 420,
+      mtime: 0,
+      size: FILE_BYTES.length,
+      manifest: MANIFEST_ID,
+      hardlink: null,
+    },
+  ],
+});
+export const NEXT_ROOT_ID = sha256Hex(`${WORKSPACE_ROOT_DOMAIN}${NEXT_ROOT_MANIFEST}`);
+
+/**
+ * The proposal that publishes `NEXT_ROOT_ID`.
+ *
+ * Its inventory is the exact closure of the proposed manifest: both file
+ * manifests and both blobs, once each, in canonical order. One of each is
+ * already authoritative, which is what proves the owner reuses retained content
+ * by identity rather than requiring it to be sent again.
+ */
+export function nextPublication(): Record<string, unknown> {
+  const content: { kind: string; digest: string; size: number }[] = [
+    { kind: "blob", digest: BLOB_ID, size: FILE_BYTES.length },
+    { kind: "blob", digest: NEXT_BLOB_ID, size: NEXT_BYTES.length },
+    { kind: "manifest", digest: MANIFEST_ID, size: DOFS_MANIFEST.length },
+    { kind: "manifest", digest: NEXT_MANIFEST_ID, size: NEXT_DOFS_MANIFEST.length },
+  ];
+  content.sort((left, right) =>
+    `${left.kind}:${left.digest}` < `${right.kind}:${right.digest}` ? -1 : 1,
+  );
+  return {
+    proposedWorkspaceRootId: NEXT_ROOT_ID,
+    proposedManifest: NEXT_ROOT_MANIFEST,
+    content,
+  };
+}
 const CREATED_AT = "2026-09-03T00:00:00.000Z";
 
 export class ExecutorObject extends WorkflowOwnerObject {
@@ -214,6 +273,63 @@ export class ExecutorObject extends WorkflowOwnerObject {
     return sha256Hex(
       JSON.stringify(tables.map((query) => this.ctx.storage.sql.exec(query).toArray())),
     );
+  }
+
+  /**
+   * Fail inside the owner transaction, after every category has been written.
+   *
+   * Injected rather than simulated: the claim is that the runtime's own
+   * transaction rolls content, roots, references, mappings, the pointer, the
+   * journal and the retry decision back together, and only a real failure
+   * inside a real `transactionSync()` can show that.
+   */
+  failAfterApply(raw: string): string {
+    try {
+      return String(
+        this.transactions.run(this.ctx.storage, () => {
+          const socket = this.ctx.getWebSockets("executor")[0];
+          if (socket === undefined) {
+            throw new Error("no live acquisition");
+          }
+          const answer = this.onRunnerMessage(socket, RUN_ID, raw);
+          throw new Error(`forced failure after ${JSON.stringify(answer)}`);
+        }),
+      );
+    } catch (error) {
+      return error instanceof Error && error.message.startsWith("forced failure")
+        ? "rolled-back"
+        : `threw:${String(error)}`;
+    }
+  }
+
+  /** Everything a reader could observe about the published frontier. */
+  published(): Record<string, unknown> {
+    const state = this.ctx.storage.sql
+      .exec("SELECT current_root_id FROM workspace_state WHERE singleton_id = 1")
+      .toArray()[0];
+    const roots = this.ctx.storage.sql
+      .exec("SELECT count(*) AS found FROM workspace_roots")
+      .toArray()[0];
+    const events = this.ctx.storage.sql
+      .exec("SELECT event_id, workspace_root_id FROM journal_events ORDER BY sequence")
+      .toArray();
+    const repositories = this.ctx.storage.sql
+      .exec("SELECT name, checkout_path FROM workspace_repositories ORDER BY name")
+      .toArray();
+    const blobs = this.ctx.storage.sql
+      .exec("SELECT count(*) AS found FROM vfs_blob_bytes")
+      .toArray()[0];
+    const refs = this.ctx.storage.sql
+      .exec("SELECT count(*) AS found FROM workspace_root_blob_refs")
+      .toArray()[0];
+    return {
+      currentRootId: state?.["current_root_id"] ?? null,
+      roots: Number(roots?.["found"] ?? -1),
+      events,
+      repositories,
+      blobs: Number(blobs?.["found"] ?? -1),
+      blobRefs: Number(refs?.["found"] ?? -1),
+    };
   }
 
   damageRetainedBlob(): void {

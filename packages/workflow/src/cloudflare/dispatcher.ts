@@ -47,6 +47,7 @@ import { bytesOf, decodeBase64, sha256Hex } from "./encoding.ts";
 import { readContent, readFrontier, readJournalPage, readRoot } from "./owner-reads.ts";
 import type { OwnerTransactions } from "./owner-transaction.ts";
 import { COMMAND_TABLE, STAGING_TABLE } from "./private-schema.ts";
+import { applyCommit } from "./publish.ts";
 import { recognizeObject } from "./recognition.ts";
 
 function requestFingerprint(command: RunnerCommand): string {
@@ -89,6 +90,17 @@ function storedDecision(value: unknown, id: string): CommandResult | "reconstruc
     return { id, outcome, refusal };
   }
   throw new Error("private protocol storage holds a malformed result");
+}
+
+/**
+ * A fresh opaque identity for one retained event.
+ *
+ * Minted by the owner inside the transaction that writes the row. An id the
+ * runner chose would be a runner deciding what a retained event is called, and
+ * two runners could choose the same one.
+ */
+function mintEventId(): string {
+  return crypto.randomUUID();
 }
 
 function retainedDecision(command: RunnerCommand, result: CommandResult): string {
@@ -200,6 +212,16 @@ function perform(
   if (command.command === "stage") {
     return { id: command.id, outcome: "performed", value: stage(ctx, acquisitionId, command) };
   }
+  if (command.command === "commit") {
+    return {
+      id: command.id,
+      outcome: "performed",
+      value: applyCommit(ctx.storage, acquisitionId, command, mintEventId),
+    };
+  }
+  // `settle` is a later checkpoint's. It parses strictly and is declined,
+  // because a placeholder that reported success is the one answer a runner
+  // cannot recover from.
   return { id: command.id, outcome: "refused", refusal: "command:unavailable" };
 }
 

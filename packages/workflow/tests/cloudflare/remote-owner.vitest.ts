@@ -576,19 +576,10 @@ describe("the remote owner protocol", () => {
     expect(first).toMatchObject({ outcome: "performed" });
   });
 
-  it("refuses D3 and D4 mutations rather than reporting placeholder success", async () => {
+  it("refuses a settlement rather than reporting placeholder success", async () => {
     const stub = executor();
     await on(stub, (owner) => owner.initialize());
     await admit(stub);
-    expect(
-      await send(stub, "commit", {
-        command: "commit",
-        expectedWorkspaceRootId: ROOT_ID,
-        expectedJournalEventId: null,
-        proposedWorkspaceRootId: ROOT_ID,
-        events: [],
-      }),
-    ).toEqual({ id: "commit", outcome: "refused", refusal: "command:unavailable" });
     expect(
       await send(stub, "settle", {
         command: "settle",

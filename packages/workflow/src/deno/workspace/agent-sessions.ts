@@ -38,7 +38,6 @@
  */
 
 import type { DatabaseSync } from "node:sqlite";
-import { createHash } from "node:crypto";
 
 /** A retained Agent session this host will not continue under. */
 export class WorkflowAgentSessionError extends Error {
@@ -46,54 +45,26 @@ export class WorkflowAgentSessionError extends Error {
 }
 
 /**
- * One durable identity a provider asserted, and what kind of thing it is.
+ * The shape and the key derivation are the shared rule, not this adapter's.
  *
- * Tagged, because "the adapter's own session id" and "an ACP session id" and "a
- * record id in some store" are different claims that happen to be strings. A
- * host comparing them without the tag would accept one for another.
+ * Both hosts retain these mappings, and two derivations would be two keys for
+ * one session — reattachment would quietly start a new conversation instead of
+ * finding the old one. What stays here is the storage: the columns, the
+ * statements, and the transaction they run in.
  */
-export interface ProviderAssertion {
-  readonly kind: string;
-  readonly value: string;
-}
+import {
+  agentSessionKey,
+  type AgentSessionIdentity,
+  type AgentSessionRecord,
+  type ProviderAssertion,
+} from "../../storage/agent-session.ts";
 
-/** What identifies one logical Agent session. */
-export interface AgentSessionIdentity {
-  /** Which provider holds the conversation, as that provider names itself. */
-  readonly provider: string;
-  /** The resolved agent command, not the name a document wrote. */
-  readonly agentCommand: string;
-  /** The engine-derived Agent/Session expansion identity. Never authored. */
-  readonly sessionIdentity: string;
-}
-
-/** One retained mapping, as the run's database holds it. */
-export interface AgentSessionRecord extends AgentSessionIdentity {
-  readonly sessionKey: string;
-  /** The session policy in force when the provider created this session. */
-  readonly policy: string;
-  readonly assertion: ProviderAssertion;
-  readonly createdAt: string;
-}
-
-function digest(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex").slice(0, 32);
-}
-
-/**
- * The key one logical session is retained under, within this run.
- *
- * The engine-derived Session expansion identity and nothing else. The provider
- * and the resolved agent command are compatibility attributes stored beside it:
- * changing either refuses reattachment rather than addressing a second mapping,
- * because a `<Session>` element that changed agent is the same element asking
- * for something this run cannot give it.
- *
- * Digested so it stays bounded, and namespaced so a row is recognizable.
- */
-export function agentSessionKey(identity: AgentSessionIdentity): string {
-  return ["xmd", "workflow", "v1", digest(identity.sessionIdentity)].join(":");
-}
+export { agentSessionKey, parseAgentSessionRecord } from "../../storage/agent-session.ts";
+export type {
+  AgentSessionIdentity,
+  AgentSessionRecord,
+  ProviderAssertion,
+} from "../../storage/agent-session.ts";
 
 const COLUMNS = `session_key, provider, agent_command, session_identity, policy,
   assertion_kind, assertion_value, created_at`;

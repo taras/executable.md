@@ -335,7 +335,7 @@ describe("reading a runner command", () => {
     );
   });
 
-  it("reads a commit intent whole, then refuses to act on it in this release", async () => {
+  it("reads a commit intent whole, then refuses one proposed against a moved frontier", async () => {
     const stub = executor();
     await on(stub, (o) => o.initialize());
     await admitted(stub);
@@ -344,16 +344,21 @@ describe("reading a runner command", () => {
       command: "commit",
       expectedWorkspaceRootId: `a${"0".repeat(63)}`,
       expectedJournalEventId: null,
-      proposedWorkspaceRootId: `b${"1".repeat(63)}`,
+      publication: {
+        proposedWorkspaceRootId: `b${"1".repeat(63)}`,
+        proposedManifest: "{}",
+        content: [],
+      },
+      mappings: [],
       events: ["event-1"],
     });
     // The shape is read — an unknown member or a malformed root would refuse
-    // differently — and then declined, because applying one is a later
-    // checkpoint's work and a performed placeholder would be a lie.
+    // differently — and then declined on its merits: this run's frontier is not
+    // the root the proposal says it started from.
     expect(await on(stub, (o) => o.send(1, raw))).toEqual({
       id: "7",
       outcome: "refused",
-      refusal: "command:unavailable",
+      refusal: "command:stale-root",
     });
     expect(
       await on(stub, (o) => o.send(1, JSON.stringify({ ...JSON.parse(raw), id: "8", extra: 1 }))),

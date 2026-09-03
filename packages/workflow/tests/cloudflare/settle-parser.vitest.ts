@@ -128,7 +128,10 @@ describe("a root identity in a command", () => {
         sourceManifest: ROOT,
       }),
     "commit.expectedWorkspaceRootId": (root) => commit({ expectedWorkspaceRootId: root }),
-    "commit.proposedWorkspaceRootId": (root) => commit({ proposedWorkspaceRootId: root }),
+    "commit.publication.proposedWorkspaceRootId": (root) =>
+      commit({
+        publication: { proposedWorkspaceRootId: root, proposedManifest: "{}", content: [] },
+      }),
     "settle.expectedWorkspaceRootId": (root) => settle({ expectedWorkspaceRootId: root }),
   };
 
@@ -138,7 +141,8 @@ describe("a root identity in a command", () => {
       command: "commit",
       expectedWorkspaceRootId: ROOT,
       expectedJournalEventId: null,
-      proposedWorkspaceRootId: ROOT,
+      publication: { proposedWorkspaceRootId: ROOT, proposedManifest: "{}", content: [] },
+      mappings: [],
       events: [],
       ...overrides,
     });
