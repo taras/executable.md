@@ -27,6 +27,9 @@ import {
 
 const GITHUB = "https://github.com/taras/executable.md";
 const SPEC = `${GITHUB}/blob/main/specs/executable-mdx-spec.md`;
+/** The planner is an ordinary XMD document; the raw file is the evidence. */
+const PLANNER_SOURCE =
+  "https://raw.githubusercontent.com/taras/executable.md/refs/heads/main/packages/cli/src/documents/Plan.md";
 const VERSION = "v0.11.0";
 
 const STEP_NUMBER =
@@ -528,6 +531,15 @@ export default define.page(function Home({ url }) {
             {" "}
             Then run the program instead of asking an agent to figure the
             workflow out again.
+          </p>
+
+          <p style={P_MD}>
+            <strong style={STRONG}>
+              <Term heavy>{"<Plan>"}</Term> is itself written in XMD.
+            </strong>{" "}
+            <a href={PLANNER_SOURCE} target="_blank" rel="noopener">
+              Read the planner source ↗
+            </a>
           </p>
 
           <p style={P_MD}>
