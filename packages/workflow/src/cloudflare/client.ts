@@ -26,12 +26,13 @@
  * caller — half a journal that looks whole is worse than no journal.
  */
 
-import { Err, type Operation, type Result } from "effection";
+import { Err, Ok, type Operation, type Result } from "effection";
+import { serializeDurableEvent } from "@executablemd/durable-streams";
 import type { JournalEntry } from "../storage/api.ts";
 import { parseMembers, requireMemberNames } from "../storage/members.ts";
 import type { DefinitionRetrieval, WorkflowRunRecord } from "../storage/record.ts";
 import type { CommitIntent, OwnerLink, StartingFrontier } from "../remote/collector.ts";
-import type { OwnerAnswer, OwnerConnection } from "../remote/client.ts";
+import { OwnerLinkError, type OwnerAnswer, type OwnerConnection } from "../remote/client.ts";
 import {
   parseRemoteJournalEntry,
   parseRemoteRetrieval,
@@ -359,14 +360,141 @@ export function cloudflareReadLink(
   };
 }
 
-export function cloudflareOwnerLink(reads: RemoteReadLink): OwnerLink {
+/**
+ * The bytes one proposed piece is made of, when the owner has to be sent them.
+ *
+ * A runner holds the content it captured; the owner may already hold some of
+ * it. Supplying bytes by identity lets the adapter stage only what is missing
+ * rather than resending a Workspace the owner never lost.
+ */
+export type ProposedBytes = (kind: "manifest" | "blob", digest: string) => Uint8Array | undefined;
+
+/**
+ * The runner's production link to its owner.
+ *
+ * `commit()` is the whole publication path: stage the pieces the owner does not
+ * have, encode one closed command, send it, and read the decision. The command
+ * identity is minted once per intent and reused verbatim on a retry, because
+ * the owner recognizes a retry by that identity and a regenerated one would be
+ * a second proposal rather than the same question asked again.
+ */
+export function cloudflareOwnerLink(
+  connection: OwnerConnection,
+  reads: RemoteReadLink,
+  nextId: () => string,
+  bytesOf: ProposedBytes = () => undefined,
+): OwnerLink {
   return {
     *frontier(): Operation<StartingFrontier> {
       return startingFrontier(yield* reads.frontier());
     },
-    *commit(_intent: CommitIntent): Operation<Result<void>> {
-      return Err(new CloudflareOwnerRefusalError("command:unavailable"));
+
+    *commit(intent: CommitIntent): Operation<Result<void>> {
+      // Minted before anything is sent, and reused for the life of this intent.
+      const id = nextId();
+      try {
+        yield* stageMissing(connection, nextId, intent, bytesOf);
+        const request = commitRequest(intent);
+        const answered = yield* ask(connection, id, request);
+        return answered.outcome === "refused"
+          ? Err(new CloudflareOwnerRefusalError(answered.refusal))
+          : Ok();
+      } catch (error) {
+        if (error instanceof OwnerLinkError) {
+          // The connection went while the answer was in flight. Whether the
+          // owner committed is exactly what cannot be known from here, so the
+          // caller learns the outcome is undecided rather than being told it
+          // failed — retrying this same id is what settles it.
+          return Err(error);
+        }
+        throw error;
+      }
     },
+  };
+}
+
+/** One command sent and one answer read, with the private refusal narrowed. */
+function* ask(
+  connection: OwnerConnection,
+  id: string,
+  request: Record<string, unknown>,
+): Operation<{ outcome: "performed" } | { outcome: "refused"; refusal: PrivateRefusal }> {
+  const offered = yield* connection.ask(
+    id,
+    request,
+    (value) => {
+      // A performed commit answers with what it published. Reading it proves
+      // the owner and this build agree about what just happened.
+      const found = members(value, ["workspaceRootId", "journalEventIds"]);
+      rootId(found.get("workspaceRootId"));
+      const ids = found.get("journalEventIds");
+      if (!Array.isArray(ids) || ids.some((entry) => typeof entry !== "string" || entry === "")) {
+        return fail("a commit answer did not name the events it retained");
+      }
+      return true;
+    },
+    privateRefusal,
+  );
+  return offered.outcome === "refused"
+    ? { outcome: "refused", refusal: privateRefusal(offered.refusal) }
+    : { outcome: "performed" };
+}
+
+/**
+ * Send the pieces the owner does not already hold.
+ *
+ * Staging is idempotent by identity, so a retry after an ambiguous answer
+ * re-offers the same bytes and the owner recognizes them rather than storing
+ * them twice. Anything the owner already has is not sent at all: content is
+ * addressed by what it is, and re-uploading a Workspace it never lost would be
+ * bytes crossing for nothing.
+ */
+function* stageMissing(
+  connection: OwnerConnection,
+  nextId: () => string,
+  intent: CommitIntent,
+  bytesOf: ProposedBytes,
+): Operation<void> {
+  if (intent.publication === null) {
+    return;
+  }
+  for (const piece of intent.publication.content) {
+    const bytes = bytesOf(piece.kind, piece.digest);
+    if (bytes === undefined) {
+      // The owner is expected to hold this one already. If it does not, the
+      // commit refuses rather than this guessing at bytes it does not have.
+      continue;
+    }
+    yield* stageCloudflareContent(connection, nextId(), piece.kind, bytes);
+  }
+}
+
+/** The one closed command a complete intent becomes. */
+function commitRequest(intent: CommitIntent): Record<string, unknown> {
+  return {
+    command: "commit",
+    expectedWorkspaceRootId: intent.expectedWorkspaceRootId,
+    expectedJournalEventId: intent.expectedJournalEventId,
+    publication:
+      intent.publication === null
+        ? null
+        : {
+            proposedWorkspaceRootId: intent.publication.proposedWorkspaceRootId,
+            proposedManifest: intent.publication.proposedManifest,
+            content: intent.publication.content.map((piece) => ({
+              kind: piece.kind,
+              digest: piece.digest,
+              size: piece.size,
+            })),
+          },
+    mappings: intent.mappings.map((mapping) =>
+      mapping.kind === "repository"
+        ? { kind: mapping.kind, record: { ...mapping.record }, locator: mapping.locator }
+        : { kind: mapping.kind, record: { ...mapping.record } },
+    ),
+    // Exactly what the serializer produces, in the order the transaction
+    // appended them. The owner parses each one and requires these same bytes.
+    events: intent.events.map((event) => serializeDurableEvent(event)),
   };
 }
 

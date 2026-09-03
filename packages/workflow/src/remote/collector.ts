@@ -23,6 +23,7 @@
  */
 
 import { call, ensure, Ok, type Operation, type Result } from "effection";
+import type { RetainedMapping, WorkspacePublication } from "./publication.ts";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import type { DurableStream } from "@executablemd/durable-streams";
 import type { WorkflowRunTransaction } from "../storage/api.ts";
@@ -30,6 +31,8 @@ import type { WorkflowRunTransaction } from "../storage/api.ts";
 /** Why a transaction could not be run or committed. */
 export type CollectorRefusal =
   | "nested-transaction"
+  | "publication-already-enlisted"
+  | "too-many-mappings"
   | "transaction-closed"
   | "operation-inside-body"
   | "too-many-events"
@@ -51,11 +54,32 @@ export interface StartingFrontier {
   readonly events: readonly DurableEvent[];
 }
 
-/** One closed intent, as the owner will receive it. */
+/**
+ * One closed intent, as the owner will receive it.
+ *
+ * Everything the transaction decided, and nothing it did not. `publication` is
+ * absent for a transaction that only appended to the journal — a real case, and
+ * inventing a Workspace change to make the shape uniform would publish a root
+ * nobody asked for.
+ */
 export interface CommitIntent {
   readonly expectedWorkspaceRootId: string;
   readonly expectedJournalEventId: string | null;
   readonly events: readonly DurableEvent[];
+  readonly publication: WorkspacePublication | null;
+  readonly mappings: readonly RetainedMapping[];
+}
+
+/**
+ * What a Workspace operation enlisted, if one did.
+ *
+ * At most one per transaction. Two would be two Workspaces proposed for one
+ * commit, and the owner would have to choose — which is a decision nobody is
+ * entitled to make on the run's behalf.
+ */
+export interface WorkspaceEnlistment {
+  readonly publication: WorkspacePublication;
+  readonly mappings: readonly RetainedMapping[];
 }
 
 /** What the collector needs from the connection. */
@@ -71,6 +95,9 @@ const MAX_EVENTS = 4096;
 
 /** The most serialized bytes one intent may carry. */
 const MAX_EVENT_BYTES = 4 * 1024 * 1024;
+
+/** The most retained mapping changes one intent may carry. */
+const MAX_MAPPINGS = 256;
 
 /**
  * Admit one event and detach it from whoever handed it over.
@@ -135,7 +162,7 @@ export function requireNoOpenTransaction(gate: TransactionGate): void {
 export function transactRemotely<T>(
   link: OwnerLink,
   gate: TransactionGate,
-  body: (transaction: WorkflowRunTransaction) => Operation<T>,
+  body: (transaction: WorkflowRunTransaction, enlist: EnlistWorkspace) => Operation<T>,
 ): Operation<Result<T>> {
   return call(function* (): Operation<Result<T>> {
     // Taken synchronously, before the first suspension. Checking and then
@@ -184,11 +211,34 @@ export function transactRemotely<T>(
         },
       };
 
+      let enlisted: WorkspaceEnlistment | undefined;
+      /**
+       * How a Workspace operation puts its result into this transaction.
+       *
+       * Private: it is handed to the body rather than reachable from the
+       * database, so work that never received it cannot publish a Workspace by
+       * accident. Detached on the way in, because the caller still holds the
+       * arrays and records it passed and a proposal that changed after it was
+       * admitted would not be the proposal the identity was computed over.
+       */
+      const enlist: EnlistWorkspace = (proposal: WorkspaceEnlistment): void => {
+        if (!live) {
+          throw new RemoteTransactionError("transaction-closed");
+        }
+        if (enlisted !== undefined) {
+          throw new RemoteTransactionError("publication-already-enlisted");
+        }
+        if (proposal.mappings.length > MAX_MAPPINGS) {
+          throw new RemoteTransactionError("too-many-mappings");
+        }
+        enlisted = detach(proposal);
+      };
+
       let outcome: T;
       try {
         // Everything the body started tears down before the intent is built, so
         // "no commit was sent" and "the body did not finish" are one statement.
-        outcome = yield* call(() => body({ journal }));
+        outcome = yield* call(() => body({ journal }, enlist));
       } finally {
         // The handle is closed before the commit goes out, so a retained
         // transaction object refuses while the handle-level gate is still held.
@@ -200,6 +250,8 @@ export function transactRemotely<T>(
         expectedJournalEventId: starting.journalEventId,
         // A private snapshot. The collector's own array never leaves.
         events: appended.map((event) => structuredClone(event)),
+        publication: enlisted?.publication ?? null,
+        mappings: enlisted?.mappings ?? [],
       });
       if (!committed.ok) {
         return committed;
@@ -207,6 +259,34 @@ export function transactRemotely<T>(
       // Only now. `T` is the body's own value and never crossed the connection.
       return Ok(outcome);
     }
+  });
+}
+
+/** How a Workspace operation enlists its one publication in the active transaction. */
+export type EnlistWorkspace = (proposal: WorkspaceEnlistment) => void;
+
+/**
+ * A copy nobody else holds a reference into.
+ *
+ * The caller keeps whatever it passed, and may go on using it. What the intent
+ * carries has to be what was admitted at the moment it was admitted — a
+ * publication whose inventory or manifest changed afterwards would not be the
+ * one its identity was computed over.
+ */
+function detach(proposal: WorkspaceEnlistment): WorkspaceEnlistment {
+  return Object.freeze({
+    publication: Object.freeze({
+      proposedWorkspaceRootId: proposal.publication.proposedWorkspaceRootId,
+      proposedManifest: proposal.publication.proposedManifest,
+      content: Object.freeze(
+        proposal.publication.content.map((piece) => Object.freeze({ ...piece })),
+      ),
+    }),
+    mappings: Object.freeze(
+      proposal.mappings.map((mapping) =>
+        Object.freeze({ ...mapping, record: Object.freeze({ ...mapping.record }) }),
+      ),
+    ) as readonly RetainedMapping[],
   });
 }
 

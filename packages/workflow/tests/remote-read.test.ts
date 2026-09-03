@@ -409,7 +409,12 @@ describe("semantic reads from a Cloudflare owner", () => {
     let committed: unknown;
     yield* scoped(function* () {
       const connection = yield* useOwnerConnection(transport.socket);
-      const link = cloudflareOwnerLink(cloudflareReadLink(connection, ids(), RUN_ID));
+      const request = ids();
+      const link = cloudflareOwnerLink(
+        connection,
+        cloudflareReadLink(connection, request, RUN_ID),
+        request,
+      );
       // Two pages went over the wire. What the body reads back is one journal:
       // the collector is handed the assembled prefix and never learns that a
       // page, a cursor or an anchor was involved.

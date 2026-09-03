@@ -24,14 +24,18 @@ import {
   mkdir,
   readdir,
   readFile,
+  mkdtemp,
   readlink,
+  rm,
   symlink,
   utimes,
   writeFile,
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Operation, until } from "effection";
+import { ensure, type Operation, resource, until } from "effection";
 import type { RunnerFiles, RunnerNode } from "../remote/materialize.ts";
+import type { TemporaryTrees } from "../remote/invocation.ts";
 
 /** Whole seconds, which is what a retained entry records. */
 function seconds(milliseconds: number): number {
@@ -160,4 +164,37 @@ export function runnerFiles(): RunnerFiles {
       return describeStats("", stats, undefined);
     },
   };
+}
+
+/**
+ * Temporary trees for one invocation, owned by the scope that asked for them.
+ *
+ * Every tree this hands out is removed when that scope ends, however it ends.
+ * A run that left one behind would leave a materialized Workspace on a machine
+ * that has stopped being responsible for it.
+ */
+export function useRunnerTrees(): Operation<TemporaryTrees> {
+  return resource(function* (provide) {
+    const roots: string[] = [];
+    yield* ensure(function* () {
+      // In reverse, so a nested tree goes before whatever contains it.
+      for (const root of roots.toReversed()) {
+        yield* until(rm(root, { recursive: true, force: true }));
+      }
+    });
+    yield* provide({
+      *create(purpose: string): Operation<string> {
+        const root = yield* until(mkdtemp(join(tmpdir(), `xmd-workflow-${purpose}-`)));
+        roots.push(root);
+        return root;
+      },
+      *remove(path: string): Operation<void> {
+        yield* until(rm(path, { recursive: true, force: true }));
+        const found = roots.indexOf(path);
+        if (found >= 0) {
+          roots.splice(found, 1);
+        }
+      },
+    });
+  });
 }
