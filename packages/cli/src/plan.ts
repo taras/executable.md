@@ -2,27 +2,24 @@
  * `xmd plan` — the trusted host around the plan command document
  * (specs/plan-command-spec.md).
  *
- * Every invocation executes one root document — the packaged plan command
- * document — and a second one only when `--run` asks for it:
+ * Every invocation executes exactly one root document — the packaged plan
+ * command document — and produces one thing: the approved program's source.
  *
  * ```text
  * fixed command preflight
  *   -> build the run-profile syntax catalog
  *   -> execute the exact packaged plan command document
  *   -> await that execution and provider teardown
- *   -> validate the returned source again
- *   -> deliver those exact bytes, in exactly one of four ways:
+ *   -> structurally validate the returned source again
+ *   -> deliver those exact bytes, in exactly one of two ways:
  *        (default)          write the source to stdout
  *        --output           exclusively create the file
- *        --run              execute retainedSource("<plan>", source)
- *                             through the ordinary run path
- *        --output --run     create the file, then execute it
  * ```
  *
- * The complete scope boundary sits before that optional second execution: the
- * command document and everything it built are gone before a Plan is admitted,
- * so whichever result follows, it follows an invocation that has already let go
- * of the conversation that wrote it.
+ * Nothing after that delivery starts. Whether the approved program ever runs is
+ * the caller's own composition — `xmd plan … | xmd run -`, or an `--output`
+ * artifact given to a later `xmd run` — so the command that wrote a program
+ * never also decides when it happens.
  *
  * What a person is asked, how many drafts may be repaired, how many may be
  * reviewed and what happens when nobody approves anything are not here. They are
@@ -31,14 +28,7 @@
  * workflow cannot be trusted to do for
  * itself: settle the command line, build the ceiling the assistant runs under,
  * answer honestly about a draft, and hold the boundary between text an agent
- * wrote and a Plan this host will hand over or run.
- *
- * Two kinds of failure are told apart throughout, because they have different
- * remedies. A *draft* failure is something the agent wrote, so the plan
- * command document is told the facts and may ask for another draft. A *caller*
- * failure is something the command line or the environment said, so it raises
- * out of the validator and ends that execution: no draft the agent could write
- * would fix it, and a workflow that could catch it could call it feedback.
+ * wrote and source this host will hand over.
  */
 
 import { Err, Ok, scoped, until, useScope } from "effection";
@@ -51,46 +41,28 @@ import process from "node:process";
 
 import {
   agentIdentityComponents,
-  inspectDocument,
   retainedSource,
-  validateDocument,
+  validateDocumentStructure,
 } from "@executablemd/core";
-import type {
-  DocumentValidation,
-  DocumentValidationCode,
-  Json,
-  PropsSchema,
-  RootDocumentSource,
-  SyntaxCatalog,
-} from "@executablemd/core";
+import type { DocumentValidation, Json, SyntaxCatalog } from "@executablemd/core";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { cwd } from "@executablemd/runtime";
 
-import type { AgentStack } from "./agent-stack.ts";
+import type { AuthorshipStack } from "./agent-stack.ts";
 import {
   DEFAULT_AUTHORSHIP_ROOT,
   planAgentContext,
   runPlanCommandDocument,
 } from "./authorship-profile.ts";
 import type { CandidateAssessment } from "./authorship-profile.ts";
-import { PLAN_IDENTITY, planComponentDeclaration } from "./plan-component.ts";
+import {
+  PLAN_IDENTITY,
+  planComponentDeclaration,
+  planComponentDescription,
+} from "./plan-component.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
-import {
-  buildBindings,
-  describeError,
-  extractPropsArgs,
-  resolvePropsFromSources,
-} from "./props.ts";
-import type { Binding, Extraction } from "./props.ts";
-import { reportFailure } from "./report.ts";
+import { describeError } from "./props.ts";
 import { renderSyntaxMarkdown, useRunProfileRegistry } from "./syntax.ts";
-import {
-  isReservedOption,
-  signatureFailure,
-  signatureOf,
-  strayPropertyValue,
-} from "./plan-args.ts";
-import type { OptionSignature, PlanScan } from "./plan-args.ts";
 
 /**
  * The identity approved text runs under.
@@ -101,33 +73,17 @@ import type { OptionSignature, PlanScan } from "./plan-args.ts";
  */
 export { PLAN_IDENTITY } from "./plan-component.ts";
 
-/** The approved bytes, and the props resolved under exactly those bytes. */
-export interface PlanExecution {
-  root: RootDocumentSource;
-  props: Record<string, Json>;
-}
-
 /** What one `xmd plan` invocation was asked to do. */
 export interface PlanCommand {
-  /** The argv this invocation holds, and the props source for every candidate. */
-  argv: string[];
-  /** What fixed grammar established about that argv. */
-  scan: PlanScan;
+  /** The request, byte for byte, as fixed grammar preserved it. */
+  request: string;
   include: string[];
   /** Where the approved Plan is written, when the caller asked for a file. */
   output?: string;
-  /** Whether the caller asked for the approved Plan to be run. */
-  run: boolean;
   /** The logical assistant-session name, when the caller chose one. */
   session?: string;
-  /**
-   * The Agent configuration this invocation settled, before the command ran.
-   *
-   * Settled by the caller rather than here, because the run that may follow
-   * approval is configured from the same answer: two resolutions of one command
-   * line is two chances to read `DEFAULT_AGENT_NAME` differently.
-   */
-  stack: AgentStack;
+  /** Who writes the Plan, settled before the command began. */
+  stack: AuthorshipStack;
 }
 
 /** What the host supplies. Every entry is a decision only a host can make. */
@@ -149,38 +105,7 @@ export interface PlanDependencies {
    * reach, so a document cannot move where the ceiling lives.
    */
   authorshipRoot?: string;
-  /** Run the approved document the way this host runs any supplied one. */
-  execute(approved: PlanExecution): Operation<Result<void>>;
 }
-
-/** The command-owned findings that are not core's to report. */
-interface DraftDiagnostic {
-  code: "generated-binding-collision" | "root-props-unreadable";
-  message: string;
-}
-
-/** Everything definite that is wrong with one candidate. */
-interface CandidateDefects {
-  /** Core's complete versioned answer, whenever core produced one. */
-  validation?: DocumentValidation;
-  /** What this command found about the options the candidate generates. */
-  draft?: DraftDiagnostic;
-}
-
-type CandidateOutcome =
-  | { kind: "valid"; props: Record<string, Json> }
-  | { kind: "repairable"; defects: CandidateDefects }
-  | { kind: "terminal"; error: Error };
-
-/** The codes that say the root's own declaration could not be read. */
-const DECLARATION_CODES: ReadonlySet<DocumentValidationCode> = new Set<DocumentValidationCode>([
-  "source-unreadable",
-  "source-invalid",
-  "target-invalid",
-  "frontmatter-invalid",
-  "props-declaration-invalid",
-  "returns-declaration-invalid",
-]);
 
 /**
  * Run the command, and report the process status it earned.
@@ -189,13 +114,6 @@ const DECLARATION_CODES: ReadonlySet<DocumentValidationCode> = new Set<DocumentV
  * phase reads, so a refusal cannot be followed by the work it refused.
  */
 export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operation<number> {
-  const { scan } = command;
-  if (scan.error !== undefined || scan.request === undefined) {
-    console.error(scan.error ?? 'xmd plan requires one request — `xmd plan "<what you want>"`');
-    return 1;
-  }
-  const request = scan.request;
-
   let syntax: string;
   try {
     syntax = renderSyntaxMarkdown(yield* deps.catalog(command.include));
@@ -204,24 +122,17 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
     return 1;
   }
 
-  // Every supplied individual option's shape, as the first draft that bound it
-  // declared it. Frozen while the Plan is being written and carried into the
-  // final gate, so the bytes that are delivered are checked against the command
-  // line that was written rather than against whichever draft happened to be
-  // last.
-  const frozen = new Map<string, OptionSignature>();
-
   // The command document lives and dies inside that call's scope. Leaving it
   // closes the Prompt tasks, the provider and the Elicitation provider, so a
-  // teardown failure raises out here — before the admission, the output file
-  // and the run that would otherwise already have happened.
+  // teardown failure raises out here — before the admission and before the
+  // output file.
   const session = command.session ?? invocationSessionName();
   // Read from what the caller wrote, not from the shape of the name. Only a
   // session somebody can ask for again needs its directory to outlive the
   // invocation, and only the host knows whether somebody named one.
   const explicitSession = command.session !== undefined;
   const root = deps.authorshipRoot ?? DEFAULT_AUTHORSHIP_ROOT;
-  const assessOne = (source: string) => assess(command, frozen, source);
+  const assessOne = (source: string) => assess(command, source);
 
   let authored: Result<string>;
   try {
@@ -256,7 +167,7 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
     });
 
     authored = yield* runPlanCommandDocument({
-      request,
+      request: command.request,
       syntax,
       session,
       explicitSession,
@@ -277,54 +188,35 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
   }
 
   // The returned Plan is untrusted again. Whatever the command document concluded
-  // about a candidate, these are the bytes that would run, and they are checked
-  // as though nothing had ever validated them.
-  const admitted = yield* assessCandidate(command, frozen, authored.value);
-  if (admitted.kind === "terminal") {
-    console.error(admitted.error.message);
-    return 1;
-  }
-  if (admitted.kind === "repairable") {
+  // about a candidate, these are the bytes a later `xmd run` would execute, and
+  // they are checked as though nothing had ever validated them.
+  const admitted = yield* structurally(command, authored.value);
+  if (admitted.outcome === "invalid") {
     console.error(
-      `the approved document does not validate:\n${JSON.stringify(admitted.defects, null, 2)}`,
+      `the approved document does not validate:\n` +
+        JSON.stringify({ validation: admitted }, null, 2),
     );
     return 1;
   }
 
   const source = authored.value;
   if (command.output !== undefined) {
-    // Before the run, so a Plan that fails at run time is still on disk to read
-    // and hand-edit. An existing path is refused and nothing after it happens.
+    // An existing path is refused and nothing after it happens: what somebody
+    // kept is left exactly as it was.
     const written = yield* writeOutput(command.output, source);
     if (!written.ok) {
       console.error(written.error.message);
       return 1;
     }
-  }
-
-  if (!command.run) {
-    // The approved Plan is the result. It goes to stdout exactly as the agent
-    // wrote it — no fence, no heading, no trailing newline of this command's —
-    // so a caller can pipe it into a file, a diff or another program. A caller
-    // who named `--output` already has it, and gets a quiet command instead.
-    if (command.output === undefined) {
-      process.stdout.write(source);
-    }
     return 0;
   }
 
-  const executed = yield* deps.execute({
-    root: retainedSource(PLAN_IDENTITY, source),
-    props: admitted.props,
-  });
-  if (!executed.ok) {
-    // Reported exactly as `xmd run` reports the same failure: what ran is one
-    // ordinary document, and how it failed is not this command's news to
-    // rephrase. A runtime failure ends the command here — there is nothing for
-    // the command document to reconsider about a Plan you already approved.
-    reportFailure(executed.error);
-    return 1;
-  }
+  // The approved Plan is the result. It goes to stdout exactly as the agent
+  // wrote it — no fence, no heading, no trailing newline of this command's —
+  // so a caller can pipe it into `xmd run -`, a file, a diff or another
+  // program. A caller who named `--output` already has it, and gets a quiet
+  // command instead.
+  process.stdout.write(source);
   return 0;
 }
 
@@ -346,104 +238,44 @@ export function invocationSessionName(): string {
 /**
  * The host's answer about one draft, in the shape the command document reads.
  *
- * A caller-source failure raises rather than answering. That is the whole of
- * the classification the command document can observe: it sees facts about drafts,
- * and it never sees an argument the command line got wrong.
+ * Structure alone, and the same question the final gate asks: a draft is a
+ * program or it is not, and the property values a later `xmd run` supplies are
+ * that run's business. The command document sees facts about drafts and nothing
+ * about the command line.
  */
-function* assess(
-  command: PlanCommand,
-  frozen: Map<string, OptionSignature>,
-  source: string,
-): Operation<CandidateAssessment> {
-  const outcome = yield* assessCandidate(command, frozen, source);
-  if (outcome.kind === "terminal") {
-    throw outcome.error;
+function* assess(command: PlanCommand, source: string): Operation<CandidateAssessment> {
+  const validation = yield* structurally(command, source);
+  if (validation.outcome === "invalid") {
+    return { valid: false, diagnostics: { validation } as unknown as Json };
   }
-  if (outcome.kind === "valid") {
-    return { valid: true, diagnostics: {} };
-  }
-  return { valid: false, diagnostics: outcome.defects as unknown as Json };
+  return { valid: true, diagnostics: {} };
 }
 
 /**
- * Everything decidable about one candidate, in the order that keeps a caller's
- * mistake from being taught to the agent.
+ * The structural answer about one candidate, against the profile it would run
+ * in.
  *
- * The registry is installed here, around the two questions that need it, rather
- * than around the command document: validation and the catalog have to agree
- * about what `<Agent>` is, and that document has no business reaching a
+ * Declarations, source, component resolution, forms and everything else
+ * decidable without the property values a later run will supply. A Plan whose
+ * root declares required properties is a Plan; `xmd plan` has no property source
+ * to resolve it with, and refusing it here would refuse a program for not having
+ * been given arguments nobody has offered it yet.
+ *
+ * The registry and the packaged `<Plan>` description are installed around the
+ * question rather than around the command document: what a Plan may write is the
+ * ordinary run profile's whole vocabulary, which is the same vocabulary the
+ * catalog showed the agent, and that document has no business reaching a
  * vocabulary it only describes.
  */
-function* assessCandidate(
-  command: PlanCommand,
-  frozen: Map<string, OptionSignature>,
-  candidate: string,
-): Operation<CandidateOutcome> {
-  return yield* scoped(function* (): Operation<CandidateOutcome> {
+function* structurally(command: PlanCommand, candidate: string): Operation<DocumentValidation> {
+  return yield* scoped(function* (): Operation<DocumentValidation> {
     yield* useRunProfileRegistry();
-    const root = retainedSource(PLAN_IDENTITY, candidate);
-    const includes = command.include;
-    const components = agentIdentityComponents();
-
-    // Whether the root declares itself readably. Inspection would raise on a
-    // malformed declaration, and recovering a code from an exception's prose is
-    // exactly what the structured answer exists to replace.
-    const declaration = yield* validateDocument({ ...root, includes, components });
-    if (declaration.diagnostics.some((entry) => DECLARATION_CODES.has(entry.code))) {
-      return { kind: "repairable", defects: { validation: declaration } };
-    }
-
-    let propsSchema: PropsSchema;
-    try {
-      propsSchema = (yield* inspectDocument(root)).props;
-    } catch (error) {
-      return {
-        kind: "repairable",
-        defects: { draft: { code: "root-props-unreadable", message: describeError(error) } },
-      };
-    }
-
-    let bindings: Binding[];
-    try {
-      bindings = buildBindings(propsSchema);
-    } catch (error) {
-      return {
-        kind: "repairable",
-        defects: {
-          draft: { code: "generated-binding-collision", message: describeError(error) },
-        },
-      };
-    }
-
-    // Before a single token is extracted: an option that changed shape would
-    // otherwise reach forward and read the `--raw` written after it as its value.
-    const drift = signatureFailure(frozen, bindings);
-    if (drift !== undefined) {
-      return { kind: "terminal", error: new Error(drift) };
-    }
-    const stray = strayPropertyValue(command.scan.occurrences, bindings);
-    if (stray !== undefined) {
-      return { kind: "terminal", error: new Error(stray) };
-    }
-
-    let extraction: Extraction;
-    let props: Record<string, Json>;
-    try {
-      extraction = extractPropsArgs(command.argv, bindings, { reserved: isReservedOption });
-      props = yield* resolvePropsFromSources({ propsSchema, bindings, extraction });
-    } catch (error) {
-      return { kind: "terminal", error: toError(error) };
-    }
-
-    for (const supplied of extraction.individual) {
-      frozen.set(supplied.binding.option, signatureOf(supplied.binding));
-    }
-
-    const validation = yield* validateDocument({ ...root, props, includes, components });
-    if (validation.outcome === "invalid") {
-      return { kind: "repairable", defects: { validation } };
-    }
-    return { kind: "valid", props };
+    return yield* validateDocumentStructure({
+      ...retainedSource(PLAN_IDENTITY, candidate),
+      includes: command.include,
+      components: agentIdentityComponents(),
+      declarations: [yield* planComponentDescription()],
+    });
   });
 }
 
@@ -467,7 +299,7 @@ function* writeOutput(path: string, source: string): Operation<Result<void>> {
       return Err(
         new Error(
           `${target} already exists — choose another --output path; the approved Plan was ` +
-            "not written and nothing ran",
+            "not written",
         ),
       );
     }
@@ -498,8 +330,4 @@ function* closeHandle(handle: FileHandle, target: string): Operation<Result<void
   } catch (error) {
     return Err(new Error(`could not close ${target}: ${describeError(error)}`));
   }
-}
-
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }

@@ -29,9 +29,9 @@ import { planComponentDeclaration } from "../../src/plan-component.ts";
 import type { PlanSurface } from "../../src/plan-component.ts";
 import type { CandidateAssessment } from "../../src/authorship-profile.ts";
 import { planAgentContext } from "../../src/authorship-profile.ts";
-import type { AgentStack } from "../../src/agent-stack.ts";
+import type { AuthorshipStack } from "../../src/agent-stack.ts";
 import type { DeclaredMarkdownComponent } from "@executablemd/core/host";
-import type { PlanDependencies, PlanExecution } from "../../src/plan.ts";
+import type { PlanDependencies } from "../../src/plan.ts";
 import { createFakeAcp, makeRegistry, makeStore } from "./fake-acp.ts";
 import type { FakeAcp, FakeStore } from "./fake-acp.ts";
 
@@ -69,10 +69,6 @@ export interface PlanHarness {
   catalogCalls: string[][];
   /** Every review request a provider was asked, in order. */
   reviews: ElicitationRequest[];
-  /** Every approved execution that reached the executor. */
-  executions: PlanExecution[];
-  /** What the executor answers with, once each, then `Ok`. */
-  executionResults: Result<void>[];
   /** Review answers, taken in order. Running out is a test defect, not a case. */
   script(review: ScriptedReview): void;
   /** The dependencies `runPlan` is driven with. */
@@ -103,16 +99,12 @@ export function createPlanHarness(options: {
   const fake = createFakeAcp();
   const catalogCalls: string[][] = [];
   const reviews: ElicitationRequest[] = [];
-  const executions: PlanExecution[] = [];
-  const executionResults: Result<void>[] = [];
   const answers: ScriptedReview[] = [];
 
   const harness: PlanHarness = {
     fake,
     catalogCalls,
     reviews,
-    executions,
-    executionResults,
     script(review) {
       answers.push(review);
     },
@@ -148,11 +140,6 @@ export function createPlanHarness(options: {
           },
           { at: "min" },
         );
-      },
-      // deno-lint-ignore require-yield
-      *execute(approved) {
-        executions.push(approved);
-        return executionResults.shift() ?? Ok(undefined);
       },
     },
   };
@@ -285,7 +272,7 @@ export function* planDeclarationHarness(options: {
   session?: string;
   explicitSession?: boolean;
   /** Absent leaves the harness with no stack at all, as `xmd test` has none. */
-  stack?: AgentStack | null;
+  stack?: AuthorshipStack | null;
   store?: FakeStore;
 }): Operation<PlanDeclarationHarness> {
   const fake = createFakeAcp();
@@ -305,7 +292,6 @@ export function* planDeclarationHarness(options: {
         : (options.stack ?? {
             provider: "acpx",
             defaultAgent: AGENT,
-            permissionMode: "deny-all",
             adapters: ADAPTERS,
           }),
       {

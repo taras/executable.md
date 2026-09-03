@@ -93,5 +93,24 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
     for (const name of ["PlanInputs", "PlanAuthorship", "CheckDraft", "AdmitPlan"]) {
       expect(names).not.toContain(name);
     }
+
+    // The command surface those bytes belong to is source-only in this build
+    // too: help describes both explicit compositions and names no option that
+    // would run the approved program.
+    const helped = yield* timebox<ProcessResult>(TIMEOUT, function* () {
+      return yield* exec(BINARY, { arguments: ["plan", "--help"], cwd: elsewhere }).join();
+    });
+    if (helped.timeout) {
+      throw new Error("the compiled binary timed out describing xmd plan");
+    }
+    expect(helped.value.code).toBe(0);
+    expect(helped.value.stdout).toContain("Planning never runs the approved program.");
+    expect(helped.value.stdout).toContain('xmd plan "Prepare the release program." | xmd run -');
+    expect(helped.value.stdout).toContain(
+      'xmd plan "Prepare the release program." --output release.md && xmd run release.md',
+    );
+    for (const option of ["--run", "--props", "--journal", "--raw", "--verbose", "--deny-all"]) {
+      expect(helped.value.stdout).not.toContain(option);
+    }
   });
 });

@@ -9,13 +9,14 @@
  * behaviour rather than of a TypeScript loop standing in for it.
  *
  * The seams are deterministic. The ACPX runtime is the scriptable fake, the
- * review provider is a scripted `Elicitation` handler, the executor records what
- * it was handed, and the contextual working directory is a temporary one.
- * Nothing here starts an agent, opens a browser or reaches a network.
+ * review provider is a scripted `Elicitation` handler, and the contextual
+ * working directory is a temporary one. Nothing here starts an agent, opens a
+ * browser or reaches a network — and nothing runs the Plan, because the command
+ * has no way to.
  *
  * Every refusal is proven by the phases that stayed at zero — turns not sent,
- * reviews not asked, executions not handed anything — rather than by output
- * nobody produced.
+ * reviews not asked, directories not placed — rather than by output nobody
+ * produced.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
@@ -35,8 +36,7 @@ import {
   authorshipDirectoryFor,
   AUTHORSHIP_INSTRUCTIONS,
 } from "../src/authorship-profile.ts";
-import { scanPlanArgs } from "../src/plan-args.ts";
-import type { AgentStack } from "../src/agent-stack.ts";
+import type { AuthorshipStack } from "../src/agent-stack.ts";
 import {
   ADAPTERS,
   AGENT,
@@ -128,24 +128,26 @@ const RETIRED_SENTINEL = "not this command's namespace\n";
 /** A Plan whose effect is visible on the filesystem if anything runs it. */
 const WRITES_A_FILE = ['<File path="drafted.txt">the draft ran</File>', ""].join("\n");
 
-/** The Agent configuration a dispatch settles once and hands to both consumers. */
-const STACK: AgentStack = {
+/**
+ * Who writes the Plan, as a dispatch settles it.
+ *
+ * There is no permission mode in it. This command starts no program, so there
+ * is nothing for one to configure, and the ceiling authorship runs under is the
+ * host's rather than the command line's.
+ */
+const STACK: AuthorshipStack = {
   provider: "acpx",
   defaultAgent: AGENT,
-  permissionMode: "deny-all",
   adapters: ADAPTERS,
 };
 
-/**
- * One invocation, asking for the approved Plan to be run.
- *
- * `--run` is the default here because these cases are about what reaches the
- * execution: the modes that write the Plan instead have their own cases, and
- * name the mode they mean.
- */
-function command(dir: string, args: string[], stack: AgentStack = STACK): PlanCommand {
-  const argv = ["plan", ...args, "--run"];
-  return { argv, scan: scanPlanArgs(argv), include: [dir], run: true, stack };
+/** One invocation, writing its approved source to stdout. */
+function command(
+  dir: string,
+  request: string = REQUEST,
+  stack: AuthorshipStack = STACK,
+): PlanCommand {
+  return { request, include: [dir], stack };
 }
 
 /**
@@ -273,7 +275,7 @@ describe(
         harness.fake.script({ reply: VALID });
         harness.script({ decision: "Approve" });
 
-        const code = yield* runPlan(command(dir, [REQUEST]), harness.deps);
+        const code = yield* runPlan(command(dir), harness.deps);
         expect(code).toBe(0);
 
         // Exactly one catalog, built with the invocation's own includes.
@@ -324,7 +326,7 @@ describe(
         harness.fake.script({ reply: VALID });
         harness.script({ decision: "Approve" });
 
-        const code = yield* runPlan(command(dir, [REQUEST]), harness.deps);
+        const code = yield* runPlan(command(dir), harness.deps);
         expect(code).toBe(0);
 
         const [initial, repair, revision] = harness.fake.prompts;
@@ -368,7 +370,7 @@ describe(
           harness.fake.script({ reply: VALID });
           harness.script({ decision: "Approve" });
 
-          const code = yield* runPlan(command(dir, [REQUEST]), harness.deps);
+          const code = yield* runPlan(command(dir), harness.deps);
           expect(code).toBe(0);
           // A draft, three repairs, a revision: five turns, one session.
           expect(harness.fake.prompts).toHaveLength(5);
@@ -402,10 +404,7 @@ describe(
             harness.fake.script({ reply: VALID });
             harness.script({ decision: "Approve" });
 
-            const code = yield* runPlan(
-              { ...command(dir, [REQUEST]), session: "ada" },
-              harness.deps,
-            );
+            const code = yield* runPlan({ ...command(dir), session: "ada" }, harness.deps);
             expect(code).toBe(0);
             named.push(sessions(harness)[0]);
             namedDirectories.push(String(harness.fake.created[0]?.cwd));
@@ -446,7 +445,7 @@ describe(
           seen.entries = yield* until(readdir(workdir));
         });
 
-        const code = yield* runPlan(command(dir, [REQUEST]), harness.deps);
+        const code = yield* runPlan(command(dir), harness.deps);
 
         expect(code).toBe(0);
         expect(seen.entries).toEqual([]);
@@ -455,8 +454,8 @@ describe(
         // it lived under is still there for the next one.
         expect(yield* exists(String(seen.workdir))).toBe(false);
         expect(yield* exists(authorshipRoot)).toBe(true);
-        // The approved Plan still ran: cleanup is not a failure.
-        expect(harness.executions).toHaveLength(1);
+        // The approved Plan was still produced: cleanup is not a failure.
+        expect(code).toBe(0);
       });
 
       // Stopping, a turn that failed, and a cancelled command each hand the
@@ -477,10 +476,9 @@ describe(
           }
           ending.drive(harness);
 
-          const code = yield* runPlan(command(dir, [REQUEST]), harness.deps);
+          const code = yield* runPlan(command(dir), harness.deps);
 
           expect(code).toBe(1);
-          expect(harness.executions).toHaveLength(0);
           // That exact leaf, and the root it lived under, both answer the
           // question: the directory this ending made is gone, and nothing else
           // was made in its place.
@@ -496,7 +494,7 @@ describe(
         harness.fake.script({ reply: VALID, manual: true });
 
         yield* scoped(function* () {
-          const running = yield* spawn(() => runPlan(command(dir, [REQUEST]), harness.deps));
+          const running = yield* spawn(() => runPlan(command(dir), harness.deps));
           yield* harness.fake.startedTurns(1);
           yield* running.halt();
         });
@@ -516,15 +514,12 @@ describe(
           throw new Error("this host could not install a review provider");
         };
 
-        const { value, lines } = yield* reported(() =>
-          runPlan(command(dir, [REQUEST]), harness.deps),
-        );
+        const { value, lines } = yield* reported(() => runPlan(command(dir), harness.deps));
 
         expect(value).toBe(1);
         expect(lines.join("\n")).toContain("could not install a review provider");
         // Nothing was built after it, and no empty leaf was left behind.
         expect(harness.fake.created).toHaveLength(0);
-        expect(harness.executions).toHaveLength(0);
         expect(yield* until(readdir(authorshipRoot))).toEqual([]);
       });
 
@@ -539,9 +534,7 @@ describe(
         const harness = createPlanHarness({ authorshipRoot: blocked });
         harness.fake.script({ reply: VALID });
 
-        const { value, lines } = yield* reported(() =>
-          runPlan(command(dir, [REQUEST]), harness.deps),
-        );
+        const { value, lines } = yield* reported(() => runPlan(command(dir), harness.deps));
 
         expect(value).toBe(1);
         expect(lines).toHaveLength(1);
@@ -549,7 +542,6 @@ describe(
         // What was in the way is untouched, and no phase after it began.
         expect(yield* readTextFile(blocked)).toBe("in the way\n");
         expect(harness.fake.created).toHaveLength(0);
-        expect(harness.executions).toHaveLength(0);
       });
 
       // A leaf that disappears under a live conversation is interference, not a
@@ -563,7 +555,7 @@ describe(
         });
 
         const { value, lines } = yield* reported(() =>
-          runPlan({ ...command(dir, [REQUEST]), output: "out.md" }, harness.deps),
+          runPlan({ ...command(dir), output: "out.md" }, harness.deps),
         );
 
         expect(value).toBe(1);
@@ -575,7 +567,6 @@ describe(
         expect(harness.reviews).toHaveLength(1);
         expect(yield* exists(join(dir, "out.md"))).toBe(false);
         expect(yield* until(readdir(dir))).toEqual([]);
-        expect(harness.executions).toHaveLength(0);
       });
 
       // The other outcome of the one attempt. A directory this invocation was
@@ -595,7 +586,7 @@ describe(
         });
 
         const { value, lines } = yield* reported(() =>
-          runPlan({ ...command(dir, [REQUEST]), output: "out.md" }, harness.deps),
+          runPlan({ ...command(dir), output: "out.md" }, harness.deps),
         );
 
         // Terminal, and said once: the attempt happens once and either settles
@@ -619,7 +610,6 @@ describe(
         // journal, which only an execution creates.
         expect(yield* exists(join(dir, "out.md"))).toBe(false);
         expect(yield* until(readdir(dir))).toEqual([]);
-        expect(harness.executions).toHaveLength(0);
       });
     });
 
@@ -649,7 +639,7 @@ describe(
           console.error = () => {
             events.push("reported");
           };
-          return yield* runPlan(command(dir, [REQUEST]), harness.deps);
+          return yield* runPlan(command(dir), harness.deps);
         });
 
         expect(code).toBe(1);
@@ -658,7 +648,6 @@ describe(
         // decision.
         expect(events).toEqual(["reported"]);
         expect(yield* exists(String(workdir))).toBe(false);
-        expect(harness.executions).toHaveLength(0);
       });
     });
 
@@ -698,7 +687,7 @@ describe(
             harness.fake.script({ reply: VALID });
             harness.script({ decision: ending === "approved" ? "Approve" : "Stop" });
 
-            const code = yield* runPlan(command(dir, [REQUEST]), harness.deps);
+            const code = yield* runPlan(command(dir), harness.deps);
             expect(code).toBe(ending === "approved" ? 0 : 1);
             workdirs.push(String(harness.fake.created[0]?.cwd));
           });
@@ -756,10 +745,7 @@ describe(
           );
         };
 
-        const code = yield* runPlan(
-          { ...command(dir, [REQUEST]), session: "ceiling" },
-          harness.deps,
-        );
+        const code = yield* runPlan({ ...command(dir), session: "ceiling" }, harness.deps);
         expect(code).toBe(0);
 
         // Not the caller's working directory: this session's, and empty while
@@ -791,7 +777,7 @@ describe(
         harness.fake.script({ reply: VALID });
 
         const { value, lines } = yield* reported(() =>
-          runPlan({ ...command(dir, [REQUEST]), session: "occupied" }, harness.deps),
+          runPlan({ ...command(dir), session: "occupied" }, harness.deps),
         );
 
         expect(value).toBe(1);
@@ -804,30 +790,27 @@ describe(
         expect(harness.fake.started).toBe(false);
         expect(harness.fake.prompts).toHaveLength(0);
         expect(harness.reviews).toHaveLength(0);
-        expect(harness.executions).toHaveLength(0);
         // The contents were left exactly as they were found.
         expect(yield* readTextFile(join(occupied, "someone-elses.txt"))).toBe(
           "not mine to delete\n",
         );
       });
 
-      // `--approve-all` configures the approved document. A native permission
-      // request while the Plan is being written is still denied, privately, and
-      // the turn it belongs to fails.
+      // A native permission request while the Plan is being written is denied
+      // privately, and the turn it belongs to fails. There is no command line
+      // that could have widened it: what authorship is settled from carries a
+      // provider and a default agent and no permission mode at all.
+      expect("permissionMode" in STACK).toBe(false);
       yield* useWorkingDirectory(function* (dir, authorshipRoot) {
         const harness = createPlanHarness({ authorshipRoot });
         harness.fake.script({ reply: VALID, requestsTool: "Bash" });
 
-        const code = yield* runPlan(
-          command(dir, [REQUEST], { ...STACK, permissionMode: "approve-all" }),
-          harness.deps,
-        );
+        const code = yield* runPlan(command(dir), harness.deps);
 
         expect(code).toBe(1);
         expect(harness.fake.decisions).toEqual(["reject_once"]);
-        // The denial ended the command: nobody was asked and nothing ran.
+        // The denial ended the command: nobody was asked.
         expect(harness.reviews).toHaveLength(0);
-        expect(harness.executions).toHaveLength(0);
       });
     });
 
@@ -847,7 +830,7 @@ describe(
           harness.fake.script({ reply: VALID });
           harness.script({ decision: "Approve" });
 
-          const code = yield* runPlan(command(dir, [REQUEST]), harness.deps);
+          const code = yield* runPlan(command(dir), harness.deps);
           expect(code).toBe(0);
           // The other root is untouched, and this one holds nothing afterwards.
           expect(yield* readTextFile(marker)).toBe("still here\n");
@@ -864,18 +847,17 @@ describe(
         harness.fake.script({ reply: WRITES_A_FILE });
         harness.script({ decision: "Stop" });
 
-        const code = yield* runPlan(command(dir, [REQUEST]), harness.deps);
+        const code = yield* runPlan(command(dir), harness.deps);
 
         expect(code).toBe(1);
         // Validated, presented, and never run: the document's own write is the
         // effect that would have happened if anything had executed it.
         expect(harness.reviews).toHaveLength(1);
         expect((yield* until(readdir(dir))).includes("drafted.txt")).toBe(false);
-        expect(harness.executions).toHaveLength(0);
       });
     });
 
-    it("C7: candidate defects earn a repair turn; caller defects escape", function* () {
+    it("C7: a candidate defect earns a repair turn", function* () {
       // A defect the agent authored: the root's own frontmatter.
       yield* useWorkingDirectory(function* (dir, authorshipRoot) {
         const harness = createPlanHarness({ authorshipRoot });
@@ -883,7 +865,7 @@ describe(
         harness.fake.script({ reply: VALID });
         harness.script({ decision: "Approve" });
 
-        const code = yield* runPlan(command(dir, [REQUEST]), harness.deps);
+        const code = yield* runPlan(command(dir), harness.deps);
 
         expect(code).toBe(0);
         expect(harness.fake.prompts).toHaveLength(2);
@@ -901,87 +883,37 @@ describe(
         expect(harness.fake.prompts[1]).toContain("source-invalid");
         // The whole versioned value, as data the program serialized.
         expect(harness.fake.prompts[1]).toContain('"version": 1');
-        expect(harness.executions).toHaveLength(1);
       });
 
-      // A defect the agent authored: two properties generating one option.
+      // A defect the agent authored: a component this profile does not offer.
       yield* useWorkingDirectory(function* (dir, authorshipRoot) {
         const harness = createPlanHarness({ authorshipRoot });
-        harness.fake.script({ reply: COLLIDING });
+        harness.fake.script({ reply: UNRESOLVED });
         harness.fake.script({ reply: VALID });
         harness.script({ decision: "Approve" });
 
-        const code = yield* runPlan(command(dir, [REQUEST]), harness.deps);
+        const code = yield* runPlan(command(dir), harness.deps);
 
         expect(code).toBe(0);
         expect(harness.fake.prompts).toHaveLength(2);
-        expect(harness.fake.prompts[1]).toContain("generated-binding-collision");
-        expect(harness.fake.prompts[1]).toContain("--props-first-name");
-        // Carried as this command's own finding, not as a core diagnostic code.
-        expect(harness.fake.prompts[1]).not.toContain("DocumentValidationCode");
+        expect(harness.fake.prompts[1]).toContain("component-unresolved");
+        expect(harness.fake.prompts[1]).toContain("NoSuchComponent");
       });
 
-      // A defect the caller wrote: an option the candidate never declares. It
-      // raises out of the validator, so the program never sees it as feedback.
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const harness = createPlanHarness({ authorshipRoot });
-        harness.fake.script({ reply: VALID });
-
-        const code = yield* runPlan(
-          command(dir, [REQUEST, "--props-nothing", "here"]),
-          harness.deps,
-        );
-
-        expect(code).toBe(1);
-        // One turn, no repair: the agent cannot fix a command line.
-        expect(harness.fake.prompts).toHaveLength(1);
-        expect(harness.reviews).toHaveLength(0);
-        expect(harness.executions).toHaveLength(0);
-      });
-
-      // A defect the caller wrote: aggregate JSON that is not JSON.
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const harness = createPlanHarness({ authorshipRoot });
-        harness.fake.script({ reply: VALID });
-
-        const code = yield* runPlan(command(dir, [REQUEST, "--props", "{oops"]), harness.deps);
-
-        expect(code).toBe(1);
-        expect(harness.fake.prompts).toHaveLength(1);
-        expect(harness.reviews).toHaveLength(0);
-        expect(harness.executions).toHaveLength(0);
-      });
-
-      // A defect the caller wrote: a value this candidate's schema rejects.
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const harness = createPlanHarness({ authorshipRoot });
-        harness.fake.script({ reply: NAME_IS_BOOLEAN });
-
-        const code = yield* runPlan(
-          command(dir, [REQUEST, "--props-name=not-a-boolean"]),
-          harness.deps,
-        );
-
-        expect(code).toBe(1);
-        expect(harness.fake.prompts).toHaveLength(1);
-        expect(harness.reviews).toHaveLength(0);
-        expect(harness.executions).toHaveLength(0);
-      });
-
-      // A revision that changes what the command line means is the caller's
-      // failure too, and it is caught before the candidate is presented.
+      // What is *not* a defect: a root that declares required properties. The
+      // check is structural, because the values belong to whoever runs the
+      // program later, and this command has no source to resolve them from. A
+      // full root-props validation would send this back for repair.
       yield* useWorkingDirectory(function* (dir, authorshipRoot) {
         const harness = createPlanHarness({ authorshipRoot });
         harness.fake.script({ reply: REQUIRES_NAME });
-        harness.script({ decision: "Request changes", feedback: "make it shout" });
-        harness.fake.script({ reply: NAME_IS_BOOLEAN });
+        harness.script({ decision: "Approve" });
 
-        const code = yield* runPlan(command(dir, [REQUEST, "--props-name", "Ada"]), harness.deps);
+        const code = yield* runPlan(command(dir), harness.deps);
 
-        expect(code).toBe(1);
+        expect(code).toBe(0);
+        expect(harness.fake.prompts).toHaveLength(1);
         expect(harness.reviews).toHaveLength(1);
-        expect(harness.executions).toHaveLength(0);
-        expect(harness.fake.prompts).toHaveLength(2);
       });
     });
 
@@ -995,7 +927,7 @@ describe(
         harness.fake.script({ reply: VALID });
         harness.script({ decision: "Approve" });
 
-        const code = yield* runPlan(command(dir, [REQUEST]), harness.deps);
+        const code = yield* runPlan(command(dir), harness.deps);
 
         expect(code).toBe(0);
         expect(harness.fake.prompts).toHaveLength(4);
@@ -1012,7 +944,7 @@ describe(
         }
         harness.script({ decision: "Stop" });
 
-        const code = yield* runPlan(command(dir, [REQUEST]), harness.deps);
+        const code = yield* runPlan(command(dir), harness.deps);
 
         expect(code).toBe(1);
         expect(harness.fake.prompts).toHaveLength(4);
@@ -1028,7 +960,6 @@ describe(
         expect(
           shown.validation?.diagnostics?.some((entry) => entry.code === "component-unresolved"),
         ).toBe(true);
-        expect(harness.executions).toHaveLength(0);
       });
 
       // Ten presentations: nine revisions, and a tenth round with nothing left
@@ -1043,7 +974,7 @@ describe(
         }
         harness.script({ decision: "Stop" });
 
-        const code = yield* runPlan(command(dir, [REQUEST]), harness.deps);
+        const code = yield* runPlan(command(dir), harness.deps);
 
         expect(code).toBe(1);
         expect(harness.reviews).toHaveLength(10);
@@ -1079,7 +1010,7 @@ describe(
         harness.fake.script({ reply: fenced });
         harness.script({ decision: "Approve" });
 
-        const code = yield* runPlan(command(dir, [REQUEST]), harness.deps);
+        const code = yield* runPlan(command(dir), harness.deps);
         expect(code).toBe(0);
 
         const message = harness.reviews[0].message;
@@ -1096,15 +1027,10 @@ describe(
         harness.fake.script({ reply: VALID });
         harness.script({ decision: "Stop" });
 
-        const { value, lines } = yield* reported(() =>
-          runPlan(command(dir, [REQUEST]), harness.deps),
-        );
+        const { value, lines } = yield* reported(() => runPlan(command(dir), harness.deps));
 
         expect(value).toBe(1);
-        expect(lines.join("\n")).toContain(
-          "xmd plan stopped at your request. Nothing was output or run.",
-        );
-        expect(harness.executions).toHaveLength(0);
+        expect(lines.join("\n")).toContain("xmd plan stopped at your request. Nothing was output.");
       });
 
       // Exhaustion is reachable, and it is a different ending: ten drafts that
@@ -1126,9 +1052,7 @@ describe(
           reply: "The drafts all named a component this profile does not have.",
         });
 
-        const { value, lines } = yield* reported(() =>
-          runPlan(command(dir, [REQUEST], STACK), harness.deps),
-        );
+        const { value, lines } = yield* reported(() => runPlan(command(dir), harness.deps));
 
         expect(value).toBe(1);
         // Nine reviews, not ten: the tenth invalid draft is never presented,
@@ -1136,11 +1060,15 @@ describe(
         expect(harness.reviews).toHaveLength(9);
         expect(decisions(harness.reviews[8])).toEqual(["Request changes", "Stop"]);
         expect(lines).toHaveLength(1);
-        expect(lines[0]).toContain("reviewed ten drafts without an approved Plan");
-        expect(lines[0]).toContain("Nothing was output or run.");
+        expect(lines[0]).toContain(
+          "xmd plan could not generate an approved Plan after 10 attempts.",
+        );
+        expect(lines[0]).toContain(
+          "The coding agent explained why planning was unsuccessful and how to improve the outcome:",
+        );
+        expect(lines[0]).toContain("Nothing was output.");
         // Forty drafting turns and exactly one explanation turn after them.
         expect(harness.fake.prompts).toHaveLength(41);
-        expect(harness.executions).toHaveLength(0);
       });
     });
 
@@ -1167,9 +1095,7 @@ describe(
         ].join("\n");
         harness.fake.script({ reply: explanation });
 
-        const { value, lines } = yield* reported(() =>
-          runPlan(command(dir, [REQUEST]), harness.deps),
-        );
+        const { value, lines } = yield* reported(() => runPlan(command(dir), harness.deps));
 
         expect(value).toBe(1);
         // Exactly one turn more than the forty drafting turns, in the same
@@ -1197,31 +1123,30 @@ describe(
         // What it said is reported as the coding agent's words, and the command
         // ends. Nothing about the explanation is treated as a Plan.
         expect(lines).toHaveLength(1);
-        expect(lines[0]).toContain("reviewed ten drafts without an approved Plan");
+        expect(lines[0]).toContain(
+          "xmd plan could not generate an approved Plan after 10 attempts.",
+        );
         expect(lines[0]).toContain(explanation);
-        expect(lines[0]).toContain("Nothing was output or run.");
-        expect(harness.executions).toHaveLength(0);
+        expect(lines[0]).toContain("Nothing was output.");
       });
     });
 
-    it("C10, C11: the approved bytes are what runs, and props are theirs", function* () {
-      // The command line is unchanged across a revision, and the schema that
-      // resolves it is the approved document's rather than the first draft's.
+    it("C10, C11: the approved bytes are what the command delivers", function* () {
+      // The bytes that leave the command are the approved candidate's, not an
+      // earlier draft's: a revision replaces the whole document, and what a
+      // caller reads back is the replacement.
       yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        const out = join(dir, "release.md");
         const harness = createPlanHarness({ authorshipRoot });
         harness.fake.script({ reply: counting("number") });
         harness.script({ decision: "Request changes", feedback: "count in words" });
         harness.fake.script({ reply: counting("string") });
         harness.script({ decision: "Approve" });
 
-        const code = yield* runPlan(command(dir, [REQUEST, "--props-count", "7"]), harness.deps);
+        const code = yield* runPlan({ ...command(dir), output: out }, harness.deps);
 
         expect(code).toBe(0);
-        // Resolved under the approved bytes: a props object kept from the first
-        // candidate would carry the number 7.
-        expect(harness.executions[0]?.props).toEqual({ count: "7" });
-        expect(harness.executions[0]?.root.source).toBe(counting("string"));
-        expect(harness.executions[0]?.root.path).toBe("<plan>");
+        expect(yield* readTextFile(out)).toBe(counting("string"));
       });
 
       // Nothing is stripped. A reply wrapped in a fence is not a document, so it
@@ -1234,7 +1159,7 @@ describe(
         }
         harness.script({ decision: "Stop" });
 
-        yield* runPlan(command(dir, [REQUEST]), harness.deps);
+        yield* runPlan(command(dir), harness.deps);
         expect(harness.reviews[0].message).toContain(wrapped);
       });
     });
@@ -1281,7 +1206,7 @@ describe(
             events.push("reported");
             lines.push(parts.map((part) => String(part)).join(" "));
           };
-          return yield* runPlan(command(dir, [REQUEST]), harness.deps);
+          return yield* runPlan(command(dir), harness.deps);
         });
 
         // The draft was sound enough to approve, and the approved bytes are
@@ -1305,12 +1230,11 @@ describe(
         expect(events).toEqual(["teardown", "reported"]);
 
         // Nothing after the veto happened.
-        expect(harness.executions).toHaveLength(0);
         expect((yield* until(readdir(dir))).sort()).toEqual([]);
       });
     });
 
-    it("C14: an interleaved Plan survives approval and execution byte for byte", function* () {
+    it("C14: an interleaved Plan survives approval and delivery byte for byte", function* () {
       yield* useWorkingDirectory(function* (dir, authorshipRoot) {
         // What the shipped instruction asks for: the request restated in prose a
         // reader was written for, with each component beside the sentences that
@@ -1335,8 +1259,9 @@ describe(
         harness.fake.script({ reply: plan });
         harness.script({ decision: "Approve" });
 
+        const out = join(dir, "release.md");
         const code = yield* runPlan(
-          command(dir, ["ask me for my age and write it to a file"]),
+          { ...command(dir, "ask me for my age and write it to a file"), output: out },
           harness.deps,
         );
 
@@ -1344,9 +1269,9 @@ describe(
         // The prose reached the person who approved it, inside the presentation
         // fence and unaltered.
         expect(harness.reviews[0].message).toContain(plan);
-        // And the exact bytes are what runs: nothing trimmed, re-fenced or
-        // reflowed between approval and execution.
-        expect(harness.executions[0]?.root.source).toBe(plan);
+        // And the exact bytes are what the command delivered: nothing trimmed,
+        // re-fenced or reflowed between approval and the artifact.
+        expect(yield* readTextFile(out)).toBe(plan);
       });
     });
 
@@ -1362,7 +1287,7 @@ describe(
         harness.fake.script({ reply: VALID });
         harness.script({ decision: "Approve" });
 
-        const code = yield* runPlan(command(dir, [REQUEST]), harness.deps);
+        const code = yield* runPlan(command(dir), harness.deps);
         expect(code).toBe(0);
 
         const [exhausted, approvable] = harness.reviews.map((review) => review.message);
@@ -1405,9 +1330,7 @@ describe(
           }
           harness.script({ decision: "Stop" });
 
-          const { value, lines } = yield* reported(() =>
-            runPlan(command(dir, [REQUEST]), harness.deps),
-          );
+          const { value, lines } = yield* reported(() => runPlan(command(dir), harness.deps));
 
           expect(value).toBe(1);
           // One line, from the document's own <Fail>, and no accumulated

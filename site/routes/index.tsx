@@ -537,10 +537,17 @@ export default define.page(function Home({ url }) {
           <p style={P_MD}>
             <strong style={STRONG}>A Plan is text, so it composes.</strong>{" "}
             <Term>xmd plan</Term>{" "}
-            writes the approved program to standard output, and{" "}
+            writes the approved program to standard output and runs none of it.
+            {" "}
             <Term>xmd run -</Term>{" "}
             takes a whole program from standard input — so the two are one
             command when you want no file in between.
+          </p>
+
+          <p style={P_MD}>
+            Plan produces a program. Run executes a program from the host or CLI.
+            {" "}
+            Composition decides whether and when a planned program runs.
           </p>
 
           <Terminal lines={[[' xmd plan "prepare the release" | xmd run -']]} />

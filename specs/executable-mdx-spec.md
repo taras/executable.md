@@ -8622,9 +8622,8 @@ it, so inspection consults no configuration at all. A repository `Verbose.md` or
 `Verbose.ts` is chosen ahead of the default.
 
 The profiles are unchanged by where the answer comes from: `xmd run` has
-`<Verbose>`, an approved Plan executed by `xmd plan --run` has it, an
-`<Execution host="run">` child has it, and a direct `xmd test` root does not —
-even under `--verbose`.
+`<Verbose>`, an `<Execution host="run">` child has it, and a direct `xmd test`
+root does not — even under `--verbose`.
 
 It opens no scope, acquires no resource, holds no authority and has no durable
 effect of its own, and contextual verbosity takes no part in durable identity,
@@ -8665,7 +8664,7 @@ imported. There are two, and they differ in lifetime and authority rather than
 in what an author writes.
 
 The **ordinary provider** is what the Deno source entrypoint and the compiled
-binary install for `xmd run` and for an approved `xmd plan --run`. Constructing
+binary install for `xmd run`. Constructing
 it mints a fresh opaque invocation identity and empty state, both private to
 that one execution:
 
@@ -8829,23 +8828,22 @@ a file: nothing of that name is read, created, or used as a base directory.
 Text a host generated reports `<plan>` on the same terms. `xmd plan` runs a
 packaged first-party command document that turns a Prompt into a Plan — asking a
 coding agent for a complete root, having the host check it, and having a person
-approve it; the host then validates the returned bytes again. What happens to
-them is the caller's choice: by default the exact source goes to stdout, and
-nothing runs; `--output` writes those bytes to a file instead; and only `--run`
-executes `retainedSource("<plan>", source)`, with `--output --run` writing the
-file first. So the identity says where the bytes came from, and a source position
-reads `(<plan>:5:1)`. It is a deliberate identity rather than a path nobody
-could read back, and it is the only thing that differs: an approved Plan that is
-run goes through the ordinary supplied-source path, renders and returns exactly
-as any other root, resolves the contextual working directory for every relative
-operation, and creates its journal only when that execution starts — so the modes
-that write a Plan create none.
+approve it; the host then structurally validates the returned bytes again under
+that identity. So the identity says where the bytes came from, and a source
+position reads `(<plan>:5:1)`.
 
-That command document is the other root the command executes, under its own
-stable internal identity `<plan-command>`, on an invocation-owned in-memory
-durable stream that is discarded when authorship is over. So nothing about
-generation, repair or approval is journaled or replayed, and the two executions
-share no scope. The command's complete contract is
+The command starts no program from them. The approved source is the result:
+by default the exact bytes go to stdout, and `--output` writes them to a file
+instead. Whether a Plan runs is the caller's own composition —
+`xmd plan … | xmd run -`, or an artifact a later `xmd run` names — and that
+later run is an ordinary supplied-source or file execution with an identity, an
+Agent provider and a journal of its own.
+
+The command document is the one root `xmd plan` executes, under its own stable
+internal identity `<plan-command>`, on an invocation-owned in-memory durable
+stream that is discarded when authorship is over. So nothing about generation,
+repair or approval is journaled or replayed, and no invocation of the command
+writes a journal at all. The command's complete contract is
 [`xmd plan`](./plan-command-spec.md).
 
 `xmd upgrade` executes the second packaged root under the stable internal
@@ -9418,8 +9416,7 @@ credential, a subprocess or a request exists (§5.3, §8.1).
 Being *supplied* by the entrypoint and being *used* are different things, and
 the commands differ:
 
-- an ordinary `xmd run`, and an approved `xmd plan --run`, install a fresh
-  provider instance for that execution;
+- an ordinary `xmd run` installs a fresh provider instance for that execution;
 - `xmd test` installs none for its own root document, and hands the
   entrypoint's installer to a `host="run"` child — which is an ordinary run
   whatever command hosts it, and receives an instance of its own;
@@ -10766,13 +10763,12 @@ One checked-in Markdown suite runs the real command against a fixture directory.
 
 ### Tier PR — The `xmd plan` command
 
-One root execution on every invocation — the packaged plan command document,
-an adapter that invokes the packaged `<Plan>` Component, which owns the visible
-generation, repair, review and failure workflow — and a second only under
-`--run`: the Plan it returned, which runs as any supplied root
-does, behind a complete scope boundary. Without `--run` the approved Plan is the
-result rather than a second execution: stdout by default, or an exclusively
-created `--output` file. Defined in
+One root execution on every invocation, and no second one: the packaged plan
+command document, an adapter that invokes the packaged `<Plan>` Component,
+which owns the visible generation, repair, review and failure workflow. The
+approved Plan is the result rather than something to run — stdout by default, or
+an exclusively created `--output` file — and whether that program runs is the
+caller's own composition with `xmd run`. Defined in
 [`xmd plan`](./plan-command-spec.md), whose acceptance table this points at
 rather than restating. The ACPX runtime is a scriptable fake, the review provider
 is a scripted `Elicitation` handler, and the contextual working directory is a
@@ -10781,12 +10777,14 @@ every refusal is proven by the phase tripwires that stayed at zero.
 
 | # | Test | Verify |
 |---|------|--------|
-| C1 | Fixed grammar and help | One Prompt preserved byte for byte; missing, repeated, empty and whitespace-only Prompts refused; individual options after the Prompt and aggregate props before it; a built-in option never read as a generated property's value; `--session` named or refused; every run-only flag refused without `--run` before any effect; a first token of `prompt` refused in preflight rather than read as a document path, with `xmd run ./prompt` still executing a document of that name; generic help with no effects, explaining `--output` and `--run` |
+| PS1–PS3 | Fixed grammar | One request preserved byte for byte and a second positional refused; every retained option accepted before and after it; every `--run` spelling answered with the migration, and every other removed option — both short aliases and the aggregate and generated property names included — answered with the one refusal that names `xmd run`, before any catalog, Agent, session, review or filesystem activity; a first token of `prompt` refused in preflight rather than read as a document path, with `xmd run ./prompt` still executing a document of that name |
+| PS4/PS5 | Help | The complete `xmd plan --help` output and the program summary carry only the retained grammar and both explicit compositions, and no removed option appears in either; `xmd run --help` still exposes every option it configures |
 | C2–C3 | The packaged adapter and Component | The command executes the checked-in Markdown value root under `<plan-command>`, which invokes the packaged `<Plan>` Component, and the turn text is that Component's own words; generation, repair, review, revision, approval, stopping, exhaustion and the final explanation are Markdown under visible headings, every Plan-producing turn states the complete Plan requirements for itself, `<Prompt>` stays one turn, and what a person reads says each thing once however many rounds it took |
-| C4–C6 | Session and ceiling | One enclosing Session carries every turn, defaults differ per invocation and `--session` supplies the exact override; the authorship profile gives the assistant an empty host-owned directory, no MCP servers, no native tools and a private strict denial no permission flag widens; a draft is data until the approved Plan is delivered, and no draft effect happens before that |
-| C7–C9 | Classification, bounds and presentation | Draft defects return structured facts and caller defects escape the checker; one base draft plus three repairs, and ten presentations with no revision on the last; arbitrary source cannot close `<CodeBlock>`, the review schemas expose exactly the friendly choices for each round and state, and stopping, exhaustion and the explanation ending each reach their own authored `<Fail>` |
-| C10–C13 | Admission and lifetime | The host revalidates after the command document has completely torn down and resolves props for the exact returned bytes; those bytes reach exactly one of stdout, an exclusively created `--output` file, a run, or a file and then a run; a journal exists only when `--run` begins and holds only the Plan's events; cancellation and teardown failure settle before anything later begins |
-| C14–C15 | Result | The shipped generation, repair and revision instructions each carry the complete titled-Plan rule, and a titled Plan of prose interleaved with components survives approval byte for byte into stdout, a file and a run alike; a run reports `<plan>` and behaves as `xmd run` does |
+| C4–C6 | Session and ceiling | One enclosing Session carries every turn, defaults differ per invocation and `--session` supplies the exact override; the authorship profile gives the assistant an empty host-owned directory, no MCP servers, no native tools and a private strict denial no command line reaches; a draft is data throughout, and no draft effect ever happens |
+| C7–C9 | Classification, bounds and presentation | Draft defects return structured facts, and a root declaring required properties is not one of them; one base draft plus three repairs, and ten presentations with no revision on the last; arbitrary source cannot close `<CodeBlock>`, the review schemas expose exactly the friendly choices for each round and state, and stopping, exhaustion and the explanation ending each reach their own authored `<Fail>` |
+| PS6–PS9 | Validation, delivery and endings | The host structurally validates after the command document has completely torn down; the exact bytes then reach exactly one of stdout or an exclusively created `--output` file, and an existing path is refused unchanged; stopping, exhaustion, a failed turn, missing Agent context, cancellation, teardown failure and structural refusal each deliver nothing at all |
+| PS10, C14 | No execution, and the result | A named session continues the planning conversation and still starts no program, and no execution callback, program journal or second-root identity exists; the shipped generation, repair and revision instructions each carry the complete titled-Plan rule, and a titled Plan of prose interleaved with components survives approval byte for byte into stdout and a file alike |
+| PS12 | Product copy | Architecture, specifications, README and the homepage state that Plan produces source, Run executes source, and composition decides when it runs |
 
 ### Tier UG — The `xmd upgrade` command
 
@@ -12094,9 +12092,8 @@ timed.
 ### Tier VB — `<Verbose>` (§6.20)
 
 The behavioral rows run the real `xmd run` command against a document on disk,
-so what they observe is what a reader of that command sees. VB5 and VB6 are
-TypeScript rows: one inspects the catalog without running anything, and one
-drives the `xmd plan` command.
+so what they observe is what a reader of that command sees. VB5 is a TypeScript
+row: it inspects the catalog without running anything.
 
 | Criterion | Evidence |
 | --- | --- |
@@ -12105,7 +12102,6 @@ drives the `xmd plan` command.
 | VB3 | A skipped body does not expand |
 | VB4 | A repository component overrides the registered default |
 | VB5 | `xmd syntax` describes the component |
-| VB6 | `xmd plan --run --verbose` gives the approved Plan `<Verbose>` |
 | VB7 | A run-profile child has `<Verbose>` |
 | VB8 | A direct `xmd test --verbose` root does not have `<Verbose>` |
 | VB9 | Host false is overridden to true for one lexical subtree |

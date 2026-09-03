@@ -46,10 +46,13 @@ here, so the branch that chooses between them is not repeated at every place one
 of them is raised.
 
 <If condition={inputs.surface === "command"}>
-<Let as="stopped" value="xmd plan stopped at your request. Nothing was output or run." />
-<Let as="unresolved" value="xmd plan ended without an approved Plan. Nothing was output or run." />
-<Let as="explained" value="xmd plan reviewed ten drafts without an approved Plan. The coding agent explained why:" />
-<Let as="closing" value="Nothing was output or run." />
+<Let as="stopped" value="xmd plan stopped at your request. Nothing was output." />
+<Let as="unresolved" value="xmd plan ended unexpectedly without an approved Plan. Nothing was output." />
+<Let
+   as="explained"
+   value={"xmd plan could not generate an approved Plan after 10 attempts.\n\nThe coding agent explained why planning was unsuccessful and how to improve the outcome:"}
+/>
+<Let as="closing" value="Nothing was output." />
 <Else>
 <Let as="stopped" value="Plan authorship stopped at your request. No Plan was returned." />
 <Let as="unresolved" value="Plan authorship ended without an approved Plan. No Plan was returned." />

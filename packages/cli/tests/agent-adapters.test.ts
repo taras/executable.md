@@ -35,7 +35,6 @@ import type { AgentStack } from "../src/agent-stack.ts";
 import { authorshipDependencies } from "../src/authorship-profile.ts";
 import type { AuthorshipProviderInputs } from "../src/authorship-profile.ts";
 import { runPlan } from "../src/plan.ts";
-import { scanPlanArgs } from "../src/plan-args.ts";
 import { AGENT, createPlanHarness, useWorkingDirectory } from "./support/plan-harness.ts";
 
 /** The two agents this build carries a patched snapshot for. */
@@ -191,14 +190,11 @@ describe("Tier AE — embedded adapters on the run and plan paths", () => {
       harness.fake.script({ reply: PLAN });
       harness.script({ decision: "Approve" });
 
-      const argv = ["plan", REQUEST];
       const code = yield* runPlan(
         {
-          argv,
-          scan: scanPlanArgs(argv),
+          request: REQUEST,
           include: [dir],
           output: join(dir, "plan.md"),
-          run: false,
           stack: { ...stackWith(installingAdapters(prepared)), defaultAgent: AGENT },
         },
         harness.deps,

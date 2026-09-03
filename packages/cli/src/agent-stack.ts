@@ -37,7 +37,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { resolveAgentConfig } from "./agent-config.ts";
-import type { AgentFlags } from "./agent-config.ts";
+import type { AgentFlags, AuthorshipFlags } from "./agent-config.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 
 /**
@@ -50,32 +50,58 @@ import type { MachineSessionAssembly } from "./session-coordinator.ts";
  */
 export const DEFAULT_ADAPTER_ROOT: string = join(homedir(), ".xmd", "adapters");
 
-/** Everything one invocation settled about agents, resolved exactly once. */
-export interface AgentStack {
+/**
+ * Who writes, and what this host launches them with.
+ *
+ * The whole of what Plan authorship settles. There is no permission mode here
+ * because authorship has none to select: the frame `<Plan>` installs denies
+ * every native request outright, and a flag that could widen it would be a
+ * command line reaching into a ceiling the host owns.
+ */
+export interface AuthorshipStack {
   /** The provider name the caller selected, already known to be registered. */
   provider: string;
   /** The agent every consumer defaults to, environment fallback applied. */
   defaultAgent: string;
-  permissionMode: PermissionMode;
-  /**
-   * The ACP adapters this build carries, and where this host puts them.
-   *
-   * Part of the one settled answer because both consumers resolve agents
-   * through it: the assistant that writes a Plan and the run of the approved
-   * Plan are the same Codex or Claude, launched from the same snapshot.
-   */
+  /** The ACP adapters this build carries, and where this host puts them. */
   adapters: EmbeddedAdapters;
   /** What this host states about machine-wide agent sessions, if anything. */
   sessions?: MachineSessionAssembly;
 }
 
+/** Everything one `xmd run` invocation settled about agents, resolved once. */
+export interface AgentStack extends AuthorshipStack {
+  permissionMode: PermissionMode;
+}
+
 /**
- * Read the command line, the environment and the host's assembly into one
- * configuration.
+ * Read the provider selection, the environment and the host's assembly into the
+ * answer authorship needs.
  *
  * A failure comes back as a `Result` rather than as a printed line and an exit,
  * so the same resolution serves a command that runs a document and one that
- * generates one first.
+ * only writes one.
+ */
+export function* resolveAuthorshipStack(
+  flags: AuthorshipFlags,
+  sessions: MachineSessionAssembly | undefined,
+): Operation<Result<AuthorshipStack>> {
+  if (flags.agentProvider !== "acpx") {
+    return Err(new Error(`Unknown agent provider "${flags.agentProvider}"`));
+  }
+  const defaultAgent =
+    flags.defaultAgent ?? (yield* readEnv("DEFAULT_AGENT_NAME")) ?? DEFAULT_AGENT_NAME;
+  return Ok({
+    provider: flags.agentProvider,
+    defaultAgent,
+    adapters: createEmbeddedAdapters(DEFAULT_ADAPTER_ROOT),
+    ...(sessions === undefined ? {} : { sessions }),
+  });
+}
+
+/**
+ * The same answer, plus the permission mode the document a run executes is
+ * installed under.
  */
 export function* resolveAgentStack(
   flags: AgentFlags,
@@ -85,18 +111,14 @@ export function* resolveAgentStack(
   if ("error" in config) {
     return Err(new Error(config.error));
   }
-  if (flags.agentProvider !== "acpx") {
-    return Err(new Error(`Unknown agent provider "${flags.agentProvider}"`));
+  const authorship = yield* resolveAuthorshipStack(
+    { agentProvider: flags.agentProvider, defaultAgent: config.defaultAgent },
+    sessions,
+  );
+  if (!authorship.ok) {
+    return authorship;
   }
-  const defaultAgent =
-    config.defaultAgent ?? (yield* readEnv("DEFAULT_AGENT_NAME")) ?? DEFAULT_AGENT_NAME;
-  return Ok({
-    provider: flags.agentProvider,
-    defaultAgent,
-    permissionMode: config.permissionMode,
-    adapters: createEmbeddedAdapters(DEFAULT_ADAPTER_ROOT),
-    ...(sessions === undefined ? {} : { sessions }),
-  });
+  return Ok({ ...authorship.value, permissionMode: config.permissionMode });
 }
 
 /**
@@ -112,7 +134,7 @@ export function* resolveAgentStack(
  * ones a document could replace are not ones. The two advertised sets are stated
  * by the host, not inherited.
  */
-export function hostAcpDependencies(stack: AgentStack): AcpxProviderDependencies {
+export function hostAcpDependencies(stack: AuthorshipStack): AcpxProviderDependencies {
   const { sessions } = stack;
   const adapters = embeddedAdapterDependencies(stack.adapters);
   if (sessions === undefined) {

@@ -7,17 +7,12 @@
  * command line before it builds a catalog, opens a session, asks a person, or
  * writes a file.
  *
- * The command line is read in two stages because only the first one is fixed.
- * The request, the built-in options and the end-of-options separator are known
- * from the grammar alone; whether `--props-name` takes a following token depends
- * on what the *generated* document declares, and no document exists yet. So this
- * stage classifies what it can, records each generated occurrence with the token
- * it provisionally read, and leaves the rest to the candidate that supplies the
- * schema.
+ * The grammar is fixed and complete, because the command produces source rather
+ * than running it: there is no generated document whose declarations could add
+ * an option. Every option this command does not define is refused here, by
+ * name, before the general parser can drop it, coerce its value, or read it as
+ * a second positional.
  */
-
-import { AGGREGATE_OPTION } from "./props.ts";
-import type { Binding } from "./props.ts";
 
 export const PLAN_COMMAND = "plan";
 
@@ -51,58 +46,66 @@ export const RETIRED_COMMAND_REFUSAL: string =
 
 export const OUTPUT_OPTION = "--output";
 export const SESSION_OPTION = "--session";
-export const RUN_OPTION = "--run";
 
-/** The built-in options that take a separated value. */
+/** The switch that used to run the approved Plan, and now names its migration. */
+const RUN_OPTION = "--run";
+
+/**
+ * What every `--run` spelling is answered with.
+ *
+ * The option is gone rather than inert, so the message says what replaced it:
+ * planning writes source, and a caller who wants that source to run composes
+ * the two commands themselves. Both compositions are shown, because the choice
+ * between them is whether the artifact is kept.
+ */
+export const RUN_REMOVAL_REFUSAL: string = [
+  "xmd plan --run was removed because xmd plan only produces approved source.",
+  "Run the program explicitly:",
+  '  xmd plan "..." | xmd run -',
+  '  xmd plan "..." --output release.md && xmd run release.md',
+].join("\n");
+
+/** What every other removed option is answered with. */
+export function removedOptionRefusal(option: string): string {
+  return (
+    `unrecognized option for xmd plan: ${option} — configure the program when you run ` +
+    "the approved source with xmd run"
+  );
+}
+
+/** The options that take a separated value. */
 const VALUE_OPTIONS: readonly string[] = [
   "--include",
-  "--journal",
-  "-j",
   "--agent-provider",
   "--default-agent",
   "--timeout",
-  "--timeout-exec",
-  "--timeout-fetch",
   OUTPUT_OPTION,
   SESSION_OPTION,
 ];
 
-/** The built-in options that take none. */
-const SWITCH_OPTIONS: readonly string[] = [
-  "--verbose",
-  "-V",
-  "--raw",
-  "--approve-all",
-  "--approve-reads",
-  "--deny-all",
-  "--secret-detection",
-  "--no-secret-detection",
-  RUN_OPTION,
-  "--help",
-  "-h",
-  "--version",
-];
+/** The options that take none. */
+const SWITCH_OPTIONS: readonly string[] = ["--help", "-h", "--version"];
 
 /**
- * The options that configure the Plan's execution and nothing else.
+ * The options that configured running the approved Plan, and now configure
+ * nothing.
  *
- * `xmd plan` prints an approved Plan unless `--run` asks for it to be run, so
- * each of these describes work that would not happen. Accepting one silently
- * would mean answering a caller who asked for a journal, a permission mode or an
- * exec deadline with a command that creates none of them.
+ * `xmd plan` produces source and stops, so each of these describes work this
+ * command never performs. Accepting one silently would mean answering a caller
+ * who asked for a journal, a permission mode or an exec deadline with a command
+ * that creates none of them; `xmd run` still defines every one of them, and the
+ * refusal says so.
  *
- * Everything absent from this list is here for a reason the command always has:
- * `--include` builds the catalog and admits properties, `--agent-provider` and
- * `--default-agent` settle who writes the Plan, `--session` names the
- * conversation, `--timeout` bounds the whole command, and `--output` is where an
- * approved Plan goes.
+ * The generated `--props-*` and `--no-props-*` names, and the aggregate
+ * `--props`, are refused by prefix rather than by list: they bind the root
+ * properties of a program, and the program a Plan describes is run later.
  */
-const RUN_ONLY_OPTIONS: readonly string[] = [
-  "--journal",
-  "-j",
+const REMOVED_OPTIONS: readonly string[] = [
   "--raw",
   "--verbose",
   "-V",
+  "--journal",
+  "-j",
   "--timeout-exec",
   "--timeout-fetch",
   "--approve-all",
@@ -112,48 +115,45 @@ const RUN_ONLY_OPTIONS: readonly string[] = [
   "--no-secret-detection",
 ];
 
-const RUN_ONLY = new Set(RUN_ONLY_OPTIONS);
-
+const REMOVED = new Set(REMOVED_OPTIONS);
 const VALUE = new Set(VALUE_OPTIONS);
-const KNOWN = new Set([...VALUE_OPTIONS, ...SWITCH_OPTIONS, AGGREGATE_OPTION]);
+const KNOWN = new Set([...VALUE_OPTIONS, ...SWITCH_OPTIONS]);
 
 function optionName(token: string): string {
   const equals = token.indexOf("=");
   return equals === -1 ? token : token.slice(0, equals);
 }
 
+/** Whether this name binds a root property of the program a Plan describes. */
 function generatesProperty(name: string): boolean {
-  return name.startsWith("--props-") || name.startsWith("--no-props");
+  return name.startsWith("--props") || name.startsWith("--no-props");
 }
 
 /**
- * Whether this token is an option `xmd` itself defines.
+ * What a removed option is answered with, or `undefined` when this name is not
+ * one.
  *
- * Used to decide what a generated property option may provisionally read as its
- * value. A caller writing `--props-name --raw` means the switch, not a value of
- * `--raw`; a value that really begins with `-` is written `--props-name=-value`.
+ * The name is read up to its first `=`, so every valued spelling arrives under
+ * the name of the option it was written as: `--run=false` is a `--run`, and a
+ * removed option that appears to take a value never consumes the token after
+ * it.
  */
-function isKnownOption(token: string): boolean {
-  if (!token.startsWith("-") || token === "-") {
-    return false;
+function removalRefusal(name: string): string | undefined {
+  if (name === RUN_OPTION) {
+    return RUN_REMOVAL_REFUSAL;
   }
-  const name = optionName(token);
-  return KNOWN.has(name) || generatesProperty(name);
+  if (REMOVED.has(name) || generatesProperty(name)) {
+    return removedOptionRefusal(name);
+  }
+  return undefined;
 }
 
-/** One `--props-*` token, as written. */
-export interface PropertyOccurrence {
-  /** The option name, without any `=value`. */
-  option: string;
-  /** The value written with `=`, when it was written that way. */
-  inline?: string;
-  /**
-   * The following token this scan read as the option's value.
-   *
-   * Provisional: whether the option takes one is the candidate's answer, and a
-   * candidate that declares it a switch turns this token into a second request.
-   */
-  provisional?: string;
+/** The removal this token names, wherever it stands on the command line. */
+function tokenRemoval(token: string): string | undefined {
+  if (!token.startsWith("-") || token === "-") {
+    return undefined;
+  }
+  return removalRefusal(optionName(token));
 }
 
 /** What fixed grammar establishes about one `xmd plan` command line. */
@@ -163,15 +163,11 @@ export interface PlanScan {
   /**
    * The argv the built-in option parser sees.
    *
-   * Generated property tokens and the aggregate `--props` are removed: the
-   * parser defines neither, and it coerces a separated value through `Number()`
-   * before any schema could judge it. Tokens after `--` are left out for the
-   * same reason the workflow command leaves them out — a dash-leading positional
-   * handed back to a parser is read as an option again.
+   * Tokens after `--` are left out for the same reason the workflow command
+   * leaves them out — a dash-leading positional handed back to a parser is read
+   * as an option again.
    */
   fixed: string[];
-  /** Every generated property occurrence, in the order it was written. */
-  occurrences: PropertyOccurrence[];
   /** Why fixed grammar refuses this command line. */
   error?: string;
 }
@@ -181,18 +177,18 @@ export function namesPlan(args: readonly string[]): boolean {
   return args[0] === PLAN_COMMAND;
 }
 
-const ORDER_HELP =
-  "document properties follow the request, as in " + '`xmd plan "<request>" --props-name <value>`';
-
 export function scanPlanArgs(args: readonly string[]): PlanScan {
   const fixed: string[] = [PLAN_COMMAND];
-  const occurrences: PropertyOccurrence[] = [];
   let request: string | undefined;
   let extra: string | undefined;
-  let runs = false;
-  let runOnly: string | undefined;
   let parsingOptions = true;
   let index = 1;
+
+  const refuse = (error: string): PlanScan => ({
+    ...(request === undefined ? {} : { request }),
+    fixed,
+    error,
+  });
 
   while (index < args.length) {
     const token = args[index];
@@ -207,33 +203,9 @@ export function scanPlanArgs(args: readonly string[]): PlanScan {
       const equals = token.indexOf("=");
       const name = optionName(token);
 
-      if (name === AGGREGATE_OPTION) {
-        index += equals === -1 && args[index + 1] !== undefined ? 2 : 1;
-        continue;
-      }
-
-      if (generatesProperty(name)) {
-        if (request === undefined) {
-          return {
-            fixed,
-            occurrences,
-            error: `unrecognized option: ${name} — ${ORDER_HELP}`,
-          };
-        }
-        if (equals !== -1) {
-          occurrences.push({ option: name, inline: token.slice(equals + 1) });
-          index += 1;
-          continue;
-        }
-        const next = args[index + 1];
-        if (next === undefined || next === "--" || isKnownOption(next)) {
-          occurrences.push({ option: name });
-          index += 1;
-          continue;
-        }
-        occurrences.push({ option: name, provisional: next });
-        index += 2;
-        continue;
+      const removed = removalRefusal(name);
+      if (removed !== undefined) {
+        return refuse(removed);
       }
 
       if (!KNOWN.has(name)) {
@@ -243,44 +215,26 @@ export function scanPlanArgs(args: readonly string[]): PlanScan {
         // has not been answered. `--save` is named because it is the one
         // spelling somebody may remember; it was replaced before release, so
         // there is no alias to keep.
-        return {
-          ...(request === undefined ? {} : { request }),
-          fixed,
-          occurrences,
-          error:
-            name === "--save"
-              ? `unrecognized option for xmd plan: --save — the approved Plan goes to stdout, ` +
+        return refuse(
+          name === "--save"
+            ? `unrecognized option for xmd plan: --save — the approved Plan goes to stdout, ` +
                 `and ${OUTPUT_OPTION} writes it to a file`
-              : `unrecognized option for xmd plan: ${name}`,
-        };
+            : `unrecognized option for xmd plan: ${name}`,
+        );
       }
 
-      if (name === RUN_OPTION) {
-        // `optionName` stops at the first `=`, so every `--run=…` spelling
-        // arrives here under the name of the switch. Reading one as the switch
-        // would let a token satisfy the gate below while meaning the opposite,
-        // and the ordinary parser reads `--run=true` as the default rather than
-        // as true — so a caller who spelled it that way is answered by neither
-        // half of this command. Refused instead, before it establishes anything.
-        if (equals !== -1) {
-          return {
-            ...(request === undefined ? {} : { request }),
-            fixed,
-            occurrences,
-            error:
-              `${RUN_OPTION} does not take a value — write ${RUN_OPTION} to execute the Plan ` +
-              "or leave it out to write the Plan",
-          };
+      const next = args[index + 1];
+      const separated = equals === -1 && VALUE.has(name) && next !== undefined ? next : undefined;
+      if (separated !== undefined) {
+        // A removed option is refused where it stands, including where a
+        // retained option would otherwise swallow it: `--include --run` names
+        // a directory nobody has, and reading it as one is how a removed
+        // spelling survives.
+        const swallowed = tokenRemoval(separated);
+        if (swallowed !== undefined) {
+          return refuse(swallowed);
         }
-        runs = true;
       }
-      if (runOnly === undefined && RUN_ONLY.has(name)) {
-        runOnly = name;
-      }
-      const separated =
-        equals === -1 && VALUE.has(name) && args[index + 1] !== undefined
-          ? args[index + 1]
-          : undefined;
       // Read here rather than after parsing, because an empty value is exactly
       // what the parser cannot report: an option it reads as absent falls back
       // to the default, so a caller who asked for a session and named none would
@@ -288,14 +242,10 @@ export function scanPlanArgs(args: readonly string[]): PlanScan {
       if (name === SESSION_OPTION) {
         const value = equals === -1 ? separated : token.slice(equals + 1);
         if (value === undefined || value.length === 0) {
-          return {
-            ...(request === undefined ? {} : { request }),
-            fixed,
-            occurrences,
-            error:
-              `${SESSION_OPTION} needs a name — write \`${SESSION_OPTION} <name>\` or leave ` +
+          return refuse(
+            `${SESSION_OPTION} needs a name — write \`${SESSION_OPTION} <name>\` or leave ` +
               "it out for a session unique to this invocation",
-          };
+          );
         }
       }
       fixed.push(token);
@@ -323,136 +273,18 @@ export function scanPlanArgs(args: readonly string[]): PlanScan {
   }
 
   if (extra !== undefined) {
-    return {
-      ...(request === undefined ? {} : { request }),
-      fixed,
-      occurrences,
-      error:
-        `unrecognized argument for xmd plan: ${extra} — the command takes exactly one ` +
-        "request, and " +
-        ORDER_HELP,
-    };
+    return refuse(
+      `unrecognized argument for xmd plan: ${extra} — the command takes exactly one request`,
+    );
   }
 
   if (request === undefined) {
-    return {
-      fixed,
-      occurrences,
-      error: 'xmd plan requires one request — `xmd plan "<what you want>"`',
-    };
+    return refuse('xmd plan requires one request — `xmd plan "<what you want>"`');
   }
 
   if (request.trim().length === 0) {
-    return {
-      request,
-      fixed,
-      occurrences,
-      error: "xmd plan requires a request with at least one non-whitespace character",
-    };
+    return refuse("xmd plan requires a request with at least one non-whitespace character");
   }
 
-  if (runOnly !== undefined && !runs) {
-    return {
-      request,
-      fixed,
-      occurrences,
-      error:
-        `${runOnly} configures running the Plan, and without ${RUN_OPTION} this command ` +
-        `writes the Plan instead of running it — add ${RUN_OPTION}, or drop ${runOnly}`,
-    };
-  }
-
-  return { request, fixed, occurrences };
-}
-
-/**
- * How a supplied individual option is written: whether it takes a token, and
- * whether repeating it accumulates.
- *
- * This is what a later candidate may not change. The comparison happens before
- * any token is extracted, so a switch that became a value option cannot reach
- * forward and consume the `--raw` written after it.
- */
-export interface OptionSignature {
-  boolean: boolean;
-  array: boolean;
-}
-
-export function signatureOf(binding: Binding): OptionSignature {
-  return { boolean: binding.boolean, array: binding.array };
-}
-
-function describeSignature(signature: OptionSignature): string {
-  if (signature.boolean) {
-    return "a bare switch";
-  }
-  return signature.array ? "a repeated value option" : "a single-value option";
-}
-
-/**
- * Whether the candidate still declares every supplied option the way the
- * candidate that first bound it did.
- *
- * A removed option or a changed shape is the caller's command line meaning
- * something else than it did, which no revision may do silently.
- */
-export function signatureFailure(
-  frozen: ReadonlyMap<string, OptionSignature>,
-  bindings: readonly Binding[],
-): string | undefined {
-  const current = new Map(bindings.map((binding) => [binding.option, signatureOf(binding)]));
-  for (const [option, signature] of frozen) {
-    const now = current.get(option);
-    if (now === undefined) {
-      return (
-        `${option} was accepted by an earlier draft and this one declares no such property — ` +
-        "the command line no longer describes the document under review"
-      );
-    }
-    if (now.boolean !== signature.boolean || now.array !== signature.array) {
-      return (
-        `${option} was ${describeSignature(signature)} in an earlier draft and is ` +
-        `${describeSignature(now)} in this one — the command line no longer describes the ` +
-        "document under review"
-      );
-    }
-  }
-  return undefined;
-}
-
-/**
- * The token a candidate's own arity turns into a second request.
- *
- * `--props-loud true` reads as an option and a value until a candidate declares
- * `loud` a boolean; from then on `true` is a positional, and the command takes
- * exactly one.
- */
-export function strayPropertyValue(
-  occurrences: readonly PropertyOccurrence[],
-  bindings: readonly Binding[],
-): string | undefined {
-  const byOption = new Map(bindings.map((binding) => [binding.option, binding]));
-  for (const occurrence of occurrences) {
-    const { provisional } = occurrence;
-    if (provisional === undefined) {
-      continue;
-    }
-    const binding = byOption.get(occurrence.option);
-    if (binding?.boolean === true) {
-      return (
-        `unrecognized argument for xmd plan: ${provisional} — ${occurrence.option} is a ` +
-        `switch, so this is a second request; write \`${occurrence.option}=${provisional}\` ` +
-        "to give it a value"
-      );
-    }
-  }
-  return undefined;
-}
-
-/**
- * Whether this token is an option the invocation owns, and therefore one a
- * generated property may not read as its value.
- */
-export function isReservedOption(token: string): boolean {
-  return isKnownOption(token);
+  return { request, fixed };
 }

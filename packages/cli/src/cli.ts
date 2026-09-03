@@ -19,8 +19,8 @@
  *
  * Examples:
  *   xmd run packages/core/examples/hello-world.md
- *   xmd plan "prepare the release" | xmd run -
- *   xmd plan "ask me for my age and write the result to a file"
+ *   xmd plan "prepare the release program."
+ *   xmd plan "prepare the release program." | xmd run -
  *   xmd packages/core/examples/hello-world.md --verbose
  *   xmd run packages/core/examples/hello-world.md --journal events.jsonl
  *   xmd run README.md#Release/Publish
@@ -96,18 +96,17 @@ import {
 import { installWebComponents, installWebElicitation } from "@executablemd/web";
 import { timebox } from "@effectionx/timebox";
 import { timeout as runTimeout } from "@executablemd/runtime";
-import { installRunAgentStack, resolveAgentStack } from "./agent-stack.ts";
+import { installRunAgentStack, resolveAgentStack, resolveAuthorshipStack } from "./agent-stack.ts";
 import { planComponentDeclaration } from "./plan-component.ts";
 import { planAgentContext } from "./authorship-profile.ts";
 import { VERBOSE_REGISTRATION } from "./verbose-component.ts";
 import type { AgentStack } from "./agent-stack.ts";
 import { reportFailure } from "./report.ts";
-import { TIMEOUT_FLAGS, resolveRunTimeouts } from "./timeouts.ts";
+import { TIMEOUT_FLAGS, resolvePlanTimeout, resolveRunTimeouts } from "./timeouts.ts";
 import type { RunTimeouts } from "./timeouts.ts";
 import type { AgentFlags } from "./agent-config.ts";
 import { FileStream } from "./file-stream.ts";
 import {
-  AGGREGATE_ENV,
   AGGREGATE_OPTION,
   buildBindings,
   declaredProperties,
@@ -120,15 +119,11 @@ import type { Binding, Extraction } from "./props.ts";
 import {
   namesPlan,
   namesRetiredCommand,
-  OUTPUT_OPTION,
   RETIRED_COMMAND_REFUSAL,
-  RUN_OPTION,
   scanPlanArgs,
-  SESSION_OPTION,
 } from "./plan-args.ts";
 import type { PlanScan } from "./plan-args.ts";
 import { runPlan } from "./plan.ts";
-import type { PlanExecution } from "./plan.ts";
 import { runUpgrade } from "./upgrade.ts";
 import type { UpgradeAssembly } from "./upgrade.ts";
 import { componentSearchPath, resolveTestTarget } from "./test-target.ts";
@@ -183,14 +178,13 @@ const SECRET_DETECTION_FIELD = {
 };
 
 /**
- * Everything a command that ends in a document execution configures.
+ * Everything a document execution configures.
  *
- * Declared once because `xmd run` and `xmd plan` configure the same
- * execution: the includes it resolves components through, what it writes and
- * where, the agent stack it runs under, and the three deadlines. `run` adds the
- * document, `plan` adds the request and where to keep the source; nothing
- * else differs, and a second copy of this list would be the two commands
- * drifting apart one option at a time.
+ * `xmd run` alone. `xmd plan` writes a program rather than running one, so it
+ * declares the few of these that describe *authorship* — the includes the
+ * catalog is built from, who writes, and one deadline — and none of the rest:
+ * a journal, a permission mode, an exec deadline or a presentation option would
+ * each configure work this command never performs.
  */
 const executionFields = {
   include: {
@@ -266,34 +260,47 @@ const runConfig = object({
 
 /** What `xmd --help` says the plan command is for. */
 const PLAN_DESCRIPTION =
-  "Create an executable Plan from a Prompt and review it before writing or running it.";
+  "Turn a request into an XMD Plan, review it, and write the approved source.";
 
 /**
- * `xmd plan` — the Prompt, where the approved Plan goes, and whether it runs.
+ * `xmd plan` — the request, where the approved source goes, and who writes it.
  *
- * The individual `--props-*` options a candidate declares are deliberately
- * absent: they exist only once a document does, and the props phase binds them
- * per candidate. The aggregate `--props` is absent for the reason `run`'s is —
- * the parser coerces a separated value before any schema could judge it.
+ * Every option that configured *running* a Plan is absent, because this command
+ * runs nothing: the program it writes is run by a later `xmd run`, and that is
+ * where a journal, a permission mode, an exec deadline and a root property are
+ * configured. The generated `--props-*` options are absent for the same reason,
+ * and for one more — they exist only once a document does, and this command's
+ * result is the document.
  */
 const planConfig = object({
   request: {
-    description: "the steps the coding agent should turn into a Plan",
+    description: "the request the coding agent should turn into an XMD Plan",
     ...field(z.string().optional(), cli.argument()),
   },
   output: {
-    description: "write the approved Plan here instead of to stdout (path must not exist)",
+    description: "write the approved source here instead of to stdout (path must not exist)",
     ...field(z.string().optional()),
-  },
-  run: {
-    description: "run the approved Plan instead of writing it",
-    ...field(z.boolean(), field.default(false)),
   },
   session: {
     description: "logical name for the assistant session (default: unique to this invocation)",
     ...field(z.string().optional()),
   },
-  ...executionFields,
+  include: {
+    description: "component search directory",
+    ...field(z.array(z.string()), field.default(["components", "."]), field.array()),
+  },
+  agentProvider: {
+    description: "agent provider for Plan authorship",
+    ...field(z.string(), field.default("acpx")),
+  },
+  defaultAgent: {
+    description: "default agent name (overrides DEFAULT_AGENT_NAME)",
+    ...field(z.string().optional()),
+  },
+  timeout: {
+    description: "deadline for the whole planning invocation, as a duration (500ms, 30s, 5min)",
+    ...field(z.string().optional()),
+  },
 });
 
 const testConfig = object({
@@ -660,11 +667,27 @@ function findAgentOnlyFlag(args: string[]): string | undefined {
   );
 }
 
-/** The timeout options, like the agent options, belong to `xmd run` alone. */
+/** The timeout options, like the agent options, belong to a command that runs. */
 function findTimeoutFlag(args: string[]): string | undefined {
   return args.find((arg) =>
     TIMEOUT_FLAGS.some((flag) => arg === flag || arg.startsWith(`${flag}=`)),
   );
+}
+
+/**
+ * The agent and timeout options `xmd plan` still defines.
+ *
+ * Planning settles who writes and bounds the whole invocation; it configures no
+ * execution, so a permission mode, an exec deadline and a fetch deadline reach
+ * `xmd run` alone. A command refusing one of these says which commands do take
+ * it, so the answer has to tell the two groups apart.
+ */
+const PLANNING_FLAGS = new Set(["--agent-provider", "--default-agent", "--timeout"]);
+
+/** Which commands the option a caller wrote actually belongs to. */
+function belongsTo(flag: string): string {
+  const [name] = flag.split("=");
+  return PLANNING_FLAGS.has(name) ? "xmd run and xmd plan" : "xmd run";
 }
 
 /**
@@ -954,7 +977,7 @@ function* runDocument(
   // imported. The run profile is where `<Plan>` belongs — a document that writes
   // one is asking for the same workflow `xmd plan` runs — and the surface is
   // fixed here, so the thin command adapter cannot supply or derive it and a
-  // Plan later executed by `--run` is a new ordinary run that receives
+  // Plan a later `xmd run` executes is an ordinary run that receives
   // `component` from its own declaration.
   //
   // Built whether or not this command settled an Agent stack. A host with none —
@@ -1204,65 +1227,6 @@ function* runScopedDocument(
   } catch (error) {
     return Err(error instanceof Error ? error : new Error(String(error)));
   }
-}
-
-/** What an approved Plan runs with, beyond the source and its props. */
-export interface PlanExecutionConfig {
-  include: string[];
-  verbose: boolean;
-  journal: string | undefined;
-  raw: boolean;
-  secretDetection: boolean;
-}
-
-/**
- * How `xmd plan` runs the document a person approved: exactly as `xmd run`
- * runs a supplied one.
- *
- * The authorship profile's scope is already gone by the time this is called, so the
- * executed program gets a fresh ordinary Agent provider and inherits neither
- * the assistant session nor its instruction layer. The browser form is composed
- * around the document for the same reason a run composes one: `xmd plan` is a
- * command a person is sitting in front of.
- */
-export function planExecutor(
-  config: PlanExecutionConfig,
-  stack: AgentStack,
-  sessions: MachineSessionAssembly | undefined,
-  installService: HostServiceInstaller,
-  installRepositories: RepositoryInstaller,
-): (approved: PlanExecution) => Operation<Result<void>> {
-  return (approved) =>
-    scoped(function* (): Operation<Result<void>> {
-      announceSecretDetection(config.secretDetection);
-      yield* installWebElicitation();
-      return yield* runScopedDocument(
-        {
-          root: approved.root,
-          include: config.include,
-          verbose: config.verbose,
-          journal: config.journal,
-          raw: config.raw,
-          secretDetection: config.secretDetection,
-          retainProcessOutput: keepsProcessOutput(config.journal),
-        },
-        {
-          testing: false,
-          props: approved.props,
-          ...(sessions === undefined ? {} : { machineSessions: sessions }),
-          // The same object generation was configured from. The provider it
-          // installs is a fresh ordinary one — the profile's scope is already
-          // gone — but which agent it defaults to and what it may do were
-          // decided once, for the whole invocation.
-          agent: stack,
-        },
-        installService,
-        // An approved plan's second execution is an ordinary run, so it gets
-        // the ordinary provider — a fresh one, since the authorship profile's
-        // scope is already gone.
-        installRepositories,
-      );
-    });
 }
 
 /**
@@ -1846,7 +1810,7 @@ function* preparePropsPhase(
         bindings: [],
         error:
           `unrecognized option for xmd ${command}: ${stray} — document properties are ` +
-          "exclusive to xmd run and xmd plan",
+          "exclusive to xmd run",
       };
     }
     if (stray) {
@@ -2217,53 +2181,34 @@ const RUN_SOURCE_HELP = [
 /**
  * What `xmd plan --help` says beyond its option list.
  *
- * Generic on purpose. The individual options a run accepts come from the
- * document it names; the ones a plan accepts come from a document the agent
- * has not written yet, so help describes where they go rather than what they
- * are. Answering otherwise would mean generating a document to describe one.
+ * It answers the two questions the option list cannot: what a request is, and
+ * what happens to the program once it exists. Both explicit compositions are
+ * written out, because "planning never runs the approved program" is only half
+ * an answer without the command line that does.
  */
 const PLAN_REQUEST_HELP = [
-  "Exactly one Prompt is required, and it is the steps you want carried out",
-  "rather than a path. Quote it so the shell passes it as a single argument:",
-  '  xmd plan "ask me for my age and write the result to a file"',
+  "Exactly one request is required. It describes the program you want the coding",
+  "agent to create, rather than a path. Quote it so the shell passes it as one",
+  "argument:",
+  '  xmd plan "Prepare the release program."',
   "",
-  "A first-party command document turns your Prompt into a Plan: an executable",
-  "Markdown document that states each step in ordinary language and places the",
-  "component that carries it out beside those words. xmd checks each draft and",
-  "repairs definite defects; you approve, request changes or stop before anything",
-  "leaves the command.",
+  "A first-party command document turns the request into an XMD Plan. xmd checks",
+  "each draft, and you approve, request changes, or stop before source leaves the",
+  "command.",
   "",
-  "The approved Plan is the result. By default it is written to stdout and nothing",
-  "runs, so it can be piped, diffed or read before you commit to it.",
+  "The approved Plan is the only result. Without --output, stdout contains its",
+  "exact source bytes and nothing else. With --output, the path is created",
+  "exclusively after approval; an existing path is left unchanged.",
   "",
-  "Document properties follow the Prompt. The individual options a Plan declares",
-  "are the generated document's, so they are not listed here:",
-  '  xmd plan "<Prompt>" --props-name Ada',
+  "Planning never runs the approved program. Compose planning and execution",
+  "explicitly through standard input:",
+  '  xmd plan "Prepare the release program." | xmd run -',
   "",
-  `  ${AGGREGATE_OPTION} <json>`,
-  "      Set document properties as a JSON object",
-  `      Environment: ${AGGREGATE_ENV}`,
+  "Or preserve the artifact and run it later:",
+  '  xmd plan "Prepare the release program." --output release.md && xmd run release.md',
   "",
-  `  ${OUTPUT_OPTION} <path>`,
-  "      Write the approved Plan there instead of to stdout. The path must not",
-  "      exist; an existing one is left alone and the command stops.",
-  "",
-  `  ${RUN_OPTION}`,
-  "      Run the approved Plan instead of writing it. With --output the file is",
-  "      written first, and only a successful write is followed by the run.",
-  "",
-  `  ${SESSION_OPTION} <name>`,
-  "      Use this logical assistant session instead of one unique to this run.",
-  "",
-  `Options that only configure running a Plan — --journal, --raw, --verbose, the`,
-  "exec and fetch timeouts, the permission flags and secret detection — are",
-  `refused without ${RUN_OPTION}, because without it nothing runs for them to`,
-  "configure.",
-  "",
-  "Permission flags configure the approved Plan. Writing the Plan is a",
-  "conversation about text and gives the coding agent nothing: an empty directory",
-  "of its own, no tools, no MCP servers, and every native permission request",
-  "denied.",
+  "A named --session continues the planning conversation. Without it, this",
+  "invocation uses a unique session.",
 ].join("\n");
 
 /**
@@ -2413,6 +2358,15 @@ function* dispatch(
     return;
   }
 
+  // `xmd plan` owns its complete grammar, and it answers first: every option
+  // this command removed is refused by name here, before the shared checks
+  // below could report one of them as something else.
+  if (propsPhase.plan?.error !== undefined) {
+    console.error(propsPhase.plan.error);
+    yield* exit(1);
+    return;
+  }
+
   const secretDetectionError = secretDetectionGrammarError(evalFlags.rest);
   if (secretDetectionError) {
     console.error(secretDetectionError);
@@ -2494,36 +2448,30 @@ function* dispatch(
     case "plan": {
       const config = command.config;
       const scan = propsPhase.plan;
-      if (scan === undefined) {
+      if (scan?.request === undefined) {
         console.error('xmd plan names the command first — write `xmd plan "<request>" [options]`');
         yield* exit(1);
         break;
       }
-      // Once, here, and handed to both consumers below. Authorship and the run
-      // that may follow it are one invocation, so they answer to one
-      // `--default-agent`, one `DEFAULT_AGENT_NAME` and one permission mode.
-      const planStack = yield* settleAgentStack(
-        {
-          agentProvider: config.agentProvider,
-          defaultAgent: config.defaultAgent,
-          approveAll: config.approveAll,
-          approveReads: config.approveReads,
-          denyAll: config.denyAll,
-        },
+      // Who writes, and nothing else. There is no permission mode to settle:
+      // this command starts no program, and the ceiling authorship runs under
+      // is the host's rather than the command line's.
+      const authorship = yield* resolveAuthorshipStack(
+        { agentProvider: config.agentProvider, defaultAgent: config.defaultAgent },
         sessions,
       );
-      if (planStack === undefined) {
+      if (!authorship.ok) {
+        console.error(authorship.error.message);
+        yield* exit(1);
         break;
       }
       const exitCode = yield* runPlan(
         {
-          argv: helpRequest.args,
-          scan,
+          request: scan.request,
           include: config.include,
           ...(config.output === undefined ? {} : { output: config.output }),
-          run: config.run,
           ...(config.session === undefined ? {} : { session: config.session }),
-          stack: planStack,
+          stack: authorship.value,
         },
         {
           ...(sessions === undefined ? {} : { sessions }),
@@ -2533,7 +2481,6 @@ function* dispatch(
           // A host that answers installs a provider; one that does not installs
           // none, and nothing downstream reads a profile to find out which.
           installElicitation: installWebElicitation,
-          execute: planExecutor(config, planStack, sessions, installService, installRepositories),
         },
       );
       if (exitCode !== 0) {
@@ -2607,7 +2554,7 @@ function* dispatch(
       if (strayTimeout) {
         console.error(
           `unrecognized option for xmd test: ${strayTimeout} — timeout options are exclusive to ` +
-            "xmd run and xmd plan",
+            belongsTo(strayTimeout),
         );
         yield* exit(1);
         break;
@@ -2616,7 +2563,7 @@ function* dispatch(
       if (agentFlag) {
         console.error(
           `unrecognized option for xmd test: ${agentFlag} — agent options are exclusive to ` +
-            "xmd run and xmd plan",
+            belongsTo(agentFlag),
         );
         yield* exit(1);
         break;
@@ -2625,7 +2572,7 @@ function* dispatch(
       if (propsFlag) {
         console.error(
           `unrecognized option for xmd test: ${propsFlag} — document properties are exclusive to ` +
-            "xmd run and xmd plan",
+            "xmd run",
         );
         yield* exit(1);
         break;
@@ -2675,7 +2622,7 @@ function* dispatch(
       if (agentFlag) {
         console.error(
           `unrecognized option for xmd workflow: ${agentFlag} — agent options are exclusive to ` +
-            "xmd run and xmd plan",
+            belongsTo(agentFlag),
         );
         yield* exit(1);
         break;
@@ -2839,17 +2786,18 @@ export function* runXmd(
   // end in one.
   const provisional = xmd.parse({ args: helpRequest.args });
   const selected = provisional.ok ? provisional.value.config : undefined;
-  // The two commands that end in a document execution. `xmd plan`'s deadline
-  // encloses more than a run's — the catalog, the assistant session, every
-  // repair, the human review, provider teardown, the output file and the run —
-  // because all of it is what the caller asked to be bounded.
-  const executes =
+  // The two commands a `--timeout` bounds. `xmd plan`'s deadline encloses
+  // something different from a run's — the catalog, the assistant session,
+  // every repair, the human review, provider teardown, final validation and the
+  // artifact — and covers no later program, because it starts none.
+  const planning = selected !== undefined && !selected.help && selected.name === "plan";
+  const bounded =
     !helpRequest.requested &&
     selected !== undefined &&
     !selected.help &&
-    (selected.name === "run" || selected.name === "plan");
+    (selected.name === "run" || planning);
 
-  if (!executes) {
+  if (!bounded) {
     return yield* dispatch(
       evalFlags,
       helpRequest,
@@ -2862,7 +2810,9 @@ export function* runXmd(
     );
   }
 
-  const timeouts = resolveRunTimeouts(evalFlags.rest);
+  const timeouts = planning
+    ? resolvePlanTimeout(evalFlags.rest)
+    : resolveRunTimeouts(evalFlags.rest);
   if ("error" in timeouts) {
     console.error(timeouts.error);
     yield* exit(1);

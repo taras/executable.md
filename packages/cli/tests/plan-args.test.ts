@@ -1,43 +1,67 @@
 /**
  * Tier PR — `xmd plan` fixed grammar (specs/plan-command-spec.md).
  *
- * Rows P1–P6, in the half that is decidable without a document. `scanPlanArgs`
- * is a pure function over argv, so what the command line means — and every
- * refusal it earns — is asserted directly rather than inferred from a process
- * that printed nothing.
+ * Rows PS1–PS3. `scanPlanArgs` is a pure function over argv, so what the
+ * command line means — and every refusal it earns — is asserted directly rather
+ * than inferred from a process that printed nothing.
  *
- * The rest of P5 and P6 live in `plan.test.ts`, where a candidate schema
- * exists to bind against.
+ * The grammar is complete here, because the command produces source rather than
+ * running it: no generated document adds an option later, so nothing about this
+ * command line waits on a candidate schema. What a refusal *reaches* is
+ * `plan-cli.test.ts`, where the phases that stayed at zero are observable.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 
 import {
-  isReservedOption,
   namesPlan,
   namesRetiredCommand,
+  removedOptionRefusal,
   RETIRED_COMMAND_REFUSAL,
+  RUN_REMOVAL_REFUSAL,
   scanPlanArgs,
-  signatureFailure,
-  signatureOf,
-  strayPropertyValue,
 } from "../src/plan-args.ts";
-import type { OptionSignature } from "../src/plan-args.ts";
-import { buildBindings, extractPropsArgs, PropsError } from "../src/props.ts";
-import type { Binding } from "../src/props.ts";
 
 const REQUEST = "ask me for my age and write the result to a file";
 
-function bindingsFor(properties: Record<string, unknown>): Binding[] {
-  return buildBindings({ type: "object", properties, additionalProperties: false });
-}
+/** Every option the command still defines, with a value where it takes one. */
+const RETAINED: readonly string[][] = [
+  ["--include", "lib"],
+  ["--agent-provider", "acpx"],
+  ["--default-agent", "codex"],
+  ["--session", "ada"],
+  ["--timeout", "5s"],
+  ["--output", "plan.md"],
+];
 
-function frozen(entries: Record<string, OptionSignature>): Map<string, OptionSignature> {
-  return new Map(Object.entries(entries));
-}
+/**
+ * One representative of every removed option class.
+ *
+ * Both short aliases are named, because a table of long names alone would leave
+ * `-V` and `-j` accepted and dropped by the parser; both secret-detection
+ * spellings are named for the same reason.
+ */
+const REMOVED: readonly string[][] = [
+  ["--journal", "trace.jsonl"],
+  ["-j", "trace.jsonl"],
+  ["--raw"],
+  ["--verbose"],
+  ["-V"],
+  ["--timeout-exec", "5s"],
+  ["--timeout-fetch", "5s"],
+  ["--approve-all"],
+  ["--approve-reads"],
+  ["--deny-all"],
+  ["--secret-detection"],
+  ["--no-secret-detection"],
+  ["--props", '{"name":"Ada"}'],
+  ["--props-name", "Ada"],
+  ["--props-loud"],
+  ["--no-props-loud"],
+];
 
 describe("Tier PR — xmd plan fixed grammar", () => {
-  it("C1: exactly one request, kept byte for byte", function* () {
+  it("PS1: exactly one request, kept byte for byte", function* () {
     expect(namesPlan(["plan", REQUEST])).toBe(true);
     expect(namesPlan(["run", "doc.md"])).toBe(false);
     // The command is named `plan` and nothing else names it: the retired
@@ -74,10 +98,13 @@ describe("Tier PR — xmd plan fixed grammar", () => {
     expect(padded.request).toBe(`  ${REQUEST}\n`);
 
     expect(scanPlanArgs(["plan"]).error).toContain("requires one request");
-    expect(scanPlanArgs(["plan", "", "--raw"]).error).toContain("non-whitespace");
+    expect(scanPlanArgs(["plan", ""]).error).toContain("non-whitespace");
     expect(scanPlanArgs(["plan", " \t\n "]).error).toContain("non-whitespace");
-    expect(scanPlanArgs(["plan", REQUEST, "second"]).error).toContain(
-      "unrecognized argument for xmd plan: second",
+    // The approved sentence, exactly: it names the token and says what the
+    // command takes, and nothing about property ordering — there are no
+    // generated properties left to order.
+    expect(scanPlanArgs(["plan", REQUEST, "second"]).error).toBe(
+      "unrecognized argument for xmd plan: second — the command takes exactly one request",
     );
 
     // A request that begins with a dash is written after the separator, and is
@@ -89,240 +116,96 @@ describe("Tier PR — xmd plan fixed grammar", () => {
     expect(separated.fixed).toEqual(["plan"]);
   });
 
-  it("C1: individual options follow the request, aggregate props may precede it", function* () {
-    const early = scanPlanArgs(["plan", "--props-name", "Ada", REQUEST]);
-    expect(early.error).toContain("unrecognized option: --props-name");
-    expect(early.error).toContain("follow the request");
-    // Refused before anything is classified: no request was adopted from the
-    // tokens that followed, and no occurrence was recorded.
-    expect(early.request).toBe(undefined);
-    expect(early.occurrences).toEqual([]);
+  it("PS1: every retained option is accepted, before and after the request", function* () {
+    for (const option of RETAINED) {
+      expect(scanPlanArgs(["plan", REQUEST, ...option]).error).toBe(undefined);
+      expect(scanPlanArgs(["plan", ...option, REQUEST]).error).toBe(undefined);
+    }
 
-    const aggregate = scanPlanArgs([
-      "plan",
-      "--props",
-      '{"name":"Ada"}',
-      REQUEST,
-      "--raw",
-      "--run",
-    ]);
-    expect(aggregate.error).toBe(undefined);
-    expect(aggregate.request).toBe(REQUEST);
-    // The aggregate never reaches the parser: it coerces a separated value
-    // through Number() before any schema could judge it.
-    expect(aggregate.fixed).toEqual(["plan", REQUEST, "--raw", "--run"]);
-
-    const inline = scanPlanArgs(["plan", '--props={"name":"Ada"}', REQUEST]);
-    expect(inline.error).toBe(undefined);
-    expect(inline.fixed).toEqual(["plan", REQUEST]);
-  });
-
-  it("C1: built-in options after generated props stay with the invocation", function* () {
-    const scan = scanPlanArgs([
-      "plan",
-      REQUEST,
-      "--props-name",
-      "Ada",
-      "--raw",
-      "--include",
-      "lib",
-      "--props-loud",
-      "--journal",
-      "trace.jsonl",
-      "--output",
-      "out.md",
-      "--session",
-      "ada",
-      "--run",
-    ]);
+    // All of them at once, and every token reaches the parser in the order it
+    // was written: the invocation keeps its own options rather than losing one
+    // to a neighbour.
+    const scan = scanPlanArgs(["plan", REQUEST, ...RETAINED.flat()]);
     expect(scan.error).toBe(undefined);
     expect(scan.request).toBe(REQUEST);
-    expect(scan.fixed).toEqual([
-      "plan",
-      REQUEST,
-      "--raw",
-      "--include",
-      "lib",
-      "--journal",
-      "trace.jsonl",
-      "--output",
-      "out.md",
-      "--session",
-      "ada",
-      "--run",
-    ]);
-    // `--props-loud` did not swallow `--journal`: a known option is never read
-    // as a generated property's value.
-    expect(scan.occurrences).toEqual([
-      { option: "--props-name", provisional: "Ada" },
-      { option: "--props-loud" },
-    ]);
+    expect(scan.fixed).toEqual(["plan", REQUEST, ...RETAINED.flat()]);
 
-    // Nor at extraction, once a candidate declares `loud` a value option.
-    const bindings = bindingsFor({ loud: { type: "string" } });
-    let failure: unknown;
-    try {
-      extractPropsArgs(["plan", REQUEST, "--props-loud", "--raw"], bindings, {
-        reserved: isReservedOption,
-      });
-    } catch (error) {
-      failure = error;
-    }
-    expect(failure).toBeInstanceOf(PropsError);
-    expect(String(failure)).toContain("--props-loud requires a value");
-    expect(String(failure)).toContain("--props-loud=--raw");
-
-    // `xmd run` supplies no reserved list, so its behavior is unchanged.
-    const asRun = extractPropsArgs(["--props-loud", "--raw"], bindings);
-    expect(asRun.individual).toEqual([{ binding: bindings[0], value: "--raw" }]);
-
-    expect(isReservedOption("--raw")).toBe(true);
-    expect(isReservedOption("--include=lib")).toBe(true);
-    expect(isReservedOption("--props-other")).toBe(true);
-    expect(isReservedOption("Ada")).toBe(false);
-    expect(isReservedOption("-5")).toBe(false);
+    // `--session` still needs a name. An option the parser reads as absent
+    // falls back to the generated session, so a caller who asked for a named
+    // one and named none would silently get a different conversation.
+    expect(scanPlanArgs(["plan", REQUEST, "--session"]).error).toContain("--session needs a name");
+    expect(scanPlanArgs(["plan", REQUEST, "--session="]).error).toContain("--session needs a name");
   });
 
-  it("C1: scalar, boolean and aggregate sources are all recorded", function* () {
-    const scan = scanPlanArgs([
-      "plan",
-      REQUEST,
-      "--props-name",
-      "Ada",
-      "--props-loud",
-      "--props-tag=alpha",
-      "--props-tag=beta",
-      "--props",
-      '{"count":2}',
-    ]);
-    expect(scan.error).toBe(undefined);
-    expect(scan.occurrences).toEqual([
-      { option: "--props-name", provisional: "Ada" },
-      { option: "--props-loud" },
-      { option: "--props-tag", inline: "alpha" },
-      { option: "--props-tag", inline: "beta" },
-    ]);
-
-    const bindings = bindingsFor({
-      name: { type: "string" },
-      loud: { type: "boolean" },
-      tag: { type: "array", items: { type: "string" } },
-      count: { type: "number" },
-    });
-    const extraction = extractPropsArgs(
+  it("PS2: every --run spelling reports the migration, and establishes nothing", function* () {
+    expect(RUN_REMOVAL_REFUSAL).toBe(
       [
-        "plan",
-        REQUEST,
-        "--props-name",
-        "Ada",
-        "--props-loud",
-        "--props-tag=alpha",
-        "--props-tag=beta",
-        "--props",
-        '{"count":2}',
-      ],
-      bindings,
-      { reserved: isReservedOption },
-    );
-    expect(extraction.aggregate).toBe('{"count":2}');
-    expect(extraction.individual.map((entry) => [entry.binding.option, entry.value])).toEqual([
-      ["--props-name", "Ada"],
-      ["--props-loud", "true"],
-      ["--props-tag", ["alpha", "beta"]],
-    ]);
-  });
-
-  it("C1: a boolean binding turns its provisional value into a second request", function* () {
-    const scan = scanPlanArgs(["plan", REQUEST, "--props-loud", "true"]);
-    expect(scan.error).toBe(undefined);
-    expect(scan.occurrences).toEqual([{ option: "--props-loud", provisional: "true" }]);
-
-    // A candidate that declares `loud` a value option accepts it.
-    expect(strayPropertyValue(scan.occurrences, bindingsFor({ loud: { type: "string" } }))).toBe(
-      undefined,
+        "xmd plan --run was removed because xmd plan only produces approved source.",
+        "Run the program explicitly:",
+        '  xmd plan "..." | xmd run -',
+        '  xmd plan "..." --output release.md && xmd run release.md',
+      ].join("\n"),
     );
 
-    // One that declares it a switch does not: `true` is then a positional.
-    const stray = strayPropertyValue(scan.occurrences, bindingsFor({ loud: { type: "boolean" } }));
-    expect(stray).toContain("unrecognized argument for xmd plan: true");
-    expect(stray).toContain("--props-loud=true");
-  });
-
-  it("C1: options that only configure a run need --run to mean anything", function* () {
-    // Each of them describes work that a command writing a Plan never does. A
-    // caller who asked for a journal, a permission mode or an exec deadline and
-    // got a command that creates none of them was not answered.
-    // Every spelling, including the short forms and both secret-detection
-    // switches: a table that covered only the long names would leave `-V` and
-    // `--secret-detection` accepted and ignored.
-    for (const flag of [
-      ["--journal", "trace.jsonl"],
-      ["-j", "trace.jsonl"],
-      ["--raw"],
-      ["--verbose"],
-      ["-V"],
-      ["--timeout-exec", "5s"],
-      ["--timeout-fetch", "5s"],
-      ["--approve-all"],
-      ["--approve-reads"],
-      ["--deny-all"],
-      ["--secret-detection"],
-      ["--no-secret-detection"],
-    ]) {
-      const refused = scanPlanArgs(["plan", REQUEST, ...flag]);
-      expect(refused.error).toContain(`${flag[0]} configures running the Plan`);
-      expect(refused.error).toContain("add --run");
-
-      // With `--run` the same command line is ordinary, wherever the two are
-      // written relative to each other.
-      expect(scanPlanArgs(["plan", REQUEST, ...flag, "--run"]).error).toBe(undefined);
-      expect(scanPlanArgs(["plan", REQUEST, "--run", ...flag]).error).toBe(undefined);
+    const spellings = [
+      ["plan", REQUEST, "--run"],
+      ["plan", REQUEST, "--run=true"],
+      ["plan", REQUEST, "--run=false"],
+      ["plan", REQUEST, "--run="],
+      ["plan", REQUEST, "--run", "--run"],
+      ["plan", "--run", REQUEST],
+      ["plan", "--run=false", REQUEST],
+      // Written where a retained option would otherwise swallow it: a value
+      // nobody names a directory is how a removed spelling survives.
+      ["plan", REQUEST, "--include", "--run"],
+      ["plan", REQUEST, "--output", "--run"],
+      // And after the options a caller does keep, so placement decides nothing.
+      ["plan", REQUEST, "--session", "ada", "--run"],
+    ];
+    for (const argv of spellings) {
+      const scan = scanPlanArgs(argv);
+      expect(scan.error).toBe(RUN_REMOVAL_REFUSAL);
+      // No hidden field survives it: the token reached neither the parser's
+      // argv nor anything this scan established beyond the request itself.
+      expect(scan.fixed).not.toContain("--run");
+      expect(Object.keys(scan).toSorted()).toEqual(
+        scan.request === undefined ? ["error", "fixed"] : ["error", "fixed", "request"],
+      );
     }
 
-    // The options the command always uses are never refused: they build the
-    // catalog, settle the agent, name the session, bound the command and say
-    // where the Plan goes.
-    for (const flag of [
-      ["--include", "lib"],
-      ["--agent-provider", "acpx"],
-      ["--default-agent", "codex"],
-      ["--session", "ada"],
-      ["--timeout", "5s"],
-      ["--output", "plan.md"],
-    ]) {
-      expect(scanPlanArgs(["plan", REQUEST, ...flag]).error).toBe(undefined);
+    // There is no alias, and no compatibility spelling that means the same
+    // thing: `--execute` is simply an option this command does not define.
+    expect(scanPlanArgs(["plan", REQUEST, "--execute"]).error).toBe(
+      "unrecognized option for xmd plan: --execute",
+    );
+  });
+
+  it("PS3: every other removed option reports the one generic refusal", function* () {
+    expect(removedOptionRefusal("--journal")).toBe(
+      "unrecognized option for xmd plan: --journal — configure the program when you run " +
+        "the approved source with xmd run",
+    );
+
+    for (const option of REMOVED) {
+      const [name] = option;
+      const after = scanPlanArgs(["plan", REQUEST, ...option]);
+      expect(after.error).toBe(removedOptionRefusal(name));
+      // It did not consume the token written after it, and it did not become a
+      // second positional first: the refusal is the option's own.
+      expect(after.fixed).toEqual(["plan", REQUEST]);
+
+      // The same answer before the request, where a generated property option
+      // used to be told about ordering instead.
+      expect(scanPlanArgs(["plan", ...option, REQUEST]).error).toBe(removedOptionRefusal(name));
+
+      // And in the inline form, whose name is read up to the first `=`.
+      expect(scanPlanArgs(["plan", REQUEST, `${name}=value`]).error).toBe(
+        removedOptionRefusal(name),
+      );
     }
   });
 
-  it("C1: --run is a switch, and every valued spelling of it is refused", function* () {
-    // An option name is read up to its first `=`, so `--run=false` arrives under
-    // the name of the switch. Taken as the switch it would establish the
-    // opposite of what was written, and satisfy the run-only gate on the way.
-    const REFUSAL =
-      "--run does not take a value — write --run to execute the Plan " +
-      "or leave it out to write the Plan";
-
-    for (const spelling of ["--run=false", "--run=true", "--run="]) {
-      const scan = scanPlanArgs(["plan", REQUEST, spelling]);
-      expect(scan.error).toBe(REFUSAL);
-      // It established nothing: the token reached neither the parser's argv nor
-      // the record of what this invocation asked for.
-      expect(scan.fixed).toEqual(["plan", REQUEST]);
-
-      // And it does not answer for `--run` where a run is what makes an option
-      // meaningful. Without the fix this command line is accepted, and then
-      // nothing runs — so the journal the caller asked for is never created.
-      const gated = scanPlanArgs(["plan", REQUEST, spelling, "--journal", "trace.jsonl"]);
-      expect(gated.error).toBe(REFUSAL);
-      expect(gated.fixed).toEqual(["plan", REQUEST]);
-    }
-
-    // The switch itself is unaffected, wherever it is written.
-    expect(scanPlanArgs(["plan", REQUEST, "--run"]).error).toBe(undefined);
-    expect(scanPlanArgs(["plan", REQUEST, "--run", "--journal", "t.jsonl"]).error).toBe(undefined);
-  });
-
-  it("C1: an option this command does not define is refused, not dropped", function* () {
+  it("PS3: an option this command does not define is refused, not dropped", function* () {
     // The parser stops at the first option it does not define and drops the
     // rest, so silence here would mean accepting a command line nobody honoured.
     const unknown = scanPlanArgs(["plan", REQUEST, "--not-a-thing", "value"]);
@@ -336,28 +219,6 @@ describe("Tier PR — xmd plan fixed grammar", () => {
     expect(retired.error).toContain("goes to stdout");
     expect(retired.error).toContain("--output writes it to a file");
     // It is not quietly read as the option that replaced it.
-    expect(retired.occurrences).toEqual([]);
-  });
-
-  it("C7: a frozen option's shape is what a later candidate may not change", function* () {
-    const scalar = bindingsFor({ name: { type: "string" } });
-    const boolean = bindingsFor({ name: { type: "boolean" } });
-    const array = bindingsFor({ name: { type: "array", items: { type: "string" } } });
-    const absent = bindingsFor({ other: { type: "string" } });
-
-    expect(signatureOf(scalar[0])).toEqual({ boolean: false, array: false });
-    const stable = frozen({ "--props-name": signatureOf(scalar[0]) });
-
-    // Unchanged: nothing is refused, so the same sources resolve again.
-    expect(signatureFailure(stable, scalar)).toBe(undefined);
-
-    expect(signatureFailure(stable, absent)).toContain("declares no such property");
-    expect(signatureFailure(stable, boolean)).toContain("single-value option");
-    expect(signatureFailure(stable, boolean)).toContain("bare switch");
-    expect(signatureFailure(stable, array)).toContain("repeated value option");
-
-    // An option nobody supplied is never frozen, so a candidate may add,
-    // remove or reshape it freely.
-    expect(signatureFailure(new Map(), absent)).toBe(undefined);
+    expect(retired.fixed).toEqual(["plan", REQUEST]);
   });
 });

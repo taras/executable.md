@@ -100,8 +100,8 @@ export interface PlanComponentAssembly {
    *
    * Fixed in the execution's declaration before the root is imported, so the
    * thin command adapter cannot accept it, derive it, or pass it on. A Plan
-   * later executed by `xmd plan --run` is a new ordinary run and receives
-   * `component`, because that run builds its own declaration.
+   * a later `xmd run` executes is an ordinary run and receives `component`,
+   * because that run builds its own declaration.
    */
   readonly surface: PlanSurface;
   /** The component search path a Plan's own components resolve against. */

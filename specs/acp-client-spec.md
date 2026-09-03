@@ -490,9 +490,9 @@ own session store and one empty working directory per session, both disposable.
 
 ## Command-line configuration
 
-`xmd run` and `xmd plan` configure the agent stack; the options belong to
-those two commands, and `xmd test` rejects them, driving agents through the
-deterministic test-agent stack instead.
+`xmd run` configures the agent stack, and `xmd plan` settles the part of it
+authorship needs — the provider and the default agent. `xmd test` rejects those
+options, driving agents through the deterministic test-agent stack instead.
 
 That division also applies to a nested run profile. The outer `xmd test`
 invocation supplies no live Agent configuration to a child and no contextual
@@ -555,24 +555,18 @@ refuses that agent.
 
 ### The `xmd plan` authorship profile
 
-`xmd plan` resolves that configuration once and uses it for the plan command
-document that writes the Plan, and — when `--run` asks for one — for the run that
-follows. Without `--run` the approved Plan is written rather than executed, so
-the second consumer never appears and the resolved configuration is used once.
-The provider
-name, the default agent with its `DEFAULT_AGENT_NAME` precedence, the permission
-mode and the host's own machine-session assembly are settled before any catalog
-is built or any document executes, so an unknown provider or an incompatible
-pair of permission flags fails first. It is the settled value that reaches both
-consumers, not the flags that produced it: `DEFAULT_AGENT_NAME` is read once per
-invocation, and authorship and a run of the Plan cannot reach different
-conclusions from one command line.
+`xmd plan` resolves that configuration once, for the one document it executes:
+the plan command document that writes the Plan. It starts no program, so there
+is no second consumer and no permission mode to settle — `--approve-all`,
+`--approve-reads` and `--deny-all` are `xmd run`'s and are refused by name here.
+What is settled is the provider name, the default agent with its
+`DEFAULT_AGENT_NAME` precedence, the adapters this build carries and the host's
+own machine-session assembly, all before any catalog is built or any document
+executes, so an unknown provider fails first. `DEFAULT_AGENT_NAME` is read once
+per invocation.
 
-The authorship profile takes the provider name, the default agent and the
-adapters this build carries from that answer, and nothing else — so the
-assistant that writes a Plan is launched from the same snapshot as the run of
-the approved Plan. Its ceiling is the host's, assembled for that one document
-and not readable from the command line:
+The authorship profile takes exactly that answer. Its ceiling is the host's,
+assembled for that one document and not readable from the command line:
 
 | The profile's provider gets | Stated as |
 | --- | --- |
@@ -639,12 +633,12 @@ the command places a name unique to the invocation, so each invocation is a fres
 conversation created under those instructions; `--session <name>` selects an
 existing one under ordinary continuation semantics.
 
-That document's scope closes before the final admission and before whichever
-result the caller asked for: the source on stdout, the `--output` file, the run,
-or the file followed by the run. A teardown failure fails the command and no later phase happens. The
-executed program is an ordinary `xmd run` document with its own root provider and
-its own lifetime: it inherits neither the assistant session nor its instruction
-layer. It exists only under `--run`.
+That document's scope closes before the structural admission and before whichever
+sink the caller asked for: the source on stdout, or the `--output` file. A
+teardown failure fails the command and no later phase happens. A later `xmd run`
+of the approved Plan is an ordinary invocation with its own root provider and its
+own lifetime: it inherits neither the assistant session nor its instruction
+layer, because nothing passes between the two commands but the source.
 
 ### Availability
 

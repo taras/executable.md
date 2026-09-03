@@ -3,9 +3,9 @@
  * runs under, and the only thing that ever runs under it
  * (specs/plan-command-spec.md).
  *
- * `xmd plan` executes this root on every invocation, and a second one — the
- * Plan it returns — only under `--run`, behind a complete scope boundary. This
- * module is the one that always happens. It supplies that document's inputs, a
+ * `xmd plan` executes this root on every invocation, and no other: the Plan it
+ * returns is source, and running it is a later command's business. This
+ * module supplies that document's inputs, a
  * constrained Agent provider, Elicitation, the fixed first-party components and
  * the host-declared draft checker, and it exposes no custom root and no
  * repository component search: the document it runs is the one the CLI ships.
@@ -52,7 +52,7 @@ import { API } from "@executablemd/runtime";
 import { FormOpener } from "@executablemd/web";
 
 import { hostAcpDependencies } from "./agent-stack.ts";
-import type { AgentStack } from "./agent-stack.ts";
+import type { AuthorshipStack } from "./agent-stack.ts";
 import { PLAN_COMMAND_DOCUMENT, readPackagedDocument } from "./packaged-document.ts";
 
 /**
@@ -132,7 +132,7 @@ export interface AuthorshipProfile {
 
 /** What building the constrained provider needs, and nothing more. */
 export interface AuthorshipProviderInputs {
-  readonly stack: AgentStack;
+  readonly stack: AuthorshipStack;
   readonly acp?: AcpxProviderDependencies;
 }
 
@@ -222,7 +222,7 @@ export function noAgentContextFrom(provider: string): string {
  * were when this was the only way to supply one.
  */
 export function planAgentContext(
-  stack: AgentStack | undefined,
+  stack: AuthorshipStack | undefined,
   acp?: AcpxProviderDependencies,
 ): Result<PlanAuthorship> {
   if (stack === undefined) {
@@ -359,7 +359,7 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
   // supplies no Agent context refuses rather than writing a Plan under a weaker one.
   const context = profile.context;
   if (!context.ok) {
-    return Err(new Error(`${context.error.message} Nothing was output or run.`));
+    return Err(new Error(`${context.error.message} Nothing was output.`));
   }
 
   return yield* scoped(function* (): Operation<Result<string>> {
@@ -621,7 +621,7 @@ function* establishDirectory(directory: string): Operation<Result<string>> {
         new Error(
           `${directory} is not empty, and xmd plan writes a Plan in a directory of its own ` +
             "with nothing in it. Move or remove what is in there, or name a different " +
-            "--session; nothing was written or run",
+            "--session; nothing was written",
         ),
       );
     }
@@ -644,7 +644,7 @@ function* establishDirectory(directory: string): Operation<Result<string>> {
  * nothing is deleted, because a leaf that changed underneath a conversation
  * nobody authorized to write there is interference, not a tidying job. The
  * failure raises out of the profile's scope, so no final admission follows it,
- * and the approved Plan reaches no stdout, no file and no run.
+ * and the approved Plan reaches no stdout and no file.
  *
  * A directory the conversation never got — establishment refused it, or never
  * made it — is a different question, and one already answered: whatever
@@ -664,14 +664,14 @@ function* releaseSessionDirectory(directory: string, claim: DirectoryClaim): Ope
       throw new Error(
         `${directory} was made for this conversation and is already gone. Something removed ` +
           "it while the conversation was still running, which nothing here is allowed to do; " +
-          "nothing was output or run",
+          "nothing was output",
       );
     }
     if (code === "ENOTEMPTY" || code === "EEXIST") {
       throw new Error(
         `${directory} was empty when this conversation started and is not now. It belongs to ` +
           "one invocation, so nothing should have written there; its contents were left alone " +
-          "and nothing was output or run",
+          "and nothing was output",
       );
     }
     throw error instanceof Error ? error : new Error(String(error));

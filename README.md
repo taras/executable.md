@@ -71,6 +71,17 @@ with a run without a file in between:
 deno task xmd plan "prepare the release" | deno task xmd run -
 ```
 
+That composition is the whole relationship between the two commands:
+
+```text
+Plan produces a program.
+Run executes a program from the host/CLI.
+Composition decides whether and when a planned program runs.
+```
+
+`xmd plan` writes approved source and stops — to standard output, or to an
+`--output` file it creates exclusively. Running it is a command you write.
+
 Preparation is common to all of them, so the block above is the document's own
 preamble: whichever target you select runs it first, and the checkout is
 prepared again before the work you asked for.
