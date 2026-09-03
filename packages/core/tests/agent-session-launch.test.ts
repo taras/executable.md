@@ -13,7 +13,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { ensure, scoped, spawn, until, withResolvers } from "effection";
+import { ensure, resource, scoped, spawn, until, withResolvers } from "effection";
 import type { Operation, Result, WithResolvers } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { createHash, randomUUID } from "node:crypto";
@@ -962,50 +962,90 @@ describe("Tier SP — a launch inside a terminal pane", () => {
     expect(preparedRecord(run.events).nativeSessionId).toBe(run.stub.nativeSessionId);
   });
 
-  it("SP5: one pane admits one live launch, and the next only after it is done", function* () {
+  /**
+   * A lease that outlives the child it protects, and unwinds slowly.
+   *
+   * This is the shape a session acquisition has: the provider takes ownership,
+   * performs the whole launch inside it, and releases it as the launch's scope
+   * comes down — *inside* the terminal reservation, so the pane is still held
+   * while it happens. `entered` says the unwinding has begun; `release` lets it
+   * finish.
+   */
+  function heldLease(entered: WithResolvers<void>, release: WithResolvers<void>): Operation<void> {
+    return resource<void>(function* (provide) {
+      yield* ensure(function* () {
+        entered.resolve();
+        yield* release.operation;
+      });
+      yield* provide();
+    });
+  }
+
+  /** Ask this pane for its terminal, and report the refusal if there is one. */
+  function reserveOnce(): Operation<string> {
+    return (function* (): Operation<string> {
+      try {
+        yield* scoped(() => reserveTerminal());
+        return "admitted";
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    })();
+  }
+
+  it("SP5: a pane is held until both the child and the lease around it are done", function* () {
     const claims = createTerminalGridClaims({
       columns: 1,
       rows: 1,
       panes: [{ ordinal: 0, title: "Only", row: 0, column: 0, form: "paired" }],
     });
     const claim = claims.claims[0]!;
-    const held = withResolvers<void>();
-    const holding = withResolvers<void>();
-    const refusals: string[] = [];
+    const childLive = withResolvers<void>();
+    const childMayExit = withResolvers<void>();
+    const unwinding = withResolvers<void>();
+    const release = withResolvers<void>();
+    const asked: string[] = [];
 
     yield* scoped(function* () {
       yield* installControlledLauncher({
         wait: () =>
           (function* () {
-            holding.resolve();
-            yield* held.operation;
+            childLive.resolve();
+            yield* childMayExit.operation;
           })(),
       });
       yield* usePaneNativeLauncher(claim, function* () {});
 
       const first = yield* spawn(function* () {
+        // The order a launch composes in: this pane, then the lease, then the
+        // child. Which is also the order they come back in, reversed.
         yield* scoped(function* () {
           yield* reserveTerminal();
+          yield* heldLease(unwinding, release);
           yield* nativeLaunch({ command: ["ui"], cwd: "." });
         });
       });
-      // Only once the first launch is provably holding the pane.
-      yield* holding.operation;
-      try {
-        yield* scoped(() => reserveTerminal());
-      } catch (error) {
-        refusals.push(error instanceof Error ? error.message : String(error));
-      }
-      held.resolve();
-      yield* first;
 
-      // The first is done, so the pane is free again and a sequential launch is
-      // ordinary composition.
-      yield* scoped(() => reserveTerminal());
+      // 1. The native child is live.
+      yield* childLive.operation;
+      asked.push(yield* reserveOnce());
+
+      // 2. The child has gone, but the lease around it is still unwinding —
+      //    which is the half a launch that merely returned would never show.
+      childMayExit.resolve();
+      yield* unwinding.operation;
+      asked.push(yield* reserveOnce());
+
+      // 3. Both are done.
+      release.resolve();
+      yield* first;
+      asked.push(yield* reserveOnce());
     });
 
-    expect(refusals.length).toBe(1);
-    expect(refusals[0]).toContain("already has a live interactive operation");
+    expect(asked.length).toBe(3);
+    expect(asked[0]).toContain("already has a live interactive operation");
+    expect(asked[1]).toContain("already has a live interactive operation");
+    expect(asked[2]).toBe("admitted");
     // The child that started is what made the pane ready, and it did.
     expect(claims.readiness[0]?.acknowledged).toBe(true);
   });
