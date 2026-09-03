@@ -317,6 +317,66 @@ describe("the remote owner protocol", () => {
     ).toEqual({ id: "orphan", outcome: "refused", refusal: "storage:corrupt" });
   });
 
+  it("refuses a root whose content graph is incomplete, before returning one", async () => {
+    // A root is a starting frontier: the runner materializes it and proposes
+    // against it. Discovering a piece is missing when the runner asks for it
+    // would mean the failure arrives after the run has been told where it
+    // stands, so the whole graph is proved before either read answers.
+    const damage: Record<string, (owner: ExecutorObject) => void> = {
+      "a missing manifest row": (owner) => owner.removeManifestRow(),
+      "a manifest payload that is not its identity": (owner) => owner.damageManifestPayload(),
+      "a manifest size that disagrees with its chunks": (owner) => owner.damageManifestSize(),
+      "a missing blob reached through a manifest": (owner) => owner.removeBlobRow(),
+      "blob bytes that are not their identity": (owner) => owner.damageRetainedBlob(),
+      "a blob size that disagrees with its bytes": (owner) => owner.damageBlobSize(),
+      "a blob reference the manifests still name": (owner) => owner.removeBlobReference(),
+      "a blob reference no manifest names": (owner) =>
+        owner.addExtraBlobReference(new TextEncoder().encode("unaccounted for")),
+    };
+
+    for (const [description, arrange] of Object.entries(damage)) {
+      const stub = executor();
+      await on(stub, (owner) => owner.initialize());
+      await on(stub, arrange);
+      await admit(stub);
+      for (const command of [
+        { command: "frontier" },
+        { command: "root", workspaceRootId: ROOT_ID },
+      ]) {
+        const answer = await send(stub, `${String(command.command)}`, command);
+        expect([description, command.command, answer]).toEqual([
+          description,
+          command.command,
+          { id: command.command, outcome: "refused", refusal: "storage:corrupt" },
+        ]);
+      }
+    }
+  });
+
+  it("says only that storage is damaged, and never what it read or was asked", async () => {
+    const stub = executor();
+    await on(stub, (owner) => owner.initialize());
+    const unaccounted = await on(stub, (owner) =>
+      owner.addExtraBlobReference(new TextEncoder().encode("unaccounted for")),
+    );
+    await admit(stub);
+    const answer = await send(stub, "root", { command: "root", workspaceRootId: ROOT_ID });
+    expect(answer).toEqual({ id: "root", outcome: "refused", refusal: "storage:corrupt" });
+    const printed = JSON.stringify(answer);
+    for (const withheld of [
+      unaccounted,
+      BLOB_ID,
+      MANIFEST_ID,
+      ROOT_ID,
+      ROOT_MANIFEST,
+      "workspace_root_blob_refs",
+      "vfs_manifests",
+      "/README.md",
+    ]) {
+      expect(printed).not.toContain(withheld);
+    }
+  });
+
   it("refuses retained bytes whose identity or recorded size is damaged", async () => {
     const stub = executor();
     await on(stub, (owner) => owner.initialize());

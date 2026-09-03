@@ -223,6 +223,75 @@ export class ExecutorObject extends WorkflowOwnerObject {
     );
   }
 
+  /**
+   * Collect the DOFS manifest a retained file entry still names.
+   *
+   * The reference row goes first because the schema will not let it go second:
+   * `ON DELETE RESTRICT` is what stops content vanishing from under a root that
+   * references it. What this reproduces is the state that restriction cannot
+   * prevent — a root whose manifest still names content the store no longer
+   * keeps, with the reference collected alongside it.
+   */
+  removeManifestRow(): void {
+    this.ctx.storage.sql.exec(
+      "DELETE FROM workspace_root_manifest_refs WHERE lower(hex(manifest_hash)) = ?",
+      MANIFEST_ID,
+    );
+    this.ctx.storage.sql.exec("DELETE FROM vfs_manifests WHERE lower(hex(hash)) = ?", MANIFEST_ID);
+  }
+
+  /** Keep the manifest row, change the bytes it is identified by. */
+  damageManifestPayload(): void {
+    this.ctx.storage.sql.exec(
+      "UPDATE vfs_manifests SET encoded = ? WHERE lower(hex(hash)) = ?",
+      new TextEncoder().encode('{"version":1,"chunks":[]}'),
+      MANIFEST_ID,
+    );
+  }
+
+  /** Keep identity and payload, disagree about how many bytes they describe. */
+  damageManifestSize(): void {
+    this.ctx.storage.sql.exec(
+      "UPDATE vfs_manifests SET size = size + 1 WHERE lower(hex(hash)) = ?",
+      MANIFEST_ID,
+    );
+  }
+
+  /** Collect the blob a referenced manifest chunk still names, reference first. */
+  removeBlobRow(): void {
+    this.removeBlobReference();
+    this.ctx.storage.sql.exec("DELETE FROM vfs_blob_bytes WHERE lower(hex(hash)) = ?", BLOB_ID);
+    this.ctx.storage.sql.exec("DELETE FROM vfs_blobs WHERE lower(hex(hash)) = ?", BLOB_ID);
+  }
+
+  /** Keep the blob and its bytes, disagree about its recorded size. */
+  damageBlobSize(): void {
+    this.ctx.storage.sql.exec(
+      "UPDATE vfs_blobs SET size = size + 1 WHERE lower(hex(hash)) = ?",
+      BLOB_ID,
+    );
+  }
+
+  /** Drop the root's reference to a blob its manifests still name. */
+  removeBlobReference(): void {
+    this.ctx.storage.sql.exec(
+      "DELETE FROM workspace_root_blob_refs WHERE root_id = ? AND lower(hex(blob_hash)) = ?",
+      ROOT_ID,
+      BLOB_ID,
+    );
+  }
+
+  /** Reference content from the root that none of its manifests names. */
+  addExtraBlobReference(bytes: Uint8Array): string {
+    const digest = this.addUnreferencedBlob(bytes);
+    this.ctx.storage.sql.exec(
+      "INSERT INTO workspace_root_blob_refs (root_id, blob_hash) VALUES (?, ?)",
+      ROOT_ID,
+      hexBytes(digest),
+    );
+    return digest;
+  }
+
   makeForeign(): void {
     this.ctx.storage.sql.exec("CREATE TABLE foreign_state (id INTEGER PRIMARY KEY)");
   }

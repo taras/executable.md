@@ -12,9 +12,13 @@
  * anchor is the last event that existed at that moment, so later appends cannot
  * enter an earlier snapshot. Reads are *bounded*: a journal is returned in
  * pages anchored to that event, and content comes back one piece at a time.
- * Reads are *referenced*: a piece of content is admitted only if the named root
- * actually names it, directly or through a manifest it names, so this is a read
- * of one retained root rather than of a content-addressed store.
+ * Reads are *referenced*: a root is returned only once its complete content
+ * graph has been proved present and self-consistent, and a piece is admitted
+ * only if that root actually names it, so this is a read of one retained root
+ * rather than of a content-addressed store. Validating the graph up front is
+ * the point: a root is a starting frontier, and a frontier that turns out not
+ * to be materializable after the runner has it is a failure arriving too late
+ * to mean anything.
  *
  * A refusal says the category and nothing else. Column values, retained JSON
  * and request data never appear in one: the caller learns that storage is
@@ -26,6 +30,7 @@ import { readRetrieval, readRunRecord, type Row } from "../sqlite/rows.ts";
 import { WorkflowRecordMalformedError } from "../storage/errors.ts";
 import {
   decodeDofsManifest,
+  type DofsManifest,
   parseWorkspaceRootManifest,
   SHA256,
   WORKSPACE_ROOT_DOMAIN,
@@ -71,10 +76,18 @@ export interface ContentValue {
   readonly bytes: string;
 }
 
+/**
+ * One retained root, and the whole content graph it names, proved.
+ *
+ * `manifests` and `blobs` are not a description of what the root refers to —
+ * they are what was found and checked. A `StoredRoot` therefore cannot exist
+ * for a root whose graph is incomplete or disagrees with itself.
+ */
 interface StoredRoot {
   readonly manifest: string;
   readonly parsed: WorkspaceRootManifest;
-  readonly manifests: ReadonlySet<string>;
+  readonly manifests: ReadonlyMap<string, DofsManifest>;
+  readonly blobs: ReadonlySet<string>;
 }
 
 function corrupt(reason: string): never {
@@ -111,6 +124,123 @@ function byteRows(storage: OwnerStorage, sql: string, ...bindings: unknown[]): R
   return storage.sql.exec(sql, ...bindings).toArray();
 }
 
+/** Every content identity one root's reference table holds, in order. */
+function referenceRows(
+  storage: OwnerStorage,
+  table: string,
+  column: string,
+  rootId: string,
+): string[] {
+  return byteRows(
+    storage,
+    `SELECT lower(hex(${column})) AS digest FROM ${table} WHERE root_id = ? ORDER BY digest`,
+    rootId,
+  ).map((row) => safeText(row, "digest"));
+}
+
+/**
+ * Whether a reference table holds exactly the identities the content names.
+ *
+ * Both directions matter and for different reasons. A missing row is content
+ * the root depends on that nothing is keeping alive, so retention may already
+ * have collected it. An extra row is the root claiming content it does not use,
+ * which keeps bytes reachable that no manifest accounts for. Neither is a root
+ * this owner will hand to a runner as a starting frontier.
+ */
+function requireReferenceSet(
+  found: readonly string[],
+  expected: ReadonlySet<string>,
+  what: string,
+): void {
+  if (found.length !== expected.size || found.some((digest) => !expected.has(digest))) {
+    corrupt(`a Workspace root's ${what} references disagree with its content`);
+  }
+}
+
+/** One retained DOFS manifest, proved against its identity, size and entries. */
+function validatedManifest(
+  storage: OwnerStorage,
+  parsed: WorkspaceRootManifest,
+  digest: string,
+): { bytes: Uint8Array; manifest: DofsManifest } {
+  const row = exactlyOne(
+    byteRows(storage, "SELECT size, encoded FROM vfs_manifests WHERE lower(hex(hash)) = ?", digest),
+    "DOFS manifest",
+  );
+  const bytes = bytesOf(row["encoded"]);
+  if (bytes.length > MAX_CONTENT_BYTES || sha256Hex(bytes) !== digest) {
+    return corrupt("a retained DOFS manifest disagrees with its identity");
+  }
+  const manifest = decodeDofsManifest(bytes, corrupt);
+  if (safeInteger(row["size"], "manifest size") !== manifest.size) {
+    return corrupt("a retained DOFS manifest disagrees with its recorded size");
+  }
+  for (const entry of parsed.entries) {
+    if (entry.kind === "file" && entry.manifest === digest && entry.size !== manifest.size) {
+      return corrupt("a Workspace file size disagrees with its retained manifest");
+    }
+  }
+  return { bytes, manifest };
+}
+
+/** One retained blob, proved against its identity and every chunk naming it. */
+function validatedBlob(
+  storage: OwnerStorage,
+  rootId: string,
+  manifests: ReadonlyMap<string, DofsManifest>,
+  digest: string,
+): Uint8Array {
+  const row = exactlyOne(
+    byteRows(
+      storage,
+      `SELECT b.size, x.bytes FROM workspace_root_blob_refs AS r
+        JOIN vfs_blobs AS b ON b.hash = r.blob_hash
+        JOIN vfs_blob_bytes AS x ON x.hash = r.blob_hash
+       WHERE r.root_id = ? AND lower(hex(r.blob_hash)) = ?`,
+      rootId,
+      digest,
+    ),
+    "DOFS blob",
+  );
+  const bytes = bytesOf(row["bytes"]);
+  if (bytes.length > MAX_CONTENT_BYTES || sha256Hex(bytes) !== digest) {
+    return corrupt("a retained DOFS blob disagrees with its identity");
+  }
+  if (safeInteger(row["size"], "blob size") !== bytes.length) {
+    return corrupt("a retained DOFS blob disagrees with its recorded size");
+  }
+  for (const manifest of manifests.values()) {
+    for (const chunk of manifest.chunks) {
+      if (chunk.hash === digest && chunk.size !== bytes.length) {
+        return corrupt("a DOFS chunk size disagrees with the blob it names");
+      }
+    }
+  }
+  return bytes;
+}
+
+/**
+ * One retained root, with its complete content graph proved before it is a root
+ * at all.
+ *
+ * Accepting a root is accepting a starting frontier: the runner will
+ * materialize it, work in it, and propose against it. A root whose graph cannot
+ * be materialized is not a frontier, and discovering that one piece at a time —
+ * after the frontier has already crossed to the runner — would mean the failure
+ * arrives once the run has already been told where it stands.
+ *
+ * So the whole graph is walked here. The manifests the entries name must be
+ * exactly the manifests the root retains; each must exist, be bounded, decode
+ * canonically, hash to its identity, and agree with its recorded size and with
+ * every file that names it. The blobs those manifests name must be exactly the
+ * blobs the root retains; each must exist, be bounded, hash to its identity,
+ * and agree with its recorded size and with every chunk that names it.
+ *
+ * The bytes are read and dropped. What is kept is the proof, and a later
+ * content request re-reads the single piece it is sending — which is what keeps
+ * the transport piece-oriented rather than turning a validated root into one
+ * unbounded answer.
+ */
 function referencedRoot(storage: OwnerStorage, rootId: string): StoredRoot {
   if (!SHA256.test(rootId)) {
     return corrupt("a Workspace root identity is malformed");
@@ -135,91 +265,36 @@ function referencedRoot(storage: OwnerStorage, rootId: string): StoredRoot {
     throw new CommandError("too-large");
   }
 
-  const expectedManifests = new Set(
+  const named = new Set(
     parsed.entries.flatMap((entry) => (entry.kind === "file" ? [entry.manifest] : [])),
   );
-  const manifestRows = byteRows(
-    storage,
-    `SELECT lower(hex(manifest_hash)) AS digest
-       FROM workspace_root_manifest_refs WHERE root_id = ? ORDER BY digest`,
-    rootId,
+  requireReferenceSet(
+    referenceRows(storage, "workspace_root_manifest_refs", "manifest_hash", rootId),
+    named,
+    "manifest",
   );
-  if (manifestRows.length !== expectedManifests.size) {
-    return corrupt("a Workspace root's manifest references are incomplete");
-  }
-  const manifests = new Set<string>();
-  for (const row of manifestRows) {
-    const digest = safeText(row, "digest");
-    if (!expectedManifests.has(digest)) {
-      return corrupt("a Workspace root has an extra manifest reference");
-    }
-    manifests.add(digest);
-  }
-  return { manifest, parsed, manifests };
-}
 
-function retainedManifest(
-  storage: OwnerStorage,
-  root: StoredRoot,
-  digest: string,
-): { bytes: Uint8Array; chunks: ReturnType<typeof decodeDofsManifest>["chunks"] } {
-  if (!root.manifests.has(digest)) {
-    return corrupt("a DOFS manifest is not referenced by this Workspace root");
+  const manifests = new Map<string, DofsManifest>();
+  for (const digest of named) {
+    manifests.set(digest, validatedManifest(storage, parsed, digest).manifest);
   }
-  const row = exactlyOne(
-    byteRows(storage, "SELECT size, encoded FROM vfs_manifests WHERE lower(hex(hash)) = ?", digest),
-    "DOFS manifest",
-  );
-  const bytes = bytesOf(row["encoded"]);
-  if (bytes.length > MAX_CONTENT_BYTES || sha256Hex(bytes) !== digest) {
-    return corrupt("a retained DOFS manifest disagrees with its identity");
-  }
-  const decoded = decodeDofsManifest(bytes, corrupt);
-  if (safeInteger(row["size"], "manifest size") !== decoded.size) {
-    return corrupt("a retained DOFS manifest disagrees with its recorded size");
-  }
-  for (const entry of root.parsed.entries) {
-    if (entry.kind === "file" && entry.manifest === digest && entry.size !== decoded.size) {
-      return corrupt("a Workspace file size disagrees with its retained manifest");
+
+  const reachable = new Set<string>();
+  for (const decoded of manifests.values()) {
+    for (const chunk of decoded.chunks) {
+      reachable.add(chunk.hash);
     }
   }
-  return { bytes, chunks: decoded.chunks };
-}
-
-function retainedBlob(
-  storage: OwnerStorage,
-  rootId: string,
-  root: StoredRoot,
-  sourceManifest: string,
-  digest: string,
-): Uint8Array {
-  const manifest = retainedManifest(storage, root, sourceManifest);
-  const expected = manifest.chunks.find((chunk) => chunk.hash === digest);
-  if (expected === undefined) {
-    return corrupt("a blob is not referenced by the named DOFS manifest");
-  }
-  const row = exactlyOne(
-    byteRows(
-      storage,
-      `SELECT b.size, x.bytes FROM workspace_root_blob_refs AS r
-        JOIN vfs_blobs AS b ON b.hash = r.blob_hash
-        JOIN vfs_blob_bytes AS x ON x.hash = r.blob_hash
-       WHERE r.root_id = ? AND lower(hex(r.blob_hash)) = ?`,
-      rootId,
-      digest,
-    ),
-    "DOFS blob",
+  requireReferenceSet(
+    referenceRows(storage, "workspace_root_blob_refs", "blob_hash", rootId),
+    reachable,
+    "blob",
   );
-  const bytes = bytesOf(row["bytes"]);
-  if (
-    bytes.length > MAX_CONTENT_BYTES ||
-    bytes.length !== expected.size ||
-    safeInteger(row["size"], "blob size") !== expected.size ||
-    sha256Hex(bytes) !== digest
-  ) {
-    return corrupt("a retained DOFS blob disagrees with its identity or size");
+  for (const digest of reachable) {
+    validatedBlob(storage, rootId, manifests, digest);
   }
-  return bytes;
+
+  return { manifest, parsed, manifests, blobs: reachable };
 }
 
 export function readFrontier(storage: OwnerStorage, runId: string): FrontierValue {
@@ -345,12 +420,39 @@ export function readContent(
   sourceManifest: string | null,
 ): ContentValue {
   const root = referencedRoot(storage, workspaceRootId);
-  const bytes =
-    kind === "manifest"
-      ? retainedManifest(storage, root, digest).bytes
-      : retainedBlob(storage, workspaceRootId, root, sourceManifest ?? "", digest);
+  const bytes = piece(storage, workspaceRootId, root, kind, digest, sourceManifest);
   if (bytes.length === 0) {
     return corrupt("a retained content piece is empty");
   }
   return { kind, digest, size: bytes.length, bytes: encodeBase64(bytes) };
+}
+
+/**
+ * The one piece a content request names, re-read from the proved graph.
+ *
+ * Membership is decided against what the root actually names rather than
+ * against the reference tables alone, and a blob is reached only through a
+ * manifest the request names. That is what keeps this a read of one retained
+ * root instead of a read of the content store: staged, orphaned or
+ * otherwise-unreferenced bytes are addressable by nobody through here.
+ */
+function piece(
+  storage: OwnerStorage,
+  rootId: string,
+  root: StoredRoot,
+  kind: "manifest" | "blob",
+  digest: string,
+  sourceManifest: string | null,
+): Uint8Array {
+  if (kind === "manifest") {
+    if (!root.manifests.has(digest)) {
+      return corrupt("a DOFS manifest is not referenced by this Workspace root");
+    }
+    return validatedManifest(storage, root.parsed, digest).bytes;
+  }
+  const source = sourceManifest === null ? undefined : root.manifests.get(sourceManifest);
+  if (source === undefined || !source.chunks.some((chunk) => chunk.hash === digest)) {
+    return corrupt("a blob is not referenced by the named DOFS manifest");
+  }
+  return validatedBlob(storage, rootId, root.manifests, digest);
 }
