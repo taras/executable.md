@@ -22,21 +22,24 @@ export default define.page(function Reference() {
           <code>-</code>{" "}
           — read the whole root document from standard input, to end of file.
           Only the explicit <code>xmd run -</code> spelling does it. A bare{" "}
-          <code>xmd -</code> is the shorthand run form and executes the file
-          named <code>-</code>; <code>xmd run -#Section</code>{" "}
+          <code>xmd -</code>{" "}
+          is the shorthand run form and executes the file named <code>-</code>;
+          {" "}
+          <code>xmd run -#Section</code>{" "}
           selects a section of that same file; and <code>--eval -</code>{" "}
           is refused rather than read. Printed errors and source positions
-          report the origin as <code>&lt;stdin&gt;</code>, which is an identity
-          rather than a file: nothing of that name is created, and relative
-          imports and every other relative operation resolve from the directory
-          the command was run in.
+          report the origin as{" "}
+          <code>&lt;stdin&gt;</code>, which is an identity rather than a file:
+          nothing of that name is created, and relative imports and every other
+          relative operation resolve from the directory the command was run in.
         </li>
         <li>
           <code>--eval</code>, <code>-e</code>{" "}
           — execute the given markdown as the root document instead of a path.
           Quote it so the shell passes one argument; printed errors report the
-          source as <code>&lt;eval&gt;</code>, and relative paths resolve from
-          the current directory.
+          source as{" "}
+          <code>&lt;eval&gt;</code>, and relative paths resolve from the current
+          directory.
         </li>
         <li>
           <code>--journal</code>, <code>-j</code>{" "}

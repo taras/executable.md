@@ -1679,8 +1679,16 @@ function writtenRoots(
   references: readonly string[],
   path: string | undefined,
 ): string[] {
-  const roots = path === undefined ? [...references] : [...references, path];
-  return roots.toSorted((left, right) => head.indexOf(left) - head.indexOf(right));
+  const pending = path === undefined ? [...references] : [...references, path];
+  const roots: string[] = [];
+  for (const token of head) {
+    const at = pending.indexOf(token);
+    if (at !== -1) {
+      pending.splice(at, 1);
+      roots.push(token);
+    }
+  }
+  return roots;
 }
 
 /**
