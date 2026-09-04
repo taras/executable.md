@@ -406,15 +406,13 @@ describe("the remote owner protocol", () => {
     const stub = executor();
     await on(stub, (owner) => owner.initialize());
     await on(stub, (owner) => owner.appendJournal("before", "before"));
-    await admit(stub);
-    const first = await send(stub, "same", { command: "frontier" });
+    const socket = await connect(stub);
+    const first = await ask(socket, "same", { command: "frontier" });
     await on(stub, (owner) => owner.appendJournal("after", "after"));
-    expect(
-      await on(stub, (owner) =>
-        record(owner.send(1, JSON.stringify({ command: "frontier", id: "same" }))),
-      ),
-    ).toEqual(first);
-    expect(await send(stub, "same", { command: "root", workspaceRootId: ROOT_ID })).toEqual({
+    // The same id and the same canonical request returns the anchored frontier
+    // it already decided, not the later one.
+    expect(await ask(socket, "same", { command: "frontier" })).toEqual(first);
+    expect(await ask(socket, "same", { command: "root", workspaceRootId: ROOT_ID })).toEqual({
       id: "same",
       outcome: "refused",
       refusal: "command:duplicate-conflict",
@@ -497,36 +495,35 @@ describe("the remote owner protocol", () => {
   });
 
   it("leaves no staged row when decoding or digest validation fails", async () => {
-    const stub = executor();
-    await on(stub, (owner) => owner.initialize());
-    await admit(stub);
     const bytes = new TextEncoder().encode("piece");
-    expect(
-      await send(stub, "bad-base64", {
-        command: "stage",
-        kind: "blob",
-        digest: sha256Hex(bytes),
-        bytes: "not base64",
-      }),
-    ).toMatchObject({ outcome: "refused", refusal: "command:malformed-member" });
-    expect(
-      await send(stub, "bad-digest", {
-        command: "stage",
-        kind: "blob",
-        digest: "0".repeat(64),
-        bytes: encodeBase64(bytes),
-      }),
-    ).toMatchObject({ outcome: "refused", refusal: "command:malformed-member" });
     const oversized = new Uint8Array(MAX_CONTENT_BYTES + 1);
-    expect(
-      await send(stub, "oversized", {
-        command: "stage",
-        kind: "blob",
-        digest: sha256Hex(oversized),
-        bytes: encodeBase64(oversized),
-      }),
-    ).toMatchObject({ outcome: "refused", refusal: "command:too-large" });
-    expect(await on(stub, (owner) => owner.scratch())).toEqual({ commands: 0, staged: 0 });
+    // Each of these is a broken channel rather than an answer, so each closes
+    // the connection it arrived on — which is why every case gets its own.
+    const cases: Record<string, [Record<string, unknown>, string]> = {
+      "bad base64": [
+        { kind: "blob", digest: sha256Hex(bytes), bytes: "not base64" },
+        "command:malformed-member",
+      ],
+      "a digest that is not the bytes": [
+        { kind: "blob", digest: "0".repeat(64), bytes: encodeBase64(bytes) },
+        "command:malformed-member",
+      ],
+      "a piece past the bound": [
+        { kind: "blob", digest: sha256Hex(oversized), bytes: encodeBase64(oversized) },
+        "command:too-large",
+      ],
+    };
+    for (const [description, [request, refusal]] of Object.entries(cases)) {
+      const stub = executor();
+      await on(stub, (owner) => owner.initialize());
+      const socket = await connect(stub);
+      const answer = await ask(socket, "staged", { command: "stage", ...request });
+      expect([description, answer["refusal"]]).toEqual([description, refusal]);
+      expect([description, await on(stub, (owner) => owner.scratch())]).toEqual([
+        description,
+        { commands: 0, staged: 0 },
+      ]);
+    }
   });
 
   it("refuses aggregate staging overflow without a partial piece or decision", async () => {

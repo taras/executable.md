@@ -73,3 +73,21 @@ export type RetainedMapping =
     }
   | { readonly kind: "worktree"; readonly record: WorktreeRecord }
   | { readonly kind: "agent-session"; readonly record: AgentSessionRecord };
+
+/**
+ * What the owner did, as the runner is allowed to know it.
+ *
+ * Returned by a performed commit and by nothing else. It names the root the
+ * commit selected and the identities the owner minted for the events it
+ * retained, which is what makes it checkable: a runner can compare the answer
+ * with the proposal it sent and refuse an owner that agreed to something else.
+ *
+ * It is also the only thing that authorizes a local promotion. Passing it is
+ * how an attempt proves the owner published *that* Workspace — a promotion
+ * that took no evidence would be the runner deciding on the owner's behalf,
+ * and the two would disagree the first time a commit was refused.
+ */
+export interface CommitDecision {
+  readonly workspaceRootId: string;
+  readonly journalEventIds: readonly string[];
+}

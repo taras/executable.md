@@ -669,6 +669,58 @@ describe("publishing one proposal", () => {
     expect(await on(stub, (owner) => owner.scratch())).toMatchObject({ commands: 2 });
   });
 
+  it("returns the same decision to a connection that replaced the one that lost it", async () => {
+    const stub = executor();
+    await on(stub, (owner) => owner.initialize());
+    const socket = await connect(stub);
+    await stageThrough(socket);
+
+    // The owner commits. The runner never sees the answer, and the connection
+    // that asked is gone — which is exactly the case the acquisition-scoped
+    // ledger cannot answer, because a replacement acquisition discards it.
+    const first = await ask(socket, "recovered", commit());
+    expect(first).toMatchObject({ outcome: "performed" });
+    const published = await on(stub, (owner) => owner.published());
+    socket.close(1000, "lost");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await evictDurableObject(stub);
+
+    // A new connection, a new acquisition, the identical closed request.
+    const replacement = await connect(stub);
+    expect(await ask(replacement, "recovered", commit())).toEqual(first);
+
+    // One root, one mapping, one set of journal rows.
+    expect(await on(stub, (owner) => owner.published())).toEqual(published);
+
+    // And the identity still cannot be reused for something else.
+    expect(
+      await ask(replacement, "recovered", commit({ events: [event("different")] })),
+    ).toMatchObject({ outcome: "refused", refusal: "command:duplicate-conflict" });
+    expect(await on(stub, (owner) => owner.published())).toEqual(published);
+  });
+
+  it("performs a proposal whose first attempt never reached the owner", async () => {
+    const stub = executor();
+    await on(stub, (owner) => owner.initialize());
+    const socket = await connect(stub);
+    await stageThrough(socket);
+    const before = await on(stub, (owner) => owner.published());
+
+    // The first attempt was lost on the way out, so the owner never saw it.
+    socket.close(1000, "lost before arriving");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await evictDurableObject(stub);
+
+    const replacement = await connect(stub);
+    await stageThrough(replacement);
+    expect(await ask(replacement, "never-arrived", commit())).toMatchObject({
+      outcome: "performed",
+    });
+    const after = await on(stub, (owner) => owner.published());
+    expect(after["currentRootId"]).toBe(NEXT_ROOT_ID);
+    expect(after).not.toEqual(before);
+  });
+
   it("grants a closed or foreign socket no publication", async () => {
     const stub = executor();
     await on(stub, (owner) => owner.initialize());

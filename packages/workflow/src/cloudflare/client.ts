@@ -32,6 +32,7 @@ import type { JournalEntry } from "../storage/api.ts";
 import { parseMembers, requireMemberNames } from "../storage/members.ts";
 import type { DefinitionRetrieval, WorkflowRunRecord } from "../storage/record.ts";
 import type { CommitIntent, OwnerLink, StartingFrontier } from "../remote/collector.ts";
+import type { CommitDecision } from "../remote/publication.ts";
 import { OwnerLinkError, type OwnerAnswer, type OwnerConnection } from "../remote/client.ts";
 import {
   parseRemoteJournalEntry,
@@ -361,15 +362,6 @@ export function cloudflareReadLink(
 }
 
 /**
- * The bytes one proposed piece is made of, when the owner has to be sent them.
- *
- * A runner holds the content it captured; the owner may already hold some of
- * it. Supplying bytes by identity lets the adapter stage only what is missing
- * rather than resending a Workspace the owner never lost.
- */
-export type ProposedBytes = (kind: "manifest" | "blob", digest: string) => Uint8Array | undefined;
-
-/**
  * The runner's production link to its owner.
  *
  * `commit()` is the whole publication path: stage the pieces the owner does not
@@ -382,14 +374,13 @@ export function cloudflareOwnerLink(
   connection: OwnerConnection,
   reads: RemoteReadLink,
   nextId: () => string,
-  bytesOf: ProposedBytes = () => undefined,
 ): OwnerLink {
   return {
     *frontier(): Operation<StartingFrontier> {
       return startingFrontier(yield* reads.frontier());
     },
 
-    *commit(intent: CommitIntent): Operation<Result<void>> {
+    *commit(intent: CommitIntent): Operation<Result<CommitDecision>> {
       // Derived from the request rather than counted. The owner recognizes a
       // retry by this identity, so retrying one proposal has to produce the
       // identity it already decided — a counter would make the second attempt a
@@ -397,11 +388,11 @@ export function cloudflareOwnerLink(
       const request = commitRequest(intent);
       const id = commandIdentity(request);
       try {
-        yield* stageMissing(connection, nextId, intent, bytesOf);
-        const answered = yield* ask(connection, id, request);
+        yield* stageMissing(connection, nextId, intent);
+        const answered = yield* ask(connection, id, request, intent);
         return answered.outcome === "refused"
           ? Err(new CloudflareOwnerRefusalError(answered.refusal))
-          : Ok();
+          : Ok(answered.decision);
       } catch (error) {
         if (error instanceof OwnerLinkError) {
           // The connection went while the answer was in flight. Whether the
@@ -428,31 +419,52 @@ function commandIdentity(request: Record<string, unknown>): string {
   return `commit-${sha256Hex(JSON.stringify(request))}`;
 }
 
-/** One command sent and one answer read, with the private refusal narrowed. */
+/**
+ * One command sent and one answer read, checked against what was asked.
+ *
+ * A performed answer is not taken on its word. It has to name the root this
+ * proposal selected — the proposed one when there is a publication, the
+ * unchanged expected one when there is not — and one event identity for each
+ * event that was sent. An owner agreeing to something else is not an owner this
+ * runner can go on talking to: it would promote a Workspace nobody proposed, so
+ * the channel fails closed instead.
+ */
 function* ask(
   connection: OwnerConnection,
   id: string,
   request: Record<string, unknown>,
-): Operation<{ outcome: "performed" } | { outcome: "refused"; refusal: PrivateRefusal }> {
+  intent: CommitIntent,
+): Operation<
+  | { outcome: "performed"; decision: CommitDecision }
+  | { outcome: "refused"; refusal: PrivateRefusal }
+> {
+  const selected =
+    intent.publication === null
+      ? intent.expectedWorkspaceRootId
+      : intent.publication.proposedWorkspaceRootId;
   const offered = yield* connection.ask(
     id,
     request,
-    (value) => {
-      // A performed commit answers with what it published. Reading it proves
-      // the owner and this build agree about what just happened.
+    (value): CommitDecision => {
       const found = members(value, ["workspaceRootId", "journalEventIds"]);
-      rootId(found.get("workspaceRootId"));
+      const workspaceRootId = rootId(found.get("workspaceRootId"));
       const ids = found.get("journalEventIds");
       if (!Array.isArray(ids) || ids.some((entry) => typeof entry !== "string" || entry === "")) {
         return fail("a commit answer did not name the events it retained");
       }
-      return true;
+      if (workspaceRootId !== selected) {
+        return fail("a commit answer named a Workspace root this proposal did not select");
+      }
+      if (ids.length !== intent.events.length) {
+        return fail("a commit answer did not retain one identity for each proposed event");
+      }
+      return Object.freeze({ workspaceRootId, journalEventIds: Object.freeze([...ids]) });
     },
     privateRefusal,
   );
   return offered.outcome === "refused"
     ? { outcome: "refused", refusal: privateRefusal(offered.refusal) }
-    : { outcome: "performed" };
+    : { outcome: "performed", decision: offered.value };
 }
 
 /**
@@ -468,17 +480,22 @@ function* stageMissing(
   connection: OwnerConnection,
   nextId: () => string,
   intent: CommitIntent,
-  bytesOf: ProposedBytes,
 ): Operation<void> {
   if (intent.publication === null) {
     return;
   }
   for (const piece of intent.publication.content) {
-    const bytes = bytesOf(piece.kind, piece.digest);
+    const bytes = intent.bytes.get(piece.digest);
     if (bytes === undefined) {
       // The owner is expected to hold this one already. If it does not, the
       // commit refuses rather than this guessing at bytes it does not have.
       continue;
+    }
+    // The sealed bytes have to be the piece they were sealed as. Staging
+    // something else would mean the command identity described one proposal and
+    // the content described another.
+    if (bytes.length !== piece.size || sha256Hex(bytes) !== piece.digest) {
+      return fail("a sealed content piece does not match the identity it was proposed under");
     }
     yield* stageCloudflareContent(connection, nextId(), piece.kind, bytes);
   }

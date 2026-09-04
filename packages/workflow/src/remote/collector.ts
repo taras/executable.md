@@ -23,7 +23,7 @@
  */
 
 import { call, ensure, Ok, type Operation, type Result, scoped } from "effection";
-import type { RetainedMapping, WorkspacePublication } from "./publication.ts";
+import type { CommitDecision, RetainedMapping, WorkspacePublication } from "./publication.ts";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import type { DurableStream } from "@executablemd/durable-streams";
 import type { WorkflowRunTransaction } from "../storage/api.ts";
@@ -68,6 +68,8 @@ export interface CommitIntent {
   readonly events: readonly DurableEvent[];
   readonly publication: WorkspacePublication | null;
   readonly mappings: readonly RetainedMapping[];
+  /** The sealed bytes for the pieces this proposal may have to supply. */
+  readonly bytes: ReadonlyMap<string, Uint8Array>;
 }
 
 /**
@@ -80,6 +82,20 @@ export interface CommitIntent {
 export interface WorkspaceEnlistment {
   readonly publication: WorkspacePublication;
   readonly mappings: readonly RetainedMapping[];
+  /**
+   * The bytes for every piece the publication names, by identity.
+   *
+   * Supplied at enlistment rather than fetched later. The proposal's identity
+   * is a digest over content, so bytes that could still change after the
+   * transaction sealed would let one identity describe two different
+   * Workspaces — and the adapter would stage whatever the buffer happened to
+   * hold by the time it looked.
+   *
+   * Only pieces the owner may not already hold need appear. What is absent is
+   * content the owner is expected to have, and a proposal naming content
+   * nobody can supply is refused rather than guessed at.
+   */
+  readonly bytes: ReadonlyMap<string, Uint8Array>;
 }
 
 /** What the collector needs from the connection. */
@@ -87,7 +103,7 @@ export interface OwnerLink {
   /** One bounded read that opens and closes its own owner-side read. */
   frontier(): Operation<StartingFrontier>;
   /** One closed intent, applied atomically or not at all. */
-  commit(intent: CommitIntent): Operation<Result<void>>;
+  commit(intent: CommitIntent): Operation<Result<CommitDecision>>;
 }
 
 /** The most events one intent may carry. */
@@ -256,6 +272,7 @@ export function transactRemotely<T>(
         events: appended.map((event) => structuredClone(event)),
         publication: enlisted?.publication ?? null,
         mappings: enlisted?.mappings ?? [],
+        bytes: enlisted?.bytes ?? new Map(),
       });
       if (!committed.ok) {
         return committed;
@@ -283,14 +300,44 @@ function detach(proposal: WorkspaceEnlistment): WorkspaceEnlistment {
       proposedWorkspaceRootId: proposal.publication.proposedWorkspaceRootId,
       proposedManifest: proposal.publication.proposedManifest,
       content: Object.freeze(
-        proposal.publication.content.map((piece) => Object.freeze({ ...piece })),
+        proposal.publication.content.map((piece) =>
+          Object.freeze({ kind: piece.kind, digest: piece.digest, size: piece.size }),
+        ),
       ),
     }),
-    mappings: Object.freeze(
-      proposal.mappings.map((mapping) =>
-        Object.freeze({ ...mapping, record: Object.freeze({ ...mapping.record }) }),
-      ),
-    ) as readonly RetainedMapping[],
+    mappings: Object.freeze(proposal.mappings.map(detachMapping)),
+    // A copy of every buffer, not a reference to one. A caller that goes on
+    // writing into the array it captured must not be able to change what this
+    // proposal stages.
+    bytes: new Map([...proposal.bytes].map(([digest, bytes]) => [digest, bytes.slice()])),
+  });
+}
+
+/**
+ * One mapping, copied all the way down.
+ *
+ * A shallow copy is not enough: an Agent-session record holds its provider
+ * assertion as a nested object, and that assertion is part of the retained
+ * identity. Leaving it shared would let a caller change what the run recorded
+ * about a session after the transaction had sealed.
+ */
+function detachMapping(mapping: RetainedMapping): RetainedMapping {
+  if (mapping.kind === "repository") {
+    return Object.freeze({
+      kind: mapping.kind,
+      locator: mapping.locator,
+      record: Object.freeze({ ...mapping.record }),
+    });
+  }
+  if (mapping.kind === "worktree") {
+    return Object.freeze({ kind: mapping.kind, record: Object.freeze({ ...mapping.record }) });
+  }
+  return Object.freeze({
+    kind: mapping.kind,
+    record: Object.freeze({
+      ...mapping.record,
+      assertion: Object.freeze({ ...mapping.record.assertion }),
+    }),
   });
 }
 

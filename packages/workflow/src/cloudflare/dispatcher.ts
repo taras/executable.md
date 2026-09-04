@@ -46,7 +46,7 @@ import {
 import { bytesOf, decodeBase64, sha256Hex } from "./encoding.ts";
 import { readContent, readFrontier, readJournalPage, readRoot } from "./owner-reads.ts";
 import type { OwnerTransactions } from "./owner-transaction.ts";
-import { COMMAND_TABLE, STAGING_TABLE } from "./private-schema.ts";
+import { COMMAND_TABLE, MUTATION_TABLE, STAGING_TABLE } from "./private-schema.ts";
 import { applyCommit } from "./publish.ts";
 import { recognizeObject } from "./recognition.ts";
 
@@ -240,6 +240,32 @@ export function dispatchCommand(
       throw new CommandError("duplicate-conflict");
     }
     recognizeObject(ctx.storage);
+
+    // A mutation's decision is looked for by the run, not by the connection.
+    // The case this exists for is the one where the connection that asked is
+    // gone: the owner committed, the answer never arrived, and the runner
+    // reconnected to ask the same question again.
+    if (command.command === "commit") {
+      const decided = ctx.storage.sql
+        .exec(
+          `SELECT request_fingerprint, response FROM ${MUTATION_TABLE} WHERE command_id = ?`,
+          command.id,
+        )
+        .toArray()[0];
+      if (decided !== undefined) {
+        if (decided.request_fingerprint !== fingerprint) {
+          throw new CommandError("duplicate-conflict");
+        }
+        const decision = storedDecision(decided.response, command.id);
+        if (decision === "reconstruct") {
+          // A mutation's decision is always retained whole. Reconstructing one
+          // would mean applying it again.
+          throw new Error("private protocol storage holds a malformed result");
+        }
+        return decision;
+      }
+    }
+
     const previous = ctx.storage.sql
       .exec(
         `SELECT request_fingerprint, response FROM ${COMMAND_TABLE}
@@ -286,6 +312,25 @@ export function dispatchCommand(
       encoded,
       responseBytes,
     );
+    if (command.command === "commit") {
+      // Recorded in this same transaction as the mutation it describes, so a
+      // crash cannot leave one without the other.
+      const mutations = ctx.storage.sql
+        .exec(`SELECT count(*) AS decided FROM ${MUTATION_TABLE}`)
+        .toArray()[0];
+      if (integer(mutations?.["decided"]) >= MAX_COMMANDS) {
+        throw new CommandError("capacity");
+      }
+      ctx.storage.sql.exec(
+        `INSERT INTO ${MUTATION_TABLE}
+          (command_id, request_fingerprint, response, response_bytes)
+          VALUES (?, ?, ?, ?)`,
+        command.id,
+        fingerprint,
+        encoded,
+        responseBytes,
+      );
+    }
     return result;
   });
 }

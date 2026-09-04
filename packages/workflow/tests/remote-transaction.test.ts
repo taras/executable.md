@@ -26,6 +26,7 @@ import {
   type StartingFrontier,
   transactRemotely,
 } from "../src/remote/collector.ts";
+import type { CommitDecision } from "../src/remote/publication.ts";
 
 /**
  * What the transaction refused with, having proved it refused at all.
@@ -88,6 +89,19 @@ function event(name: string): DurableEvent {
   };
 }
 
+/** What a correct owner would answer for this intent. */
+function decisionFor(intent: CommitIntent): CommitDecision {
+  return {
+    workspaceRootId: intent.publication?.proposedWorkspaceRootId ?? intent.expectedWorkspaceRootId,
+    journalEventIds: intent.events.map((_event, index) => `event-${index}`),
+  };
+}
+
+/** A test-supplied outcome, carried through with the decision it implies. */
+function mapDecision(result: Result<void>, intent: CommitIntent): Result<CommitDecision> {
+  return result.ok ? Ok(decisionFor(intent)) : result;
+}
+
 /** A link that records what it was asked, and answers how a test tells it to. */
 function link(
   options: {
@@ -110,12 +124,14 @@ function link(
       }
       return starting;
     },
-    *commit(intent: CommitIntent): Operation<Result<void>> {
+    *commit(intent: CommitIntent): Operation<Result<CommitDecision>> {
       sent.push(intent);
       if (options.blockCommit !== undefined) {
         yield* options.blockCommit.operation;
       }
-      return options.commit === undefined ? Ok(undefined) : options.commit(intent);
+      return options.commit === undefined
+        ? Ok(decisionFor(intent))
+        : mapDecision(options.commit(intent), intent);
     },
   };
   return { owner, sent, starting };
@@ -352,8 +368,8 @@ describe("a remote transaction", () => {
       *frontier(): Operation<StartingFrontier> {
         throw new Error("transport failed");
       },
-      *commit(): Operation<Result<void>> {
-        return Ok(undefined);
+      *commit(): Operation<Result<CommitDecision>> {
+        return Ok({ workspaceRootId: "root-a", journalEventIds: [] });
       },
     };
     try {

@@ -15,9 +15,10 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
 import { ensure, type Operation, scoped, sleep, spawn, until } from "effection";
-import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { agentSessionKey } from "../src/storage/agent-session.ts";
 import { cloudflareOwnerLink } from "../src/cloudflare/client.ts";
+import { encodeBase64 } from "../src/cloudflare/encoding.ts";
 import { runnerFiles, useRunnerTrees } from "../src/deno/remote-files.ts";
 import {
   type CommitIntent,
@@ -55,6 +56,34 @@ function event(name: string) {
 }
 
 const LOCATOR = "https://git.example.invalid/octo/app.git";
+
+/** The exact closure a proposed root names, in canonical order. */
+function inventoryOf(captured: CapturedWorkspace): ProposedContent[] {
+  return [
+    ...captured.root.manifests.map((digest) => ({
+      kind: "manifest" as const,
+      digest,
+      size: captured.contents.get(digest)?.manifestBytes.length ?? 0,
+    })),
+    ...captured.root.blobs.map((digest) => ({
+      kind: "blob" as const,
+      digest,
+      size: captured.blobs.get(digest)?.length ?? 0,
+    })),
+  ];
+}
+
+/** Every piece a capture can supply, by identity. */
+function proposedBytes(captured: CapturedWorkspace): Map<string, Uint8Array> {
+  const bytes = new Map<string, Uint8Array>();
+  for (const [digest, content] of captured.contents) {
+    bytes.set(digest, content.manifestBytes);
+  }
+  for (const [digest, blob] of captured.blobs) {
+    bytes.set(digest, blob);
+  }
+  return bytes;
+}
 
 /** The Repository mapping these tests enlist. */
 function repositoryMapping(): RetainedMapping {
@@ -118,11 +147,15 @@ function wire(answer: (request: Record<string, unknown>) => Record<string, unkno
 /**
  * What a correct owner answers each private command with.
  *
- * `sizes` is what the owner would have measured after decoding the bytes it was
- * sent. The runner checks that against what it sent, so an owner that guessed
- * would be answering about content it had not read.
+ * The commit answer is derived from the request the way the owner derives it:
+ * the root the proposal selected — proposed when there is a publication, the
+ * unchanged expected one when there is not — and one minted identity for each
+ * event. The runner checks the answer against what it asked, so an owner that
+ * answered with something else would not be believed.
+ *
+ * `sizes` is what the owner measured after decoding staged bytes.
  */
-function ownerAnswers(rootId: string, sizes: ReadonlyMap<string, number> = new Map()) {
+function ownerAnswers(_rootId: string, sizes: ReadonlyMap<string, number> = new Map()) {
   return (request: Record<string, unknown>): Record<string, unknown> => {
     if (request["command"] === "stage") {
       return {
@@ -134,9 +167,18 @@ function ownerAnswers(rootId: string, sizes: ReadonlyMap<string, number> = new M
         },
       };
     }
+    const publication = request["publication"];
+    const selected =
+      publication === null || publication === undefined
+        ? request["expectedWorkspaceRootId"]
+        : (publication as Record<string, unknown>)["proposedWorkspaceRootId"];
+    const events = Array.isArray(request["events"]) ? request["events"] : [];
     return {
       outcome: "performed",
-      value: { workspaceRootId: rootId, journalEventIds: ["e1"] },
+      value: {
+        workspaceRootId: selected,
+        journalEventIds: events.map((_entry, index) => `event-${index}`),
+      },
     };
   };
 }
@@ -258,92 +300,73 @@ function* startingTree(): Operation<{ captured: CapturedWorkspace; reads: Remote
 describe("what the production runner publishes", () => {
   it("sends one closed commit describing everything the transaction decided", function* () {
     const files = runnerFiles();
-    yield* scoped(function* () {
-      const trees = yield* useRunnerTrees();
-      const { captured, reads } = yield* startingTree();
-      const sizes = new Map<string, number>();
-      const transport = wire(ownerAnswers(captured.root.rootId, sizes));
-      const connection = yield* useOwnerConnection(transport.socket);
+    const trees = yield* useRunnerTrees();
+    const { captured, reads } = yield* startingTree();
+    const sizes = new Map<string, number>();
+    const transport = wire(ownerAnswers(captured.root.rootId, sizes));
+    const connection = yield* useOwnerConnection(transport.socket);
 
-      const materialization = yield* useMaterialization(
-        files,
-        trees,
-        reads,
-        captured.root.rootId,
-        reject,
-      );
-      const attempt = yield* useAttempt(files, trees, reads, materialization, reject);
-      yield* until(writeFile(attempt.at("/NOTES.md"), "written by the effect\n", { mode: 0o644 }));
-      const proposed = yield* attempt.capture();
-      for (const [digest, content] of proposed.contents) {
-        sizes.set(digest, content.manifestBytes.length);
-      }
-      for (const [digest, bytes] of proposed.blobs) {
-        sizes.set(digest, bytes.length);
-      }
+    const materialization = yield* useMaterialization(
+      files,
+      trees,
+      reads,
+      captured.root.rootId,
+      reject,
+    );
+    const attempt = yield* useAttempt(files, trees, reads, materialization, reject);
+    yield* until(writeFile(attempt.at("/NOTES.md"), "written by the effect\n", { mode: 0o644 }));
+    const proposed = yield* attempt.capture();
+    for (const [digest, content] of proposed.contents) {
+      sizes.set(digest, content.manifestBytes.length);
+    }
+    for (const [digest, bytes] of proposed.blobs) {
+      sizes.set(digest, bytes.length);
+    }
 
-      const link = cloudflareOwnerLink(connection, reads, ids(), (kind, digest) =>
-        kind === "manifest"
-          ? proposed.contents.get(digest)?.manifestBytes
-          : proposed.blobs.get(digest),
-      );
-      const committed = yield* transactRemotely(
-        link,
-        createTransactionGate(),
-        function* (transaction, enlist) {
-          yield* transaction.journal.append(event("published"));
-          enlist({
-            publication: {
-              proposedWorkspaceRootId: proposed.root.rootId,
-              proposedManifest: proposed.root.manifest,
-              content: [
-                ...proposed.root.manifests.map((digest) => ({
-                  kind: "manifest" as const,
-                  digest,
-                  size: proposed.contents.get(digest)?.manifestBytes.length ?? 0,
-                })),
-                ...proposed.root.blobs.map((digest) => ({
-                  kind: "blob" as const,
-                  digest,
-                  size: proposed.blobs.get(digest)?.length ?? 0,
-                })),
-              ],
-            },
-            mappings: [
-              {
-                kind: "repository",
-                locator: LOCATOR,
-                record: {
-                  name: "app",
-                  locatorFingerprint: locatorFingerprintOf(LOCATOR),
-                  requestedBase: null,
-                  creationCommit: "9".repeat(40),
-                  primaryBranch: "main",
-                  objectFormat: "sha1",
-                  checkoutPath: "/docs",
-                },
-              },
+    const link = cloudflareOwnerLink(connection, reads, ids());
+    const committed = yield* transactRemotely(
+      link,
+      createTransactionGate(),
+      function* (transaction, enlist) {
+        yield* transaction.journal.append(event("published"));
+        enlist({
+          publication: {
+            proposedWorkspaceRootId: proposed.root.rootId,
+            proposedManifest: proposed.root.manifest,
+            content: [
+              ...proposed.root.manifests.map((digest) => ({
+                kind: "manifest" as const,
+                digest,
+                size: proposed.contents.get(digest)?.manifestBytes.length ?? 0,
+              })),
+              ...proposed.root.blobs.map((digest) => ({
+                kind: "blob" as const,
+                digest,
+                size: proposed.blobs.get(digest)?.length ?? 0,
+              })),
             ],
-          });
-          return "done";
-        },
-      );
-      expect(committed).toMatchObject({ ok: true });
+          },
+          mappings: [repositoryMapping()],
+          bytes: proposedBytes(proposed),
+        });
+        return "done";
+      },
+    );
+    expect(committed).toMatchObject({ ok: true });
 
-      // The last request is one closed commit carrying the whole proposal.
-      const commit = lastCommit(transport.sent);
-      expect(commit["expectedWorkspaceRootId"]).toBe(captured.root.rootId);
-      expect(commit["events"]).toEqual([serializeDurableEvent(event("published"))]);
-      const publication = member(commit, "publication");
-      expect(publication["proposedWorkspaceRootId"]).toBe(proposed.root.rootId);
-      expect(sha256Hex(`${WORKSPACE_ROOT_DOMAIN}${String(publication["proposedManifest"])}`)).toBe(
-        proposed.root.rootId,
-      );
-      expect(text(memberList(commit, "mappings")[0] ?? {}, "locator")).toBe(LOCATOR);
-      // Everything the proposal names was staged before the commit went out.
-      const staged = transport.sent.filter((request) => request["command"] === "stage");
-      expect(staged.length).toBe(proposed.root.manifests.length + proposed.root.blobs.length);
-    });
+    // The last request is one closed commit carrying the whole proposal.
+    const commit = lastCommit(transport.sent);
+    expect(commit["expectedWorkspaceRootId"]).toBe(captured.root.rootId);
+    expect(commit["events"]).toEqual([serializeDurableEvent(event("published"))]);
+    const publication = member(commit, "publication");
+    expect(publication["proposedWorkspaceRootId"]).toBe(proposed.root.rootId);
+    expect(sha256Hex(`${WORKSPACE_ROOT_DOMAIN}${String(publication["proposedManifest"])}`)).toBe(
+      proposed.root.rootId,
+    );
+    expect(text(memberList(commit, "mappings")[0] ?? {}, "locator")).toBe(LOCATOR);
+    // Everything the proposal names was staged before the commit went out.
+    const staged = transport.sent.filter((request) => request["command"] === "stage");
+    expect(staged.length).toBe(proposed.root.manifests.length + proposed.root.blobs.length);
   });
 
   it("sends no commit and keeps no tree when the body does not finish", function* () {
@@ -408,33 +431,76 @@ describe("what the production runner publishes", () => {
     void outcomes;
   });
 
-  it("keeps the accepted root until the owner performs the commit", function* () {
+  it("promotes only with the owner's decision, and moves the tree with it", function* () {
     const files = runnerFiles();
-    yield* scoped(function* () {
-      const trees = yield* useRunnerTrees();
-      const { captured, reads } = yield* startingTree();
-      const materialization = yield* useMaterialization(
-        files,
-        trees,
-        reads,
-        captured.root.rootId,
-        reject,
-      );
-      yield* scoped(function* () {
-        const attempt = yield* useAttempt(files, trees, reads, materialization, reject);
-        yield* until(writeFile(attempt.at("/NOTES.md"), "not published\n", { mode: 0o644 }));
-        // The owner refused, so nothing promotes.
-      });
-      expect(materialization.workspaceRootId).toBe(captured.root.rootId);
+    const trees = yield* useRunnerTrees();
+    const { captured, reads } = yield* startingTree();
+    const sizes = new Map<string, number>();
+    const transport = wire(ownerAnswers("", sizes));
+    const connection = yield* useOwnerConnection(transport.socket);
+    const link = cloudflareOwnerLink(connection, reads, ids());
+    const materialization = yield* useMaterialization(
+      files,
+      trees,
+      reads,
+      captured.root.rootId,
+      reject,
+    );
+    const acceptedBefore = materialization.at("/");
 
-      yield* scoped(function* () {
-        const attempt = yield* useAttempt(files, trees, reads, materialization, reject);
-        yield* until(writeFile(attempt.at("/NOTES.md"), "published\n", { mode: 0o644 }));
-        yield* attempt.promote();
-      });
-      // Only a promoted attempt moves what the run is at.
-      expect(materialization.workspaceRootId).not.toBe(captured.root.rootId);
+    let attemptRoot = "";
+    const attempt = yield* useAttempt(files, trees, reads, materialization, reject);
+    attemptRoot = attempt.at("/");
+    yield* until(writeFile(attempt.at("/NOTES.md"), "published\n", { mode: 0o644 }));
+    const proposed = yield* attempt.capture();
+    for (const [digest, content] of proposed.contents) {
+      sizes.set(digest, content.manifestBytes.length);
+    }
+    for (const [digest, blob] of proposed.blobs) {
+      sizes.set(digest, blob.length);
+    }
+
+    // A decision the owner did not give cannot promote.
+    let raised: unknown;
+    try {
+      yield* attempt.promote({ workspaceRootId: captured.root.rootId, journalEventIds: [] });
+    } catch (error) {
+      raised = error;
+    }
+    expect(raised).toBeInstanceOf(Error);
+    expect(materialization.workspaceRootId).toBe(captured.root.rootId);
+
+    // The owner's own answer, naming the root this attempt captured.
+    const committed = yield* link.commit({
+      expectedWorkspaceRootId: captured.root.rootId,
+      expectedJournalEventId: null,
+      events: [],
+      publication: {
+        proposedWorkspaceRootId: proposed.root.rootId,
+        proposedManifest: proposed.root.manifest,
+        content: inventoryOf(proposed),
+      },
+      mappings: [],
+      bytes: proposedBytes(proposed),
     });
+    if (!committed.ok) {
+      throw committed.error;
+    }
+    yield* attempt.promote(committed.value);
+
+    // The accepted materialization is the promoted tree, not a relabelled
+    // copy of the old one: the file the effect wrote is readable through it.
+    expect(materialization.workspaceRootId).not.toBe(captured.root.rootId);
+    expect(materialization.at("/")).toBe(attemptRoot);
+    expect(yield* until(readFile(materialization.at("/NOTES.md"), "utf8"))).toBe("published\n");
+    // And the tree the run used to be at is gone.
+    let listed: unknown;
+    try {
+      listed = yield* until(readdir(acceptedBefore));
+    } catch (error) {
+      listed = error;
+    }
+    expect(listed).toBeInstanceOf(Error);
   });
 
   it("cannot be changed by a caller that kept its own copy", function* () {
@@ -466,6 +532,7 @@ describe("what the production runner publishes", () => {
           content,
         },
         mappings,
+        bytes: new Map(),
       });
       // The caller still holds both arrays and edits them after admission.
       content.push({ kind: "blob", digest: "b".repeat(64), size: 2 });
@@ -511,60 +578,59 @@ describe("what the production runner publishes", () => {
   });
 
   it("encodes every kind of retained mapping the owner accepts", function* () {
-    yield* scoped(function* () {
-      const { captured, reads } = yield* startingTree();
-      const transport = wire(ownerAnswers(captured.root.rootId));
-      const connection = yield* useOwnerConnection(transport.socket);
-      const link = cloudflareOwnerLink(connection, reads, ids());
-      yield* transactRemotely(link, createTransactionGate(), function* (_transaction, enlist) {
-        enlist({
-          publication: {
-            proposedWorkspaceRootId: captured.root.rootId,
-            proposedManifest: captured.root.manifest,
-            content: [],
-          },
-          mappings: [
-            repositoryMapping(),
-            {
-              kind: "worktree",
-              record: {
-                repositoryName: "app",
-                name: "feature",
-                requestedBranch: "feature",
-                requestedBase: null,
-                creationCommit: "2".repeat(40),
-                checkoutPath: "/docs",
-              },
+    const { captured, reads } = yield* startingTree();
+    const transport = wire(ownerAnswers(captured.root.rootId));
+    const connection = yield* useOwnerConnection(transport.socket);
+    const link = cloudflareOwnerLink(connection, reads, ids());
+    yield* transactRemotely(link, createTransactionGate(), function* (_transaction, enlist) {
+      enlist({
+        publication: {
+          proposedWorkspaceRootId: captured.root.rootId,
+          proposedManifest: captured.root.manifest,
+          content: [],
+        },
+        bytes: new Map(),
+        mappings: [
+          repositoryMapping(),
+          {
+            kind: "worktree",
+            record: {
+              repositoryName: "app",
+              name: "feature",
+              requestedBranch: "feature",
+              requestedBase: null,
+              creationCommit: "2".repeat(40),
+              checkoutPath: "/docs",
             },
-            {
-              kind: "agent-session",
-              record: {
+          },
+          {
+            kind: "agent-session",
+            record: {
+              provider: "acp",
+              agentCommand: "/usr/bin/agent",
+              sessionIdentity: "session-1",
+              sessionKey: agentSessionKey({
                 provider: "acp",
                 agentCommand: "/usr/bin/agent",
                 sessionIdentity: "session-1",
-                sessionKey: agentSessionKey({
-                  provider: "acp",
-                  agentCommand: "/usr/bin/agent",
-                  sessionIdentity: "session-1",
-                }),
-                policy: "strict",
-                assertion: { kind: "acp-session", value: "abc" },
-                createdAt: "2026-09-03T00:00:00.000Z",
-              },
+              }),
+              policy: "strict",
+              assertion: { kind: "acp-session", value: "abc" },
+              createdAt: "2026-09-03T00:00:00.000Z",
             },
-          ],
-        });
-        return "done";
+          },
+        ],
       });
-      const mappings = memberList(lastCommit(transport.sent), "mappings");
-      expect(mappings.map((mapping) => mapping["kind"])).toEqual([
-        "repository",
-        "worktree",
-        "agent-session",
-      ]);
-      // Only a Repository carries the locator; the other two are the record.
-      expect(mappings.filter((mapping) => "locator" in mapping)).toHaveLength(1);
+      return "done";
     });
+    const mappings = memberList(lastCommit(transport.sent), "mappings");
+    expect(mappings.map((mapping) => mapping["kind"])).toEqual([
+      "repository",
+      "worktree",
+      "agent-session",
+    ]);
+    // Only a Repository carries the locator; the other two are the record.
+    expect(mappings.filter((mapping) => "locator" in mapping)).toHaveLength(1);
   });
 
   it("retries a lost answer with the same identity and the same bytes", function* () {
@@ -587,6 +653,7 @@ describe("what the production runner publishes", () => {
           events: [],
           publication: null,
           mappings: [],
+          bytes: new Map(),
         };
         const committed = yield* link.commit(intent);
         expect([attempt, committed.ok]).toEqual([attempt, true]);
@@ -601,24 +668,23 @@ describe("what the production runner publishes", () => {
   });
 
   it("asks a different question for a different proposal", function* () {
-    yield* scoped(function* () {
-      const { captured, reads } = yield* startingTree();
-      const transport = wire(ownerAnswers(captured.root.rootId));
-      const connection = yield* useOwnerConnection(transport.socket);
-      const link = cloudflareOwnerLink(connection, reads, ids());
-      const intent: CommitIntent = {
-        expectedWorkspaceRootId: captured.root.rootId,
-        expectedJournalEventId: null,
-        events: [],
-        publication: null,
-        mappings: [],
-      };
-      yield* link.commit(intent);
-      yield* link.commit({ ...intent, events: [event("later")] });
-      const commits = transport.sent.filter((request) => request["command"] === "commit");
-      expect(commits).toHaveLength(2);
-      expect(commits[0]?.["id"]).not.toBe(commits[1]?.["id"]);
-    });
+    const { captured, reads } = yield* startingTree();
+    const transport = wire(ownerAnswers(captured.root.rootId));
+    const connection = yield* useOwnerConnection(transport.socket);
+    const link = cloudflareOwnerLink(connection, reads, ids());
+    const intent: CommitIntent = {
+      expectedWorkspaceRootId: captured.root.rootId,
+      expectedJournalEventId: null,
+      events: [],
+      publication: null,
+      mappings: [],
+      bytes: new Map(),
+    };
+    yield* link.commit(intent);
+    yield* link.commit({ ...intent, events: [event("later")] });
+    const commits = transport.sent.filter((request) => request["command"] === "commit");
+    expect(commits).toHaveLength(2);
+    expect(commits[0]?.["id"]).not.toBe(commits[1]?.["id"]);
   });
 
   it("promotes nothing and keeps no tree when the owner refuses", function* () {
@@ -723,31 +789,127 @@ describe("what the production runner publishes", () => {
   });
 
   it("sends nothing when the transaction exceeds a local bound", function* () {
-    yield* scoped(function* () {
-      const { captured, reads } = yield* startingTree();
-      const transport = wire(ownerAnswers(captured.root.rootId));
-      const connection = yield* useOwnerConnection(transport.socket);
-      const link = cloudflareOwnerLink(connection, reads, ids());
-      let raised: unknown;
-      try {
-        yield* transactRemotely(link, createTransactionGate(), function* (_transaction, enlist) {
-          enlist({
-            publication: {
-              proposedWorkspaceRootId: captured.root.rootId,
-              proposedManifest: captured.root.manifest,
-              content: [],
-            },
-            // More retained mappings than one intent may carry.
-            mappings: Array.from({ length: 300 }, () => repositoryMapping()),
-          });
-          return "done";
+    const { captured, reads } = yield* startingTree();
+    const transport = wire(ownerAnswers(captured.root.rootId));
+    const connection = yield* useOwnerConnection(transport.socket);
+    const link = cloudflareOwnerLink(connection, reads, ids());
+    let raised: unknown;
+    try {
+      yield* transactRemotely(link, createTransactionGate(), function* (_transaction, enlist) {
+        enlist({
+          publication: {
+            proposedWorkspaceRootId: captured.root.rootId,
+            proposedManifest: captured.root.manifest,
+            content: [],
+          },
+          // More retained mappings than one intent may carry.
+          mappings: Array.from({ length: 300 }, () => repositoryMapping()),
+          bytes: new Map(),
         });
-      } catch (error) {
-        raised = error;
-      }
-      expect(raised).toBeInstanceOf(Error);
-      expect(transport.sent.some((request) => request["command"] === "commit")).toBe(false);
+        return "done";
+      });
+    } catch (error) {
+      raised = error;
+    }
+    expect(raised).toBeInstanceOf(Error);
+    expect(transport.sent.some((request) => request["command"] === "commit")).toBe(false);
+  });
+
+  it("refuses a performed answer that names a root this proposal did not select", function* () {
+    const { captured, reads } = yield* startingTree();
+    // An owner agreeing to something else is not an owner this runner can go
+    // on talking to: believing it would promote a Workspace nobody proposed.
+    const transport = wire(() => ({
+      outcome: "performed",
+      value: { workspaceRootId: "f".repeat(64), journalEventIds: [] },
+    }));
+    const connection = yield* useOwnerConnection(transport.socket);
+    const link = cloudflareOwnerLink(connection, reads, ids());
+    const committed = yield* link.commit({
+      expectedWorkspaceRootId: captured.root.rootId,
+      expectedJournalEventId: null,
+      events: [],
+      publication: null,
+      mappings: [],
+      bytes: new Map(),
     });
+    expect(committed.ok).toBe(false);
+  });
+
+  it("refuses a performed answer that loses an event it was given", function* () {
+    const { captured, reads } = yield* startingTree();
+    const transport = wire((request) => ({
+      outcome: "performed",
+      value: { workspaceRootId: request["expectedWorkspaceRootId"], journalEventIds: [] },
+    }));
+    const connection = yield* useOwnerConnection(transport.socket);
+    const link = cloudflareOwnerLink(connection, reads, ids());
+    const committed = yield* link.commit({
+      expectedWorkspaceRootId: captured.root.rootId,
+      expectedJournalEventId: null,
+      events: [event("appended")],
+      publication: null,
+      mappings: [],
+      bytes: new Map(),
+    });
+    // One identity per event, or the two sides disagree about what history
+    // this commit created.
+    expect(committed.ok).toBe(false);
+  });
+
+  it("seals nested mapping values and content bytes against later mutation", function* () {
+    const { captured, reads } = yield* startingTree();
+    const sizes = new Map<string, number>();
+    const transport = wire(ownerAnswers("", sizes));
+    const connection = yield* useOwnerConnection(transport.socket);
+    const link = cloudflareOwnerLink(connection, reads, ids());
+
+    const assertion = { kind: "acp-session", value: "admitted" };
+    const identity = {
+      provider: "acp",
+      agentCommand: "/usr/bin/agent",
+      sessionIdentity: "session-1",
+    };
+    const piece = new TextEncoder().encode("admitted bytes");
+    const digest = sha256Hex(piece);
+    sizes.set(digest, piece.length);
+    const bytes = new Map([[digest, piece]]);
+
+    yield* transactRemotely(link, createTransactionGate(), function* (_transaction, enlist) {
+      enlist({
+        publication: {
+          proposedWorkspaceRootId: captured.root.rootId,
+          proposedManifest: captured.root.manifest,
+          content: [{ kind: "blob", digest, size: piece.length }],
+        },
+        mappings: [
+          {
+            kind: "agent-session",
+            record: {
+              ...identity,
+              sessionKey: agentSessionKey(identity),
+              policy: "strict",
+              assertion,
+              createdAt: "2026-09-03T00:00:00.000Z",
+            },
+          },
+        ],
+        bytes,
+      });
+      // The caller still holds the assertion object and the byte buffer, and
+      // edits both after the transaction admitted them.
+      assertion.value = "changed after admission";
+      piece.fill(0);
+      bytes.set(digest, new TextEncoder().encode("substituted"));
+      return "done";
+    });
+
+    // What was sent is what was admitted, not what the caller did afterwards.
+    const mapping = memberList(lastCommit(transport.sent), "mappings")[0] ?? {};
+    expect(text(member(member(mapping, "record"), "assertion"), "value")).toBe("admitted");
+    const staged = transport.sent.find((request) => request["command"] === "stage");
+    expect(staged?.["digest"]).toBe(digest);
+    expect(staged?.["bytes"]).toBe(encodeBase64(new TextEncoder().encode("admitted bytes")));
   });
 
   it("refuses a second Workspace publication in one transaction", function* () {
@@ -762,6 +924,7 @@ describe("what the production runner publishes", () => {
         content: [],
       },
       mappings: [],
+      bytes: new Map<string, Uint8Array>(),
     };
     let raised: unknown;
     try {

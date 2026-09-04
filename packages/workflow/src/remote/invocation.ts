@@ -31,6 +31,7 @@ import {
   type RunnerFiles,
 } from "./materialize.ts";
 import type { RemoteReadLink } from "./read.ts";
+import type { CommitDecision } from "./publication.ts";
 
 /** A directory this invocation owns for as long as it needs one. */
 export interface TemporaryTrees {
@@ -44,15 +45,15 @@ export interface TemporaryTrees {
 export interface Materialization {
   /** The root this tree is, as the owner confirmed it. */
   readonly workspaceRootId: string;
-  /** Where a logical Workspace path sits in this tree. */
-  readonly at: HostPath;
   /**
-   * Record which root this tree now is.
+   * Where a logical Workspace path sits in the accepted tree.
    *
-   * Called by a promoted attempt and by nothing else. It moves no bytes: the
-   * attempt did that, and this says what they are.
+   * Resolved on each call rather than closed over one directory, because
+   * promotion replaces the tree: after it, this has to answer with the promoted
+   * bytes. A path captured once would keep pointing at the Workspace the run
+   * used to be at while the identity said otherwise.
    */
-  accept(workspaceRootId: string): void;
+  at(logical: string): string;
 }
 
 /** One disposable place to make a mutation, and the way to keep it. */
@@ -63,12 +64,14 @@ export interface Attempt {
   /**
    * Make this attempt the accepted materialization.
    *
-   * Called only after the owner reports the commit performed. Anything else —
-   * a refusal, a lost response, a local failure — leaves the accepted tree
-   * where it was, because until the owner says otherwise the run is still at
-   * the root it started from.
+   * It takes the owner's performed decision because that decision is the
+   * authority: nothing else may promote, and a decision naming a different root
+   * than this attempt captured is not this attempt's decision. Passing it is
+   * the proof, which is why there is no argument-free way to do this — a
+   * refusal, an ambiguous loss and a local failure all leave the caller with
+   * nothing to pass.
    */
-  promote(): Operation<void>;
+  promote(decision: CommitDecision): Operation<void>;
 }
 
 /**
@@ -85,22 +88,39 @@ export function useMaterialization(
   reads: RemoteReadLink,
   workspaceRootId: string,
   reject: WorkspaceRejection,
-): Operation<Materialization> {
+): Operation<AcceptedMaterialization> {
   return resource(function* (provide) {
     const root = yield* trees.create("accepted");
-    const at: HostPath = (logical) => join(root, logical);
-    yield* materializeWorkspaceRoot(files, reads, at, workspaceRootId, reject);
-    let accepted = workspaceRootId;
+    yield* materializeWorkspaceRoot(files, reads, at(root), workspaceRootId, reject);
+    let accepted = { root, workspaceRootId };
     yield* provide({
       get workspaceRootId(): string {
-        return accepted;
+        return accepted.workspaceRootId;
       },
-      at,
-      accept(next: string): void {
+      at(logical: string): string {
+        return at(accepted.root)(logical);
+      },
+      *replace(next: { root: string; workspaceRootId: string }): Operation<void> {
+        const previous = accepted.root;
         accepted = next;
+        // The tree the run used to be at is removed once nothing points at it.
+        // Leaving it would keep a second copy of the Workspace on disk that
+        // nothing can reach and nothing will clean up until the invocation ends.
+        yield* trees.remove(previous);
       },
     });
   });
+}
+
+/**
+ * The accepted materialization, plus the one operation that may move it.
+ *
+ * `replace` is not on `Materialization` because everything that merely reads
+ * the Workspace should not be able to change which Workspace it is reading.
+ * Only an attempt holding a performed decision reaches this.
+ */
+export interface AcceptedMaterialization extends Materialization {
+  replace(next: { root: string; workspaceRootId: string }): Operation<void>;
 }
 
 /**
@@ -115,13 +135,18 @@ export function useAttempt(
   files: RunnerFiles,
   trees: TemporaryTrees,
   reads: RemoteReadLink,
-  materialization: Materialization,
+  materialization: AcceptedMaterialization,
   reject: WorkspaceRejection,
 ): Operation<Attempt> {
   return resource(function* (provide) {
     const root = yield* trees.create("attempt");
-    const at: HostPath = (logical) => join(root, logical);
-    yield* materializeWorkspaceRoot(files, reads, at, materialization.workspaceRootId, reject);
+    yield* materializeWorkspaceRoot(
+      files,
+      reads,
+      at(root),
+      materialization.workspaceRootId,
+      reject,
+    );
 
     let promoted = false;
     // Registered before the attempt is handed over, so every exit removes it —
@@ -133,14 +158,27 @@ export function useAttempt(
     });
 
     yield* provide({
-      at,
+      at: at(root),
       *capture(): Operation<CapturedWorkspace> {
-        return yield* captureWorkspace(files, at, reject);
+        return yield* captureWorkspace(files, at(root), reject);
       },
-      *promote(): Operation<void> {
-        const captured = yield* captureWorkspace(files, at, reject);
+      *promote(decision: CommitDecision): Operation<void> {
+        if (promoted) {
+          // One decision promotes one attempt once. A second promotion would be
+          // moving the accepted tree somewhere it has already been moved from.
+          reject("this attempt has already been promoted");
+        }
+        const captured = yield* captureWorkspace(files, at(root), reject);
+        if (decision.workspaceRootId !== captured.root.rootId) {
+          // The owner published something other than what this attempt holds.
+          // Promoting would label these bytes with a root they are not.
+          reject("the owner's decision names a root this attempt did not capture");
+        }
         promoted = true;
-        materialization.accept(captured.root.rootId);
+        // The tree itself becomes the accepted one. Recording the identity
+        // without moving the bytes would leave the invocation reading the
+        // Workspace it used to be at under the name of the one it is now at.
+        yield* materialization.replace({ root, workspaceRootId: captured.root.rootId });
       },
     });
   });
@@ -154,6 +192,6 @@ export function useAttempt(
  * host's path conventions. The logical root is `/` and everything under it is
  * relative to the tree this invocation was given.
  */
-function join(root: string, logical: string): string {
-  return logical === "/" ? root : `${root}/${logical.slice(1)}`;
+function at(root: string): HostPath {
+  return (logical) => (logical === "/" ? root : `${root}/${logical.slice(1)}`);
 }
