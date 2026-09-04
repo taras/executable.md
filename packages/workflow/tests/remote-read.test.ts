@@ -23,7 +23,8 @@ import {
   cloudflareRunLink,
   stageCloudflareContent,
 } from "../src/cloudflare/client.ts";
-import { WorkflowStorageError } from "../src/storage/errors.ts";
+import { WorkflowSchemaVersionError, WorkflowStorageError } from "../src/storage/errors.ts";
+import { SCHEMA_VERSION } from "../src/sqlite/workflow-schema.ts";
 import { createTransactionGate, transactRemotely } from "../src/remote/collector.ts";
 import { encodeBase64 } from "../src/cloudflare/encoding.ts";
 import type { OwnerSocket, SocketListener } from "../src/remote/client.ts";
@@ -336,6 +337,61 @@ describe("semantic reads from a Cloudflare owner", () => {
     });
     expect(failure(raised)).toBe("malformed-answer");
     expect(transport.closes).toBe(1);
+  });
+
+  it("closes on a retrieval answer describing a replacement nobody asked for", function* () {
+    // The contradiction is settled where the answer arrives, not by a caller
+    // noticing afterwards. Two sides that disagree about which replacement was
+    // performed have no shared state left to continue from.
+    const transport = wire(() => ({
+      outcome: "performed",
+      value: {
+        retrieval: {
+          metadata: { locator: "something else entirely" },
+          revision: 1,
+          updatedAt: "2026-09-04T00:00:01.000Z",
+        },
+      },
+    }));
+    let outcome: unknown;
+    yield* scoped(function* () {
+      const connection = yield* useOwnerConnection(transport.socket);
+      const link = cloudflareRunLink(
+        connection,
+        cloudflareReadLink(connection, ids(), RUN_ID),
+        ids(),
+        RUN_ID,
+      );
+      outcome = yield* link.replaceRetrieval(ROOT_ID, '{"locator":"what was asked"}');
+    });
+    expect((outcome as { ok: boolean }).ok).toBe(false);
+    expect(transport.closes).toBe(1);
+  });
+
+  it("reports the schema version the owner actually read", function* () {
+    // A version this build cannot open is the one fact the refusal exists to
+    // carry. Reporting a placeholder would state something the owner never
+    // said, and a host deciding whether to upgrade would act on it.
+    const transport = wire(() => ({
+      outcome: "refused",
+      refusal: "storage:unsupported-version-v7",
+    }));
+    let outcome: unknown;
+    yield* scoped(function* () {
+      const connection = yield* useOwnerConnection(transport.socket);
+      const link = cloudflareRunLink(
+        connection,
+        cloudflareReadLink(connection, ids(), RUN_ID),
+        ids(),
+        RUN_ID,
+      );
+      outcome = yield* link.readExecutions();
+    });
+    const failed = outcome as { ok: boolean; error: Error };
+    expect(failed.ok).toBe(false);
+    expect(failed.error).toEqual(expect.any(WorkflowSchemaVersionError));
+    const version = failed.error as WorkflowSchemaVersionError;
+    expect([version.stored, version.supported]).toEqual([7, SCHEMA_VERSION]);
   });
 
   it("closes when content bytes disagree with the requested identity", function* () {

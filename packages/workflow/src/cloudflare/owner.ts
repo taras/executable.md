@@ -91,6 +91,13 @@ export function refusalOf(error: unknown): string {
     return `command:${error.refusal}`;
   }
   if (error instanceof WorkflowObjectStorageError) {
+    if (error.failure.kind === "unsupported-version") {
+      // The version travels in the category rather than beside it, because the
+      // answer envelope carries a refusal and nothing else. It is the one fact
+      // a host needs to decide whether this build may open the store, and a
+      // public error that guessed it would state something untrue.
+      return `storage:unsupported-version-v${error.failure.schemaVersion}`;
+    }
     return `storage:${error.failure.kind}`;
   }
   if (error instanceof WorkflowRecordMalformedError) {

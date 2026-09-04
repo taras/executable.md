@@ -49,6 +49,7 @@ import type {
   WorkflowRunRecord,
 } from "../storage/record.ts";
 import { createTransactionGate, type OwnerLink, transactRemotely } from "./collector.ts";
+import { OwnerLinkError } from "./client.ts";
 import type { EnlistWorkspace } from "./collector.ts";
 import type { RemoteFrontierSnapshot } from "./read.ts";
 
@@ -140,6 +141,13 @@ export function* activeWorkspaceRoute(
  * string nobody can act on.
  */
 function failure(error: unknown): Error {
+  if (error instanceof OwnerLinkError && error.refusal === "too-large") {
+    // The channel measured the whole request and never sent it. To a caller
+    // that is not a lost connection, it is a request too large to make.
+    return new WorkflowRequestError(
+      "this request is larger than one message may carry, so it was not sent.",
+    );
+  }
   return error instanceof Error ? error : new WorkflowTransactionError(String(error));
 }
 
@@ -330,14 +338,6 @@ export function useRemoteRunDatabase(
         } catch (error) {
           return Err(failure(error));
         }
-        if (encoded !== null && new TextEncoder().encode(encoded).length > MAX_RETRIEVAL_BYTES) {
-          return Err(
-            new WorkflowRequestError(
-              "this retrieval metadata is larger than one message may carry, so it was not sent.",
-            ),
-          );
-        }
-
         const replaced = yield* turn(function* () {
           const snapshot = yield* link.frontierSnapshot();
           return yield* link.replaceRetrieval(snapshot.workspaceRootId, encoded);
@@ -374,9 +374,6 @@ export function useRemoteRunDatabase(
     yield* provide(handle);
   });
 }
-
-/** The most bytes one canonical retrieval value may carry. */
-const MAX_RETRIEVAL_BYTES = 8 * 1024 * 1024;
 
 /** How a malformed retrieval value is reported, before anything is sent. */
 function retrievalFailure(reason: string, path: string): Error {

@@ -24,6 +24,15 @@
 
 import { ensure, type Operation, resource, withResolvers } from "effection";
 
+/**
+ * The most bytes one message on this connection may carry.
+ *
+ * The bound is the whole message as it crosses, in both directions. Measuring
+ * one member of a request instead would let a request that clears the check
+ * still be too large once its correlation and framing are added.
+ */
+export const MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
+
 /** Why the connection itself could not carry a request. */
 export type LinkRefusal =
   | "closed"
@@ -309,6 +318,13 @@ export function useOwnerConnection(socket: OwnerSocket): Operation<OwnerConnecti
         if (waiting.has(id) || settled.has(id)) {
           throw new OwnerLinkError("duplicate-answer");
         }
+        // Exactly what would be written, correlation and framing included, and
+        // measured before this request is registered as outstanding. A request
+        // too large to carry never becomes one the caller is waiting on.
+        const raw = JSON.stringify({ ...command, id });
+        if (new TextEncoder().encode(raw).length > MAX_MESSAGE_BYTES) {
+          throw new OwnerLinkError("too-large");
+        }
         const settle = withResolvers<OwnerAnswer<T>>();
         waiting.set(id, {
           deliver(answer: RawAnswer): boolean {
@@ -336,7 +352,7 @@ export function useOwnerConnection(socket: OwnerSocket): Operation<OwnerConnecti
           },
         });
         try {
-          socket.send(JSON.stringify({ ...command, id }));
+          socket.send(raw);
         } catch {
           // The socket refused the write. This request never left, and the
           // connection cannot be trusted to carry the next one either.

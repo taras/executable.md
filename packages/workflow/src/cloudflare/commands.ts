@@ -12,8 +12,10 @@ import {
   type WorktreeRecord,
 } from "../composition/records.ts";
 import { type AgentSessionRecord, parseAgentSessionRecord } from "../storage/agent-session.ts";
+import { MAX_MESSAGE_BYTES } from "../remote/client.ts";
 
-export const MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
+export { MAX_MESSAGE_BYTES };
+
 export const MAX_CONTENT_BYTES = 1024 * 1024;
 export const MAX_STAGED_BYTES = 2 * 1024 * 1024;
 export const MAX_COMMANDS = 256;
@@ -24,6 +26,19 @@ export const JOURNAL_PAGE_BYTES = 512 * 1024;
 export const EXECUTION_PAGE_ENTRIES = 128;
 /** The most serialized bytes of retained execution rows one page carries. */
 export const EXECUTION_PAGE_BYTES = 512 * 1024;
+
+/**
+ * How both ends measure one execution page.
+ *
+ * One function rather than two similar sums: the owner decides what fits and
+ * the runner checks it, and if they measured different things an honest page
+ * near the bound would be sent by one and refused by the other. What is
+ * measured is the exact `rows` member as it crosses, wrappers and punctuation
+ * included, because that is what the bound is about.
+ */
+export function executionPageBytes(rows: readonly unknown[]): number {
+  return new TextEncoder().encode(JSON.stringify(rows)).length;
+}
 /** The most content identities one proposal may name. */
 export const MAX_PROPOSED_PIECES = 8192;
 /** The most retained mapping changes one proposal may carry. */

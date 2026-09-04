@@ -362,6 +362,18 @@ export class ExecutorObject extends WorkflowOwnerObject {
     );
   }
 
+  /** Stop one document execution, as the matching transition would. */
+  stopExecution(executionId: string, stoppedAt: string, status: string, code?: string): void {
+    this.ctx.storage.sql.exec(
+      "UPDATE document_executions SET stopped_at = ?, stop_status = ?, stop_reason_kind = ?, stop_reason_code = ? WHERE execution_id = ?",
+      stoppedAt,
+      status,
+      code === undefined ? null : "host",
+      code ?? null,
+      executionId,
+    );
+  }
+
   /** What the retrieval row holds right now. */
   retrieval(): Record<string, unknown> | null {
     const row = this.ctx.storage.sql

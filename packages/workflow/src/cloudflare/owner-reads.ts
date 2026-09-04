@@ -27,6 +27,7 @@
 
 import { parseDurableEvent } from "@executablemd/durable-streams";
 import { readDocumentExecution, readRetrieval, readRunRecord, type Row } from "../sqlite/rows.ts";
+import type { DocumentExecutionRecord } from "../storage/record.ts";
 import { WorkflowRecordMalformedError } from "../storage/errors.ts";
 import {
   parseWorkspaceRootManifest,
@@ -39,6 +40,7 @@ import {
   CommandError,
   EXECUTION_PAGE_BYTES,
   EXECUTION_PAGE_ENTRIES,
+  executionPageBytes,
   JOURNAL_PAGE_BYTES,
   JOURNAL_PAGE_ENTRIES,
   MAX_CONTENT_BYTES,
@@ -474,7 +476,7 @@ export interface ExecutionsValue {
   readonly runId: string;
   readonly anchor: number | null;
   readonly after: number | null;
-  readonly rows: readonly { readonly sequence: number; readonly record: Row }[];
+  readonly rows: readonly { readonly sequence: number; readonly record: DocumentExecutionRecord }[];
   readonly done: boolean;
 }
 
@@ -520,27 +522,23 @@ export function readExecutions(
     EXECUTION_PAGE_ENTRIES + 1,
   );
 
-  const page: { sequence: number; record: Row }[] = [];
-  let encoded = 0;
+  const page: { sequence: number; record: DocumentExecutionRecord }[] = [];
   for (const row of found.slice(0, EXECUTION_PAGE_ENTRIES)) {
     const at = safeInteger(row["sequence"], "execution sequence");
-    // Parsed here as well as on the runner: a row this owner cannot read is
-    // storage damage, and sending it would make the runner report damage it
-    // cannot attribute.
-    readDocumentExecution(row);
-    const bytes = new TextEncoder().encode(JSON.stringify(row)).length;
-    if (page.length > 0 && encoded + bytes > EXECUTION_PAGE_BYTES) {
+    // The semantic record is what crosses, not the physical row. A row this
+    // owner cannot read is storage damage; sending its columns would make the
+    // runner responsible for a shape it has no business knowing.
+    const entry = { sequence: at, record: readDocumentExecution(row) };
+    const grown = [...page, entry];
+    if (executionPageBytes(grown) > EXECUTION_PAGE_BYTES) {
+      if (page.length === 0) {
+        // One record larger than a whole page: this snapshot cannot be paged,
+        // and answering with it would send what the runner must refuse.
+        throw new CommandError("too-large");
+      }
       break;
     }
-    if (bytes > EXECUTION_PAGE_BYTES) {
-      // One row larger than a whole page. The bound is the page's, not the
-      // message envelope's: a row that could never fit means this snapshot
-      // cannot be paged at all, and answering with it anyway would send
-      // something the runner is required to refuse.
-      throw new CommandError("too-large");
-    }
-    page.push({ sequence: at, record: row });
-    encoded += bytes;
+    page.push(entry);
   }
 
   const done = found.length <= page.length;

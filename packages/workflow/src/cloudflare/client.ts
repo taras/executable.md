@@ -58,11 +58,13 @@ import { decodeContentManifest } from "../workspace/content-manifest.ts";
 import {
   EXECUTION_PAGE_BYTES,
   EXECUTION_PAGE_ENTRIES,
+  executionPageBytes,
   JOURNAL_PAGE_ENTRIES,
   MAX_CONTENT_BYTES,
 } from "./commands.ts";
 import type { RemoteRunLink } from "../remote/database.ts";
 import { SCHEMA_VERSION } from "../sqlite/workflow-schema.ts";
+import { canonicalJson } from "../storage/record.ts";
 import {
   WorkflowDatabaseCorruptError,
   WorkflowDatabaseFormatError,
@@ -92,7 +94,7 @@ export type PrivateRefusal =
   | "command:stale-journal"
   | "command:mapping-conflict"
   | "storage:foreign"
-  | "storage:unsupported-version"
+  | `storage:unsupported-version-v${number}`
   | "storage:corrupt";
 
 export class CloudflareOwnerRefusalError extends Error {
@@ -168,11 +170,17 @@ function privateRefusal(value: string): PrivateRefusal {
     case "command:stale-journal":
     case "command:mapping-conflict":
     case "storage:foreign":
-    case "storage:unsupported-version":
     case "storage:corrupt":
       return value;
-    default:
+    default: {
+      // The one category that carries a value: the schema version the owner
+      // actually read, bounded and parsed rather than guessed.
+      const unsupported = /^storage:unsupported-version-v(\d{1,6})$/.exec(value);
+      if (unsupported !== null) {
+        return `storage:unsupported-version-v${Number(unsupported[1])}`;
+      }
       return fail("it named an unknown refusal category");
+    }
   }
 }
 
@@ -658,6 +666,13 @@ export function cloudflareRunLink(
             if (parsed === undefined || metadata === null) {
               return fail("a retrieval answer disagreed with the replacement it answered");
             }
+            // Compared here, where the answer arrives. An owner that performed
+            // a different replacement than the one asked for is a channel the
+            // two sides disagree on, so it fails closed rather than handing
+            // back a value the caller would have to notice was wrong.
+            if (canonicalJson(parsed.metadata) !== metadata) {
+              return fail("a retrieval answer named metadata the request did not ask for");
+            }
             return parsed;
           },
           privateRefusal,
@@ -764,7 +779,7 @@ function* askPage(
       if (!Array.isArray(offered) || offered.length > EXECUTION_PAGE_ENTRIES) {
         return fail("an execution page was not one bounded page");
       }
-      if (new TextEncoder().encode(JSON.stringify(offered)).length > EXECUTION_PAGE_BYTES) {
+      if (executionPageBytes(offered) > EXECUTION_PAGE_BYTES) {
         // The page bound, not the message envelope. A page that ignored it
         // would make the number of requests depend on how large one row is.
         return fail("an execution page carried more than one page of rows");
@@ -820,8 +835,9 @@ function storageFailure(refusal: PrivateRefusal): WorkflowStorageError {
   if (refusal === "storage:foreign") {
     return new WorkflowDatabaseFormatError(REMOTE_STORE, "it belongs to something else");
   }
-  if (refusal === "storage:unsupported-version") {
-    return new WorkflowSchemaVersionError(REMOTE_STORE, 0, SCHEMA_VERSION);
+  const unsupported = /^storage:unsupported-version-v(\d{1,6})$/.exec(refusal);
+  if (unsupported !== null) {
+    return new WorkflowSchemaVersionError(REMOTE_STORE, Number(unsupported[1]), SCHEMA_VERSION);
   }
   if (refusal === "storage:corrupt") {
     return new WorkflowDatabaseCorruptError(REMOTE_STORE, "its retained records do not agree");

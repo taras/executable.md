@@ -15,6 +15,7 @@ import {
   type OwnerSocket,
   OwnerLinkError,
   type SocketListener,
+  MAX_MESSAGE_BYTES,
   useOwnerConnection,
 } from "../src/remote/client.ts";
 
@@ -467,6 +468,42 @@ describe("a connection to a run's owner", () => {
     expect(wire.sent).toEqual([]);
     expect(wire.closes).toBe(1);
     expect(wire.listening).toBe(0);
+  });
+
+  it("refuses a request larger than one message, before it is outstanding", function* () {
+    const wire = fakeSocket();
+    let raised: unknown;
+    let reused: unknown;
+    yield* scoped(function* () {
+      const owner = yield* useOwnerConnection(wire.socket);
+      yield* sleep(0);
+      try {
+        // Under the bound on its own; over it once the correlation id and the
+        // framing around it are counted. Measuring one member instead would
+        // let exactly this request through.
+        yield* owner.ask(
+          "over",
+          { command: "retrieval", metadata: "m".repeat(MAX_MESSAGE_BYTES - 40) },
+          readString,
+        );
+      } catch (error) {
+        raised = error;
+      }
+      // The id never became outstanding, so it is still usable. A request that
+      // was registered and then refused would fail here as a duplicate.
+      try {
+        yield* spawn(function* () {
+          yield* owner.ask("over", { command: "frontier" }, readString);
+        });
+        yield* sleep(0);
+      } catch (error) {
+        reused = error;
+      }
+    });
+    expect(refusalOf(raised)).toBe("too-large");
+    expect(reused).toBe(undefined);
+    // Exactly one message left: the small one.
+    expect(wire.sent).toEqual([{ id: "over", command: "frontier" }]);
   });
 
   it("refuses to send a correlation id it would refuse to read", function* () {

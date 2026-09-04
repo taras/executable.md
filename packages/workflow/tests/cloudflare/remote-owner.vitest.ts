@@ -32,8 +32,16 @@ import {
   VALID_CLAIMS,
 } from "./support/executor-object.ts";
 import { generateKeys, signToken, type TestKeys } from "./support/tokens.ts";
+import { call, run } from "effection";
+import {
+  type OwnerSocket,
+  type SocketListener,
+  useOwnerConnection,
+} from "../../src/remote/client.ts";
+import { cloudflareReadLink, cloudflareRunLink } from "../../src/cloudflare/client.ts";
 
 let unique = 0;
+const NEW_START = "2026-02-02T00:00:00.000Z";
 const NOW = 1_800_000_000;
 let keys: TestKeys;
 
@@ -118,6 +126,32 @@ function askFrame(
   });
 }
 
+/**
+ * The platform socket, as the runner's client needs it.
+ *
+ * A host binds its own socket to this interface; the runtime's event types are
+ * wider than the four members the client uses, so the binding is written out
+ * rather than asserted.
+ */
+function ownerSocket(socket: WebSocket): OwnerSocket {
+  const listeners = new Map<SocketListener, EventListener>();
+  return {
+    send: (data) => socket.send(data),
+    close: () => socket.close(),
+    addEventListener(type, listener) {
+      const bound: EventListener = (event) => listener(event as { data?: unknown });
+      listeners.set(listener, bound);
+      socket.addEventListener(type, bound);
+    },
+    removeEventListener(type, listener) {
+      const bound = listeners.get(listener);
+      if (bound !== undefined) {
+        socket.removeEventListener(type, bound);
+      }
+    },
+  };
+}
+
 function record(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("expected an object answer");
@@ -157,7 +191,7 @@ describe("the remote owner protocol", () => {
           owner.initialize();
           owner.rewriteMarker(0x584d4431, 2);
         },
-        "storage:unsupported-version",
+        "storage:unsupported-version-v2",
       ],
       [
         "damaged",
@@ -266,6 +300,82 @@ describe("the remote owner protocol", () => {
       expect.objectContaining({ eventId: "event-128", previousEventId: "event-127" }),
     ]);
     expect(second["done"]).toBe(true);
+  });
+
+  it("reads a whole retained history back through the runner's own client", async () => {
+    // The one test where the owner's answers and the runner's parser meet. Each
+    // half was already proven against a hand-built counterpart, which is
+    // exactly why a disagreement between them could survive: the owner may
+    // answer a shape no runner accepts and both halves still pass. This
+    // composes the real pages through the real client.
+    const stub = executor();
+    await on(stub, (owner) => owner.initialize());
+    for (let index = 0; index < 129; index += 1) {
+      const id = `execution-${String(index).padStart(3, "0")}`;
+      await on(stub, (owner) => owner.beginExecution(id, `2026-01-01T00:00:0${index % 10}.000Z`));
+    }
+    // Two stopped rows, so the optional members cross as well as the required
+    // ones. A record that only ever travelled in its shortest form would not
+    // prove the parser accepts the shape the owner actually builds.
+    await on(stub, (owner) =>
+      owner.stopExecution("execution-001", "2026-01-01T01:00:00.000Z", "completed"),
+    );
+    await on(stub, (owner) =>
+      owner.stopExecution("execution-002", "2026-01-01T02:00:00.000Z", "failed", "it-stopped"),
+    );
+
+    const socket = await connect(stub);
+    let identifier = 0;
+    const outcome = await run(function* () {
+      const connection = yield* useOwnerConnection(ownerSocket(socket));
+      const ids = () => `read-${(identifier += 1)}`;
+      const link = cloudflareRunLink(
+        connection,
+        cloudflareReadLink(connection, ids, RUN_ID),
+        ids,
+        RUN_ID,
+      );
+      const first = yield* link.readExecutions();
+      // Appended after the snapshot was anchored, and while the read is still
+      // paging: the anchor is what decides, not when the rows were written.
+      yield* call(() => on(stub, (owner) => owner.beginExecution("execution-later", NEW_START)));
+      return { first, second: yield* link.readExecutions() };
+    });
+
+    if (!outcome.first.ok) {
+      throw outcome.first.error;
+    }
+    const records = outcome.first.value;
+    expect(records).toHaveLength(129);
+    expect(records.map((held) => held.executionId)).toEqual(
+      Array.from({ length: 129 }, (_, index) => `execution-${String(index).padStart(3, "0")}`),
+    );
+    expect(records[0]).toEqual({
+      executionId: "execution-000",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+    expect(records[1]).toEqual({
+      executionId: "execution-001",
+      startedAt: "2026-01-01T00:00:01.000Z",
+      stoppedAt: "2026-01-01T01:00:00.000Z",
+      stopStatus: "completed",
+    });
+    expect(records[2]).toEqual({
+      executionId: "execution-002",
+      startedAt: "2026-01-01T00:00:02.000Z",
+      stoppedAt: "2026-01-01T02:00:00.000Z",
+      stopStatus: "failed",
+      stopReason: { kind: "host", code: "it-stopped" },
+    });
+    // Nothing physical crossed: the runner never sees a column name.
+    expect(Object.keys(records[0])).toEqual(["executionId", "startedAt"]);
+
+    if (!outcome.second.ok) {
+      throw outcome.second.error;
+    }
+    // The later row is outside the first anchored snapshot and inside the next.
+    expect(outcome.second.value).toHaveLength(130);
+    expect(outcome.second.value[129]?.executionId).toBe("execution-later");
   });
 
   it("returns only content referenced by one validated root", async () => {
