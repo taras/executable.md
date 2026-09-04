@@ -1,0 +1,2807 @@
+{
+  "environment": {
+    "commit": "650510b553111c9a46a8205f09fbe0ff2c797a9f",
+    "os": "darwin 25.5.0",
+    "arch": "arm64",
+    "tmux": "tmux 3.6a",
+    "deno": "deno 2.9.5 (stable, release, aarch64-apple-darwin)",
+    "date": "2026-09-02T14:34:03.667Z",
+    "command": "deno task proof:tmux-pane-workers --inner --out /tmp/xmd-proof-ev2 --runs 20"
+  },
+  "checks": [
+    {
+      "name": "layout-geometry",
+      "ok": true,
+      "claims": [
+        {
+          "claim": "4@2 80x24: row-major placement",
+          "ok": true,
+          "observed": []
+        },
+        {
+          "claim": "4@2 80x24: 2 rows",
+          "ok": true,
+          "observed": 2
+        },
+        {
+          "claim": "4@2 200x60: row-major placement",
+          "ok": true,
+          "observed": []
+        },
+        {
+          "claim": "4@2 200x60: 2 rows",
+          "ok": true,
+          "observed": 2
+        },
+        {
+          "claim": "5@2 80x24: row-major placement",
+          "ok": true,
+          "observed": []
+        },
+        {
+          "claim": "5@2 80x24: 3 rows",
+          "ok": true,
+          "observed": 3
+        },
+        {
+          "claim": "5@2 200x60: row-major placement",
+          "ok": true,
+          "observed": []
+        },
+        {
+          "claim": "5@2 200x60: 3 rows",
+          "ok": true,
+          "observed": 3
+        },
+        {
+          "claim": "8@3 80x24: row-major placement",
+          "ok": true,
+          "observed": []
+        },
+        {
+          "claim": "8@3 80x24: 3 rows",
+          "ok": true,
+          "observed": 3
+        },
+        {
+          "claim": "8@3 200x60: row-major placement",
+          "ok": true,
+          "observed": []
+        },
+        {
+          "claim": "8@3 200x60: 3 rows",
+          "ok": true,
+          "observed": 3
+        }
+      ],
+      "facts": {
+        "observations": {
+          "4@2 80x24": {
+            "cells": [
+              {
+                "ordinal": 0,
+                "left": 0,
+                "top": 1,
+                "width": 40,
+                "height": 11
+              },
+              {
+                "ordinal": 1,
+                "left": 41,
+                "top": 1,
+                "width": 39,
+                "height": 11
+              },
+              {
+                "ordinal": 2,
+                "left": 0,
+                "top": 13,
+                "width": 40,
+                "height": 11
+              },
+              {
+                "ordinal": 3,
+                "left": 41,
+                "top": 13,
+                "width": 39,
+                "height": 11
+              }
+            ],
+            "problems": []
+          },
+          "4@2 80x24 tiled": {
+            "columns": 2,
+            "problems": []
+          },
+          "4@2 200x60": {
+            "cells": [
+              {
+                "ordinal": 0,
+                "left": 0,
+                "top": 1,
+                "width": 100,
+                "height": 29
+              },
+              {
+                "ordinal": 1,
+                "left": 101,
+                "top": 1,
+                "width": 99,
+                "height": 29
+              },
+              {
+                "ordinal": 2,
+                "left": 0,
+                "top": 31,
+                "width": 100,
+                "height": 29
+              },
+              {
+                "ordinal": 3,
+                "left": 101,
+                "top": 31,
+                "width": 99,
+                "height": 29
+              }
+            ],
+            "problems": []
+          },
+          "4@2 200x60 tiled": {
+            "columns": 2,
+            "problems": []
+          },
+          "5@2 80x24": {
+            "cells": [
+              {
+                "ordinal": 0,
+                "left": 0,
+                "top": 1,
+                "width": 40,
+                "height": 7
+              },
+              {
+                "ordinal": 1,
+                "left": 41,
+                "top": 1,
+                "width": 39,
+                "height": 7
+              },
+              {
+                "ordinal": 2,
+                "left": 0,
+                "top": 9,
+                "width": 40,
+                "height": 7
+              },
+              {
+                "ordinal": 3,
+                "left": 41,
+                "top": 9,
+                "width": 39,
+                "height": 7
+              },
+              {
+                "ordinal": 4,
+                "left": 0,
+                "top": 17,
+                "width": 80,
+                "height": 7
+              }
+            ],
+            "problems": []
+          },
+          "5@2 80x24 tiled": {
+            "columns": 2,
+            "problems": []
+          },
+          "5@2 200x60": {
+            "cells": [
+              {
+                "ordinal": 0,
+                "left": 0,
+                "top": 1,
+                "width": 100,
+                "height": 19
+              },
+              {
+                "ordinal": 1,
+                "left": 101,
+                "top": 1,
+                "width": 99,
+                "height": 19
+              },
+              {
+                "ordinal": 2,
+                "left": 0,
+                "top": 21,
+                "width": 100,
+                "height": 19
+              },
+              {
+                "ordinal": 3,
+                "left": 101,
+                "top": 21,
+                "width": 99,
+                "height": 19
+              },
+              {
+                "ordinal": 4,
+                "left": 0,
+                "top": 41,
+                "width": 200,
+                "height": 19
+              }
+            ],
+            "problems": []
+          },
+          "5@2 200x60 tiled": {
+            "columns": 2,
+            "problems": []
+          },
+          "8@3 80x24": {
+            "cells": [
+              {
+                "ordinal": 0,
+                "left": 0,
+                "top": 1,
+                "width": 26,
+                "height": 7
+              },
+              {
+                "ordinal": 1,
+                "left": 27,
+                "top": 1,
+                "width": 26,
+                "height": 7
+              },
+              {
+                "ordinal": 2,
+                "left": 54,
+                "top": 1,
+                "width": 26,
+                "height": 7
+              },
+              {
+                "ordinal": 3,
+                "left": 0,
+                "top": 9,
+                "width": 26,
+                "height": 7
+              },
+              {
+                "ordinal": 4,
+                "left": 27,
+                "top": 9,
+                "width": 26,
+                "height": 7
+              },
+              {
+                "ordinal": 5,
+                "left": 54,
+                "top": 9,
+                "width": 26,
+                "height": 7
+              },
+              {
+                "ordinal": 6,
+                "left": 0,
+                "top": 17,
+                "width": 40,
+                "height": 7
+              },
+              {
+                "ordinal": 7,
+                "left": 41,
+                "top": 17,
+                "width": 39,
+                "height": 7
+              }
+            ],
+            "problems": []
+          },
+          "8@3 80x24 tiled": {
+            "columns": 3,
+            "problems": []
+          },
+          "8@3 200x60": {
+            "cells": [
+              {
+                "ordinal": 0,
+                "left": 0,
+                "top": 1,
+                "width": 66,
+                "height": 19
+              },
+              {
+                "ordinal": 1,
+                "left": 67,
+                "top": 1,
+                "width": 66,
+                "height": 19
+              },
+              {
+                "ordinal": 2,
+                "left": 134,
+                "top": 1,
+                "width": 66,
+                "height": 19
+              },
+              {
+                "ordinal": 3,
+                "left": 0,
+                "top": 21,
+                "width": 66,
+                "height": 19
+              },
+              {
+                "ordinal": 4,
+                "left": 67,
+                "top": 21,
+                "width": 66,
+                "height": 19
+              },
+              {
+                "ordinal": 5,
+                "left": 134,
+                "top": 21,
+                "width": 66,
+                "height": 19
+              },
+              {
+                "ordinal": 6,
+                "left": 0,
+                "top": 41,
+                "width": 100,
+                "height": 19
+              },
+              {
+                "ordinal": 7,
+                "left": 101,
+                "top": 41,
+                "width": 99,
+                "height": 19
+              }
+            ],
+            "problems": []
+          },
+          "8@3 200x60 tiled": {
+            "columns": 3,
+            "problems": []
+          }
+        }
+      },
+      "notes": [
+        "tiled column counts are recorded beside each shape; they are tmux's choice, not the author's"
+      ],
+      "durationMs": 5336
+    },
+    {
+      "name": "readiness-boundary",
+      "ok": true,
+      "claims": [
+        {
+          "claim": "tmux alone: a missing executable still yields a pane pid",
+          "ok": true,
+          "observed": "2 pid=16425 dead=1 status=1 cmd=/definitely/missing x"
+        },
+        {
+          "claim": "missing executable: startup-failed",
+          "ok": true,
+          "observed": {
+            "type": "startup-failed",
+            "id": "missing",
+            "reason": "the interactive child could not be started (ENOENT)"
+          }
+        },
+        {
+          "claim": "missing executable: never ready",
+          "ok": true
+        },
+        {
+          "claim": "exit 1: ready acknowledged",
+          "ok": true,
+          "observed": {
+            "type": "ready",
+            "id": "exit1",
+            "pid": 16786
+          }
+        },
+        {
+          "claim": "exit 1: then exit code 1",
+          "ok": true,
+          "observed": {
+            "type": "exited",
+            "id": "exit1",
+            "exitCode": 1,
+            "proof": {
+              "method": "exited",
+              "childPid": 16786,
+              "childGone": true,
+              "descendants": [],
+              "survivors": [],
+              "terminalHolders": []
+            }
+          }
+        },
+        {
+          "claim": "exit 1: ready precedes exited",
+          "ok": true,
+          "observed": [
+            "startup-failed",
+            "ready",
+            "exited"
+          ]
+        },
+        {
+          "claim": "the pane and its worker survived both launches",
+          "ok": true,
+          "observed": "%0 16582 0"
+        },
+        {
+          "claim": "server stopped",
+          "ok": true,
+          "observed": {
+            "serverGone": true,
+            "unreachable": true,
+            "socketFileRemains": true
+          }
+        }
+      ],
+      "facts": {
+        "tmuxAlone": [
+          "0 pid=16398 dead=0 status= cmd=sleep 60",
+          "1 pid=16444 dead=1 status=1 cmd=/bin/sh -c \"exit 1\"",
+          "2 pid=16425 dead=1 status=1 cmd=/definitely/missing x"
+        ]
+      },
+      "notes": [],
+      "durationMs": 2276
+    },
+    {
+      "name": "journey",
+      "ok": true,
+      "claims": [
+        {
+          "claim": "pane 0: worker on the pane terminal",
+          "ok": true,
+          "observed": {
+            "hello": {
+              "type": "hello",
+              "ordinal": 0,
+              "token": "<redacted>",
+              "pid": 17190,
+              "ppid": 17188,
+              "pgid": 17190,
+              "tty": "ttys009",
+              "isatty": [
+                true,
+                true,
+                true
+              ]
+            },
+            "pane": {
+              "ordinal": 0,
+              "id": "%0",
+              "tty": "/dev/ttys009",
+              "pid": 17190,
+              "cell": {
+                "ordinal": 0,
+                "left": 0,
+                "top": 1,
+                "width": 80,
+                "height": 23
+              }
+            }
+          }
+        },
+        {
+          "claim": "pane 0: worker stdin/stdout/stderr are terminals",
+          "ok": true
+        },
+        {
+          "claim": "pane 1: worker on the pane terminal",
+          "ok": true,
+          "observed": {
+            "hello": {
+              "type": "hello",
+              "ordinal": 1,
+              "token": "<redacted>",
+              "pid": 17262,
+              "ppid": 17188,
+              "pgid": 17262,
+              "tty": "ttys012",
+              "isatty": [
+                true,
+                true,
+                true
+              ]
+            },
+            "pane": {
+              "ordinal": 1,
+              "id": "%1",
+              "tty": "/dev/ttys012",
+              "pid": 17262,
+              "cell": {
+                "ordinal": 1,
+                "left": 81,
+                "top": 1,
+                "width": 79,
+                "height": 23
+              }
+            }
+          }
+        },
+        {
+          "claim": "pane 1: worker stdin/stdout/stderr are terminals",
+          "ok": true
+        },
+        {
+          "claim": "pane 2: worker on the pane terminal",
+          "ok": true,
+          "observed": {
+            "hello": {
+              "type": "hello",
+              "ordinal": 2,
+              "token": "<redacted>",
+              "pid": 17271,
+              "ppid": 17188,
+              "pgid": 17271,
+              "tty": "ttys020",
+              "isatty": [
+                true,
+                true,
+                true
+              ]
+            },
+            "pane": {
+              "ordinal": 2,
+              "id": "%2",
+              "tty": "/dev/ttys020",
+              "pid": 17271,
+              "cell": {
+                "ordinal": 2,
+                "left": 0,
+                "top": 25,
+                "width": 80,
+                "height": 23
+              }
+            }
+          }
+        },
+        {
+          "claim": "pane 2: worker stdin/stdout/stderr are terminals",
+          "ok": true
+        },
+        {
+          "claim": "pane 3: worker on the pane terminal",
+          "ok": true,
+          "observed": {
+            "hello": {
+              "type": "hello",
+              "ordinal": 3,
+              "token": "<redacted>",
+              "pid": 17293,
+              "ppid": 17188,
+              "pgid": 17293,
+              "tty": "ttys021",
+              "isatty": [
+                true,
+                true,
+                true
+              ]
+            },
+            "pane": {
+              "ordinal": 3,
+              "id": "%3",
+              "tty": "/dev/ttys021",
+              "pid": 17293,
+              "cell": {
+                "ordinal": 3,
+                "left": 81,
+                "top": 25,
+                "width": 79,
+                "height": 23
+              }
+            }
+          }
+        },
+        {
+          "claim": "pane 3: worker stdin/stdout/stderr are terminals",
+          "ok": true
+        },
+        {
+          "claim": "prelude displayed before any child",
+          "ok": true
+        },
+        {
+          "claim": "all four panes ready before attach",
+          "ok": true
+        },
+        {
+          "claim": "visible client attached after readiness",
+          "ok": true,
+          "observed": [
+            {
+              "kind": "other",
+              "line": "%begin 1788359651 330 0"
+            },
+            {
+              "kind": "other",
+              "line": "%end 1788359651 330 0"
+            },
+            {
+              "kind": "other",
+              "line": "%session-changed $0 grid"
+            },
+            {
+              "kind": "client-attached",
+              "client": "/dev/ttys005"
+            }
+          ]
+        },
+        {
+          "claim": "two children received input concurrently",
+          "ok": true
+        },
+        {
+          "claim": "argv bytes unchanged through IPC",
+          "ok": true,
+          "observed": [
+            "a b",
+            "\"quoted\"",
+            "$HOME",
+            "x;y",
+            "`z`",
+            "new\nline",
+            "it's",
+            "#{pane_id}"
+          ]
+        },
+        {
+          "claim": "child A on pane 0's terminal, in the worker's process group",
+          "ok": true,
+          "observed": {
+            "tty": "ttys009",
+            "pgid": 17190,
+            "isatty": [
+              true,
+              true,
+              true
+            ]
+          }
+        },
+        {
+          "claim": "prelude text was not fed to the child as input",
+          "ok": true,
+          "observed": [
+            "hello from zero"
+          ]
+        },
+        {
+          "claim": "pane 0 shows prelude, banner and echo",
+          "ok": true,
+          "observed": "Prelude: this pane belongs to the Implementor.\nhello from zero\nchild[plain] pid=17409 pgid=17190 tty=ttys009 isatty=true,true,true argv=[\"a b\",\"\\\"quoted\\\"\",\"$HOME\",\"x;y\",\"`z`\",\"new\\nline\",\"it's\",\"#{pane_id}\"]\n> hello from zero"
+        },
+        {
+          "claim": "a second concurrent launch on pane 0 is refused",
+          "ok": true,
+          "observed": {
+            "type": "refused",
+            "id": "A-dup",
+            "reason": "busy"
+          }
+        },
+        {
+          "claim": "shell took the foreground in a process group of its own",
+          "ok": true,
+          "observed": {
+            "shellRow": {
+              "pid": 17411,
+              "ppid": 17293,
+              "pgid": 17411,
+              "tty": "ttys021",
+              "tpgid": 17411,
+              "command": "/bin/zsh"
+            },
+            "workerRow": {
+              "pid": 17293,
+              "ppid": 17188,
+              "pgid": 17293,
+              "tty": "ttys021",
+              "tpgid": 17411,
+              "command": "deno run --allow-all /private/tmp/xmd-726-pane-workers/scripts/proofs/tmux-pane-workers/worker.ts 3 /var/folders/6_/pc0hwbg54xsgfstv9nwq5qpc0000gn/T/xtg-BXg4aN"
+            }
+          }
+        },
+        {
+          "claim": "shell put its background job in a process group of its own",
+          "ok": true,
+          "observed": {
+            "sleeper": {
+              "pid": 18202,
+              "ppid": 17411,
+              "pgid": 18202,
+              "tty": "ttys021",
+              "tpgid": 17411,
+              "command": "sleep 300"
+            },
+            "shellRow": {
+              "pid": 17411,
+              "ppid": 17293,
+              "pgid": 17411,
+              "tty": "ttys021",
+              "tpgid": 17411,
+              "command": "/bin/zsh"
+            }
+          }
+        },
+        {
+          "claim": "fg made the job the terminal's foreground process group",
+          "ok": true,
+          "observed": {
+            "pid": 18202,
+            "ppid": 17411,
+            "pgid": 18202,
+            "tty": "ttys021",
+            "tpgid": 18202,
+            "command": "sleep 300"
+          }
+        },
+        {
+          "claim": "^Z suspended the foreground job",
+          "ok": true,
+          "observed": [
+            "[1]  + 18202 running    sleep 300",
+            "^Z",
+            "[1]  + 18202 suspended  sleep 300"
+          ]
+        },
+        {
+          "claim": "^C interrupted child B",
+          "ok": true,
+          "observed": {
+            "type": "exited",
+            "id": "B",
+            "signal": "SIGINT",
+            "proof": {
+              "method": "exited",
+              "childPid": 17408,
+              "childGone": true,
+              "descendants": [],
+              "survivors": [],
+              "terminalHolders": []
+            }
+          }
+        },
+        {
+          "claim": "worker 1 survived the ^C that ended its child",
+          "ok": true
+        },
+        {
+          "claim": "child A exited 3 on request",
+          "ok": true,
+          "observed": {
+            "type": "exited",
+            "id": "A",
+            "exitCode": 3,
+            "proof": {
+              "method": "exited",
+              "childPid": 17409,
+              "childGone": true,
+              "descendants": [],
+              "survivors": [],
+              "terminalHolders": []
+            }
+          }
+        },
+        {
+          "claim": "child C still runs while A exited",
+          "ok": true
+        },
+        {
+          "claim": "second child in pane 0 on the same pane and worker",
+          "ok": true,
+          "observed": {
+            "a2": {
+              "type": "ready",
+              "id": "A2",
+              "pid": 18696
+            },
+            "paneNow": "%0 17190"
+          }
+        },
+        {
+          "claim": "second child received input",
+          "ok": true
+        },
+        {
+          "claim": "reader close observed as %client-detached",
+          "ok": true,
+          "observed": [
+            {
+              "kind": "layout-change"
+            },
+            {
+              "kind": "client-detached",
+              "client": "/dev/ttys005"
+            }
+          ]
+        },
+        {
+          "claim": "attach client exited 0 after detach",
+          "ok": true,
+          "observed": {
+            "exitCode": 0
+          }
+        },
+        {
+          "claim": "after reader close, children still run until cancelled",
+          "ok": true
+        },
+        {
+          "claim": "every cancelled child is gone",
+          "ok": true,
+          "observed": [
+            {
+              "method": "interrupted",
+              "childPid": 18696,
+              "childGone": true,
+              "descendants": [
+                {
+                  "pid": 18826,
+                  "command": "/bin/ps -axo pid=,ppid=,pgid=,tty=,tpgid=,command=",
+                  "inGroup": true,
+                  "delivery": "absent",
+                  "gone": true
+                }
+              ],
+              "survivors": [],
+              "terminalHolders": []
+            },
+            {
+              "method": "killed",
+              "childPid": 17410,
+              "childGone": true,
+              "descendants": [
+                {
+                  "pid": 17602,
+                  "command": "sleep 600",
+                  "inGroup": true,
+                  "delivery": "delivered",
+                  "gone": true
+                },
+                {
+                  "pid": 18827,
+                  "command": "/bin/ps -axo pid=,ppid=,pgid=,tty=,tpgid=,command=",
+                  "inGroup": true,
+                  "delivery": "absent",
+                  "gone": true
+                }
+              ],
+              "survivors": [],
+              "terminalHolders": []
+            },
+            {
+              "method": "killed",
+              "childPid": 17411,
+              "childGone": true,
+              "descendants": [],
+              "survivors": [],
+              "terminalHolders": []
+            }
+          ]
+        },
+        {
+          "claim": "C ignored SIGINT and was killed, with its in-group descendant",
+          "ok": true,
+          "observed": {
+            "method": "killed",
+            "cDescendant": 17602,
+            "descendants": [
+              {
+                "pid": 17602,
+                "command": "sleep 600",
+                "inGroup": true,
+                "delivery": "delivered",
+                "gone": true
+              },
+              {
+                "pid": 18827,
+                "command": "/bin/ps -axo pid=,ppid=,pgid=,tty=,tpgid=,command=",
+                "inGroup": true,
+                "delivery": "absent",
+                "gone": true
+              }
+            ],
+            "signals": [
+              "SIGINT"
+            ]
+          }
+        },
+        {
+          "claim": "every worker acknowledged shutdown with nothing left on its terminal",
+          "ok": true,
+          "observed": [
+            [],
+            [],
+            [],
+            []
+          ]
+        },
+        {
+          "claim": "workers gone",
+          "ok": true
+        },
+        {
+          "claim": "tmux server gone",
+          "ok": true,
+          "observed": {
+            "serverGone": true,
+            "unreachable": true,
+            "socketFileRemains": true
+          }
+        },
+        {
+          "claim": "all child pids gone",
+          "ok": true
+        },
+        {
+          "claim": "nothing holds a pane terminal open",
+          "ok": true,
+          "observed": {
+            "/dev/ttys009": [],
+            "/dev/ttys012": [],
+            "/dev/ttys020": [],
+            "/dev/ttys021": []
+          }
+        },
+        {
+          "claim": "control client never received pane output",
+          "ok": true,
+          "observed": 8
+        },
+        {
+          "claim": "terminal settings restored",
+          "ok": true,
+          "observed": {
+            "sttyBefore": "gfmt1:cflag=4b00:iflag=6b02:lflag=5cb:oflag=3:discard=f:dsusp=19:eof=4:eol=ff:eol2=ff:erase=7f:intr=3:kill=15:lnext=16:min=1:quit=1c:reprint=12:start=11:status=14:stop=13:susp=1a:time=0:werase=17:ispeed=9600:ospeed=9600",
+            "sttyAfter": "gfmt1:cflag=4b00:iflag=6b02:lflag=5cb:oflag=3:discard=f:dsusp=19:eof=4:eol=ff:eol2=ff:erase=7f:intr=3:kill=15:lnext=16:min=1:quit=1c:reprint=12:start=11:status=14:stop=13:susp=1a:time=0:werase=17:ispeed=9600:ospeed=9600"
+          }
+        }
+      ],
+      "facts": {
+        "panes": [
+          {
+            "ordinal": 0,
+            "id": "%0",
+            "tty": "/dev/ttys009",
+            "pid": 17190,
+            "cell": {
+              "ordinal": 0,
+              "left": 0,
+              "top": 1,
+              "width": 80,
+              "height": 23
+            }
+          },
+          {
+            "ordinal": 1,
+            "id": "%1",
+            "tty": "/dev/ttys012",
+            "pid": 17262,
+            "cell": {
+              "ordinal": 1,
+              "left": 81,
+              "top": 1,
+              "width": 79,
+              "height": 23
+            }
+          },
+          {
+            "ordinal": 2,
+            "id": "%2",
+            "tty": "/dev/ttys020",
+            "pid": 17271,
+            "cell": {
+              "ordinal": 2,
+              "left": 0,
+              "top": 25,
+              "width": 80,
+              "height": 23
+            }
+          },
+          {
+            "ordinal": 3,
+            "id": "%3",
+            "tty": "/dev/ttys021",
+            "pid": 17293,
+            "cell": {
+              "ordinal": 3,
+              "left": 81,
+              "top": 25,
+              "width": 79,
+              "height": 23
+            }
+          }
+        ],
+        "hellos": [
+          {
+            "type": "hello",
+            "ordinal": 0,
+            "token": "<redacted>",
+            "pid": 17190,
+            "ppid": 17188,
+            "pgid": 17190,
+            "tty": "ttys009",
+            "isatty": [
+              true,
+              true,
+              true
+            ]
+          },
+          {
+            "type": "hello",
+            "ordinal": 1,
+            "token": "<redacted>",
+            "pid": 17262,
+            "ppid": 17188,
+            "pgid": 17262,
+            "tty": "ttys012",
+            "isatty": [
+              true,
+              true,
+              true
+            ]
+          },
+          {
+            "type": "hello",
+            "ordinal": 2,
+            "token": "<redacted>",
+            "pid": 17271,
+            "ppid": 17188,
+            "pgid": 17271,
+            "tty": "ttys020",
+            "isatty": [
+              true,
+              true,
+              true
+            ]
+          },
+          {
+            "type": "hello",
+            "ordinal": 3,
+            "token": "<redacted>",
+            "pid": 17293,
+            "ppid": 17188,
+            "pgid": 17293,
+            "tty": "ttys021",
+            "isatty": [
+              true,
+              true,
+              true
+            ]
+          }
+        ],
+        "visibleClient": "/dev/ttys005",
+        "closeDetectMs": 48,
+        "quiescence": [
+          {
+            "method": "interrupted",
+            "childPid": 18696,
+            "childGone": true,
+            "descendants": [
+              {
+                "pid": 18826,
+                "command": "/bin/ps -axo pid=,ppid=,pgid=,tty=,tpgid=,command=",
+                "inGroup": true,
+                "delivery": "absent",
+                "gone": true
+              }
+            ],
+            "survivors": [],
+            "terminalHolders": []
+          },
+          {
+            "method": "killed",
+            "childPid": 17410,
+            "childGone": true,
+            "descendants": [
+              {
+                "pid": 17602,
+                "command": "sleep 600",
+                "inGroup": true,
+                "delivery": "delivered",
+                "gone": true
+              },
+              {
+                "pid": 18827,
+                "command": "/bin/ps -axo pid=,ppid=,pgid=,tty=,tpgid=,command=",
+                "inGroup": true,
+                "delivery": "absent",
+                "gone": true
+              }
+            ],
+            "survivors": [],
+            "terminalHolders": []
+          },
+          {
+            "method": "killed",
+            "childPid": 17411,
+            "childGone": true,
+            "descendants": [],
+            "survivors": [],
+            "terminalHolders": []
+          }
+        ],
+        "controlLog": [
+          "%begin 1788359651 330 0",
+          "%end 1788359651 330 0",
+          "%session-changed $0 grid",
+          "%client-session-changed /dev/ttys005 $0 grid",
+          "%layout-change @0 b1a4,200x56,0,0[200x28,0,0{100x28,0,0,0,99x28,101,0,1},200x27,0,29{100x27,0,29,2,99x27,101,29,3}] b1a4,200x56,0,0[200x28,0,0{100x28,0,0,0,99x28,101,0,1},200x27,0,29{100x27,0,29,2,99x27,101,29,3}] *",
+          "%client-detached /dev/ttys005",
+          "%sessions-changed",
+          "%exit"
+        ]
+      },
+      "notes": [],
+      "durationMs": 8083
+    },
+    {
+      "name": "startup-failure-atomic",
+      "ok": true,
+      "claims": [
+        {
+          "claim": "pane 2 reported startup-failed",
+          "ok": true,
+          "observed": {
+            "type": "startup-failed",
+            "id": "c",
+            "reason": "the interactive child could not be started (ENOENT)"
+          }
+        },
+        {
+          "claim": "three siblings had already started",
+          "ok": true
+        },
+        {
+          "claim": "the grid failed instead of attaching",
+          "ok": true,
+          "observed": "grid startup failed: pane 2"
+        },
+        {
+          "claim": "started siblings torn down",
+          "ok": true,
+          "observed": [
+            20545,
+            20546,
+            20547
+          ]
+        },
+        {
+          "claim": "workers torn down",
+          "ok": true,
+          "observed": [
+            20311,
+            20370,
+            20392,
+            20415
+          ]
+        },
+        {
+          "claim": "server torn down",
+          "ok": true,
+          "observed": 20310
+        }
+      ],
+      "facts": {
+        "outcomes": [
+          {
+            "type": "ready",
+            "id": "a",
+            "pid": 20545
+          },
+          {
+            "type": "ready",
+            "id": "b",
+            "pid": 20546
+          },
+          {
+            "type": "startup-failed",
+            "id": "c",
+            "reason": "the interactive child could not be started (ENOENT)"
+          },
+          {
+            "type": "ready",
+            "id": "s",
+            "pid": 20547
+          }
+        ]
+      },
+      "notes": [],
+      "durationMs": 756
+    },
+    {
+      "name": "signals-distinct",
+      "ok": true,
+      "claims": [
+        {
+          "claim": "detach: %client-detached names the visible client",
+          "ok": true,
+          "observed": [
+            {
+              "kind": "layout-change"
+            },
+            {
+              "kind": "client-detached",
+              "client": "/dev/ttys005"
+            }
+          ]
+        },
+        {
+          "claim": "detach: children keep running",
+          "ok": true
+        },
+        {
+          "claim": "control loss: the stream ends with %exit, not %client-detached for the reader",
+          "ok": true,
+          "observed": [
+            {
+              "kind": "exit"
+            },
+            {
+              "kind": "closed"
+            }
+          ]
+        },
+        {
+          "claim": "control loss: server still answers",
+          "ok": true
+        },
+        {
+          "claim": "control loss: children keep running",
+          "ok": true
+        },
+        {
+          "claim": "control loss: workers still connected",
+          "ok": true
+        },
+        {
+          "claim": "server stop: every worker link closed",
+          "ok": true
+        },
+        {
+          "claim": "server stop: children ended with their terminal (SIGHUP)",
+          "ok": true,
+          "observed": [
+            false,
+            false
+          ]
+        },
+        {
+          "claim": "server stop: workers ended with their terminal",
+          "ok": true
+        }
+      ],
+      "facts": {
+        "controlClient": "client-20751"
+      },
+      "notes": [
+        "the three signals were classified from different sources: attach exit + %client-detached, control EOF/%exit, has-session failure + link EOF"
+      ],
+      "durationMs": 746
+    },
+    {
+      "name": "negative-children",
+      "ok": true,
+      "claims": [
+        {
+          "claim": "negative child and its in-group descendant survived the first interrupt",
+          "ok": true
+        },
+        {
+          "claim": "escaped descendant left the session and process group",
+          "ok": true,
+          "observed": {
+            "pid": 21500,
+            "ppid": 21237,
+            "pgid": 21500,
+            "tty": "??",
+            "tpgid": 0,
+            "command": "/bin/sleep 600"
+          }
+        },
+        {
+          "claim": "orphan-escape: the descendant left the session and process group while its parent lived",
+          "ok": true,
+          "observed": {
+            "pid": 21774,
+            "ppid": 21682,
+            "pgid": 21774,
+            "tty": "??",
+            "tpgid": 0,
+            "command": "/bin/sleep 600"
+          }
+        },
+        {
+          "claim": "orphan-escape: outside the settlement's ancestry once the parent exited",
+          "ok": true,
+          "observed": []
+        },
+        {
+          "claim": "orphan-escape-closed: the descendant left the session and process group while its parent lived",
+          "ok": true,
+          "observed": {
+            "pid": 22180,
+            "ppid": 22088,
+            "pgid": 22180,
+            "tty": "??",
+            "tpgid": 0,
+            "command": "/bin/sleep 600"
+          }
+        },
+        {
+          "claim": "orphan-escape-closed: outside the settlement's ancestry once the parent exited",
+          "ok": true,
+          "observed": []
+        },
+        {
+          "claim": "ignore-sigint-fork: child stopped (killed)",
+          "ok": true
+        },
+        {
+          "claim": "ignore-sigint-fork: descendant 21511 was found in the pre-kill snapshot and stopped",
+          "ok": true,
+          "observed": {
+            "pid": 21511,
+            "command": "sleep 600",
+            "inGroup": true,
+            "delivery": "delivered",
+            "gone": true
+          }
+        },
+        {
+          "claim": "escape: child stopped (interrupted)",
+          "ok": true
+        },
+        {
+          "claim": "escape: descendant 21500 was found in the pre-kill snapshot and stopped",
+          "ok": true,
+          "observed": {
+            "pid": 21500,
+            "command": "/bin/sleep 600",
+            "inGroup": false,
+            "delivery": "delivered",
+            "gone": true
+          }
+        },
+        {
+          "claim": "escape-closed: child stopped (interrupted)",
+          "ok": true
+        },
+        {
+          "claim": "escape-closed: descendant 21526 was found in the pre-kill snapshot and stopped",
+          "ok": true,
+          "observed": {
+            "pid": 21526,
+            "command": "/bin/sleep 600",
+            "inGroup": false,
+            "delivery": "delivered",
+            "gone": true
+          }
+        },
+        {
+          "claim": "orphans: outside the pane sweep's ancestry once their parent exited",
+          "ok": true,
+          "observed": [
+            {
+              "method": "exited",
+              "childGone": true,
+              "descendants": [],
+              "survivors": [],
+              "terminalHolders": []
+            },
+            {
+              "method": "exited",
+              "childGone": true,
+              "descendants": [],
+              "survivors": [],
+              "terminalHolders": []
+            },
+            {
+              "method": "exited",
+              "childGone": true,
+              "descendants": [],
+              "survivors": [],
+              "terminalHolders": []
+            },
+            {
+              "method": "exited",
+              "childGone": true,
+              "descendants": [],
+              "survivors": [],
+              "terminalHolders": []
+            },
+            {
+              "method": "exited",
+              "childGone": true,
+              "descendants": [],
+              "survivors": [],
+              "terminalHolders": []
+            }
+          ]
+        },
+        {
+          "claim": "server stopped",
+          "ok": true
+        },
+        {
+          "claim": "orphan holding the terminal: named by its parent's settlement sweep and stopped before `exited`",
+          "ok": true,
+          "observed": {
+            "holdingOrphan": 21774,
+            "foundHolding": {
+              "pid": 21774,
+              "gone": true
+            }
+          }
+        },
+        {
+          "claim": "orphan that closed the terminal: outlived its parent, reparented, still running",
+          "ok": true,
+          "observed": {
+            "pid": 22180,
+            "ppid": 1,
+            "pgid": 22180,
+            "tty": "??",
+            "tpgid": 0,
+            "command": "/bin/sleep 600"
+          }
+        },
+        {
+          "claim": "orphan that closed the terminal: recorded as unprovable by this topology",
+          "ok": true,
+          "observed": {
+            "closedFound": false,
+            "closedAlive": true
+          }
+        },
+        {
+          "claim": "after the server stopped, `lsof` names no holder of any pane terminal",
+          "ok": true,
+          "observed": {
+            "/dev/ttys009": [],
+            "/dev/ttys012": [],
+            "/dev/ttys020": [],
+            "/dev/ttys021": [],
+            "/dev/ttys022": []
+          }
+        }
+      ],
+      "facts": {
+        "children": {
+          "ignore-sigint-fork": {
+            "mode": "ignore-sigint-fork",
+            "argv": [],
+            "pid": 21236,
+            "ppid": 20883,
+            "pgid": 20883,
+            "tty": "ttys009",
+            "tpgid": 20883,
+            "isatty": [
+              true,
+              true,
+              true
+            ],
+            "stdin": [],
+            "signals": [
+              "SIGINT"
+            ],
+            "descendants": [
+              {
+                "pid": 21511,
+                "kind": "in-group"
+              }
+            ]
+          },
+          "escape": {
+            "mode": "escape",
+            "argv": [],
+            "pid": 21237,
+            "ppid": 20940,
+            "pgid": 20940,
+            "tty": "ttys012",
+            "tpgid": 20940,
+            "isatty": [
+              true,
+              true,
+              true
+            ],
+            "stdin": [],
+            "signals": [],
+            "descendants": [
+              {
+                "pid": 21500,
+                "kind": "escape"
+              }
+            ]
+          },
+          "escape-closed": {
+            "mode": "escape-closed",
+            "argv": [],
+            "pid": 21238,
+            "ppid": 20950,
+            "pgid": 20950,
+            "tty": "ttys020",
+            "tpgid": 20950,
+            "isatty": [
+              true,
+              true,
+              true
+            ],
+            "stdin": [],
+            "signals": [],
+            "descendants": [
+              {
+                "pid": 21526,
+                "kind": "escape-closed"
+              }
+            ]
+          }
+        },
+        "orphan-escape": {
+          "pid": 21774,
+          "before": {
+            "pid": 21774,
+            "ppid": 21682,
+            "pgid": 21774,
+            "tty": "??",
+            "tpgid": 0,
+            "command": "/bin/sleep 600"
+          },
+          "settlement": {
+            "method": "exited",
+            "childPid": 21682,
+            "childGone": true,
+            "descendants": [],
+            "survivors": [],
+            "terminalHolders": [
+              {
+                "pid": 21774,
+                "gone": true
+              }
+            ]
+          }
+        },
+        "orphan-escape-closed": {
+          "pid": 22180,
+          "before": {
+            "pid": 22180,
+            "ppid": 22088,
+            "pgid": 22180,
+            "tty": "??",
+            "tpgid": 0,
+            "command": "/bin/sleep 600"
+          },
+          "afterParentExit": {
+            "pid": 22180,
+            "ppid": 1,
+            "pgid": 22180,
+            "tty": "??",
+            "tpgid": 0,
+            "command": "/bin/sleep 600"
+          },
+          "settlement": {
+            "method": "exited",
+            "childPid": 22088,
+            "childGone": true,
+            "descendants": [],
+            "survivors": [],
+            "terminalHolders": []
+          }
+        },
+        "ignore-sigint-fork.proof": {
+          "method": "killed",
+          "childPid": 21236,
+          "childGone": true,
+          "descendants": [
+            {
+              "pid": 21511,
+              "command": "sleep 600",
+              "inGroup": true,
+              "delivery": "delivered",
+              "gone": true
+            },
+            {
+              "pid": 22494,
+              "command": "/bin/ps -axo pid=,ppid=,pgid=,tty=,tpgid=,command=",
+              "inGroup": true,
+              "delivery": "absent",
+              "gone": true
+            }
+          ],
+          "survivors": [],
+          "terminalHolders": []
+        },
+        "escape.proof": {
+          "method": "interrupted",
+          "childPid": 21237,
+          "childGone": true,
+          "descendants": [
+            {
+              "pid": 21500,
+              "command": "/bin/sleep 600",
+              "inGroup": false,
+              "delivery": "delivered",
+              "gone": true
+            },
+            {
+              "pid": 22495,
+              "command": "/bin/ps -axo pid=,ppid=,pgid=,tty=,tpgid=,command=",
+              "inGroup": true,
+              "delivery": "absent",
+              "gone": true
+            }
+          ],
+          "survivors": [],
+          "terminalHolders": []
+        },
+        "escape-closed.proof": {
+          "method": "interrupted",
+          "childPid": 21238,
+          "childGone": true,
+          "descendants": [
+            {
+              "pid": 21526,
+              "command": "/bin/sleep 600",
+              "inGroup": false,
+              "delivery": "delivered",
+              "gone": true
+            },
+            {
+              "pid": 22493,
+              "command": "/bin/ps -axo pid=,ppid=,pgid=,tty=,tpgid=,command=",
+              "inGroup": true,
+              "delivery": "absent",
+              "gone": true
+            }
+          ],
+          "survivors": [],
+          "terminalHolders": []
+        },
+        "ttyHolders": [
+          [],
+          [],
+          [],
+          [],
+          []
+        ],
+        "orphanClosed": {
+          "pid": 22180,
+          "foundByAnySweep": false,
+          "stillRunning": true
+        }
+      },
+      "notes": [
+        "orphan 22180 (escaped the group, lost its parent, closed the terminal) is invisible to ancestry, process-group and terminal-holder sweeps; the check killed it afterwards using the child's own record of its pid",
+        "once the worker exits, tmux closes the pane's pty master and macOS revokes the slave, so a holder can only be named by the worker before it leaves"
+      ],
+      "durationMs": 9995
+    },
+    {
+      "name": "sequential-handoff",
+      "ok": true,
+      "claims": [
+        {
+          "claim": "the descendant left the session and process group and still holds the pane terminal",
+          "ok": true,
+          "observed": {
+            "escaped": {
+              "pid": 24236,
+              "ppid": 24157,
+              "pgid": 24236,
+              "tty": "??",
+              "tpgid": 0,
+              "command": "/bin/sleep 600"
+            },
+            "holdersBefore": [
+              24055,
+              24157,
+              24236
+            ]
+          }
+        },
+        {
+          "claim": "a launch sent while the first child was settling was refused, before `exited`",
+          "ok": true,
+          "observed": {
+            "early": {
+              "type": "refused",
+              "id": "early",
+              "reason": "busy"
+            },
+            "order": [
+              "ready",
+              "refused",
+              "exited"
+            ]
+          }
+        },
+        {
+          "claim": "the orphaned descendant was outside ancestry but named by the settlement's terminal sweep",
+          "ok": true,
+          "observed": {
+            "descendants": [],
+            "terminalHolders": [
+              {
+                "pid": 24236,
+                "gone": true
+              }
+            ]
+          }
+        },
+        {
+          "claim": "the descendant was stopped before `exited` was reported",
+          "ok": true,
+          "observed": {
+            "swept": {
+              "pid": 24236,
+              "gone": true
+            },
+            "reachable": false
+          }
+        },
+        {
+          "claim": "after admission, only the worker and the second child hold the pane terminal",
+          "ok": true,
+          "observed": {
+            "holdersAfter": [
+              24055,
+              24548
+            ],
+            "worker": 24055,
+            "second": 24548
+          }
+        },
+        {
+          "claim": "the second child runs on the same pane and worker",
+          "ok": true
+        },
+        {
+          "claim": "nothing held the terminal at shutdown",
+          "ok": true,
+          "observed": []
+        },
+        {
+          "claim": "server stopped",
+          "ok": true
+        },
+        {
+          "claim": "first child, descendant, second child gone",
+          "ok": true
+        }
+      ],
+      "facts": {
+        "first": {
+          "child": 24157,
+          "descendant": 24236,
+          "escaped": {
+            "pid": 24236,
+            "ppid": 24157,
+            "pgid": 24236,
+            "tty": "??",
+            "tpgid": 0,
+            "command": "/bin/sleep 600"
+          },
+          "holdersBefore": [
+            24055,
+            24157,
+            24236
+          ]
+        },
+        "exited": {
+          "exitCode": 0,
+          "proof": {
+            "method": "exited",
+            "childPid": 24157,
+            "childGone": true,
+            "descendants": [],
+            "survivors": [],
+            "terminalHolders": [
+              {
+                "pid": 24236,
+                "gone": true
+              }
+            ]
+          },
+          "handoffMs": 443,
+          "order": [
+            "ready",
+            "refused",
+            "exited"
+          ]
+        },
+        "second": {
+          "child": 24548,
+          "holdersAfter": [
+            24055,
+            24548
+          ],
+          "relaunchMs": 1
+        }
+      },
+      "notes": [
+        "handoff (exit requested → exited) 443 ms; relaunch (launch → ready) 1 ms"
+      ],
+      "durationMs": 2520
+    },
+    {
+      "name": "cancellation-points",
+      "ok": true,
+      "claims": [
+        {
+          "claim": "prepared: phase reached",
+          "ok": true
+        },
+        {
+          "claim": "prepared: server gone",
+          "ok": true
+        },
+        {
+          "claim": "prepared: workers gone",
+          "ok": true
+        },
+        {
+          "claim": "prepared: children gone",
+          "ok": true
+        },
+        {
+          "claim": "prepared: private directory removed",
+          "ok": true
+        },
+        {
+          "claim": "workers: phase reached",
+          "ok": true
+        },
+        {
+          "claim": "workers: server gone",
+          "ok": true
+        },
+        {
+          "claim": "workers: workers gone",
+          "ok": true
+        },
+        {
+          "claim": "workers: children gone",
+          "ok": true
+        },
+        {
+          "claim": "workers: private directory removed",
+          "ok": true
+        },
+        {
+          "claim": "ready: phase reached",
+          "ok": true
+        },
+        {
+          "claim": "ready: server gone",
+          "ok": true
+        },
+        {
+          "claim": "ready: workers gone",
+          "ok": true
+        },
+        {
+          "claim": "ready: children gone",
+          "ok": true
+        },
+        {
+          "claim": "ready: private directory removed",
+          "ok": true
+        },
+        {
+          "claim": "attached: phase reached",
+          "ok": true
+        },
+        {
+          "claim": "attached: server gone",
+          "ok": true
+        },
+        {
+          "claim": "attached: workers gone",
+          "ok": true
+        },
+        {
+          "claim": "attached: children gone",
+          "ok": true
+        },
+        {
+          "claim": "attached: private directory removed",
+          "ok": true
+        },
+        {
+          "claim": "active: phase reached",
+          "ok": true
+        },
+        {
+          "claim": "active: server gone",
+          "ok": true
+        },
+        {
+          "claim": "active: workers gone",
+          "ok": true
+        },
+        {
+          "claim": "active: children gone",
+          "ok": true
+        },
+        {
+          "claim": "active: private directory removed",
+          "ok": true
+        }
+      ],
+      "facts": {
+        "prepared": {
+          "serverPid": 25020,
+          "workerPids": [],
+          "childPids": [],
+          "teardownMs": 81
+        },
+        "workers": {
+          "serverPid": 25172,
+          "workerPids": [
+            25180,
+            25236
+          ],
+          "childPids": [
+            25323,
+            25324
+          ],
+          "teardownMs": 88
+        },
+        "ready": {
+          "serverPid": 25378,
+          "workerPids": [
+            25379,
+            25432
+          ],
+          "childPids": [
+            25528,
+            25527
+          ],
+          "teardownMs": 72
+        },
+        "attached": {
+          "serverPid": 25574,
+          "workerPids": [
+            25578,
+            25637
+          ],
+          "childPids": [
+            25739,
+            25740
+          ],
+          "teardownMs": 330
+        },
+        "active": {
+          "serverPid": 25912,
+          "workerPids": [
+            25914,
+            25970
+          ],
+          "childPids": [
+            26086,
+            26085
+          ],
+          "teardownMs": 426
+        }
+      },
+      "notes": [],
+      "durationMs": 3568
+    },
+    {
+      "name": "measurements",
+      "ok": true,
+      "claims": [
+        {
+          "claim": "60 runs completed with complete teardown",
+          "ok": true
+        }
+      ],
+      "facts": {
+        "runs": [
+          {
+            "panes": 2,
+            "layoutMs": 348,
+            "workersMs": 497,
+            "readyMs": 504,
+            "attachMs": 31,
+            "closeDetectMs": 35,
+            "handoffMs": 732,
+            "relaunchMs": 1,
+            "teardownMs": 1662
+          },
+          {
+            "panes": 2,
+            "layoutMs": 1461,
+            "workersMs": 1922,
+            "readyMs": 1927,
+            "attachMs": 117,
+            "closeDetectMs": 94,
+            "handoffMs": 614,
+            "relaunchMs": 1,
+            "teardownMs": 1265
+          },
+          {
+            "panes": 2,
+            "layoutMs": 338,
+            "workersMs": 506,
+            "readyMs": 509,
+            "attachMs": 58,
+            "closeDetectMs": 32,
+            "handoffMs": 648,
+            "relaunchMs": 2,
+            "teardownMs": 1170
+          },
+          {
+            "panes": 2,
+            "layoutMs": 280,
+            "workersMs": 401,
+            "readyMs": 404,
+            "attachMs": 38,
+            "closeDetectMs": 29,
+            "handoffMs": 561,
+            "relaunchMs": 3,
+            "teardownMs": 1184
+          },
+          {
+            "panes": 2,
+            "layoutMs": 282,
+            "workersMs": 405,
+            "readyMs": 409,
+            "attachMs": 57,
+            "closeDetectMs": 29,
+            "handoffMs": 559,
+            "relaunchMs": 2,
+            "teardownMs": 1185
+          },
+          {
+            "panes": 2,
+            "layoutMs": 248,
+            "workersMs": 365,
+            "readyMs": 368,
+            "attachMs": 33,
+            "closeDetectMs": 28,
+            "handoffMs": 568,
+            "relaunchMs": 2,
+            "teardownMs": 1160
+          },
+          {
+            "panes": 2,
+            "layoutMs": 249,
+            "workersMs": 361,
+            "readyMs": 364,
+            "attachMs": 43,
+            "closeDetectMs": 29,
+            "handoffMs": 611,
+            "relaunchMs": 4,
+            "teardownMs": 1212
+          },
+          {
+            "panes": 2,
+            "layoutMs": 316,
+            "workersMs": 450,
+            "readyMs": 453,
+            "attachMs": 66,
+            "closeDetectMs": 49,
+            "handoffMs": 598,
+            "relaunchMs": 1,
+            "teardownMs": 1249
+          },
+          {
+            "panes": 2,
+            "layoutMs": 659,
+            "workersMs": 765,
+            "readyMs": 770,
+            "attachMs": 48,
+            "closeDetectMs": 28,
+            "handoffMs": 608,
+            "relaunchMs": 3,
+            "teardownMs": 1232
+          },
+          {
+            "panes": 2,
+            "layoutMs": 628,
+            "workersMs": 709,
+            "readyMs": 715,
+            "attachMs": 145,
+            "closeDetectMs": 36,
+            "handoffMs": 591,
+            "relaunchMs": 1,
+            "teardownMs": 1209
+          },
+          {
+            "panes": 2,
+            "layoutMs": 307,
+            "workersMs": 434,
+            "readyMs": 438,
+            "attachMs": 45,
+            "closeDetectMs": 31,
+            "handoffMs": 657,
+            "relaunchMs": 2,
+            "teardownMs": 1452
+          },
+          {
+            "panes": 2,
+            "layoutMs": 806,
+            "workersMs": 949,
+            "readyMs": 959,
+            "attachMs": 78,
+            "closeDetectMs": 35,
+            "handoffMs": 648,
+            "relaunchMs": 1,
+            "teardownMs": 1238
+          },
+          {
+            "panes": 2,
+            "layoutMs": 598,
+            "workersMs": 674,
+            "readyMs": 678,
+            "attachMs": 77,
+            "closeDetectMs": 40,
+            "handoffMs": 639,
+            "relaunchMs": 1,
+            "teardownMs": 1214
+          },
+          {
+            "panes": 2,
+            "layoutMs": 393,
+            "workersMs": 465,
+            "readyMs": 468,
+            "attachMs": 181,
+            "closeDetectMs": 71,
+            "handoffMs": 652,
+            "relaunchMs": 2,
+            "teardownMs": 1285
+          },
+          {
+            "panes": 2,
+            "layoutMs": 297,
+            "workersMs": 403,
+            "readyMs": 406,
+            "attachMs": 49,
+            "closeDetectMs": 35,
+            "handoffMs": 569,
+            "relaunchMs": 2,
+            "teardownMs": 1069
+          },
+          {
+            "panes": 2,
+            "layoutMs": 286,
+            "workersMs": 389,
+            "readyMs": 393,
+            "attachMs": 39,
+            "closeDetectMs": 27,
+            "handoffMs": 616,
+            "relaunchMs": 5,
+            "teardownMs": 1299
+          },
+          {
+            "panes": 2,
+            "layoutMs": 268,
+            "workersMs": 377,
+            "readyMs": 380,
+            "attachMs": 30,
+            "closeDetectMs": 29,
+            "handoffMs": 668,
+            "relaunchMs": 2,
+            "teardownMs": 1301
+          },
+          {
+            "panes": 2,
+            "layoutMs": 363,
+            "workersMs": 473,
+            "readyMs": 476,
+            "attachMs": 287,
+            "closeDetectMs": 96,
+            "handoffMs": 686,
+            "relaunchMs": 1,
+            "teardownMs": 1173
+          },
+          {
+            "panes": 2,
+            "layoutMs": 365,
+            "workersMs": 526,
+            "readyMs": 531,
+            "attachMs": 147,
+            "closeDetectMs": 145,
+            "handoffMs": 954,
+            "relaunchMs": 1,
+            "teardownMs": 1241
+          },
+          {
+            "panes": 2,
+            "layoutMs": 314,
+            "workersMs": 414,
+            "readyMs": 427,
+            "attachMs": 57,
+            "closeDetectMs": 39,
+            "handoffMs": 565,
+            "relaunchMs": 1,
+            "teardownMs": 1156
+          },
+          {
+            "panes": 4,
+            "layoutMs": 543,
+            "workersMs": 633,
+            "readyMs": 637,
+            "attachMs": 54,
+            "closeDetectMs": 26,
+            "handoffMs": 780,
+            "relaunchMs": 2,
+            "teardownMs": 1976
+          },
+          {
+            "panes": 4,
+            "layoutMs": 436,
+            "workersMs": 567,
+            "readyMs": 574,
+            "attachMs": 91,
+            "closeDetectMs": 31,
+            "handoffMs": 855,
+            "relaunchMs": 1,
+            "teardownMs": 1964
+          },
+          {
+            "panes": 4,
+            "layoutMs": 591,
+            "workersMs": 711,
+            "readyMs": 717,
+            "attachMs": 51,
+            "closeDetectMs": 31,
+            "handoffMs": 801,
+            "relaunchMs": 2,
+            "teardownMs": 2042
+          },
+          {
+            "panes": 4,
+            "layoutMs": 565,
+            "workersMs": 764,
+            "readyMs": 769,
+            "attachMs": 68,
+            "closeDetectMs": 33,
+            "handoffMs": 789,
+            "relaunchMs": 2,
+            "teardownMs": 1979
+          },
+          {
+            "panes": 4,
+            "layoutMs": 705,
+            "workersMs": 728,
+            "readyMs": 733,
+            "attachMs": 59,
+            "closeDetectMs": 43,
+            "handoffMs": 825,
+            "relaunchMs": 2,
+            "teardownMs": 2024
+          },
+          {
+            "panes": 4,
+            "layoutMs": 493,
+            "workersMs": 558,
+            "readyMs": 562,
+            "attachMs": 49,
+            "closeDetectMs": 35,
+            "handoffMs": 831,
+            "relaunchMs": 1,
+            "teardownMs": 1878
+          },
+          {
+            "panes": 4,
+            "layoutMs": 549,
+            "workersMs": 620,
+            "readyMs": 624,
+            "attachMs": 68,
+            "closeDetectMs": 70,
+            "handoffMs": 888,
+            "relaunchMs": 1,
+            "teardownMs": 1830
+          },
+          {
+            "panes": 4,
+            "layoutMs": 521,
+            "workersMs": 544,
+            "readyMs": 548,
+            "attachMs": 46,
+            "closeDetectMs": 34,
+            "handoffMs": 803,
+            "relaunchMs": 1,
+            "teardownMs": 2000
+          },
+          {
+            "panes": 4,
+            "layoutMs": 1587,
+            "workersMs": 1587,
+            "readyMs": 1693,
+            "attachMs": 700,
+            "closeDetectMs": 46,
+            "handoffMs": 1169,
+            "relaunchMs": 2,
+            "teardownMs": 2066
+          },
+          {
+            "panes": 4,
+            "layoutMs": 653,
+            "workersMs": 711,
+            "readyMs": 718,
+            "attachMs": 73,
+            "closeDetectMs": 32,
+            "handoffMs": 814,
+            "relaunchMs": 1,
+            "teardownMs": 1980
+          },
+          {
+            "panes": 4,
+            "layoutMs": 548,
+            "workersMs": 637,
+            "readyMs": 640,
+            "attachMs": 82,
+            "closeDetectMs": 37,
+            "handoffMs": 699,
+            "relaunchMs": 2,
+            "teardownMs": 1990
+          },
+          {
+            "panes": 4,
+            "layoutMs": 1224,
+            "workersMs": 1224,
+            "readyMs": 1261,
+            "attachMs": 250,
+            "closeDetectMs": 34,
+            "handoffMs": 725,
+            "relaunchMs": 2,
+            "teardownMs": 2181
+          },
+          {
+            "panes": 4,
+            "layoutMs": 607,
+            "workersMs": 631,
+            "readyMs": 635,
+            "attachMs": 47,
+            "closeDetectMs": 28,
+            "handoffMs": 989,
+            "relaunchMs": 1,
+            "teardownMs": 2068
+          },
+          {
+            "panes": 4,
+            "layoutMs": 616,
+            "workersMs": 655,
+            "readyMs": 659,
+            "attachMs": 39,
+            "closeDetectMs": 65,
+            "handoffMs": 790,
+            "relaunchMs": 1,
+            "teardownMs": 1975
+          },
+          {
+            "panes": 4,
+            "layoutMs": 523,
+            "workersMs": 592,
+            "readyMs": 599,
+            "attachMs": 95,
+            "closeDetectMs": 45,
+            "handoffMs": 901,
+            "relaunchMs": 2,
+            "teardownMs": 2166
+          },
+          {
+            "panes": 4,
+            "layoutMs": 545,
+            "workersMs": 597,
+            "readyMs": 601,
+            "attachMs": 72,
+            "closeDetectMs": 28,
+            "handoffMs": 872,
+            "relaunchMs": 2,
+            "teardownMs": 2062
+          },
+          {
+            "panes": 4,
+            "layoutMs": 797,
+            "workersMs": 797,
+            "readyMs": 818,
+            "attachMs": 101,
+            "closeDetectMs": 39,
+            "handoffMs": 731,
+            "relaunchMs": 2,
+            "teardownMs": 1980
+          },
+          {
+            "panes": 4,
+            "layoutMs": 946,
+            "workersMs": 984,
+            "readyMs": 990,
+            "attachMs": 155,
+            "closeDetectMs": 30,
+            "handoffMs": 746,
+            "relaunchMs": 1,
+            "teardownMs": 2409
+          },
+          {
+            "panes": 4,
+            "layoutMs": 869,
+            "workersMs": 954,
+            "readyMs": 961,
+            "attachMs": 103,
+            "closeDetectMs": 69,
+            "handoffMs": 1115,
+            "relaunchMs": 1,
+            "teardownMs": 2096
+          },
+          {
+            "panes": 4,
+            "layoutMs": 553,
+            "workersMs": 610,
+            "readyMs": 614,
+            "attachMs": 35,
+            "closeDetectMs": 32,
+            "handoffMs": 800,
+            "relaunchMs": 1,
+            "teardownMs": 1912
+          },
+          {
+            "panes": 8,
+            "layoutMs": 936,
+            "workersMs": 1093,
+            "readyMs": 1101,
+            "attachMs": 78,
+            "closeDetectMs": 32,
+            "handoffMs": 1354,
+            "relaunchMs": 2,
+            "teardownMs": 4392
+          },
+          {
+            "panes": 8,
+            "layoutMs": 1030,
+            "workersMs": 1095,
+            "readyMs": 1103,
+            "attachMs": 105,
+            "closeDetectMs": 34,
+            "handoffMs": 1714,
+            "relaunchMs": 1,
+            "teardownMs": 4405
+          },
+          {
+            "panes": 8,
+            "layoutMs": 1266,
+            "workersMs": 1266,
+            "readyMs": 1300,
+            "attachMs": 369,
+            "closeDetectMs": 167,
+            "handoffMs": 1855,
+            "relaunchMs": 2,
+            "teardownMs": 5068
+          },
+          {
+            "panes": 8,
+            "layoutMs": 2176,
+            "workersMs": 2176,
+            "readyMs": 2353,
+            "attachMs": 182,
+            "closeDetectMs": 98,
+            "handoffMs": 1465,
+            "relaunchMs": 2,
+            "teardownMs": 4497
+          },
+          {
+            "panes": 8,
+            "layoutMs": 1281,
+            "workersMs": 1281,
+            "readyMs": 1299,
+            "attachMs": 92,
+            "closeDetectMs": 73,
+            "handoffMs": 1227,
+            "relaunchMs": 1,
+            "teardownMs": 4105
+          },
+          {
+            "panes": 8,
+            "layoutMs": 980,
+            "workersMs": 1082,
+            "readyMs": 1092,
+            "attachMs": 79,
+            "closeDetectMs": 30,
+            "handoffMs": 1939,
+            "relaunchMs": 3,
+            "teardownMs": 4374
+          },
+          {
+            "panes": 8,
+            "layoutMs": 1885,
+            "workersMs": 1885,
+            "readyMs": 1944,
+            "attachMs": 669,
+            "closeDetectMs": 273,
+            "handoffMs": 1432,
+            "relaunchMs": 1,
+            "teardownMs": 4483
+          },
+          {
+            "panes": 8,
+            "layoutMs": 993,
+            "workersMs": 1179,
+            "readyMs": 1217,
+            "attachMs": 84,
+            "closeDetectMs": 35,
+            "handoffMs": 1556,
+            "relaunchMs": 2,
+            "teardownMs": 4839
+          },
+          {
+            "panes": 8,
+            "layoutMs": 1249,
+            "workersMs": 1249,
+            "readyMs": 1326,
+            "attachMs": 384,
+            "closeDetectMs": 99,
+            "handoffMs": 2106,
+            "relaunchMs": 2,
+            "teardownMs": 4549
+          },
+          {
+            "panes": 8,
+            "layoutMs": 1973,
+            "workersMs": 1973,
+            "readyMs": 1990,
+            "attachMs": 153,
+            "closeDetectMs": 143,
+            "handoffMs": 1500,
+            "relaunchMs": 2,
+            "teardownMs": 4108
+          },
+          {
+            "panes": 8,
+            "layoutMs": 1032,
+            "workersMs": 1169,
+            "readyMs": 1194,
+            "attachMs": 145,
+            "closeDetectMs": 52,
+            "handoffMs": 1368,
+            "relaunchMs": 1,
+            "teardownMs": 4387
+          },
+          {
+            "panes": 8,
+            "layoutMs": 1094,
+            "workersMs": 1212,
+            "readyMs": 1218,
+            "attachMs": 142,
+            "closeDetectMs": 31,
+            "handoffMs": 1540,
+            "relaunchMs": 1,
+            "teardownMs": 4524
+          },
+          {
+            "panes": 8,
+            "layoutMs": 1080,
+            "workersMs": 1224,
+            "readyMs": 1230,
+            "attachMs": 100,
+            "closeDetectMs": 76,
+            "handoffMs": 1309,
+            "relaunchMs": 3,
+            "teardownMs": 4371
+          },
+          {
+            "panes": 8,
+            "layoutMs": 1724,
+            "workersMs": 1724,
+            "readyMs": 1756,
+            "attachMs": 126,
+            "closeDetectMs": 63,
+            "handoffMs": 1735,
+            "relaunchMs": 2,
+            "teardownMs": 4821
+          },
+          {
+            "panes": 8,
+            "layoutMs": 1449,
+            "workersMs": 1486,
+            "readyMs": 1494,
+            "attachMs": 264,
+            "closeDetectMs": 68,
+            "handoffMs": 1388,
+            "relaunchMs": 2,
+            "teardownMs": 4230
+          },
+          {
+            "panes": 8,
+            "layoutMs": 890,
+            "workersMs": 984,
+            "readyMs": 992,
+            "attachMs": 89,
+            "closeDetectMs": 29,
+            "handoffMs": 1233,
+            "relaunchMs": 13,
+            "teardownMs": 4515
+          },
+          {
+            "panes": 8,
+            "layoutMs": 2634,
+            "workersMs": 2634,
+            "readyMs": 2654,
+            "attachMs": 99,
+            "closeDetectMs": 31,
+            "handoffMs": 1368,
+            "relaunchMs": 2,
+            "teardownMs": 4445
+          },
+          {
+            "panes": 8,
+            "layoutMs": 1945,
+            "workersMs": 1945,
+            "readyMs": 2008,
+            "attachMs": 221,
+            "closeDetectMs": 87,
+            "handoffMs": 1399,
+            "relaunchMs": 2,
+            "teardownMs": 4214
+          },
+          {
+            "panes": 8,
+            "layoutMs": 805,
+            "workersMs": 968,
+            "readyMs": 984,
+            "attachMs": 95,
+            "closeDetectMs": 61,
+            "handoffMs": 1513,
+            "relaunchMs": 2,
+            "teardownMs": 4340
+          },
+          {
+            "panes": 8,
+            "layoutMs": 1061,
+            "workersMs": 1165,
+            "readyMs": 1176,
+            "attachMs": 118,
+            "closeDetectMs": 163,
+            "handoffMs": 1710,
+            "relaunchMs": 2,
+            "teardownMs": 4314
+          }
+        ],
+        "summary": {
+          "2": {
+            "layoutMs": {
+              "median": 338,
+              "min": 248,
+              "max": 1461
+            },
+            "workersMs": {
+              "median": 465,
+              "min": 361,
+              "max": 1922
+            },
+            "readyMs": {
+              "median": 468,
+              "min": 364,
+              "max": 1927
+            },
+            "attachMs": {
+              "median": 57,
+              "min": 30,
+              "max": 287
+            },
+            "closeDetectMs": {
+              "median": 35,
+              "min": 27,
+              "max": 145
+            },
+            "handoffMs": {
+              "median": 616,
+              "min": 559,
+              "max": 954
+            },
+            "relaunchMs": {
+              "median": 2,
+              "min": 1,
+              "max": 5
+            },
+            "teardownMs": {
+              "median": 1232,
+              "min": 1069,
+              "max": 1662
+            }
+          },
+          "4": {
+            "layoutMs": {
+              "median": 591,
+              "min": 436,
+              "max": 1587
+            },
+            "workersMs": {
+              "median": 655,
+              "min": 544,
+              "max": 1587
+            },
+            "readyMs": {
+              "median": 659,
+              "min": 548,
+              "max": 1693
+            },
+            "attachMs": {
+              "median": 72,
+              "min": 35,
+              "max": 700
+            },
+            "closeDetectMs": {
+              "median": 34,
+              "min": 26,
+              "max": 70
+            },
+            "handoffMs": {
+              "median": 814,
+              "min": 699,
+              "max": 1169
+            },
+            "relaunchMs": {
+              "median": 2,
+              "min": 1,
+              "max": 2
+            },
+            "teardownMs": {
+              "median": 2000,
+              "min": 1830,
+              "max": 2409
+            }
+          },
+          "8": {
+            "layoutMs": {
+              "median": 1249,
+              "min": 805,
+              "max": 2634
+            },
+            "workersMs": {
+              "median": 1249,
+              "min": 968,
+              "max": 2634
+            },
+            "readyMs": {
+              "median": 1299,
+              "min": 984,
+              "max": 2654
+            },
+            "attachMs": {
+              "median": 126,
+              "min": 78,
+              "max": 669
+            },
+            "closeDetectMs": {
+              "median": 68,
+              "min": 29,
+              "max": 273
+            },
+            "handoffMs": {
+              "median": 1500,
+              "min": 1227,
+              "max": 2106
+            },
+            "relaunchMs": {
+              "median": 2,
+              "min": 1,
+              "max": 13
+            },
+            "teardownMs": {
+              "median": 4405,
+              "min": 4105,
+              "max": 5068
+            }
+          }
+        }
+      },
+      "notes": [],
+      "durationMs": 282203
+    }
+  ]
+}
