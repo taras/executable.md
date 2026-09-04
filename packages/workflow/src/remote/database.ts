@@ -124,6 +124,20 @@ export function* activeWorkspaceRoute(
   return route;
 }
 
+/**
+ * What a `DurableStream` member does with a result.
+ *
+ * The interface splits these deliberately: a member returning `Result` answers
+ * with the failure, and a stream member raises it. Both describe the same
+ * condition.
+ */
+function* raising<T>(result: Result<T>): Operation<T> {
+  if (!result.ok) {
+    throw result.error;
+  }
+  return result.value;
+}
+
 /** One handle's cooperative turn, so two operations never interleave on it. */
 interface Turns {
   take<T>(body: () => Operation<T>): Operation<T>;
@@ -131,21 +145,21 @@ interface Turns {
 
 function createTurns(): Turns {
   const waiting = createSignal<void, never>();
-  let held = false;
+  const holder = { held: false };
   return {
     *take<T>(body: () => Operation<T>): Operation<T> {
-      while (held) {
+      while (holder.held) {
         // Someone else has the handle. Wait to be told it is free rather than
         // polling, and check again, because several may be waiting and only one
         // of them can take the turn that was just released.
         const released = yield* waiting;
         yield* released.next();
       }
-      held = true;
+      holder.held = true;
       try {
         return yield* body();
       } finally {
-        held = false;
+        holder.held = false;
         waiting.send();
       }
     },
@@ -188,14 +202,6 @@ export function useRemoteRunDatabase(
         return admitted;
       }
       return yield* turns.take(body);
-    }
-
-    /** The same, for a `DurableStream` member, which raises instead. */
-    function* raising<T>(result: Result<T>): Operation<T> {
-      if (!result.ok) {
-        throw result.error;
-      }
-      return result.value;
     }
 
     const ordinary: DurableStream = {
@@ -321,7 +327,9 @@ function sorted(value: Json): Json {
     return value;
   }
   const members: Record<string, Json> = {};
-  for (const key of Object.keys(value).sort()) {
+  const names = Object.keys(value);
+  names.sort();
+  for (const key of names) {
     const held = (value as Record<string, Json>)[key];
     if (held !== undefined) {
       members[key] = sorted(held);

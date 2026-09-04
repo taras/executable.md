@@ -735,3 +735,130 @@ describe("publishing one proposal", () => {
     expect(await on(stub, (owner) => owner.published())).toEqual(before);
   });
 });
+
+describe("the run's own records", () => {
+  it("counts retrieval revisions authoritatively, and clearing starts again", async () => {
+    const stub = executor();
+    await on(stub, (owner) => owner.initialize());
+    const socket = await connect(stub);
+
+    // The run is created with a retrieval row, so the first replacement is the
+    // next revision rather than the first.
+    const before = await on(stub, (owner) => owner.retrieval());
+    expect(before).not.toBe(null);
+
+    const first = await ask(socket, "r1", {
+      command: "retrieval",
+      expectedWorkspaceRootId: ROOT_ID,
+      metadata: '{"locator":"https://example.invalid/a.git"}',
+    });
+    expect(first).toMatchObject({ outcome: "performed" });
+
+    // Byte-identical metadata under a different id is a second replacement.
+    const second = await ask(socket, "r2", {
+      command: "retrieval",
+      expectedWorkspaceRootId: ROOT_ID,
+      metadata: '{"locator":"https://example.invalid/a.git"}',
+    });
+    expect(second).toMatchObject({ outcome: "performed" });
+    const revisions = [first, second].map((answer) =>
+      Number(record(record(answer["value"])["retrieval"])["revision"]),
+    );
+    expect(revisions[1]).toBe((revisions[0] ?? 0) + 1);
+
+    // Clearing removes the row; the next replacement counts from one.
+    expect(
+      await ask(socket, "r3", {
+        command: "retrieval",
+        expectedWorkspaceRootId: ROOT_ID,
+        metadata: null,
+      }),
+    ).toEqual({ id: "r3", outcome: "performed", value: { retrieval: null } });
+    expect(await on(stub, (owner) => owner.retrieval())).toBe(null);
+    const restarted = await ask(socket, "r4", {
+      command: "retrieval",
+      expectedWorkspaceRootId: ROOT_ID,
+      metadata: '{"locator":"https://example.invalid/b.git"}',
+    });
+    expect(Number(record(record(restarted["value"])["retrieval"])["revision"])).toBe(1);
+  });
+
+  it("applies one retrieval replacement once across a lost answer and eviction", async () => {
+    const stub = executor();
+    await on(stub, (owner) => owner.initialize());
+    const socket = await connect(stub);
+    const request = {
+      command: "retrieval",
+      expectedWorkspaceRootId: ROOT_ID,
+      metadata: '{"locator":"https://example.invalid/once.git"}',
+    };
+    const performed = await ask(socket, "once", request);
+    expect(performed).toMatchObject({ outcome: "performed" });
+    const stored = await on(stub, (owner) => owner.retrieval());
+
+    socket.close(1000, "lost");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await evictDurableObject(stub);
+
+    const replacement = await connect(stub);
+    // The same invocation asked again: the retained decision answers, and the
+    // revision does not move.
+    expect(await ask(replacement, "once", request)).toEqual(performed);
+    expect(await on(stub, (owner) => owner.retrieval())).toEqual(stored);
+
+    // The same identity for different content is a conflict, not a retry.
+    expect(
+      await ask(replacement, "once", { ...request, metadata: '{"locator":"other"}' }),
+    ).toMatchObject({ outcome: "refused", refusal: "command:duplicate-conflict" });
+    expect(await on(stub, (owner) => owner.retrieval())).toEqual(stored);
+  });
+
+  it("refuses a replacement proposed against a root the run has left", async () => {
+    const stub = executor();
+    await on(stub, (owner) => owner.initialize());
+    const socket = await connect(stub);
+    const before = await on(stub, (owner) => owner.retrieval());
+    expect(
+      await ask(socket, "stale", {
+        command: "retrieval",
+        expectedWorkspaceRootId: `f${"0".repeat(63)}`,
+        metadata: '{"locator":"x"}',
+      }),
+    ).toMatchObject({ outcome: "refused", refusal: "command:stale-root" });
+    expect(await on(stub, (owner) => owner.retrieval())).toEqual(before);
+  });
+
+  it("anchors a multipage execution snapshot and excludes a later one", async () => {
+    const stub = executor();
+    await on(stub, (owner) => owner.initialize());
+    for (let index = 0; index < 129; index += 1) {
+      await on(stub, (owner) =>
+        owner.beginExecution(
+          `execution-${index}`,
+          `2026-09-04T00:00:${String(index % 60).padStart(2, "0")}.000Z`,
+        ),
+      );
+    }
+    const socket = await connect(stub);
+
+    // The first request carries no anchor; the owner chooses the terminal row
+    // at this moment and answers with it.
+    const anchored = record(
+      (await ask(socket, "x1", { command: "executions", anchor: null, after: null }))["value"],
+    );
+    expect(anchored["anchor"]).toBe(129);
+    expect(Array.isArray(anchored["rows"]) && anchored["rows"]).toHaveLength(128);
+    expect(anchored["done"]).toBe(false);
+
+    // A later execution begins while the read is in flight.
+    await on(stub, (owner) => owner.beginExecution("execution-later", "2026-09-04T01:00:00.000Z"));
+
+    const second = record(
+      (await ask(socket, "x2", { command: "executions", anchor: 129, after: 128 }))["value"],
+    );
+    expect(Array.isArray(second["rows"]) && second["rows"]).toHaveLength(1);
+    expect(second["done"]).toBe(true);
+    // The one begun after the anchor is not in the snapshot.
+    expect(record((second["rows"] as Record<string, unknown>[])[0] ?? {})["sequence"]).toBe(129);
+  });
+});

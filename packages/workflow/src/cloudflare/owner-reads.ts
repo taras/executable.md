@@ -497,15 +497,16 @@ export function readExecutions(
   anchor: number | null,
   after: number | null,
 ): ExecutionsValue {
-  if (anchor === null) {
-    const last = byteRows(
-      storage,
-      "SELECT sequence FROM document_executions ORDER BY sequence DESC LIMIT 1",
-    )[0];
-    if (last !== undefined) {
-      return corrupt("an empty execution snapshot was anchored against existing rows");
+  // The first request carries no anchor because the runner has nothing to
+  // anchor to yet. The owner chooses it — the terminal row at this moment — and
+  // answers with it, so every later page is held to the snapshot this one
+  // began. An empty run answers with an explicit empty anchor.
+  const selected = anchor ?? (after === null ? executionAnchor(storage) : null);
+  if (selected === null) {
+    if (after !== null) {
+      return corrupt("an empty execution snapshot names an earlier row");
     }
-    return { runId, anchor, after, rows: [], done: true };
+    return { runId, anchor: null, after, rows: [], done: true };
   }
 
   const found = byteRows(
@@ -515,7 +516,7 @@ export function readExecutions(
        FROM document_executions
       WHERE sequence > ? AND sequence <= ? ORDER BY sequence ASC LIMIT ?`,
     after ?? 0,
-    anchor,
+    selected,
     EXECUTION_PAGE_ENTRIES + 1,
   );
 
@@ -539,10 +540,10 @@ export function readExecutions(
   }
 
   const done = found.length <= page.length;
-  if (done && page.at(-1)?.sequence !== anchor) {
+  if (done && page.at(-1)?.sequence !== selected) {
     return corrupt("an anchored execution snapshot is incomplete");
   }
-  return { runId, anchor, after, rows: page, done };
+  return { runId, anchor: selected, after, rows: page, done };
 }
 
 /** The terminal execution sequence right now, or `null` when there is none. */

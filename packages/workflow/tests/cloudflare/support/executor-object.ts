@@ -353,6 +353,23 @@ export class ExecutorObject extends WorkflowOwnerObject {
     );
   }
 
+  /** Begin one document execution, as a lifecycle transition would. */
+  beginExecution(executionId: string, startedAt: string): void {
+    this.ctx.storage.sql.exec(
+      "INSERT INTO document_executions (execution_id, started_at) VALUES (?, ?)",
+      executionId,
+      startedAt,
+    );
+  }
+
+  /** What the retrieval row holds right now. */
+  retrieval(): Record<string, unknown> | null {
+    const row = this.ctx.storage.sql
+      .exec("SELECT metadata, revision, updated_at FROM definition_retrieval WHERE id = 1")
+      .toArray()[0];
+    return row === undefined ? null : row;
+  }
+
   damageRetainedBlob(): void {
     this.ctx.storage.sql.exec(
       "UPDATE vfs_blob_bytes SET bytes = ?",

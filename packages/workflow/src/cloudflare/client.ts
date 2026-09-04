@@ -644,8 +644,10 @@ export function cloudflareRunLink(
         let done = false;
         while (!done) {
           const page: ExecutionPage = yield* askPage(connection, nextId(), anchor ?? null, after);
-          anchor ??= page.anchor;
-          if (page.anchor !== (anchor ?? null) || page.after !== after) {
+          // The first page chooses the anchor; every later one is held to it.
+          const expected = anchor === undefined ? page.anchor : anchor;
+          anchor = expected;
+          if (page.anchor !== expected || page.after !== after) {
             return Err(
               new WorkflowRecordMalformedError(
                 "document executions",
@@ -683,7 +685,7 @@ function* askPage(
 ): Operation<ExecutionPage> {
   const answered = yield* connection.ask(
     id,
-    { command: "executions", anchor: anchor === 0 ? null : anchor, after },
+    { command: "executions", anchor, after },
     (value): ExecutionPage => {
       const found = members(value, ["runId", "anchor", "after", "rows", "done"]);
       const offered = found.get("rows");
