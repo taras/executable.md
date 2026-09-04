@@ -22,7 +22,7 @@
  * tries to infer what the body did.
  */
 
-import { call, ensure, Ok, type Operation, type Result } from "effection";
+import { call, ensure, Ok, type Operation, type Result, scoped } from "effection";
 import type { RetainedMapping, WorkspacePublication } from "./publication.ts";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import type { DurableStream } from "@executablemd/durable-streams";
@@ -236,9 +236,13 @@ export function transactRemotely<T>(
 
       let outcome: T;
       try {
-        // Everything the body started tears down before the intent is built, so
-        // "no commit was sent" and "the body did not finish" are one statement.
-        outcome = yield* call(() => body({ journal }, enlist));
+        // A scope of its own, closed here. Everything the body started —
+        // spawned children, resources — has finished tearing down before the
+        // intent is built, so "no commit was sent" and "the body did not
+        // finish" are one statement. `call()` alone would let a resource whose
+        // teardown fails surface its failure after the commit had already gone
+        // out, which is the one ordering that cannot be taken back.
+        outcome = yield* scoped(() => body({ journal }, enlist));
       } finally {
         // The handle is closed before the commit goes out, so a retained
         // transaction object refuses while the handle-level gate is still held.

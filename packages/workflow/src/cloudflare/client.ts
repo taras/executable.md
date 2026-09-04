@@ -390,11 +390,14 @@ export function cloudflareOwnerLink(
     },
 
     *commit(intent: CommitIntent): Operation<Result<void>> {
-      // Minted before anything is sent, and reused for the life of this intent.
-      const id = nextId();
+      // Derived from the request rather than counted. The owner recognizes a
+      // retry by this identity, so retrying one proposal has to produce the
+      // identity it already decided — a counter would make the second attempt a
+      // second question, and the owner would apply it again.
+      const request = commitRequest(intent);
+      const id = commandIdentity(request);
       try {
         yield* stageMissing(connection, nextId, intent, bytesOf);
-        const request = commitRequest(intent);
         const answered = yield* ask(connection, id, request);
         return answered.outcome === "refused"
           ? Err(new CloudflareOwnerRefusalError(answered.refusal))
@@ -411,6 +414,18 @@ export function cloudflareOwnerLink(
       }
     },
   };
+}
+
+/**
+ * The identity one closed command is known by.
+ *
+ * A digest of the exact bytes that will be sent, so two attempts at the same
+ * proposal share an identity and two different proposals cannot. It is bounded
+ * well inside the correlation limit and carries nothing about the run: it is a
+ * name for a request, not a fact about the Workspace.
+ */
+function commandIdentity(request: Record<string, unknown>): string {
+  return `commit-${sha256Hex(JSON.stringify(request))}`;
 }
 
 /** One command sent and one answer read, with the private refusal narrowed. */

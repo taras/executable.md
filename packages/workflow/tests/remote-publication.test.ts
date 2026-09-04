@@ -14,11 +14,16 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
-import { type Operation, scoped, sleep, spawn, until } from "effection";
+import { ensure, type Operation, scoped, sleep, spawn, until } from "effection";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { agentSessionKey } from "../src/storage/agent-session.ts";
 import { cloudflareOwnerLink } from "../src/cloudflare/client.ts";
 import { runnerFiles, useRunnerTrees } from "../src/deno/remote-files.ts";
-import { createTransactionGate, transactRemotely } from "../src/remote/collector.ts";
+import {
+  type CommitIntent,
+  createTransactionGate,
+  transactRemotely,
+} from "../src/remote/collector.ts";
 import { useAttempt, useMaterialization } from "../src/remote/invocation.ts";
 import { type OwnerSocket, type SocketListener, useOwnerConnection } from "../src/remote/client.ts";
 import type {
@@ -50,6 +55,23 @@ function event(name: string) {
 }
 
 const LOCATOR = "https://git.example.invalid/octo/app.git";
+
+/** The Repository mapping these tests enlist. */
+function repositoryMapping(): RetainedMapping {
+  return {
+    kind: "repository",
+    locator: LOCATOR,
+    record: {
+      name: "app",
+      locatorFingerprint: locatorFingerprintOf(LOCATOR),
+      requestedBase: null,
+      creationCommit: "9".repeat(40),
+      primaryBranch: "main",
+      objectFormat: "sha1",
+      checkoutPath: "/docs",
+    },
+  };
+}
 
 /** A recording connection: every request it was sent, and canned answers. */
 function wire(answer: (request: Record<string, unknown>) => Record<string, unknown>) {
@@ -456,6 +478,276 @@ describe("what the production runner publishes", () => {
     const commit = lastCommit(transport.sent);
     expect(memberList(member(commit, "publication"), "content")).toHaveLength(1);
     expect(text(memberList(commit, "mappings")[0] ?? {}, "locator")).toBe(LOCATOR);
+  });
+
+  it("sends a journal-only commit with no publication and stages nothing", function* () {
+    const files = runnerFiles();
+    yield* scoped(function* () {
+      const trees = yield* useRunnerTrees();
+      void trees;
+      const { captured, reads } = yield* startingTree();
+      const transport = wire(ownerAnswers(captured.root.rootId));
+      const connection = yield* useOwnerConnection(transport.socket);
+      const link = cloudflareOwnerLink(connection, reads, ids());
+      const committed = yield* transactRemotely(
+        link,
+        createTransactionGate(),
+        function* (transaction) {
+          yield* transaction.journal.append(event("noted"));
+          return "done";
+        },
+      );
+      expect(committed).toMatchObject({ ok: true });
+
+      const commit = lastCommit(transport.sent);
+      // A transaction that only appended proposes nothing. Inventing a
+      // Workspace change to make the shape uniform would publish a root nobody
+      // asked for, so `publication` is null and nothing was staged.
+      expect(commit["publication"]).toBe(null);
+      expect(commit["mappings"]).toEqual([]);
+      expect(transport.sent.some((request) => request["command"] === "stage")).toBe(false);
+    });
+    void files;
+  });
+
+  it("encodes every kind of retained mapping the owner accepts", function* () {
+    yield* scoped(function* () {
+      const { captured, reads } = yield* startingTree();
+      const transport = wire(ownerAnswers(captured.root.rootId));
+      const connection = yield* useOwnerConnection(transport.socket);
+      const link = cloudflareOwnerLink(connection, reads, ids());
+      yield* transactRemotely(link, createTransactionGate(), function* (_transaction, enlist) {
+        enlist({
+          publication: {
+            proposedWorkspaceRootId: captured.root.rootId,
+            proposedManifest: captured.root.manifest,
+            content: [],
+          },
+          mappings: [
+            repositoryMapping(),
+            {
+              kind: "worktree",
+              record: {
+                repositoryName: "app",
+                name: "feature",
+                requestedBranch: "feature",
+                requestedBase: null,
+                creationCommit: "2".repeat(40),
+                checkoutPath: "/docs",
+              },
+            },
+            {
+              kind: "agent-session",
+              record: {
+                provider: "acp",
+                agentCommand: "/usr/bin/agent",
+                sessionIdentity: "session-1",
+                sessionKey: agentSessionKey({
+                  provider: "acp",
+                  agentCommand: "/usr/bin/agent",
+                  sessionIdentity: "session-1",
+                }),
+                policy: "strict",
+                assertion: { kind: "acp-session", value: "abc" },
+                createdAt: "2026-09-03T00:00:00.000Z",
+              },
+            },
+          ],
+        });
+        return "done";
+      });
+      const mappings = memberList(lastCommit(transport.sent), "mappings");
+      expect(mappings.map((mapping) => mapping["kind"])).toEqual([
+        "repository",
+        "worktree",
+        "agent-session",
+      ]);
+      // Only a Repository carries the locator; the other two are the record.
+      expect(mappings.filter((mapping) => "locator" in mapping)).toHaveLength(1);
+    });
+  });
+
+  it("retries a lost answer with the same identity and the same bytes", function* () {
+    // A retry happens on a new connection: the one that lost the answer is
+    // gone, and a connection refuses to reuse a correlation id of its own. What
+    // has to be stable is the identity across those two connections, because
+    // that is what the owner recognizes the retry by.
+    const sent: Record<string, unknown>[][] = [];
+    let intent: CommitIntent | undefined;
+    for (const attempt of [0, 1]) {
+      yield* scoped(function* () {
+        const { captured, reads } = yield* startingTree();
+        const transport = wire(ownerAnswers(captured.root.rootId));
+        sent.push(transport.sent);
+        const connection = yield* useOwnerConnection(transport.socket);
+        const link = cloudflareOwnerLink(connection, reads, ids());
+        intent ??= {
+          expectedWorkspaceRootId: captured.root.rootId,
+          expectedJournalEventId: null,
+          events: [],
+          publication: null,
+          mappings: [],
+        };
+        const committed = yield* link.commit(intent);
+        expect([attempt, committed.ok]).toEqual([attempt, true]);
+      });
+    }
+
+    const first = sent[0]?.find((request) => request["command"] === "commit");
+    const second = sent[1]?.find((request) => request["command"] === "commit");
+    expect(first?.["id"]).toBe(second?.["id"]);
+    // Byte-equivalent, so the owner sees the request it already decided.
+    expect(JSON.stringify(first)).toBe(JSON.stringify(second));
+  });
+
+  it("asks a different question for a different proposal", function* () {
+    yield* scoped(function* () {
+      const { captured, reads } = yield* startingTree();
+      const transport = wire(ownerAnswers(captured.root.rootId));
+      const connection = yield* useOwnerConnection(transport.socket);
+      const link = cloudflareOwnerLink(connection, reads, ids());
+      const intent: CommitIntent = {
+        expectedWorkspaceRootId: captured.root.rootId,
+        expectedJournalEventId: null,
+        events: [],
+        publication: null,
+        mappings: [],
+      };
+      yield* link.commit(intent);
+      yield* link.commit({ ...intent, events: [event("later")] });
+      const commits = transport.sent.filter((request) => request["command"] === "commit");
+      expect(commits).toHaveLength(2);
+      expect(commits[0]?.["id"]).not.toBe(commits[1]?.["id"]);
+    });
+  });
+
+  it("promotes nothing and keeps no tree when the owner refuses", function* () {
+    const files = runnerFiles();
+    let attemptPath = "";
+    yield* scoped(function* () {
+      const trees = yield* useRunnerTrees();
+      const { captured, reads } = yield* startingTree();
+      const transport = wire(() => ({ outcome: "refused", refusal: "command:stale-root" }));
+      const connection = yield* useOwnerConnection(transport.socket);
+      const link = cloudflareOwnerLink(connection, reads, ids());
+      const materialization = yield* useMaterialization(
+        files,
+        trees,
+        reads,
+        captured.root.rootId,
+        reject,
+      );
+      yield* scoped(function* () {
+        const attempt = yield* useAttempt(files, trees, reads, materialization, reject);
+        attemptPath = attempt.at("/");
+        yield* until(writeFile(attempt.at("/NOTES.md"), "refused\n", { mode: 0o644 }));
+        const committed = yield* transactRemotely(link, createTransactionGate(), function* () {
+          return "done";
+        });
+        // A refusal is an answer, and the answer is no.
+        expect(committed.ok).toBe(false);
+      });
+      expect(materialization.workspaceRootId).toBe(captured.root.rootId);
+    });
+    let listed: unknown;
+    try {
+      listed = yield* until(readdir(attemptPath));
+    } catch (error) {
+      listed = error;
+    }
+    expect(listed).toBeInstanceOf(Error);
+  });
+
+  it("promotes nothing when the answer is lost", function* () {
+    const files = runnerFiles();
+    yield* scoped(function* () {
+      const trees = yield* useRunnerTrees();
+      const { captured, reads } = yield* startingTree();
+      const transport = wire(ownerAnswers(captured.root.rootId));
+      const connection = yield* useOwnerConnection(transport.socket);
+      const link = cloudflareOwnerLink(connection, reads, ids());
+      const materialization = yield* useMaterialization(
+        files,
+        trees,
+        reads,
+        captured.root.rootId,
+        reject,
+      );
+      yield* scoped(function* () {
+        const attempt = yield* useAttempt(files, trees, reads, materialization, reject);
+        yield* until(writeFile(attempt.at("/NOTES.md"), "unanswered\n", { mode: 0o644 }));
+        // The connection goes while the answer is in flight.
+        transport.silence();
+        const asking = yield* spawn(() =>
+          transactRemotely(link, createTransactionGate(), function* () {
+            return "done";
+          }),
+        );
+        yield* sleep(0);
+        transport.end();
+        const committed = yield* asking;
+        // Undecided, not failed — whether the owner committed cannot be known
+        // from here. Either way nothing is promoted locally.
+        expect(committed.ok).toBe(false);
+      });
+      expect(materialization.workspaceRootId).toBe(captured.root.rootId);
+    });
+  });
+
+  it("sends nothing when a resource the body started fails to tear down", function* () {
+    let sent: Record<string, unknown>[] = [];
+    let raised: unknown;
+    try {
+      yield* scoped(function* () {
+        const { captured, reads } = yield* startingTree();
+        const transport = wire(ownerAnswers(captured.root.rootId));
+        sent = transport.sent;
+        const connection = yield* useOwnerConnection(transport.socket);
+        const link = cloudflareOwnerLink(connection, reads, ids());
+        yield* transactRemotely(link, createTransactionGate(), function* (transaction) {
+          yield* transaction.journal.append(event("appended"));
+          // A resource whose teardown fails. The body finished, but everything
+          // it started did not, so the transaction has not finished either —
+          // and the failure surfaces as the scope unwinds rather than inside it.
+          yield* ensure(() => {
+            throw new Error("teardown failed");
+          });
+          return "done";
+        });
+      });
+    } catch (error) {
+      raised = error;
+    }
+    expect(raised).toBeInstanceOf(Error);
+    expect(sent.some((request) => request["command"] === "commit")).toBe(false);
+  });
+
+  it("sends nothing when the transaction exceeds a local bound", function* () {
+    yield* scoped(function* () {
+      const { captured, reads } = yield* startingTree();
+      const transport = wire(ownerAnswers(captured.root.rootId));
+      const connection = yield* useOwnerConnection(transport.socket);
+      const link = cloudflareOwnerLink(connection, reads, ids());
+      let raised: unknown;
+      try {
+        yield* transactRemotely(link, createTransactionGate(), function* (_transaction, enlist) {
+          enlist({
+            publication: {
+              proposedWorkspaceRootId: captured.root.rootId,
+              proposedManifest: captured.root.manifest,
+              content: [],
+            },
+            // More retained mappings than one intent may carry.
+            mappings: Array.from({ length: 300 }, () => repositoryMapping()),
+          });
+          return "done";
+        });
+      } catch (error) {
+        raised = error;
+      }
+      expect(raised).toBeInstanceOf(Error);
+      expect(transport.sent.some((request) => request["command"] === "commit")).toBe(false);
+    });
   });
 
   it("refuses a second Workspace publication in one transaction", function* () {

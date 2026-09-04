@@ -31,7 +31,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
-import { runnerFiles } from "../src/deno/remote-files.ts";
+import { runnerFiles, useRunnerTrees } from "../src/deno/remote-files.ts";
 import {
   captureWorkspace,
   materializeWorkspaceRoot,
@@ -44,21 +44,6 @@ import { encodeContentManifest } from "../src/workspace/content-manifest.ts";
 
 function reject(reason: string): never {
   throw new Error(reason);
-}
-
-/**
- * A temporary directory owned by the scope that asked for it.
- *
- * A resource rather than a scoped operation: the tree has to outlive the call
- * that created it and end with the invocation that owns it, which is the whole
- * lifetime claim materialization makes.
- */
-function useTemporaryDirectory(): Operation<string> {
-  return resource(function* (provide) {
-    const path = yield* until(mkdtemp(join(tmpdir(), "xmd-materialize-")));
-    yield* ensure(() => until(rm(path, { recursive: true, force: true })));
-    yield* provide(path);
-  });
 }
 
 /** Where one logical Workspace path sits under `root`. */
@@ -168,7 +153,8 @@ describe("materializing a retained Workspace root", () => {
     // explicit rather than incidental.
     const previous = process.umask(0o022);
     const files: RunnerFiles = runnerFiles();
-    const source = yield* useTemporaryDirectory();
+    const trees = yield* useRunnerTrees();
+    const source = yield* trees.create("source");
     yield* buildTree(source);
 
     const captured = yield* captureWorkspace(files, at(source), reject);
@@ -205,7 +191,7 @@ describe("materializing a retained Workspace root", () => {
     }
     expect(captured.contents.get(large.manifest)?.chunks).toHaveLength(2);
 
-    const destination = yield* useTemporaryDirectory();
+    const destination = yield* trees.create("destination");
     yield* materializeWorkspaceRoot(
       files,
       servedBy(captured),
@@ -235,7 +221,8 @@ describe("materializing a retained Workspace root", () => {
     const files: RunnerFiles = runnerFiles();
     let path = "";
     yield* scoped(function* () {
-      path = yield* useTemporaryDirectory();
+      const trees = yield* useRunnerTrees();
+      path = yield* trees.create("scoped");
       yield* until(writeFile(join(path, "present"), "here\n"));
     });
     // The scope that owned it has ended, so the tree is gone rather than left
