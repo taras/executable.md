@@ -84,13 +84,13 @@ The terminal packages follow the same manifest-derived publication graph as
 every other workspace member. `@executablemd/terminal` depends on
 `@executablemd/durable-streams` and the external Effection packages, not on
 runtime, core, CLI, or terminal-tmux. `@executablemd/terminal-tmux` depends on
-terminal. Runtime depends on terminal for its compatibility re-exports. Core
-depends on terminal as well as its existing runtime and durable-stream
-dependencies. CLI depends on terminal-tmux, terminal, core, and runtime.
+terminal. Runtime has no terminal dependency. Core depends on terminal as well
+as its existing runtime and durable-stream dependencies. CLI depends on
+terminal-tmux, terminal, core, and runtime.
 
 The generated npm jobs consequently publish durable-streams before terminal;
-terminal before terminal-tmux, runtime, and core; and all of terminal-tmux,
-terminal, runtime, and core before CLI. Independent leaves remain parallel. The
+terminal before terminal-tmux and core; and terminal-tmux, terminal, core and
+runtime before CLI. Runtime remains an independent leaf. The
 workspace package names and versions are also recorded in `bun.lock`. Adding
 the two manifests or changing these sibling dependencies requires
 `deno install --frozen=false`, the repository's normal setup, and
