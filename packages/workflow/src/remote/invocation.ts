@@ -31,7 +31,8 @@ import {
   type RunnerFiles,
 } from "./materialize.ts";
 import type { RemoteReadLink } from "./read.ts";
-import type { CommitDecision } from "./publication.ts";
+import type { CommitDecision, ProposedContent, RetainedMapping } from "./publication.ts";
+import type { WorkspaceEnlistment } from "./collector.ts";
 
 /** A directory this invocation owns for as long as it needs one. */
 export interface TemporaryTrees {
@@ -40,6 +41,16 @@ export interface TemporaryTrees {
   /** Remove one, before its scope would. */
   remove(path: string): Operation<void>;
 }
+
+/**
+ * The capability to move the accepted tree, which is not part of reading it.
+ *
+ * A symbol because a symbol cannot be written down by anyone who does not
+ * already have it. Everything that merely reads the Workspace receives a
+ * `Materialization` and can see no way to change which Workspace it is
+ * reading; only an attempt, created by this module, is handed the key.
+ */
+const ACCEPT: unique symbol = Symbol("executablemd.workflow.remote.accept");
 
 /** The accepted local copy of the root the owner last confirmed. */
 export interface Materialization {
@@ -56,22 +67,37 @@ export interface Materialization {
   at(logical: string): string;
 }
 
-/** One disposable place to make a mutation, and the way to keep it. */
+/** The accepted materialization as this module alone sees it. */
+interface AcceptedMaterialization extends Materialization {
+  readonly [ACCEPT]: (next: { root: string; workspaceRootId: string }) => Operation<void>;
+}
+
+/**
+ * One disposable place to make a mutation, and the way to offer it.
+ *
+ * There is no `promote()`. Promotion is not something a caller does at the
+ * right moment; it is what happens inside the transaction when the owner
+ * performs the exact commit that proposed this attempt. An attempt offers a
+ * proposal, the transaction sends it, and only the transaction — holding the
+ * answer it just validated — transfers the tree.
+ */
 export interface Attempt {
   readonly at: HostPath;
   /** What the attempt now describes, captured and checked locally. */
   capture(): Operation<CapturedWorkspace>;
   /**
-   * Make this attempt the accepted materialization.
+   * Offer this attempt's captured Workspace to the active transaction.
    *
-   * It takes the owner's performed decision because that decision is the
-   * authority: nothing else may promote, and a decision naming a different root
-   * than this attempt captured is not this attempt's decision. Passing it is
-   * the proof, which is why there is no argument-free way to do this — a
-   * refusal, an ambiguous loss and a local failure all leave the caller with
-   * nothing to pass.
+   * The value it returns carries a way back to this attempt that nothing else
+   * can construct. A caller may build an enlistment by hand, but it will carry
+   * no attempt, and so it can move no accepted materialization — which is the
+   * point: a value shaped like an owner's decision is not authority, and there
+   * is nowhere to hand one.
    */
-  promote(decision: CommitDecision): Operation<void>;
+  propose(
+    captured: CapturedWorkspace,
+    mappings: readonly RetainedMapping[],
+  ): Operation<WorkspaceEnlistment>;
 }
 
 /**
@@ -88,19 +114,19 @@ export function useMaterialization(
   reads: RemoteReadLink,
   workspaceRootId: string,
   reject: WorkspaceRejection,
-): Operation<AcceptedMaterialization> {
+): Operation<Materialization> {
   return resource(function* (provide) {
     const root = yield* trees.create("accepted");
     yield* materializeWorkspaceRoot(files, reads, at(root), workspaceRootId, reject);
     let accepted = { root, workspaceRootId };
-    yield* provide({
+    const materialization: AcceptedMaterialization = {
       get workspaceRootId(): string {
         return accepted.workspaceRootId;
       },
       at(logical: string): string {
         return at(accepted.root)(logical);
       },
-      *replace(next: { root: string; workspaceRootId: string }): Operation<void> {
+      *[ACCEPT](next: { root: string; workspaceRootId: string }): Operation<void> {
         const previous = accepted.root;
         accepted = next;
         // The tree the run used to be at is removed once nothing points at it.
@@ -108,19 +134,24 @@ export function useMaterialization(
         // nothing can reach and nothing will clean up until the invocation ends.
         yield* trees.remove(previous);
       },
-    });
+    };
+    yield* provide(materialization);
   });
 }
 
 /**
- * The accepted materialization, plus the one operation that may move it.
+ * The accepted materialization, with the capability an attempt needs.
  *
- * `replace` is not on `Materialization` because everything that merely reads
- * the Workspace should not be able to change which Workspace it is reading.
- * Only an attempt holding a performed decision reaches this.
+ * The declared type hides it, so this is where the two views meet. A value that
+ * did not come from `useMaterialization()` carries no such key and cannot be
+ * mistaken for one.
  */
-export interface AcceptedMaterialization extends Materialization {
-  replace(next: { root: string; workspaceRootId: string }): Operation<void>;
+function accepting(materialization: Materialization, reject: WorkspaceRejection) {
+  const accept = (materialization as Partial<AcceptedMaterialization>)[ACCEPT];
+  if (accept === undefined) {
+    reject("this is not an accepted materialization this invocation owns");
+  }
+  return accept;
 }
 
 /**
@@ -135,10 +166,11 @@ export function useAttempt(
   files: RunnerFiles,
   trees: TemporaryTrees,
   reads: RemoteReadLink,
-  materialization: AcceptedMaterialization,
+  materialization: Materialization,
   reject: WorkspaceRejection,
 ): Operation<Attempt> {
   return resource(function* (provide) {
+    const accept = accepting(materialization, reject);
     const root = yield* trees.create("attempt");
     yield* materializeWorkspaceRoot(
       files,
@@ -148,40 +180,85 @@ export function useAttempt(
       reject,
     );
 
-    let promoted = false;
+    let transferred = false;
     // Registered before the attempt is handed over, so every exit removes it —
     // including the ones that never reach the end of the calling scope.
     yield* ensure(function* () {
-      if (!promoted) {
+      if (!transferred) {
         yield* trees.remove(root);
       }
     });
+
+    /**
+     * Make this attempt the accepted materialization.
+     *
+     * Reached only through the enlistment `propose()` produced, and only by the
+     * transaction that has just validated the owner's answer for this exact
+     * proposal. The decision is compared with what this attempt captured, so an
+     * answer about some other Workspace transfers nothing.
+     */
+    function* transfer(decision: CommitDecision, captured: CapturedWorkspace): Operation<void> {
+      if (transferred) {
+        reject("this attempt has already been transferred");
+      }
+      if (decision.workspaceRootId !== captured.root.rootId) {
+        reject("the owner's decision names a root this attempt did not capture");
+      }
+      transferred = true;
+      yield* accept({ root, workspaceRootId: captured.root.rootId });
+    }
 
     yield* provide({
       at: at(root),
       *capture(): Operation<CapturedWorkspace> {
         return yield* captureWorkspace(files, at(root), reject);
       },
-      *promote(decision: CommitDecision): Operation<void> {
-        if (promoted) {
-          // One decision promotes one attempt once. A second promotion would be
-          // moving the accepted tree somewhere it has already been moved from.
-          reject("this attempt has already been promoted");
-        }
-        const captured = yield* captureWorkspace(files, at(root), reject);
-        if (decision.workspaceRootId !== captured.root.rootId) {
-          // The owner published something other than what this attempt holds.
-          // Promoting would label these bytes with a root they are not.
-          reject("the owner's decision names a root this attempt did not capture");
-        }
-        promoted = true;
-        // The tree itself becomes the accepted one. Recording the identity
-        // without moving the bytes would leave the invocation reading the
-        // Workspace it used to be at under the name of the one it is now at.
-        yield* materialization.replace({ root, workspaceRootId: captured.root.rootId });
+      // deno-lint-ignore require-yield
+      *propose(
+        captured: CapturedWorkspace,
+        mappings: readonly RetainedMapping[],
+      ): Operation<WorkspaceEnlistment> {
+        return {
+          publication: {
+            proposedWorkspaceRootId: captured.root.rootId,
+            proposedManifest: captured.root.manifest,
+            content: inventoryOf(captured),
+          },
+          mappings,
+          bytes: bytesOf(captured),
+          transfer: (decision) => transfer(decision, captured),
+        };
       },
     });
   });
+}
+
+/** The exact closure a captured root names, in canonical order. */
+function inventoryOf(captured: CapturedWorkspace): ProposedContent[] {
+  return [
+    ...captured.root.manifests.map((digest) => ({
+      kind: "manifest" as const,
+      digest,
+      size: captured.contents.get(digest)?.manifestBytes.length ?? 0,
+    })),
+    ...captured.root.blobs.map((digest) => ({
+      kind: "blob" as const,
+      digest,
+      size: captured.blobs.get(digest)?.length ?? 0,
+    })),
+  ];
+}
+
+/** Every piece the capture can supply, by identity. */
+function bytesOf(captured: CapturedWorkspace): Map<string, Uint8Array> {
+  const bytes = new Map<string, Uint8Array>();
+  for (const [digest, content] of captured.contents) {
+    bytes.set(digest, content.manifestBytes);
+  }
+  for (const [digest, blob] of captured.blobs) {
+    bytes.set(digest, blob);
+  }
+  return bytes;
 }
 
 /**

@@ -96,6 +96,20 @@ export interface WorkspaceEnlistment {
    * nobody can supply is refused rather than guessed at.
    */
   readonly bytes: ReadonlyMap<string, Uint8Array>;
+  /**
+   * How this proposal's attempt becomes the accepted Workspace.
+   *
+   * Supplied by the attempt that produced the proposal, and reachable nowhere
+   * else. The transaction calls it once, after the owner has performed the
+   * exact commit this proposal describes and the answer has been validated
+   * against it — which is what makes the performed answer the authority rather
+   * than a value that merely looks like one.
+   *
+   * Absent when the proposal came from somewhere other than a disposable
+   * attempt. Then there is nothing to transfer, which is the correct outcome
+   * rather than a missing step.
+   */
+  readonly transfer?: (decision: CommitDecision) => Operation<void>;
 }
 
 /** What the collector needs from the connection. */
@@ -277,6 +291,13 @@ export function transactRemotely<T>(
       if (!committed.ok) {
         return committed;
       }
+      // The owner performed this exact proposal, so the attempt that produced
+      // it becomes the accepted Workspace — here, inside the operation that
+      // received and validated the answer, rather than by handing the answer
+      // to a caller and trusting the sequence.
+      if (enlisted?.transfer !== undefined) {
+        yield* enlisted.transfer(committed.value);
+      }
       // Only now. `T` is the body's own value and never crossed the connection.
       return Ok(outcome);
     }
@@ -306,6 +327,9 @@ function detach(proposal: WorkspaceEnlistment): WorkspaceEnlistment {
       ),
     }),
     mappings: Object.freeze(proposal.mappings.map(detachMapping)),
+    // Carried through rather than copied: it is a capability, not data, and the
+    // attempt that created it is the only thing that can honour it.
+    ...(proposal.transfer === undefined ? {} : { transfer: proposal.transfer }),
     // A copy of every buffer, not a reference to one. A caller that goes on
     // writing into the array it captured must not be able to change what this
     // proposal stages.

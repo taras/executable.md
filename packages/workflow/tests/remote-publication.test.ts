@@ -431,7 +431,7 @@ describe("what the production runner publishes", () => {
     void outcomes;
   });
 
-  it("promotes only with the owner's decision, and moves the tree with it", function* () {
+  it("transfers the attempt inside the transaction that the owner performed", function* () {
     const files = runnerFiles();
     const trees = yield* useRunnerTrees();
     const { captured, reads } = yield* startingTree();
@@ -449,50 +449,35 @@ describe("what the production runner publishes", () => {
     const acceptedBefore = materialization.at("/");
 
     let attemptRoot = "";
-    const attempt = yield* useAttempt(files, trees, reads, materialization, reject);
-    attemptRoot = attempt.at("/");
-    yield* until(writeFile(attempt.at("/NOTES.md"), "published\n", { mode: 0o644 }));
-    const proposed = yield* attempt.capture();
-    for (const [digest, content] of proposed.contents) {
-      sizes.set(digest, content.manifestBytes.length);
-    }
-    for (const [digest, blob] of proposed.blobs) {
-      sizes.set(digest, blob.length);
-    }
-
-    // A decision the owner did not give cannot promote.
-    let raised: unknown;
-    try {
-      yield* attempt.promote({ workspaceRootId: captured.root.rootId, journalEventIds: [] });
-    } catch (error) {
-      raised = error;
-    }
-    expect(raised).toBeInstanceOf(Error);
-    expect(materialization.workspaceRootId).toBe(captured.root.rootId);
-
-    // The owner's own answer, naming the root this attempt captured.
-    const committed = yield* link.commit({
-      expectedWorkspaceRootId: captured.root.rootId,
-      expectedJournalEventId: null,
-      events: [],
-      publication: {
-        proposedWorkspaceRootId: proposed.root.rootId,
-        proposedManifest: proposed.root.manifest,
-        content: inventoryOf(proposed),
-      },
-      mappings: [],
-      bytes: proposedBytes(proposed),
+    let acceptedDuringBody = "";
+    const committed = yield* scoped(function* () {
+      const attempt = yield* useAttempt(files, trees, reads, materialization, reject);
+      attemptRoot = attempt.at("/");
+      yield* until(writeFile(attempt.at("/NOTES.md"), "published\n", { mode: 0o644 }));
+      const proposed = yield* attempt.capture();
+      for (const [digest, content] of proposed.contents) {
+        sizes.set(digest, content.manifestBytes.length);
+      }
+      for (const [digest, blob] of proposed.blobs) {
+        sizes.set(digest, blob.length);
+      }
+      return yield* transactRemotely(link, createTransactionGate(), function* (_tx, enlist) {
+        enlist(yield* attempt.propose(proposed, []));
+        // Still the old Workspace while the answer is unknown.
+        acceptedDuringBody = materialization.at("/");
+        return "done";
+      });
     });
-    if (!committed.ok) {
-      throw committed.error;
-    }
-    yield* attempt.promote(committed.value);
 
-    // The accepted materialization is the promoted tree, not a relabelled
-    // copy of the old one: the file the effect wrote is readable through it.
-    expect(materialization.workspaceRootId).not.toBe(captured.root.rootId);
+    expect(committed).toMatchObject({ ok: true });
+    expect(acceptedDuringBody).toBe(acceptedBefore);
+
+    // By the time the transaction reported success the transfer had happened:
+    // the accepted path is the attempt's tree and reads the attempted bytes.
     expect(materialization.at("/")).toBe(attemptRoot);
+    expect(materialization.workspaceRootId).not.toBe(captured.root.rootId);
     expect(yield* until(readFile(materialization.at("/NOTES.md"), "utf8"))).toBe("published\n");
+
     // And the tree the run used to be at is gone.
     let listed: unknown;
     try {
@@ -501,6 +486,54 @@ describe("what the production runner publishes", () => {
       listed = error;
     }
     expect(listed).toBeInstanceOf(Error);
+  });
+
+  it("offers no way to move the accepted Workspace without the owner", function* () {
+    const files = runnerFiles();
+    const trees = yield* useRunnerTrees();
+    const { captured, reads } = yield* startingTree();
+    const materialization = yield* useMaterialization(
+      files,
+      trees,
+      reads,
+      captured.root.rootId,
+      reject,
+    );
+    const accepted = materialization.at("/");
+
+    yield* scoped(function* () {
+      const attempt = yield* useAttempt(files, trees, reads, materialization, reject);
+      yield* until(writeFile(attempt.at("/NOTES.md"), "never published\n", { mode: 0o644 }));
+      const proposed = yield* attempt.capture();
+
+      // Everything a caller can reach: reading the Workspace, capturing an
+      // attempt, and offering a proposal. Nothing here promotes or replaces.
+      expect(Object.keys(materialization).toSorted()).toEqual(["at", "workspaceRootId"]);
+      expect(Object.keys(attempt).toSorted()).toEqual(["at", "capture", "propose"]);
+
+      // A value shaped exactly like the owner's answer, for the exact root this
+      // attempt captured, handed to the only thing that takes an enlistment.
+      // It carries no attempt, so it can transfer nothing.
+      const forged = {
+        publication: {
+          proposedWorkspaceRootId: proposed.root.rootId,
+          proposedManifest: proposed.root.manifest,
+          content: [],
+        },
+        mappings: [],
+        bytes: new Map<string, Uint8Array>(),
+      };
+      const transport = wire(ownerAnswers(""));
+      const connection = yield* useOwnerConnection(transport.socket);
+      const link = cloudflareOwnerLink(connection, reads, ids());
+      yield* transactRemotely(link, createTransactionGate(), function* (_tx, enlist) {
+        enlist(forged);
+        return "done";
+      });
+    });
+
+    expect(materialization.at("/")).toBe(accepted);
+    expect(materialization.workspaceRootId).toBe(captured.root.rootId);
   });
 
   it("cannot be changed by a caller that kept its own copy", function* () {
