@@ -24,6 +24,7 @@
 
 import { call, ensure, Ok, type Operation, type Result, scoped } from "effection";
 import type { CommitDecision, RetainedMapping, WorkspacePublication } from "./publication.ts";
+import { SEAL, type SealableAttempt } from "./seal.ts";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import type { DurableStream } from "@executablemd/durable-streams";
 import type { WorkflowRunTransaction } from "../storage/api.ts";
@@ -70,46 +71,6 @@ export interface CommitIntent {
   readonly mappings: readonly RetainedMapping[];
   /** The sealed bytes for the pieces this proposal may have to supply. */
   readonly bytes: ReadonlyMap<string, Uint8Array>;
-}
-
-/**
- * What a Workspace operation enlisted, if one did.
- *
- * At most one per transaction. Two would be two Workspaces proposed for one
- * commit, and the owner would have to choose — which is a decision nobody is
- * entitled to make on the run's behalf.
- */
-export interface WorkspaceEnlistment {
-  readonly publication: WorkspacePublication;
-  readonly mappings: readonly RetainedMapping[];
-  /**
-   * The bytes for every piece the publication names, by identity.
-   *
-   * Supplied at enlistment rather than fetched later. The proposal's identity
-   * is a digest over content, so bytes that could still change after the
-   * transaction sealed would let one identity describe two different
-   * Workspaces — and the adapter would stage whatever the buffer happened to
-   * hold by the time it looked.
-   *
-   * Only pieces the owner may not already hold need appear. What is absent is
-   * content the owner is expected to have, and a proposal naming content
-   * nobody can supply is refused rather than guessed at.
-   */
-  readonly bytes: ReadonlyMap<string, Uint8Array>;
-  /**
-   * How this proposal's attempt becomes the accepted Workspace.
-   *
-   * Supplied by the attempt that produced the proposal, and reachable nowhere
-   * else. The transaction calls it once, after the owner has performed the
-   * exact commit this proposal describes and the answer has been validated
-   * against it — which is what makes the performed answer the authority rather
-   * than a value that merely looks like one.
-   *
-   * Absent when the proposal came from somewhere other than a disposable
-   * attempt. Then there is nothing to transfer, which is the correct outcome
-   * rather than a missing step.
-   */
-  readonly transfer?: (decision: CommitDecision) => Operation<void>;
 }
 
 /** What the collector needs from the connection. */
@@ -241,7 +202,7 @@ export function transactRemotely<T>(
         },
       };
 
-      let enlisted: WorkspaceEnlistment | undefined;
+      let enlisted: { attempt: SealableAttempt; mappings: readonly RetainedMapping[] } | undefined;
       /**
        * How a Workspace operation puts its result into this transaction.
        *
@@ -251,17 +212,22 @@ export function transactRemotely<T>(
        * arrays and records it passed and a proposal that changed after it was
        * admitted would not be the proposal the identity was computed over.
        */
-      const enlist: EnlistWorkspace = (proposal: WorkspaceEnlistment): void => {
+      const enlist: EnlistWorkspace = (
+        attempt: SealableAttempt,
+        mappings: readonly RetainedMapping[] = [],
+      ): void => {
         if (!live) {
           throw new RemoteTransactionError("transaction-closed");
         }
         if (enlisted !== undefined) {
           throw new RemoteTransactionError("publication-already-enlisted");
         }
-        if (proposal.mappings.length > MAX_MAPPINGS) {
+        if (mappings.length > MAX_MAPPINGS) {
           throw new RemoteTransactionError("too-many-mappings");
         }
-        enlisted = detach(proposal);
+        // The mappings are detached now, because they are the caller's values.
+        // The Workspace itself is not read until sealing.
+        enlisted = { attempt, mappings: Object.freeze(mappings.map(detachMapping)) };
       };
 
       let outcome: T;
@@ -279,14 +245,18 @@ export function transactRemotely<T>(
         live = false;
       }
 
+      // Sealed after teardown: the proposal is the tree as it finally is.
+      const sealed =
+        enlisted === undefined ? undefined : yield* enlisted.attempt[SEAL](enlisted.mappings);
+
       const committed = yield* link.commit({
         expectedWorkspaceRootId: starting.workspaceRootId,
         expectedJournalEventId: starting.journalEventId,
         // A private snapshot. The collector's own array never leaves.
         events: appended.map((event) => structuredClone(event)),
-        publication: enlisted?.publication ?? null,
-        mappings: enlisted?.mappings ?? [],
-        bytes: enlisted?.bytes ?? new Map(),
+        publication: sealed?.publication ?? null,
+        mappings: sealed?.mappings ?? [],
+        bytes: sealed?.bytes ?? new Map(),
       });
       if (!committed.ok) {
         return committed;
@@ -295,8 +265,8 @@ export function transactRemotely<T>(
       // it becomes the accepted Workspace — here, inside the operation that
       // received and validated the answer, rather than by handing the answer
       // to a caller and trusting the sequence.
-      if (enlisted?.transfer !== undefined) {
-        yield* enlisted.transfer(committed.value);
+      if (sealed !== undefined) {
+        yield* sealed.transfer(committed.value);
       }
       // Only now. `T` is the body's own value and never crossed the connection.
       return Ok(outcome);
@@ -304,8 +274,20 @@ export function transactRemotely<T>(
   });
 }
 
-/** How a Workspace operation enlists its one publication in the active transaction. */
-export type EnlistWorkspace = (proposal: WorkspaceEnlistment) => void;
+/**
+ * How a Workspace operation designates its attempt for publication.
+ *
+ * It names an attempt rather than handing over a proposal. What the attempt
+ * holds is captured when the transaction seals it — after the body and
+ * everything it started have finished — so the proposal always describes the
+ * tree as it finally is, and the tree the owner decides is the tree that gets
+ * transferred. There is no way to enlist a Workspace that no live attempt owns,
+ * which is what stops a durable commit from leaving the invocation behind.
+ */
+export type EnlistWorkspace = (
+  attempt: SealableAttempt,
+  mappings?: readonly RetainedMapping[],
+) => void;
 
 /**
  * A copy nobody else holds a reference into.
@@ -315,28 +297,6 @@ export type EnlistWorkspace = (proposal: WorkspaceEnlistment) => void;
  * publication whose inventory or manifest changed afterwards would not be the
  * one its identity was computed over.
  */
-function detach(proposal: WorkspaceEnlistment): WorkspaceEnlistment {
-  return Object.freeze({
-    publication: Object.freeze({
-      proposedWorkspaceRootId: proposal.publication.proposedWorkspaceRootId,
-      proposedManifest: proposal.publication.proposedManifest,
-      content: Object.freeze(
-        proposal.publication.content.map((piece) =>
-          Object.freeze({ kind: piece.kind, digest: piece.digest, size: piece.size }),
-        ),
-      ),
-    }),
-    mappings: Object.freeze(proposal.mappings.map(detachMapping)),
-    // Carried through rather than copied: it is a capability, not data, and the
-    // attempt that created it is the only thing that can honour it.
-    ...(proposal.transfer === undefined ? {} : { transfer: proposal.transfer }),
-    // A copy of every buffer, not a reference to one. A caller that goes on
-    // writing into the array it captured must not be able to change what this
-    // proposal stages.
-    bytes: new Map([...proposal.bytes].map(([digest, bytes]) => [digest, bytes.slice()])),
-  });
-}
-
 /**
  * One mapping, copied all the way down.
  *

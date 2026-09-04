@@ -18,7 +18,6 @@ import { ensure, type Operation, scoped, sleep, spawn, until } from "effection";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { agentSessionKey } from "../src/storage/agent-session.ts";
 import { cloudflareOwnerLink } from "../src/cloudflare/client.ts";
-import { encodeBase64 } from "../src/cloudflare/encoding.ts";
 import { runnerFiles, useRunnerTrees } from "../src/deno/remote-files.ts";
 import {
   type CommitIntent,
@@ -40,7 +39,7 @@ import {
 } from "../src/workspace/root-manifest.ts";
 import { sha256Hex } from "../src/workspace/sha256.ts";
 import { locatorFingerprintOf } from "../src/composition/locator.ts";
-import type { ProposedContent, RetainedMapping } from "../src/remote/publication.ts";
+import type { RetainedMapping } from "../src/remote/publication.ts";
 
 function reject(reason: string): never {
   throw new Error(reason);
@@ -56,34 +55,6 @@ function event(name: string) {
 }
 
 const LOCATOR = "https://git.example.invalid/octo/app.git";
-
-/** The exact closure a proposed root names, in canonical order. */
-function inventoryOf(captured: CapturedWorkspace): ProposedContent[] {
-  return [
-    ...captured.root.manifests.map((digest) => ({
-      kind: "manifest" as const,
-      digest,
-      size: captured.contents.get(digest)?.manifestBytes.length ?? 0,
-    })),
-    ...captured.root.blobs.map((digest) => ({
-      kind: "blob" as const,
-      digest,
-      size: captured.blobs.get(digest)?.length ?? 0,
-    })),
-  ];
-}
-
-/** Every piece a capture can supply, by identity. */
-function proposedBytes(captured: CapturedWorkspace): Map<string, Uint8Array> {
-  const bytes = new Map<string, Uint8Array>();
-  for (const [digest, content] of captured.contents) {
-    bytes.set(digest, content.manifestBytes);
-  }
-  for (const [digest, blob] of captured.blobs) {
-    bytes.set(digest, blob);
-  }
-  return bytes;
-}
 
 /** The Repository mapping these tests enlist. */
 function repositoryMapping(): RetainedMapping {
@@ -155,15 +126,20 @@ function wire(answer: (request: Record<string, unknown>) => Record<string, unkno
  *
  * `sizes` is what the owner measured after decoding staged bytes.
  */
-function ownerAnswers(_rootId: string, sizes: ReadonlyMap<string, number> = new Map()) {
+function ownerAnswers(_rootId = "", _sizes: ReadonlyMap<string, number> = new Map()) {
   return (request: Record<string, unknown>): Record<string, unknown> => {
     if (request["command"] === "stage") {
+      // The length the owner would have measured after decoding, computed from
+      // the encoding itself so this answers about the bytes it was actually
+      // sent rather than about a number a test remembered to set.
+      const encoded = String(request["bytes"] ?? "");
+      const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
       return {
         outcome: "performed",
         value: {
           kind: request["kind"],
           digest: request["digest"],
-          size: sizes.get(String(request["digest"])) ?? 0,
+          size: (encoded.length / 4) * 3 - padding,
         },
       };
     }
@@ -329,26 +305,7 @@ describe("what the production runner publishes", () => {
       createTransactionGate(),
       function* (transaction, enlist) {
         yield* transaction.journal.append(event("published"));
-        enlist({
-          publication: {
-            proposedWorkspaceRootId: proposed.root.rootId,
-            proposedManifest: proposed.root.manifest,
-            content: [
-              ...proposed.root.manifests.map((digest) => ({
-                kind: "manifest" as const,
-                digest,
-                size: proposed.contents.get(digest)?.manifestBytes.length ?? 0,
-              })),
-              ...proposed.root.blobs.map((digest) => ({
-                kind: "blob" as const,
-                digest,
-                size: proposed.blobs.get(digest)?.length ?? 0,
-              })),
-            ],
-          },
-          mappings: [repositoryMapping()],
-          bytes: proposedBytes(proposed),
-        });
+        enlist(attempt, [repositoryMapping()]);
         return "done";
       },
     );
@@ -462,7 +419,7 @@ describe("what the production runner publishes", () => {
         sizes.set(digest, blob.length);
       }
       return yield* transactRemotely(link, createTransactionGate(), function* (_tx, enlist) {
-        enlist(yield* attempt.propose(proposed, []));
+        enlist(attempt);
         // Still the old Workspace while the answer is unknown.
         acceptedDuringBody = materialization.at("/");
         return "done";
@@ -504,32 +461,24 @@ describe("what the production runner publishes", () => {
     yield* scoped(function* () {
       const attempt = yield* useAttempt(files, trees, reads, materialization, reject);
       yield* until(writeFile(attempt.at("/NOTES.md"), "never published\n", { mode: 0o644 }));
-      const proposed = yield* attempt.capture();
 
-      // Everything a caller can reach: reading the Workspace, capturing an
-      // attempt, and offering a proposal. Nothing here promotes or replaces.
+      // Everything a caller can reach by name. Reading where the Workspace is,
+      // reading what an attempt holds — and nothing that moves either.
       expect(Object.keys(materialization).toSorted()).toEqual(["at", "workspaceRootId"]);
-      expect(Object.keys(attempt).toSorted()).toEqual(["at", "capture", "propose"]);
+      expect(Object.keys(attempt).toSorted()).toEqual(["at", "capture"]);
+      const reachable = [
+        ...Object.getOwnPropertyNames(attempt),
+        ...Object.getOwnPropertyNames(materialization),
+      ];
+      for (const name of ["promote", "transfer", "replace", "accept", "propose", "seal"]) {
+        expect(reachable).not.toContain(name);
+      }
 
-      // A value shaped exactly like the owner's answer, for the exact root this
-      // attempt captured, handed to the only thing that takes an enlistment.
-      // It carries no attempt, so it can transfer nothing.
-      const forged = {
-        publication: {
-          proposedWorkspaceRootId: proposed.root.rootId,
-          proposedManifest: proposed.root.manifest,
-          content: [],
-        },
-        mappings: [],
-        bytes: new Map<string, Uint8Array>(),
-      };
-      const transport = wire(ownerAnswers(""));
-      const connection = yield* useOwnerConnection(transport.socket);
-      const link = cloudflareOwnerLink(connection, reads, ids());
-      yield* transactRemotely(link, createTransactionGate(), function* (_tx, enlist) {
-        enlist(forged);
-        return "done";
-      });
+      // A caller can still capture. What it gets back is a description, and
+      // there is nothing to hand it to: `enlist` takes an attempt, so a
+      // publication that no live attempt owns cannot be expressed at all.
+      const described = yield* attempt.capture();
+      expect(described.root.rootId).not.toBe(captured.root.rootId);
     });
 
     expect(materialization.at("/")).toBe(accepted);
@@ -537,47 +486,36 @@ describe("what the production runner publishes", () => {
   });
 
   it("cannot be changed by a caller that kept its own copy", function* () {
+    const files = runnerFiles();
+    const trees = yield* useRunnerTrees();
     const { captured, reads } = yield* startingTree();
-    const transport = wire(ownerAnswers(captured.root.rootId));
+    const transport = wire(ownerAnswers(""));
     const connection = yield* useOwnerConnection(transport.socket);
     const link = cloudflareOwnerLink(connection, reads, ids());
-    const content: ProposedContent[] = [{ kind: "manifest", digest: "a".repeat(64), size: 1 }];
-    const mappings: RetainedMapping[] = [
-      {
-        kind: "repository",
-        locator: LOCATOR,
-        record: {
-          name: "app",
-          locatorFingerprint: locatorFingerprintOf(LOCATOR),
-          requestedBase: null,
-          creationCommit: "9".repeat(40),
-          primaryBranch: "main",
-          objectFormat: "sha1",
-          checkoutPath: "/docs",
-        },
-      },
-    ];
-    yield* transactRemotely(link, createTransactionGate(), function* (_transaction, enlist) {
-      enlist({
-        publication: {
-          proposedWorkspaceRootId: captured.root.rootId,
-          proposedManifest: captured.root.manifest,
-          content,
-        },
-        mappings,
-        bytes: new Map(),
+    const materialization = yield* useMaterialization(
+      files,
+      trees,
+      reads,
+      captured.root.rootId,
+      reject,
+    );
+
+    const mappings: RetainedMapping[] = [repositoryMapping()];
+    yield* scoped(function* () {
+      const attempt = yield* useAttempt(files, trees, reads, materialization, reject);
+      yield* transactRemotely(link, createTransactionGate(), function* (_transaction, enlist) {
+        enlist(attempt, mappings);
+        // The caller still holds the array it passed and edits it afterwards.
+        const first = mappings[0];
+        if (first?.kind === "repository") {
+          mappings[0] = { ...first, locator: "https://elsewhere.invalid/x.git" };
+        }
+        return "done";
       });
-      // The caller still holds both arrays and edits them after admission.
-      content.push({ kind: "blob", digest: "b".repeat(64), size: 2 });
-      const first = mappings[0];
-      if (first?.kind === "repository") {
-        mappings[0] = { ...first, locator: "https://elsewhere.invalid/x.git" };
-      }
-      return "done";
     });
-    const commit = lastCommit(transport.sent);
-    expect(memberList(member(commit, "publication"), "content")).toHaveLength(1);
-    expect(text(memberList(commit, "mappings")[0] ?? {}, "locator")).toBe(LOCATOR);
+    expect(text(memberList(lastCommit(transport.sent), "mappings")[0] ?? {}, "locator")).toBe(
+      LOCATOR,
+    );
   });
 
   it("sends a journal-only commit with no publication and stages nothing", function* () {
@@ -611,19 +549,23 @@ describe("what the production runner publishes", () => {
   });
 
   it("encodes every kind of retained mapping the owner accepts", function* () {
+    const files = runnerFiles();
+    const trees = yield* useRunnerTrees();
     const { captured, reads } = yield* startingTree();
-    const transport = wire(ownerAnswers(captured.root.rootId));
+    const transport = wire(ownerAnswers(""));
     const connection = yield* useOwnerConnection(transport.socket);
     const link = cloudflareOwnerLink(connection, reads, ids());
-    yield* transactRemotely(link, createTransactionGate(), function* (_transaction, enlist) {
-      enlist({
-        publication: {
-          proposedWorkspaceRootId: captured.root.rootId,
-          proposedManifest: captured.root.manifest,
-          content: [],
-        },
-        bytes: new Map(),
-        mappings: [
+    const materialization = yield* useMaterialization(
+      files,
+      trees,
+      reads,
+      captured.root.rootId,
+      reject,
+    );
+    yield* scoped(function* () {
+      const attempt = yield* useAttempt(files, trees, reads, materialization, reject);
+      yield* transactRemotely(link, createTransactionGate(), function* (_transaction, enlist) {
+        enlist(attempt, [
           repositoryMapping(),
           {
             kind: "worktree",
@@ -652,9 +594,9 @@ describe("what the production runner publishes", () => {
               createdAt: "2026-09-03T00:00:00.000Z",
             },
           },
-        ],
+        ]);
+        return "done";
       });
-      return "done";
     });
     const mappings = memberList(lastCommit(transport.sent), "mappings");
     expect(mappings.map((mapping) => mapping["kind"])).toEqual([
@@ -822,30 +764,38 @@ describe("what the production runner publishes", () => {
   });
 
   it("sends nothing when the transaction exceeds a local bound", function* () {
+    const files = runnerFiles();
+    const trees = yield* useRunnerTrees();
     const { captured, reads } = yield* startingTree();
-    const transport = wire(ownerAnswers(captured.root.rootId));
+    const transport = wire(ownerAnswers(""));
     const connection = yield* useOwnerConnection(transport.socket);
     const link = cloudflareOwnerLink(connection, reads, ids());
+    const materialization = yield* useMaterialization(
+      files,
+      trees,
+      reads,
+      captured.root.rootId,
+      reject,
+    );
     let raised: unknown;
-    try {
-      yield* transactRemotely(link, createTransactionGate(), function* (_transaction, enlist) {
-        enlist({
-          publication: {
-            proposedWorkspaceRootId: captured.root.rootId,
-            proposedManifest: captured.root.manifest,
-            content: [],
-          },
+    yield* scoped(function* () {
+      const attempt = yield* useAttempt(files, trees, reads, materialization, reject);
+      try {
+        yield* transactRemotely(link, createTransactionGate(), function* (_transaction, enlist) {
           // More retained mappings than one intent may carry.
-          mappings: Array.from({ length: 300 }, () => repositoryMapping()),
-          bytes: new Map(),
+          enlist(
+            attempt,
+            Array.from({ length: 300 }, () => repositoryMapping()),
+          );
+          return "done";
         });
-        return "done";
-      });
-    } catch (error) {
-      raised = error;
-    }
+      } catch (error) {
+        raised = error;
+      }
+    });
     expect(raised).toBeInstanceOf(Error);
     expect(transport.sent.some((request) => request["command"] === "commit")).toBe(false);
+    expect(materialization.workspaceRootId).toBe(captured.root.rootId);
   });
 
   it("refuses a performed answer that names a root this proposal did not select", function* () {
@@ -890,12 +840,20 @@ describe("what the production runner publishes", () => {
     expect(committed.ok).toBe(false);
   });
 
-  it("seals nested mapping values and content bytes against later mutation", function* () {
+  it("seals a nested mapping value against later mutation", function* () {
+    const files = runnerFiles();
+    const trees = yield* useRunnerTrees();
     const { captured, reads } = yield* startingTree();
-    const sizes = new Map<string, number>();
-    const transport = wire(ownerAnswers("", sizes));
+    const transport = wire(ownerAnswers(""));
     const connection = yield* useOwnerConnection(transport.socket);
     const link = cloudflareOwnerLink(connection, reads, ids());
+    const materialization = yield* useMaterialization(
+      files,
+      trees,
+      reads,
+      captured.root.rootId,
+      reject,
+    );
 
     const assertion = { kind: "acp-session", value: "admitted" };
     const identity = {
@@ -903,19 +861,10 @@ describe("what the production runner publishes", () => {
       agentCommand: "/usr/bin/agent",
       sessionIdentity: "session-1",
     };
-    const piece = new TextEncoder().encode("admitted bytes");
-    const digest = sha256Hex(piece);
-    sizes.set(digest, piece.length);
-    const bytes = new Map([[digest, piece]]);
-
-    yield* transactRemotely(link, createTransactionGate(), function* (_transaction, enlist) {
-      enlist({
-        publication: {
-          proposedWorkspaceRootId: captured.root.rootId,
-          proposedManifest: captured.root.manifest,
-          content: [{ kind: "blob", digest, size: piece.length }],
-        },
-        mappings: [
+    yield* scoped(function* () {
+      const attempt = yield* useAttempt(files, trees, reads, materialization, reject);
+      yield* transactRemotely(link, createTransactionGate(), function* (_transaction, enlist) {
+        enlist(attempt, [
           {
             kind: "agent-session",
             record: {
@@ -926,51 +875,97 @@ describe("what the production runner publishes", () => {
               createdAt: "2026-09-03T00:00:00.000Z",
             },
           },
-        ],
-        bytes,
+        ]);
+        // The caller still holds the nested assertion object and edits it.
+        assertion.value = "changed after admission";
+        return "done";
       });
-      // The caller still holds the assertion object and the byte buffer, and
-      // edits both after the transaction admitted them.
-      assertion.value = "changed after admission";
-      piece.fill(0);
-      bytes.set(digest, new TextEncoder().encode("substituted"));
-      return "done";
     });
 
-    // What was sent is what was admitted, not what the caller did afterwards.
     const mapping = memberList(lastCommit(transport.sent), "mappings")[0] ?? {};
     expect(text(member(member(mapping, "record"), "assertion"), "value")).toBe("admitted");
-    const staged = transport.sent.find((request) => request["command"] === "stage");
-    expect(staged?.["digest"]).toBe(digest);
-    expect(staged?.["bytes"]).toBe(encodeBase64(new TextEncoder().encode("admitted bytes")));
+  });
+
+  it("commits the tree as it finally is, not as it was when enlisted", function* () {
+    const files = runnerFiles();
+    const trees = yield* useRunnerTrees();
+    const { captured, reads } = yield* startingTree();
+    const sizes = new Map<string, number>();
+    const transport = wire(ownerAnswers("", sizes));
+    const connection = yield* useOwnerConnection(transport.socket);
+    const link = cloudflareOwnerLink(connection, reads, ids());
+    const materialization = yield* useMaterialization(
+      files,
+      trees,
+      reads,
+      captured.root.rootId,
+      reject,
+    );
+
+    let atEnlistment = "";
+    yield* scoped(function* () {
+      const attempt = yield* useAttempt(files, trees, reads, materialization, reject);
+      yield* until(writeFile(attempt.at("/NOTES.md"), "first\n", { mode: 0o644 }));
+      const committed = yield* transactRemotely(
+        link,
+        createTransactionGate(),
+        function* (_transaction, enlist) {
+          enlist(attempt);
+          atEnlistment = (yield* attempt.capture()).root.rootId;
+          // The body goes on working after designating the attempt. Sealing
+          // happens after teardown, so this is what gets proposed.
+          yield* until(writeFile(attempt.at("/NOTES.md"), "second\n", { mode: 0o644 }));
+          const staged = yield* attempt.capture();
+          for (const [digest, content] of staged.contents) {
+            sizes.set(digest, content.manifestBytes.length);
+          }
+          for (const [digest, blob] of staged.blobs) {
+            sizes.set(digest, blob.length);
+          }
+          return "done";
+        },
+      );
+      expect(committed).toMatchObject({ ok: true });
+    });
+
+    // The root the owner was asked to publish is the final one, not the one the
+    // tree held when the body enlisted it.
+    const proposed = member(lastCommit(transport.sent), "publication");
+    expect(proposed["proposedWorkspaceRootId"]).not.toBe(atEnlistment);
+    // And the accepted tree recaptures to exactly the root that was committed.
+    expect(materialization.workspaceRootId).toBe(proposed["proposedWorkspaceRootId"]);
+    expect(yield* until(readFile(materialization.at("/NOTES.md"), "utf8"))).toBe("second\n");
   });
 
   it("refuses a second Workspace publication in one transaction", function* () {
+    const files = runnerFiles();
+    const trees = yield* useRunnerTrees();
     const { captured, reads } = yield* startingTree();
-    const transport = wire(ownerAnswers(captured.root.rootId));
+    const transport = wire(ownerAnswers(""));
     const connection = yield* useOwnerConnection(transport.socket);
     const link = cloudflareOwnerLink(connection, reads, ids());
-    const proposal = {
-      publication: {
-        proposedWorkspaceRootId: captured.root.rootId,
-        proposedManifest: captured.root.manifest,
-        content: [],
-      },
-      mappings: [],
-      bytes: new Map<string, Uint8Array>(),
-    };
+    const materialization = yield* useMaterialization(
+      files,
+      trees,
+      reads,
+      captured.root.rootId,
+      reject,
+    );
     let raised: unknown;
-    try {
-      yield* transactRemotely(link, createTransactionGate(), function* (_transaction, enlist) {
-        enlist(proposal);
-        enlist(proposal);
-        return "done";
-      });
-    } catch (error) {
-      raised = error;
-    }
-    // Two Workspaces proposed for one commit is a choice nobody may make on
-    // the run's behalf, so the transaction fails and nothing is sent.
+    yield* scoped(function* () {
+      const attempt = yield* useAttempt(files, trees, reads, materialization, reject);
+      try {
+        yield* transactRemotely(link, createTransactionGate(), function* (_transaction, enlist) {
+          enlist(attempt);
+          enlist(attempt);
+          return "done";
+        });
+      } catch (error) {
+        raised = error;
+      }
+    });
+    // Two Workspaces proposed for one commit is a choice nobody may make on the
+    // run's behalf, so the transaction fails and nothing is sent.
     expect(raised).toBeInstanceOf(Error);
     expect(transport.sent.some((request) => request["command"] === "commit")).toBe(false);
   });

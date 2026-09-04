@@ -32,7 +32,7 @@ import {
 } from "./materialize.ts";
 import type { RemoteReadLink } from "./read.ts";
 import type { CommitDecision, ProposedContent, RetainedMapping } from "./publication.ts";
-import type { WorkspaceEnlistment } from "./collector.ts";
+import { SEAL, type SealableAttempt, type SealedProposal } from "./seal.ts";
 
 /** A directory this invocation owns for as long as it needs one. */
 export interface TemporaryTrees {
@@ -81,23 +81,10 @@ interface AcceptedMaterialization extends Materialization {
  * proposal, the transaction sends it, and only the transaction — holding the
  * answer it just validated — transfers the tree.
  */
-export interface Attempt {
+export interface Attempt extends SealableAttempt {
   readonly at: HostPath;
-  /** What the attempt now describes, captured and checked locally. */
+  /** What the attempt describes right now, captured and checked locally. */
   capture(): Operation<CapturedWorkspace>;
-  /**
-   * Offer this attempt's captured Workspace to the active transaction.
-   *
-   * The value it returns carries a way back to this attempt that nothing else
-   * can construct. A caller may build an enlistment by hand, but it will carry
-   * no attempt, and so it can move no accepted materialization — which is the
-   * point: a value shaped like an owner's decision is not authority, and there
-   * is nowhere to hand one.
-   */
-  propose(
-    captured: CapturedWorkspace,
-    mappings: readonly RetainedMapping[],
-  ): Operation<WorkspaceEnlistment>;
 }
 
 /**
@@ -189,35 +176,27 @@ export function useAttempt(
       }
     });
 
-    /**
-     * Make this attempt the accepted materialization.
-     *
-     * Reached only through the enlistment `propose()` produced, and only by the
-     * transaction that has just validated the owner's answer for this exact
-     * proposal. The decision is compared with what this attempt captured, so an
-     * answer about some other Workspace transfers nothing.
-     */
-    function* transfer(decision: CommitDecision, captured: CapturedWorkspace): Operation<void> {
-      if (transferred) {
-        reject("this attempt has already been transferred");
-      }
-      if (decision.workspaceRootId !== captured.root.rootId) {
-        reject("the owner's decision names a root this attempt did not capture");
-      }
-      transferred = true;
-      yield* accept({ root, workspaceRootId: captured.root.rootId });
-    }
-
     yield* provide({
       at: at(root),
       *capture(): Operation<CapturedWorkspace> {
         return yield* captureWorkspace(files, at(root), reject);
       },
-      // deno-lint-ignore require-yield
-      *propose(
-        captured: CapturedWorkspace,
-        mappings: readonly RetainedMapping[],
-      ): Operation<WorkspaceEnlistment> {
+
+      /**
+       * Seal this attempt into the proposal the owner will decide.
+       *
+       * Captured here, not earlier. The transaction calls this once the body
+       * and everything it started have torn down, so the proposal describes the
+       * tree as it finally is — a capture taken when the body enlisted could
+       * name one Workspace while the directory went on to hold another, and the
+       * owner would commit one root while the runner transferred different
+       * bytes under it.
+       */
+      *[SEAL](mappings: readonly RetainedMapping[]): Operation<SealedProposal> {
+        if (transferred) {
+          reject("this attempt has already been sealed and transferred");
+        }
+        const captured = yield* captureWorkspace(files, at(root), reject);
         return {
           publication: {
             proposedWorkspaceRootId: captured.root.rootId,
@@ -226,7 +205,16 @@ export function useAttempt(
           },
           mappings,
           bytes: bytesOf(captured),
-          transfer: (decision) => transfer(decision, captured),
+          *transfer(decision: CommitDecision): Operation<void> {
+            if (transferred) {
+              reject("this attempt has already been transferred");
+            }
+            if (decision.workspaceRootId !== captured.root.rootId) {
+              reject("the owner's decision names a root this attempt did not seal");
+            }
+            transferred = true;
+            yield* accept({ root, workspaceRootId: captured.root.rootId });
+          },
         };
       },
     });
