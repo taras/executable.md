@@ -18,7 +18,7 @@ import type { Operation } from "effection";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { settle } from "./errors.ts";
 import type { BoundExecRequest } from "./bound-exec.ts";
-import type { ProgramComponent, ProgramComponentRef } from "./program-identity.ts";
+import type { ProgramComponentRef, ResolvedProgramComponent } from "./program-identity.ts";
 import type {
   CodeBlockContext,
   CodeBlockResult,
@@ -185,7 +185,9 @@ export interface ComponentApi {
    * same question again from its own resolver before the first program effect,
    * so a dishonest answer refuses the evaluation rather than widening it.
    */
-  resolveProgramSite(named: readonly ProgramComponentRef[]): Operation<readonly ProgramComponent[]>;
+  resolveProgramSite(
+    named: readonly ProgramComponentRef[],
+  ): Operation<readonly ResolvedProgramComponent[]>;
   /**
    * Decide what an ordinary function-component failure means (spec §6.9).
    *
@@ -302,7 +304,7 @@ export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component",
   // deno-lint-ignore require-yield
   *resolveProgramSite(
     _named: readonly ProgramComponentRef[],
-  ): Operation<readonly ProgramComponent[]> {
+  ): Operation<readonly ResolvedProgramComponent[]> {
     throw new Error(
       "Component.resolveProgramSite() has no provider: not inside a function component invocation.",
     );

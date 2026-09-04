@@ -85,9 +85,15 @@ import { validateProps } from "./validate.ts";
 import {
   isProgramComponentForm,
   ProgramEvaluationError,
+  readIdentity,
   sameElements,
+  UNIDENTIFIED,
 } from "./program-identity.ts";
-import type { ProgramComponent, ProgramComponentRef } from "./program-identity.ts";
+import type {
+  ProgramComponent,
+  ProgramComponentRef,
+  ResolvedProgramComponent,
+} from "./program-identity.ts";
 import type {
   Json,
   JsonObject,
@@ -327,7 +333,11 @@ function* admitProgram(
       decision: "admitted",
       source,
       mode,
-      named: resolved.map((entry) => ({ ...entry })),
+      named: resolved.map((entry) => ({
+        name: entry.name,
+        form: entry.form,
+        identity: { ...entry.identity },
+      })),
       terms,
       validated: props,
     });
@@ -411,10 +421,11 @@ function readComponents(value: Json | undefined): readonly ProgramComponent[] | 
       return undefined;
     }
     const { name, form, identity } = entry;
-    if (typeof name !== "string" || typeof identity !== "string" || !isProgramComponentForm(form)) {
+    const settled = readIdentity(identity);
+    if (typeof name !== "string" || settled === undefined || !isProgramComponentForm(form)) {
       return undefined;
     }
-    found.push({ name, form, identity });
+    found.push({ name, form, identity: settled });
   }
   return found;
 }
@@ -483,9 +494,15 @@ export function* evaluateProgram(request: ProgramEvaluationRequest): Operation<P
   // What this site answers for each element the candidate writes, settled
   // before the decision so the decision can retain it. A candidate the parser
   // refuses names nothing, and the admission below is where that is recorded.
-  const resolved = yield* resolveProgramSite(
+  const resolved: readonly ResolvedProgramComponent[] = yield* resolveProgramSite(
     yield* programElements(request.source, request.origin),
   );
+  // A site holding an answer nobody stands behind cannot be described, so there
+  // is nothing to record: no grant is made rather than one that a continuation
+  // could not be held to.
+  if (resolved.some((entry) => entry.unidentified)) {
+    throw new ProgramEvaluationError(UNIDENTIFIED);
+  }
 
   const stored = yield createDurableOperation<DurableJson>(
     {

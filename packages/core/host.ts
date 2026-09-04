@@ -142,6 +142,20 @@ export {
   props as evaluateProgramProps,
   selectProgramForm,
 } from "./src/components/Evaluate.ts";
+/**
+ * How an import-middleware provider states a stable identity for the answers it
+ * supplies (§5.7).
+ *
+ * A provider that answers without delegating, or replaces what came back, is
+ * part of the authority genuinely available at an evaluation site. A complete
+ * program can only be admitted against such an answer when the provider says
+ * who it is, because a continuation has to be told whether the implementation
+ * changed. Ordinary expansion is unaffected either way.
+ */
+export { useImportProvider } from "./src/program-imports.ts";
+export type { ImportProviderClaimant } from "./src/program-imports.ts";
+export type { ImportProviderIdentity, ProgramIdentity } from "./src/program-identity.ts";
+
 export {
   EVALUATE_PROGRAM,
   evaluateProgram,

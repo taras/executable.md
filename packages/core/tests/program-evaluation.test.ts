@@ -32,7 +32,11 @@ import type { Operation } from "effection";
 import { createDurableOperation, InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 
+import { Component } from "../src/component-api.ts";
 import { executeInstalled, programEvaluationComponents, sourceDigest } from "../host.ts";
+import { useImportProvider } from "../host.ts";
+import type { ImportProviderIdentity } from "../host.ts";
+import type { FunctionComponentDefinition, JsonObject } from "../src/types.ts";
 import type { DeclaredMarkdownComponent, IdentityClaimant, IdentityComponent } from "../host.ts";
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
 import { pairedProgramSource, programDigest } from "../host.ts";
@@ -133,19 +137,29 @@ function run(
     probeOrigin?: string;
     declarations?: readonly DeclaredMarkdownComponent[];
     privates?: readonly IdentityComponent[];
+    /** An ordinary open import-middleware provider, installed as a host's is. */
+    install?: () => Operation<void>;
   } = {},
 ): Operation<Attempt> {
   return scoped(function* () {
     const stream = options.stream ?? new InMemoryStream();
-    const execution = yield* executeInstalled(
-      { ...retainedSource(ROOT_PATH, source), stream, includes: [] },
-      [
-        {
-          components: [...programEvaluationComponents(), ...probeComponents(options.probeOrigin)],
-          ...(options.declarations === undefined ? {} : { declarations: options.declarations }),
-        },
-      ],
-    );
+    // An installation that refuses throws out of `executeInstalled` rather than
+    // settling a document result, so both endings are reported the same way.
+    let execution;
+    try {
+      execution = yield* executeInstalled(
+        { ...retainedSource(ROOT_PATH, source), stream, includes: [] },
+        [
+          {
+            components: [...programEvaluationComponents(), ...probeComponents(options.probeOrigin)],
+            ...(options.declarations === undefined ? {} : { declarations: options.declarations }),
+            ...(options.install === undefined ? {} : { install: options.install }),
+          },
+        ],
+      );
+    } catch (error) {
+      return { failure: error instanceof Error ? error.message : String(error), events: [] };
+    }
     const result = yield* execution;
     const events = yield* stream.readAll();
     return result.ok
@@ -726,6 +740,366 @@ describe("Tier PE — a producer's private closure does not cross", () => {
     // The positive control: a component the site does authorize runs normally,
     // so this is about the closure rather than about programs reaching nothing.
     expect(performed).toEqual(["control"]);
+    approved = APPROVED;
+  });
+});
+
+/** Every implementation an open middleware provider actually entered. */
+const opened: string[] = [];
+
+/** One implementation of `<Open />`, distinguishable by what it renders. */
+function openImplementation(mark: string, props?: JsonObject): FunctionComponentDefinition {
+  return {
+    kind: "function",
+    name: "Open",
+    props: props ?? { type: "object", properties: {}, additionalProperties: false },
+    // deno-lint-ignore require-yield
+    fn: function* Open(): Operation<string> {
+      opened.push(mark);
+      return `open ${mark}`;
+    },
+  };
+}
+
+/**
+ * An ordinary open `Component.importComponent` provider, of the kind a host or
+ * a package installs.
+ *
+ * It answers without delegating, which is exactly the case an independent
+ * second resolution cannot describe: the selector would report that `Open`
+ * resolves to nothing while this is what runs.
+ */
+function openProvider(options: {
+  mark: string;
+  identity?: ImportProviderIdentity;
+  /** Answer this from the given lookup onwards, to model a check/use split. */
+  then?: string;
+  /** Which lookup starts answering `then`. */
+  switchAfter?: number;
+}): () => Operation<void> {
+  return function* install(): Operation<void> {
+    const claim = yield* useImportProvider(
+      options.identity ?? { origin: "test/open", revision: options.mark },
+    );
+    let answered = 0;
+    const first = openImplementation(options.mark);
+    const later = options.then === undefined ? first : openImplementation(options.then);
+    yield* Component.around(
+      {
+        *importComponent([name, position], next) {
+          if (name !== "Open") {
+            return yield* next(name, position);
+          }
+          answered += 1;
+          const definition = answered <= (options.switchAfter ?? 1) ? first : later;
+          return options.identity === null ? definition : claim(name, "Open", definition);
+        },
+      },
+      { at: "max" },
+    );
+  };
+}
+
+/** A program whose only element is the middleware-supplied component. */
+const OPEN_PROGRAM = "<Open />\n";
+
+describe("Tier PE — the identity is the answer's, not the selector's", () => {
+  it("PE23 refuses a continuation whose middleware supplies another implementation", function* () {
+    opened.length = 0;
+    approved = OPEN_PROGRAM;
+
+    // 1. The first run's live middleware supplies A under identity A.
+    const first = yield* run(PROBING_DOCUMENT, {
+      install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+    });
+    expect(first.failure).toBeUndefined();
+    expect(first.output).toContain("open A");
+    expect(opened).toEqual(["A"]);
+
+    // 2. Keep the journal only through the committed admission, and forget
+    //    every implementation observation.
+    const interrupted = through(first.events, "evaluate_program");
+    opened.length = 0;
+
+    // 3. Continue with the same source and props while middleware supplies B.
+    const moved = yield* run(PROBING_DOCUMENT, {
+      stream: new InMemoryStream(interrupted),
+      install: openProvider({ mark: "B", identity: { origin: "test/open", revision: "B" } }),
+    });
+
+    // 4. The site refusal, before A or B runs.
+    expect(moved.failure ?? moved.output ?? "").toContain("resolves differently");
+    expect(opened).toEqual([]);
+
+    // 5. The same retained prefix with A unchanged resumes and runs A once.
+    opened.length = 0;
+    const resumed = yield* run(PROBING_DOCUMENT, {
+      stream: new InMemoryStream(interrupted),
+      install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+    });
+
+    expect(resumed.failure).toBeUndefined();
+    expect(resumed.output).toContain("open A");
+    expect(opened).toEqual(["A"]);
+    approved = APPROVED;
+  });
+
+  it("PE24 retains the provider's identity, not the selector's answer", function* () {
+    opened.length = 0;
+    approved = OPEN_PROGRAM;
+
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+    });
+
+    expect(attempt.failure).toBeUndefined();
+    const record = decision(admissions(attempt.events)[0]!);
+    const named = record.named as Record<string, Json>[];
+    // The selector answers nothing for this name — a middleware-only component
+    // is on no search path and in no registry — so an independent resolution
+    // would have retained `unresolved` for both implementations.
+    expect(named).toEqual([
+      {
+        name: "Open",
+        form: "self-closing",
+        identity: { tag: "middleware", origin: "test/open", key: "Open", revision: "A" },
+      },
+    ]);
+    approved = APPROVED;
+  });
+
+  it("PE25 refuses a program naming an unidentified middleware answer", function* () {
+    opened.length = 0;
+    approved = OPEN_PROGRAM;
+
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      install: openProvider({ mark: "A", identity: null as unknown as undefined }),
+    });
+
+    expect(attempt.failure ?? attempt.output ?? "").toContain("states no identity");
+    // Nothing of it ran, and no grant was recorded against a site that cannot
+    // be described.
+    expect(opened).toEqual([]);
+    expect(admissions(attempt.events)).toHaveLength(0);
+    approved = APPROVED;
+  });
+
+  it("PE26 cannot run an answer that changed after the comparison passed", function* () {
+    opened.length = 0;
+    approved = OPEN_PROGRAM;
+
+    // The provider answers A for the admission's resolution and for canonical
+    // execution's own comparison, then B for the lookup expansion would make.
+    // Expansion must invoke the answer the comparison passed, not ask again.
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      install: openProvider({
+        mark: "A",
+        then: "B",
+        switchAfter: 2,
+        identity: { origin: "test/open", revision: "A" },
+      }),
+    });
+
+    // B never runs. Expansion is authorized against the answer the comparison
+    // settled, so an answer that changed underneath it is refused rather than
+    // quietly preferred.
+    expect(`${attempt.failure ?? attempt.output ?? ""}`).toContain(
+      "changed the definition canonical resolution settled",
+    );
+    expect(opened).toEqual([]);
+    approved = APPROVED;
+  });
+
+  it("PE27 refuses two providers installed under one origin", function* () {
+    approved = OPEN_PROGRAM;
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      *install() {
+        yield* useImportProvider({ origin: "test/open", revision: "A" });
+        yield* useImportProvider({ origin: "test/open", revision: "B" });
+      },
+    });
+
+    expect(attempt.failure ?? attempt.output ?? "").toContain("no single authority");
+    approved = APPROVED;
+  });
+
+  it("PE28 refuses a retained middleware identity that is malformed", function* () {
+    opened.length = 0;
+    approved = OPEN_PROGRAM;
+    const first = yield* run(PROBING_DOCUMENT, {
+      install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+    });
+    expect(first.failure).toBeUndefined();
+
+    const interrupted = through(first.events, "evaluate_program");
+    const malformed: Record<string, Json>[] = [
+      { tag: "middleware", origin: "test/open", key: "Open" },
+      { tag: "middleware", origin: "test/open", key: "Open", revision: "" },
+      { tag: "middleware", origin: "test/open", key: "Open", revision: "A", extra: 1 },
+      { tag: "registered", origin: "test/open", key: "Open", revision: "A" },
+      { tag: "unknown-tier", origin: "test/open" },
+    ];
+
+    for (const identity of malformed) {
+      opened.length = 0;
+      const replayed = yield* run(PROBING_DOCUMENT, {
+        stream: new InMemoryStream(
+          tamper(interrupted, (record) => ({
+            ...record,
+            named: [{ name: "Open", form: "self-closing", identity }],
+          })),
+        ),
+        install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+      });
+
+      expect(`${JSON.stringify(identity)}: ${replayed.failure ?? replayed.output ?? ""}`).toContain(
+        "cannot be read as one",
+      );
+      expect([identity, opened]).toEqual([identity, []]);
+    }
+    approved = APPROVED;
+  });
+});
+
+describe("Tier PE — what a provider does to the chain's answer", () => {
+  it("PE29 keeps the canonical identity when a provider delegates unchanged", function* () {
+    performed.length = 0;
+    approved = '<Probe mark="delegated" />\n';
+
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      *install() {
+        // Identified, but it answers nothing: it delegates and returns what
+        // came back. The canonical answer keeps its canonical identity.
+        yield* useImportProvider({ origin: "test/passthrough", revision: "1" });
+        yield* Component.around(
+          {
+            *importComponent([name, position], next) {
+              return yield* next(name, position);
+            },
+          },
+          { at: "max" },
+        );
+      },
+    });
+
+    expect(attempt.failure).toBeUndefined();
+    expect(performed).toEqual(["delegated"]);
+    const named = decision(admissions(attempt.events)[0]!).named as Record<string, Json>[];
+    expect(named).toEqual([
+      {
+        name: "Probe",
+        form: "self-closing",
+        identity: { tag: "registered", origin: "test/probe", reserved: false },
+      },
+    ]);
+    approved = APPROVED;
+  });
+
+  it("PE30 retains the provider's identity when it replaces a canonical answer", function* () {
+    performed.length = 0;
+    approved = '<Probe mark="replaced" />\n';
+
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      *install() {
+        const claim = yield* useImportProvider({ origin: "test/replacer", revision: "7" });
+        // One implementation, held by the provider, as a provider with a stable
+        // revision holds one. Building a new object per import would be the
+        // provider saying its answer is unchanged while handing over a
+        // different one, which is the case PE26 covers.
+        const replacement = openImplementation("replaced", {
+          type: "object",
+          properties: { mark: { type: "string" } },
+          additionalProperties: false,
+        });
+        yield* Component.around(
+          {
+            *importComponent([name, position], next) {
+              const answered = yield* next(name, position);
+              if (name !== "Probe") {
+                return answered;
+              }
+              // Canonical selection settled a registration; this replaces it.
+              return claim(name, "Probe", replacement);
+            },
+          },
+          { at: "max" },
+        );
+      },
+    });
+
+    expect(attempt.failure).toBeUndefined();
+    const named = decision(admissions(attempt.events)[0]!).named as Record<string, Json>[];
+    // Not `registered:test/probe`: what runs is the replacement, so what the
+    // admission describes is the replacement.
+    expect(named).toEqual([
+      {
+        name: "Probe",
+        form: "self-closing",
+        identity: { tag: "middleware", origin: "test/replacer", key: "Probe", revision: "7" },
+      },
+    ]);
+    // The registration never ran; the replacement did.
+    expect(performed).toEqual([]);
+    expect(opened).toContain("replaced");
+    approved = APPROVED;
+  });
+
+  it("PE31 refuses an answer mutated after it was claimed", function* () {
+    opened.length = 0;
+    approved = OPEN_PROGRAM;
+
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      *install() {
+        const claim = yield* useImportProvider({ origin: "test/open", revision: "A" });
+        yield* Component.around(
+          {
+            *importComponent([name, position], next) {
+              if (name !== "Open") {
+                return yield* next(name, position);
+              }
+              const definition = openImplementation("A");
+              const claimed = claim(name, "Open", definition);
+              // Changed after the claim, on its way back through the chain.
+              (claimed as { name: string }).name = "Substituted";
+              return claimed;
+            },
+          },
+          { at: "max" },
+        );
+      },
+    });
+
+    expect(attempt.failure ?? attempt.output ?? "").toMatch(/changed|cannot be read as one/);
+    expect(opened).toEqual([]);
+    approved = APPROVED;
+  });
+
+  it("PE32 refuses a second provider claiming one answer", function* () {
+    opened.length = 0;
+    approved = OPEN_PROGRAM;
+    const shared = openImplementation("A");
+
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      *install() {
+        const first = yield* useImportProvider({ origin: "test/first", revision: "1" });
+        const second = yield* useImportProvider({ origin: "test/second", revision: "1" });
+        yield* Component.around(
+          {
+            *importComponent([name, position], next) {
+              if (name !== "Open") {
+                return yield* next(name, position);
+              }
+              first(name, "Open", shared);
+              return second(name, "Open", shared);
+            },
+          },
+          { at: "max" },
+        );
+      },
+    });
+
+    expect(attempt.failure ?? attempt.output ?? "").toContain("another provider had claimed");
+    expect(opened).toEqual([]);
     approved = APPROVED;
   });
 });

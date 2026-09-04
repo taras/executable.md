@@ -6,29 +6,101 @@
  * definition each name it writes resolves to is part of what the admission
  * granted. Retaining the names alone would let a run resume against a different
  * `<Report />` than the one it was admitted with — same bytes, different
- * program — so the admission retains the identity canonical resolution selected
- * for each name together with the form the element is written in, and a
+ * program — so the admission retains the identity of what each name actually
+ * resolved to together with the form the element is written in, and a
  * continuation is refused when either has moved.
  *
- * The identity is a string rather than the selection itself because it is
- * durable data: it is written into a journal, read back from one, and compared
- * whole. Every tier that can answer a name contributes a distinguishable one,
- * and a name nothing answers is `unresolved` — which is an identity like any
- * other here, so a name that becomes resolvable between two runs is a change
- * the comparison sees.
+ * ## The identity is the answer's, not the selector's
+ *
+ * What runs is what the ordinary `Component.importComponent` chain returns, and
+ * a provider may answer without delegating or replace what came back. Resolving
+ * the name a second way and describing *that* would retain an identity for a
+ * definition nobody invokes, so two different middleware answers would compare
+ * equal and a continuation would silently run the other one. The identity is
+ * therefore taken from the final answer the chain supplied.
+ *
+ * A canonical tier's answer keeps its canonical identity. An answer an
+ * identified middleware provider supplied keeps that provider's own versioned
+ * identity — a stable origin, the provider's stable key for the name, and a
+ * revision that changes whenever the implementation changes incompatibly. That
+ * identity is stated by the provider outside the definition, because a
+ * definition is data an answer can copy, and it is bound to the exact answer in
+ * execution-private state rather than carried on it.
+ *
+ * An answer nobody identified is not refused for ordinary expansion — a
+ * document that installs a raw replacement keeps working exactly as it did —
+ * but a complete program cannot be admitted against one, because there would be
+ * nothing for a continuation to compare.
+ *
+ * ## Records, not strings
+ *
+ * The identity is a closed tagged record because it is durable data: it is
+ * written into a journal, read back from one, and compared whole. Every tier
+ * contributes a distinguishable tag, no tag can be spelled as another, and a
+ * name nothing answers is `unresolved` — an identity like any other here, so a
+ * name that becomes resolvable between two runs is a change the comparison
+ * sees.
  */
 
-import type { ComponentSelection } from "./types.ts";
+import type { Operation } from "effection";
+
+import type { ImportedDefinition } from "./components/import-authority.ts";
+import type { ComponentSelection, Json, JsonObject } from "./types.ts";
 
 /** The authored forms an element is written in. */
 export type ProgramComponentForm = "self-closing" | "paired";
+
+/**
+ * What an identified import provider states about itself and its answers.
+ *
+ * Stated by the provider, at the installation boundary, and outside every
+ * definition it supplies. It is an assertion by the authority installed at the
+ * site — like a registration's origin or a declared component's — and reusing
+ * one revision for a different implementation is that provider breaking its own
+ * contract. The engine compares the assertion; it never tries to repair one by
+ * reading the definition.
+ */
+export interface ImportProviderIdentity {
+  /** The stable origin this provider answers under. */
+  readonly origin: string;
+  /** A revision that changes when the supplied implementation changes. */
+  readonly revision: string;
+}
+
+/** The identity of what one name resolved to, as the run retains it. */
+export type ProgramIdentity =
+  | { readonly tag: "structural"; readonly construct: string }
+  | { readonly tag: "registered"; readonly origin: string; readonly reserved: boolean }
+  | { readonly tag: "repository"; readonly path: string }
+  | { readonly tag: "workflow"; readonly path: string; readonly object: string }
+  | { readonly tag: "declared-markdown"; readonly origin: string; readonly digest: string }
+  | {
+      readonly tag: "middleware";
+      readonly origin: string;
+      readonly key: string;
+      readonly revision: string;
+    }
+  | { readonly tag: "unresolved" };
+
+/** The members each identity tag has, and the only members it has. */
+const IDENTITY_MEMBERS: Record<ProgramIdentity["tag"], readonly string[]> = {
+  structural: ["tag", "construct"],
+  registered: ["tag", "origin", "reserved"],
+  repository: ["tag", "path"],
+  workflow: ["tag", "path", "object"],
+  "declared-markdown": ["tag", "origin", "digest"],
+  middleware: ["tag", "origin", "key", "revision"],
+  unresolved: ["tag"],
+};
+
+/** A name nothing at this site answers for. */
+export const UNRESOLVED: ProgramIdentity = { tag: "unresolved" };
 
 /** One component a program names, with the form and identity it resolved to. */
 export interface ProgramComponent {
   readonly name: string;
   readonly form: ProgramComponentForm;
-  /** The identity canonical resolution selected, or `unresolved`. */
-  readonly identity: string;
+  readonly identity: ProgramIdentity;
 }
 
 /** One element a program names, before its identity has been resolved. */
@@ -37,8 +109,36 @@ export interface ProgramComponentRef {
   readonly form: ProgramComponentForm;
 }
 
-/** A name nothing at this site answers for. */
-export const UNRESOLVED = "unresolved";
+/**
+ * What canonical resolution settled for one name: its identity, and the copy of
+ * the answer core will invoke.
+ *
+ * The two travel together because they are one decision. Carrying the identity
+ * without the answer would leave expansion to ask the chain again, and a
+ * provider that answered one way for the comparison could answer another way
+ * for the invocation.
+ */
+export interface ResolvedProgramComponent extends ProgramComponent {
+  /**
+   * Core's own copy of the answer, or `undefined` when nothing was resolved or
+   * the answer could not be copied.
+   */
+  readonly definition: ImportedDefinition | undefined;
+  /** Whether the chain's final answer carried no witness at all. */
+  readonly unidentified: boolean;
+}
+
+/**
+ * Resolve one name through the site's own import chain.
+ *
+ * Held by canonical execution and handed to core's own expansion by value, like
+ * the rest of the expansion authority. It resolves through the ordinary chain,
+ * so what it describes is what would run; it invokes no component
+ * implementation and performs no program effect.
+ */
+export interface ProgramResolver {
+  (name: string): Operation<ResolvedProgramComponent>;
+}
 
 /** A program this site will not evaluate. */
 export class ProgramEvaluationError extends Error {
@@ -58,51 +158,99 @@ export const INCOMPATIBLE =
   "than it did when this evaluation was admitted.";
 
 /**
- * Resolve one name to a component this execution may name durable work about.
+ * What a program naming a component nobody identified says.
  *
- * Held by canonical execution and handed to core's own expansion by value, like
- * the rest of the expansion authority. It answers with the identity selection
- * produced, and it imports nothing: resolving a name is a decision about which
- * definition answers it, and loading one is a durable effect a program's own
- * expansion performs where the element is written.
+ * Ordinary expansion is unaffected: a raw replacement keeps answering there
+ * exactly as it did. What it cannot do is stand behind a durable grant, because
+ * a continuation would have nothing to compare and would run whatever answered
+ * on the day it resumed.
  */
-export interface ProgramResolver {
-  (name: string): import("effection").Operation<string>;
-}
+export const UNIDENTIFIED =
+  "<Evaluate> cannot evaluate a program naming a component supplied by import middleware that " +
+  "states no identity: a continuation has nothing to hold the site to.";
 
-/**
- * The durable identity of what a name resolved to.
- *
- * Every tier is distinguishable, and each carries the part of its selection
- * that says which implementation it is: a registration is its origin and
- * whether it is reserved, a repository component is its path, a bundled one is
- * its path and object id, and declared Markdown is its origin and digest. A
- * private name resolves to nothing at all (`select.ts`), so a program naming one
- * carries the same identity as a program naming a component that does not
- * exist — which is what it is.
- */
-export function componentIdentity(selection: ComponentSelection): string {
+/** The canonical identity of what a selection chose. */
+export function selectionIdentity(selection: ComponentSelection): ProgramIdentity {
   switch (selection.kind) {
     case "structural":
-      return `structural:${selection.construct}`;
+      return { tag: "structural", construct: selection.construct };
     case "registered":
       return selection.origin.kind === "registered"
-        ? `registered:${selection.origin.reserved ? "reserved" : "default"}:${selection.origin.origin}`
-        : `registered:${selection.origin.kind}`;
+        ? {
+            tag: "registered",
+            origin: selection.origin.origin,
+            reserved: selection.origin.reserved,
+          }
+        : { tag: "registered", origin: selection.origin.kind, reserved: false };
     case "repository":
-      return `repository:${selection.path}`;
+      return { tag: "repository", path: selection.path };
     case "workflow":
-      return `workflow:${selection.path}@${selection.sourceHash}`;
+      return { tag: "workflow", path: selection.path, object: selection.sourceHash };
     case "declared-markdown":
-      return `declared-markdown:${selection.origin}@${selection.digest}`;
+      return { tag: "declared-markdown", origin: selection.origin, digest: selection.digest };
     default:
       return UNRESOLVED;
   }
 }
 
+/** The identity an identified provider's answer carries. */
+export function providerIdentity(provider: ImportProviderIdentity, key: string): ProgramIdentity {
+  return { tag: "middleware", origin: provider.origin, key, revision: provider.revision };
+}
+
 /** Whether a value is one of the two authored forms. */
 export function isProgramComponentForm(value: unknown): value is ProgramComponentForm {
   return value === "self-closing" || value === "paired";
+}
+
+/**
+ * One retained identity, read back from the journal as a closed tagged record.
+ *
+ * The tag decides which members the record has, and it has exactly those: a
+ * missing, additional or misspelled member is a record this version did not
+ * write, whatever its tag says. An empty string is not an identity either — a
+ * provider that states nothing has stated nothing.
+ */
+export function readIdentity(value: Json | undefined): ProgramIdentity | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as JsonObject;
+  const tag = record.tag;
+  if (typeof tag !== "string" || !Object.hasOwn(IDENTITY_MEMBERS, tag)) {
+    return undefined;
+  }
+  const members = IDENTITY_MEMBERS[tag as ProgramIdentity["tag"]];
+  const own = Object.keys(record);
+  if (own.length !== members.length || !members.every((member) => Object.hasOwn(record, member))) {
+    return undefined;
+  }
+  for (const member of members) {
+    const held = record[member];
+    if (member === "reserved") {
+      if (typeof held !== "boolean") {
+        return undefined;
+      }
+      continue;
+    }
+    if (typeof held !== "string" || held.length === 0) {
+      return undefined;
+    }
+  }
+  return record as unknown as ProgramIdentity;
+}
+
+/** Whether two retained identities describe the same implementation. */
+export function sameIdentity(one: ProgramIdentity, other: ProgramIdentity): boolean {
+  if (one.tag !== other.tag) {
+    return false;
+  }
+  const members = IDENTITY_MEMBERS[one.tag];
+  return members.every(
+    (member) =>
+      (one as unknown as Record<string, Json>)[member] ===
+      (other as unknown as Record<string, Json>)[member],
+  );
 }
 
 /** Whether two resolved component lists describe the same site. */
@@ -119,7 +267,7 @@ export function sameComponents(
       other !== undefined &&
       entry.name === other.name &&
       entry.form === other.form &&
-      entry.identity === other.identity
+      sameIdentity(entry.identity, other.identity)
     );
   });
 }

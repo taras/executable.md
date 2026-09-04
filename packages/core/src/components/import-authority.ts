@@ -126,6 +126,15 @@ export type ImportRefusal = "unissued" | "another-name" | "changed";
 interface Witness {
   readonly name: string;
   /**
+   * The provider that supplied this answer, when an identified one did.
+   *
+   * Absent for an answer canonical execution produced itself, whose identity is
+   * the selection's. Stated by the provider at its installation boundary and
+   * bound here, outside the definition, because a definition is data an answer
+   * can copy and an identity a copy carries identifies nothing.
+   */
+  readonly supplied?: SuppliedIdentity;
+  /**
    * Core's own copy of its own answer, taken before the public chain could see
    * the definition and reachable from nowhere but here.
    *
@@ -134,6 +143,20 @@ interface Witness {
    * the object middleware was holding.
    */
   readonly canonical: ImportedDefinition | undefined;
+}
+
+/** What an identified provider stated about one answer it supplied. */
+export interface SuppliedIdentity {
+  readonly origin: string;
+  readonly key: string;
+  readonly revision: string;
+}
+
+/** What canonical execution knows about the answer the chain returned. */
+export interface AnswerWitness {
+  readonly name: string;
+  readonly canonical: ImportedDefinition | undefined;
+  readonly supplied?: SuppliedIdentity;
 }
 
 /**
@@ -253,6 +276,55 @@ export class CanonicalImports {
   }
 
   /**
+   * Record that an identified middleware provider supplied this answer.
+   *
+   * The copy is taken here for the same reason canonical answers are copied:
+   * the object that travelled through the rest of the chain is never the object
+   * invoked. A second claim on one answer is refused rather than overwritten —
+   * two providers each saying an answer is theirs is an ambiguity, not a later
+   * one winning.
+   */
+  supply(
+    name: string,
+    supplied: SuppliedIdentity,
+    definition: ImportedDefinition,
+  ): ImportedDefinition {
+    const held = this.#issued.get(definition);
+    if (held !== undefined) {
+      // One provider answering the same import twice with the same definition
+      // is ordinary: a name resolved for a program's admission and again for
+      // its expansion is two imports of one answer. What is refused is a second
+      // *claim* — another provider, another name, or the same provider under a
+      // changed revision — because then no single authority stands behind it.
+      const same =
+        held.name === name &&
+        held.supplied !== undefined &&
+        held.supplied.origin === supplied.origin &&
+        held.supplied.key === supplied.key &&
+        held.supplied.revision === supplied.revision;
+      if (!same) {
+        throw new Error(
+          "Component.importComponent middleware claimed an answer another provider had claimed.",
+        );
+      }
+      return definition;
+    }
+    this.#issued.set(definition, { name, canonical: retain(definition), supplied });
+    return definition;
+  }
+
+  /**
+   * What canonical execution knows about the answer the chain returned.
+   *
+   * Absent for an answer nobody issued or supplied, which is a replacement no
+   * authority stands behind. Ordinary expansion still runs it; a durable grant
+   * cannot be made against it.
+   */
+  witness(answer: ImportedDefinition): AnswerWitness | undefined {
+    return typeof answer === "object" && answer !== null ? this.#issued.get(answer) : undefined;
+  }
+
+  /**
    * Core's own copy of the definition this import may invoke.
    *
    * Verified at the call site, after the public chain has returned and before
@@ -318,11 +390,19 @@ export interface ImportTier {
  * an answer decides only how a refusal reads, never whether one is authorized.
  */
 export class ExecutionImports implements ImportAuthority {
-  readonly #imports = new CanonicalImports();
+  readonly #imports: CanonicalImports;
   readonly #tiers: readonly ImportTier[];
 
-  constructor(tiers: readonly ImportTier[]) {
+  /**
+   * The witness table is the execution's, not this authority's.
+   *
+   * One execution has one answer per import, and an open execution witnesses
+   * its answers too — a complete program's admission has to tell a canonical
+   * answer from a supplied one whether or not any tier closes an import.
+   */
+  constructor(tiers: readonly ImportTier[], imports: CanonicalImports = new CanonicalImports()) {
     this.#tiers = tiers;
+    this.#imports = imports;
   }
 
   /** Record that canonical execution produced this answer for this name. */

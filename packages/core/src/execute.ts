@@ -94,7 +94,9 @@ import {
   useSegmentCauses,
 } from "./errors.ts";
 import { Component, importComponent, raise } from "./component-api.ts";
-import { componentIdentity } from "./program-identity.ts";
+import { providerIdentity, selectionIdentity, UNRESOLVED } from "./program-identity.ts";
+import type { ResolvedProgramComponent } from "./program-identity.ts";
+import { createImportProviderRegistry, ImportProviders } from "./program-imports.ts";
 import { sourceDescription } from "./source-position.ts";
 import { renderSegment } from "./render.ts";
 import { createExactSource } from "./output/exact-source.ts";
@@ -138,7 +140,8 @@ import {
   parseFormDeclaration,
 } from "./invocation-identity.ts";
 import type { IdentityComponent } from "./invocation-identity.ts";
-import { ExecutionImports } from "./components/import-authority.ts";
+import { CanonicalImports, ExecutionImports } from "./components/import-authority.ts";
+import type { ImportedDefinition } from "./components/import-authority.ts";
 import type { ExpansionAuthority, ImportTier } from "./components/import-authority.ts";
 import type { WorkflowComponentBundle, WorkflowImportAuthority } from "./components/bundle.ts";
 import type { CodeBlockContext, CodeBlockResult, EvalEnv } from "./types.ts";
@@ -2111,6 +2114,14 @@ function* executeDocument(
   bundles: readonly WorkflowComponentBundle[] = [],
   identityComponents: readonly IdentityComponent[] = [],
   declarations: readonly DeclaredMarkdownComponent[] = [],
+  /**
+   * The witness table this execution's providers were minted against.
+   *
+   * Created where the installations run, because that is where an identified
+   * import provider is installed and a provider minted against a different
+   * table would witness nothing this execution reads.
+   */
+  witnesses: CanonicalImports = new CanonicalImports(),
 ): Operation<DocumentExecution> {
   const {
     stream,
@@ -2264,7 +2275,11 @@ function* executeDocument(
       if (declaredImports !== undefined) {
         tiers.push(declaredImports);
       }
-      const imports = tiers.length === 0 ? undefined : new ExecutionImports(tiers);
+      // One witness table for the whole execution, whether or not any tier
+      // closes an import. An open run needs it too: a complete program's
+      // admission has to tell an answer canonical execution produced from one a
+      // provider supplied, and from one nobody stands behind at all.
+      const imports = tiers.length === 0 ? undefined : new ExecutionImports(tiers, witnesses);
       const authority: ExpansionAuthority = {
         ...(imports === undefined ? {} : { imports }),
         ...(declaredImports === undefined ? {} : { declared: declaredImports }),
@@ -2279,7 +2294,50 @@ function* executeDocument(
         // On the authority rather than on the Component Api, because this
         // decides whether a retained admission still describes this site.
         // Reconciliation never trusts an answer middleware can replace.
-        *resolve(name: string): Operation<string> {
+        *resolve(name: string): Operation<ResolvedProgramComponent> {
+          // Through the ordinary chain, because the answer the chain returns is
+          // the answer that would run. Resolving the name a second way would
+          // describe a definition a provider replaced, and a continuation would
+          // compare two different implementations as equal.
+          let answer: ImportedDefinition;
+          try {
+            answer = yield* importComponent(name);
+          } catch {
+            return {
+              name,
+              form: "self-closing",
+              identity: UNRESOLVED,
+              definition: undefined,
+              unidentified: false,
+            };
+          }
+          const witness = witnesses.witness(answer);
+          if (witness === undefined) {
+            // A replacement no authority stands behind. Ordinary expansion runs
+            // it; a durable grant cannot be made against it.
+            return {
+              name,
+              form: "self-closing",
+              identity: UNRESOLVED,
+              definition: undefined,
+              unidentified: true,
+            };
+          }
+          if (witness.supplied !== undefined) {
+            return {
+              name,
+              form: "self-closing",
+              identity: providerIdentity(
+                { origin: witness.supplied.origin, revision: witness.supplied.revision },
+                witness.supplied.key,
+              ),
+              definition: witness.canonical,
+              unidentified: false,
+            };
+          }
+          // Canonical execution's own answer keeps its canonical identity. The
+          // selection that produced it is what names it, and asking for it here
+          // describes the definition this import actually settled on.
           const registered = yield* Component.operations.registry;
           const selection = yield* ephemeral(
             selectComponent(name, {
@@ -2289,7 +2347,13 @@ function* executeDocument(
               ...(catalog === undefined ? {} : { declared: catalog }),
             }),
           );
-          return componentIdentity(selection);
+          return {
+            name,
+            form: "self-closing",
+            identity: selectionIdentity(selection),
+            definition: witness.canonical,
+            unidentified: false,
+          };
         },
         // Created here, held here, and reclaimed with this execution. Nothing a
         // document, a component, middleware or a separately loaded copy can
@@ -2330,7 +2394,10 @@ function* executeDocument(
             // The witness for this answer. It is issued where the answer is
             // produced and verified where it is invoked, so what a handler does
             // to the value in between is visible rather than authoritative.
-            return imports === undefined ? definition : imports.issue(name, definition);
+            // Always witnessed, closed execution or not: what the chain hands
+            // back is compared against this, and an answer nobody stands behind
+            // has to be tellable from one canonical execution produced.
+            return witnesses.issue(name, definition);
           },
           *applyModifiers([modifiers, context], _next) {
             const chain = composeModifierChain(modifiers, context, registry);
@@ -2959,6 +3026,12 @@ function* invoke(
     ),
   );
 
+  // The witness table this execution reads, created before its providers are
+  // installed. An identified provider is minted a claimant here, against this
+  // table, so what it marks is what canonical resolution later reads.
+  const witnesses = new CanonicalImports();
+  yield* ImportProviders.set(createImportProviderRegistry(witnesses));
+
   for (const installation of installations) {
     if (installation.install) {
       yield* installation.install();
@@ -2997,6 +3070,7 @@ function* invoke(
     bundles,
     identityComponents,
     declarations,
+    witnesses,
   );
 }
 

@@ -101,9 +101,11 @@ import {
   INCOMPATIBLE,
   ProgramEvaluationError,
   sameComponents,
+  UNIDENTIFIED,
   UNRESOLVED,
 } from "./program-identity.ts";
-import type { ProgramComponent, ProgramComponentRef } from "./program-identity.ts";
+import type { ProgramComponentRef, ResolvedProgramComponent } from "./program-identity.ts";
+import { ProgramImports } from "./program-imports.ts";
 import { DeclaredMarkdownError } from "./components/declared-markdown.ts";
 import type { PrivateImport } from "./components/declared-markdown.ts";
 import CoreTest from "./components/Test.ts";
@@ -4204,9 +4206,22 @@ export function* expandProgramBody(
   // the authority, so a handler that answered the admission's own resolution
   // dishonestly is caught by the answer it cannot reach.
   const current = yield* resolveProgramComponents(program.named, site.authority);
+  if (current.some((entry) => entry.unidentified)) {
+    throw new ProgramEvaluationError(UNIDENTIFIED);
+  }
   if (!sameComponents(program.named, current)) {
     throw new ProgramEvaluationError(INCOMPATIBLE);
   }
+  // The answers that passed the comparison are the answers the program
+  // invokes. Asking the chain again and running whatever came back is the gap
+  // this closes: a provider could answer one way while the site was being
+  // checked and another way while the program ran.
+  const settled = new ProgramImports(current);
+  // Closed over the answers that passed, so a handler outside this expansion
+  // that replaces one is refused where it would be invoked rather than
+  // silently preferred.
+  const authority: ExpansionAuthority | undefined =
+    site.authority === undefined ? { imports: settled } : { ...site.authority, imports: settled };
   return yield* scoped(function* () {
     yield* provideEnv(programEnvironment(site.callerValues, program.props));
     if (program.returns !== undefined) {
@@ -4226,7 +4241,7 @@ export function* expandProgramBody(
         passthroughClaim,
         program.path,
         site.checkedFailures,
-        site.authority,
+        authority,
         undefined,
       );
       return { kind: "value", value };
@@ -4244,7 +4259,7 @@ export function* expandProgramBody(
       undefined,
       program.path,
       site.checkedFailures,
-      site.authority,
+      authority,
       undefined,
     );
     return { kind: "text", output: renderSegments(expanded) };
@@ -4282,15 +4297,22 @@ function programAuthority(
 export function* resolveProgramComponents(
   named: readonly ProgramComponentRef[],
   authority: ExpansionAuthority | undefined,
-): Operation<readonly ProgramComponent[]> {
+): Operation<readonly ResolvedProgramComponent[]> {
   const resolve = authority?.resolve;
-  const resolved: ProgramComponent[] = [];
+  const resolved: ResolvedProgramComponent[] = [];
   for (const entry of named) {
-    resolved.push({
-      name: entry.name,
-      form: entry.form,
-      identity: resolve === undefined ? UNRESOLVED : yield* resolve(entry.name),
-    });
+    if (resolve === undefined) {
+      resolved.push({
+        name: entry.name,
+        form: entry.form,
+        identity: UNRESOLVED,
+        definition: undefined,
+        unidentified: false,
+      });
+      continue;
+    }
+    const settled = yield* resolve(entry.name);
+    resolved.push({ ...settled, name: entry.name, form: entry.form });
   }
   return resolved;
 }

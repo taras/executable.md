@@ -4412,7 +4412,7 @@ interface, and each operation is also exported directly:
 | `hasCapture(name)` | Whether the invocation wrote this capture prop at all (§6.5) | `false` |
 | `capture(name)` | Evaluate a capture prop now, against the caller's bindings, and deliver the result by reference (§6.5) | throws: not inside a function component invocation |
 | `expandProgram(program)` | Expand a complete XMD program at this invocation's site, under the authority the enclosing expansion holds, after settling that every retained component identity still describes this site (§5.7) | throws: not inside a function component invocation |
-| `resolveProgramSite(named)` | What each name a complete program writes resolves to at this site, for the admission to retain (§5.7). Observable and short-circuitable; the compatibility decision is canonical execution's own and rests on nothing answered here | throws: not inside a function component invocation |
+| `resolveProgramSite(named)` | What each name a complete program writes resolves to at this site, resolved through the ordinary import chain, for the admission to retain (§5.7). Observable and short-circuitable; the compatibility decision is canonical execution's own and rests on nothing answered here | throws: not inside a function component invocation |
 | `handleFailure(failure)` | What an ordinary function-component failure means, after complete invocation teardown (§6.9) | fails the operation with `failure.error` |
 | `retain(resource)` | Create a resource in the invocation-site scope, so it outlives this invocation (§4.4) | throws: not inside a component invocation |
 
@@ -4827,25 +4827,60 @@ already committed. A changed program at the same evaluation occurrence is stale
 input: it refuses before either the current or the retained source runs, so
 neither silently wins.
 
-A retained identity is a string, and every tier that can answer a name
-contributes a distinguishable one: `structural:<construct>`,
-`registered:<reserved|default>:<origin>`, `repository:<path>`,
-`workflow:<path>@<object id>`, `declared-markdown:<origin>@<digest>`, and
-`unresolved` for a name nothing at this site answers — a private name included,
-because selection resolves one to nothing outside the declaration that carries
-it (§5.3). Resolution imports nothing: it decides which definition answers a
-name, while loading one is the program's own durable effect where the element is
-written.
+**The identity is the answer's, not the selector's.** What runs is what the
+ordinary `Component.importComponent` chain returns, and a provider may answer
+without delegating or replace what came back. So the identity is taken from the
+final answer that chain supplied, by resolving through it. Describing the name a
+second way would retain an identity for a definition nobody invokes, and two
+different middleware answers would then compare equal.
+
+A retained identity is a closed tagged record, and every tier that can answer a
+name contributes a distinguishable tag: `structural`, `registered`,
+`repository`, `workflow`, `declared-markdown`, `middleware`, and `unresolved`
+for a name nothing at this site answers — a private name included, because
+selection resolves one to nothing outside the declaration that carries it
+(§5.3). A canonical tier's answer keeps its canonical identity.
+
+An answer an **identified middleware provider** supplied keeps that provider's
+own identity: a stable origin, the provider's stable key for the name, and a
+revision that changes whenever the supplied implementation changes. The provider
+states those terms at its installation boundary through `useImportProvider()`,
+and canonical execution mints it a claimant for that one execution. Marking an
+answer binds the terms to that exact object in execution-private state — never
+on the definition, which is data an answer can copy, and never through a
+replaceable Context answer. The identity is an assertion by the authority
+installed at the site, exactly as a registration's origin is: reusing one
+revision for a different implementation is that provider breaking its own
+contract, and the engine does not try to repair it by reading the definition.
+Two live providers under one origin refuse, and so does a second claim on one
+answer.
+
+An answer **nobody identified** is not refused for ordinary expansion — a
+document that installs a raw replacement keeps working exactly as it did — but a
+complete program cannot be admitted against one, because a continuation would
+have nothing to compare and would invoke whatever answered on the day it
+resumed.
+
+Resolution invokes no component implementation and performs no program effect;
+it settles which definition answers each name.
 
 **A continuation is held to the site it was admitted at.** Before the first
-program effect, canonical execution resolves every retained name again and
-refuses when any identity or form has moved. That comparison is canonical
-execution's own: the resolver is built by the execution, travels on the
-expansion authority, and is reachable from no document, component, contextual
-Api answer or middleware return value. A host may observe the admission's own
-resolution through `Component.resolveProgramSite()`, and answering it
-dishonestly refuses the evaluation rather than widening it, because the
-canonical comparison is what decides.
+program effect, canonical execution resolves every retained name again through
+the same chain and refuses when any identity or form has moved. That comparison
+is canonical execution's own: the resolver is built by the execution, travels on
+the expansion authority, and is reachable from no document, component,
+contextual Api answer or middleware return value. A host may observe the
+admission's own resolution through `Component.resolveProgramSite()`, and
+answering it dishonestly refuses the evaluation rather than widening it, because
+the canonical comparison is what decides.
+
+**The comparison and the invocation are one decision.** The answers that passed
+the comparison are the answers the program invokes: canonical execution keeps
+its own copy of each, taken when the answer was witnessed, and the program's
+imports are authorized against it. An answer that no longer describes what the
+comparison settled is refused where it would be invoked rather than silently
+preferred, which is what closes the gap in which a provider answers one way
+while the site is checked and another way while the program runs.
 
 **The retained record is hostile data.** A journal is a file, and replay hands
 back whatever it holds. The admitted and refused decisions and every nested
@@ -9840,7 +9875,7 @@ trusted-host events may have no authored source.
 | Resolve components (glob) | `glob` | `resolve:{dir}` | Only when `useDurableGlobResolver` middleware is installed |
 | Read over HTTP | `fetch` | `fetch:{expansion id}` | Normalized request in `description.input`; status, detached headers and text body in the result (§6.18) |
 | Admit generated XMD | `generated_xmd` | `generated:{fragment id}` | The canonical class selection, retained roots, selected root, every selected entry as a name, identity and admitted forms, and the exact request policy in `description.input`; the admitted source, that same policy, and the identity and form of each element the fragment named in the result (workflow-workspace-spec §8.4) |
-| Admit a complete program | `evaluate_program` | `program:{evaluation id}` | The source digest, explicit props, evaluation-site source origin and whether the result is captured in `description.input`. The result is one of two closed shapes: an admitted one of exactly `decision`, `source`, `mode`, `named`, `terms` and `validated` — where each `named` entry is exactly `name`, `form` and `identity`, and `terms` is exactly `digest`, `props`, `origin` and `captured` — or a refused one of exactly `decision` and `refused`, carrying the refused class and nothing of the source. A record with a missing, additional or misspelled member at any depth, or one that disagrees with itself, is unreadable rather than partially believed (§5.7) |
+| Admit a complete program | `evaluate_program` | `program:{evaluation id}` | The source digest, explicit props, evaluation-site source origin and whether the result is captured in `description.input`. The result is one of two closed shapes: an admitted one of exactly `decision`, `source`, `mode`, `named`, `terms` and `validated` — where each `named` entry is exactly `name`, `form` and `identity`, each `identity` is a closed tagged record holding exactly the members its tag has — `structural`/`construct`, `registered`/`origin`/`reserved`, `repository`/`path`, `workflow`/`path`/`object`, `declared-markdown`/`origin`/`digest`, `middleware`/`origin`/`key`/`revision`, or `unresolved` alone — and `terms` is exactly `digest`, `props`, `origin` and `captured` — or a refused one of exactly `decision` and `refused`, carrying the refused class and nothing of the source. A record with a missing, additional or misspelled member at any depth, or one that disagrees with itself, is unreadable rather than partially believed (§5.7) |
 
 ### 10.2 Example journal for a multi-component document
 
@@ -12362,6 +12397,16 @@ forms sit beside the restricted one.
 | PE20 | A site that answers differently | The same source and request, with one named component registered under another origin, refuses before either implementation runs; the unchanged site resumes |
 | PE21 | Structural preflight | A durable effect written before a later malformed structural construct never runs: structural admission refuses first |
 | PE22 | The producer's private closure | A program evaluated inside a declaration carrying a private component cannot resolve that name and never enters its implementation, while an ordinary site-authorized component in the same program runs |
+| PE23 | An answer that moved | A program naming a middleware-supplied `<Open />` admits under identity A; a continuation whose provider supplies B under identity B refuses before either implementation runs, and the same prefix with A unchanged resumes and runs A once |
+| PE24 | The identity is the answer's | A middleware-only component retains the provider's identity, where an independent selector would have retained `unresolved` for every implementation |
+| PE25 | An unidentified answer | A program naming a raw replacement refuses before it runs, and records no admission |
+| PE26 | Check and use are one decision | An answer that changed after the comparison passed is refused where it would be invoked; the later implementation never runs |
+| PE27 | One origin, one authority | Two providers installed under one origin refuse |
+| PE28 | A malformed retained identity | A missing, empty, additional or mis-tagged identity member is unreadable and runs nothing |
+| PE29 | Delegation | A provider that delegates and returns the answer unchanged preserves the canonical identity |
+| PE30 | Replacement | A provider replacing a canonical answer retains its own identity, and the replaced registration never runs |
+| PE31 | Mutation after the claim | An answer changed on its way back through the chain refuses |
+| PE32 | Two claims on one answer | A second provider claiming an answer another already claimed refuses |
 | EP1–EP8 | Run profile | The ordinary run profile declares `<Evaluate>`; the forms, props, refusals and catalog entry hold through the real binary, and a program cannot reach `<Plan>`'s private components |
 | WGAC17–WGAC20 | Workflow profile | A complete program records `evaluate_program` and no `generated_xmd`; the three forms cannot be combined; complete-program support is not reachable through `source` |
 
