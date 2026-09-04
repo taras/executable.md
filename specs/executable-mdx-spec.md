@@ -4913,13 +4913,22 @@ Settlements belong to the program's own parsed body. A component the program
 invokes expands its own bytes, which nothing reconciled, so it imports exactly
 as it always did.
 
-The authored element still makes its ordinary durable import: one
-`import_component` record per settled occurrence, written after the admission.
+A **resolved** occurrence still makes its ordinary durable import: one
+`import_component` record per resolved occurrence, written after the admission.
+An unresolved occurrence loads no component and records no such event — there is
+nothing to import.
 Its result is a closed shape of exactly two members — `settled`, holding
 `"program-occurrence"`, and `name` — and a continuation parses it as the hostile
-replay data it is before anything is invoked. A record missing a member,
+replay data it is before anything is invoked: the value is detached into plain
+JSON under a failure boundary and only that copy is inspected, so a member that
+answers differently on a second read decides nothing and a value that will not
+detach is simply not the record. A record missing a member,
 carrying one nobody wrote, spelling one differently, holding an unknown tag, or
-naming another component is refused, and the component does not run. Identity
+naming another component is refused, and the component does not run. A retained
+value that refuses to be read at all — a Proxy trapping `ownKeys` or a
+descriptor, a throwing accessor, a cycle — is refused earlier still, by the
+run's own retention check, before the document body starts; that refusal is the
+journal's and carries the journal's wording. Identity
 domain and form selection are recorded from the already-authorized answer; the
 record rediscovers no authority.
 
@@ -12456,7 +12465,10 @@ forms sit beside the restricted one.
 | PE38 | Identity captured once | Editing the stated identity after the claimant exists does not change what its claims are marked with |
 | PE39 | An alternating origin | A getter cannot answer the duplicate check and the claim differently |
 | PE40 | Two occurrences of one name | A program writing `<Open /><Open />` against a provider supplying A then B under distinct keys invokes A then B, not A twice |
-| PE41 | An unresolved occurrence | A provider that delegates through both resolution passes and would answer a third leaves the element unresolved: the third lookup never happens and the late implementation never runs |
+| PE41 | An unresolved occurrence | A provider that delegates through both resolution passes and would answer a third leaves the element unresolved: the third lookup never happens, the late implementation never runs, and no `import_component` is recorded for it |
+| PE43 | A settled import that will not read | A retained result holding a member no JSON has reaches this boundary and produces its fixed unreadable diagnostic, planting nothing in it, with the component never invoked |
+| PE44 | A detached read | The result is read once into detached JSON, so a member answering differently on a second read decides nothing |
+| PE45 | A value the journal will not retain | A Proxy refusing `ownKeys` or a descriptor, a throwing accessor, and a circular value are refused by the run's own retention check before the document body starts; the component is never invoked |
 | PE42 | A corrupted settled import | A missing, additional, mistyped or unknown member in the settled `import_component` result, and one naming another component, each refuse before the component is invoked |
 | EP1–EP8 | Run profile | The ordinary run profile declares `<Evaluate>`; the forms, props, refusals and catalog entry hold through the real binary, and a program cannot reach `<Plan>`'s private components |
 | WGAC17–WGAC20 | Workflow profile | A complete program records `evaluate_program` and no `generated_xmd`; the three forms cannot be combined; complete-program support is not reachable through `source` |

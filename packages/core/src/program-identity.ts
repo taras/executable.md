@@ -45,6 +45,7 @@
 import type { Operation } from "effection";
 
 import type { ImportedDefinition } from "./components/import-authority.ts";
+import { isJsonObject, parseJson } from "./json.ts";
 import type { ComponentSelection, Json, JsonObject, Segment } from "./types.ts";
 
 /** The authored forms an element is written in. */
@@ -142,15 +143,27 @@ export const SETTLED_IMPORT = "program-occurrence";
  * strength of it.
  */
 export function readSettledImport(value: unknown, name: string): boolean {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  // Detached first, under a boundary, and only then inspected. The restored
+  // value is whatever the journal holds: a Proxy can refuse `ownKeys`, answer a
+  // property differently each time it is read, or throw from a descriptor, and
+  // a value can be circular or hold something no JSON has. Reading such a value
+  // to decide anything is reading a value that decides for itself, so the only
+  // thing asked of it is whether it will become plain JSON — and every way of
+  // saying no is one answer, which is that this is not the record.
+  let detached: Json;
+  try {
+    detached = parseJson(value);
+  } catch {
     return false;
   }
-  const record = value as JsonObject;
-  const own = Object.keys(record);
-  if (own.length !== 2 || !Object.hasOwn(record, "settled") || !Object.hasOwn(record, "name")) {
+  if (!isJsonObject(detached)) {
     return false;
   }
-  return record.settled === SETTLED_IMPORT && record.name === name;
+  const own = Object.keys(detached);
+  if (own.length !== 2 || !Object.hasOwn(detached, "settled") || !Object.hasOwn(detached, "name")) {
+    return false;
+  }
+  return detached.settled === SETTLED_IMPORT && detached.name === name;
 }
 
 /** What a settled program import that cannot be read as one says. */

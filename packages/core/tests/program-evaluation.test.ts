@@ -30,7 +30,7 @@ import { scoped } from "effection";
 import type { Operation } from "effection";
 
 import { createDurableOperation, InMemoryStream } from "@executablemd/durable-streams";
-import type { DurableEvent } from "@executablemd/durable-streams";
+import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
 
 import { Component } from "../src/component-api.ts";
 import { executeInstalled, programEvaluationComponents, sourceDigest } from "../host.ts";
@@ -132,7 +132,7 @@ function probeComponents(origin = "test/probe"): readonly IdentityComponent[] {
 function run(
   source: string,
   options: {
-    stream?: InMemoryStream;
+    stream?: DurableStream;
     /** The origin `<Probe>` is registered under, so a site can be moved. */
     probeOrigin?: string;
     declarations?: readonly DeclaredMarkdownComponent[];
@@ -142,7 +142,7 @@ function run(
   } = {},
 ): Operation<Attempt> {
   return scoped(function* () {
-    const stream = options.stream ?? new InMemoryStream();
+    const stream: DurableStream = options.stream ?? new InMemoryStream();
     // An installation that refuses throws out of `executeInstalled` rather than
     // settling a document result, so both endings are reported the same way.
     let execution;
@@ -1390,6 +1390,9 @@ describe("Tier PE — a settlement belongs to an occurrence", () => {
     // The third lookup never happened, so the late implementation never ran.
     expect(consulted.filter((name) => name === "Open")).toHaveLength(2);
     expect(opened).toEqual([]);
+    // And nothing was loaded: an unresolved occurrence imports no component, so
+    // it records no import of one.
+    expect(importsOf(attempt.events, "Open")).toHaveLength(0);
     approved = APPROVED;
   });
 
@@ -1441,6 +1444,141 @@ describe("Tier PE — a settlement belongs to an occurrence", () => {
       expect(`${what}: ${replayed.failure ?? replayed.output ?? ""}`).toContain(
         "cannot be read as one",
       );
+      expect([what, opened]).toEqual([what, []]);
+    }
+    approved = APPROVED;
+  });
+});
+
+/**
+ * A journal that hands its events back exactly as they were put in.
+ *
+ * `InMemoryStream` structured-clones what it stores, which is the right thing
+ * for a journal and the wrong thing for this case: a value that refuses to be
+ * read would be rejected by the clone, long before the parser under test sees
+ * it. This keeps the reference, so what a continuation reads is the hostile
+ * value itself.
+ */
+function unclonedStream(events: readonly DurableEvent[]): DurableStream {
+  const held = [...events];
+  return {
+    // deno-lint-ignore require-yield
+    *readAll(): Operation<DurableEvent[]> {
+      return held;
+    },
+    // deno-lint-ignore require-yield
+    *append(event: DurableEvent): Operation<void> {
+      held.push(event);
+    },
+  };
+}
+
+/** What a hostile retained value tried to smuggle into a diagnostic. */
+const PLANTED = "planted-by-the-journal-a3f9";
+
+/** The tag a settled program occurrence records. */
+const SETTLED_IMPORT_TAG = "program-occurrence";
+
+describe("Tier PE — a settled import that will not be read", () => {
+  /** The interrupted history, with the settled import's result replaced. */
+  function* holding(value: unknown): Operation<{ events: DurableEvent[]; at: number }> {
+    opened.length = 0;
+    approved = OPEN_PROGRAM;
+    const first = yield* run(PROBING_DOCUMENT, {
+      install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+    });
+    expect(first.failure).toBeUndefined();
+    expect(opened).toEqual(["A"]);
+    const at = importsOf(first.events, "Open")[0]!;
+    return {
+      at,
+      events: first.events.slice(0, at + 1).map((event, index) => {
+        if (index !== at || event.type !== "yield" || event.result.status !== "ok") {
+          return event;
+        }
+        return { ...event, result: { ...event.result, value: value as Json } };
+      }),
+    };
+  }
+
+  function resume(events: DurableEvent[]): Operation<Attempt> {
+    opened.length = 0;
+    return run(PROBING_DOCUMENT, {
+      stream: unclonedStream(events),
+      install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+    });
+  }
+
+  it("PE43 refuses a value the parser can reach but not read, planting nothing", function* () {
+    // A member no JSON holds. It survives the journal's own retention checks
+    // and reaches this boundary, which answers with its one fixed sentence.
+    const planted = { settled: SETTLED_IMPORT_TAG, name: () => PLANTED };
+    const replayed = yield* resume((yield* holding(planted)).events);
+
+    expect(replayed.failure ?? replayed.output ?? "").toContain("cannot be read as one");
+    expect(replayed.failure ?? replayed.output ?? "").not.toContain(PLANTED);
+    expect(opened).toEqual([]);
+    approved = APPROVED;
+  });
+
+  it("PE44 reads a detached copy, so an alternating answer decides nothing", function* () {
+    // Read once into detached JSON, so a member that answers differently on a
+    // second read has no second read to answer. The first answer is the record,
+    // and it is the right one.
+    let reads = 0;
+    const alternating = {
+      settled: SETTLED_IMPORT_TAG,
+      get name(): string {
+        reads += 1;
+        return reads === 1 ? "Open" : PLANTED;
+      },
+    };
+    const replayed = yield* resume((yield* holding(alternating)).events);
+
+    expect(replayed.failure).toBeUndefined();
+    expect(replayed.output).toContain("open A");
+    expect(opened).toEqual(["A"]);
+    approved = APPROVED;
+  });
+
+  it("PE45 refuses a value the journal itself will not retain, invoking nothing", function* () {
+    // These never reach this boundary: the run's own retention check reads
+    // every retained result before the document body starts, and a value that
+    // refuses there is refused there. What this proves is the part that is
+    // this boundary's to promise — the component is never invoked.
+    const hostile: Record<string, unknown> = {
+      "a proxy refusing ownKeys": new Proxy(
+        { settled: SETTLED_IMPORT_TAG, name: "Open" },
+        {
+          ownKeys() {
+            throw new Error(PLANTED);
+          },
+        },
+      ),
+      "a proxy refusing a descriptor": new Proxy(
+        { settled: SETTLED_IMPORT_TAG, name: "Open" },
+        {
+          getOwnPropertyDescriptor() {
+            throw new Error(PLANTED);
+          },
+        },
+      ),
+      "a throwing accessor": {
+        settled: SETTLED_IMPORT_TAG,
+        get name(): string {
+          throw new Error(PLANTED);
+        },
+      },
+      "a circular value": (() => {
+        const circular: Record<string, unknown> = { settled: SETTLED_IMPORT_TAG, name: "Open" };
+        circular.self = circular;
+        return circular;
+      })(),
+    };
+
+    for (const [what, value] of Object.entries(hostile)) {
+      const replayed = yield* resume((yield* holding(value)).events);
+      expect([what, replayed.output ?? ""]).toEqual([what, ""]);
       expect([what, opened]).toEqual([what, []]);
     }
     approved = APPROVED;

@@ -2411,13 +2411,30 @@ function* expandComponent(
     // The authored element still makes its ordinary durable import, and a
     // continuation reads that record as the hostile data it is before anything
     // is invoked. A record this protocol did not write authorizes nothing.
-    const record = yield createDurableOperation<Json>(
-      { type: "import_component", name, ...sourceDescription(position) },
-      // deno-lint-ignore require-yield
-      function* (): Operation<Json> {
-        return { settled: SETTLED_IMPORT, name };
-      },
-    );
+    // Restoring the record is itself a read of journal data. A value that
+    // refuses to be read — a proxy that throws from `ownKeys`, an accessor that
+    // throws, something no JSON holds — can refuse before this frame ever sees
+    // it, and what it throws is its own text. So the restore and the parse are
+    // one boundary: either this run is holding the record it wrote, or it is
+    // not, and the one thing said about it is the same either way.
+    //
+    // A durability failure is not that. The journal no longer describing this
+    // run is a fact about the run, not about this record, and it travels.
+    let record: unknown;
+    try {
+      record = yield createDurableOperation<Json>(
+        { type: "import_component", name, ...sourceDescription(position) },
+        // deno-lint-ignore require-yield
+        function* (): Operation<Json> {
+          return { settled: SETTLED_IMPORT, name };
+        },
+      );
+    } catch (error) {
+      if (durabilityFailure(error) !== undefined) {
+        throw error;
+      }
+      throw new Error(UNREADABLE_SETTLED_IMPORT);
+    }
     if (!readSettledImport(record, name)) {
       throw new Error(UNREADABLE_SETTLED_IMPORT);
     }

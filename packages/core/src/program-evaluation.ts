@@ -501,7 +501,16 @@ export function* evaluateProgram(request: ProgramEvaluationRequest): Operation<P
     () => admitProgram(request, terms, resolved),
   );
 
-  const decided = readAdmission(parseJson(stored));
+  // Detached under a boundary for the reason every other read of this record
+  // is: a restored value can refuse to be read at all, and a value that will
+  // not become plain JSON is not an admission.
+  let restoredRecord: Json;
+  try {
+    restoredRecord = parseJson(stored);
+  } catch {
+    throw new ProgramEvaluationError(UNREADABLE);
+  }
+  const decided = readAdmission(restoredRecord);
   if (decided === undefined) {
     throw new ProgramEvaluationError(UNREADABLE);
   }
