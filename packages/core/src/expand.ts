@@ -105,7 +105,7 @@ import {
   UNRESOLVED,
 } from "./program-identity.ts";
 import type { ProgramComponentRef, ResolvedProgramComponent } from "./program-identity.ts";
-import { ProgramImports } from "./program-imports.ts";
+
 import { DeclaredMarkdownError } from "./components/declared-markdown.ts";
 import type { PrivateImport } from "./components/declared-markdown.ts";
 import CoreTest from "./components/Test.ts";
@@ -134,6 +134,8 @@ import { declareChildAnswers, expandAnswers, strayAnswerError } from "./answers.
 import { DeclarationScan } from "./declaration-scan.ts";
 import { RESERVED_STRUCTURAL } from "./structural.ts";
 import { renderSegments } from "./render.ts";
+import { createDurableOperation } from "@executablemd/durable-streams";
+import { sourceDescription } from "./source-position.ts";
 import { markExactSource } from "./output/exact-source.ts";
 import {
   layerEnvironments,
@@ -2377,94 +2379,118 @@ function* expandComponent(
    * definition can reach the presentation decision below.
    */
   let authorizedCanonically = false;
-  try {
-    // The public chain answers, and canonical execution decides whether the
-    // answer is one it produced. In a closed execution — a workflow holding a
-    // component bundle, a generated fragment holding an allowlist — a handler
-    // may observe this import, delegate it, and refuse it by throwing; nothing
-    // it returns is invoked. Without an authority the answer is whatever the
-    // chain produced, exactly as it always was.
-    // The offer is open for exactly this ask. Middleware composes inside it and
-    // may observe, delegate or refuse the import; what it cannot do is obtain
-    // the declaration for an element that did not author it, because the offer
-    // is made from the closure the segments being expanded carry, is spent by
-    // whatever asks first, and authorizes only the answer it produced itself.
-    const offered = authority?.declared?.offer(authority.privates, name);
-    let answered: ImportedDefinition;
-    try {
-      answered = yield* importComponent(name, position);
-    } finally {
-      offered?.close();
+  // An admitted program's own components were resolved through this site's
+  // chain, compared against the retained admission and copied before the first
+  // program effect, so the chain has already answered for this name. Asking it
+  // again would be a second lookup a provider could answer differently. What
+  // still happens is the ordinary durable import the authored element makes,
+  // restored from the answer that was already authorized.
+  const settled = authority?.settled?.get(name);
+  if (settled !== undefined) {
+    yield createDurableOperation<Json>(
+      { type: "import_component", name, ...sourceDescription(position) },
+      // deno-lint-ignore require-yield
+      function* (): Operation<Json> {
+        return { kind: "settled" };
+      },
+    );
+    imported = settled;
+    if (settled.kind === "function") {
+      authority?.identities?.select(name, settled);
+      authority?.forms?.select(name, settled);
     }
     selected = selection?.settle();
-    // A private import is authorized by the ask that made the offer, and by
-    // nothing else. Not by the name: a private component runs for the element
-    // the declaration that carries it authored, so an answer kept from another
-    // import — however exactly it describes the same definition — authorizes
-    // nothing here. And a private name written where no offer was made never
-    // reaches this at all: selection resolves it to nothing, so what arrives is
-    // the ordinary unresolved failure.
-    let authorizedPrivate = false;
-    if (authority?.declared?.declaresPrivate(name) === true) {
-      imported = requirePrivate(offered, name, answered);
-      authorizedPrivate = true;
-      authority.forms?.select(name, imported);
-    } else if (authority?.imports === undefined || !authority.imports.closes(name)) {
-      // Closed for this exact name, not for the execution that closed it. A
-      // bundled run closes every import; a host that declared exact Markdown
-      // closed the names it declared, and an unrelated one is the open import it
-      // has always been — the chain's answer, unverified, with no selection
-      // recorded against it.
-      imported = answered;
-    } else {
-      imported = authority.imports.authorize(name, answered);
-      // This import is canonical execution's own answer for a name this
-      // execution closed, which is the only provenance exact source is read
-      // from. An open import — one no tier claims — never sets it, however its
-      // answer describes itself.
-      authorizedCanonically = true;
-      // Closed authorization answers with core's retained copy rather than the
-      // object the resolver recorded, and the copy is what this expansion
-      // invokes — so the selection is recorded against it too. Only here: an
-      // open execution's answer travelled through public middleware, and
-      // nothing it hands back is canonical resolution's product. The record
-      // takes its dispatcher from the copy's own `fn`, identical by retention;
-      // a wrapper whose `fn` is no dispatcher records nothing, so a dispatcher
-      // an authority recorded explicitly is never displaced.
-      authority.forms?.select(name, imported);
+    dispatcher = authority?.forms?.dispatcherFor(name, settled);
+  } else {
+    try {
+      // The public chain answers, and canonical execution decides whether the
+      // answer is one it produced. In a closed execution — a workflow holding a
+      // component bundle, a generated fragment holding an allowlist — a handler
+      // may observe this import, delegate it, and refuse it by throwing; nothing
+      // it returns is invoked. Without an authority the answer is whatever the
+      // chain produced, exactly as it always was.
+      // The offer is open for exactly this ask. Middleware composes inside it and
+      // may observe, delegate or refuse the import; what it cannot do is obtain
+      // the declaration for an element that did not author it, because the offer
+      // is made from the closure the segments being expanded carry, is spent by
+      // whatever asks first, and authorizes only the answer it produced itself.
+      const offered = authority?.declared?.offer(authority.privates, name);
+      let answered: ImportedDefinition;
+      try {
+        answered = yield* importComponent(name, position);
+      } finally {
+        offered?.close();
+      }
+      selected = selection?.settle();
+      // A private import is authorized by the ask that made the offer, and by
+      // nothing else. Not by the name: a private component runs for the element
+      // the declaration that carries it authored, so an answer kept from another
+      // import — however exactly it describes the same definition — authorizes
+      // nothing here. And a private name written where no offer was made never
+      // reaches this at all: selection resolves it to nothing, so what arrives is
+      // the ordinary unresolved failure.
+      let authorizedPrivate = false;
+      if (authority?.declared?.declaresPrivate(name) === true) {
+        imported = requirePrivate(offered, name, answered);
+        authorizedPrivate = true;
+        authority.forms?.select(name, imported);
+      } else if (authority?.imports === undefined || !authority.imports.closes(name)) {
+        // Closed for this exact name, not for the execution that closed it. A
+        // bundled run closes every import; a host that declared exact Markdown
+        // closed the names it declared, and an unrelated one is the open import it
+        // has always been — the chain's answer, unverified, with no selection
+        // recorded against it.
+        imported = answered;
+      } else {
+        imported = authority.imports.authorize(name, answered);
+        // This import is canonical execution's own answer for a name this
+        // execution closed, which is the only provenance exact source is read
+        // from. An open import — one no tier claims — never sets it, however its
+        // answer describes itself.
+        authorizedCanonically = true;
+        // Closed authorization answers with core's retained copy rather than the
+        // object the resolver recorded, and the copy is what this expansion
+        // invokes — so the selection is recorded against it too. Only here: an
+        // open execution's answer travelled through public middleware, and
+        // nothing it hands back is canonical resolution's product. The record
+        // takes its dispatcher from the copy's own `fn`, identical by retention;
+        // a wrapper whose `fn` is no dispatcher records nothing, so a dispatcher
+        // an authority recorded explicitly is never displaced.
+        authority.forms?.select(name, imported);
+      }
+      // Whatever tier answered, and whatever this execution declares, an
+      // implementation some declaration's private closure built runs only for an
+      // import that closure authorized. Neither the name nor the current
+      // execution can decide it: an answer kept from a legitimate private import
+      // can be returned for any *other* name, in a copy of the definition, and in
+      // a later run that declares nothing at all — and a run that has ended
+      // authorizes nothing.
+      if (!authorizedPrivate) {
+        refuseEscapedPrivate(name, imported);
+      }
+      // Read off the answer rather than from a frame the engine opened: what is
+      // recognized is the exact definition canonical resolution produced for this
+      // exact name, whenever it produced it.
+      dispatcher = authority?.forms?.dispatcherFor(name, imported);
+    } catch (error) {
+      selection?.settle();
+      // Import is a durable effect, so it is the other place a stale journal
+      // entry can surface.
+      const fatal = fatalCause(error);
+      if (fatal !== undefined) {
+        throw fatal;
+      }
+      return [
+        yield* raise({
+          type: "error",
+          message:
+            error instanceof Error
+              ? `Failed to import component ${name}: ${error.message}`
+              : `Failed to import component ${name}: ${String(error)}`,
+          source: name,
+        }),
+      ];
     }
-    // Whatever tier answered, and whatever this execution declares, an
-    // implementation some declaration's private closure built runs only for an
-    // import that closure authorized. Neither the name nor the current
-    // execution can decide it: an answer kept from a legitimate private import
-    // can be returned for any *other* name, in a copy of the definition, and in
-    // a later run that declares nothing at all — and a run that has ended
-    // authorizes nothing.
-    if (!authorizedPrivate) {
-      refuseEscapedPrivate(name, imported);
-    }
-    // Read off the answer rather than from a frame the engine opened: what is
-    // recognized is the exact definition canonical resolution produced for this
-    // exact name, whenever it produced it.
-    dispatcher = authority?.forms?.dispatcherFor(name, imported);
-  } catch (error) {
-    selection?.settle();
-    // Import is a durable effect, so it is the other place a stale journal
-    // entry can surface.
-    const fatal = fatalCause(error);
-    if (fatal !== undefined) {
-      throw fatal;
-    }
-    return [
-      yield* raise({
-        type: "error",
-        message:
-          error instanceof Error
-            ? `Failed to import component ${name}: ${error.message}`
-            : `Failed to import component ${name}: ${String(error)}`,
-        source: name,
-      }),
-    ];
   }
 
   // Function component: call the generator function directly
@@ -4213,15 +4239,18 @@ export function* expandProgramBody(
     throw new ProgramEvaluationError(INCOMPATIBLE);
   }
   // The answers that passed the comparison are the answers the program
-  // invokes. Asking the chain again and running whatever came back is the gap
-  // this closes: a provider could answer one way while the site was being
-  // checked and another way while the program ran.
-  const settled = new ProgramImports(current);
-  // Closed over the answers that passed, so a handler outside this expansion
-  // that replaces one is refused where it would be invoked rather than
-  // silently preferred.
+  // invokes, and they reach expansion as settled answers rather than as a
+  // second lookup. The site's own closed tiers are untouched: a bundled or
+  // declared name is still that tier's to answer, and this adds nothing to
+  // what the site closes.
+  const settled = new Map<string, ImportedDefinition>();
+  for (const entry of current) {
+    if (entry.definition !== undefined && !settled.has(entry.name)) {
+      settled.set(entry.name, entry.definition);
+    }
+  }
   const authority: ExpansionAuthority | undefined =
-    site.authority === undefined ? { imports: settled } : { ...site.authority, imports: settled };
+    site.authority === undefined ? { settled } : { ...site.authority, settled };
   return yield* scoped(function* () {
     yield* provideEnv(programEnvironment(site.callerValues, program.props));
     if (program.returns !== undefined) {

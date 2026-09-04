@@ -4845,7 +4845,11 @@ An answer an **identified middleware provider** supplied keeps that provider's
 own identity: a stable origin, the provider's stable key for the name, and a
 revision that changes whenever the supplied implementation changes. The provider
 states those terms at its installation boundary through `useImportProvider()`,
-and canonical execution mints it a claimant for that one execution. Marking an
+and canonical execution mints it a claimant for that one execution, reading the
+origin and revision exactly once and closing over copies. A getter that answers
+one origin to the duplicate check and another to the claim, or an object edited
+after registration, changes nothing about the identity that claimant marks
+answers with. Marking an
 answer binds the terms to that exact object in execution-private state — never
 on the definition, which is data an answer can copy, and never through a
 replaceable Context answer. The identity is an assertion by the authority
@@ -4861,8 +4865,22 @@ complete program cannot be admitted against one, because a continuation would
 have nothing to compare and would invoke whatever answered on the day it
 resumed.
 
-Resolution invokes no component implementation and performs no program effect;
-it settles which definition answers each name.
+**Resolution is its own path.** It runs the site's ordinary chain under a
+resolution-only terminal: it selects and loads exactly what an authored import
+would, invokes no component implementation, and journals nothing. So
+`evaluate_program` commits before the program's own ordinary import record
+rather than after it.
+
+**The site's closed authority still decides.** A name a workflow bundle or a
+declared-Markdown host closed is answered by that tier, exactly as it is in
+ordinary expansion, and an identified replacement of such a name is refused
+rather than becoming the identity a program is admitted under. A
+provider-supplied answer is witnessed, not issued: it authorizes nothing for a
+closed name.
+
+**Structural syntax never reaches component import.** `<If>`, `<Return>` and
+every other reserved construct resolve directly to their structural identity —
+no lookup, no provider consulted, and no import record.
 
 **A continuation is held to the site it was admitted at.** Before the first
 program effect, canonical execution resolves every retained name again through
@@ -4875,12 +4893,17 @@ answering it dishonestly refuses the evaluation rather than widening it, because
 the canonical comparison is what decides.
 
 **The comparison and the invocation are one decision.** The answers that passed
-the comparison are the answers the program invokes: canonical execution keeps
-its own copy of each, taken when the answer was witnessed, and the program's
-imports are authorized against it. An answer that no longer describes what the
-comparison settled is refused where it would be invoked rather than silently
-preferred, which is what closes the gap in which a provider answers one way
-while the site is checked and another way while the program runs.
+the comparison are the answers the program invokes. Canonical execution keeps
+its own copy of each, taken when the answer was witnessed, and hands those
+copies to the program's expansion: an element whose name is among them does not
+reach `Component.importComponent` at all. The chain is entered twice for one
+evaluation — once for the admission's resolution, once for reconciliation — and
+never again, so there is no third lookup for a provider to answer differently.
+
+The authored element still makes its ordinary durable import: one
+`import_component` record per occurrence, written after the admission and
+restored from the answer already authorized, with identity-domain and form
+selection recorded from that same answer. It rediscovers no authority.
 
 **The retained record is hostile data.** A journal is a file, and replay hands
 back whatever it holds. The admitted and refused decisions and every nested
@@ -12407,6 +12430,13 @@ forms sit beside the restricted one.
 | PE30 | Replacement | A provider replacing a canonical answer retains its own identity, and the replaced registration never runs |
 | PE31 | Mutation after the claim | An answer changed on its way back through the chain refuses |
 | PE32 | Two claims on one answer | A second provider claiming an answer another already claimed refuses |
+| PE33 | One import, after the admission | Exactly one ordinary `import_component` follows `evaluate_program` for a program's component, and none precedes it |
+| PE34 | Two lookups, not three | The provider chain is entered for the admission's resolution and for reconciliation, and never for expansion |
+| PE35 | Structural syntax | `<If>` retains the structural tag, consults no provider and records no import |
+| PE36 | A closed name | An identified replacement of a declared component is refused, and its implementation never runs |
+| PE37 | The closed positive control | With no replacement, the declared answer is what the program invokes and what the admission retains |
+| PE38 | Identity captured once | Editing the stated identity after the claimant exists does not change what its claims are marked with |
+| PE39 | An alternating origin | A getter cannot answer the duplicate check and the claim differently |
 | EP1–EP8 | Run profile | The ordinary run profile declares `<Evaluate>`; the forms, props, refusals and catalog entry hold through the real binary, and a program cannot reach `<Plan>`'s private components |
 | WGAC17–WGAC20 | Workflow profile | A complete program records `evaluate_program` and no `generated_xmd`; the three forms cannot be combined; complete-program support is not reachable through `source` |
 

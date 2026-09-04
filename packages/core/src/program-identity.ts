@@ -169,6 +169,17 @@ export const UNIDENTIFIED =
   "<Evaluate> cannot evaluate a program naming a component supplied by import middleware that " +
   "states no identity: a continuation has nothing to hold the site to.";
 
+/**
+ * What an answer that moved on its way back through the chain says.
+ *
+ * A provider marks an answer and then edits it, or hands back something other
+ * than what it marked. Either way what the chain returned is not what was
+ * claimed, so there is nothing here to admit a program against.
+ */
+export const ANSWER_CHANGED =
+  "<Evaluate> cannot evaluate a program whose component answer was changed after the provider " +
+  "that supplied it claimed it.";
+
 /** The canonical identity of what a selection chose. */
 export function selectionIdentity(selection: ComponentSelection): ProgramIdentity {
   switch (selection.kind) {

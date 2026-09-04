@@ -38,15 +38,10 @@
 import { createContext } from "effection";
 import type { Context, Operation } from "effection";
 
-import { stillDescribes } from "./components/import-authority.ts";
 import { CanonicalImports } from "./components/import-authority.ts";
-import type {
-  ImportAuthority,
-  ImportedDefinition,
-  ImportRefusal,
-} from "./components/import-authority.ts";
+import type { ImportedDefinition } from "./components/import-authority.ts";
 import { ProgramEvaluationError } from "./program-identity.ts";
-import type { ImportProviderIdentity, ResolvedProgramComponent } from "./program-identity.ts";
+import type { ImportProviderIdentity } from "./program-identity.ts";
 
 /** How an identified provider marks one answer as its own. */
 export interface ImportProviderClaimant {
@@ -92,98 +87,33 @@ export function createImportProviderRegistry(imports: CanonicalImports): ImportP
   const origins = new Set<string>();
   return {
     claimant(identity: ImportProviderIdentity): ImportProviderClaimant {
-      if (identity.origin.length === 0 || identity.revision.length === 0) {
+      // Read once, here, and never again. What a provider states is an object it
+      // still holds: a getter can answer one origin to the duplicate check and
+      // another to the claim, and a plain object can be edited after this
+      // returns. Copying the primitives out at registration is what makes the
+      // identity this claimant marks answers with the identity that was
+      // validated and counted.
+      const origin = identity.origin;
+      const revision = identity.revision;
+      if (typeof origin !== "string" || typeof revision !== "string") {
+        throw new ProgramEvaluationError(
+          "An identified import provider states its origin and revision as strings.",
+        );
+      }
+      if (origin.length === 0 || revision.length === 0) {
         throw new ProgramEvaluationError(
           "An identified import provider states a non-empty origin and revision.",
         );
       }
-      if (origins.has(identity.origin)) {
+      if (origins.has(origin)) {
         throw new ProgramEvaluationError(
-          `Two import providers are installed under the origin "${identity.origin}", so it names ` +
+          `Two import providers are installed under the origin "${origin}", so it names ` +
             "no single authority.",
         );
       }
-      origins.add(identity.origin);
+      origins.add(origin);
       return (name, key, definition) =>
-        imports.supply(
-          name,
-          { origin: identity.origin, key, revision: identity.revision },
-          definition,
-        );
+        imports.supply(name, { origin, key, revision: revision }, definition);
     },
   };
-}
-
-/** What one program's imports refuse, and why. */
-const REFUSED: Record<ImportRefusal, string> = {
-  unissued:
-    "Component.importComponent middleware answered a complete program's import with a definition " +
-    "canonical resolution did not settle for it.",
-  "another-name":
-    "Component.importComponent middleware answered a complete program's import with the " +
-    "definition canonical resolution settled for another component.",
-  changed:
-    "Component.importComponent middleware changed the definition canonical resolution settled " +
-    "before the program invoked it.",
-};
-
-/**
- * The answers one admitted program invokes.
- *
- * Built from the resolution that passed the compatibility comparison, so the
- * definition a program expands is the one the comparison was about. Asking the
- * chain again and invoking whatever came back is the gap this closes: a
- * provider could answer one way while the site was being checked and another
- * way while the program ran.
- *
- * A name that resolved to nothing is not closed here. It reaches the ordinary
- * chain and produces the ordinary unresolved failure, which is what a program
- * naming a component this site does not have should say.
- */
-export class ProgramImports implements ImportAuthority {
-  readonly #answers: ReadonlyMap<string, ImportedDefinition>;
-
-  constructor(resolved: readonly ResolvedProgramComponent[]) {
-    const answers = new Map<string, ImportedDefinition>();
-    for (const entry of resolved) {
-      if (entry.definition !== undefined && !answers.has(entry.name)) {
-        answers.set(entry.name, entry.definition);
-      }
-    }
-    this.#answers = answers;
-  }
-
-  closes(name: string): boolean {
-    return this.#answers.has(name);
-  }
-
-  /**
-   * The answer canonical resolution settled, for the import the program made.
-   *
-   * The chain still runs, so the execution records its own selection and
-   * identity domain exactly as it does for any other import. What changes is
-   * what comes back: the answer must still describe what the comparison
-   * passed, and the object invoked is the copy the comparison was about. A
-   * provider that answered one way while the site was checked and another way
-   * while the program ran is refused here rather than preferred.
-   */
-  authorize(name: string, answer: ImportedDefinition): ImportedDefinition {
-    const settled = this.#answers.get(name);
-    if (settled === undefined) {
-      throw new ProgramEvaluationError(REFUSED.unissued);
-    }
-    if (answer !== settled && read(() => stillDescribes(settled, answer)) !== true) {
-      throw new ProgramEvaluationError(REFUSED.changed);
-    }
-    return settled;
-  }
-}
-
-/** One read of an answer that may refuse to be read. */
-function read<T>(inspect: () => T): T | undefined {
-  try {
-    return inspect();
-  } catch {
-    return undefined;
-  }
 }

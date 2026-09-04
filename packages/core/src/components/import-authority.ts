@@ -117,6 +117,20 @@ export interface ExpansionAuthority {
    * case a program's components are compared by name and form alone.
    */
   readonly resolve?: ProgramResolver;
+  /**
+   * The answers an admitted program invokes, settled before its first effect.
+   *
+   * Canonical execution resolved these through the site's own chain, compared
+   * them against the retained admission, and kept its own copy of each. An
+   * element whose name is here does not reach `Component.importComponent` at
+   * all: the chain has already answered, and asking it again would let a
+   * provider answer one way while the site was checked and another way while
+   * the program ran.
+   *
+   * Held by the execution and handed here by value, like everything else on
+   * this object.
+   */
+  readonly settled?: ReadonlyMap<string, ImportedDefinition>;
 }
 
 /** Why an answer is not the one canonical execution produced for this name. */
@@ -338,7 +352,12 @@ export class CanonicalImports {
   ): ImportedDefinition {
     const witness =
       typeof answer === "object" && answer !== null ? this.#issued.get(answer) : undefined;
-    if (witness === undefined) {
+    // A provider-supplied answer is witnessed, not issued. It says which
+    // provider stands behind it, which is what a complete program's admission
+    // reads — and it is not canonical execution's own answer, so it authorizes
+    // nothing for a name a tier closed. A bundled or declared component is that
+    // tier's to answer whatever middleware supplies beside it.
+    if (witness === undefined || witness.supplied !== undefined) {
       throw refuse("unissued");
     }
     if (witness.name !== name) {

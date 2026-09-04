@@ -747,6 +747,9 @@ describe("Tier PE — a producer's private closure does not cross", () => {
 /** Every implementation an open middleware provider actually entered. */
 const opened: string[] = [];
 
+/** Every name the open provider's handler was consulted for. */
+const consulted: string[] = [];
+
 /** One implementation of `<Open />`, distinguishable by what it renders. */
 function openImplementation(mark: string, props?: JsonObject): FunctionComponentDefinition {
   return {
@@ -787,6 +790,7 @@ function openProvider(options: {
     yield* Component.around(
       {
         *importComponent([name, position], next) {
+          consulted.push(name);
           if (name !== "Open") {
             return yield* next(name, position);
           }
@@ -884,7 +888,7 @@ describe("Tier PE — the identity is the answer's, not the selector's", () => {
     approved = APPROVED;
   });
 
-  it("PE26 cannot run an answer that changed after the comparison passed", function* () {
+  it("PE26 invokes the snapshot that passed reconciliation, asking nothing again", function* () {
     opened.length = 0;
     approved = OPEN_PROGRAM;
 
@@ -900,13 +904,11 @@ describe("Tier PE — the identity is the answer's, not the selector's", () => {
       }),
     });
 
-    // B never runs. Expansion is authorized against the answer the comparison
-    // settled, so an answer that changed underneath it is refused rather than
-    // quietly preferred.
-    expect(`${attempt.failure ?? attempt.output ?? ""}`).toContain(
-      "changed the definition canonical resolution settled",
-    );
-    expect(opened).toEqual([]);
+    // Expansion invokes the snapshot that passed reconciliation, so the third
+    // lookup never happens and the effect planted in it never occurs.
+    expect(attempt.failure).toBeUndefined();
+    expect(attempt.output).toContain("open A");
+    expect(opened).toEqual(["A"]);
     approved = APPROVED;
   });
 
@@ -1100,6 +1102,217 @@ describe("Tier PE — what a provider does to the chain's answer", () => {
 
     expect(attempt.failure ?? attempt.output ?? "").toContain("another provider had claimed");
     expect(opened).toEqual([]);
+    approved = APPROVED;
+  });
+});
+
+/** Every ordinary import this run recorded for one component name. */
+function importsOf(events: DurableEvent[], name: string): number[] {
+  return events.flatMap((event, index) =>
+    event.type === "yield" &&
+    event.description.type === "import_component" &&
+    event.description.name === name
+      ? [index]
+      : [],
+  );
+}
+
+/** Where the complete-program admission sits in the journal. */
+function admissionIndex(events: DurableEvent[]): number {
+  return events.findIndex(
+    (event) => event.type === "yield" && event.description.type === "evaluate_program",
+  );
+}
+
+describe("Tier PE — resolution settles before the program's own import", () => {
+  it("PE33 records exactly one ordinary import, after the admission", function* () {
+    opened.length = 0;
+    consulted.length = 0;
+    approved = OPEN_PROGRAM;
+
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+    });
+
+    expect(attempt.failure).toBeUndefined();
+    const admitted = admissionIndex(attempt.events);
+    const records = importsOf(attempt.events, "Open");
+    // Resolution journals nothing, so the admission commits first and the
+    // authored element's own import is the only one that follows it.
+    expect(records).toHaveLength(1);
+    expect(records[0]).toBeGreaterThan(admitted);
+    approved = APPROVED;
+  });
+
+  it("PE34 consults the provider for admission and reconciliation only", function* () {
+    opened.length = 0;
+    consulted.length = 0;
+    approved = OPEN_PROGRAM;
+
+    yield* run(PROBING_DOCUMENT, {
+      install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+    });
+
+    // Twice: once for the admission's resolution, once for canonical
+    // reconciliation. Expansion invokes the snapshot instead of asking again.
+    expect(consulted.filter((name) => name === "Open")).toHaveLength(2);
+    approved = APPROVED;
+  });
+
+  it("PE35 resolves structural syntax directly, consulting nobody", function* () {
+    opened.length = 0;
+    consulted.length = 0;
+    approved = ["<If condition={true}>", "structural ran", "</If>", "", "<Open />", ""].join("\n");
+
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+    });
+
+    expect(attempt.failure).toBeUndefined();
+    expect(attempt.output).toContain("structural ran");
+    const named = decision(admissions(attempt.events)[0]!).named as Record<string, Json>[];
+    expect(named[0]).toEqual({
+      name: "If",
+      form: "paired",
+      identity: { tag: "structural", construct: "If" },
+    });
+    // No lookup and no record: structural syntax is the engine's own.
+    expect(consulted).not.toContain("If");
+    expect(importsOf(attempt.events, "If")).toHaveLength(0);
+    approved = APPROVED;
+  });
+});
+
+describe("Tier PE — the site's closed authority still decides", () => {
+  it("PE36 refuses an identified replacement of a declared component", function* () {
+    opened.length = 0;
+    approved = "<Policy />\n";
+    const policy = "the declared policy ran\n";
+
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      declarations: [
+        {
+          name: "Policy",
+          origin: POLICY_ORIGIN,
+          source: policy,
+          digest: sourceDigest(policy),
+        },
+      ],
+      *install() {
+        const claim = yield* useImportProvider({ origin: "test/usurper", revision: "1" });
+        const replacement = openImplementation("usurped");
+        yield* Component.around(
+          {
+            *importComponent([name, position], next) {
+              if (name !== "Policy") {
+                return yield* next(name, position);
+              }
+              yield* next(name, position);
+              return claim(name, "Policy", replacement);
+            },
+          },
+          { at: "max" },
+        );
+      },
+    });
+
+    // The declared tier closes this name, so it answers for it. The
+    // replacement is refused before the program runs anything.
+    expect(attempt.failure ?? attempt.output ?? "").not.toContain("usurped");
+    expect(opened).toEqual([]);
+    approved = APPROVED;
+  });
+
+  it("PE37 lets a declared component answer its own name inside a program", function* () {
+    opened.length = 0;
+    approved = "<Policy />\n";
+    const policy = "the declared policy ran\n";
+
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      declarations: [
+        {
+          name: "Policy",
+          origin: POLICY_ORIGIN,
+          source: policy,
+          digest: sourceDigest(policy),
+        },
+      ],
+    });
+
+    // The positive control for PE36: with no replacement, the closed answer is
+    // exactly what the program invokes.
+    expect(attempt.failure).toBeUndefined();
+    expect(attempt.output).toContain("the declared policy ran");
+    const named = decision(admissions(attempt.events)[0]!).named as Record<string, Json>[];
+    expect(named[0]).toEqual({
+      name: "Policy",
+      form: "self-closing",
+      identity: { tag: "declared-markdown", origin: POLICY_ORIGIN, digest: sourceDigest(policy) },
+    });
+    approved = APPROVED;
+  });
+});
+
+describe("Tier PE — a provider's stated identity is captured once", () => {
+  it("PE38 ignores mutation of the identity object after the claimant exists", function* () {
+    opened.length = 0;
+    approved = OPEN_PROGRAM;
+    const stated = { origin: "test/open", revision: "A" };
+
+    const first = yield* run(PROBING_DOCUMENT, {
+      *install() {
+        const claim = yield* useImportProvider(stated);
+        // Edited after registration. What the claimant marks answers with is
+        // what was read and validated, not what this object says now.
+        stated.revision = "B";
+        const definition = openImplementation("A");
+        yield* Component.around(
+          {
+            *importComponent([name, position], next) {
+              if (name !== "Open") {
+                return yield* next(name, position);
+              }
+              return claim(name, "Open", definition);
+            },
+          },
+          { at: "max" },
+        );
+      },
+    });
+
+    expect(first.failure).toBeUndefined();
+    const named = decision(admissions(first.events)[0]!).named as Record<string, Json>[];
+    expect(named).toEqual([
+      {
+        name: "Open",
+        form: "self-closing",
+        identity: { tag: "middleware", origin: "test/open", key: "Open", revision: "A" },
+      },
+    ]);
+    approved = APPROVED;
+  });
+
+  it("PE39 refuses an alternating origin that would evade duplicate detection", function* () {
+    approved = OPEN_PROGRAM;
+    let reads = 0;
+    const alternating: ImportProviderIdentity = {
+      get origin() {
+        reads += 1;
+        return reads === 1 ? "test/open" : "test/other";
+      },
+      revision: "A",
+    };
+
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      *install() {
+        yield* useImportProvider({ origin: "test/open", revision: "A" });
+        yield* useImportProvider(alternating);
+      },
+    });
+
+    // The origin is read once, so the getter answers the duplicate check and
+    // the claim with one value — and that value is already taken.
+    expect(attempt.failure ?? attempt.output ?? "").toContain("no single authority");
     approved = APPROVED;
   });
 });
