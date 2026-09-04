@@ -31,7 +31,7 @@ import {
   processReachable,
   processTable,
   terminalHolders,
-} from "@executablemd/runtime";
+} from "@executablemd/terminal/processes";
 import type { Settlement } from "./pane-protocol.ts";
 
 export interface PaneChildRequest {

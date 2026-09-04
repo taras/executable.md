@@ -25,12 +25,12 @@ import {
   StaleInputError,
 } from "@executablemd/durable-streams";
 import type { EffectDescription, Json, Workflow } from "@executablemd/durable-streams";
-import type { TerminalGridRequest } from "@executablemd/runtime";
+import type { TerminalGridRequest } from "@executablemd/terminal";
 
 import { sourceDescription } from "../source-position.ts";
 import type { SourcePosition } from "../types.ts";
-import { retainedLayout } from "./grid.ts";
-import type { RetainedGrid } from "./grid.ts";
+import { retainedLayout } from "@executablemd/terminal/lifecycle";
+import type { RetainedGrid } from "@executablemd/terminal/lifecycle";
 
 /** A grid's identity within one execution: where it was written. */
 export interface GridIdentity {

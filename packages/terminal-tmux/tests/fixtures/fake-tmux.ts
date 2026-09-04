@@ -23,8 +23,8 @@ import { spawn as spawnChild } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { until } from "effection";
 import type { Operation } from "effection";
-import { TmuxCommandFailed } from "../../src/terminal/tmux.ts";
-import type { Tmux } from "../../src/terminal/tmux.ts";
+import { TmuxCommandFailed } from "../../src/tmux.ts";
+import type { Tmux } from "../../src/tmux.ts";
 
 export interface FakePane {
   id: string;

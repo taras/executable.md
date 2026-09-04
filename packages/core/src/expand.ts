@@ -66,13 +66,15 @@ import {
   terminalTitleMissingMessage,
 } from "./structural-rules.ts";
 import type { StructuralViolation, SwitchCase, TerminalPane } from "./structural-rules.ts";
-import { terminalGridLayout } from "./terminal-grid.ts";
-import type { PlacedPane } from "./terminal-grid.ts";
-import { durableGrid, openTerminalGrid, toRequest } from "./terminal/grid.ts";
-import type { PaneWork } from "./terminal/grid.ts";
+import {
+  durableGrid,
+  openTerminalGrid,
+  terminalGridLayout,
+  toRequest,
+} from "@executablemd/terminal/lifecycle";
+import type { PaneWork, PlacedPane } from "@executablemd/terminal/lifecycle";
+import { usePaneNativeLauncher, usePaneTerminal } from "@executablemd/terminal";
 import { recordGridLayout } from "./terminal/journal.ts";
-import { usePaneTerminal } from "./terminal/pane.ts";
-import { usePaneNativeLauncher } from "./terminal/pane-launcher.ts";
 import {
   asBindingViolation,
   asExpressionViolation,

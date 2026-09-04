@@ -15,8 +15,7 @@ import { scoped } from "effection";
 import type { Operation } from "effection";
 
 import { Execution } from "../execute.ts";
-import { useTerminalInstallation } from "./authority.ts";
-import { installTerminalProvider } from "./provider-api.ts";
+import { installTerminalProvider, useTerminalInstallation } from "@executablemd/terminal/lifecycle";
 
 export interface TerminalGridProfileOptions {
   /**

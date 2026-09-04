@@ -28,7 +28,8 @@ import process from "node:process";
 import { readTextFile, rm } from "@effectionx/fs";
 import { ensure, resource, run, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { installDenoTerminalProcesses, processTable } from "@executablemd/runtime";
+import { processTable } from "@executablemd/terminal/processes";
+import { installDenoTerminalProcesses } from "@executablemd/terminal/posix";
 import { sweepHolders, usePaneChild } from "./pane-child.ts";
 import type { PaneChild, PaneChildRequest } from "./pane-child.ts";
 import {

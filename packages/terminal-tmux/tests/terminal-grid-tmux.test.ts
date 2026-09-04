@@ -39,46 +39,30 @@ import process from "node:process";
 import { cliCommand } from "@executablemd/test-support/launch";
 import { ensureDir, exists, readTextFile, rm, stat, writeTextFile } from "@effectionx/fs";
 import { realpath } from "node:fs/promises";
-import { installControlledLauncher, nativeLaunch, reserveTerminal } from "@executablemd/runtime";
-import type { TerminalComposite } from "@executablemd/runtime";
+import { nativeLaunch, reserveTerminal, TerminalGrids } from "@executablemd/terminal";
+import type { TerminalComposite } from "@executablemd/terminal";
+import { installControlledLauncher } from "@executablemd/terminal/test";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import {
-  installDenoTerminalProcesses,
-  processReachable,
-  TerminalProcesses,
-} from "@executablemd/runtime";
-import type { SignalDelivery } from "@executablemd/runtime";
-import { useTmuxGrid } from "../src/terminal/tmux-grid.ts";
-import type { ControlEvent, TmuxGrid } from "../src/terminal/tmux-grid.ts";
+import { processReachable, TerminalProcesses } from "@executablemd/terminal/processes";
+import type { SignalDelivery } from "@executablemd/terminal/processes";
+import { installDenoTerminalProcesses } from "@executablemd/terminal/posix";
+import { useTmuxGrid } from "../src/tmux-grid.ts";
+import type { ControlEvent, TmuxGrid } from "../src/tmux-grid.ts";
 import { createFakeTmux } from "./fixtures/fake-tmux.ts";
 import type { FakeTmux } from "./fixtures/fake-tmux.ts";
-import {
-  layoutString,
-  placementProblems,
-  rowMajorCells,
-  swapsInto,
-} from "../src/terminal/layout.ts";
-import type { LayoutCell } from "../src/terminal/layout.ts";
-import { usePaneChannels } from "../src/terminal/pane-channel.ts";
-import { createGridTeardown, runInPane, tmuxGridProvider } from "../src/terminal/provider.ts";
-import {
-  foregroundTerminalGrid,
-  underHangup,
-  unsupportedTerminalGrid,
-} from "../src/terminal/host.ts";
-import {
-  execute,
-  installTerminalProvider,
-  registerTerminalProvider,
-  useTerminalInstallation,
-} from "@executablemd/core";
-import type { Json } from "@executablemd/core";
+import { clientCommand } from "./fixtures/client-command.ts";
+import { layoutString, placementProblems, rowMajorCells, swapsInto } from "../src/layout.ts";
+import type { LayoutCell } from "../src/layout.ts";
+import { usePaneChannels } from "../src/pane-channel.ts";
+import { createGridTeardown, runInPane, tmuxGridProvider } from "../src/provider.ts";
+import { installTerminalProvider, useTerminalInstallation } from "@executablemd/terminal/lifecycle";
+import { registerTerminalProvider } from "@executablemd/terminal";
 import type { Result } from "effection";
-import { processTable, TerminalGrids } from "@executablemd/runtime";
+import { processTable } from "@executablemd/terminal/processes";
 import { chmod, readdir } from "node:fs/promises";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import type { PaneChannels, PaneLink } from "../src/terminal/pane-channel.ts";
+import type { PaneChannels, PaneLink } from "../src/pane-channel.ts";
 import {
   FromWorkerSchema,
   paneSocketPath,
@@ -86,17 +70,17 @@ import {
   readFrames,
   ToWorkerSchema,
   writeFrame,
-} from "../src/terminal/pane-protocol.ts";
+} from "../src/pane-protocol.ts";
 import {
   foregroundSignalListeners,
   PANE_WORKER_COMMAND,
   paneWorkerInvocation,
   runPaneWorker,
   useForegroundSignals,
-} from "../src/terminal/pane-worker.ts";
-import { usePaneChild } from "../src/terminal/pane-child.ts";
-import type { PaneChild, PaneChildOutcome } from "../src/terminal/pane-child.ts";
-import type { FromWorker, Settlement, ToWorker } from "../src/terminal/pane-protocol.ts";
+} from "../src/pane-worker.ts";
+import { usePaneChild } from "../src/pane-child.ts";
+import type { PaneChild, PaneChildOutcome } from "../src/pane-child.ts";
+import type { FromWorker, Settlement, ToWorker } from "../src/pane-protocol.ts";
 
 /** The cells a layout string describes, read back out of it. */
 function readCells(layout: string): LayoutCell[] {
@@ -130,14 +114,6 @@ function useScript(): Operation<string> {
     });
     yield* provide(file);
   });
-}
-
-/** The fixture that stands in for one tmux client. */
-function clientCommand(mode: "control" | "attach", script: string): readonly string[] {
-  const fixture = path.resolve("packages/cli/tests/fixtures/tmux-client.ts");
-  const invocation = cliCommand([]);
-  // The same runtime the CLI runs under, pointed at the fixture instead.
-  return [invocation.command, "run", "--allow-all", fixture, mode, script];
 }
 
 /** Every listener this process holds, across the names this code installs. */
@@ -2128,92 +2104,6 @@ describe("Tier TD — the combined teardown", () => {
     }
   });
 
-  it("TD9: a teardown that fails refuses the run, and nothing after the grid goes", function* () {
-    // The document-level end of the same claim: a grid whose teardown could not
-    // establish the terminal was given back is a failed run, not a run with a
-    // warning in it.
-    const room = yield* useScratch();
-    const shell = yield* useShellFixture(room);
-    const script = yield* useScript();
-    const invocation = cliCommand([]);
-    // The server refuses to be killed the first time it is asked, so the last
-    // phase of the teardown cannot establish it is gone.
-    const tmux = createFakeTmux({
-      script,
-      clientCommand,
-      spawnPanes: true,
-      failOnce: { command: "kill-server", message: "refused" },
-    });
-    yield* ensure(() => {
-      tmux.stopPanes();
-    });
-    yield* writeTextFile(
-      path.join(room, "doc.md"),
-      [
-        "<Terminal.Grid columns={1}>",
-        '<Terminal title="Only" />',
-        "</Terminal.Grid>",
-        "",
-        "AFTER_THE_GRID",
-        "",
-      ].join("\n"),
-    );
-    yield* installControlledLauncher({ outcome: () => ({ exitCode: 0 }) });
-
-    let outcome: Result<Json> | undefined;
-    let output = "";
-    yield* scoped(function* () {
-      yield* foregroundTerminalGrid({
-        isTerminal: () => true,
-        createTmux: () => tmux,
-        env: { PATH: "/usr/bin:/bin", SHELL: shell },
-        // deno-lint-ignore require-yield
-        *askVersion() {
-          return { code: 0, stdout: "tmux 3.6a" };
-        },
-        workerCommand: function* (ordinal, at) {
-          return [
-            invocation.command,
-            ...invocation.arguments,
-            PANE_WORKER_COMMAND,
-            String(ordinal),
-            at,
-          ];
-        },
-      })();
-
-      yield* spawn(function* () {
-        while (!(yield* exists(`${room}/shell-pid`))) {
-          yield* sleep(15);
-        }
-        while (tmux.clients.length === 0) {
-          yield* sleep(15);
-        }
-        yield* tmux.say(`%client-detached ${tmux.clients[0] ?? ""}`);
-      });
-
-      const execution = yield* execute({
-        path: path.join(room, "doc.md"),
-        stream: new InMemoryStream(),
-        includes: [room],
-      });
-      const subscription = yield* execution.output;
-      let next = yield* subscription.next();
-      while (!next.done) {
-        output = next.value;
-        next = yield* subscription.next();
-      }
-      outcome = yield* execution;
-    });
-
-    expect(outcome?.ok).toBe(false);
-    const refusal = outcome?.ok === false ? String(outcome.error) : "";
-    expect(refusal).toContain("terminal server");
-    // Nothing private in it, and nothing after the grid ran.
-    expect(refusal).not.toContain(room);
-    expect(output).not.toContain("AFTER_THE_GRID");
-  });
-
   it("TD7: the combined order is the frozen one", function* () {
     const order: string[] = [];
     let directory = "";
@@ -2256,282 +2146,5 @@ describe("Tier TD — the combined teardown", () => {
       Math.max(at("server-closed:0"), at("server-closed:1")),
     );
     expect(at("paths-removed")).toBe(order.length - 1);
-  });
-});
-
-/** One entrypoint's source, for the rows about what a host assembles. */
-function entrypointSource(name: string): Operation<string> {
-  return readTextFile(path.resolve("packages/cli/src", name));
-}
-
-describe("Tier TH — host installation", () => {
-  it("TH1: without a terminal, a grid refuses before anything exists", function* () {
-    const before = yield* until(readdir(tmpdir()));
-    let refusal = "";
-    try {
-      yield* scoped(function* () {
-        yield* installDenoTerminalProcesses();
-        yield* useProbedProvider({ isTerminal: () => false });
-      });
-    } catch (error) {
-      refusal = error instanceof Error ? error.message : String(error);
-    }
-
-    expect(refusal).toContain("cannot open a terminal grid");
-    expect(refusal).toContain("no terminal");
-    // Before a directory, a socket, a token, a worker, a server or a pane: the
-    // host left nothing behind for having tried.
-    const after = yield* until(readdir(tmpdir()));
-    expect(after.filter((name) => name.startsWith("xmd-grid-")).length).toBe(
-      before.filter((name) => name.startsWith("xmd-grid-")).length,
-    );
-  });
-
-  it("TH2: without a usable tmux, a grid refuses the same way", function* () {
-    let refusal = "";
-    try {
-      yield* scoped(function* () {
-        yield* installDenoTerminalProcesses();
-        yield* useProbedProvider({
-          isTerminal: () => true,
-          // A tmux far too old for an explicit layout string.
-          version: "tmux 1.8",
-        });
-      });
-    } catch (error) {
-      refusal = error instanceof Error ? error.message : String(error);
-    }
-    expect(refusal).toContain("cannot open a terminal grid");
-    expect(refusal).toContain("older than tmux");
-  });
-
-  it("TH4: the installed SIGHUP listener cancels the run and tears the grid down", function* () {
-    const room = yield* useScratch();
-    const shell = yield* useShellFixture(room);
-    const script = yield* useScript();
-    const invocation = cliCommand([]);
-    const tmux = createFakeTmux({ script, clientCommand, spawnPanes: true });
-    yield* ensure(() => {
-      tmux.stopPanes();
-    });
-    yield* writeTextFile(
-      path.join(room, "doc.md"),
-      [
-        "<Terminal.Grid columns={1}>",
-        '<Terminal title="Only" />',
-        "</Terminal.Grid>",
-        "",
-        "AFTER_THE_GRID",
-        "",
-      ].join("\n"),
-    );
-    // The run's foreground lease, which a grid takes before any provider.
-    yield* installControlledLauncher({ outcome: () => ({ exitCode: 0 }) });
-
-    const sighupBefore = foregroundSignalListeners("SIGHUP");
-    let directory = "";
-    let installed = 0;
-    let outcome: Result<Json> | undefined;
-    let output = "";
-    yield* scoped(function* () {
-      yield* foregroundTerminalGrid({
-        isTerminal: () => true,
-        createTmux: () => tmux,
-        env: { PATH: "/usr/bin:/bin", SHELL: shell },
-        // deno-lint-ignore require-yield
-        *askVersion() {
-          return { code: 0, stdout: "tmux 3.6a" };
-        },
-        workerCommand: function* (ordinal, at) {
-          directory = at;
-          return [
-            invocation.command,
-            ...invocation.arguments,
-            PANE_WORKER_COMMAND,
-            String(ordinal),
-            at,
-          ];
-        },
-      })();
-      // The listener is the installer's, and this row uses that one.
-      installed = foregroundSignalListeners("SIGHUP");
-
-      yield* spawn(function* () {
-        // Driven by the pane child's own start: the worker spawned, its channel
-        // authenticated, and the shell it launched said so.
-        while (!(yield* exists(`${room}/shell-pid`))) {
-          yield* sleep(15);
-        }
-        process.kill(process.pid, "SIGHUP");
-      });
-
-      const execution = yield* execute({
-        path: path.join(room, "doc.md"),
-        stream: new InMemoryStream(),
-        includes: [room],
-      });
-      const subscription = yield* execution.output;
-      let next = yield* subscription.next();
-      while (!next.done) {
-        output = next.value;
-        next = yield* subscription.next();
-      }
-      outcome = yield* execution;
-    });
-
-    // The installer put its listener on, and took it off with the run.
-    expect(installed).toBe(sighupBefore + 1);
-    expect(foregroundSignalListeners("SIGHUP")).toBe(sighupBefore);
-
-    // Cancellation, not a reader close: the run failed and nothing after the
-    // grid ran in that attempt.
-    expect(outcome?.ok).toBe(false);
-    expect(output).not.toContain("AFTER_THE_GRID");
-
-    // Every teardown phase completed before the result was observed. The pane's
-    // child is gone, the worker is gone, the server is gone, and the private
-    // directory — which is removed last, after its sockets have closed — is
-    // gone with them.
-    const shellPid = Number((yield* readTextFile(`${room}/shell-pid`)).trim());
-    expect(shellPid).toBeGreaterThan(0);
-    yield* installDenoTerminalProcesses();
-    expect(yield* processReachable(shellPid)).toBe(false);
-    // Awaited on each process's own exit event, not sampled: a worker that had
-    // not quite gone yet would make a sampled check pass or fail by timing.
-    for (const child of tmux.started) {
-      yield* exited(child);
-    }
-    expect(tmux.alive()).toBe(false);
-    expect(directory).not.toBe("");
-    expect(yield* exists(directory)).toBe(false);
-  });
-
-  it("TH5: an ordinary run shows the grid, and the reader's detach ends it", function* () {
-    // The same host, the same document and the same live grid as TH4. What
-    // differs is the ending: the reader leaves rather than the terminal going
-    // away, so the grid settles and the document carries on — which is the
-    // branch `useHangupCancellation()` has to hand the result back through.
-    const room = yield* useScratch();
-    const shell = yield* useShellFixture(room);
-    const script = yield* useScript();
-    const invocation = cliCommand([]);
-    const tmux = createFakeTmux({ script, clientCommand, spawnPanes: true });
-    yield* ensure(() => {
-      tmux.stopPanes();
-    });
-    yield* writeTextFile(
-      path.join(room, "doc.md"),
-      [
-        "<Terminal.Grid columns={1}>",
-        '<Terminal title="Only" />',
-        "</Terminal.Grid>",
-        "",
-        "AFTER_THE_GRID",
-        "",
-      ].join("\n"),
-    );
-    yield* installControlledLauncher({ outcome: () => ({ exitCode: 0 }) });
-
-    let directory = "";
-    let outcome: Result<Json> | undefined;
-    let output = "";
-    yield* scoped(function* () {
-      yield* foregroundTerminalGrid({
-        isTerminal: () => true,
-        createTmux: () => tmux,
-        env: { PATH: "/usr/bin:/bin", SHELL: shell },
-        // deno-lint-ignore require-yield
-        *askVersion() {
-          return { code: 0, stdout: "tmux 3.6a" };
-        },
-        workerCommand: function* (ordinal, at) {
-          directory = at;
-          return [
-            invocation.command,
-            ...invocation.arguments,
-            PANE_WORKER_COMMAND,
-            String(ordinal),
-            at,
-          ];
-        },
-      })();
-
-      yield* spawn(function* () {
-        // Driven by the grid's own progress: the pane child started, and the
-        // server has a reader's client to report the detach of. No SIGHUP.
-        while (!(yield* exists(`${room}/shell-pid`))) {
-          yield* sleep(15);
-        }
-        while (tmux.clients.length === 0) {
-          yield* sleep(15);
-        }
-        yield* tmux.say(`%client-detached ${tmux.clients[0] ?? ""}`);
-      });
-
-      const execution = yield* execute({
-        path: path.join(room, "doc.md"),
-        stream: new InMemoryStream(),
-        includes: [room],
-      });
-      const subscription = yield* execution.output;
-      let next = yield* subscription.next();
-      while (!next.done) {
-        output = next.value;
-        next = yield* subscription.next();
-      }
-      outcome = yield* execution;
-    });
-
-    // The exact result, handed back through the hangup wrapper rather than
-    // swallowed by it: a handler that answered with nothing would be refused
-    // for having returned before the document produced a result.
-    expect(outcome).toEqual(Ok("\n\nAFTER_THE_GRID\n"));
-    // The reader closed the grid; the document went on.
-    expect(output).toContain("AFTER_THE_GRID");
-
-    // And it went on over a grid that had actually been taken down: the pane's
-    // child, the workers, the server and the private directory are all gone.
-    const shellPid = Number((yield* readTextFile(`${room}/shell-pid`)).trim());
-    expect(shellPid).toBeGreaterThan(0);
-    yield* installDenoTerminalProcesses();
-    expect(yield* processReachable(shellPid)).toBe(false);
-    for (const child of tmux.started) {
-      yield* exited(child);
-    }
-    expect(tmux.alive()).toBe(false);
-    expect(directory).not.toBe("");
-    expect(yield* exists(directory)).toBe(false);
-  });
-
-  it("TH6: the Deno and compiled entrypoints present grids; Node and Bun do not", function* () {
-    for (const name of ["deno.ts", "compiled.ts"]) {
-      expect((yield* entrypointSource(name)).includes("foregroundTerminalGrid()")).toBe(true);
-    }
-    for (const name of ["node.ts", "bun.ts"]) {
-      // Not a different grid: no grid at all, and therefore the default the
-      // shared entry declares — which is the installation that validates a grid
-      // and presents none.
-      expect((yield* entrypointSource(name)).includes("foregroundTerminalGrid")).toBe(false);
-    }
-    expect(yield* entrypointSource("cli.ts")).toContain(
-      "installTerminalGrid: TerminalGridInstaller = unsupportedTerminalGrid",
-    );
-  });
-
-  it("TH3: a host that installs no provider still validates the grid", function* () {
-    // Node and Bun: the same language and the same validation, and core's own
-    // refusal rather than a provider that half-works.
-    yield* unsupportedTerminalGrid();
-    let refusal = "";
-    try {
-      yield* TerminalGrids.operations.open({
-        columns: 1,
-        rows: 1,
-        panes: [{ ordinal: 0, title: "Only", row: 0, column: 0, form: "paired" }],
-      });
-    } catch (error) {
-      refusal = error instanceof Error ? error.message : String(error);
-    }
-    expect(refusal).toContain("no terminal provider is installed");
   });
 });

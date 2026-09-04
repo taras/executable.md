@@ -33,22 +33,23 @@ import { parsePrepared } from "../src/agent/launch-journal.ts";
 import type { AgentLaunchRequest } from "../src/agent/launch-request.ts";
 import { installAgentComponents } from "../src/agent/components.ts";
 import type { AgentProviderFactory } from "../src/agent/provider-api.ts";
+import { API, useHostFiles } from "@executablemd/runtime";
 import {
-  API,
-  installControlledLauncher,
   NATIVE_LAUNCHER_UNAVAILABLE,
   nativeLaunch,
-  prepareControlledComposite,
   reserveTerminal,
   TerminalGrids,
+} from "@executablemd/terminal";
+import {
+  installControlledLauncher,
+  prepareControlledComposite,
   terminalProviderLog,
-  useHostFiles,
-} from "@executablemd/runtime";
-import type { NativeLaunchOutcome, NativeLaunchRequest } from "@executablemd/runtime";
-import { createTerminalGridClaims } from "../src/terminal/authority.ts";
-import { usePaneNativeLauncher } from "../src/terminal/pane-launcher.ts";
+} from "@executablemd/terminal/test";
+import type { NativeLaunchOutcome, NativeLaunchRequest } from "@executablemd/terminal";
+import { createTerminalGridClaims } from "@executablemd/terminal/lifecycle";
+import { usePaneNativeLauncher } from "@executablemd/terminal";
 import { installTerminalGridProfile } from "../src/terminal/profile.ts";
-import { registerTerminalProvider } from "../src/terminal/provider-api.ts";
+import { registerTerminalProvider } from "@executablemd/terminal";
 import type { Json } from "../src/types.ts";
 
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";

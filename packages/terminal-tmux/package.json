@@ -1,0 +1,17 @@
+{
+  "name": "@executablemd/terminal-tmux",
+  "version": "0.11.0",
+  "description": "The tmux presentation provider for executable.md terminal grids.",
+  "type": "module",
+  "exports": {
+    ".": "./mod.ts",
+    "./test": "./test.ts"
+  },
+  "dependencies": {
+    "@effectionx/fs": "0.3.0",
+    "@effectionx/process": "0.8.1",
+    "@executablemd/terminal": "workspace:*",
+    "effection": "4.1.0",
+    "zod": "^4.3.6"
+  }
+}

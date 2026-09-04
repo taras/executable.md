@@ -148,7 +148,7 @@ const REAP_POLL_MS = 25;
 /** How long an unanswerable kill is given before the child is called gone. */
 const KILL_SETTLE_MS = 500;
 
-interface ForegroundLauncherOptions {
+export interface ForegroundLauncherOptions {
   /**
    * Whether this host can hand a child the terminal. Read once, when the
    * launcher installs, so a run learns what it is before a document starts.

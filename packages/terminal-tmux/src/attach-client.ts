@@ -20,7 +20,7 @@ import { spawn as spawnChild } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { ensure, race, resource, sleep, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { deliverSignal, processReachable } from "@executablemd/runtime";
+import { deliverSignal, processReachable } from "@executablemd/terminal/processes";
 import { TerminalTeardownFailed } from "./tmux.ts";
 
 export interface AttachClient {

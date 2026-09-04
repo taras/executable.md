@@ -31,7 +31,7 @@ import {
   NO_TERMINAL,
   reap,
   reserveTerminal,
-} from "../launcher.ts";
+} from "../src/launcher.ts";
 
 const SENTINEL = "SENTINEL-PREPARED-CONTEXT-4b17";
 

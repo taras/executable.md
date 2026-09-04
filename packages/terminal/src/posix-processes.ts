@@ -23,8 +23,8 @@ import { until } from "effection";
 import type { Operation } from "effection";
 import { execFile } from "node:child_process";
 import process from "node:process";
-import { TerminalProcesses, TerminalProcessesUnavailableError } from "./terminal-processes.ts";
-import type { ProcessFacts, SignalDelivery, TerminalSignal } from "./terminal-processes.ts";
+import { TerminalProcesses, TerminalProcessesUnavailableError } from "./processes.ts";
+import type { ProcessFacts, SignalDelivery, TerminalSignal } from "./processes.ts";
 
 /** What one observation ran, so a suite can answer for it. */
 export interface ProcessProbes {

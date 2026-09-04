@@ -28,10 +28,10 @@ import {
   TERMINAL_PROCESSES_UNAVAILABLE,
   TerminalProcesses,
   terminalHolders,
-} from "../terminal-processes.ts";
-import { installDenoTerminalProcesses } from "../deno-terminal-processes.ts";
-import type { ProcessProbes } from "../deno-terminal-processes.ts";
-import type { PaneOccupants, ProcessFacts, SignalDelivery, TerminalSignal } from "../mod.ts";
+} from "../src/processes.ts";
+import { installDenoTerminalProcesses } from "../src/posix-processes.ts";
+import type { ProcessProbes } from "../src/posix-processes.ts";
+import type { PaneOccupants, ProcessFacts, SignalDelivery, TerminalSignal } from "../processes.ts";
 
 /** A table written by hand, so a row can describe a machine it is not on. */
 function table(rows: readonly Partial<ProcessFacts>[]): readonly ProcessFacts[] {
