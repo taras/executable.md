@@ -37,7 +37,9 @@ import type { WorkspaceFilesystem } from "../src/workspace/filesystem.ts";
 import type { WorkspaceMetadata } from "../src/workspace/metadata.ts";
 import {
   createRemoteWorkspaceEffect,
+  type RemoteRun,
   type RemoteWorkspaceMutation,
+  useRemoteRun,
   type RemoteWorkspaceRuntime,
   useRemoteWorkspaceEffects,
   withRemoteWorkspaceEffects,
@@ -254,8 +256,7 @@ function* startingTree(): Operation<CapturedWorkspace> {
 }
 
 interface Harness {
-  readonly database: WorkflowRunDatabase;
-  readonly runtime: RemoteWorkspaceRuntime;
+  readonly run: RemoteRun;
   readonly commits: Record<string, unknown>[];
   refuse(reason: string): void;
   lose(): void;
@@ -272,25 +273,27 @@ interface Harness {
  */
 function* harness(
   snapshot: (rootId: string) => RemoteInvocationSnapshot | { refused: string } = emptySnapshot,
+  shared?: CapturedWorkspace,
 ): Operation<Harness> {
-  const captured = yield* startingTree();
+  const captured = shared ?? (yield* startingTree());
   const owner = ownerOf(captured, () => snapshot(captured.root.rootId));
   const transport = wire((request) => owner.answer(request));
   const connection = yield* useOwnerConnection(transport.socket);
   let identifier = 0;
   const next = () => `request-${(identifier += 1)}`;
   const reads = cloudflareReadLink(connection, next, RUN_ID);
-  const link = cloudflareRunLink(connection, reads, next, RUN_ID);
-  const database = yield* useRemoteRunDatabase(link, yield* link.frontierSnapshot());
-  const runtime: RemoteWorkspaceRuntime = {
+  // The production constructor: the handle, the routed journal and the
+  // provenance are made together from this one link.
+  const run = yield* useRemoteRun({
+    link: cloudflareRunLink(connection, reads, next, RUN_ID),
+    reads,
     files: runnerFiles(),
     trees: yield* useRunnerTrees(),
-    reads,
     createFilesystem: (at, authorize) => createRemoteWorkspaceFilesystem(at, authorize),
-  };
+    journal: new InMemoryStream(),
+  });
   return {
-    database,
-    runtime,
+    run,
     commits: owner.commits,
     refuse: owner.refuse,
     lose: owner.lose,
@@ -315,18 +318,22 @@ function* invocation<T extends Json>(
   mutate: RemoteWorkspaceMutation<T>,
 ): Operation<{ raised: unknown; events: DurableEvent[] }> {
   return yield* scoped(function* () {
-    const stream = new InMemoryStream();
-    const routed = routeRemoteRunJournal(held.database, stream);
-    yield* useRemoteWorkspaceEffects(held.runtime, establishJournalProvenance(routed));
-    const effect = createRemoteWorkspaceEffect(held.database, { type: "workspace", name }, mutate);
+    yield* useRemoteWorkspaceEffects(held.run);
+    const effect = createRemoteWorkspaceEffect(held.run, { type: "workspace", name }, mutate);
     function* workflow(): Workflow<void> {
       yield effect;
     }
     const raised = yield* trapped(
-      withRemoteWorkspaceEffects(held.database, durableRun(workflow, { stream: routed })),
+      withRemoteWorkspaceEffects(held.run, durableRun(workflow, { stream: held.run.journal })),
     );
-    return { raised, events: stream.snapshot() };
+    return { raised, events: yield* held.run.journal.readAll() };
   });
+}
+
+/** A mutation that touches nothing: these tests are about who may run one. */
+// deno-lint-ignore require-yield
+function* own(): Operation<Json> {
+  return "ran";
 }
 
 function yielded(events: readonly DurableEvent[]): DurableEvent[] {
@@ -388,15 +395,11 @@ describe("the runner's Workspace coordinator", () => {
       expect(intent["expectedWorkspaceRootId"]).toBe(held.captured.root.rootId);
       expect(Array.isArray(intent["events"]) && intent["events"]).toHaveLength(1);
 
-      // A later invocation materializes the same root it always had: the
-      // discarded attempt left nothing, and nothing was promoted.
-      const observed = yield* invocation(held, "observe", function* (filesystem): Operation<Json> {
-        const names = yield* filesystem.readdir("/");
-        return names.map((entry) => entry.name).toSorted();
-      });
-      expect(observed.raised).toBe(undefined);
-      const seen = held.commits[1] ?? {};
-      expect(seen["expectedWorkspaceRootId"]).toBe(held.captured.root.rootId);
+      // That the owner still holds the starting root after this is a claim
+      // about storage, and it is made against real owner storage in
+      // `remote-workspace.vitest.ts`. What is settled here is that nothing was
+      // proposed: no publication, no mapping, and the root this commit expected
+      // is the one the invocation was admitted from.
     });
   });
 
@@ -456,64 +459,130 @@ describe("the runner's Workspace coordinator", () => {
     });
   });
 
-  it("refuses an execution identity another database claimed", function* () {
+  it("cannot pair one run's handle with another run's link, journal or provenance", function* () {
     yield* scoped(function* () {
-      const held = yield* harness();
-      const other = yield* harness();
+      // Two owners, deliberately begun from the same root and the same empty
+      // journal. Every structural value they hold is equal; only the objects
+      // differ, and only the objects decide.
+      const tree = yield* startingTree();
+      const a = yield* harness(emptySnapshot, tree);
+      const b = yield* harness(emptySnapshot, tree);
+      expect(a.run.database.record.runId).toBe(b.run.database.record.runId);
+
+      // An effect made against A, coordinated under B.
       yield* scoped(function* () {
-        const stream = new InMemoryStream();
-        const routed = routeRemoteRunJournal(held.database, stream);
-        yield* useRemoteWorkspaceEffects(held.runtime, establishJournalProvenance(routed));
-        // Created against one handle, coordinated under another.
-        const effect = createRemoteWorkspaceEffect(
-          other.database,
-          { type: "workspace", name: "foreign" },
-          // deno-lint-ignore require-yield
-          function* (): Operation<Json> {
-            return "ran";
-          },
-        );
+        yield* useRemoteWorkspaceEffects(b.run);
+        const effect = createRemoteWorkspaceEffect(a.run, { type: "workspace", name: "a" }, own);
         function* workflow(): Workflow<void> {
           yield effect;
         }
         const raised = yield* trapped(
-          withRemoteWorkspaceEffects(held.database, durableRun(workflow, { stream: routed })),
+          withRemoteWorkspaceEffects(b.run, durableRun(workflow, { stream: b.run.journal })),
         );
         expect(String(raised)).toContain("foreign");
       });
-      expect(held.commits).toEqual([]);
-      expect(other.commits).toEqual([]);
+
+      // A's coordinator installed, B's binding asked to use it.
+      yield* scoped(function* () {
+        yield* useRemoteWorkspaceEffects(a.run);
+        const effect = createRemoteWorkspaceEffect(b.run, { type: "workspace", name: "b" }, own);
+        function* workflow(): Workflow<void> {
+          yield effect;
+        }
+        const raised = yield* trapped(
+          withRemoteWorkspaceEffects(b.run, durableRun(workflow, { stream: b.run.journal })),
+        );
+        expect(String(raised)).toContain("no remote Workspace coordinator is installed");
+      });
+
+      // B throughout, running over A's journal. The provenance is A's.
+      yield* scoped(function* () {
+        yield* useRemoteWorkspaceEffects(b.run);
+        const effect = createRemoteWorkspaceEffect(b.run, { type: "workspace", name: "c" }, own);
+        function* workflow(): Workflow<void> {
+          yield effect;
+        }
+        const raised = yield* trapped(
+          withRemoteWorkspaceEffects(b.run, durableRun(workflow, { stream: a.run.journal })),
+        );
+        expect(String(raised)).toContain("provenance");
+      });
+
+      // A value shaped like a binding is not one.
+      const forged = { database: b.run.database, journal: b.run.journal };
+      expect(
+        String(yield* trapped(useRemoteWorkspaceEffects(forged as unknown as RemoteRun))),
+      ).toContain("not a remote run this build opened");
+
+      // Neither owner was asked for anything, and neither journal moved.
+      expect([a.commits, b.commits]).toEqual([[], []]);
+      expect(yielded(yield* a.run.journal.readAll())).toEqual([]);
+      expect(yielded(yield* b.run.journal.readAll())).toEqual([]);
     });
   });
 
-  it("refuses a journal whose provenance is not this run's", function* () {
+  it("refuses before the split, not after: the other run's journal stays empty", function* () {
     yield* scoped(function* () {
-      const held = yield* harness();
+      // The discriminator. Before this correction, B's transaction would enlist
+      // the Workspace while the publication appended through A's journal, and a
+      // refusal from B would leave A holding an event for a commit that never
+      // happened. The refusal has to come first.
+      const tree = yield* startingTree();
+      const a = yield* harness(emptySnapshot, tree);
+      const b = yield* harness(emptySnapshot, tree);
+      b.refuse("command:stale-root");
+
       yield* scoped(function* () {
-        const stream = new InMemoryStream();
-        const routed = routeRemoteRunJournal(held.database, stream);
-        yield* useRemoteWorkspaceEffects(held.runtime, establishJournalProvenance(routed));
+        yield* useRemoteWorkspaceEffects(b.run);
         const effect = createRemoteWorkspaceEffect(
-          held.database,
-          { type: "workspace", name: "provenance" },
-          // deno-lint-ignore require-yield
-          function* (): Operation<Json> {
+          b.run,
+          { type: "workspace", name: "split" },
+          function* (filesystem): Operation<Json> {
+            yield* filesystem.writeFile("/NOTES.md", "written by the effect\n", 0o644);
             return "ran";
           },
         );
         function* workflow(): Workflow<void> {
           yield effect;
         }
-        // A different stream: structurally identical, and not this run's journal.
-        const foreign = new InMemoryStream();
-        establishJournalProvenance(foreign);
         const raised = yield* trapped(
-          withRemoteWorkspaceEffects(held.database, durableRun(workflow, { stream: foreign })),
+          withRemoteWorkspaceEffects(b.run, durableRun(workflow, { stream: a.run.journal })),
         );
         expect(String(raised)).toContain("provenance");
       });
-      expect(held.commits).toEqual([]);
+
+      // No commit reached either owner, and A holds no event for work that
+      // happened somewhere else.
+      expect([a.commits, b.commits]).toEqual([[], []]);
+      expect(yielded(yield* a.run.journal.readAll())).toEqual([]);
     });
+  });
+
+  it("refuses a binding whose scope has closed", function* () {
+    let retained: RemoteRun | undefined;
+    yield* scoped(function* () {
+      retained = (yield* harness()).run;
+    });
+    if (retained === undefined) {
+      throw new Error("expected a binding");
+    }
+    // The value outlived the scope that opened it; what it names did not.
+    const held = retained;
+    expect((yield* held.database.replaceRetrievalMetadata({ a: 1 })).ok).toBe(false);
+    const raised = yield* trapped(
+      scoped(function* () {
+        yield* useRemoteWorkspaceEffects(held);
+        const effect = createRemoteWorkspaceEffect(held, { type: "workspace", name: "late" }, own);
+        function* workflow(): Workflow<void> {
+          yield effect;
+        }
+        return yield* withRemoteWorkspaceEffects(
+          held,
+          durableRun(workflow, { stream: held.journal }),
+        );
+      }),
+    );
+    expect(raised).not.toBe(undefined);
   });
 
   it("refuses a Files capability kept past the invocation that owned it", function* () {
@@ -578,11 +647,9 @@ describe("the runner's Workspace coordinator", () => {
   it("sends nothing and keeps nothing when the invocation is cancelled", function* () {
     yield* scoped(function* () {
       const held = yield* harness();
-      const stream = new InMemoryStream();
-      const routed = routeRemoteRunJournal(held.database, stream);
-      yield* useRemoteWorkspaceEffects(held.runtime, establishJournalProvenance(routed));
+      yield* useRemoteWorkspaceEffects(held.run);
       const effect = createRemoteWorkspaceEffect(
-        held.database,
+        held.run,
         { type: "workspace", name: "cancelled" },
         function* (filesystem): Operation<Json> {
           yield* filesystem.writeFile("/SLOW.md", "in progress\n", 0o644);
@@ -594,13 +661,13 @@ describe("the runner's Workspace coordinator", () => {
         yield effect;
       }
       const task = yield* spawn(() =>
-        withRemoteWorkspaceEffects(held.database, durableRun(workflow, { stream: routed })),
+        withRemoteWorkspaceEffects(held.run, durableRun(workflow, { stream: held.run.journal })),
       );
       yield* sleep(0);
       yield* task.halt();
       // Cancellation is control flow: nothing was claimed, and nothing was sent.
       expect(held.commits).toEqual([]);
-      expect(yielded(stream.snapshot())).toHaveLength(0);
+      expect(yielded(yield* held.run.journal.readAll())).toHaveLength(0);
     });
   });
 });

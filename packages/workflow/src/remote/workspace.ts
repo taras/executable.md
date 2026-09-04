@@ -64,6 +64,11 @@ import type { HostPath, RunnerFiles } from "./materialize.ts";
 import type { RemoteReadLink } from "./read.ts";
 import type { RemoteInvocationSnapshot } from "./records.ts";
 import { withRemoteJournalRoute } from "./journal-route.ts";
+import { resource } from "effection";
+import { establishJournalProvenance, type DurableStream } from "@executablemd/durable-streams";
+import { useRemoteRunDatabase, type RemoteRunLink } from "./database.ts";
+import { routeRemoteRunJournal } from "./journal-route.ts";
+
 import type { TemporaryTrees } from "./invocation.ts";
 
 /**
@@ -123,21 +128,111 @@ const WorkspaceMutation: Api<WorkspaceMutationApi> = createApi<WorkspaceMutation
  * its own map and its own identities, and neither can answer for the other's.
  */
 const workspaceEffectOwners = (() => {
-  const owners = new WeakMap<object, WorkflowRunDatabase>();
+  const owners = new WeakMap<object, object>();
   return {
-    claim(identity: object, database: WorkflowRunDatabase): void {
-      owners.set(identity, database);
+    claim(identity: object, run: object): void {
+      owners.set(identity, run);
     },
-    get(identity: object): WorkflowRunDatabase | undefined {
+    get(identity: object): object | undefined {
       return owners.get(identity);
     },
   };
 })();
 
-interface Registration {
-  open: boolean;
+/**
+ * One remote run, as one thing.
+ *
+ * The pieces a Workspace invocation needs — the database handle, the owner link
+ * its reads and commits go through, the runtime adapters that materialize from
+ * that owner, the routed journal and the provenance taken over it — describe
+ * one run only when they came from the same one. Supplied separately they can
+ * be recombined: pair run B's database with run A's link and journal, and if
+ * both happen to start at the same root and anchor, one effect journals in A
+ * and publishes its Workspace in B.
+ *
+ * So they are not supplied separately. This constructs them together and hands
+ * back one opaque value. There is nothing to recombine, and nothing structural
+ * to forge: the coordinator compares the object it was given, not the run id,
+ * root or anchor inside it.
+ */
+export interface RemoteRun {
+  /** The run's storage handle, for work that is not a Workspace effect. */
+  readonly database: WorkflowRunDatabase;
+  /**
+   * The run's journal, routed so a Workspace publication lands in its
+   * transaction. This exact stream is the one provenance was taken over.
+   */
+  readonly journal: DurableStream;
+}
+
+/** What only this module may read off a binding. */
+interface BoundRun extends RemoteRun {
   readonly runtime: RemoteWorkspaceRuntime;
   readonly provenance: JournalProvenance;
+}
+
+/**
+ * The private view of a binding, keyed by the binding itself.
+ *
+ * A `WeakSet` would answer "did this module make it"; this answers "and here is
+ * what it was made from", without putting either on the value a host holds. A
+ * second loaded copy of this module has its own map and cannot answer for one
+ * of these, which is the loaded-copy contract.
+ */
+const bindings = (() => {
+  const held = new WeakMap<RemoteRun, BoundRun>();
+  return {
+    bind(run: BoundRun): RemoteRun {
+      const handle: RemoteRun = Object.freeze({ database: run.database, journal: run.journal });
+      held.set(handle, run);
+      return handle;
+    },
+    of(run: RemoteRun | undefined): BoundRun | undefined {
+      return run === undefined ? undefined : held.get(run);
+    },
+  };
+})();
+
+/** What a host supplies to open one remote run. */
+export interface RemoteRunOptions {
+  /** The owner link this run's database, reads and commits all go through. */
+  readonly link: RemoteRunLink;
+  readonly reads: RemoteReadLink;
+  readonly files: RunnerFiles;
+  readonly trees: TemporaryTrees;
+  createFilesystem(at: HostPath, authorize: () => void): WorkspaceFilesystem;
+  /** The run's ordinary journal, which this routes and takes provenance over. */
+  readonly journal: DurableStream;
+}
+
+/**
+ * Open one remote run: its database, its routed journal and its provenance.
+ *
+ * The database is created here from the same link the runtime reads through, so
+ * "this runtime belongs to this handle" is true by construction rather than by
+ * a check that could be passed with another handle.
+ */
+export function useRemoteRun(options: RemoteRunOptions): Operation<RemoteRun> {
+  return resource(function* (provide) {
+    const database = yield* useRemoteRunDatabase(
+      options.link,
+      yield* options.link.frontierSnapshot(),
+    );
+    const journal = routeRemoteRunJournal(database, options.journal);
+    yield* provide(
+      bindings.bind({
+        database,
+        journal,
+        provenance: establishJournalProvenance(journal),
+        runtime: {
+          files: options.files,
+          trees: options.trees,
+          reads: options.reads,
+          createFilesystem: options.createFilesystem,
+        },
+      }),
+    );
+  });
 }
 
 interface ProviderApi {
@@ -149,12 +244,17 @@ const RemoteWorkspaceProvider: Api<ProviderApi> = createApi<ProviderApi>(
   { provider: undefined },
 );
 
+interface Registration {
+  open: boolean;
+  readonly run: BoundRun;
+}
+
 const registrations = (() => {
   const held = new WeakMap<object, Registration>();
   return {
-    register(runtime: RemoteWorkspaceRuntime, provenance: JournalProvenance) {
+    register(run: BoundRun) {
       const selection = Object.freeze({});
-      const registration: Registration = { open: true, runtime, provenance };
+      const registration: Registration = { open: true, run };
       held.set(selection, registration);
       return {
         selection,
@@ -171,70 +271,72 @@ const registrations = (() => {
   };
 })();
 
-/**
- * Install the runner's Workspace coordination for this scope.
- *
- * The provenance is the one the run's journal was established with. It is held
- * here rather than compared structurally, because two journals can describe the
- * same events and only one of them is this run's.
- */
-export function* useRemoteWorkspaceEffects(
-  runtime: RemoteWorkspaceRuntime,
-  provenance: JournalProvenance,
-): Operation<void> {
-  const registration = registrations.register(runtime, provenance);
+/** Install the runner's Workspace coordination for this run, in this scope. */
+export function* useRemoteWorkspaceEffects(run: RemoteRun): Operation<void> {
+  const bound = bindings.of(run);
+  if (bound === undefined) {
+    unavailable("this is not a remote run this build opened.");
+  }
+  const registration = registrations.register(bound);
   yield* ensure(registration.close);
   yield* RemoteWorkspaceProvider.around({ provider: () => registration.selection }, { at: "min" });
 }
 
 export function withRemoteWorkspaceEffects<T>(
-  database: WorkflowRunDatabase,
+  run: RemoteRun,
   operation: Operation<T>,
 ): Operation<T> {
   return scoped(function* () {
     const selection = yield* RemoteWorkspaceProvider.operations.provider;
     const registration = selection === undefined ? undefined : registrations.get(selection);
-    if (registration === undefined) {
+    // The exact binding, not one that describes the same run. Two handles on
+    // two owners can hold identical records; only one of them is this one.
+    if (registration === undefined || registration.run !== bindings.of(run)) {
       return unavailable("no remote Workspace coordinator is installed for this run.");
     }
-    return yield* withWorkspaceCoordinationProvider(coordinator(database, registration), operation);
+    return yield* withWorkspaceCoordinationProvider(coordinator(registration.run), operation);
   });
 }
 
 export function createRemoteWorkspaceEffect<T extends Json>(
-  database: WorkflowRunDatabase,
+  run: RemoteRun,
   description: EffectDescription,
   mutate: RemoteWorkspaceMutation<T>,
 ): DurableEffect<T> {
-  const execute = () => WorkspaceMutation.operations.run(database, mutate);
+  const bound = bindings.of(run);
+  if (bound === undefined) {
+    unavailable("this is not a remote run this build opened.");
+  }
+  const execute = () => WorkspaceMutation.operations.run(bound.database, mutate);
   const executionIdentity = Object.freeze({});
-  workspaceEffectOwners.claim(executionIdentity, database);
+  // Claimed for the binding rather than for a database, so an effect cannot be
+  // created against one run and coordinated by another that holds it.
+  workspaceEffectOwners.claim(executionIdentity, bound);
   return createOwnedDurableWorkspaceOperation(description, execute, executionIdentity);
 }
 
-function coordinator(
-  database: WorkflowRunDatabase,
-  registration: Registration,
-): WorkspaceCoordinationProvider {
+function coordinator(run: BoundRun): WorkspaceCoordinationProvider {
   return {
     *run(authority: WorkspaceCoordinationAuthority): Operation<DurableResult> {
       let transacted;
       try {
-        if (workspaceEffectOwners.get(authority.executionIdentity) !== database) {
+        // Both against the same binding, so there is no pair of checks that a
+        // recombination could satisfy one at a time.
+        if (workspaceEffectOwners.get(authority.executionIdentity) !== run) {
           unavailable(
             "the live Workspace effect is missing, foreign, completed, or stale for this " +
-              "WorkflowRun database.",
+              "remote run.",
           );
         }
         if (
           authority.journalProvenance === undefined ||
-          authority.journalProvenance !== registration.provenance
+          authority.journalProvenance !== run.provenance
         ) {
           unavailable(
-            "the live Workspace journal does not have the provenance of the selected WorkflowRun.",
+            "the live Workspace journal does not have the provenance of the selected remote run.",
           );
         }
-        transacted = yield* invoke(database, registration, authority);
+        transacted = yield* invoke(run, authority);
       } catch (error) {
         throw yield* authority.activateFailure(error);
       }
@@ -246,12 +348,8 @@ function coordinator(
   };
 }
 
-function* invoke(
-  database: WorkflowRunDatabase,
-  registration: Registration,
-  authority: WorkspaceCoordinationAuthority,
-) {
-  const { runtime } = registration;
+function* invoke(run: BoundRun, authority: WorkspaceCoordinationAuthority) {
+  const { runtime, database } = run;
   const reject = (reason: string): never => unavailable(reason);
   const snapshot = yield* runtime.reads.invocationSnapshot();
 
@@ -291,27 +389,19 @@ function* invoke(
         "this Workspace invocation was admitted from a state this run has since moved past.",
       );
     }
-    return yield* coordinateTransaction(
-      database,
-      transaction,
-      route,
-      runtime,
-      snapshot,
-      attempt,
-      authority,
-    );
+    return yield* coordinateTransaction(run, transaction, route, snapshot, attempt, authority);
   });
 }
 
 function* coordinateTransaction(
-  database: WorkflowRunDatabase,
+  run: BoundRun,
   transaction: WorkflowRunTransaction,
   route: WorkspaceRoute,
-  runtime: RemoteWorkspaceRuntime,
   snapshot: RemoteInvocationSnapshot,
   attempt: Attempt,
   authority: WorkspaceCoordinationAuthority,
 ): Operation<DurableResult> {
+  const { database, runtime } = run;
   return yield* scoped(function* () {
     let live = true;
     // The capabilities exist while this invocation does and no longer. A

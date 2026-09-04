@@ -221,9 +221,17 @@ export function useAttempt(
   });
 }
 
-/** The exact closure a captured root names, in canonical order. */
+/**
+ * The exact closure a captured root names, in canonical order.
+ *
+ * Ordered by `kind:digest`, which is the order the owner reads it in: it holds
+ * the inventory to a strictly increasing sequence, because a proposal that
+ * named its pieces in another order is not the proposal whose identity the
+ * runner computed. Concatenating one kind after the other would produce a list
+ * this owner refuses, and only a real owner would say so.
+ */
 function inventoryOf(captured: CapturedWorkspace): ProposedContent[] {
-  return [
+  const inventory: ProposedContent[] = [
     ...captured.root.manifests.map((digest) => ({
       kind: "manifest" as const,
       digest,
@@ -235,6 +243,13 @@ function inventoryOf(captured: CapturedWorkspace): ProposedContent[] {
       size: captured.blobs.get(digest)?.length ?? 0,
     })),
   ];
+  return inventory.toSorted((left, right) =>
+    orderingOf(left) < orderingOf(right) ? -1 : orderingOf(left) > orderingOf(right) ? 1 : 0,
+  );
+}
+
+function orderingOf(piece: ProposedContent): string {
+  return `${piece.kind}:${piece.digest}`;
 }
 
 /** Every piece the capture can supply, by identity. */
