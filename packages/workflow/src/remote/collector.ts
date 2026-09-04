@@ -153,7 +153,11 @@ export function requireNoOpenTransaction(gate: TransactionGate): void {
 export function transactRemotely<T>(
   link: OwnerLink,
   gate: TransactionGate,
-  body: (transaction: WorkflowRunTransaction, enlist: EnlistWorkspace) => Operation<T>,
+  body: (
+    transaction: WorkflowRunTransaction,
+    enlist: EnlistWorkspace,
+    anchor: TransactionAnchor,
+  ) => Operation<T>,
 ): Operation<Result<T>> {
   return call(function* (): Operation<Result<T>> {
     // Taken synchronously, before the first suspension. Checking and then
@@ -238,7 +242,12 @@ export function transactRemotely<T>(
         // finish" are one statement. `call()` alone would let a resource whose
         // teardown fails surface its failure after the commit had already gone
         // out, which is the one ordering that cannot be taken back.
-        outcome = yield* scoped(() => body({ journal }, enlist));
+        outcome = yield* scoped(() =>
+          body({ journal }, enlist, {
+            workspaceRootId: starting.workspaceRootId,
+            journalEventId: starting.journalEventId,
+          }),
+        );
       } finally {
         // The handle is closed before the commit goes out, so a retained
         // transaction object refuses while the handle-level gate is still held.
@@ -272,6 +281,19 @@ export function transactRemotely<T>(
       return Ok(outcome);
     }
   });
+}
+
+/**
+ * Exactly where this transaction began, and nothing else about it.
+ *
+ * A coordinator has to prove that the state it admitted its invocation from is
+ * the state this transaction will commit against. It needs the two anchors for
+ * that and no more — the journal prefix is the body's to read through the
+ * transaction, not something a route hands out.
+ */
+export interface TransactionAnchor {
+  readonly workspaceRootId: string;
+  readonly journalEventId: string | null;
 }
 
 /**

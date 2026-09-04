@@ -36,7 +36,9 @@ import type { CommitDecision } from "../remote/publication.ts";
 import { OwnerLinkError, type OwnerAnswer, type OwnerConnection } from "../remote/client.ts";
 import {
   parseRemoteExecution,
+  parseRemoteInvocationSnapshot,
   parseRemoteJournalEntry,
+  type RemoteInvocationSnapshot,
   parseRemoteRetrieval,
   parseRemoteRunRecord,
   RemoteRecordError,
@@ -327,6 +329,17 @@ export function cloudflareReadLink(
   expectedRunId: string,
 ): RemoteReadLink {
   return {
+    *invocationSnapshot(): Operation<RemoteInvocationSnapshot> {
+      return answer(
+        yield* connection.ask(
+          nextId(),
+          { command: "mappings" },
+          (value) => parseRemoteInvocationSnapshot(value),
+          privateRefusal,
+        ),
+      );
+    },
+
     *frontier(): Operation<RemoteFrontierSnapshot> {
       const header = answer(
         yield* connection.ask(

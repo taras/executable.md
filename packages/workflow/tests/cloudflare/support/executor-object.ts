@@ -382,6 +382,23 @@ export class ExecutorObject extends WorkflowOwnerObject {
     return row === undefined ? null : row;
   }
 
+  /** Retain more Repository rows than one admitted snapshot may carry. */
+  fillRepositories(from: number, count: number): void {
+    for (let index = from; index < from + count; index += 1) {
+      const name = `repo-${String(index).padStart(4, "0")}`;
+      this.ctx.storage.sql.exec(
+        `INSERT INTO workspace_repositories (name, locator, locator_fingerprint, requested_base,
+           creation_commit, primary_branch, object_format, checkout_path)
+         VALUES (?, ?, ?, NULL, ?, 'main', 'sha1', ?)`,
+        name,
+        `https://git.example.invalid/${name}.git`,
+        "a".repeat(64),
+        "9".repeat(40),
+        `/${name}`,
+      );
+    }
+  }
+
   damageRetainedBlob(): void {
     this.ctx.storage.sql.exec(
       "UPDATE vfs_blob_bytes SET bytes = ?",

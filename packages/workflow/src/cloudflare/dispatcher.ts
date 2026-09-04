@@ -47,6 +47,7 @@ import { bytesOf, decodeBase64, sha256Hex } from "./encoding.ts";
 import {
   readContent,
   readExecutions,
+  readInvocationSnapshot,
   readFrontier,
   readJournalPage,
   readRoot,
@@ -139,7 +140,8 @@ function retainedDecision(command: RunnerCommand, result: CommandResult): string
     (command.command === "journal" ||
       command.command === "root" ||
       command.command === "content" ||
-      command.command === "executions")
+      command.command === "executions" ||
+      command.command === "mappings")
   ) {
     return JSON.stringify({ id: command.id, outcome: "reconstruct" });
   }
@@ -264,6 +266,13 @@ function perform(
       id: command.id,
       outcome: "performed",
       value: readExecutions(ctx.storage, runId, command.anchor, command.after),
+    };
+  }
+  if (command.command === "mappings") {
+    return {
+      id: command.id,
+      outcome: "performed",
+      value: readInvocationSnapshot(ctx.storage, runId),
     };
   }
   // `settle` is a later checkpoint's. It parses strictly and is declined,

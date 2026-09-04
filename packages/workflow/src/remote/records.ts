@@ -35,6 +35,14 @@ import {
   type WorkflowRunRecord,
 } from "../storage/record.ts";
 import { SHA256 } from "../workspace/root-manifest.ts";
+import { admitLocator, locatorFingerprintOf } from "../composition/locator.ts";
+import {
+  parseRepositoryRecord,
+  parseWorktreeRecord,
+  type WorktreeRecord,
+} from "../composition/records.ts";
+import { type AgentSessionRecord, parseAgentSessionRecord } from "../storage/agent-session.ts";
+import type { StoredRepository } from "../workspace/metadata.ts";
 
 export class RemoteRecordError extends Error {
   override name = "RemoteRecordError";
@@ -192,4 +200,135 @@ export function parseRemoteExecution(value: unknown): DocumentExecutionRecord {
     ...halted,
     stopReason: parseWorkflowStopReason(found.get("stopReason"), "$.stopReason", fail),
   });
+}
+
+/**
+ * One admitted invocation snapshot, as the runner is allowed to read it.
+ *
+ * The root and journal anchor travel with the mappings because they are one
+ * fact, and the runner holds the whole answer to that: before a document runs,
+ * the transaction it runs inside has to start from exactly this root and this
+ * anchor.
+ */
+export interface RemoteInvocationSnapshot {
+  readonly workspaceRootId: string;
+  readonly journalEventId: string | null;
+  readonly repositories: readonly StoredRepository[];
+  readonly worktrees: readonly WorktreeRecord[];
+  readonly agentSessions: readonly AgentSessionRecord[];
+}
+
+/** The most mapping entries one admitted snapshot may carry. */
+const MAX_SNAPSHOT_ENTRIES = 256;
+
+export function parseRemoteInvocationSnapshot(value: unknown): RemoteInvocationSnapshot {
+  const found = parseMembers(value, "$", fail);
+  requireMemberNames(
+    found,
+    ["workspaceRootId", "journalEventId", "repositories", "worktrees", "agentSessions"],
+    "$",
+    fail,
+  );
+  const workspaceRootId = parseStringMember(found, "workspaceRootId", "$", fail);
+  if (!SHA256.test(workspaceRootId)) {
+    throw fail("expected a Workspace root identity", "$.workspaceRootId");
+  }
+  const anchor = found.get("journalEventId");
+  if (anchor !== null && (typeof anchor !== "string" || anchor === "")) {
+    throw fail("expected a journal event identity or an explicit empty anchor", "$.journalEventId");
+  }
+
+  const repositories = list(found.get("repositories"), "$.repositories").map((entry, index) =>
+    parseStoredRepository(entry, `$.repositories[${index}]`),
+  );
+  const worktrees = list(found.get("worktrees"), "$.worktrees").map((entry, index) =>
+    admitted(parseWorktreeRecord(entry), `$.worktrees[${index}]`, "a Worktree"),
+  );
+  const agentSessions = list(found.get("agentSessions"), "$.agentSessions").map((entry, index) =>
+    admitted(parseAgentSessionRecord(entry), `$.agentSessions[${index}]`, "an Agent session"),
+  );
+
+  if (repositories.length + worktrees.length + agentSessions.length > MAX_SNAPSHOT_ENTRIES) {
+    throw fail("expected fewer retained mappings than one snapshot may carry", "$");
+  }
+  requireOrdered(
+    repositories.map((stored) => stored.record.name),
+    "$.repositories",
+  );
+  requireOrdered(
+    worktrees.map((record) => `${record.repositoryName} ${record.name}`),
+    "$.worktrees",
+  );
+  requireOrdered(
+    agentSessions.map((record) => record.sessionKey),
+    "$.agentSessions",
+  );
+  // Every Worktree names a Repository this snapshot also carries. A checkout
+  // whose Repository is missing is not a state this run was ever in.
+  const names = new Set(repositories.map((stored) => stored.record.name));
+  for (const [index, record] of worktrees.entries()) {
+    if (!names.has(record.repositoryName)) {
+      throw fail(
+        "expected a Worktree whose Repository this snapshot holds",
+        `$.worktrees[${index}]`,
+      );
+    }
+  }
+  return Object.freeze({
+    workspaceRootId,
+    journalEventId: anchor === null ? null : anchor,
+    repositories: Object.freeze(repositories),
+    worktrees: Object.freeze(worktrees),
+    agentSessions: Object.freeze(agentSessions),
+  });
+}
+
+function list(value: unknown, path: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw fail("expected an array", path);
+  }
+  return value;
+}
+
+function admitted<T>(parsed: T | undefined, path: string, expectation: string): T {
+  if (parsed === undefined) {
+    throw fail(`expected ${expectation}`, path);
+  }
+  return parsed;
+}
+
+/**
+ * Deterministic and without repeats, checked rather than assumed.
+ *
+ * The owner reads these in one order; a snapshot that arrived in another, or
+ * twice under one name, is not the state it claims to describe — and a mapping
+ * view built from it would answer differently depending on which copy it read.
+ */
+function requireOrdered(keys: readonly string[], path: string): void {
+  for (const [index, key] of keys.entries()) {
+    const previous = keys[index - 1];
+    if (previous !== undefined && previous >= key) {
+      throw fail("expected retained mappings in one deterministic order, without repeats", path);
+    }
+  }
+}
+
+function parseStoredRepository(value: unknown, path: string): StoredRepository {
+  const found = parseMembers(value, path, fail);
+  requireMemberNames(found, ["record", "locator"], path, fail);
+  const locator = parseStringMember(found, "locator", path, fail);
+  // Admitted by the same rule the local host admits one by, so a locator this
+  // build would refuse to use never becomes one it reconciles against.
+  if (admitLocator(locator) === undefined) {
+    throw fail("expected a Repository locator this build admits", `${path}.locator`);
+  }
+  const record = admitted(
+    parseRepositoryRecord(found.get("record")),
+    `${path}.record`,
+    "a Repository",
+  );
+  if (locatorFingerprintOf(locator) !== record.locatorFingerprint) {
+    throw fail("expected a locator the record's fingerprint follows from", `${path}.locator`);
+  }
+  return Object.freeze({ record, locator });
 }

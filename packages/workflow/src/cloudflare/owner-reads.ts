@@ -28,6 +28,13 @@
 import { parseDurableEvent } from "@executablemd/durable-streams";
 import { readDocumentExecution, readRetrieval, readRunRecord, type Row } from "../sqlite/rows.ts";
 import type { DocumentExecutionRecord } from "../storage/record.ts";
+import {
+  parseRepositoryRecord,
+  parseWorktreeRecord,
+  type RepositoryRecord,
+  type WorktreeRecord,
+} from "../composition/records.ts";
+import { type AgentSessionRecord, parseAgentSessionRecord } from "../storage/agent-session.ts";
 import { WorkflowRecordMalformedError } from "../storage/errors.ts";
 import {
   parseWorkspaceRootManifest,
@@ -41,6 +48,8 @@ import {
   EXECUTION_PAGE_BYTES,
   EXECUTION_PAGE_ENTRIES,
   executionPageBytes,
+  MAX_LEDGER_BYTES,
+  MAX_MAPPINGS,
   JOURNAL_PAGE_BYTES,
   JOURNAL_PAGE_ENTRIES,
   MAX_CONTENT_BYTES,
@@ -351,6 +360,114 @@ export function readFrontier(storage: OwnerStorage, runId: string): FrontierValu
   };
 }
 
+/**
+ * One coherent admission fact: the root, the journal anchor and every mapping.
+ *
+ * Read together, in one owner-side read, because they are one state. Taking the
+ * mappings from one request and the root from another would let an invocation
+ * begin against a Workspace whose retained Repository rows describe a different
+ * moment — and nothing later could notice, because each answer was true when it
+ * was given.
+ *
+ * Complete rather than paged. The mapping tables are insert-only, so a cursor
+ * over sorted names cannot be made safe by root and journal equality alone: a
+ * name inserted later can sort before the cursor and never be seen. A count and
+ * byte ceiling refuses instead, and refuses whole.
+ */
+export function readInvocationSnapshot(
+  storage: OwnerStorage,
+  runId: string,
+): InvocationSnapshotValue {
+  const frontier = readFrontier(storage, runId);
+  const repositories = byteRows(
+    storage,
+    `SELECT name, locator, locator_fingerprint, requested_base, creation_commit,
+            primary_branch, object_format, checkout_path
+       FROM workspace_repositories ORDER BY name`,
+  ).map((row) => ({
+    record: readRepositoryRecord(row),
+    locator: safeText(row, "locator"),
+  }));
+  const worktrees = byteRows(
+    storage,
+    `SELECT repository_name, name, requested_branch, requested_base,
+            creation_commit, checkout_path
+       FROM workspace_worktrees ORDER BY repository_name, name`,
+  ).map((row) => readWorktreeRecord(row));
+  const agentSessions = byteRows(
+    storage,
+    `SELECT session_key, provider, agent_command, session_identity, policy,
+            assertion_kind, assertion_value, created_at
+       FROM agent_sessions ORDER BY session_key`,
+  ).map((row) => readAgentSessionRow(row));
+
+  const entries = repositories.length + worktrees.length + agentSessions.length;
+  if (entries > MAX_MAPPINGS) {
+    throw new CommandError("too-large");
+  }
+  const snapshot = {
+    workspaceRootId: frontier.workspaceRootId,
+    journalEventId: frontier.journalEventId,
+    repositories,
+    worktrees,
+    agentSessions,
+  };
+  // Measured over the complete semantic answer, before any of it is returned. A
+  // ceiling checked per record would let an aggregate no message can carry
+  // through one record at a time.
+  if (new TextEncoder().encode(JSON.stringify(snapshot)).length > MAX_LEDGER_BYTES) {
+    throw new CommandError("too-large");
+  }
+  return snapshot;
+}
+
+function readRepositoryRecord(row: Row): RepositoryRecord {
+  const parsed = parseRepositoryRecord({
+    name: row["name"],
+    locatorFingerprint: row["locator_fingerprint"],
+    requestedBase: row["requested_base"] ?? null,
+    creationCommit: row["creation_commit"],
+    primaryBranch: row["primary_branch"],
+    objectFormat: row["object_format"],
+    checkoutPath: row["checkout_path"],
+  });
+  if (parsed === undefined) {
+    return corrupt("a retained Repository row does not describe a Repository");
+  }
+  return parsed;
+}
+
+function readWorktreeRecord(row: Row): WorktreeRecord {
+  const parsed = parseWorktreeRecord({
+    repositoryName: row["repository_name"],
+    name: row["name"],
+    requestedBranch: row["requested_branch"],
+    requestedBase: row["requested_base"] ?? null,
+    creationCommit: row["creation_commit"],
+    checkoutPath: row["checkout_path"],
+  });
+  if (parsed === undefined) {
+    return corrupt("a retained Worktree row does not describe a Worktree");
+  }
+  return parsed;
+}
+
+function readAgentSessionRow(row: Row): AgentSessionRecord {
+  const parsed = parseAgentSessionRecord({
+    sessionKey: row["session_key"],
+    provider: row["provider"],
+    agentCommand: row["agent_command"],
+    sessionIdentity: row["session_identity"],
+    policy: row["policy"],
+    assertion: { kind: row["assertion_kind"], value: row["assertion_value"] },
+    createdAt: row["created_at"],
+  });
+  if (parsed === undefined) {
+    return corrupt("a retained Agent session row does not describe a session");
+  }
+  return parsed;
+}
+
 export function readJournalPage(
   storage: OwnerStorage,
   anchorEventId: string | null,
@@ -472,6 +589,15 @@ function piece(
 }
 
 /** One page of document executions, anchored to the snapshot that began it. */
+/** The one admitted state a remote Workspace invocation begins from. */
+export interface InvocationSnapshotValue {
+  readonly workspaceRootId: string;
+  readonly journalEventId: string | null;
+  readonly repositories: readonly { readonly record: RepositoryRecord; readonly locator: string }[];
+  readonly worktrees: readonly WorktreeRecord[];
+  readonly agentSessions: readonly AgentSessionRecord[];
+}
+
 export interface ExecutionsValue {
   readonly runId: string;
   readonly anchor: number | null;

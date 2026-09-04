@@ -55,6 +55,7 @@ export type CommandName =
   | "commit"
   | "retrieval"
   | "executions"
+  | "mappings"
   | "settle";
 
 export type CommandRefusal =
@@ -198,6 +199,11 @@ export interface ExecutionsCommand extends CommandEnvelope {
   readonly after: number | null;
 }
 
+/** One coherent admitted state, asked for exactly once per invocation. */
+export interface MappingsCommand extends CommandEnvelope {
+  readonly command: "mappings";
+}
+
 export interface SettleCommand extends CommandEnvelope {
   readonly command: "settle";
   readonly completion: DocumentExecutionCompletion;
@@ -213,6 +219,7 @@ export type RunnerCommand =
   | CommitCommand
   | RetrievalCommand
   | ExecutionsCommand
+  | MappingsCommand
   | SettleCommand;
 
 export type CommandResult =
@@ -238,6 +245,7 @@ const MEMBERS: Record<CommandName, readonly string[]> = {
   ],
   retrieval: [...ENVELOPE, "expectedWorkspaceRootId", "metadata"],
   executions: [...ENVELOPE, "anchor", "after"],
+  mappings: ENVELOPE,
   settle: [...ENVELOPE, "completion", "expectedWorkspaceRootId"],
 };
 
@@ -367,6 +375,7 @@ export function parseCommand(raw: string): RunnerCommand {
     command !== "commit" &&
     command !== "retrieval" &&
     command !== "executions" &&
+    command !== "mappings" &&
     command !== "settle"
   ) {
     throw new CommandError("unknown-command");
@@ -425,6 +434,9 @@ export function parseCommand(raw: string): RunnerCommand {
       expectedWorkspaceRootId: digest(members, "expectedWorkspaceRootId"),
       metadata,
     };
+  }
+  if (command === "mappings") {
+    return { id, command };
   }
   if (command === "executions") {
     const anchor = sequence(members, "anchor");

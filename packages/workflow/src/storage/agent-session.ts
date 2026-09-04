@@ -123,3 +123,93 @@ export function parseAgentSessionRecord(value: unknown): AgentSessionRecord | un
     createdAt,
   });
 }
+
+/** A retained Agent session this host will not continue under. */
+export class WorkflowAgentSessionError extends Error {
+  override name = "WorkflowAgentSessionError";
+}
+
+/** Every retained mapping one run holds, as a coordinator may reach it. */
+export interface AgentSessions {
+  read(sessionKey: string): AgentSessionRecord | undefined;
+  commit(record: AgentSessionRecord): void;
+}
+
+/** What a continuation may do with the session a key names. */
+export type AgentSessionResolution =
+  | { readonly kind: "create"; readonly sessionKey: string }
+  | { readonly kind: "reattach"; readonly record: AgentSessionRecord };
+
+/**
+ * Decide what this attachment may do with the session this identity names.
+ *
+ * `asserted` is every canonical identity the provider currently asserts for that
+ * key — none, one, or more than one. It is deliberately not "does the provider
+ * hold this key": occupancy says something is there, not what conversation it
+ * is, and adopting one on that basis is how a run continues a session it cannot
+ * name.
+ */
+export function resolveAgentSession(
+  retained: AgentSessionRecord | undefined,
+  policy: string,
+  asserted: readonly ProviderAssertion[],
+  identity: AgentSessionIdentity,
+): AgentSessionResolution {
+  const sessionKey = agentSessionKey(identity);
+  if (asserted.length > 1) {
+    throw new WorkflowAgentSessionError(
+      "the provider asserts more than one durable identity for this run's Agent session, so " +
+        "this host cannot tell which conversation it would be continuing. Start a new run " +
+        "rather than continuing this one.",
+    );
+  }
+  const current = asserted[0];
+
+  if (retained === undefined) {
+    if (current === undefined) {
+      // Neither side holds anything: nothing was ever established here.
+      return { kind: "create", sessionKey };
+    }
+    // The pre-commit window. An attempt was interrupted between the provider
+    // asserting an identity and this run recording it, and exactly one
+    // canonical assertion is what reconciles it — nothing else may.
+    return {
+      kind: "reattach",
+      record: {
+        sessionKey,
+        ...identity,
+        policy,
+        assertion: current,
+        createdAt: new Date().toISOString(),
+      },
+    };
+  }
+
+  if (
+    retained.provider !== identity.provider ||
+    retained.agentCommand !== identity.agentCommand ||
+    retained.sessionIdentity !== identity.sessionIdentity ||
+    retained.policy !== policy
+  ) {
+    throw new WorkflowAgentSessionError(
+      "this run's Agent session was established under a different provider, agent or session " +
+        "policy than this host states, and a session created under one ceiling is not " +
+        "continued under another. Start a new run rather than continuing this one.",
+    );
+  }
+  if (current === undefined) {
+    throw new WorkflowAgentSessionError(
+      "the provider asserts no durable identity for the Agent session this run retained, and " +
+        "this host does not reconstruct a conversation by replaying it into a new session. " +
+        "Start a new run rather than continuing this one.",
+    );
+  }
+  if (current.kind !== retained.assertion.kind || current.value !== retained.assertion.value) {
+    throw new WorkflowAgentSessionError(
+      "the provider asserts a different durable identity than the Agent session this run " +
+        "retained, so it did not resume the conversation this run was having. This host does " +
+        "not continue under a replacement session.",
+    );
+  }
+  return { kind: "reattach", record: retained };
+}

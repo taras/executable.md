@@ -215,6 +215,65 @@ describe("publishing one proposal", () => {
     ).toMatchObject({ outcome: "performed" });
   });
 
+  it("admits root, journal anchor and every mapping as one state", async () => {
+    // The invocation snapshot D3c begins from. It is one read on the owner
+    // because it is one fact: mappings taken from one moment and a root from
+    // another would let an invocation start against a Workspace its retained
+    // rows do not describe, and nothing later could tell.
+    const stub = executor();
+    await on(stub, (owner) => owner.initialize());
+    const socket = await connect(stub);
+
+    const empty = record(record(await ask(socket, "empty", { command: "mappings" }))["value"]);
+    expect(empty).toEqual({
+      workspaceRootId: ROOT_ID,
+      journalEventId: null,
+      repositories: [],
+      worktrees: [],
+      agentSessions: [],
+    });
+
+    await stageThrough(socket);
+    const published = await ask(socket, "publish", commit());
+    expect(published).toEqual(expect.objectContaining({ outcome: "performed" }));
+
+    // One commit moved the pointer, retained the mapping and wrote the row.
+    // The next snapshot observes all of it, and observes it together.
+    const after = record(record(await ask(socket, "after", { command: "mappings" }))["value"]);
+    expect(after["workspaceRootId"]).toBe(NEXT_ROOT_ID);
+    expect(typeof after["journalEventId"]).toBe("string");
+    expect(after["repositories"]).toEqual([{ record: REPOSITORY.record, locator: LOCATOR }]);
+    expect(after["worktrees"]).toEqual([]);
+    expect(after["agentSessions"]).toEqual([]);
+
+    // The same anchor the frontier reports, from the same owner state.
+    const frontier = record(
+      record(await ask(socket, "frontier", { command: "frontier" }))["value"],
+    );
+    expect([frontier["workspaceRootId"], frontier["journalEventId"]]).toEqual([
+      after["workspaceRootId"],
+      after["journalEventId"],
+    ]);
+  });
+
+  it("returns no partial snapshot when more is retained than one may carry", async () => {
+    const stub = executor();
+    await on(stub, (owner) => owner.initialize());
+    const socket = await connect(stub);
+    // Under the ceiling the snapshot answers whole.
+    await on(stub, (owner) => owner.fillRepositories(0, 200));
+    const held = record(record(await ask(socket, "under", { command: "mappings" }))["value"]);
+    expect(Array.isArray(held["repositories"]) && held["repositories"]).toHaveLength(200);
+
+    // Over it, the answer is a refusal rather than as much as would fit. A
+    // partial snapshot would describe a run holding fewer Repositories than it
+    // does, and every reconciliation against it would be decided wrongly.
+    await on(stub, (owner) => owner.fillRepositories(200, 200));
+    const answer = await ask(socket, "over", { command: "mappings" });
+    expect(answer["outcome"]).toBe("refused");
+    expect(answer["value"]).toBe(undefined);
+  });
+
   it("keeps the expected root current for a journal-only transaction", async () => {
     const stub = executor();
     await on(stub, (owner) => owner.initialize());

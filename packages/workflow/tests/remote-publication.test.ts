@@ -11,6 +11,7 @@
  * that was supposed to be removed is not a claim a fake can settle.
  */
 
+import type { RemoteInvocationSnapshot } from "../src/remote/records.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
@@ -213,6 +214,11 @@ function readsOf(captured: {
   blobs: ReadonlyMap<string, Uint8Array>;
 }): RemoteReadLink {
   return {
+    // Materialization never asks for this; a stub that answered would say this
+    // test proved something it did not.
+    *invocationSnapshot(): Operation<RemoteInvocationSnapshot> {
+      throw new Error("this read link carries no invocation snapshot");
+    },
     // deno-lint-ignore require-yield
     *frontier(): Operation<RemoteFrontierSnapshot> {
       return {

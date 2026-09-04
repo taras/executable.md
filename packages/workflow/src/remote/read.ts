@@ -19,6 +19,7 @@
  */
 
 import type { Operation } from "effection";
+import type { RemoteInvocationSnapshot } from "./records.ts";
 import type { JournalEntry } from "../storage/api.ts";
 import type { DefinitionRetrieval, WorkflowRunRecord } from "../storage/record.ts";
 import type { WorkspaceRootManifest } from "../workspace/root-manifest.ts";
@@ -44,6 +45,8 @@ export type RemoteContentRequest =
 
 export interface RemoteReadLink {
   frontier(): Operation<RemoteFrontierSnapshot>;
+  /** The one coherent admitted state a Workspace invocation begins from. */
+  invocationSnapshot(): Operation<RemoteInvocationSnapshot>;
   root(workspaceRootId: string): Operation<WorkspaceRootManifest>;
   content(workspaceRootId: string, request: RemoteContentRequest): Operation<RemoteContent>;
 }

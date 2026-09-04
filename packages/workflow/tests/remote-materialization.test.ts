@@ -14,6 +14,7 @@
  * map kept what it was given.
  */
 
+import type { RemoteInvocationSnapshot } from "../src/remote/records.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, type Operation, resource, scoped, until } from "effection";
@@ -65,6 +66,11 @@ function servedBy(captured: {
   blobs: ReadonlyMap<string, Uint8Array>;
 }): RemoteReadLink {
   return {
+    // Materialization never asks for this; a stub that answered would say this
+    // test proved something it did not.
+    *invocationSnapshot(): Operation<RemoteInvocationSnapshot> {
+      throw new Error("this read link carries no invocation snapshot");
+    },
     // deno-lint-ignore require-yield
     *frontier(): Operation<never> {
       throw new Error("this owner serves only a root and its content");

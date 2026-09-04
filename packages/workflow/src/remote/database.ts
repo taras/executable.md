@@ -49,7 +49,7 @@ import type {
   WorkflowRunRecord,
 } from "../storage/record.ts";
 import { createTransactionGate, type OwnerLink, transactRemotely } from "./collector.ts";
-import type { EnlistWorkspace } from "./collector.ts";
+import type { EnlistWorkspace, TransactionAnchor } from "./collector.ts";
 import type { RemoteFrontierSnapshot } from "./read.ts";
 
 /** What a remote handle needs to answer everything the interface asks. */
@@ -105,6 +105,8 @@ export interface WorkspaceRoute {
   readonly database: WorkflowRunDatabase;
   readonly transaction: WorkflowRunTransaction;
   readonly enlist: EnlistWorkspace;
+  /** Where this transaction began, so a coordinator can prove it has not drifted. */
+  readonly anchor: TransactionAnchor;
 }
 
 const ActiveRoute: Context<WorkspaceRoute | undefined> = createContext<WorkspaceRoute | undefined>(
@@ -274,7 +276,7 @@ export function useRemoteRunDatabase(
       }
       return yield* turns.take(function* (): Operation<Result<T>> {
         try {
-          return yield* transactRemotely(link, gate, function* (transaction, enlist) {
+          return yield* transactRemotely(link, gate, function* (transaction, enlist, anchor) {
             // The marker and the route are installed for the body's scope
             // alone. Outside it neither exists, so a retained transaction
             // object reaches nothing and an unrelated scope is not mistaken for
@@ -283,7 +285,7 @@ export function useRemoteRunDatabase(
               handle,
               enclosing: yield* ActiveTransaction.get(),
             });
-            yield* ActiveRoute.set({ database: handle, transaction, enlist });
+            yield* ActiveRoute.set({ database: handle, transaction, enlist, anchor });
             return yield* body(transaction);
           });
         } catch (error) {
