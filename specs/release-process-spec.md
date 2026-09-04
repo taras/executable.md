@@ -49,10 +49,11 @@ sequenceDiagram
 ## 2. Version lockstep
 
 Every publishable package (`packages/core`, `packages/cli`,
-`packages/durable-streams`, `packages/runtime`, `packages/testing`,
-`packages/code-review-agent`, `packages/test-agent`, `packages/acp`,
-`packages/web`, `packages/workflow`) declares the same version in its `deno.json` and
-`package.json`. A member marked `"private": true` is outside the lockstep
+`packages/durable-streams`, `packages/runtime`, `packages/terminal`,
+`packages/terminal-tmux`, `packages/testing`, `packages/code-review-agent`,
+`packages/test-agent`, `packages/acp`, `packages/web`, `packages/workflow`)
+declares the same version in its `deno.json` and `package.json`. A member marked
+`"private": true` is outside the lockstep
 because it never publishes — `packages/test-support` is the one, and it stays
 at `0.0.0`. `packages/cli/src/cli.ts`
 imports `packages/cli/deno.json` and reads `version`
@@ -76,6 +77,31 @@ the checked-out revision with `deno task setup` and `deno task build`, then run
 `./dist/xmd`. They do not
 install the latest published release, so a review always understands the
 documents at the revision it checks.
+
+### Terminal package order
+
+The terminal packages follow the same manifest-derived publication graph as
+every other workspace member. `@executablemd/terminal` depends on
+`@executablemd/durable-streams` and the external Effection packages, not on
+runtime, core, CLI, or terminal-tmux. `@executablemd/terminal-tmux` depends on
+terminal. Runtime depends on terminal for its compatibility re-exports. Core
+depends on terminal as well as its existing runtime and durable-stream
+dependencies. CLI depends on terminal-tmux, terminal, core, and runtime.
+
+The generated npm jobs consequently publish durable-streams before terminal;
+terminal before terminal-tmux, runtime, and core; and all of terminal-tmux,
+terminal, runtime, and core before CLI. Independent leaves remain parallel. The
+workspace package names and versions are also recorded in `bun.lock`. Adding
+the two manifests or changing these sibling dependencies requires
+`deno install --frozen=false`, the repository's normal setup, and
+`deno task gen:publish-workflow`; `publish-packages.yml` remains generated and
+is never edited by hand.
+
+Moving terminal tests between workspace members changes test-corpus paths. The
+runtime exclusions continue to name every deliberately excluded file, and
+`test-weights.json` is remeasured by the Measure test weights workflow on the
+exact implementation head. No timing value is copied, renamed, or edited by
+hand.
 
 ## 3. Workflows
 
@@ -191,7 +217,7 @@ already carries at that version, member by member. A rerun after a partial publi
 therefore completes exactly the members that are missing, and a rerun after a
 complete publish exits 0 without republishing. Never gate the job on one
 package's existence — whether `core` is published says nothing about the other
-six.
+packages.
 
 `deno task check:jsr` runs the same command with `--dry-run` and is a required
 CI job on every PR (§3, `ci.yml`). It enforces JSR's fast-check rules, so every
