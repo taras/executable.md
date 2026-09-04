@@ -1,8 +1,10 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, spawn, suspend, withResolvers } from "effection";
+import { ensure, scoped, sleep, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
 
+import { createServer } from "node:http";
+import type { ClientRequest } from "node:http";
 import { FormResponder, respond, submitForm } from "../src/responder.ts";
 import type { FormResponse } from "../src/responder.ts";
 import { useFormServer } from "../src/server.ts";
@@ -256,5 +258,130 @@ describe("responder: subject to the protocol, not exempt from it", () => {
     const later = yield* submitForm(server.url, { decision: "reject" });
     expect(later.status).toBe(409);
     expect(later.body).toBe("");
+  });
+});
+
+describe("responder: the request it opens is its own", () => {
+  /**
+   * A submission cancelled before its response arrives is the case the events
+   * never come for. The server here accepts and answers nothing, so the halt
+   * lands while the request is live: the counts are read before the halt, again
+   * after it and before the event is replayed, and the replay must reach
+   * neither the abandoned operation nor anything still accumulating.
+   */
+  it("releases the outgoing request's handlers when the submission is cancelled", function* () {
+    const server = createServer(() => {});
+    const listening = withResolvers<void>();
+    const onError = (error: Error): void => listening.reject(error);
+
+    yield* ensure(() => {
+      server.off("error", onError);
+    });
+    server.on("error", onError);
+
+    server.listen(0, "127.0.0.1", () => listening.resolve());
+    yield* listening.operation;
+    yield* ensure(() => {
+      server.closeAllConnections();
+      server.close();
+    });
+
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("the silent server did not listen on a TCP port");
+    }
+
+    let outgoing: ClientRequest | undefined;
+    let before = 0;
+    let settled = false;
+
+    const owner = yield* spawn(function* () {
+      yield* submitForm(
+        `http://127.0.0.1:${address.port}/f/x/`,
+        { decision: "approve" },
+        (request) => {
+          outgoing = request;
+          before = request.listenerCount("error");
+        },
+      );
+      settled = true;
+    });
+
+    // A turn after the executor ran, so its handler is attached and its
+    // cleanup — the one `action()` returns — is the executor's own return
+    // value rather than something still being registered.
+    yield* sleep(0);
+    if (!outgoing) {
+      throw new Error("the responder opened no request");
+    }
+
+    // At least one more, not exactly one: a runtime may hold handlers of its
+    // own on this source, so the release below is measured against what was
+    // live rather than against the baseline.
+    const live = outgoing.listenerCount("error");
+    expect(live).toBeGreaterThanOrEqual(before + 1);
+    expect(settled).toBe(false);
+
+    yield* owner.halt();
+
+    expect(outgoing.listenerCount("error")).toBe(live - 1);
+
+    let seen = 0;
+    const sentinel = (): void => {
+      seen += 1;
+    };
+
+    outgoing.on("error", sentinel);
+    try {
+      outgoing.emit("error", new Error("after the submission was cancelled"));
+    } finally {
+      outgoing.off("error", sentinel);
+    }
+
+    expect(seen).toBe(1);
+    expect(outgoing.listenerCount("error")).toBe(live - 1);
+    expect(settled).toBe(false);
+  });
+
+  /**
+   * `postJson` observes its outgoing request and the response it brings back
+   * for exactly as long as the `action` runs. The count is read after the
+   * submission has settled and before the event is replayed, because a handler
+   * removed by its own event would leave the same count behind as one the
+   * action released.
+   */
+  it("releases the outgoing request's error handler when the submission settles", function* () {
+    const server = yield* useFormServer(formInput());
+    let outgoing: ClientRequest | undefined;
+    let before = 0;
+
+    const response = yield* submitForm(server.url, { decision: "approve" }, (request) => {
+      outgoing = request;
+      before = request.listenerCount("error");
+    });
+
+    expect(response.status).toBe(204);
+    if (!outgoing) {
+      throw new Error("the responder opened no request");
+    }
+
+    // The case above reads the count while it is live; this one is the
+    // completion path, where what matters is that settling released it.
+    expect(outgoing.listenerCount("error")).toBe(before);
+
+    let seen = 0;
+    const sentinel = (): void => {
+      seen += 1;
+    };
+
+    outgoing.on("error", sentinel);
+    try {
+      outgoing.emit("error", new Error("after the submission settled"));
+    } finally {
+      outgoing.off("error", sentinel);
+    }
+
+    expect(seen).toBe(1);
+    expect(outgoing.listenerCount("error")).toBe(before);
   });
 });

@@ -9,7 +9,8 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { ensure, type Operation, resource, until } from "effection";
+import { each, ensure, type Operation, resource, until, useScope } from "effection";
+import { fromReadable } from "@effectionx/node";
 
 /** One request this server received, as an assertion reads it. */
 export interface ServedRequest {
@@ -63,9 +64,18 @@ export function usePullRequestServer(options: ServerOptions = {}): Operation<Pul
     const requests: ServedRequest[] = [];
     let origin = "";
 
+    // Each request body is read by a task of this server's own scope, so
+    // tearing the server down ends the reads still in progress rather than
+    // leaving their listeners on sockets it is about to destroy. `fromReadable`
+    // is the scope-bound adapter for that: it attaches and detaches the
+    // stream's own handlers with the task.
+    const scope = yield* useScope();
     const server = createServer((incoming: IncomingMessage, outgoing: ServerResponse) => {
-      incoming.resume();
-      incoming.on("end", () => {
+      scope.run(function* () {
+        for (const _chunk of yield* each(fromReadable(incoming))) {
+          yield* each.next();
+        }
+
         const url = new URL(incoming.url ?? "/", "http://127.0.0.1");
         const authorization =
           typeof incoming.headers["authorization"] === "string"

@@ -6,11 +6,11 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { each, ensure, race, scoped, spawn, suspend, withResolvers } from "effection";
+import { each, ensure, race, scoped, sleep, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { once } from "@effectionx/node";
 import { connect } from "node:net";
-import { useLineClient, useLineServer } from "../src/net.ts";
+import { useLineClient, useLineServer, useLineSocket } from "../src/net.ts";
 import type { LineSocket } from "../src/net.ts";
 
 describe("Tier NR — line-socket adapter", () => {
@@ -92,5 +92,53 @@ describe("Tier NR — line-socket adapter", () => {
       })(),
     ]);
     expect(outcome).toBe("refused");
+  });
+
+  /**
+   * The socket adapter's own listener, rather than what it provides.
+   *
+   * A cancelled acquisition is the case the event never comes for, so the
+   * handler cannot be waiting for it to leave. What proves that is the count
+   * on the socket itself: one while the resource is live, back to where it
+   * started once the owner is halted, and unmoved by a `close` afterwards —
+   * a listener that removed itself when the event finally arrived would leave
+   * the same count behind as one that was never there.
+   */
+  it("NR4: halting a line socket detaches it, and a later close changes nothing", function* () {
+    const server = yield* useLineServer("127.0.0.1", function* () {
+      yield* suspend();
+    });
+
+    const socket = connect(server.port, "127.0.0.1");
+    const connected = withResolvers<void>();
+    const onConnect = (): void => connected.resolve();
+
+    socket.on("connect", onConnect);
+    try {
+      yield* connected.operation;
+    } finally {
+      socket.off("connect", onConnect);
+    }
+
+    const before = socket.listenerCount("close");
+    const owner = yield* spawn(function* () {
+      yield* useLineSocket(socket);
+      yield* suspend();
+    });
+    yield* sleep(0);
+
+    // At least one more, not exactly one: a runtime may hold handlers of its
+    // own on this source, so the release below is measured against what was
+    // live rather than against the baseline.
+    const live = socket.listenerCount("close");
+    expect(live).toBeGreaterThanOrEqual(before + 1);
+
+    yield* owner.halt();
+
+    expect(socket.listenerCount("close")).toBe(live - 1);
+
+    socket.emit("close");
+
+    expect(socket.listenerCount("close")).toBe(live - 1);
   });
 });

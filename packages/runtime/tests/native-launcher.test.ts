@@ -22,11 +22,13 @@ import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
 import process from "node:process";
+import { spawn as spawnChild } from "node:child_process";
 import {
   flushOutput,
   installForegroundLauncher,
   nativeLaunch,
   NO_TERMINAL,
+  reap,
   reserveTerminal,
 } from "../launcher.ts";
 
@@ -236,6 +238,60 @@ describe("Tier FL — the foreground native launcher", () => {
     const before = yield* beats(heartbeat);
     yield* sleep(200);
     expect(yield* beats(heartbeat)).toBe(before);
+  });
+});
+
+describe("native launcher — the reaper's own listener", () => {
+  /**
+   * The reaper waits on the child's `exit` from inside a bounded Promise, so
+   * its handler is not covered by an Effection scope: `done()` is the only
+   * funnel out — the event itself, the reachability poll, the escalation
+   * deadline, and the refusal that rejects — and it is where the handler comes
+   * off. The count is read after the reap has settled and before the event is
+   * replayed, because a handler that removed itself on `exit` would leave the
+   * same count behind as one that was released.
+   */
+  it("NLR1: releases the exit handler when the reap settles, and a later exit changes nothing", function* () {
+    const dir = yield* useTempDir();
+    // Deliberately deaf to the interrupt, so the reap is still in flight while
+    // its handler is counted, and settles through the escalation rather than
+    // through the event — which is the path a self-removing listener would not
+    // have been released by.
+    const fake = yield* useFake(dir, "stubborn", { ignoreInterrupt: true, hang: true });
+    const child = spawnChild(fake.command, [], { stdio: "ignore" });
+    const before = child.listenerCount("exit");
+
+    // Not spawned: a Promise executor runs synchronously, so the handler is
+    // attached by the time `reap` has returned, and the count below is read
+    // with the reap unambiguously in flight rather than a turn after it.
+    const reaping = reap(child);
+
+    // At least one more, not exactly one: a runtime may hold handlers of its
+    // own on this source, so the release below is measured against what was
+    // live rather than against the baseline.
+    const live = child.listenerCount("exit");
+    expect(live).toBeGreaterThanOrEqual(before + 1);
+
+    yield* until(reaping);
+
+    expect(child.listenerCount("exit")).toBe(live - 1);
+
+    child.emit("exit", 0, null);
+
+    expect(child.listenerCount("exit")).toBe(live - 1);
+  });
+
+  /** A child already gone is answered without observing anything at all. */
+  it("NLR2: installs nothing for a child that has already exited", function* () {
+    const dir = yield* useTempDir();
+    const fake = yield* useFake(dir, "brief", { exitCode: 0 });
+    const child = spawnChild(fake.command, [], { stdio: "ignore" });
+    const before = child.listenerCount("exit");
+
+    yield* until(reap(child));
+    yield* until(reap(child));
+
+    expect(child.listenerCount("exit")).toBe(before);
   });
 });
 

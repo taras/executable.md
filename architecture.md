@@ -2422,6 +2422,16 @@ hidden inside library objects that accumulate. One exception: metadata an
 author declares at module evaluation, about a value the author owns, may live
 on that value.
 
+A callback registered with something outside the process — a listener on a
+socket, a child process, a stream or a DOM target — is state of exactly this
+kind, and the source it is attached to knows nothing about the operation that
+attached it. The event arriving is not teardown: a cancelled wait is precisely
+the case where it never arrives, and a losing race arm is one that will never
+be told. So the owner detaches its handlers, on completion, failure, halt and
+race loss alike, before it is considered closed, and an event delivered after
+that reaches nothing and changes nothing. `local/require-scope-bound-event-registration`
+holds source to it.
+
 A Repository selection is composition data and is therefore replaceable: a
 document may bind one, render one, hand one to a child, and construct one that
 looks exactly like it. Nothing a repository provider does is authorized by the

@@ -48,7 +48,7 @@
     "npm:@effectionx/fetch@0.2.1": "0.2.1_effection@4.1.0",
     "npm:@effectionx/fs@0.3.0": "0.3.0_effection@4.1.0",
     "npm:@effectionx/middleware@0.1.1": "0.1.1",
-    "npm:@effectionx/node@0.2.4": "0.2.4_effection@4.1.0",
+    "npm:@effectionx/node@0.2.5": "0.2.5_effection@4.1.0",
     "npm:@effectionx/process@0.8.1": "0.8.1_effection@4.1.0",
     "npm:@effectionx/scope-eval@0.1.3": "0.1.3_effection@4.1.0",
     "npm:@effectionx/stream-helpers@0.8.3": "0.8.3_effection@4.1.0",
@@ -548,11 +548,17 @@
         "effection"
       ]
     },
+    "@effectionx/node@0.2.5_effection@4.1.0": {
+      "integrity": "sha512-hL8mROda8Lx375MVS+Ubu86+yMht/I0wOZG5VR6Pel0XUA5ReObQDYvNS6ocW0cNFKnEmvlVLWGWbcjJ+VkVhA==",
+      "dependencies": [
+        "effection"
+      ]
+    },
     "@effectionx/process@0.8.1_effection@4.1.0": {
       "integrity": "sha512-xyXlFja0Ill80lQ3IYfksXtJkqVmWuUOogRn/qlHWCAGlZj+MGGF8gOFbyzk/3Kx4pj14riVGgF/cyT5XCzqDw==",
       "dependencies": [
         "@effectionx/context-api",
-        "@effectionx/node",
+        "@effectionx/node@0.2.4_effection@4.1.0",
         "@effectionx/scope-eval",
         "cross-spawn",
         "ctrlc-windows",
@@ -3966,7 +3972,7 @@
       "npm:@effectionx/fetch@0.2.1",
       "npm:@effectionx/fs@0.3.0",
       "npm:@effectionx/middleware@0.1.1",
-      "npm:@effectionx/node@0.2.4",
+      "npm:@effectionx/node@0.2.5",
       "npm:@effectionx/process@0.8.1",
       "npm:@effectionx/scope-eval@0.1.3",
       "npm:@effectionx/stream-helpers@0.8.3",
@@ -3997,7 +4003,7 @@
         "npm:@effectionx/fetch@0.2.1",
         "npm:@effectionx/fs@0.3.0",
         "npm:@effectionx/middleware@0.1.1",
-        "npm:@effectionx/node@0.2.4",
+        "npm:@effectionx/node@0.2.5",
         "npm:@effectionx/process@0.8.1",
         "npm:@effectionx/scope-eval@0.1.3",
         "npm:@effectionx/stream-helpers@0.8.3",
@@ -4081,7 +4087,7 @@
             "npm:@effectionx/fetch@0.2.1",
             "npm:@effectionx/fs@0.3.0",
             "npm:@effectionx/middleware@0.1.1",
-            "npm:@effectionx/node@0.2.4",
+            "npm:@effectionx/node@0.2.5",
             "npm:@effectionx/process@0.8.1",
             "npm:@effectionx/scope-eval@0.1.3",
             "npm:@effectionx/stream-helpers@0.8.3",
@@ -4117,7 +4123,7 @@
             "npm:@effectionx/context-api@0.6.0",
             "npm:@effectionx/fetch@0.2.1",
             "npm:@effectionx/fs@0.3.0",
-            "npm:@effectionx/node@0.2.4",
+            "npm:@effectionx/node@0.2.5",
             "npm:@effectionx/process@0.8.1",
             "npm:effection@4.1.0"
           ]
@@ -4126,7 +4132,7 @@
       "packages/test-agent": {
         "dependencies": [
           "npm:@agentclientprotocol/sdk@1.3.0",
-          "npm:@effectionx/node@0.2.4",
+          "npm:@effectionx/node@0.2.5",
           "npm:@effectionx/scope-eval@0.1.3",
           "npm:@effectionx/stream-helpers@0.8.3",
           "npm:acorn@^8.16.0",
@@ -4136,7 +4142,7 @@
         "packageJson": {
           "dependencies": [
             "npm:@agentclientprotocol/sdk@1.3.0",
-            "npm:@effectionx/node@0.2.4",
+            "npm:@effectionx/node@0.2.5",
             "npm:@effectionx/scope-eval@0.1.3",
             "npm:@effectionx/stream-helpers@0.8.3",
             "npm:acorn@^8.16.0",
@@ -4185,7 +4191,7 @@
         "packageJson": {
           "dependencies": [
             "npm:@effectionx/fs@0.3.0",
-            "npm:@effectionx/node@0.2.4",
+            "npm:@effectionx/node@0.2.5",
             "npm:@fontsource/montserrat@5.3.0",
             "npm:@fontsource/space-mono@5.3.0",
             "npm:@rjsf/core@6.7.1",

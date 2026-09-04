@@ -17,8 +17,11 @@
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
+import type { ChildProcessByStdio } from "node:child_process";
+import type { Readable, Writable } from "node:stream";
+import { runProcess } from "../src/deno/composition/subprocess.ts";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, until, type Operation } from "effection";
+import { scoped, spawn, until, withResolvers, type Operation } from "effection";
 import { chmod, readFile, stat, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -482,4 +485,101 @@ describe("workflow credential injected infrastructure faults", () => {
     });
     expect(String(raised)).toContain("injected marker-read failure");
   });
+  /**
+   * The child a command owns carries its handlers for as long as the scope
+   * that acquired it runs — `runProcess` registers with `ensure()`, and
+   * delegation gives a generator no frame of its own. Cancelling that scope
+   * while the child is still alive is the case the event never comes for, so
+   * the counts are read while they are live, again after the halt, and once
+   * more after the events are replayed.
+   */
+  it("releases every handler when the command's owner is cancelled", function* () {
+    let child: ChildProcessByStdio<Writable | null, Readable, Readable> | undefined;
+    let before: number[] = [];
+    let settled = false;
+    let captured: () => { stdout: string; stderr: string } = () => ({ stdout: "", stderr: "" });
+    const spawned = withResolvers<void>();
+
+    const owner = yield* spawn(function* () {
+      yield* runProcess({
+        command: "sh",
+        args: ["-c", "sleep 30"],
+        cwd: ".",
+        env: {},
+        observe: (started, reader) => {
+          child = started;
+          before = attachedToChild(started);
+          captured = reader;
+          spawned.resolve();
+        },
+      });
+      settled = true;
+    });
+
+    // Resumed from inside the operation's own synchronous prefix, so the halt
+    // below lands at its very first suspension — the boundary at which an
+    // `ensure()` yielded after the subscriptions would not yet have been
+    // established. The cleanup here is armed before the child is reachable, so
+    // this is precisely where it has to hold.
+    yield* spawned.operation;
+    if (!child) {
+      throw new Error("the command never owned a child");
+    }
+
+    // One `close`, one `error`, and one on each output pipe — the reap keeps no
+    // standing listener of its own. Nothing on stdin, which this invocation
+    // left closed.
+    const mine = [1, 1, 1, 1, 0];
+    const live = attachedToChild(child);
+
+    live.forEach((count, index) => {
+      expect(count).toBeGreaterThanOrEqual(before[index] + mine[index]);
+    });
+
+    const seen = captured();
+
+    yield* owner.halt();
+
+    const released = live.map((count, index) => count - mine[index]);
+
+    expect(attachedToChild(child)).toEqual(released);
+
+    // Delivered through a sentinel, because an `error` an emitter has no
+    // listener for is thrown rather than dropped — so the replay needs one
+    // observer, and exactly one is what it must find.
+    let reached = 0;
+    const sentinel = (): void => {
+      reached += 1;
+    };
+
+    child.emit("close", 0, null);
+    child.stdout.emit("data", "after the owner was cancelled");
+    child.stderr.emit("data", "after the owner was cancelled");
+    child.on("error", sentinel);
+    try {
+      child.emit("error", new Error("after the owner was cancelled"));
+    } finally {
+      child.off("error", sentinel);
+    }
+
+    expect(reached).toBe(1);
+    expect(attachedToChild(child)).toEqual(released);
+    // Nothing is still accumulating, and the cancelled operation produced no
+    // result that a later event could have resumed.
+    expect(captured()).toEqual(seen);
+    expect(settled).toBe(false);
+  });
 });
+
+/** What one owned child is carrying, across itself and its pipes. */
+function attachedToChild(
+  child: ChildProcessByStdio<Writable | null, Readable, Readable>,
+): number[] {
+  return [
+    child.listenerCount("error"),
+    child.listenerCount("close"),
+    child.stdout.listenerCount("data"),
+    child.stderr.listenerCount("data"),
+    child.stdin?.listenerCount("error") ?? 0,
+  ];
+}

@@ -42,7 +42,23 @@ function useLoopback(): Operation<Loopback> {
     });
 
     const listening = withResolvers<void>();
-    server.on("error", (error: Error) => listening.reject(error));
+    // Removed with the resource rather than after the first error: a listening
+    // server outlives its bind, and a handler left behind would still be
+    // holding a rejected resolver when the next test binds its own.
+    //
+    // Established before the handler exists, because `yield* ensure(...)` is
+    // itself a suspension: an owner halted while it registers unwinds with no
+    // cleanup at all, so nothing may be attached until it has completed.
+    let onError: ((error: Error) => void) | undefined;
+
+    yield* ensure(() => {
+      if (onError) {
+        server.off("error", onError);
+      }
+    });
+
+    onError = (error: Error) => listening.reject(error);
+    server.on("error", onError);
     server.listen(0, "127.0.0.1", () => listening.resolve());
     yield* listening.operation;
 

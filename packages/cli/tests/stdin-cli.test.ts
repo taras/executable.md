@@ -10,7 +10,10 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { runCli } from "@executablemd/test-support/launch";
+import { runCli, runShell } from "@executablemd/test-support/launch";
+import { when } from "@effectionx/converge";
+import { Buffer } from "node:buffer";
+import type { ChildProcess } from "node:child_process";
 import {
   createContext,
   Err,
@@ -131,6 +134,17 @@ const CONFLICT_FIXTURE = {
     "",
   ].join("\n"),
 };
+
+/** What the shared launcher attaches to a child it owns, and to its pipes. */
+function attached(child: ChildProcess): number[] {
+  return [
+    child.listenerCount("error"),
+    child.listenerCount("close"),
+    child.stdout?.listenerCount("data") ?? 0,
+    child.stderr?.listenerCount("data") ?? 0,
+    child.stdin?.listenerCount("error") ?? 0,
+  ];
+}
 
 const STDIN_EFFECT = '<File path="stdin-ran.txt">x</File>\n\nSTDIN_MARKER\n';
 
@@ -547,11 +561,25 @@ describe(
           "",
         ].join("\n");
 
+        // The child this launcher owns, what its streams carried before the
+        // launcher attached anything, and what the run has captured from it.
+        let child: ChildProcess | undefined;
+        let before: number[] = [];
+        let captured: () => { stdout: string; stderr: string } = () => ({
+          stdout: "",
+          stderr: "",
+        });
+
         const run = yield* spawn(function* () {
           yield* runCli(["run", "-", "--raw"], {
             cwd: dir,
             stdin: document,
             timeout: 60_000,
+            observeChild: (started, reader) => {
+              child = started;
+              before = attached(started);
+              captured = reader;
+            },
           }).join();
         });
 
@@ -564,9 +592,41 @@ describe(
         const [escaped, owned] = yield* waitForIds(idsPath);
         yield* ensure(() => endEscapedGroup(escaped));
 
+        // Synchronized on the command having run, so every handler is attached
+        // and the child is still alive when the run is cancelled underneath it.
+        if (!child) {
+          throw new Error("the launcher never owned a child");
+        }
+        const live = attached(child);
+        const seen = captured();
+
+        // At least what this owner attached, not exactly it: a runtime may hold
+        // handlers of its own on a child and its pipes, so the release below is
+        // measured against what was live rather than against the baseline.
+        live.forEach((count, index) => {
+          expect(count).toBeGreaterThanOrEqual(before[index] + 1);
+        });
+
         const at = Date.now();
         yield* run.halt();
         const elapsed = Date.now() - at;
+
+        // Cancelled while all five were live, and back to what the runtime had
+        // before the launcher attached anything. Read before the events are
+        // replayed, because a handler removed by its own event would leave the
+        // same counts behind as one the launcher released.
+        const released = live.map((count) => count - 1);
+
+        expect(attached(child)).toEqual(released);
+
+        child.stdout?.emit("data", Buffer.from("after the run was cancelled"));
+        child.stderr?.emit("data", Buffer.from("after the run was cancelled"));
+        child.emit("close", 0, null);
+
+        // And nothing is still accumulating: the capture the run abandoned did
+        // not grow.
+        expect(captured()).toEqual(seen);
+        expect(attached(child)).toEqual(released);
 
         // A signal that has been sent is not a process that is gone: teardown
         // returning as soon as it signalled would come back at once. Nor may it
@@ -578,6 +638,59 @@ describe(
         // And the group the launcher owns is gone by the time it returns.
         expect(yield* waitForGroupExit(owned)).toBe(true);
       });
+    });
+
+    /**
+     * Teardown's boundary is the child's `close`, not the signal it was sent
+     * and not an exit status the handle has recorded. This child traps the
+     * interrupt, writes on its way out, and only then leaves — so the marker
+     * can only be here if the capture was still attached while it stopped and
+     * the cancellation waited for the pipes to end.
+     */
+    it("SI12b: what a cancelled child writes while it stops is still captured", function* () {
+      let child: ChildProcess | undefined;
+      let before: number[] = [];
+      let captured: () => { stdout: string; stderr: string } = () => ({
+        stdout: "",
+        stderr: "",
+      });
+
+      const run = yield* spawn(function* () {
+        // A large trailing write, so what is asserted below is the whole of it
+        // rather than the first line to arrive.
+        yield* runShell("trap 'yes LATE | head -20000; exit 0' TERM; echo READY; sleep 20", {
+          stdin: "",
+          timeout: 60_000,
+          observeChild: (started, reader) => {
+            child = started;
+            before = attached(started);
+            captured = reader;
+          },
+        }).join();
+      });
+
+      // Synchronized on the child running, so the halt lands on a live process
+      // with every handler attached.
+      yield* when(function* () {
+        expect(captured().stdout).toContain("READY");
+      });
+
+      if (!child) {
+        throw new Error("the launcher never owned a child");
+      }
+      const live = attached(child);
+
+      yield* run.halt();
+
+      live.forEach((count, index) => {
+        expect(count).toBeGreaterThanOrEqual(before[index] + 1);
+      });
+      // All of it, written after the signal and before `close`: the capture was
+      // still attached while the child stopped, and teardown did not return
+      // until the pipes had ended.
+      expect(captured().stdout.split("LATE").length - 1).toBe(20_000);
+      // And released only once that had happened.
+      expect(attached(child)).toEqual(live.map((count) => count - 1));
     });
 
     it("SI9b: the stream adapter's listeners belong to the read's own scope", function* () {

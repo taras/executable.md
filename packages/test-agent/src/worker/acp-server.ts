@@ -222,17 +222,21 @@ export function useProcessStdio(): Operation<AcpByteStreams> {
         // already settled
       }
     };
-    process.stdin.on("data", onData);
-    process.stdin.on("end", onEnd);
-    process.stdin.on("close", onClose);
-    process.stdin.on("error", onError);
-    yield* ensure(() => {
+    // A lexical finalizer rather than `ensure()`: entering the `try` is
+    // synchronous, so there is no instant at which standard input is observed
+    // and the release is not yet armed.
+    try {
+      process.stdin.on("data", onData);
+      process.stdin.on("end", onEnd);
+      process.stdin.on("close", onClose);
+      process.stdin.on("error", onError);
+
+      yield* provide({ input, output });
+    } finally {
       process.stdin.off("data", onData);
       process.stdin.off("end", onEnd);
       process.stdin.off("close", onClose);
       process.stdin.off("error", onError);
-    });
-
-    yield* provide({ input, output });
+    }
   });
 }

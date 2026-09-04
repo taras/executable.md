@@ -14,11 +14,22 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
+import type { ChildProcess, ChildProcessByStdio } from "node:child_process";
+import type { Readable, Writable } from "node:stream";
 import { Buffer } from "node:buffer";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { Socket } from "node:net";
 import { dirname } from "node:path";
 import process from "node:process";
-import { ensure, type Operation, resource, until } from "effection";
+import {
+  ensure,
+  type Operation,
+  resource,
+  scoped,
+  until,
+  useScope,
+  withResolvers,
+} from "effection";
 import { git, type BareRemote } from "./git-remotes.ts";
 
 /** One request this remote received, as a suite asserts on it. */
@@ -105,6 +116,23 @@ export interface GitHttpOptions {
    * authentication cleanup that must follow it.
    */
   readonly closed?: () => void;
+  /**
+   * Handed every backend child as it is spawned.
+   *
+   * Package-private, for the cancellation regression: the listeners this
+   * fixture installs are on a process it owns and does not otherwise hand out,
+   * and their release is the thing under test.
+   */
+  readonly observeBackend?: (child: ChildProcess) => void;
+  /**
+   * Run inside the request task, after the backend's cleanup is registered and
+   * before its input is forwarded.
+   *
+   * Package-private, for the cancellation regression: a backend is only
+   * observable while its request is still running, and this is what holds one
+   * there.
+   */
+  readonly holdBackend?: () => Operation<void>;
 }
 
 /** Where Git keeps `git-http-backend`, asked of Git rather than guessed. */
@@ -167,7 +195,16 @@ function headerEnd(buffered: Buffer): { at: number; width: number } | undefined 
   return plain < 0 ? undefined : { at: plain, width: 2 };
 }
 
-/** Hand one request to `git-http-backend` and its answer back to the client. */
+/**
+ * Hand one request to `git-http-backend` and its answer back to the client, as
+ * a task of the server's own scope.
+ *
+ * The backend is a child process with four listeners on it, and both belong to
+ * this request rather than to the fixture: cancelling the server ends the
+ * request, which kills the backend, waits for it to be gone, and detaches
+ * every handler synchronously afterwards. A request that simply finishes takes
+ * the same path.
+ */
 function serve(
   incoming: IncomingMessage,
   outgoing: ServerResponse,
@@ -176,63 +213,129 @@ function serve(
   user: string,
   segment: string,
   directory: string,
-): void {
-  const child = spawn(backend, [], {
-    env: cgiEnvironment(incoming, root, user, segment, directory),
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  // A client that hung up mid-body closes this pipe under the backend. It is
-  // the client's answer rather than a fault of this fixture's, and an unhandled
-  // stream error here would take the whole suite process down.
-  child.stdin.on("error", () => {});
-  incoming.pipe(child.stdin);
+  observe?: (child: ChildProcess) => void,
+  hold?: () => Operation<void>,
+): Operation<void> {
+  return scoped(function* () {
+    // Declared before the cleanup below and assigned after it: a backend that
+    // exists before its release is registered can be stranded, because `yield*
+    // ensure(...)` is itself a suspension and an owner halted while it
+    // registers unwinds with nothing on it.
+    let child: ChildProcessByStdio<Writable, Readable, Readable> | undefined;
 
-  let buffered = Buffer.alloc(0);
-  let started = false;
-  child.stdout.on("data", (chunk: Buffer) => {
-    if (started) {
-      outgoing.write(chunk);
-      return;
-    }
-    buffered = Buffer.concat([buffered, chunk]);
-    const end = headerEnd(buffered);
-    if (end === undefined) {
-      return;
-    }
-    let status = 200;
-    const headers: Record<string, string> = {};
-    for (const line of buffered.subarray(0, end.at).toString("utf8").split(/\r?\n/)) {
-      const separator = line.indexOf(":");
-      if (separator < 0) {
-        continue;
+    let buffered = Buffer.alloc(0);
+    let started = false;
+    const answered = withResolvers<void>();
+    const closed = withResolvers<void>();
+    // `close`, and nothing else, is what says the backend and its pipes are
+    // done; an assigned exit status says only that the process ended.
+    let finished = false;
+
+    // A client that hung up mid-body closes this pipe under the backend. It is
+    // the client's answer rather than a fault of this fixture's, and an
+    // unhandled stream error here would take the whole suite process down.
+    const onStdinError = (): void => {};
+    const onStdout = (chunk: Buffer): void => {
+      if (started) {
+        outgoing.write(chunk);
+        return;
       }
-      const name = line.slice(0, separator).trim();
-      const value = line.slice(separator + 1).trim();
-      if (name.toLowerCase() === "status") {
-        status = Number.parseInt(value, 10) || 200;
-      } else {
-        headers[name] = value;
+      buffered = Buffer.concat([buffered, chunk]);
+      const end = headerEnd(buffered);
+      if (end === undefined) {
+        return;
       }
-    }
-    outgoing.writeHead(status, headers);
-    started = true;
-    const rest = buffered.subarray(end.at + end.width);
-    if (rest.length > 0) {
-      outgoing.write(rest);
-    }
-  });
-  child.stdout.on("end", () => {
-    if (!started) {
-      outgoing.writeHead(500);
-    }
-    outgoing.end();
-  });
-  child.on("error", () => {
-    if (!started) {
-      outgoing.writeHead(500);
+      let status = 200;
+      const headers: Record<string, string> = {};
+      for (const line of buffered.subarray(0, end.at).toString("utf8").split(/\r?\n/)) {
+        const separator = line.indexOf(":");
+        if (separator < 0) {
+          continue;
+        }
+        const name = line.slice(0, separator).trim();
+        const value = line.slice(separator + 1).trim();
+        if (name.toLowerCase() === "status") {
+          status = Number.parseInt(value, 10) || 200;
+        } else {
+          headers[name] = value;
+        }
+      }
+      outgoing.writeHead(status, headers);
       started = true;
+      const rest = buffered.subarray(end.at + end.width);
+      if (rest.length > 0) {
+        outgoing.write(rest);
+      }
+    };
+    const onStdoutEnd = (): void => {
+      if (!started) {
+        outgoing.writeHead(500);
+      }
+      outgoing.end();
+      answered.resolve();
+    };
+    const onChildError = (): void => {
+      if (!started) {
+        outgoing.writeHead(500);
+        started = true;
+      }
+      outgoing.end();
+      answered.resolve();
+    };
+    const onClose = (): void => {
+      finished = true;
+      closed.resolve();
+    };
+
+    // Established before the backend exists, so a request cancelled anywhere
+    // below still ends the process it started — and so that no instant exists
+    // in which a backend is running with no cleanup registered for it.
+    //
+    // Teardown keeps every handler attached through the close wait, so the
+    // answer this fixture was streaming is still being written while the
+    // backend ends. They come off, and the request is unpiped, synchronously
+    // once that wait has settled.
+    yield* ensure(function* () {
+      if (child === undefined) {
+        return;
+      }
+
+      try {
+        child.kill("SIGKILL");
+
+        if (!finished) {
+          yield* closed.operation;
+        }
+      } finally {
+        incoming.unpipe(child.stdin);
+        child.stdin.off("error", onStdinError);
+        child.stdout.off("data", onStdout);
+        child.stdout.off("end", onStdoutEnd);
+        child.off("error", onChildError);
+        child.off("close", onClose);
+      }
+    });
+
+    child = spawn(backend, [], {
+      env: cgiEnvironment(incoming, root, user, segment, directory),
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    observe?.(child);
+
+    child.stdin.on("error", onStdinError);
+    child.stdout.on("data", onStdout);
+    child.stdout.on("end", onStdoutEnd);
+    child.on("error", onChildError);
+    child.on("close", onClose);
+
+    if (hold) {
+      yield* hold();
     }
-    outgoing.end();
+
+    incoming.pipe(child.stdin);
+
+    yield* answered.operation;
   });
 }
 
@@ -283,6 +386,10 @@ export function useGitHttpRemote(options: GitHttpOptions): Operation<GitHttpRemo
       alsoLocator = segment;
     }
 
+    // Each accepted request runs as a task of this resource, so tearing the
+    // server down ends the backends it is still talking to.
+    const requestScope = yield* useScope();
+    const holds = new Map<Socket, () => void>();
     const server = createServer((incoming: IncomingMessage, outgoing: ServerResponse) => {
       const url = new URL(incoming.url ?? "/", "http://127.0.0.1");
       const header = incoming.headers.authorization;
@@ -310,8 +417,15 @@ export function useGitHttpRemote(options: GitHttpOptions): Operation<GitHttpRemo
       if (options.hold?.(requests[requests.length - 1] as ServedGitRequest) === true) {
         // Accepted, and then nothing. The socket stays open, so the client is
         // waiting on this end rather than on a refusal — and when it goes, this
-        // is where that is observed.
-        incoming.socket.on("close", () => options.closed?.());
+        // is where that is observed. The handler is remembered so teardown can
+        // take it off before it destroys the connection it is attached to.
+        const held = incoming.socket;
+        const onHeldClose = (): void => {
+          holds.delete(held);
+          options.closed?.();
+        };
+        holds.set(held, onHeldClose);
+        held.on("close", onHeldClose);
         incoming.resume();
         return;
       }
@@ -323,11 +437,29 @@ export function useGitHttpRemote(options: GitHttpOptions): Operation<GitHttpRemo
         incoming.resume();
         return;
       }
-      serve(incoming, outgoing, backend, entry.root, entry.user, segment, entry.directory);
+      requestScope.run(() =>
+        serve(
+          incoming,
+          outgoing,
+          backend,
+          entry.root,
+          entry.user,
+          segment,
+          entry.directory,
+          options.observeBackend,
+          options.holdBackend,
+        ),
+      );
     });
 
     yield* until(new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve())));
     yield* ensure(function* () {
+      // Before the first suspension below, so a teardown halted part-way
+      // leaves no handler on a connection this server is finished with.
+      for (const [socket, onHeldClose] of holds) {
+        socket.off("close", onHeldClose);
+      }
+      holds.clear();
       server.closeAllConnections();
       yield* until(new Promise<void>((resolve) => server.close(() => resolve())));
     });

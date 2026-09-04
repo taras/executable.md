@@ -447,6 +447,28 @@ the corpus or enabling in-shard concurrency is not an answer to a miss.
     structural values for composition data and a contextual Api for operations.
     Security enforcement, durable identity, and reconciliation never trust
     replaceable context state.
+16. An event listener an Effection operation installs has that operation's
+    lifetime. Wait for one event with `once()` from `@effectionx/node/events`,
+    never `emitter.once()` or `addEventListener(..., { once: true })`: cleanup
+    that waits for the event is no cleanup for a wait that is cancelled. A
+    longer subscription binds a stable handler and removes that same handler,
+    from that same receiver and event, in the owner's own teardown — `.off()`
+    for Node, `.removeEventListener()` with the matching capture mode for the
+    DOM. Removal is synchronous, so it belongs in a `finally` around the
+    subscription, an `ensure()` that **completed before** the subscription, or
+    the cleanup an `action()` returns; where teardown must wait on the event
+    itself, keep the handler through the wait and remove it in a synchronous
+    `finally` inside that same `ensure()`. `yield* ensure(...)` is itself a
+    suspension: an owner halted while it registers unwinds with no cleanup on
+    it at all, so an `ensure()` yielded *after* the subscription has not
+    established anything — nor may a native resource be created before the
+    cleanup that releases it, and only the resource's own closing event proves
+    it is finished, never an assigned exit status. The listener ordering is
+    enforced by the `local/require-scope-bound-event-registration` Oxlint rule
+    (`scripts/oxlint-rules/`), which does not autofix: which owner, which
+    handler and which order are lifecycle decisions. The resource half — a
+    child spawned before the cleanup that reaps it — is not something that rule
+    can see, and is held by each owner's focused lifecycle regression instead.
 
 ## Writing Guide
 

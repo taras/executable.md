@@ -92,6 +92,16 @@ export interface CliRunOptions {
    * of file rather than nothing at all.
    */
   stdin?: string;
+  /**
+   * Handed the child this launcher owns, before anything is attached to it,
+   * together with a reader for what has been captured from it so far.
+   *
+   * Package-private, for the cancellation regression: the listeners are on a
+   * value this operation owns and does not otherwise hand out, and what a
+   * cancelled run must prove is that they are gone *and* that a later chunk
+   * reaches nothing that is still accumulating.
+   */
+  observeChild?: (child: ChildProcess, captured: () => { stdout: string; stderr: string }) => void;
 }
 
 /** A bounded run of `xmd`, synchronized like any `@effectionx/process` exec. */
@@ -222,8 +232,64 @@ function* withInput(
   input: string,
 ): Operation<ProcessResult> {
   const settled = withResolvers<Result<{ code?: number; signal?: string }>>();
-  const closed = withResolvers<void>();
-  const child = spawnChild(launch.command, launch.arguments ?? [], {
+  // `close`, and nothing else, is what says this child and its pipes are done.
+  let closed = false;
+  // Declared before the cleanup below and assigned after it: a child that
+  // exists before its release is registered can be stranded, because `yield*
+  // ensure(...)` is itself a suspension and an owner halted while it registers
+  // unwinds with nothing on it.
+  let child: ChildProcess | undefined;
+
+  const onStdout = (chunk: Uint8Array): void => {
+    partial.stdout += text(chunk);
+  };
+  const onStderr = (chunk: Uint8Array): void => {
+    partial.stderr += text(chunk);
+  };
+  // A child that never started closes through this rather than through `close`,
+  // so teardown has an end either way.
+  const onError = (error: Error): void => {
+    settled.resolve(Err(error));
+  };
+  // A pipe the child could not use is the launcher's problem and not the run's:
+  // the close below is what this whole path exists for, and a broken one would
+  // otherwise raise on a process that is already reporting why.
+  const onStdinError = (): void => {};
+  const onClose = (code: number | null, signal: string | null): void => {
+    closed = true;
+    settled.resolve(
+      Ok({
+        ...(code === null ? {} : { code }),
+        ...(signal === null ? {} : { signal }),
+      }),
+    );
+  };
+
+  // Established before the child exists, so a run cancelled anywhere below
+  // still ends with its process group gone — and so that no instant exists in
+  // which a child is running with no cleanup registered for it.
+  //
+  // Teardown keeps every handler attached through the reap: `close` is what
+  // says the process is finished, and the capture must still be reading what
+  // the child writes on its way out. They come off synchronously once that
+  // wait has settled, whichever way it did.
+  yield* ensure(function* () {
+    if (child === undefined) {
+      return;
+    }
+
+    try {
+      yield* reap(child, () => closed);
+    } finally {
+      child.stdout?.off("data", onStdout);
+      child.stderr?.off("data", onStderr);
+      child.off("error", onError);
+      child.stdin?.off("error", onStdinError);
+      child.off("close", onClose);
+    }
+  });
+
+  child = spawnChild(launch.command, launch.arguments ?? [], {
     detached: true,
     shell: launch.shell,
     cwd: options.cwd,
@@ -231,35 +297,13 @@ function* withInput(
     stdio: "pipe",
   });
 
-  child.stdout?.on("data", (chunk: Uint8Array) => {
-    partial.stdout += text(chunk);
-  });
-  child.stderr?.on("data", (chunk: Uint8Array) => {
-    partial.stderr += text(chunk);
-  });
-  // A child that never started closes through this rather than through `close`,
-  // so teardown has an end either way.
-  child.on("error", (error: Error) => {
-    settled.resolve(Err(error));
-    closed.resolve();
-  });
-  // A pipe the child could not use is the launcher's problem and not the run's:
-  // the close below is what this whole path exists for, and a broken one would
-  // otherwise raise on a process that is already reporting why.
-  child.stdin?.on("error", () => {});
-  child.on("close", (code: number | null, signal: string | null) => {
-    settled.resolve(
-      Ok({
-        ...(code === null ? {} : { code }),
-        ...(signal === null ? {} : { signal }),
-      }),
-    );
-    closed.resolve();
-  });
+  options.observeChild?.(child, () => ({ stdout: partial.stdout, stderr: partial.stderr }));
 
-  // Registered before the first suspension point, so a run cancelled anywhere
-  // below still ends with its process group gone.
-  yield* ensure(() => reap(child, closed.operation));
+  child.stdout?.on("data", onStdout);
+  child.stderr?.on("data", onStderr);
+  child.on("error", onError);
+  child.stdin?.on("error", onStdinError);
+  child.on("close", onClose);
 
   child.stdin?.end(input);
 
@@ -289,24 +333,38 @@ function* withInput(
  * could be delivered to while the child is still reachable ends the run with
  * that fact rather than waiting on a `close` that is never coming.
  */
-function* reap(child: ChildProcess, closed: Operation<void>): Operation<void> {
-  const pid = child.pid;
-  if (pid === undefined || child.exitCode !== null || child.signalCode !== null) {
-    yield* closed;
-    return;
-  }
+function* reap(child: ChildProcess, hasClosed: () => boolean): Operation<void> {
+  const gone = withResolvers<void>();
+  const onGone = (): void => gone.resolve();
 
-  end(pid, "SIGTERM");
-  const graceful = yield* timebox(TERMINATION_GRACE, () => closed);
-  if (!graceful.timeout) {
-    return;
-  }
+  // `close`, and nothing else. An assigned `exitCode` or `signalCode` says the
+  // process ended; it does not say the pipes this run inherited have, and the
+  // capture is still reading them.
+  child.on("close", onGone);
+  try {
+    if (hasClosed()) {
+      return;
+    }
 
-  const killed = end(pid, "SIGKILL");
-  if (killed === "refused" && isReachable(pid)) {
-    throw new Error(`the launched process ${pid} could not be stopped: SIGKILL was refused`);
+    const pid = child.pid;
+
+    if (pid !== undefined) {
+      end(pid, "SIGTERM");
+      const graceful = yield* timebox(TERMINATION_GRACE, () => gone.operation);
+      if (!graceful.timeout) {
+        return;
+      }
+
+      const killed = end(pid, "SIGKILL");
+      if (killed === "refused" && isReachable(pid)) {
+        throw new Error(`the launched process ${pid} could not be stopped: SIGKILL was refused`);
+      }
+    }
+
+    yield* gone.operation;
+  } finally {
+    child.off("close", onGone);
   }
-  yield* closed;
 }
 
 /** What one signal delivery established about what it was aimed at. */

@@ -57,6 +57,7 @@ const GATE_RULES = [
   "local/no-yield-in-finally",
   "local/prefer-effection-operation",
   "local/prefer-effection-result",
+  "local/require-scope-bound-event-registration",
 ];
 
 interface Override {

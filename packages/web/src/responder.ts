@@ -15,9 +15,10 @@
  */
 
 import { type Api, createApi, type Operations } from "@effectionx/context-api";
-import { action } from "effection";
+import { ensure, scoped, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { request } from "node:http";
+import type { ClientRequest, IncomingMessage } from "node:http";
 
 import type { Json } from "./json.ts";
 
@@ -53,15 +54,75 @@ export interface FormResponse {
  * sends, and the server still checks it. `Host` is left to `node:http` to derive
  * from the URL, so it names where the request is actually going.
  */
-export function submitForm(url: string, data: Json): Operation<FormResponse> {
-  return postJson(new URL("submit", url), JSON.stringify(data));
+export function submitForm(
+  url: string,
+  data: Json,
+  observe?: (request: ClientRequest) => void,
+): Operation<FormResponse> {
+  return postJson(new URL("submit", url), JSON.stringify(data), observe);
 }
 
-function postJson(url: URL, body: string): Operation<FormResponse> {
-  return action<FormResponse>((resolve, reject) => {
+function postJson(
+  url: URL,
+  body: string,
+  observe?: (request: ClientRequest) => void,
+): Operation<FormResponse> {
+  return scoped(function* () {
     const payload = new TextEncoder().encode(body);
+    const settled = withResolvers<FormResponse>();
+    const closed = withResolvers<void>();
+    // `close`, and nothing else. A destroyed request has not necessarily
+    // finished emitting: the peer's hang-up arrives afterwards, and this is
+    // what says there is nothing left to observe.
+    let finished = false;
 
-    const outgoing = request(
+    let received = "";
+    let incoming: IncomingMessage | undefined;
+    let outgoing: ClientRequest | undefined;
+
+    const onData = (chunk: string): void => {
+      received += chunk;
+    };
+    const onEnd = (): void => {
+      settled.resolve({ status: incoming?.statusCode ?? 0, body: received });
+    };
+    const onFailure = (error: Error): void => settled.reject(error);
+    const onClose = (): void => {
+      finished = true;
+      closed.resolve();
+    };
+
+    // Established before the request exists, because `yield* ensure(...)` is
+    // itself a suspension: an owner halted while it registers unwinds with no
+    // cleanup at all.
+    //
+    // The error observer stays attached across the destroy. `destroy()` on a
+    // live request makes the peer's end arrive as an asynchronous `error` —
+    // "socket hang up" — and an `error` an emitter has no listener for is
+    // thrown, not dropped. So the wait for `close` is what says the request can
+    // no longer emit, and only then is anything detached.
+    yield* ensure(function* () {
+      try {
+        if (outgoing && !finished) {
+          if (!outgoing.destroyed) {
+            outgoing.destroy();
+          }
+          yield* closed.operation;
+        }
+      } finally {
+        if (incoming) {
+          incoming.off("data", onData);
+          incoming.off("end", onEnd);
+          incoming.off("error", onFailure);
+        }
+        if (outgoing) {
+          outgoing.off("error", onFailure);
+          outgoing.off("close", onClose);
+        }
+      }
+    });
+
+    outgoing = request(
       {
         protocol: url.protocol,
         hostname: url.hostname,
@@ -74,25 +135,20 @@ function postJson(url: URL, body: string): Operation<FormResponse> {
           Origin: url.origin,
         },
       },
-      (incoming) => {
-        let received = "";
-        incoming.setEncoding("utf8");
-        incoming.on("data", (chunk: string) => {
-          received += chunk;
-        });
-        incoming.on("end", () => {
-          resolve({ status: incoming.statusCode ?? 0, body: received });
-        });
-        incoming.on("error", (error: Error) => reject(error));
+      (response) => {
+        incoming = response;
+        response.setEncoding("utf8");
+        response.on("data", onData);
+        response.on("end", onEnd);
+        response.on("error", onFailure);
       },
     );
 
-    outgoing.on("error", (error: Error) => reject(error));
+    observe?.(outgoing);
+    outgoing.on("error", onFailure);
+    outgoing.on("close", onClose);
     outgoing.end(payload);
 
-    // Runs however the action ends, so a halted responder leaves no socket.
-    return () => {
-      outgoing.destroy();
-    };
+    return yield* settled.operation;
   });
 }

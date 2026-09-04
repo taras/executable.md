@@ -88,7 +88,15 @@ export interface FormServer {
  * always run for real.
  */
 export interface FormServerSeams {
-  responseChannel?(res: ServerResponse): ResponseChannel;
+  responseChannel?(res: ServerResponse): Operation<ResponseChannel>;
+  /**
+   * Handed every accepted socket as it arrives.
+   *
+   * Package-private, for the cancellation regression: the listeners are on a
+   * value this operation owns and does not otherwise hand out, and their
+   * release is the thing under test.
+   */
+  observeSocket?(socket: Socket): void;
   /**
    * After the listener is up, before `provide()`.
    *
@@ -150,9 +158,20 @@ export function useFormServer(
     const server = createServer();
     const channelFor = seams.responseChannel ?? nodeResponseChannel;
 
+    // One close handler per accepted socket, kept so teardown can detach them
+    // all before it destroys the connections they are attached to.
+    const closers = new Map<Socket, () => void>();
     const onConnection = (socket: Socket): void => {
+      // Before this server attaches anything, so a case can measure what the
+      // runtime was already holding on the connection.
+      seams.observeSocket?.(socket);
       sockets.add(socket);
-      socket.once("close", () => sockets.delete(socket));
+      const onClose = (): void => {
+        sockets.delete(socket);
+        closers.delete(socket);
+      };
+      closers.set(socket, onClose);
+      socket.on("close", onClose);
     };
     // One long-lived observer, not a readiness-only one: an error handler that
     // stopped mattering once the server came up would leave a caller waiting on
@@ -168,18 +187,26 @@ export function useFormServer(
 
     const onListening = (): void => listening.resolve();
 
-    // Attached before `listen`, not after: an event emitted before its listener
-    // exists is simply lost, and readiness is emitted immediately.
-    server.once("listening", onListening);
-    server.on("connection", onConnection);
-    server.on("error", onError);
-
-    // Registered before `listen`, so a server that fails to bind is still torn
-    // down by the same path as one that served for an hour.
+    // Registered before anything is attached and before `listen`, so a server
+    // that fails to bind is torn down by the same path as one that served for
+    // an hour — and so that no instant exists in which this server is observed
+    // and the release is not yet armed. `yield* ensure(...)` is itself a
+    // suspension, and an owner halted while it registers unwinds with nothing
+    // on it.
     yield* ensure(function* () {
-      server.removeListener("listening", onListening);
-      server.removeListener("connection", onConnection);
-      server.removeListener("error", onError);
+      server.off("listening", onListening);
+      server.off("connection", onConnection);
+      server.off("error", onError);
+      // Every accepted socket's close handler comes off in the same
+      // uninterrupted run as the listener's own, before this teardown
+      // suspends: `connection` is no longer observed, so nothing can be
+      // accepted and left untracked after this point.
+      for (const [socket, onClose] of closers) {
+        socket.off("close", onClose);
+      }
+      closers.clear();
+      // Request tasks end before their connections do, so a response in flight
+      // is abandoned by its own scope rather than by a destroyed socket.
       if (acceptor) {
         yield* acceptor.halt();
       }
@@ -191,11 +218,22 @@ export function useFormServer(
       sockets.clear();
       if (server.listening) {
         const closed = withResolvers<void>();
-        server.once("close", () => closed.resolve());
-        server.close();
-        yield* closed.operation;
+        const onClose = (): void => closed.resolve();
+        server.on("close", onClose);
+        try {
+          server.close();
+          yield* closed.operation;
+        } finally {
+          server.off("close", onClose);
+        }
       }
     });
+
+    // Attached before `listen`, not after: an event emitted before its listener
+    // exists is simply lost, and readiness is emitted immediately.
+    server.on("listening", onListening);
+    server.on("connection", onConnection);
+    server.on("error", onError);
 
     server.listen(0, HOST);
     yield* listening.operation;
@@ -210,7 +248,7 @@ export function useFormServer(
     const prefix = `/f/${token}/`;
 
     function* handle(req: IncomingMessage, res: ServerResponse): Operation<void> {
-      const channel = channelFor(res);
+      const channel = yield* channelFor(res);
       const route = routeFor(req, prefix);
 
       if (route === undefined || req.headers.host !== `${HOST}:${port}`) {

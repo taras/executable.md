@@ -18,9 +18,18 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { all, ensure, resource, spawn as effectionSpawn, until, withResolvers } from "effection";
+import {
+  all,
+  ensure,
+  resource,
+  scoped,
+  spawn as effectionSpawn,
+  until,
+  withResolvers,
+} from "effection";
 import type { Operation } from "effection";
 import { rm } from "@effectionx/fs";
+import { Buffer } from "node:buffer";
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
@@ -36,6 +45,8 @@ const FAKE_CLAUDE = join(FIXTURES, "fake-claude-cli.cjs");
 
 /** One ACP conversation with a spawned adapter. */
 interface Adapter {
+  /** The adapter process, so a case can say what the resource still observes. */
+  readonly child: ChildProcess;
   request(method: string, params: unknown): Operation<Record<string, unknown>>;
   /**
    * Every `session/update` notification the adapter sent, in arrival order.
@@ -75,7 +86,7 @@ function useAdapter(provider: string, environment: Record<string, string>): Oper
     let next = 1;
     let buffer = "";
 
-    child.stdout?.on("data", (chunk: Buffer) => {
+    const onStdout = (chunk: Buffer): void => {
       buffer += chunk.toString("utf8");
       let index = buffer.indexOf("\n");
       while (index >= 0) {
@@ -110,9 +121,20 @@ function useAdapter(provider: string, environment: Record<string, string>): Oper
           child.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", id, result: {} })}\n`);
         }
       }
+    };
+
+    // Detached before the kill above, because destructors unwind in reverse:
+    // the adapter stops being read before the process it is reading is ended.
+    // Established before the subscription, because `yield* ensure(...)` is
+    // itself a suspension an owner can be halted at.
+    yield* ensure(() => {
+      child.stdout?.off("data", onStdout);
     });
 
+    child.stdout?.on("data", onStdout);
+
     yield* provide({
+      child,
       updates,
       *request(method: string, params: unknown): Operation<Record<string, unknown>> {
         const id = next++;
@@ -329,5 +351,34 @@ describe("Tier EA — the embedded adapters' prompt-response metadata", () => {
     // before work it had already done.
     expect(metaOf(first, "codex")).toEqual({ turnId: `turn:${sessionId}:1` });
     expect(metaOf(second, "codex")).toEqual({ turnId: `turn:${sessionId}:2` });
+  });
+  /**
+   * The adapter resource reads one child's stdout for as long as it holds it.
+   * The count is read after the resource has been torn down and before the
+   * event is replayed, because a handler removed by its own event would leave
+   * the same count behind as one the resource released.
+   */
+  it("releases the adapter's output handler with the resource", function* () {
+    let child: ChildProcess | undefined;
+    let live = 0;
+    let before = 0;
+
+    yield* scoped(function* () {
+      const adapter = yield* useAdapter("claude", {});
+      child = adapter.child;
+      before = 0;
+      live = adapter.child.stdout?.listenerCount("data") ?? 0;
+    });
+
+    if (!child) {
+      throw new Error("the adapter never started");
+    }
+
+    expect(live).toBeGreaterThanOrEqual(before + 1);
+    expect(child.stdout?.listenerCount("data") ?? 0).toBe(live - 1);
+
+    child.stdout?.emit("data", Buffer.from("after the adapter was torn down"));
+
+    expect(child.stdout?.listenerCount("data") ?? 0).toBe(live - 1);
   });
 });
