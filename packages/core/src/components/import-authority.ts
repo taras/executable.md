@@ -22,6 +22,7 @@ import type { ComponentDefinition, FunctionComponentDefinition } from "../types.
 import type { FormSelections, InvocationIdentities } from "../invocation-identity.ts";
 import type { DeclaredImports, PrivateClosure } from "./declared-markdown.ts";
 import type { ExactSource } from "../output/exact-source.ts";
+import type { ProgramResolver } from "../program-identity.ts";
 
 /** A definition an import may answer with. */
 export type ImportedDefinition = ComponentDefinition | FunctionComponentDefinition;
@@ -101,6 +102,21 @@ export interface ExpansionAuthority {
    * a component or middleware can name reaches it.
    */
   readonly forms?: FormSelections;
+  /**
+   * What canonical resolution selects for a name at this site, without
+   * importing it.
+   *
+   * Complete-program admission retains the identity behind every name its
+   * program writes and holds a continuation to it (§5.7). That is
+   * reconciliation, so it must not be answerable through the composable chain:
+   * this closure is built by canonical execution, handed to core's own
+   * expansion by value like everything else on this object, and reachable from
+   * no document, component or middleware.
+   *
+   * Absent for an expansion canonical execution did not build one for, in which
+   * case a program's components are compared by name and form alone.
+   */
+  readonly resolve?: ProgramResolver;
 }
 
 /** Why an answer is not the one canonical execution produced for this name. */

@@ -94,6 +94,7 @@ import {
   useSegmentCauses,
 } from "./errors.ts";
 import { Component, importComponent, raise } from "./component-api.ts";
+import { componentIdentity } from "./program-identity.ts";
 import { sourceDescription } from "./source-position.ts";
 import { renderSegment } from "./render.ts";
 import { createExactSource } from "./output/exact-source.ts";
@@ -2269,6 +2270,27 @@ function* executeDocument(
         ...(declaredImports === undefined ? {} : { declared: declaredImports }),
         identities: identity.identities,
         forms,
+        // What complete-program admission retains behind each name its program
+        // writes, and what a continuation is compared against (§5.7). It reads
+        // the same inputs the import provider above reads and imports nothing:
+        // resolving a name decides which definition answers it, and loading one
+        // is the program's own durable effect where the element is written.
+        //
+        // On the authority rather than on the Component Api, because this
+        // decides whether a retained admission still describes this site.
+        // Reconciliation never trusts an answer middleware can replace.
+        *resolve(name: string): Operation<string> {
+          const registered = yield* Component.operations.registry;
+          const selection = yield* ephemeral(
+            selectComponent(name, {
+              includes,
+              registry: registered,
+              ...(bundle === undefined ? {} : { workflow: bundle }),
+              ...(catalog === undefined ? {} : { declared: catalog }),
+            }),
+          );
+          return componentIdentity(selection);
+        },
         // Created here, held here, and reclaimed with this execution. Nothing a
         // document, a component, middleware or a separately loaded copy can
         // name reaches this object.

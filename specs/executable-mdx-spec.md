@@ -4411,7 +4411,8 @@ interface, and each operation is also exported directly:
 | `hasBinding()` | Whether the invocation has an engine-owned result binding — whether `as` was written (§6.10) | throws a missing-provider error |
 | `hasCapture(name)` | Whether the invocation wrote this capture prop at all (§6.5) | `false` |
 | `capture(name)` | Evaluate a capture prop now, against the caller's bindings, and deliver the result by reference (§6.5) | throws: not inside a function component invocation |
-| `expandProgram(program)` | Expand a complete XMD program at this invocation's site, under the authority the enclosing expansion holds (§5.7) | throws: not inside a function component invocation |
+| `expandProgram(program)` | Expand a complete XMD program at this invocation's site, under the authority the enclosing expansion holds, after settling that every retained component identity still describes this site (§5.7) | throws: not inside a function component invocation |
+| `resolveProgramSite(named)` | What each name a complete program writes resolves to at this site, for the admission to retain (§5.7). Observable and short-circuitable; the compatibility decision is canonical execution's own and rests on nothing answered here | throws: not inside a function component invocation |
 | `handleFailure(failure)` | What an ordinary function-component failure means, after complete invocation teardown (§6.9) | fails the operation with `failure.error` |
 | `retain(resource)` | Create a resource in the invocation-site scope, so it outlives this invocation (§4.4) | throws: not inside a component invocation |
 
@@ -4816,12 +4817,47 @@ origin of the authored `<Evaluate>` site.
 
 **Admission is this boundary's own durable event.** A complete program records
 `evaluate_program`, never `generated_xmd` (§10). Before the first program effect
-the run retains the exact source and its digest, the explicit props, the
-evaluation-site source origin, the root mode, and the components the program
-names with the forms it writes them in. A partial continuation expands the
-retained source and restores the nested effects that already committed. A
-changed program at the same evaluation occurrence is stale input: it refuses
-before either the current or the retained source runs, so neither silently wins.
+the run retains the exact source and its digest, the explicit props and the
+props they validated to, the evaluation-site source origin, whether the result
+is captured, the root mode, and — for every element the program writes, in the
+order it writes them — the name, the authored form, and **the identity
+canonical resolution selects for that name at this site**. A partial
+continuation expands the retained source and restores the nested effects that
+already committed. A changed program at the same evaluation occurrence is stale
+input: it refuses before either the current or the retained source runs, so
+neither silently wins.
+
+A retained identity is a string, and every tier that can answer a name
+contributes a distinguishable one: `structural:<construct>`,
+`registered:<reserved|default>:<origin>`, `repository:<path>`,
+`workflow:<path>@<object id>`, `declared-markdown:<origin>@<digest>`, and
+`unresolved` for a name nothing at this site answers — a private name included,
+because selection resolves one to nothing outside the declaration that carries
+it (§5.3). Resolution imports nothing: it decides which definition answers a
+name, while loading one is the program's own durable effect where the element is
+written.
+
+**A continuation is held to the site it was admitted at.** Before the first
+program effect, canonical execution resolves every retained name again and
+refuses when any identity or form has moved. That comparison is canonical
+execution's own: the resolver is built by the execution, travels on the
+expansion authority, and is reachable from no document, component, contextual
+Api answer or middleware return value. A host may observe the admission's own
+resolution through `Component.resolveProgramSite()`, and answering it
+dishonestly refuses the evaluation rather than widening it, because the
+canonical comparison is what decides.
+
+**The retained record is hostile data.** A journal is a file, and replay hands
+back whatever it holds. The admitted and refused decisions and every nested
+record are closed shapes: a missing member, an additional member and a
+misspelled member are each read as "not a record this evaluation wrote". Beyond
+shape, the record must agree with itself before anything expands — the retained
+source hashes to the retained digest; reparsing it produces the retained root
+mode and a valid body structure; the retained elements are the ones that source
+writes, in that order and in those forms; and the supplied props validate to the
+retained validated props. A record that fails any of them, at any depth, is
+refused as unreadable, and neither the retained nor the current program performs
+an effect.
 
 **The digest identifies the artifact; the site identifies the occurrence.** The
 authored element and the loop iteration it was reached through are what make one
@@ -9804,7 +9840,7 @@ trusted-host events may have no authored source.
 | Resolve components (glob) | `glob` | `resolve:{dir}` | Only when `useDurableGlobResolver` middleware is installed |
 | Read over HTTP | `fetch` | `fetch:{expansion id}` | Normalized request in `description.input`; status, detached headers and text body in the result (§6.18) |
 | Admit generated XMD | `generated_xmd` | `generated:{fragment id}` | The canonical class selection, retained roots, selected root, every selected entry as a name, identity and admitted forms, and the exact request policy in `description.input`; the admitted source, that same policy, and the identity and form of each element the fragment named in the result (workflow-workspace-spec §8.4) |
-| Admit a complete program | `evaluate_program` | `program:{evaluation id}` | The source digest, explicit props, evaluation-site source origin and whether the result is captured in `description.input`; the exact admitted source, the root mode, the components the program names with their authored forms, those same terms and the validated root props in the result — or the refused class alone (§5.7) |
+| Admit a complete program | `evaluate_program` | `program:{evaluation id}` | The source digest, explicit props, evaluation-site source origin and whether the result is captured in `description.input`. The result is one of two closed shapes: an admitted one of exactly `decision`, `source`, `mode`, `named`, `terms` and `validated` — where each `named` entry is exactly `name`, `form` and `identity`, and `terms` is exactly `digest`, `props`, `origin` and `captured` — or a refused one of exactly `decision` and `refused`, carrying the refused class and nothing of the source. A record with a missing, additional or misspelled member at any depth, or one that disagrees with itself, is unreadable rather than partially believed (§5.7) |
 
 ### 10.2 Example journal for a multi-component document
 
@@ -12320,6 +12356,12 @@ forms sit beside the restricted one.
 | PE14 | Repeated evaluation | Two sites evaluate one artifact independently under two durable names; the digest deduplicates neither |
 | PE15 | Changed evaluation source | A partial continuation whose producer returns different source refuses as stale input, and neither the current nor the retained program performs its effect |
 | PE16 | Evaluation replay | A partial continuation expands the retained source and restores a completed nested effect without performing it again, proven by the producer re-rendering on that run |
+| PE17 | A failing program | A program stops where it failed: the effect written before the failure happened and the one after it did not |
+| PE18 | A retained source that moved | Altering only the retained source, with its digest and the current request untouched, refuses as unreadable and runs neither program |
+| PE19 | Every corrupted member | Corrupted validated props, root mode, a missing, additional or misspelled member, a corrupted component entry, a corrupted entry shape, corrupted term shape and a record that is not an object each refuse as unreadable with nothing run |
+| PE20 | A site that answers differently | The same source and request, with one named component registered under another origin, refuses before either implementation runs; the unchanged site resumes |
+| PE21 | Structural preflight | A durable effect written before a later malformed structural construct never runs: structural admission refuses first |
+| PE22 | The producer's private closure | A program evaluated inside a declaration carrying a private component cannot resolve that name and never enters its implementation, while an ordinary site-authorized component in the same program runs |
 | EP1–EP8 | Run profile | The ordinary run profile declares `<Evaluate>`; the forms, props, refusals and catalog entry hold through the real binary, and a program cannot reach `<Plan>`'s private components |
 | WGAC17–WGAC20 | Workflow profile | A complete program records `evaluate_program` and no `generated_xmd`; the three forms cannot be combined; complete-program support is not reachable through `source` |
 

@@ -9,6 +9,7 @@ import type { Operation, Result } from "effection";
 import type { Json as DurableJson } from "@executablemd/durable-streams";
 import type { TestHarnessComponentDefinition } from "./test-harness.ts";
 import type { ComponentInvocation, InvocationForm } from "./invocation-identity.ts";
+import type { ProgramComponent } from "./program-identity.ts";
 
 export type Json = DurableJson;
 
@@ -427,6 +428,16 @@ export interface ProgramBody {
   readonly bodySegments: Segment[];
   /** The source origin the evaluation site resolves from. */
   readonly path: string;
+  /**
+   * The components the admission resolved, with the forms it admitted them in.
+   *
+   * Carried here so canonical execution can settle the same question again
+   * before the first program effect: a site that now answers one of these names
+   * with a different implementation is not the site this program was admitted
+   * at. Verified against canonical execution's own resolver, never against
+   * anything the chain could answer.
+   */
+  readonly named: readonly ProgramComponent[];
 }
 
 /** What expanding a program produced: selected output, or a returned value. */

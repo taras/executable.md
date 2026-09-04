@@ -97,6 +97,13 @@ import { printsErrors, usePrintErrors } from "./component-failures.ts";
 import { containedLedger, recoveringLedger } from "./component-failures.ts";
 import type { CheckedFailures } from "./component-failures.ts";
 import type { ExpansionAuthority, ImportedDefinition } from "./components/import-authority.ts";
+import {
+  INCOMPATIBLE,
+  ProgramEvaluationError,
+  sameComponents,
+  UNRESOLVED,
+} from "./program-identity.ts";
+import type { ProgramComponent, ProgramComponentRef } from "./program-identity.ts";
 import { DeclaredMarkdownError } from "./components/declared-markdown.ts";
 import type { PrivateImport } from "./components/declared-markdown.ts";
 import CoreTest from "./components/Test.ts";
@@ -3199,6 +3206,13 @@ function* expandFunctionComponent(
                 authority: programAuthority(authority),
               });
             },
+            // The same authority the program will run under, asked what each
+            // name it writes resolves to. The private closure is already gone
+            // from it, so a name an enclosing declaration keeps to itself
+            // resolves to nothing here exactly as it will there.
+            *resolveProgramSite([named], _next) {
+              return yield* resolveProgramComponents(named, programAuthority(authority));
+            },
             *tryContent([slotName], _next) {
               const outcome = yield* handle.tryProject({
                 kind: "slot",
@@ -4185,6 +4199,14 @@ export function* expandProgramBody(
   program: ProgramBody,
   site: ProgramSite,
 ): Operation<ProgramOutcome> {
+  // Before the first program effect, and settled here rather than by whoever
+  // called: the resolver is canonical execution's and reaches this expansion on
+  // the authority, so a handler that answered the admission's own resolution
+  // dishonestly is caught by the answer it cannot reach.
+  const current = yield* resolveProgramComponents(program.named, site.authority);
+  if (!sameComponents(program.named, current)) {
+    throw new ProgramEvaluationError(INCOMPATIBLE);
+  }
   return yield* scoped(function* () {
     yield* provideEnv(programEnvironment(site.callerValues, program.props));
     if (program.returns !== undefined) {
@@ -4246,4 +4268,29 @@ function programAuthority(
   }
   const { privates: _privates, ...rest } = authority;
   return rest;
+}
+
+/**
+ * What each name a program writes resolves to at this site.
+ *
+ * Canonical execution's own answer, taken from the resolver the execution put
+ * on the authority rather than from anything the composable chain could
+ * produce. An expansion built without one — a fragment evaluator's, which
+ * resolves through its own closed table — reports every name unresolved, and
+ * the comparison it feeds then rests on names and forms alone.
+ */
+export function* resolveProgramComponents(
+  named: readonly ProgramComponentRef[],
+  authority: ExpansionAuthority | undefined,
+): Operation<readonly ProgramComponent[]> {
+  const resolve = authority?.resolve;
+  const resolved: ProgramComponent[] = [];
+  for (const entry of named) {
+    resolved.push({
+      name: entry.name,
+      form: entry.form,
+      identity: resolve === undefined ? UNRESOLVED : yield* resolve(entry.name),
+    });
+  }
+  return resolved;
 }

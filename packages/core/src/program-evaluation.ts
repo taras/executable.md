@@ -75,22 +75,32 @@ import { createDurableOperation } from "@executablemd/durable-streams";
 import type { Json as DurableJson } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
 
-import { expandProgram } from "./component-api.ts";
+import { expandProgram, resolveProgramSite } from "./component-api.ts";
 import { sourceDigest } from "./components/declared-markdown.ts";
 import { parseRootMarkdownDefinition } from "./definition.ts";
 import { validateBodyStructure } from "./expand.ts";
 import { isJsonObject, parseJson } from "./json.ts";
 import { sourceDescription } from "./source-position.ts";
 import { validateProps } from "./validate.ts";
-import type { Json, JsonObject, ProgramOutcome, Segment, SourcePosition } from "./types.ts";
+import {
+  isProgramComponentForm,
+  ProgramEvaluationError,
+  sameElements,
+} from "./program-identity.ts";
+import type { ProgramComponent, ProgramComponentRef } from "./program-identity.ts";
+import type {
+  Json,
+  JsonObject,
+  ProgramOutcome,
+  ReturnsSchema,
+  Segment,
+  SourcePosition,
+} from "./types.ts";
+
+export { ProgramEvaluationError } from "./program-identity.ts";
 
 /** The durable effect type one complete-program evaluation records. */
 export const EVALUATE_PROGRAM = "evaluate_program";
-
-/** A program this site will not evaluate. */
-export class ProgramEvaluationError extends Error {
-  override name = "ProgramEvaluationError";
-}
 
 /** What the name a diagnostic and a durable record call this program. */
 const PROGRAM = "program";
@@ -151,12 +161,6 @@ export interface ProgramEvaluationRequest {
   readonly position?: Readonly<SourcePosition>;
 }
 
-/** One component the program names, with the form it is written in. */
-interface Named {
-  readonly name: string;
-  readonly form: "self-closing" | "paired";
-}
-
 /**
  * The terms an evaluation is admitted under, and held to on a continuation.
  *
@@ -172,18 +176,19 @@ interface Terms {
   readonly captured: boolean;
 }
 
+/** An admitted decision, as the run retains it. */
+interface Admitted {
+  readonly decision: "admitted";
+  readonly source: string;
+  readonly mode: "text" | "value";
+  readonly named: readonly ProgramComponent[];
+  readonly terms: Terms;
+  /** The props the program ran with, after its own schema validated them. */
+  readonly validated: JsonObject;
+}
+
 /** The decision this run recorded, restored from its own durable record. */
-type Admission =
-  | { readonly decision: "refused"; readonly refused: Refused }
-  | {
-      readonly decision: "admitted";
-      readonly source: string;
-      readonly mode: "text" | "value";
-      readonly named: readonly Named[];
-      readonly terms: Terms;
-      /** The props the program ran with, after its own schema validated them. */
-      readonly validated: JsonObject;
-    };
+type Admission = { readonly decision: "refused"; readonly refused: Refused } | Admitted;
 
 /**
  * The program a paired `<Evaluate>` produced, with the wrapper's framing off.
@@ -239,14 +244,36 @@ export function programDigest(source: string): string {
 }
 
 /** Every component the program names, with the form each element is written in. */
-function names(segments: readonly Segment[], found: Named[]): Named[] {
+function elements(
+  segments: readonly Segment[],
+  found: ProgramComponentRef[],
+): ProgramComponentRef[] {
   for (const segment of segments) {
     if (segment.type === "component") {
       found.push({ name: segment.name, form: segment.selfClosing ? "self-closing" : "paired" });
-      names(segment.children, found);
+      elements(segment.children, found);
     }
   }
   return found;
+}
+
+/**
+ * The elements a candidate program writes, or none when it will not parse.
+ *
+ * Asked before the admission, so the site can be resolved and retained with the
+ * decision. A source the parser refuses still reaches the admission, which is
+ * where a refusal belongs — so this reports no elements rather than failing.
+ */
+function* programElements(
+  source: string,
+  origin: string,
+): Operation<readonly ProgramComponentRef[]> {
+  try {
+    const parsed = yield* parseRootMarkdownDefinition(PROGRAM, origin, source);
+    return elements(parsed.definition.bodySegments, []);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -257,7 +284,11 @@ function names(segments: readonly Segment[], found: Named[]): Named[] {
  * error and its stack, and a refusal caused by somebody else's source would put
  * host paths into the run's history to say what one word already says.
  */
-function* admitProgram(request: ProgramEvaluationRequest, terms: Terms): Operation<DurableJson> {
+function* admitProgram(
+  request: ProgramEvaluationRequest,
+  terms: Terms,
+  resolved: readonly ProgramComponent[],
+): Operation<DurableJson> {
   try {
     const { source } = request;
     if (source.trim().length === 0) {
@@ -285,11 +316,18 @@ function* admitProgram(request: ProgramEvaluationRequest, terms: Terms): Operati
     } catch {
       throw new Refusal("props");
     }
+    // What the site answered for each element, in the order the program writes
+    // them. Resolution happened before this decision, so the record says which
+    // implementation each name stood for when the grant was made rather than
+    // which one happens to answer on the day it is read back.
+    if (!sameElements(resolved, elements(definition.bodySegments, []))) {
+      throw new Refusal("source");
+    }
     return parseJson({
       decision: "admitted",
       source,
       mode,
-      named: names(definition.bodySegments, []),
+      named: resolved.map((entry) => ({ ...entry })),
       terms,
       validated: props,
     });
@@ -302,11 +340,38 @@ function* admitProgram(request: ProgramEvaluationRequest, terms: Terms): Operati
 }
 
 /**
+ * Every member an admitted record has, and every member a refused one has.
+ *
+ * The record is hostile data: a replay hands back whatever the history holds,
+ * and a value with the right keys is not an admission. So each shape is closed
+ * — a missing member, a member spelled differently and a member nobody wrote
+ * are all the same answer, which is that this is not a record this version
+ * wrote.
+ */
+const ADMITTED_MEMBERS: readonly string[] = [
+  "decision",
+  "source",
+  "mode",
+  "named",
+  "terms",
+  "validated",
+];
+const REFUSED_MEMBERS: readonly string[] = ["decision", "refused"];
+const TERM_MEMBERS: readonly string[] = ["digest", "props", "origin", "captured"];
+const COMPONENT_MEMBERS: readonly string[] = ["name", "form", "identity"];
+
+/** Whether an object has exactly these own members and no others. */
+function closed(value: JsonObject, members: readonly string[]): boolean {
+  const own = Object.keys(value);
+  return own.length === members.length && members.every((member) => Object.hasOwn(value, member));
+}
+
+/**
  * The decision this run recorded, read back from the journal.
  *
- * Parsed rather than trusted: a replay hands back whatever the history holds,
- * and a record somebody else wrote is not an admission because it happens to
- * have the right keys.
+ * Parsed rather than trusted: a record somebody else wrote is not an admission
+ * because it happens to have the right keys, and one this version wrote is not
+ * an admission if something has since added to it.
  */
 function readAdmission(value: Json): Admission | undefined {
   if (!isJsonObject(value)) {
@@ -315,45 +380,47 @@ function readAdmission(value: Json): Admission | undefined {
   const { decision } = value;
   if (decision === "refused") {
     const { refused } = value;
-    return typeof refused === "string" && Object.hasOwn(REFUSAL, refused)
+    return closed(value, REFUSED_MEMBERS) &&
+      typeof refused === "string" &&
+      Object.hasOwn(REFUSAL, refused)
       ? { decision, refused: refused as Refused }
       : undefined;
   }
-  if (decision !== "admitted") {
+  if (decision !== "admitted" || !closed(value, ADMITTED_MEMBERS)) {
     return undefined;
   }
   const { source, mode, named, terms, validated } = value;
   if (typeof source !== "string" || (mode !== "text" && mode !== "value")) {
     return undefined;
   }
-  const invocations = readNames(named);
+  const components = readComponents(named);
   const retained = readTerms(terms);
-  if (invocations === undefined || retained === undefined || !isJsonObject(validated)) {
+  if (components === undefined || retained === undefined || !isJsonObject(validated)) {
     return undefined;
   }
-  return { decision, source, mode, named: invocations, terms: retained, validated };
+  return { decision, source, mode, named: components, terms: retained, validated };
 }
 
-function readNames(value: Json | undefined): readonly Named[] | undefined {
+function readComponents(value: Json | undefined): readonly ProgramComponent[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const found: Named[] = [];
+  const found: ProgramComponent[] = [];
   for (const entry of value) {
-    if (!isJsonObject(entry)) {
+    if (!isJsonObject(entry) || !closed(entry, COMPONENT_MEMBERS)) {
       return undefined;
     }
-    const { name, form } = entry;
-    if (typeof name !== "string" || (form !== "self-closing" && form !== "paired")) {
+    const { name, form, identity } = entry;
+    if (typeof name !== "string" || typeof identity !== "string" || !isProgramComponentForm(form)) {
       return undefined;
     }
-    found.push({ name, form });
+    found.push({ name, form, identity });
   }
   return found;
 }
 
 function readTerms(value: Json | undefined): Terms | undefined {
-  if (!isJsonObject(value)) {
+  if (!isJsonObject(value) || !closed(value, TERM_MEMBERS)) {
     return undefined;
   }
   const { digest, props, origin, captured } = value;
@@ -413,6 +480,13 @@ export function* evaluateProgram(request: ProgramEvaluationRequest): Operation<P
     captured: request.captured,
   };
 
+  // What this site answers for each element the candidate writes, settled
+  // before the decision so the decision can retain it. A candidate the parser
+  // refuses names nothing, and the admission below is where that is recorded.
+  const resolved = yield* resolveProgramSite(
+    yield* programElements(request.source, request.origin),
+  );
+
   const stored = yield createDurableOperation<DurableJson>(
     {
       type: EVALUATE_PROGRAM,
@@ -420,7 +494,7 @@ export function* evaluateProgram(request: ProgramEvaluationRequest): Operation<P
       input: admissionInput(terms),
       ...sourceDescription(request.position),
     },
-    () => admitProgram(request, terms),
+    () => admitProgram(request, terms, resolved),
   );
 
   const decided = readAdmission(parseJson(stored));
@@ -430,27 +504,85 @@ export function* evaluateProgram(request: ProgramEvaluationRequest): Operation<P
   if (decided.decision === "refused") {
     throw new ProgramEvaluationError(REFUSAL[decided.refused]);
   }
-  // Before the retained source is parsed and before the first program effect: a
-  // continuation asking for a different program is stale input, and refusing
-  // here is what keeps the retained source from silently winning over it.
+  // Before the retained source is read for anything else and before the first
+  // program effect: a continuation asking for a different program is stale
+  // input, and refusing here is what keeps the retained source from silently
+  // winning over it.
   if (!sameEvaluation(decided.terms, terms)) {
     throw new ProgramEvaluationError(STALE);
   }
 
-  // The retained source is what expands, so a continuation runs the program
-  // this run admitted rather than whatever a later caller happens to hold.
-  const { definition } = yield* parseRootMarkdownDefinition(
-    PROGRAM,
-    decided.terms.origin,
-    decided.source,
-  );
+  const restored = yield* restore(decided);
+  if (restored === undefined) {
+    throw new ProgramEvaluationError(UNREADABLE);
+  }
 
   return yield* expandProgram({
     name: PROGRAM,
-    meta: definition.meta,
+    meta: restored.meta,
     props: decided.validated,
+    ...(restored.returns === undefined ? {} : { returns: restored.returns }),
+    bodySegments: restored.bodySegments,
+    path: decided.terms.origin,
+    // Canonical execution settles these again from its own resolver before the
+    // first program effect, so a site that has moved refuses there.
+    named: decided.named,
+  });
+}
+
+/** What a retained admission has to say about itself before anything expands. */
+interface Restored {
+  readonly meta: Record<string, unknown>;
+  readonly returns?: ReturnsSchema;
+  readonly bodySegments: Segment[];
+}
+
+/**
+ * Prove the retained admission describes itself, and produce what it admitted.
+ *
+ * A journal is data, and every member of this record is a claim about another
+ * one: the digest claims to be the source's, the mode claims to be what
+ * reparsing produces, the validated props claim to be what the supplied ones
+ * validate to, and the components claim to be the elements the source writes.
+ * A record that fails any of them is not one this evaluation wrote, whatever
+ * shape it has, and nothing of either program runs on the strength of it.
+ *
+ * The parse is the one this expansion will use, so what is checked and what
+ * runs are the same value rather than two readings of one string.
+ */
+function* restore(decided: Admitted): Operation<Restored | undefined> {
+  if (programDigest(decided.source) !== decided.terms.digest) {
+    return undefined;
+  }
+  let parsed;
+  try {
+    parsed = yield* parseRootMarkdownDefinition(PROGRAM, decided.terms.origin, decided.source);
+  } catch {
+    return undefined;
+  }
+  const { definition } = parsed;
+  if (validateBodyStructure(definition.bodySegments, definition.returns) !== undefined) {
+    return undefined;
+  }
+  const mode = definition.returns === undefined ? "text" : "value";
+  if (mode !== decided.mode || (mode === "value" && !decided.terms.captured)) {
+    return undefined;
+  }
+  if (!sameElements(decided.named, elements(definition.bodySegments, []))) {
+    return undefined;
+  }
+  let props: Record<string, Json>;
+  try {
+    props = yield* validateProps(PROGRAM, { ...decided.terms.props }, definition.props);
+  } catch {
+    return undefined;
+  }
+  if (JSON.stringify(props) !== JSON.stringify(decided.validated)) {
+    return undefined;
+  }
+  return {
+    meta: definition.meta,
     ...(definition.returns === undefined ? {} : { returns: definition.returns }),
     bodySegments: definition.bodySegments,
-    path: decided.terms.origin,
-  });
+  };
 }

@@ -18,6 +18,7 @@ import type { Operation } from "effection";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { settle } from "./errors.ts";
 import type { BoundExecRequest } from "./bound-exec.ts";
+import type { ProgramComponent, ProgramComponentRef } from "./program-identity.ts";
 import type {
   CodeBlockContext,
   CodeBlockResult,
@@ -172,6 +173,20 @@ export interface ComponentApi {
    */
   expandProgram(program: ProgramBody): Operation<ProgramOutcome>;
   /**
+   * What each name a complete program writes resolves to at this site (§5.7).
+   *
+   * Complete-program admission retains these so a continuation can be held to
+   * the site it was admitted at. Canonical execution answers from the resolver
+   * it holds on the expansion authority, which no document, component or
+   * middleware reaches.
+   *
+   * A handler may still short-circuit this call, and what it answers goes into
+   * the durable record. Nothing rests on that: canonical execution settles the
+   * same question again from its own resolver before the first program effect,
+   * so a dishonest answer refuses the evaluation rather than widening it.
+   */
+  resolveProgramSite(named: readonly ProgramComponentRef[]): Operation<readonly ProgramComponent[]>;
+  /**
    * Decide what an ordinary function-component failure means (spec §6.9).
    *
    * Called only after `withInvocation()` has dismantled the invocation, so the
@@ -285,6 +300,14 @@ export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component",
     );
   },
   // deno-lint-ignore require-yield
+  *resolveProgramSite(
+    _named: readonly ProgramComponentRef[],
+  ): Operation<readonly ProgramComponent[]> {
+    throw new Error(
+      "Component.resolveProgramSite() has no provider: not inside a function component invocation.",
+    );
+  },
+  // deno-lint-ignore require-yield
   *handleFailure(failure: ComponentFailure): Operation<ErrorSegment> {
     throw failure.error;
   },
@@ -314,3 +337,5 @@ export const handleFailure: Operations<ComponentApi>["handleFailure"] =
   Component.operations.handleFailure;
 export const expandProgram: Operations<ComponentApi>["expandProgram"] =
   Component.operations.expandProgram;
+export const resolveProgramSite: Operations<ComponentApi>["resolveProgramSite"] =
+  Component.operations.resolveProgramSite;

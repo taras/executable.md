@@ -32,8 +32,8 @@ import type { Operation } from "effection";
 import { createDurableOperation, InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 
-import { executeInstalled, programEvaluationComponents } from "../host.ts";
-import type { IdentityClaimant, IdentityComponent } from "../host.ts";
+import { executeInstalled, programEvaluationComponents, sourceDigest } from "../host.ts";
+import type { DeclaredMarkdownComponent, IdentityClaimant, IdentityComponent } from "../host.ts";
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
 import { pairedProgramSource, programDigest } from "../host.ts";
 import { retainedSource } from "../src/root-source.ts";
@@ -79,7 +79,7 @@ let approved = APPROVED;
 /** Every time a producer really rendered its approved source. */
 const produced: string[] = [];
 
-function probeComponents(): readonly IdentityComponent[] {
+function probeComponents(origin = "test/probe"): readonly IdentityComponent[] {
   return [
     {
       name: "Source",
@@ -96,7 +96,7 @@ function probeComponents(): readonly IdentityComponent[] {
     },
     {
       name: "Probe",
-      origin: "test/probe",
+      origin,
       props: {
         type: "object",
         properties: { mark: { type: "string" } },
@@ -125,12 +125,26 @@ function probeComponents(): readonly IdentityComponent[] {
 }
 
 /** Run one document with `<Evaluate>` declared, exactly as a run profile does. */
-function run(source: string, options: { stream?: InMemoryStream } = {}): Operation<Attempt> {
+function run(
+  source: string,
+  options: {
+    stream?: InMemoryStream;
+    /** The origin `<Probe>` is registered under, so a site can be moved. */
+    probeOrigin?: string;
+    declarations?: readonly DeclaredMarkdownComponent[];
+    privates?: readonly IdentityComponent[];
+  } = {},
+): Operation<Attempt> {
   return scoped(function* () {
     const stream = options.stream ?? new InMemoryStream();
     const execution = yield* executeInstalled(
       { ...retainedSource(ROOT_PATH, source), stream, includes: [] },
-      [{ components: [...programEvaluationComponents(), ...probeComponents()] }],
+      [
+        {
+          components: [...programEvaluationComponents(), ...probeComponents(options.probeOrigin)],
+          ...(options.declarations === undefined ? {} : { declarations: options.declarations }),
+        },
+      ],
     );
     const result = yield* execution;
     const events = yield* stream.readAll();
@@ -503,5 +517,215 @@ describe("Tier PE — a program that fails", () => {
     // A program that stopped must not leave later steps looking as though they
     // ran.
     expect(performed).toEqual(["before"]);
+  });
+});
+
+/**
+ * Rewrite what the retained admission says, leaving the run's own history
+ * otherwise intact.
+ *
+ * The record is the one thing a continuation trusts, and a journal is a file:
+ * this is what it looks like when the file no longer says what this evaluation
+ * wrote. Nothing else about the interrupted run is touched, so a case that
+ * refuses here refuses because of the record and not because the history around
+ * it stopped adding up.
+ */
+function tamper(
+  events: DurableEvent[],
+  change: (record: Record<string, Json>) => Json,
+): DurableEvent[] {
+  return events.map((event) => {
+    if (event.type !== "yield" || event.description.type !== "evaluate_program") {
+      return event;
+    }
+    const result = event.result;
+    if (result.status !== "ok") {
+      return event;
+    }
+    const record = result.value as Record<string, Json>;
+    return { ...event, result: { ...result, value: change({ ...record }) } };
+  });
+}
+
+/** A program whose one effect is a probe, so "did anything run" is answerable. */
+const PROBING = '<Probe mark="one" />\n\nRestored program.\n';
+
+/** The document every hostile-record case resumes, unchanged between runs. */
+const PROBING_DOCUMENT = ["<Evaluate>", "  <Source />", "</Evaluate>", ""].join("\n");
+
+/** Interrupt a run of `PROBING` right after its admission committed. */
+function* admitted(): Operation<DurableEvent[]> {
+  performed.length = 0;
+  approved = PROBING;
+  const first = yield* run(PROBING_DOCUMENT);
+  expect(first.failure).toBeUndefined();
+  expect(performed).toEqual(["one"]);
+  return through(first.events, "evaluate_program");
+}
+
+describe("Tier PE — the retained admission is hostile data", () => {
+  it("PE18 refuses a retained source that no longer hashes to its digest", function* () {
+    const interrupted = yield* admitted();
+    performed.length = 0;
+
+    // Only the source moves. The digest, the terms and the current request are
+    // all exactly what they were, so nothing but the record's own internal
+    // agreement can catch this.
+    const replayed = yield* run(PROBING_DOCUMENT, {
+      stream: new InMemoryStream(
+        tamper(interrupted, (record) => ({
+          ...record,
+          source: '<Probe mark="substituted" />\n\nRestored program.\n',
+        })),
+      ),
+    });
+
+    expect(replayed.failure ?? replayed.output ?? "").toContain("cannot be read as one");
+    // Neither source ran: not the substituted one, and not the one the current
+    // producer would have offered in its place.
+    expect(performed).toEqual([]);
+  });
+
+  it("PE19 refuses every corrupted member of the retained record", function* () {
+    const interrupted = yield* admitted();
+
+    const corruptions: Record<string, (record: Record<string, Json>) => Json> = {
+      "validated props": (record) => ({ ...record, validated: { release: "substituted" } }),
+      "root mode": (record) => ({ ...record, mode: "value" }),
+      "a missing member": ({ validated: _validated, ...rest }) => rest,
+      "an additional member": (record) => ({ ...record, admitted: true }),
+      "a misspelled member": ({ validated, ...rest }) => ({ ...rest, validatedProps: validated }),
+      "a component entry": (record) => ({
+        ...record,
+        named: [{ name: "Probe", form: "paired", identity: "registered:default:test/probe" }],
+      }),
+      "a component entry's shape": (record) => ({
+        ...record,
+        named: [{ name: "Probe", form: "self-closing" }],
+      }),
+      "the terms' shape": (record) => ({
+        ...record,
+        terms: { ...(record.terms as Record<string, Json>), extra: 1 },
+      }),
+      "the whole record": () => "admitted",
+    };
+
+    for (const [what, change] of Object.entries(corruptions)) {
+      performed.length = 0;
+      const replayed = yield* run(PROBING_DOCUMENT, {
+        stream: new InMemoryStream(tamper(interrupted, change)),
+      });
+
+      expect(`${what}: ${replayed.failure ?? replayed.output ?? ""}`).toContain(
+        "cannot be read as one",
+      );
+      expect([what, performed]).toEqual([what, []]);
+    }
+  });
+
+  it("PE20 refuses a continuation whose site answers a name differently", function* () {
+    const interrupted = yield* admitted();
+
+    // The same document, the same producer, the same bytes — and `<Probe>`
+    // registered under another origin, which is a different implementation
+    // however identically it behaves.
+    performed.length = 0;
+    const moved = yield* run(PROBING_DOCUMENT, {
+      stream: new InMemoryStream(interrupted),
+      probeOrigin: "test/probe-replacement",
+    });
+
+    expect(moved.failure ?? moved.output ?? "").toContain("resolves differently");
+    expect(performed).toEqual([]);
+
+    // The unchanged site resumes, which is what makes the refusal above about
+    // the identity rather than about resuming at all.
+    performed.length = 0;
+    const unchanged = yield* run(PROBING_DOCUMENT, {
+      stream: new InMemoryStream(interrupted),
+    });
+
+    expect(unchanged.failure).toBeUndefined();
+    expect(unchanged.output).toContain("Restored program.");
+    // The history stops at the admission, so the program's own effect had not
+    // committed and legitimately happens now. What matters is that it happened
+    // at all: the refusal above stopped a run this one completes.
+    expect(performed).toEqual(["one"]);
+  });
+});
+
+describe("Tier PE — structural admission precedes every program effect", () => {
+  it("PE21 refuses a malformed construct after an effect, and the effect never runs", function* () {
+    performed.length = 0;
+    // The negative control is first, so a preflight that ran while the program
+    // expanded would have performed it before reaching the malformed element.
+    approved = ['<Probe mark="before" />', "", "<Return value={1} />", ""].join("\n");
+
+    const attempt = yield* run(PROBING_DOCUMENT);
+
+    expect(attempt.failure ?? attempt.output ?? "").toContain("body structure is not valid");
+    expect(performed).toEqual([]);
+    approved = APPROVED;
+  });
+});
+
+/** The origin the declared outer component reports. */
+const POLICY_ORIGIN = "@executablemd/test/Policy.md";
+
+/**
+ * A private component that records each entry into its implementation.
+ *
+ * A tripwire rather than a fake: what this case has to show is that the
+ * implementation did not run, and a refusal in the output cannot show that on
+ * its own.
+ */
+function watching(entered: string[]): IdentityComponent {
+  return {
+    name: "Secret",
+    origin: `${POLICY_ORIGIN}#Secret`,
+    props: { type: "object", properties: {}, additionalProperties: false },
+    returns: { type: "string" },
+    forms: ["self-closing"],
+    // deno-lint-ignore require-yield
+    factory: (_claim: IdentityClaimant) =>
+      function* Secret(): Operation<string> {
+        entered.push("Secret");
+        return "the private answer";
+      },
+  };
+}
+
+describe("Tier PE — a producer's private closure does not cross", () => {
+  it("PE22 leaves a declaration's private name unavailable to the program it evaluates", function* () {
+    const entered: string[] = [];
+    performed.length = 0;
+    // The program names the private component the *enclosing declaration*
+    // carries, and an ordinary site-authorized one beside it.
+    approved = ['<Probe mark="control" />', "", "<Secret />", ""].join("\n");
+
+    const body = ["<Evaluate>", "  <Source />", "</Evaluate>", ""].join("\n");
+    const attempt = yield* run("<Policy />\n", {
+      declarations: [
+        {
+          name: "Policy",
+          origin: POLICY_ORIGIN,
+          source: body,
+          digest: sourceDigest(body),
+          privates: [watching(entered)],
+        },
+      ],
+    });
+
+    const reported = attempt.failure ?? attempt.output ?? "";
+    // The name resolves to nothing inside the program, exactly as it does for
+    // any other bytes that are not the declaration's own.
+    expect(reported).toContain("Cannot resolve component: Secret");
+    // And nothing of it ran: a refusal that reached the implementation first
+    // would leave a mark here.
+    expect(entered).toEqual([]);
+    // The positive control: a component the site does authorize runs normally,
+    // so this is about the closure rather than about programs reaching nothing.
+    expect(performed).toEqual(["control"]);
+    approved = APPROVED;
   });
 });
