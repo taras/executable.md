@@ -9589,16 +9589,15 @@ imports terminal for the lifecycle it invokes and retains only authored
 parsing, expansion, source-position journal descriptions, profile composition,
 and Agent behavior. Terminal-tmux imports terminal and imports neither runtime,
 core nor CLI. CLI imports the domain and provider to compose the Deno and
-compiled hosts. Runtime imports terminal only to keep its previous public
-terminal exports working.
+compiled hosts. Runtime owns no terminal module, export, or dependency.
 
-Those previous `@executablemd/runtime` and `@executablemd/core` exports are
-direct compatibility re-exports. The old and canonical imports of
-`NativeLauncher`, `TerminalGrids`, `TerminalProviders`, `TerminalProcesses`,
-their constants, operations and error constructors are the same objects, not
-equivalent replacements. Stable contextual API names, middleware composition,
-error identity and `instanceof` behavior therefore do not depend on import
-path.
+The previous `@executablemd/runtime` and `@executablemd/core` terminal exports
+and the old CLI terminal implementation paths are deleted. They have not
+shipped and are not compatibility surfaces. Every repository import names
+`@executablemd/terminal`, one of its documented subpaths, or
+`@executablemd/terminal-tmux`; no alias or forwarding barrel keeps an old path
+reachable. Each contextual API and public error constructor consequently has
+one canonical definition.
 
 The Deno and compiled CLI entrypoints select tmux, supply self-reinvocation,
 environment and terminal dimensions, translate `SIGHUP`, and install POSIX
@@ -11633,7 +11632,7 @@ test derives a core result from a provider identifier.
 | TG18 | Provider neutrality | The controlled non-tmux provider passes TG1–TG17 and TG19; the tmux adapter prepares one hidden invocation-private server with authenticated persistent pane workers, transmits exact child creation outside tmux parsing, applies explicit row-major layout, distinguishes visible detach from control loss and server stop, attaches only after runtime spawn readiness, and satisfies TG14 without leaking provider identifiers; Node and Bun validate the same document and refuse before pane start with no provider installed |
 | TG19 | Reader close crossed with parent cancellation | A controlled live pane enters a signal-held finalizer after reader close takes effect. Parent cancellation begins while teardown is blocked; releasing the finalizer lets pane and provider teardown complete, retains the pane as `closed` and the grid with its reader-close result, and only then delivers cancellation to the parent. A continuation neither contacts the provider nor enters pane work, does not hang, and proceeds from the retained grid outcome. Provider-resource and following-sibling observations prove both sides of the ordering; no elapsed duration is evidence |
 | TG20 | Pane-native physical endpoint | A paired pane's native launch passes through nearer launcher middleware and then the required composite operation for its authored ordinal. Production tmux evidence observes the exact argv, cwd, and environment at that pane's authenticated worker while a root-foreground-launcher sentinel is never entered. Distinct pane workers accept concurrent launches. Cancellation settles only after worker-reported child settlement and pane-terminal quiescence. A root launch still enters the root foreground launcher unchanged, and a composite unable to execute a pane launch refuses without fallback |
-| TG21 | Package boundary and compatibility | Static dependency evidence proves terminal imports neither runtime, core, CLI nor terminal-tmux; terminal-tmux imports terminal and none of runtime, core or CLI; and CLI alone composes the document engine with the provider and host. Imports through terminal, runtime and core return the identical `NativeLauncher`, `TerminalGrids`, `TerminalProviders`, `TerminalProcesses` and public error constructors. The relocated neutral, tmux, cross-package Agent and Deno/compiled host suites retain TG1–TG20 without changing syntax, provider identity, hidden-worker grammar, protocol, durable records or diagnostics; Node and Bun still install neither observer nor provider |
+| TG21 | Package boundary and canonical imports | Static dependency evidence proves terminal imports neither runtime, core, CLI nor terminal-tmux; terminal-tmux imports terminal and none of runtime, core or CLI; runtime has no terminal dependency; and CLI alone composes the document engine with the provider and host. The old runtime, core and CLI terminal modules and exports are absent, every repository terminal import names a canonical package surface, and each contextual descriptor and public error constructor has one definition. The relocated neutral, tmux, cross-package Agent and Deno/compiled host suites retain TG1–TG20 without changing syntax, provider identity, hidden-worker grammar, protocol, durable records or diagnostics; Node and Bun still install neither observer nor provider |
 
 ### Tier CR — Component registration and resolution
 

@@ -1208,12 +1208,14 @@ hosts compose the two domains and provide self-reinvocation and POSIX process
 observation; Node and Bun continue to compose neither a foreground grid
 provider nor an observer.
 
-The former `@executablemd/runtime` native-launch exports and
-`@executablemd/core` pane and terminal-provider exports directly re-export the
-canonical definitions. Old and new imports of every contextual descriptor and
-public error constructor are object-identical. This extraction changes no
-launch request, phase, route, ownership key, durable record, result, diagnostic,
-provider advertisement, or root-versus-pane behavior.
+The former `@executablemd/runtime` native-launch exports,
+`@executablemd/core` pane and terminal-provider exports, and old CLI terminal
+implementation paths are deleted. They are unshipped and carry no compatibility
+contract. Every repository consumer imports the canonical terminal packages,
+and each contextual descriptor and public error constructor has one definition.
+This extraction changes no launch request, phase, route, ownership key, durable
+record, result, diagnostic, provider advertisement, or root-versus-pane
+behavior.
 
 ## Testing
 
@@ -1500,9 +1502,10 @@ Implementation review checks these frozen invariants:
     pane's authenticated worker, the root foreground launcher is not entered,
     distinct panes launch concurrently, cancellation awaits worker settlement
     and pane quiescence, and root launch routing remains unchanged.
-30. Canonical terminal, legacy runtime and legacy core imports expose the same
-    native-launch and terminal-provider descriptors and error constructors by
-    identity; the terminal package imports no Agent, core, runtime, CLI or tmux
+30. Native-launch and terminal-provider descriptors and error constructors have
+    one canonical definition under the terminal packages; the former runtime,
+    core and CLI terminal paths are absent and every repository import is
+    canonical. The terminal package imports no Agent, core, runtime, CLI or tmux
     module, the tmux package imports only the neutral terminal domain, and the
     complete launch evidence above passes without changing any request, route,
     record, provider advertisement or diagnostic.

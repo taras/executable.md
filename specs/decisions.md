@@ -753,10 +753,10 @@ Keeping the lifecycle in core would preserve that coupling. Putting the neutral
 domain and tmux in one package would remove the CLI dependency but make every
 provider consumer acquire tmux-specific code and host assumptions.
 
-Existing consumers also import terminal symbols from `@executablemd/runtime`
-and `@executablemd/core`. The contextual API descriptors and error constructors
-among those exports are identity-bearing; reproducing an equivalent descriptor,
-wrapper, or class would split middleware composition and `instanceof` behavior.
+The terminal stack has not merged, so its temporary exports from runtime, core,
+and CLI are not compatibility surfaces. Preserving them would leave the
+ownership ambiguity this extraction removes and would add runtime as a
+dependency only to keep an unreleased path alive.
 
 ### Decision
 
@@ -779,27 +779,27 @@ APIs. CLI chooses and wires the provider for each entrypoint; it does not own a
 terminal provider implementation.
 
 The canonical descriptors, functions, types, constants, and errors move to the
-new packages. The former runtime and core entrypoints re-export those exact
-objects from their canonical definitions. They contain no duplicate descriptor,
-wrapper, subclass, or compatibility implementation. Existing imports therefore
-remain valid and object-identical in this extraction.
+new packages. Their former runtime and core exports and the old CLI terminal
+implementation paths are deleted, and every repository import is updated to
+the canonical package surface. No compatibility module, alias, forwarding
+barrel, wrapper, subclass, or duplicate descriptor remains.
 
 The neutral package has no dependency on runtime, core, CLI, or the tmux
 package. Core depends on terminal. The tmux package depends on terminal and
 does not depend on runtime, core, or CLI. CLI depends on both packages and on
-core and runtime. Runtime depends on terminal only for its compatibility
-re-exports. Host-specific POSIX observation is an explicit terminal adapter;
+core and runtime. Runtime has no terminal dependency. Host-specific POSIX
+observation is an explicit terminal adapter;
 Deno and compiled entrypoints install it in the supervising host and the pane
 worker, while Node and Bun continue to install neither observer nor provider.
 
 ### Consequences
 
-Any terminal provider implements the public neutral contract without
-importing CLI or tmux. Consumers can migrate to the canonical package names at
-their own pace; removing the old runtime or core exports is a separate breaking
-decision. The extraction changes no authored syntax, provider name, hidden
-worker invocation, durable record, private tmux protocol, diagnostic text,
-terminal behavior, or provider identity.
+Any terminal provider implements the public neutral contract without importing
+CLI or tmux. Repository consumers use only the canonical package names. This
+removal is non-breaking because none of the temporary terminal paths has
+shipped. The extraction changes no authored syntax, provider name, hidden worker
+invocation, durable record, private tmux protocol, diagnostic text, terminal
+behavior, or provider identity.
 
 Both packages participate in workspace version lockstep, npm and JSR
 publication, generated dependency ordering, package discovery, runtime test
