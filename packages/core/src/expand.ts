@@ -27,6 +27,8 @@ import type {
   FunctionComponentDefinition,
   Json,
   CodeBlockContext,
+  ProgramBody,
+  ProgramOutcome,
   ReturnsSchema,
   SourcePosition,
 } from "./types.ts";
@@ -3185,6 +3187,18 @@ function* expandFunctionComponent(
                 values: captureEnv,
               });
             },
+            // Canonical execution's own answer, built from the frame it is
+            // already holding. A program admitted here runs under the site's
+            // authority and against the site's bindings, and neither is
+            // reachable from the component that asked.
+            *expandProgram([program], _next) {
+              return yield* expandProgramBody(program, {
+                counter,
+                callerValues: captureEnv,
+                checkedFailures,
+                authority: programAuthority(authority),
+              });
+            },
             *tryContent([slotName], _next) {
               const outcome = yield* handle.tryProject({
                 kind: "slot",
@@ -4101,4 +4115,135 @@ function* expandValueBody(
     throw new Error(missingReturnMessage(componentName));
   }
   return selected.value;
+}
+
+/**
+ * What the site contributes to a program's expansion.
+ *
+ * Every member is read from the frame canonical execution is already holding
+ * when it answers `expandProgram`, so none of it is anything a document, a
+ * component or middleware supplied.
+ */
+interface ProgramSite {
+  counter: BlockCounter;
+  /** The bindings the evaluation site can see, copied so nothing escapes. */
+  callerValues: Record<string, unknown>;
+  checkedFailures: CheckedFailures | undefined;
+  authority: ExpansionAuthority | undefined;
+}
+
+/**
+ * The three names a Markdown body publishes for its own projections.
+ *
+ * They close over the invocation that installed them, so carrying them into a
+ * program would hand it the enclosing component's content. A program has
+ * content of its own — none — and reaches nobody else's.
+ */
+const PROJECTION_BINDINGS: readonly string[] = ["renderChildren", "render", "useContent"];
+
+/**
+ * The environment a program's body runs in.
+ *
+ * Ordinary caller bindings are visible, because a program evaluated where they
+ * are in scope is written to read them. They are visible *read-only* in the
+ * only way that matters: this is a copy, so a binding the program creates or
+ * overwrites lands here and reaches no caller.
+ *
+ * `props` is the program's own, never the caller's — an ambient root props
+ * object is not something a program silently inherits.
+ */
+function programEnvironment(
+  callerValues: Record<string, unknown>,
+  props: Record<string, Json>,
+): EvalEnv {
+  const values: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(callerValues)) {
+    if (!PROJECTION_BINDINGS.includes(name)) {
+      values[name] = value;
+    }
+  }
+  values.props = props;
+  const environment: EvalEnv = { values };
+  liveEnvironment(environment);
+  return environment;
+}
+
+/**
+ * Expand a complete XMD program where `<Evaluate>` admitted it (spec §5.7).
+ *
+ * A root's own structure applies here exactly as it does at the top of a
+ * document: `<Output>` selects what renders, a `returns` declaration makes the
+ * body a value body whose `<Return>` answers, and a text root is fail-capable
+ * while a value root is not.
+ *
+ * The body is not this program's caller's, so it carries no children, no slot
+ * substitution and an empty hide set. What it does carry is the site's own
+ * authority and block counter — the program's durable work belongs to the run
+ * that evaluated it.
+ */
+export function* expandProgramBody(
+  program: ProgramBody,
+  site: ProgramSite,
+): Operation<ProgramOutcome> {
+  return yield* scoped(function* () {
+    yield* provideEnv(programEnvironment(site.callerValues, program.props));
+    if (program.returns !== undefined) {
+      // A value root has no rendered result to fall back on, so an undecided
+      // error is the evaluation's failure rather than text in the document.
+      yield* ErrorMode.set("throw");
+      const value = yield* expandValueBody(
+        program.name,
+        program.returns,
+        program.bodySegments,
+        [],
+        program.meta,
+        program.props,
+        new Set(),
+        site.counter,
+        undefined,
+        passthroughClaim,
+        program.path,
+        site.checkedFailures,
+        site.authority,
+        undefined,
+      );
+      return { kind: "value", value };
+    }
+    yield* ErrorMode.set("output");
+    const expanded = yield* expandBody(
+      program.bodySegments,
+      [],
+      program.meta,
+      program.props,
+      new Set(),
+      site.counter,
+      undefined,
+      passthroughClaim,
+      undefined,
+      program.path,
+      site.checkedFailures,
+      site.authority,
+      undefined,
+    );
+    return { kind: "text", output: renderSegments(expanded) };
+  });
+}
+
+/**
+ * The authority a program evaluated at this site runs under.
+ *
+ * Everything the site holds crosses — the imports a closed execution closes,
+ * the identity domains it minted, the exact-source record — except the private
+ * closure. A private component belongs to the declaration whose exact bytes
+ * authored it, and a program is somebody else's text however it got here, so a
+ * private name written in one resolves to nothing.
+ */
+function programAuthority(
+  authority: ExpansionAuthority | undefined,
+): ExpansionAuthority | undefined {
+  if (authority === undefined) {
+    return undefined;
+  }
+  const { privates: _privates, ...rest } = authority;
+  return rest;
 }

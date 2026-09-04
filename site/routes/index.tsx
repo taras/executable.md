@@ -93,6 +93,24 @@ const PLAN_XMD: Tok[][] = [
   [key("</File>")],
 ];
 
+/** Direct composition: the program is carried out where it is produced. */
+const EVALUATE_DIRECT: Tok[][] = [
+  [key("<Evaluate>")],
+  ["  ", key("<Plan>")],
+  ...PLAN_STEPS.map((step): Tok[] => [`    ${step}`]),
+  ["  ", key("</Plan>")],
+  [key("</Evaluate>")],
+];
+
+/** Deferred composition: the program is kept first and run at a later step. */
+const EVALUATE_DEFERRED: Tok[][] = [
+  [key("<Plan"), " as", dim("="), str('"plan"'), key(">")],
+  ...PLAN_STEPS.map((step): Tok[] => [`  ${step}`]),
+  [key("</Plan>")],
+  [],
+  [key("<Evaluate"), " program", dim("="), mod("{plan}"), " ", key("/>")],
+];
+
 const RELEASE_MD: Tok[][] = [
   [bold("# Release")],
   [],
@@ -557,8 +575,28 @@ export default define.page(function Home({ url }) {
           </p>
 
           <p style={P_MD}>
-            Plan produces a program. Run executes a program from the host or
-            CLI. Composition decides whether and when a planned program runs.
+            <strong style={STRONG}>
+              <Term heavy>{"<Evaluate>"}</Term>{" "}
+              runs a program in the document you are already running.
+            </strong>{" "}
+            Wrap the planner to carry the program out where it is produced, or
+            keep the program first and evaluate it at a later step.
+          </p>
+
+          <div class="grid" style={PAIR}>
+            <CodeBlock filename="Direct" copy>
+              <Source lines={EVALUATE_DIRECT} />
+            </CodeBlock>
+
+            <CodeBlock filename="Deferred" copy>
+              <Source lines={EVALUATE_DEFERRED} />
+            </CodeBlock>
+          </div>
+
+          <p style={P_MD}>
+            Plan produces a program. Evaluate evaluates a program in the current
+            XMD execution. Run executes a program from the host or CLI.
+            Composition decides whether and when a planned program runs.
           </p>
 
           <Terminal lines={[[' xmd plan "prepare the release" | xmd run -']]} />

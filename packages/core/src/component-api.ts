@@ -29,6 +29,8 @@ import type {
   EvalEnv,
   FunctionComponentDefinition,
   Modifier,
+  ProgramBody,
+  ProgramOutcome,
   SourcePosition,
 } from "./types.ts";
 
@@ -149,6 +151,27 @@ export interface ComponentApi {
    */
   tryContent(slot?: string): Operation<PartialContent>;
   /**
+   * Expand a complete XMD program at this invocation's site
+   * (spec §5.7).
+   *
+   * The site is the whole point. A program admitted by `<Evaluate>` runs in the
+   * current execution — its lifecycle, journal, cancellation scope, contextual
+   * providers and working directory — and under the authority the enclosing
+   * expansion already holds: the imports a closed execution closes, and the
+   * identity domains it minted. None of that is reachable from a component, so
+   * canonical execution answers this with the values it is already carrying,
+   * exactly as it answers `content()`.
+   *
+   * What it does not carry across is the enclosing declaration's private
+   * closure. A private component belongs to the bytes its declaration authored,
+   * and a program is not those bytes, so a private name written in one is the
+   * ordinary unresolved failure.
+   *
+   * The program arrives parsed and validated: admission owns the decision, and
+   * this owns running it.
+   */
+  expandProgram(program: ProgramBody): Operation<ProgramOutcome>;
+  /**
    * Decide what an ordinary function-component failure means (spec §6.9).
    *
    * Called only after `withInvocation()` has dismantled the invocation, so the
@@ -256,6 +279,12 @@ export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component",
     );
   },
   // deno-lint-ignore require-yield
+  *expandProgram(_program: ProgramBody): Operation<ProgramOutcome> {
+    throw new Error(
+      "Component.expandProgram() has no provider: not inside a function component invocation.",
+    );
+  },
+  // deno-lint-ignore require-yield
   *handleFailure(failure: ComponentFailure): Operation<ErrorSegment> {
     throw failure.error;
   },
@@ -283,3 +312,5 @@ export const hasCapture: Operations<ComponentApi>["hasCapture"] = Component.oper
 export const capture: Operations<ComponentApi>["capture"] = Component.operations.capture;
 export const handleFailure: Operations<ComponentApi>["handleFailure"] =
   Component.operations.handleFailure;
+export const expandProgram: Operations<ComponentApi>["expandProgram"] =
+  Component.operations.expandProgram;

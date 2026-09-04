@@ -1953,10 +1953,10 @@ not the loop's failure — the document states what exhaustion means, which the
 representative flow does with a final `<Parse>` that requires a proposal. The
 completed Prompt and observation records are the evidence for exhaustion.
 
-`<Evaluate>`'s schema is closed on one required string prop and one optional
-`allow` array, and paired content is refused: a `source` the element rendered is
-not a fragment anybody handed it. A write-enabled invocation is written the same
-way, with the class it draws on stated where a reader can see it:
+The restricted form takes a `source` string and an optional `allow` array, and
+refuses paired content: a `source` the element rendered is not a fragment
+anybody handed it. A write-enabled invocation is written the same way, with the
+class it draws on stated where a reader can see it:
 
 ```md
 <Evaluate source={proposal.changes} allow={["write"]} />
@@ -1993,6 +1993,22 @@ It declares no `returns`, so the value binds by reference under `as` and nothing
 about it is rewritten on the way to the document. Turning it into text is the
 document's decision, made where the text is wanted: the representative flow binds
 it and renders it into the next `<Prompt>` with `<Json>`.
+
+**Complete programs are a different form of the same element.** A workflow's
+`<Evaluate>` also takes the complete-program forms every host that offers this
+element has — paired content and `program`, with optional root `props`
+(executable-mdx-spec §5.7). Those admit a complete XMD root and evaluate it in
+the current execution under the site's own authority, and they record their own
+`evaluate_program` durable event. The restricted admission described here is a
+decision about a different kind of source and is not widened to carry them:
+complete-program support is not reachable through `source` or `allow`, and a
+fragment naming `<Prompt>`, `<Elicit>`, an import, a binding, an executable
+block or an unadmitted component is refused on this path exactly as before.
+
+The three forms are disjoint. `source` cannot be combined with `program`, with
+paired content, or with `props`; `allow` is valid only with `source`; and
+`props` is valid only for a complete program. Each combination refuses before
+the durable name is claimed or the candidate is read.
 
 **How it is supplied.** `<Evaluate>` is not registered by the attachment. It
 names durable work after its own invocation, so the host **declares** it to the

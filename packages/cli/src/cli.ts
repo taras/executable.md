@@ -67,6 +67,7 @@ import {
   inspectDocument,
   agentIdentityComponents,
   installAgentComponents,
+  programEvaluationComponents,
   registerComponents,
   retainedSource,
   rootSourcePath,
@@ -889,6 +890,25 @@ export interface DocumentMode {
   installations?: readonly ExecutionInstallation[];
 }
 
+/**
+ * Whether a host this invocation attached already declares `<Evaluate>`.
+ *
+ * A workflow run brings its own, which offers the complete-program forms and
+ * the restricted generated-fragment form only that profile has. Declaring the
+ * run profile's beside it would give one execution two identity components of
+ * one name, which canonical execution refuses — correctly, because a name names
+ * durable work in one domain.
+ *
+ * Read from the installations themselves rather than from a second flag: the
+ * host that owns the name is the one that declared it, and a flag saying so
+ * would be a second thing to keep true.
+ */
+function declaresEvaluate(installations: readonly ExecutionInstallation[] | undefined): boolean {
+  return (installations ?? []).some((installation) =>
+    (installation.components ?? []).some((component) => component.name === "Evaluate"),
+  );
+}
+
 export type HostServiceInstaller = () => Operation<void>;
 
 /**
@@ -1160,7 +1180,17 @@ function* runDocument(
     [
       ...(mode.installations ?? []),
       {
-        components: agentIdentityComponents(),
+        // `<Evaluate>` travels with `<Plan>` and for the same reason: producing
+        // a program and running one are two halves of one vocabulary, and a
+        // profile that offers the first without the second can produce an
+        // artifact it has no way to carry out. Both name durable work after
+        // their own invocation, so both are declared rather than registered.
+        components: [
+          ...agentIdentityComponents(),
+          ...(mode.testing || declaresEvaluate(mode.installations)
+            ? []
+            : programEvaluationComponents()),
+        ],
         // The `run` profile's own vocabulary. `xmd test` is a different profile
         // and does not gain `<Plan>` at its root — but the production run child
         // it can launch is the run profile, and gets it below.

@@ -4411,6 +4411,7 @@ interface, and each operation is also exported directly:
 | `hasBinding()` | Whether the invocation has an engine-owned result binding — whether `as` was written (§6.10) | throws a missing-provider error |
 | `hasCapture(name)` | Whether the invocation wrote this capture prop at all (§6.5) | `false` |
 | `capture(name)` | Evaluate a capture prop now, against the caller's bindings, and deliver the result by reference (§6.5) | throws: not inside a function component invocation |
+| `expandProgram(program)` | Expand a complete XMD program at this invocation's site, under the authority the enclosing expansion holds (§5.7) | throws: not inside a function component invocation |
 | `handleFailure(failure)` | What an ordinary function-component failure means, after complete invocation teardown (§6.9) | fails the operation with `failure.error` |
 | `retain(resource)` | Create a resource in the invocation-site scope, so it outlives this invocation (§4.4) | throws: not inside a component invocation |
 
@@ -4440,17 +4441,22 @@ by being handled first.
 `registerComponents`, on the terms above. One that names durable work after its
 own invocation is supplied differently: the host declares it to the execution,
 which calls the host's factory once with the claimant it minted and registers
-what comes back (§5.3, §5.6). The workflow host supplies
-`<Evaluate source={…} />` that way, for a live or partial run — the operation an
-authored workflow document writes where an Agent's proposed fragment should be
-admitted and performed. Its schema is closed on one required string prop and one
-optional `allow` array selecting from the closed effect classes `read` and
-`write`, and paired content is refused. It declares no `returns` and answers
-with a detached value — `{ observations: [{ name, value }], output }`, each
-admitted read's own returned value under the name the fragment invoked it by,
-with an admitted mutation contributing none — so it renders nothing where it is
-written; an ordinary `as` captures it by reference for every selection, and an
-authored `<Json>` turns it into the text a next `<Prompt>` carries. Availability is all
+what comes back (§5.3, §5.6). `<Evaluate>` is supplied that way by every host
+that offers it. The ordinary run profile supplies its complete-program forms,
+which evaluate an admitted root in the current execution (§5.7).
+
+The workflow host supplies those forms and, beside them, the restricted
+`<Evaluate source={…} />` — the operation an authored workflow document writes
+where an Agent's proposed fragment should be admitted and performed, for a live
+or partial run. That form takes a `source` string and an optional `allow` array
+selecting from the closed effect classes `read` and `write`, refuses paired
+content, and cannot be combined with `program`, with paired content, or with
+`props`. On it the component declares no `returns` and answers with a detached
+value — `{ observations: [{ name, value }], output }`, each admitted read's own
+returned value under the name the fragment invoked it by, with an admitted
+mutation contributing none — so it renders nothing where it is written; an
+ordinary `as` captures it by reference for every selection, and an authored
+`<Json>` turns it into the text a next `<Prompt>` carries. Availability is all
 the registration decides; the ceilings it runs under come from values the host
 captured before any document existed, and no prop, binding or middleware return
 value supplies or widens one. [Workflow workspaces](./workflow-workspace-spec.md)
@@ -4732,6 +4738,101 @@ inside another execution without moving what an invocation may name.
 
 `Expansion` and `getExpansion()` belong to `@executablemd/core`, so ordinary
 document execution receives expansion identity with no extension installed.
+
+### 5.7 Complete-program evaluation
+
+Producing a program and running one are separate choices. `<Plan>` produces
+approved XMD source and never evaluates it (§5.4); `<Evaluate>` is the element
+an author writes where a program should run. It has two complete-program forms,
+and they say the same thing about different moments:
+
+```md
+<Evaluate>
+  <Plan>Inspect the release inputs and recommend a version.</Plan>
+</Evaluate>
+```
+
+```md
+<Plan as="plan">Inspect the release inputs and recommend a version.</Plan>
+
+<Evaluate program={plan} />
+```
+
+`<Evaluate>` is declared to an execution rather than registered, because its
+implementation names durable work after its own invocation (§5.6). A host that
+declares none has no `<Evaluate>` at all. The ordinary run profile declares the
+complete-program forms; the workflow host declares those and its own restricted
+generated-fragment form beside them (workflow-workspace-spec §8.4).
+
+**It is a composition site, not a child document.** The program runs in the
+current execution: its lifecycle, its journal, its cancellation scope, its
+contextual providers, its working directory or Workspace, and the authority in
+force where the element was written. No child process, no second host profile,
+no second root lifecycle, no journal of its own. Program source *requests*
+behavior and grants none.
+
+What does not cross is the producer's temporary authority. By the time a program
+is admitted, `<Plan>`'s authorship profile and its private phases have torn
+down, and a private component belongs to the declaration whose exact bytes
+authored it — so a private name written in a program resolves to nothing.
+Ordinary imports and capabilities genuinely present at the site remain
+available.
+
+**The forms are disjoint.** Paired content and `program` are mutually exclusive
+and one of them is required; `props` is valid only for a complete program.
+Every ambiguous or misplaced combination refuses before program content is
+produced and before any program effect runs, so an ambiguous element performs
+nothing at all — including the producer it was written around.
+
+**Paired content is a private program buffer, not a quotation.** What is written
+inside runs under ordinary XMD semantics while it produces text, and that text
+is what admission is offered; none of it reaches the surrounding document. The
+element removes the framing its own wrapper contributed — the line break after
+the opening tag with the indentation that follows it, the line break before the
+closing tag with the indentation that precedes it, and the indentation those
+lines share — and nothing else. Interior bytes are untouched. A producer's
+result is spliced in as one value and keeps its own trailing newline, which is
+why a sole `<Plan>` producer and `program={plan}` admit the same bytes and the
+same content digest.
+
+`program={value}` is exact supplied source. Whitespace an author put at either
+end of it is part of the program, and no trimming, dedenting or newline
+adjustment is applied to it.
+
+**The root's own contract decides the result.** The admitted source is a root,
+so its frontmatter, imports, metadata, props schema, `returns` declaration and
+`<Output>` selection apply (§5.4). A text root renders its selected output where
+the element was written; with `as` it still executes, binds that selected text
+as a string, and emits none of it. A value root requires `as` and binds its
+schema-validated result — without one it refuses before the first program
+effect, because the result would have nowhere to go.
+
+Root props are the explicit `props` object and default to `{}`. Ambient root
+props are never adopted. They are validated against the program's own schema
+before the first program effect. Ordinary non-props caller bindings are visible
+to the program, and visibly read-only: the program reads a copy, so a binding it
+creates or overwrites reaches no caller. Relative paths resolve from the source
+origin of the authored `<Evaluate>` site.
+
+**Admission is this boundary's own durable event.** A complete program records
+`evaluate_program`, never `generated_xmd` (§10). Before the first program effect
+the run retains the exact source and its digest, the explicit props, the
+evaluation-site source origin, the root mode, and the components the program
+names with the forms it writes them in. A partial continuation expands the
+retained source and restores the nested effects that already committed. A
+changed program at the same evaluation occurrence is stale input: it refuses
+before either the current or the retained source runs, so neither silently wins.
+
+**The digest identifies the artifact; the site identifies the occurrence.** The
+authored element and the loop iteration it was reached through are what make one
+execution of a program. Evaluating the same approved program at two sites is two
+executions with two nested effect identities, and the digest never deduplicates
+them.
+
+Canonical execution answers `Component.expandProgram()` (§5.5) for the
+invocation, from the authority and block counter it is already holding. That is
+what makes "the site's authority" a fact about the frame rather than something a
+prop, a binding or a middleware return value could supply.
 
 ## 6. Expansion
 
@@ -9703,6 +9804,7 @@ trusted-host events may have no authored source.
 | Resolve components (glob) | `glob` | `resolve:{dir}` | Only when `useDurableGlobResolver` middleware is installed |
 | Read over HTTP | `fetch` | `fetch:{expansion id}` | Normalized request in `description.input`; status, detached headers and text body in the result (§6.18) |
 | Admit generated XMD | `generated_xmd` | `generated:{fragment id}` | The canonical class selection, retained roots, selected root, every selected entry as a name, identity and admitted forms, and the exact request policy in `description.input`; the admitted source, that same policy, and the identity and form of each element the fragment named in the result (workflow-workspace-spec §8.4) |
+| Admit a complete program | `evaluate_program` | `program:{evaluation id}` | The source digest, explicit props, evaluation-site source origin and whether the result is captured in `description.input`; the exact admitted source, the root mode, the components the program names with their authored forms, those same terms and the validated root props in the result — or the refused class alone (§5.7) |
 
 ### 10.2 Example journal for a multi-component document
 
@@ -12196,6 +12298,30 @@ user's own `~/.xmd/repositories`.
 | ORC20 | Retained workflow regression | Repository and Worktree replay, transactional Git, Push and pull-request history evidence, Issue effects, forks and completed replay keep their records, identities, provider call counts and native-launch refusal unchanged; directory ensure adds only its own `workspace_file` event and resulting retained root |
 | ORC21 | Compiled binary | A compiled smoke creates a root-level ambient Worktree, runs a command there, proves `.git` is a file and the checkout persists after exit; a second gated process proves lock refusal and release |
 
+### Tier PE — Complete-program evaluation (§5.7)
+
+Canonical evidence runs a document with `<Evaluate>` declared exactly as a host
+profile declares it, so what is measured is the element a person writes rather
+than an operation only a test can reach. Tier EP is the same claims under a
+shelled-out `xmd run`, and Tier WGAC covers the workflow profile, where these
+forms sit beside the restricted one.
+
+| # | Test | Verify |
+|---|------|--------|
+| PE1 | Deferred composition | `program={plan}` admits and evaluates the bound source once, recording one `evaluate_program` event |
+| PE2 | Direct composition | A producer written as content evaluates once and none of its approved source reaches the surrounding document |
+| PE3 | The two forms agree | A sole producer's paired projection and `program={plan}` admit the same bytes and the same content digest |
+| PE4 | Wrapper framing | The paired form removes one line break and the shared indentation at each end and nothing else; interior bytes, including a producer's own trailing newline, survive |
+| PE5 | Supplied source is exact | `program={value}` is neither trimmed, dedented nor newline-adjusted, so leading and trailing whitespace change the digest |
+| PE6–PE9 | Program forms | A value root binds its schema-validated result under `as`; a text root renders its selected output, or binds it as a string under `as` and emits none of it |
+| PE7 | Value root without `as` | Refused before the first program effect |
+| PE10–PE11 | Root props | An omitted `props` gives the program its own defaults rather than the caller's root props; props the program's schema refuses are refused before effects |
+| PE12–PE13 | Ambiguous forms | `program` written with content, and an element naming no program at all, each refuse with no admission recorded |
+| PE14 | Repeated evaluation | Two sites evaluate one artifact independently under two durable names; the digest deduplicates neither |
+| PE15 | Changed evaluation source | A partial continuation whose producer returns different source refuses as stale input, and neither the current nor the retained program performs its effect |
+| PE16 | Evaluation replay | A partial continuation expands the retained source and restores a completed nested effect without performing it again, proven by the producer re-rendering on that run |
+| EP1–EP8 | Run profile | The ordinary run profile declares `<Evaluate>`; the forms, props, refusals and catalog entry hold through the real binary, and a program cannot reach `<Plan>`'s private components |
+| WGAC17–WGAC20 | Workflow profile | A complete program records `evaluate_program` and no `generated_xmd`; the three forms cannot be combined; complete-program support is not reachable through `source` |
 
 ---
 

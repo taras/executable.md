@@ -19,6 +19,7 @@ import {
   AGENT_REGISTRATIONS,
   agentIdentityComponents,
   inspectSyntax,
+  programEvaluationComponents,
   registerComponents,
 } from "@executablemd/core";
 import type {
@@ -59,7 +60,10 @@ export function* syntaxCatalog(includes: readonly string[]): Operation<SyntaxCat
     yield* useRunProfileRegistry();
     return yield* inspectSyntax({
       includes,
-      components: agentIdentityComponents(),
+      // `<Plan>` and `<Evaluate>` are one vocabulary: a catalog that described
+      // how to produce a program without describing how to run one would
+      // advertise half of what the run profile has.
+      components: [...agentIdentityComponents(), ...programEvaluationComponents()],
       // `<Plan>` is part of the run profile, so a catalog that left it out would
       // describe a vocabulary no run has. Described from the packaged bytes:
       // inspection mints nothing, so it reports the Component's identity and

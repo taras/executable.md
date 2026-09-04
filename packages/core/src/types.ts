@@ -406,3 +406,30 @@ export interface SampleContext {
   /** Name of the component that initiated the sample call. */
   componentName?: string;
 }
+
+/**
+ * A complete XMD program, parsed and validated, ready to expand at the site
+ * that admitted it (specs/executable-mdx-spec.md §5.7).
+ *
+ * The parse is the admission's, so what crosses here is a decision already
+ * taken: the root's own frontmatter, metadata, props schema and `returns`
+ * declaration, its body, and the source origin its relative resolution is
+ * anchored to. Nothing about it is read again while it expands.
+ */
+export interface ProgramBody {
+  /** What a diagnostic calls this program. */
+  readonly name: string;
+  readonly meta: Record<string, unknown>;
+  /** The root props, already validated against the program's own schema. */
+  readonly props: Record<string, Json>;
+  /** Present for a value root, absent for a text root. */
+  readonly returns?: ReturnsSchema;
+  readonly bodySegments: Segment[];
+  /** The source origin the evaluation site resolves from. */
+  readonly path: string;
+}
+
+/** What expanding a program produced: selected output, or a returned value. */
+export type ProgramOutcome =
+  | { readonly kind: "text"; readonly output: string }
+  | { readonly kind: "value"; readonly value: Json };

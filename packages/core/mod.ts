@@ -276,6 +276,11 @@ export {
   installAgentComponents,
 } from "./src/agent/components.ts";
 export type { AgentComponentsOptions } from "./src/agent/components.ts";
+
+// `<Evaluate>` — the composition site a complete XMD program runs at. Declared
+// by the host that offers it, like the Agent components above, because its
+// implementation names durable work after its own invocation.
+export { EVALUATE_DESCRIPTION, programEvaluationComponents } from "./src/components/Evaluate.ts";
 export { Agent } from "./src/agent/agent-api.ts";
 export type {
   AgentApi,

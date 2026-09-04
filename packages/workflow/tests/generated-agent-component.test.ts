@@ -1214,3 +1214,104 @@ describe("Tier WGAC — a committed mutation is not repeated", () => {
     });
   });
 });
+
+/**
+ * Tier WGAC — the complete-program forms beside the restricted one (#713).
+ *
+ * A workflow's `<Evaluate>` gained two forms and lost none. What matters here is
+ * that the three do not reach into each other: a program is admitted by the
+ * complete-program event and not by `generated_xmd`, `allow` selects nothing for
+ * one, `props` configures nothing for a fragment, and everything the restricted
+ * evaluator refuses it still refuses.
+ */
+describe("Tier WGAC — complete programs beside restricted fragments", () => {
+  it("WGAC17: a workflow evaluates a complete program under its own event", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const attempt = yield* runDocument(
+        database,
+        `<Let value={"# Composed\\n\\nThe program ran.\\n"} as="plan" />\n\n` +
+          `<Evaluate program={plan} />\n`,
+      );
+
+      expect(attempt.failure).toBe(undefined);
+      expect(reported(attempt)).toContain("The program ran.");
+      // Its own record. The restricted admission is a different decision about a
+      // different kind of source and must not be widened to carry this one.
+      expect(admissions(attempt.events)).toHaveLength(0);
+      expect(
+        attempt.events.filter(
+          (event) => event.type === "yield" && event.description.type === "evaluate_program",
+        ),
+      ).toHaveLength(1);
+    });
+  });
+
+  it("WGAC18: a program written as content is admitted and not emitted twice", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const attempt = yield* runDocument(
+        database,
+        `<Evaluate>\n  # Composed\n\n  The program ran.\n</Evaluate>\n`,
+      );
+
+      expect(attempt.failure).toBe(undefined);
+      expect(reported(attempt).split("The program ran.")).toHaveLength(2);
+      expect(admissions(attempt.events)).toHaveLength(0);
+    });
+  });
+
+  it("WGAC19: the three forms cannot be combined", function* () {
+    const first = yield* useStorageRoot();
+    yield* withStorage(first, function* () {
+      const database = yield* createRun();
+      const both = yield* runDocument(database, `<Evaluate source="text" program="# Program" />\n`);
+      expect(reported(both)).toContain("not both");
+      expect(admissions(both.events)).toHaveLength(0);
+    });
+
+    const second = yield* useStorageRoot();
+    yield* withStorage(second, function* () {
+      const database = yield* createRun();
+      // `allow` names a table only the restricted evaluator has.
+      const selected = yield* runDocument(
+        database,
+        `<Evaluate program="# Program" allow={["read"]} />\n`,
+      );
+      expect(reported(selected)).toContain("only with `source`");
+      expect(admissions(selected.events)).toHaveLength(0);
+    });
+
+    const third = yield* useStorageRoot();
+    yield* withStorage(third, function* () {
+      const database = yield* createRun();
+      // Root props configure a program's root, and a fragment has none.
+      const propped = yield* runDocument(
+        database,
+        `<Evaluate source="text" props={{ release: "1.4.0" }} />\n`,
+      );
+      expect(reported(propped)).toContain("only for a complete program");
+      expect(admissions(propped.events)).toHaveLength(0);
+    });
+  });
+
+  it("WGAC20: complete-program support is not reachable through `source`", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      // A fragment that names a component the restricted tables do not hold is
+      // refused exactly as it always was — being a complete root's vocabulary
+      // buys it nothing on this path.
+      const attempt = yield* runDocument(
+        database,
+        `<Evaluate source={'<Prompt>do the work</Prompt>'} as="observation" />\n`,
+      );
+
+      expect(reported(attempt)).toMatch(/component/i);
+      expect(admissions(attempt.events)).toHaveLength(1);
+      expect(reads(attempt.events)).toHaveLength(0);
+    });
+  });
+});
