@@ -20,8 +20,10 @@ import { scoped } from "effection";
 import {
   cloudflareOwnerLink,
   cloudflareReadLink,
+  cloudflareRunLink,
   stageCloudflareContent,
 } from "../src/cloudflare/client.ts";
+import { WorkflowStorageError } from "../src/storage/errors.ts";
 import { createTransactionGate, transactRemotely } from "../src/remote/collector.ts";
 import { encodeBase64 } from "../src/cloudflare/encoding.ts";
 import type { OwnerSocket, SocketListener } from "../src/remote/client.ts";
@@ -430,5 +432,118 @@ describe("semantic reads from a Cloudflare owner", () => {
     // D2 has reads and no commit. The transaction returns the owner's refusal
     // rather than a success nothing performed.
     expect(committed).toMatchObject({ ok: false });
+  });
+  it("assembles an execution snapshot only from pages that describe it", function* () {
+    const record = (id: string) => ({ executionId: id, startedAt: "2026-09-04T00:00:00.000Z" });
+    const page = (rows: unknown[], overrides: Record<string, unknown> = {}) => ({
+      outcome: "performed",
+      value: { runId: RUN_ID, anchor: 2, after: null, rows, done: true, ...overrides },
+    });
+    const row = (sequence: number, id: string) => ({ sequence, record: record(id) });
+
+    // Each of these is a page that does not describe the snapshot it claims.
+    // The structural consequence is one: no partial history is returned.
+    const refused: Record<string, unknown> = {
+      "another run's history": page([row(1, "a"), row(2, "b")], { runId: "somebody-else" }),
+      "a terminal page short of its anchor": page([row(1, "a")]),
+      "a first row that is not the first": page([row(2, "b")]),
+      "a gap between rows": page([row(1, "a"), row(3, "c")]),
+      "a repeated row": page([row(1, "a"), row(1, "a")]),
+      "a row beyond the anchor": page([row(1, "a"), row(2, "b"), row(3, "c")]),
+      "an empty page of a non-empty snapshot": page([], { done: false }),
+      "an empty snapshot that carries rows": page([row(1, "a")], { anchor: null }),
+      "a cursor it was not asked to continue from": page([row(1, "a"), row(2, "b")], { after: 7 }),
+      "a record with a member the shape does not declare": page([
+        { sequence: 1, record: { ...record("a"), note: "extra" } },
+      ]),
+      "a record that stopped without saying how": page([
+        { sequence: 1, record: { ...record("a"), stopStatus: "completed" } },
+      ]),
+    };
+
+    for (const [description, answer] of Object.entries(refused)) {
+      const transport = wire(() => answer as Record<string, unknown>);
+      let outcome: unknown;
+      yield* scoped(function* () {
+        const connection = yield* useOwnerConnection(transport.socket);
+        const link = cloudflareRunLink(
+          connection,
+          cloudflareReadLink(connection, ids(), RUN_ID),
+          ids(),
+          RUN_ID,
+        );
+        outcome = yield* link.readExecutions();
+      });
+      expect([description, (outcome as { ok: boolean }).ok]).toEqual([description, false]);
+      if (!(outcome as { ok: boolean }).ok) {
+        const failed = outcome as { error: Error };
+        // A provider-neutral failure, with nothing private in it.
+        expect([description, failed.error]).toEqual([
+          description,
+          expect.any(WorkflowStorageError),
+        ]);
+        expect(String(failed.error)).not.toContain("command:");
+      }
+    }
+  });
+
+  it("assembles an honest snapshot across pages, and an empty one", function* () {
+    const record = (id: string) => ({ executionId: id, startedAt: "2026-09-04T00:00:00.000Z" });
+    const pages: Record<string, Record<string, unknown>> = {
+      null: {
+        outcome: "performed",
+        value: {
+          runId: RUN_ID,
+          anchor: 2,
+          after: null,
+          rows: [{ sequence: 1, record: record("first") }],
+          done: false,
+        },
+      },
+      "1": {
+        outcome: "performed",
+        value: {
+          runId: RUN_ID,
+          anchor: 2,
+          after: 1,
+          rows: [{ sequence: 2, record: record("second") }],
+          done: true,
+        },
+      },
+    };
+    const transport = wire(
+      (request) =>
+        pages[String(request["after"])] ?? { outcome: "refused", refusal: "storage:corrupt" },
+    );
+    yield* scoped(function* () {
+      const connection = yield* useOwnerConnection(transport.socket);
+      const link = cloudflareRunLink(
+        connection,
+        cloudflareReadLink(connection, ids(), RUN_ID),
+        ids(),
+        RUN_ID,
+      );
+      const read = yield* link.readExecutions();
+      expect(read.ok).toBe(true);
+      if (read.ok) {
+        expect(read.value.map((entry) => entry.executionId)).toEqual(["first", "second"]);
+      }
+    });
+
+    const empty = wire(() => ({
+      outcome: "performed",
+      value: { runId: RUN_ID, anchor: null, after: null, rows: [], done: true },
+    }));
+    yield* scoped(function* () {
+      const connection = yield* useOwnerConnection(empty.socket);
+      const link = cloudflareRunLink(
+        connection,
+        cloudflareReadLink(connection, ids(), RUN_ID),
+        ids(),
+        RUN_ID,
+      );
+      const read = yield* link.readExecutions();
+      expect(read.ok && read.value).toEqual([]);
+    });
   });
 });

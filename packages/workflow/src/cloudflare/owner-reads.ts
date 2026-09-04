@@ -532,7 +532,11 @@ export function readExecutions(
     if (page.length > 0 && encoded + bytes > EXECUTION_PAGE_BYTES) {
       break;
     }
-    if (bytes > MAX_CONTENT_BYTES) {
+    if (bytes > EXECUTION_PAGE_BYTES) {
+      // One row larger than a whole page. The bound is the page's, not the
+      // message envelope's: a row that could never fit means this snapshot
+      // cannot be paged at all, and answering with it anyway would send
+      // something the runner is required to refuse.
       throw new CommandError("too-large");
     }
     page.push({ sequence: at, record: row });

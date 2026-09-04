@@ -55,10 +55,18 @@ import {
   type WorkspaceRootManifest,
 } from "../workspace/root-manifest.ts";
 import { decodeContentManifest } from "../workspace/content-manifest.ts";
-import { EXECUTION_PAGE_ENTRIES, JOURNAL_PAGE_ENTRIES, MAX_CONTENT_BYTES } from "./commands.ts";
+import {
+  EXECUTION_PAGE_BYTES,
+  EXECUTION_PAGE_ENTRIES,
+  JOURNAL_PAGE_ENTRIES,
+  MAX_CONTENT_BYTES,
+} from "./commands.ts";
 import type { RemoteRunLink } from "../remote/database.ts";
+import { SCHEMA_VERSION } from "../sqlite/workflow-schema.ts";
 import {
   WorkflowDatabaseCorruptError,
+  WorkflowDatabaseFormatError,
+  WorkflowSchemaVersionError,
   WorkflowRecordMalformedError,
   WorkflowRequestError,
   WorkflowStorageError,
@@ -589,14 +597,40 @@ export function cloudflareRunLink(
   connection: OwnerConnection,
   reads: RemoteReadLink,
   nextId: () => string,
+  expectedRunId: string,
 ): RemoteRunLink {
   const publication = cloudflareOwnerLink(connection, reads, nextId);
   return {
-    frontier: publication.frontier,
-    commit: publication.commit,
+    /**
+     * Both halves of the publication link, translated.
+     *
+     * The database returns these failures through a provider-neutral interface,
+     * so a private refusal or a transport error must not travel as itself. This
+     * is the one place that translation happens.
+     */
+    *frontier(): Operation<StartingFrontier> {
+      try {
+        return yield* publication.frontier();
+      } catch (error) {
+        throw translate(error);
+      }
+    },
+
+    *commit(intent: CommitIntent): Operation<Result<CommitDecision>> {
+      try {
+        const committed = yield* publication.commit(intent);
+        return committed.ok ? committed : Err(translate(committed.error));
+      } catch (error) {
+        return Err(translate(error));
+      }
+    },
 
     *frontierSnapshot(): Operation<RemoteFrontierSnapshot> {
-      return yield* reads.frontier();
+      try {
+        return yield* reads.frontier();
+      } catch (error) {
+        throw translate(error);
+      }
     },
 
     *replaceRetrieval(
@@ -638,35 +672,68 @@ export function cloudflareRunLink(
 
     *readExecutions(): Operation<Result<DocumentExecutionRecord[]>> {
       try {
-        const found: { sequence: number; record: DocumentExecutionRecord }[] = [];
+        const found: DocumentExecutionRecord[] = [];
         let anchor: number | null | undefined;
         let after: number | null = null;
         let done = false;
         while (!done) {
-          const page: ExecutionPage = yield* askPage(connection, nextId(), anchor ?? null, after);
-          // The first page chooses the anchor; every later one is held to it.
+          const page: ExecutionPage = yield* askPage(
+            connection,
+            nextId(),
+            expectedRunId,
+            anchor ?? null,
+            after,
+          );
+          // The first page chooses the snapshot. Every later one is held to it,
+          // and to the cursor it was asked to continue from.
           const expected = anchor === undefined ? page.anchor : anchor;
           anchor = expected;
           if (page.anchor !== expected || page.after !== after) {
-            return Err(
-              new WorkflowRecordMalformedError(
-                "document executions",
-                "a page did not continue its anchored snapshot",
-              ),
-            );
+            return Err(pageFailure("a page did not continue its anchored snapshot"));
           }
+          if (page.anchor === null) {
+            // An empty snapshot is terminal and carries nothing.
+            if (page.rows.length > 0 || !page.done || after !== null) {
+              return Err(pageFailure("an empty snapshot carried rows or did not terminate"));
+            }
+            break;
+          }
+          if (page.rows.length === 0) {
+            // A page with nothing in it can only be the empty snapshot, which
+            // was handled above. Otherwise the read would never advance.
+            return Err(pageFailure("a page of an anchored snapshot carried no rows"));
+          }
+          let previous: number = after ?? 0;
           for (const row of page.rows) {
-            found.push(row);
+            if (row.sequence !== previous + 1) {
+              // Exactly adjacent: a gap would be retained history omitted from
+              // a snapshot that claims to be complete.
+              return Err(pageFailure("a page skipped, repeated or reordered a row"));
+            }
+            if (row.sequence > page.anchor) {
+              return Err(pageFailure("a page carried a row outside its snapshot"));
+            }
+            previous = row.sequence;
+            found.push(row.record);
           }
-          after = page.rows.at(-1)?.sequence ?? after;
+          if (page.done !== (previous === page.anchor)) {
+            // Terminal exactly at the anchor, and only there.
+            return Err(pageFailure("a page disagreed with its terminal row"));
+          }
+          after = previous;
           done = page.done;
         }
-        return Ok(found.map((row) => row.record));
+        return Ok(found);
       } catch (error) {
         return Err(translate(error));
       }
     },
   };
+}
+
+/** What a page that does not describe the snapshot it claims becomes. */
+function pageFailure(reason: string): WorkflowStorageError {
+  return new WorkflowRecordMalformedError("document executions", reason);
 }
 
 /** One execution page, with the private ordering the runner checks adjacency by. */
@@ -680,6 +747,7 @@ interface ExecutionPage {
 function* askPage(
   connection: OwnerConnection,
   id: string,
+  expectedRunId: string,
   anchor: number | null,
   after: number | null,
 ): Operation<ExecutionPage> {
@@ -688,24 +756,28 @@ function* askPage(
     { command: "executions", anchor, after },
     (value): ExecutionPage => {
       const found = members(value, ["runId", "anchor", "after", "rows", "done"]);
+      if (found.get("runId") !== expectedRunId) {
+        // Another run's retained history is not this run's, however well formed.
+        return fail("an execution page named another run");
+      }
       const offered = found.get("rows");
       if (!Array.isArray(offered) || offered.length > EXECUTION_PAGE_ENTRIES) {
         return fail("an execution page was not one bounded page");
       }
+      if (new TextEncoder().encode(JSON.stringify(offered)).length > EXECUTION_PAGE_BYTES) {
+        // The page bound, not the message envelope. A page that ignored it
+        // would make the number of requests depend on how large one row is.
+        return fail("an execution page carried more than one page of rows");
+      }
       if (typeof found.get("done") !== "boolean") {
         return fail("an execution page did not say whether it was terminal");
       }
-      let previous = after;
       const rows = offered.map((entry) => {
         const item = members(entry, ["sequence", "record"]);
         const sequence = item.get("sequence");
         if (typeof sequence !== "number" || !Number.isSafeInteger(sequence) || sequence < 1) {
           return fail("an execution row did not carry a position");
         }
-        if (previous !== null && sequence <= previous) {
-          return fail("an execution page repeated or reordered a row");
-        }
-        previous = sequence;
         return { sequence, record: parseRemoteExecution(item.get("record")) };
       });
       return {
@@ -741,8 +813,18 @@ function nullableSequence(value: unknown): number | null {
  * line: they describe a protocol nobody above here is party to.
  */
 function storageFailure(refusal: PrivateRefusal): WorkflowStorageError {
-  if (refusal.startsWith("storage:")) {
-    return new WorkflowDatabaseCorruptError("the workflow run's remote storage", refusal.slice(8));
+  // A host acts on these differently: storage belonging to something else may
+  // not be written, a version this build does not implement may not be
+  // migrated, and damage may not be repaired. Collapsing them would make all
+  // three look like the one that says "restore from a backup".
+  if (refusal === "storage:foreign") {
+    return new WorkflowDatabaseFormatError(REMOTE_STORE, "it belongs to something else");
+  }
+  if (refusal === "storage:unsupported-version") {
+    return new WorkflowSchemaVersionError(REMOTE_STORE, 0, SCHEMA_VERSION);
+  }
+  if (refusal === "storage:corrupt") {
+    return new WorkflowDatabaseCorruptError(REMOTE_STORE, "its retained records do not agree");
   }
   if (refusal === "command:stale-root" || refusal === "command:stale-journal") {
     return new WorkflowTransactionError(
@@ -755,7 +837,22 @@ function storageFailure(refusal: PrivateRefusal): WorkflowStorageError {
   return new WorkflowTransactionError("this run's owner refused the operation.");
 }
 
-/** Any failure from the private protocol, as a provider-neutral one. */
+/**
+ * What a public error names instead of a path.
+ *
+ * A remote run has no file, and naming one would be an invitation to look for
+ * it. The store is named as what it is.
+ */
+const REMOTE_STORE = "this run's remote storage";
+
+/**
+ * Any failure from the private protocol, as a provider-neutral one.
+ *
+ * Nothing private crosses: not a refusal class, not a refusal spelling, not the
+ * message a parser wrote about a value it refused. A record this build cannot
+ * read is a malformed record rather than an unreachable owner, because those
+ * are different facts and a caller acts on them differently.
+ */
 function translate(error: unknown): WorkflowStorageError {
   if (error instanceof CloudflareOwnerRefusalError) {
     return storageFailure(error.refusal);
@@ -763,5 +860,14 @@ function translate(error: unknown): WorkflowStorageError {
   if (error instanceof WorkflowStorageError) {
     return error;
   }
-  return new WorkflowTransactionError("this run's owner could not be reached.");
+  if (error instanceof RemoteRecordError) {
+    return new WorkflowRecordMalformedError(
+      "record this run's owner returned",
+      "it is not a record this build can read",
+    );
+  }
+  if (error instanceof OwnerLinkError) {
+    return new WorkflowTransactionError("this run's owner could not be reached.");
+  }
+  return new WorkflowTransactionError("this run's owner could not answer the operation.");
 }

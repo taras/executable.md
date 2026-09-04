@@ -153,6 +153,22 @@ export function parseRemoteJournalEntry(value: unknown): JournalEntry {
  */
 export function parseRemoteExecution(value: unknown): DocumentExecutionRecord {
   const found = parseMembers(value, "$", fail);
+  // One of exactly two legal shapes. A record carrying a stop status without
+  // having stopped, or an undeclared member, is a shape this build does not
+  // understand — and reading it leniently would make a history that means one
+  // thing here and another where it was written.
+  const active = ["executionId", "startedAt"];
+  const stopped = [...active, "stoppedAt", "stopStatus"];
+  const declared = found.has("stoppedAt")
+    ? found.has("stopReason")
+      ? [...stopped, "stopReason"]
+      : stopped
+    : active;
+  requireMemberNames(found, declared, "$", fail);
+  if (found.size !== declared.length) {
+    throw fail("expected exactly the members this shape declares", "$");
+  }
+
   const executionId = parseStringMember(found, "executionId", "$", fail);
   if (executionId === "") {
     throw fail("expected a non-empty identity", "$.executionId");
@@ -164,16 +180,16 @@ export function parseRemoteExecution(value: unknown): DocumentExecutionRecord {
   if (!found.has("stoppedAt")) {
     return Object.freeze(record);
   }
-  const stopped: DocumentExecutionRecord = {
+  const halted: DocumentExecutionRecord = {
     ...record,
     stoppedAt: instant(found.get("stoppedAt"), "$.stoppedAt"),
     stopStatus: parseWorkflowRunStatus(found.get("stopStatus"), "$.stopStatus", fail),
   };
   if (!found.has("stopReason")) {
-    return Object.freeze(stopped);
+    return Object.freeze(halted);
   }
   return Object.freeze({
-    ...stopped,
+    ...halted,
     stopReason: parseWorkflowStopReason(found.get("stopReason"), "$.stopReason", fail),
   });
 }

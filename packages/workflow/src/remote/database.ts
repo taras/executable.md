@@ -35,7 +35,14 @@ import {
 } from "effection";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
 import type { JournalEntry, WorkflowRunDatabase, WorkflowRunTransaction } from "../storage/api.ts";
-import { WorkflowDatabaseClosedError, WorkflowTransactionError } from "../storage/errors.ts";
+import {
+  WorkflowDatabaseClosedError,
+  WorkflowRecordMalformedError,
+  WorkflowRequestError,
+  WorkflowStorageError,
+  WorkflowTransactionError,
+} from "../storage/errors.ts";
+import { parseJsonValue } from "../storage/members.ts";
 import type {
   DefinitionRetrieval,
   DocumentExecutionRecord,
@@ -125,6 +132,18 @@ export function* activeWorkspaceRoute(
 }
 
 /**
+ * A failure this interface can return, whatever it arrived as.
+ *
+ * The adapter beneath has already translated what it knows about; anything else
+ * reaching here is the body's own error, which is carried as it is. A value
+ * that is not an error at all becomes one rather than travelling as a thrown
+ * string nobody can act on.
+ */
+function failure(error: unknown): Error {
+  return error instanceof Error ? error : new WorkflowTransactionError(String(error));
+}
+
+/**
  * What a `DurableStream` member does with a result.
  *
  * The interface splits these deliberately: a member returning `Result` answers
@@ -195,13 +214,25 @@ export function useRemoteRunDatabase(
       return Ok();
     }
 
-    /** One turn at the handle, for an ordinary operation. */
+    /**
+     * One turn at the handle, for an ordinary operation.
+     *
+     * A member that returns `Result` answers with the failure rather than
+     * raising it, so a link that raised is caught here. Cancellation is not a
+     * failure and is left to unwind as control flow.
+     */
     function* turn<T>(body: () => Operation<Result<T>>): Operation<Result<T>> {
       const admitted = yield* admit();
       if (!admitted.ok) {
         return admitted;
       }
-      return yield* turns.take(body);
+      return yield* turns.take(function* (): Operation<Result<T>> {
+        try {
+          return yield* body();
+        } catch (error) {
+          return Err(failure(error));
+        }
+      });
     }
 
     const ordinary: DurableStream = {
@@ -242,17 +273,25 @@ export function useRemoteRunDatabase(
         );
       }
       return yield* turns.take(function* (): Operation<Result<T>> {
-        return yield* transactRemotely(link, gate, function* (transaction, enlist) {
-          // The marker and the route are installed for the body's scope alone.
-          // Outside it neither exists, so a retained transaction object reaches
-          // nothing and an unrelated scope is not mistaken for a nested one.
-          yield* ActiveTransaction.set({
-            handle,
-            enclosing: yield* ActiveTransaction.get(),
+        try {
+          return yield* transactRemotely(link, gate, function* (transaction, enlist) {
+            // The marker and the route are installed for the body's scope
+            // alone. Outside it neither exists, so a retained transaction
+            // object reaches nothing and an unrelated scope is not mistaken for
+            // a nested one.
+            yield* ActiveTransaction.set({
+              handle,
+              enclosing: yield* ActiveTransaction.get(),
+            });
+            yield* ActiveRoute.set({ database: handle, transaction, enlist });
+            return yield* body(transaction);
           });
-          yield* ActiveRoute.set({ database: handle, transaction, enlist });
-          return yield* body(transaction);
-        });
+        } catch (error) {
+          // A body that raised, or a resource of its that failed to tear down,
+          // is a failed transaction rather than a raised one: the interface
+          // answers with a `Result`, and nothing was committed.
+          return Err(failure(error));
+        }
       });
     }
 
@@ -279,20 +318,48 @@ export function useRemoteRunDatabase(
       },
 
       *replaceRetrievalMetadata(metadata: Json | undefined): Operation<Result<void>> {
+        let encoded: string | null;
+        try {
+          // Parsed by the same rules a stored value is held to, then encoded
+          // canonically. A value that is not JSON at all never becomes a
+          // request: refusing it here is what "no request" means.
+          encoded =
+            metadata === undefined
+              ? null
+              : canonical(parseJsonValue(metadata, "$", retrievalFailure));
+        } catch (error) {
+          return Err(failure(error));
+        }
+        if (encoded !== null && new TextEncoder().encode(encoded).length > MAX_RETRIEVAL_BYTES) {
+          return Err(
+            new WorkflowRequestError(
+              "this retrieval metadata is larger than one message may carry, so it was not sent.",
+            ),
+          );
+        }
+
         const replaced = yield* turn(function* () {
           const snapshot = yield* link.frontierSnapshot();
-          return yield* link.replaceRetrieval(
-            snapshot.workspaceRootId,
-            metadata === undefined ? null : canonical(metadata),
-          );
+          return yield* link.replaceRetrieval(snapshot.workspaceRootId, encoded);
         });
         if (!replaced.ok) {
           return replaced;
         }
+        // The answer has to describe the replacement that was asked for. An
+        // owner that returned different metadata would otherwise install the
+        // location a later fetch of the definition would use.
+        const answered = replaced.value;
+        if (encoded === null) {
+          if (answered !== undefined) {
+            return Err(contradiction());
+          }
+        } else if (answered === undefined || canonical(answered.metadata) !== encoded) {
+          return Err(contradiction());
+        }
         // Only this handle, and only after its own successful replacement. The
         // owner's revision and time are what is recorded; nothing is invented
         // here.
-        retrieval = replaced.value;
+        retrieval = answered;
         return Ok();
       },
 
@@ -306,6 +373,24 @@ export function useRemoteRunDatabase(
     });
     yield* provide(handle);
   });
+}
+
+/** The most bytes one canonical retrieval value may carry. */
+const MAX_RETRIEVAL_BYTES = 8 * 1024 * 1024;
+
+/** How a malformed retrieval value is reported, before anything is sent. */
+function retrievalFailure(reason: string, path: string): Error {
+  return new WorkflowRequestError(
+    `this retrieval metadata is not a JSON value storage can keep at ${path}: ${reason}.`,
+  );
+}
+
+/** An answer that does not describe the replacement it answered. */
+function contradiction(): WorkflowStorageError {
+  return new WorkflowRecordMalformedError(
+    "retrieval this run's owner returned",
+    "it does not describe the replacement that was asked for",
+  );
 }
 
 /**

@@ -358,6 +358,38 @@ describe("a run whose storage is somewhere else", () => {
     });
   });
 
+  it("refuses metadata that is not a JSON value, without asking the owner", function* () {
+    const remote = owner();
+    yield* scoped(function* () {
+      const database = yield* useDatabase(remote.link);
+      const offered = { locator: () => "not json" } as unknown as Json;
+      const refused = yield* database.replaceRetrievalMetadata(offered);
+      expect(refused.ok).toBe(false);
+      // Nothing was sent: an inadmissible value is not a request.
+      expect(remote.retrievals).toHaveLength(0);
+      expect(database.retrieval).toBe(undefined);
+    });
+  });
+
+  it("fails closed when the answer describes another replacement", function* () {
+    const remote = owner({
+      retrieval: () =>
+        Ok({
+          metadata: { locator: "something else entirely" },
+          revision: 1,
+          updatedAt: "2026-09-04T00:00:01.000Z",
+        }),
+    });
+    yield* scoped(function* () {
+      const database = yield* useDatabase(remote.link);
+      const refused = yield* database.replaceRetrievalMetadata({ locator: "what was asked" });
+      expect(refused.ok).toBe(false);
+      // The snapshot is what it was: an answer about another value installs
+      // nothing, because it would change where the definition is fetched from.
+      expect(database.retrieval).toBe(undefined);
+    });
+  });
+
   it("leaves its snapshot alone when a replacement is refused", function* () {
     const remote = owner({
       retrieval: () => Err(new WorkflowTransactionError("this run has moved")),
@@ -410,16 +442,20 @@ describe("a run whose storage is somewhere else", () => {
     const raising = owner();
     yield* scoped(function* () {
       const database = yield* useDatabase(raising.link);
-      let caught: unknown;
-      try {
-        yield* database.transact(function* () {
-          throw new Error("the body failed");
-        });
-      } catch (error) {
-        caught = error;
+      // A body that raised is a failed transaction, not a raised one: the
+      // interface answers with a `Result`, and the same condition returns
+      // `Err` from the local provider.
+      const failed = yield* database.transact(function* (transaction) {
+        yield* transaction.journal.append(event("attempted"));
+        throw new Error("the body failed");
+      });
+      expect(failed.ok).toBe(false);
+      if (!failed.ok) {
+        expect(String(failed.error)).toContain("the body failed");
       }
-      expect(caught).toBeInstanceOf(Error);
       expect(raising.commits).toHaveLength(0);
+      // And the handle is still usable afterwards.
+      expect(ok(yield* database.readJournalEntries())).toEqual([]);
     });
   });
 
