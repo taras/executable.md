@@ -779,12 +779,17 @@ function openProvider(options: {
   then?: string;
   /** Which lookup starts answering `then`. */
   switchAfter?: number;
+  /** Answer each successive lookup from this list, under one key each. */
+  sequence?: readonly string[];
+  /** Delegate to nothing for this many lookups, then answer `then`. */
+  absentFor?: number;
 }): () => Operation<void> {
   return function* install(): Operation<void> {
     const claim = yield* useImportProvider(
       options.identity ?? { origin: "test/open", revision: options.mark },
     );
     let answered = 0;
+    const sequenced = new Map<string, FunctionComponentDefinition>();
     const first = openImplementation(options.mark);
     const later = options.then === undefined ? first : openImplementation(options.then);
     yield* Component.around(
@@ -795,6 +800,24 @@ function openProvider(options: {
             return yield* next(name, position);
           }
           answered += 1;
+          if (options.absentFor !== undefined) {
+            // Delegates while the site is resolved and reconciled, and would
+            // answer only on a lookup that must never happen.
+            if (answered <= options.absentFor) {
+              return yield* next(name, position);
+            }
+            const late = openImplementation(options.then ?? "late");
+            return claim(name, "Open", late);
+          }
+          if (options.sequence !== undefined) {
+            // One implementation per occurrence, each under its own stable key,
+            // answered in the order the program writes them.
+            const index = Math.min(answered, options.sequence.length) - 1;
+            const mark = options.sequence[index] ?? options.mark;
+            const supplied = sequenced.get(mark) ?? openImplementation(mark);
+            sequenced.set(mark, supplied);
+            return claim(name, `Open:${mark}`, supplied);
+          }
           const definition = answered <= (options.switchAfter ?? 1) ? first : later;
           return options.identity === null ? definition : claim(name, "Open", definition);
         },
@@ -1313,6 +1336,113 @@ describe("Tier PE — a provider's stated identity is captured once", () => {
     // The origin is read once, so the getter answers the duplicate check and
     // the claim with one value — and that value is already taken.
     expect(attempt.failure ?? attempt.output ?? "").toContain("no single authority");
+    approved = APPROVED;
+  });
+});
+
+describe("Tier PE — a settlement belongs to an occurrence", () => {
+  it("PE40 invokes A then B for two occurrences of one name", function* () {
+    opened.length = 0;
+    consulted.length = 0;
+    approved = "<Open />\n\n<Open />\n";
+
+    // Two occurrences, resolved twice in each pass. The provider answers A for
+    // the first and B for the second, under distinct stable keys.
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      install: openProvider({
+        mark: "A",
+        sequence: ["A", "B", "A", "B"],
+        identity: { origin: "test/open", revision: "1" },
+      }),
+    });
+
+    expect(attempt.failure).toBeUndefined();
+    // A then B, in the order the program writes them — not A twice, which is
+    // what a name-keyed settlement produces.
+    expect(opened).toEqual(["A", "B"]);
+    const named = decision(admissions(attempt.events)[0]!).named as Record<string, Json>[];
+    expect(named.map((entry) => (entry.identity as Record<string, Json>).key)).toEqual([
+      "Open:A",
+      "Open:B",
+    ]);
+    approved = APPROVED;
+  });
+
+  it("PE41 keeps an unresolved occurrence from reaching a later lookup", function* () {
+    opened.length = 0;
+    consulted.length = 0;
+    approved = OPEN_PROGRAM;
+
+    // The provider delegates for the admission's resolution and for
+    // reconciliation, and would answer on a third lookup.
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      install: openProvider({
+        mark: "A",
+        absentFor: 2,
+        then: "late",
+        identity: { origin: "test/open", revision: "1" },
+      }),
+    });
+
+    // Settled as unresolved, so the element says so rather than falling
+    // through to the open chain.
+    expect(attempt.failure ?? attempt.output ?? "").toContain("Cannot resolve component: Open");
+    // The third lookup never happened, so the late implementation never ran.
+    expect(consulted.filter((name) => name === "Open")).toHaveLength(2);
+    expect(opened).toEqual([]);
+    approved = APPROVED;
+  });
+
+  it("PE42 refuses a corrupted settled-import record before invoking anything", function* () {
+    opened.length = 0;
+    approved = OPEN_PROGRAM;
+
+    const first = yield* run(PROBING_DOCUMENT, {
+      install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+    });
+    expect(first.failure).toBeUndefined();
+    expect(opened).toEqual(["A"]);
+
+    /**
+     * The history an interruption right after the settled import leaves, with
+     * that record rewritten.
+     *
+     * Truncated, because a completed journal replays as a terminal result and
+     * the element is never re-entered — which would prove nothing about what a
+     * continuation reads.
+     */
+    const rewrite = (change: (record: Record<string, Json>) => Json): DurableEvent[] => {
+      const at = importsOf(first.events, "Open")[0]!;
+      return first.events.slice(0, at + 1).map((event, index) => {
+        if (index !== at || event.type !== "yield" || event.result.status !== "ok") {
+          return event;
+        }
+        const record = event.result.value as Record<string, Json>;
+        return { ...event, result: { ...event.result, value: change({ ...record }) } };
+      });
+    };
+
+    const corruptions: Record<string, (record: Record<string, Json>) => Json> = {
+      "a missing member": ({ name: _name, ...rest }) => rest,
+      "an additional member": (record) => ({ ...record, extra: 1 }),
+      "a mistyped member": (record) => ({ ...record, name: 7 }),
+      "an unknown tag": (record) => ({ ...record, settled: "something-else" }),
+      "another component's name": (record) => ({ ...record, name: "Probe" }),
+      "no record at all": () => "settled",
+    };
+
+    for (const [what, change] of Object.entries(corruptions)) {
+      opened.length = 0;
+      const replayed = yield* run(PROBING_DOCUMENT, {
+        stream: new InMemoryStream(rewrite(change)),
+        install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+      });
+
+      expect(`${what}: ${replayed.failure ?? replayed.output ?? ""}`).toContain(
+        "cannot be read as one",
+      );
+      expect([what, opened]).toEqual([what, []]);
+    }
     approved = APPROVED;
   });
 });

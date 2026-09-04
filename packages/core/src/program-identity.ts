@@ -45,7 +45,7 @@
 import type { Operation } from "effection";
 
 import type { ImportedDefinition } from "./components/import-authority.ts";
-import type { ComponentSelection, Json, JsonObject } from "./types.ts";
+import type { ComponentSelection, Json, JsonObject, Segment } from "./types.ts";
 
 /** The authored forms an element is written in. */
 export type ProgramComponentForm = "self-closing" | "paired";
@@ -103,11 +103,59 @@ export interface ProgramComponent {
   readonly identity: ProgramIdentity;
 }
 
-/** One element a program names, before its identity has been resolved. */
+/**
+ * One element a program names, before its identity has been resolved.
+ *
+ * The offset is where the element was written in the program's own source. It
+ * is what makes an occurrence an occurrence: a program writing one name twice
+ * resolves it twice, and the two answers are two settlements rather than one
+ * that the second overwrites. It is derived from the retained source every time
+ * it is needed and never retained itself.
+ */
 export interface ProgramComponentRef {
   readonly name: string;
   readonly form: ProgramComponentForm;
+  readonly offset: number;
 }
+
+/**
+ * What canonical execution settled for one authored occurrence.
+ *
+ * An unresolved occurrence is a settled outcome like any other. Leaving it out
+ * would let the element fall through to the ordinary open chain and be answered
+ * by a lookup reconciliation never made.
+ */
+export type ProgramSettlement =
+  | { readonly kind: "resolved"; readonly name: string; readonly definition: ImportedDefinition }
+  | { readonly kind: "unresolved"; readonly name: string };
+
+/** The durable result an already-authorized program occurrence records. */
+export const SETTLED_IMPORT = "program-occurrence";
+
+/**
+ * The record one settled program import writes, read back as hostile data.
+ *
+ * A closed shape of exactly two members: the tag saying which protocol wrote
+ * it, and the name it was written for. A journal is data, so a restored value
+ * that is missing a member, carries one nobody wrote, spells one differently,
+ * or names another component is not this record — and nothing is invoked on the
+ * strength of it.
+ */
+export function readSettledImport(value: unknown, name: string): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as JsonObject;
+  const own = Object.keys(record);
+  if (own.length !== 2 || !Object.hasOwn(record, "settled") || !Object.hasOwn(record, "name")) {
+    return false;
+  }
+  return record.settled === SETTLED_IMPORT && record.name === name;
+}
+
+/** What a settled program import that cannot be read as one says. */
+export const UNREADABLE_SETTLED_IMPORT =
+  "the retained record of this program component's import cannot be read as one.";
 
 /**
  * What canonical resolution settled for one name: its identity, and the copy of
@@ -119,6 +167,8 @@ export interface ProgramComponentRef {
  * for the invocation.
  */
 export interface ResolvedProgramComponent extends ProgramComponent {
+  /** Where this occurrence was written in the program's own source. */
+  readonly offset: number;
   /**
    * Core's own copy of the answer, or `undefined` when nothing was resolved or
    * the answer could not be copied.
@@ -179,6 +229,25 @@ export const UNIDENTIFIED =
 export const ANSWER_CHANGED =
   "<Evaluate> cannot evaluate a program whose component answer was changed after the provider " +
   "that supplied it claimed it.";
+
+/** Every component the program names, with the form each element is written in. */
+export function elements(
+  segments: readonly Segment[],
+  found: ProgramComponentRef[],
+): ProgramComponentRef[] {
+  for (const segment of segments) {
+    if (segment.type === "component") {
+      found.push({
+        name: segment.name,
+        form: segment.selfClosing ? "self-closing" : "paired",
+        // Where this occurrence is, so two of one name stay two.
+        offset: segment.position?.offset ?? -1,
+      });
+      elements(segment.children, found);
+    }
+  }
+  return found;
+}
 
 /** The canonical identity of what a selection chose. */
 export function selectionIdentity(selection: ComponentSelection): ProgramIdentity {

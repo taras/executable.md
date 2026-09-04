@@ -83,6 +83,7 @@ import { isJsonObject, parseJson } from "./json.ts";
 import { sourceDescription } from "./source-position.ts";
 import { validateProps } from "./validate.ts";
 import {
+  elements,
   isProgramComponentForm,
   ProgramEvaluationError,
   readIdentity,
@@ -247,20 +248,6 @@ export function pairedProgramSource(text: string): string {
  */
 export function programDigest(source: string): string {
   return sourceDigest(source);
-}
-
-/** Every component the program names, with the form each element is written in. */
-function elements(
-  segments: readonly Segment[],
-  found: ProgramComponentRef[],
-): ProgramComponentRef[] {
-  for (const segment of segments) {
-    if (segment.type === "component") {
-      found.push({ name: segment.name, form: segment.selfClosing ? "self-closing" : "paired" });
-      elements(segment.children, found);
-    }
-  }
-  return found;
 }
 
 /**

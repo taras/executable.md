@@ -2378,6 +2378,9 @@ function* executeDocument(
           const absent = (unidentified = false): ResolvedProgramComponent => ({
             name,
             form: "self-closing",
+            // The occurrence is the caller's — this answers about a name — and
+            // is filled in where the two are put together.
+            offset: -1,
             identity: UNRESOLVED,
             definition: undefined,
             unidentified,
@@ -2391,6 +2394,7 @@ function* executeDocument(
             return {
               name,
               form: "self-closing",
+              offset: -1,
               identity: { tag: "structural", construct: name },
               definition: undefined,
               unidentified: false,
@@ -2423,7 +2427,14 @@ function* executeDocument(
               );
               return yield* importComponent(name);
             });
-          } catch {
+          } catch (error) {
+            // A name nothing answers is an ordinary outcome and settles as
+            // unresolved. A refusal this boundary raised — a second provider
+            // claiming one answer, an answer changed after it was claimed — is
+            // not an outcome about the name and must not be read as one.
+            if (error instanceof ProgramEvaluationError) {
+              throw error;
+            }
             return absent();
           }
 
@@ -2465,6 +2476,7 @@ function* executeDocument(
             return {
               name,
               form: "self-closing",
+              offset: -1,
               identity: selectionIdentity(selection),
               definition: authorized,
               unidentified: false,
@@ -2475,6 +2487,7 @@ function* executeDocument(
             return {
               name,
               form: "self-closing",
+              offset: -1,
               identity: providerIdentity(
                 { origin: witness.supplied.origin, revision: witness.supplied.revision },
                 witness.supplied.key,
@@ -2498,6 +2511,7 @@ function* executeDocument(
           return {
             name,
             form: "self-closing",
+            offset: -1,
             identity: selectionIdentity(selection),
             definition: witness.canonical,
             unidentified: false,

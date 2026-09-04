@@ -22,7 +22,8 @@ import type { ComponentDefinition, FunctionComponentDefinition } from "../types.
 import type { FormSelections, InvocationIdentities } from "../invocation-identity.ts";
 import type { DeclaredImports, PrivateClosure } from "./declared-markdown.ts";
 import type { ExactSource } from "../output/exact-source.ts";
-import type { ProgramResolver } from "../program-identity.ts";
+import { ProgramEvaluationError } from "../program-identity.ts";
+import type { ProgramResolver, ProgramSettlement } from "../program-identity.ts";
 
 /** A definition an import may answer with. */
 export type ImportedDefinition = ComponentDefinition | FunctionComponentDefinition;
@@ -118,19 +119,29 @@ export interface ExpansionAuthority {
    */
   readonly resolve?: ProgramResolver;
   /**
-   * The answers an admitted program invokes, settled before its first effect.
+   * What an admitted program's own occurrences settled to, before its first
+   * effect, keyed by where each element was written.
    *
    * Canonical execution resolved these through the site's own chain, compared
    * them against the retained admission, and kept its own copy of each. An
-   * element whose name is here does not reach `Component.importComponent` at
-   * all: the chain has already answered, and asking it again would let a
-   * provider answer one way while the site was checked and another way while
-   * the program ran.
+   * element written at one of these offsets does not reach
+   * `Component.importComponent` at all: the chain has already answered, and
+   * asking it again would let a provider answer one way while the site was
+   * checked and another way while the program ran.
+   *
+   * Keyed by occurrence rather than by name, because a program writing one name
+   * twice resolved it twice and the two answers are two settlements. An
+   * unresolved occurrence is here too, so it cannot fall through to the open
+   * chain.
+   *
+   * It belongs to the program's own parsed body and travels no further: a
+   * component the program invokes expands its own bytes, and settling a name
+   * for that body would be a name-wide override nobody reconciled.
    *
    * Held by the execution and handed here by value, like everything else on
    * this object.
    */
-  readonly settled?: ReadonlyMap<string, ImportedDefinition>;
+  readonly settled?: ReadonlyMap<number, ProgramSettlement>;
 }
 
 /** Why an answer is not the one canonical execution produced for this name. */
@@ -317,7 +328,7 @@ export class CanonicalImports {
         held.supplied.key === supplied.key &&
         held.supplied.revision === supplied.revision;
       if (!same) {
-        throw new Error(
+        throw new ProgramEvaluationError(
           "Component.importComponent middleware claimed an answer another provider had claimed.",
         );
       }

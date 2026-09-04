@@ -103,8 +103,16 @@ import {
   sameComponents,
   UNIDENTIFIED,
   UNRESOLVED,
+  elements,
+  readSettledImport,
+  SETTLED_IMPORT,
+  UNREADABLE_SETTLED_IMPORT,
 } from "./program-identity.ts";
-import type { ProgramComponentRef, ResolvedProgramComponent } from "./program-identity.ts";
+import type {
+  ProgramComponentRef,
+  ProgramSettlement,
+  ResolvedProgramComponent,
+} from "./program-identity.ts";
 
 import { DeclaredMarkdownError } from "./components/declared-markdown.ts";
 import type { PrivateImport } from "./components/declared-markdown.ts";
@@ -731,10 +739,11 @@ function authorityForBody(
     return undefined;
   }
   const privates = authority.declared?.closureFor(name, definition);
-  if (privates === authority.privates) {
-    return authority;
-  }
-  const { privates: _cleared, ...rest } = authority;
+  // A program's settlements belong to the occurrences its own parsed body
+  // writes. A component the program invokes expands its own bytes, at its own
+  // offsets, which nothing reconciled — carrying them in would make a
+  // settlement a name-wide override of somebody else's element.
+  const { privates: _cleared, settled: _scoped, ...rest } = authority;
   return privates === undefined ? rest : { ...rest, privates };
 }
 
@@ -2385,22 +2394,40 @@ function* expandComponent(
   // again would be a second lookup a provider could answer differently. What
   // still happens is the ordinary durable import the authored element makes,
   // restored from the answer that was already authorized.
-  const settled = authority?.settled?.get(name);
-  if (settled !== undefined) {
-    yield createDurableOperation<Json>(
+  const settled = position === undefined ? undefined : authority?.settled?.get(position.offset);
+  if (settled !== undefined && settled.name === name) {
+    if (settled.kind === "unresolved") {
+      // Settled as unresolved, so it does not fall through to the open chain:
+      // reconciliation already asked, and nothing may answer it now.
+      return [
+        yield* raise({
+          type: "error",
+          message: `Cannot resolve component: ${name}`,
+          source: name,
+        }),
+      ];
+    }
+    const answer = settled.definition;
+    // The authored element still makes its ordinary durable import, and a
+    // continuation reads that record as the hostile data it is before anything
+    // is invoked. A record this protocol did not write authorizes nothing.
+    const record = yield createDurableOperation<Json>(
       { type: "import_component", name, ...sourceDescription(position) },
       // deno-lint-ignore require-yield
       function* (): Operation<Json> {
-        return { kind: "settled" };
+        return { settled: SETTLED_IMPORT, name };
       },
     );
-    imported = settled;
-    if (settled.kind === "function") {
-      authority?.identities?.select(name, settled);
-      authority?.forms?.select(name, settled);
+    if (!readSettledImport(record, name)) {
+      throw new Error(UNREADABLE_SETTLED_IMPORT);
+    }
+    imported = answer;
+    if (answer.kind === "function") {
+      authority?.identities?.select(name, answer);
+      authority?.forms?.select(name, answer);
     }
     selected = selection?.settle();
-    dispatcher = authority?.forms?.dispatcherFor(name, settled);
+    dispatcher = authority?.forms?.dispatcherFor(name, answer);
   } else {
     try {
       // The public chain answers, and canonical execution decides whether the
@@ -4231,7 +4258,17 @@ export function* expandProgramBody(
   // called: the resolver is canonical execution's and reaches this expansion on
   // the authority, so a handler that answered the admission's own resolution
   // dishonestly is caught by the answer it cannot reach.
-  const current = yield* resolveProgramComponents(program.named, site.authority);
+  // The occurrences the retained source writes, in the order the admission
+  // retained them. Pairing them by position is what keeps two `<Open />`
+  // elements two: they resolve separately and settle separately.
+  const occurrences = elements(program.bodySegments, []);
+  if (occurrences.length !== program.named.length) {
+    throw new ProgramEvaluationError(INCOMPATIBLE);
+  }
+  const current = yield* resolveProgramComponents(
+    program.named.map((entry, index) => ({ ...entry, offset: occurrences[index]!.offset })),
+    site.authority,
+  );
   if (current.some((entry) => entry.unidentified)) {
     throw new ProgramEvaluationError(UNIDENTIFIED);
   }
@@ -4239,15 +4276,21 @@ export function* expandProgramBody(
     throw new ProgramEvaluationError(INCOMPATIBLE);
   }
   // The answers that passed the comparison are the answers the program
-  // invokes, and they reach expansion as settled answers rather than as a
-  // second lookup. The site's own closed tiers are untouched: a bundled or
-  // declared name is still that tier's to answer, and this adds nothing to
-  // what the site closes.
-  const settled = new Map<string, ImportedDefinition>();
+  // invokes, and they reach expansion bound to the occurrence each was settled
+  // for rather than to the name. An unresolved occurrence is settled too:
+  // leaving it out would let that element fall through to the ordinary open
+  // chain and be answered by a lookup reconciliation never made.
+  //
+  // The site's own closed tiers are untouched: a bundled or declared name is
+  // still that tier's to answer, and this adds nothing to what the site closes.
+  const settled = new Map<number, ProgramSettlement>();
   for (const entry of current) {
-    if (entry.definition !== undefined && !settled.has(entry.name)) {
-      settled.set(entry.name, entry.definition);
-    }
+    settled.set(
+      entry.offset,
+      entry.definition === undefined
+        ? { kind: "unresolved", name: entry.name }
+        : { kind: "resolved", name: entry.name, definition: entry.definition },
+    );
   }
   const authority: ExpansionAuthority | undefined =
     site.authority === undefined ? { settled } : { ...site.authority, settled };
@@ -4334,14 +4377,18 @@ export function* resolveProgramComponents(
       resolved.push({
         name: entry.name,
         form: entry.form,
+        offset: entry.offset,
         identity: UNRESOLVED,
         definition: undefined,
         unidentified: false,
       });
       continue;
     }
+    // Resolved per occurrence, not per name: a program writing one name twice
+    // asks twice, and a provider answering the two differently is answering
+    // about two elements rather than changing its mind about one.
     const settled = yield* resolve(entry.name);
-    resolved.push({ ...settled, name: entry.name, form: entry.form });
+    resolved.push({ ...settled, name: entry.name, form: entry.form, offset: entry.offset });
   }
   return resolved;
 }

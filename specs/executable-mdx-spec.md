@@ -4892,18 +4892,36 @@ admission's own resolution through `Component.resolveProgramSite()`, and
 answering it dishonestly refuses the evaluation rather than widening it, because
 the canonical comparison is what decides.
 
-**The comparison and the invocation are one decision.** The answers that passed
-the comparison are the answers the program invokes. Canonical execution keeps
-its own copy of each, taken when the answer was witnessed, and hands those
-copies to the program's expansion: an element whose name is among them does not
-reach `Component.importComponent` at all. The chain is entered twice for one
-evaluation — once for the admission's resolution, once for reconciliation — and
-never again, so there is no third lookup for a provider to answer differently.
+**The comparison and the invocation are one decision, and it is made per
+occurrence.** Each element the program writes is resolved on its own, in the
+order the admission retained, and the answer that passed the comparison is bound
+to *that* element rather than to its name. A program writing one name twice
+resolved it twice: if a provider supplies two implementations under two stable
+keys, the two elements invoke the two implementations, in order. An element
+settled as **unresolved** is settled too — it reports the ordinary unresolved
+failure and never falls through to the open chain, where a later lookup could
+answer what reconciliation did not.
+
+Canonical execution keeps its own copy of each answer, taken when it was
+witnessed, and hands those copies to the program's expansion: a settled element
+does not reach `Component.importComponent` at all. The chain is entered twice
+for one evaluation — once for the admission's resolution, once for
+reconciliation — and never again, so there is no third lookup for a provider to
+answer differently.
+
+Settlements belong to the program's own parsed body. A component the program
+invokes expands its own bytes, which nothing reconciled, so it imports exactly
+as it always did.
 
 The authored element still makes its ordinary durable import: one
-`import_component` record per occurrence, written after the admission and
-restored from the answer already authorized, with identity-domain and form
-selection recorded from that same answer. It rediscovers no authority.
+`import_component` record per settled occurrence, written after the admission.
+Its result is a closed shape of exactly two members — `settled`, holding
+`"program-occurrence"`, and `name` — and a continuation parses it as the hostile
+replay data it is before anything is invoked. A record missing a member,
+carrying one nobody wrote, spelling one differently, holding an unknown tag, or
+naming another component is refused, and the component does not run. Identity
+domain and form selection are recorded from the already-authorized answer; the
+record rediscovers no authority.
 
 **The retained record is hostile data.** A journal is a file, and replay hands
 back whatever it holds. The admitted and refused decisions and every nested
@@ -12437,6 +12455,9 @@ forms sit beside the restricted one.
 | PE37 | The closed positive control | With no replacement, the declared answer is what the program invokes and what the admission retains |
 | PE38 | Identity captured once | Editing the stated identity after the claimant exists does not change what its claims are marked with |
 | PE39 | An alternating origin | A getter cannot answer the duplicate check and the claim differently |
+| PE40 | Two occurrences of one name | A program writing `<Open /><Open />` against a provider supplying A then B under distinct keys invokes A then B, not A twice |
+| PE41 | An unresolved occurrence | A provider that delegates through both resolution passes and would answer a third leaves the element unresolved: the third lookup never happens and the late implementation never runs |
+| PE42 | A corrupted settled import | A missing, additional, mistyped or unknown member in the settled `import_component` result, and one naming another component, each refuse before the component is invoked |
 | EP1–EP8 | Run profile | The ordinary run profile declares `<Evaluate>`; the forms, props, refusals and catalog entry hold through the real binary, and a program cannot reach `<Plan>`'s private components |
 | WGAC17–WGAC20 | Workflow profile | A complete program records `evaluate_program` and no `generated_xmd`; the three forms cannot be combined; complete-program support is not reachable through `source` |
 
