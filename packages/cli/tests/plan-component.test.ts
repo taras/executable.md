@@ -308,7 +308,14 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
 
   it("PC6: the private capabilities resolve nowhere a document can write", function* () {
     yield* useWorkingDirectory(function* () {
-      for (const name of ["PlanInputs", "PlanAuthorship", "CheckDraft", "AdmitPlan"]) {
+      for (const name of [
+        "Syntax",
+        "PlanInputs",
+        "PlanAuthorship",
+        "PlanProgress",
+        "CheckDraft",
+        "AdmitPlan",
+      ]) {
         const run = yield* runDocument({
           source: [`<${name} as="x" />`, ""].join("\n"),
           reviews: [],
@@ -338,7 +345,14 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
 
       for (const category of catalog.categories) {
         const names = category.entries.map((entry) => entry.name);
-        for (const priv of ["PlanInputs", "PlanAuthorship", "CheckDraft", "AdmitPlan"]) {
+        for (const priv of [
+          "Syntax",
+          "PlanInputs",
+          "PlanAuthorship",
+          "PlanProgress",
+          "CheckDraft",
+          "AdmitPlan",
+        ]) {
           expect(names).not.toContain(priv);
         }
       }
@@ -421,11 +435,20 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       // differently and a review nobody scripted. Neither is reached: the turn,
       // the check, the approval and the admission are all restored.
       const partial = yield* continuing(first);
+      let catalogs = 0;
       const two = yield* runDocument({
         source,
         reply: "# A different Plan\n\nnot this one.\n",
         reviews: [],
         stream: partial,
+        harness: yield* planDeclarationHarness({
+          surface: "component",
+          authorshipRoot: yield* authorshipRoot(),
+          *catalog() {
+            catalogs += 1;
+            throw new Error("a restored syntax snapshot was rebuilt");
+          },
+        }),
       });
 
       expect(two.failure).toBe(undefined);
@@ -433,6 +456,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       expect(two.harness.fake.prompts).toEqual([]);
       expect(two.harness.reviews).toEqual([]);
       expect(two.harness.checked).toEqual([]);
+      expect(catalogs).toBe(0);
     });
   });
 
@@ -978,7 +1002,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       // a member of the wrong type. Each is refused with the same fixed
       // sentence, and none of them produces source or a binding.
       const cases: [string, (value: Json) => Json][] = [
-        ["a member is missing", (value) => ({ syntax: Object(value).syntax })],
+        ["the member is missing", () => ({})],
         [
           "a member this version does not know was added",
           (value) => ({ ...Object(value), extra: "surprise" }),
@@ -995,6 +1019,37 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         expect(run.output).not.toContain("got:");
         expect(run.output).not.toContain("# Say hello");
         expect(run.emitted).not.toContain("# Say hello");
+      }
+    });
+  });
+
+  it("PC27: the private syntax snapshot is closed and hostile records produce nothing", function* () {
+    yield* useWorkingDirectory(function* () {
+      const approved = yield* approvedRun();
+      const syntax = (yield* approved.readAll()).find(
+        (event) => event.type === "yield" && event.description.name.startsWith("plan:syntax:"),
+      );
+      expect(syntax?.type).toBe("yield");
+      if (syntax?.type !== "yield" || syntax.result.status !== "ok") {
+        throw new Error("the approved run retained no syntax snapshot");
+      }
+      const value = Object(syntax.result.value);
+      expect(Object.keys(value)).toEqual(["syntax"]);
+      expect(typeof value.syntax).toBe("string");
+
+      const cases: [string, (value: Json) => Json][] = [
+        ["the member is missing", () => ({})],
+        ["an unknown member was added", (record) => ({ ...Object(record), extra: true })],
+        ["the member has the wrong type", () => ({ syntax: 7 })],
+      ];
+
+      for (const [, replace] of cases) {
+        const run = yield* continued(yield* tampered(approved, "plan:syntax:", replace));
+        expect(run.failure).toContain("retained Plan syntax cannot be read as syntax");
+        expect(run.output).not.toContain("got:");
+        expect(run.output).not.toContain("# Say hello");
+        expect(run.harness.fake.prompts).toEqual([]);
+        expect(run.harness.reviews).toEqual([]);
       }
     });
   });

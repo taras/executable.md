@@ -2842,11 +2842,15 @@ it emits that source where the component is written, and `as` is ordinary text
 capture: the same bytes are bound and nothing is emitted. Neither form
 evaluates the source, and neither announces a phase: the progress `xmd plan`
 writes is a private side effect of the command surface, and an ordinary `<Plan>`
-expands no progress body at all. Its five private
-capabilities — `<PlanInputs>`, `<PlanAuthorship>`, `<PlanProgress>`,
-`<CheckDraft>` and
+expands no progress body at all. Its six private capabilities — `<Syntax>`,
+`<PlanInputs>`, `<PlanAuthorship>`, `<PlanProgress>`, `<CheckDraft>` and
 `<AdmitPlan>` — are the closure those exact bytes carry, and are syntax no
-document may write. [The plan command](./plan-command-spec.md) is the contract.
+document may write. `<Syntax>` observes and durably freezes the host-supplied run
+vocabulary before `<PlanInputs>` records the instruction identity and session
+facts. Their retained records are separate closed protocols, exactly
+`{ syntax }` and `{ instruction }`; malformed members refuse before authorship,
+and continuation restores the catalog already shown rather than rebuilding it.
+[The plan command](./plan-command-spec.md) is the contract.
 
 **Which Agent a Plan is written with is the host's to say, not the Component's.**
 The declaration carries a trusted-host capability: the agent a Plan conversation
@@ -10813,7 +10817,7 @@ rather than restating.
 | PO6/PO7 | Channels and grammar | A non-terminal stderr receives normalized Markdown and a stated terminal receives it rendered, while stdout and `--output` stay byte-identical; `--verbose` and `--journal` work on either side of the request, help carries them and the journal warning, and the short aliases, every removed spelling and a retained option that reaches this grammar written where the journal path goes all refuse before any work, while `--help` keeps its ordinary precedence |
 | PO8/PO9/PO16 | The journal file | No `--journal` writes no file; one creates the path before the catalog and the first turn, parses as the existing JSONL in commit order, ends terminally and holds no program execution; an existing path and an uncreatable one each report their exact refusal and reach nothing; and an ordinary failure — where no append failed — leaves a wholly parseable file with no partial trailing record |
 | PO10–PO12 | The secret and persistence boundaries | A secret in a draft or in a failed check's findings reaches neither the progress nor the file while the earlier prefix stays readable, and the same values without it are shown and recorded; a refused entry reports the exact journal-write diagnostic and preserves what committed |
-| PO13–PO15 | Failure and ordering | A progress destination that fails cancels the live turn, waits for every owned teardown and delivers nothing; every existing ending keeps its order and no phase claims delivery; the packaged adapter says nothing of its own and the catalog is built once, from `<PlanInputs>` |
+| PO13–PO15 | Failure and ordering | A progress destination that fails cancels the live turn, waits for every owned teardown and delivers nothing; every existing ending keeps its order and no phase claims delivery; the packaged adapter says nothing of its own and the catalog is built once, from private `<Syntax>`, while continuation restores that snapshot without rebuilding it |
 
 ### Tier UG — The `xmd upgrade` command
 

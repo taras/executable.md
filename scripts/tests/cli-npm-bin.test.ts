@@ -221,6 +221,7 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     expect(plan.forms).toEqual(["paired"]);
     // And no private capability is syntax a document may write, in any build.
     for (const name of [
+      "Syntax",
       "PlanInputs",
       "PlanAuthorship",
       "PlanProgress",

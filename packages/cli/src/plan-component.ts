@@ -1,5 +1,5 @@
 /**
- * `<Plan>` — how this host declares the component, and the five private
+ * `<Plan>` — how this host declares the component, and the six private
  * capabilities only its own bytes may write.
  *
  * The Component itself is `src/documents/Plan.md` rather than anything here:
@@ -27,9 +27,9 @@
  *
  * ## Why the capabilities are private
  *
- * `<PlanInputs>`, `<PlanAuthorship>`, `<PlanProgress>`, `<CheckDraft>` and
- * `<AdmitPlan>` are the phases of one invocation, not components anyone composes
- * with. Freezing the inputs, installing a constrained Agent frame, telling an
+ * `<Syntax>`, `<PlanInputs>`, `<PlanAuthorship>`, `<PlanProgress>`, `<CheckDraft>`
+ * and `<AdmitPlan>` are operations of one invocation, not components anyone
+ * composes with. Freezing the inputs, installing a constrained Agent frame, telling an
  * operator which phase is running, answering about a draft and admitting the
  * approved bytes are each meaningless outside the workflow that orders them —
  * and each carries authority the enclosing document does not have.
@@ -234,19 +234,26 @@ const INPUTS_RETURNS = {
 };
 
 /**
- * What the frozen inputs are given: the caller's optional session name, and the
- * prompt this invocation is about.
+ * What the frozen inputs are given: the caller's optional session name, the
+ * prompt this invocation is about, and the syntax `<Syntax>` already froze.
  *
- * The prompt is here so that the first durable record of the invocation is
- * about a question as well as a catalog. Only its digest is kept.
+ * Only the prompt's digest is retained here. The syntax has its own durable
+ * record, so each protocol can be read and reconciled independently.
  */
 const INPUTS_PROPS = {
   type: "object",
   properties: {
     session: { type: "string", minLength: 1 },
     instruction: { type: "string" },
+    syntax: { type: "string" },
   },
-  required: ["instruction"],
+  required: ["instruction", "syntax"],
+  additionalProperties: false,
+};
+
+const NO_PROPS = {
+  type: "object",
+  properties: {},
   additionalProperties: false,
 };
 
@@ -347,6 +354,7 @@ export function* planComponentDeclaration(
     // formatting it as Markdown would publish bytes nobody approved.
     exact: true,
     privates: [
+      planSyntax(assembly),
       planInputs(assembly),
       planAuthorship(assembly),
       planProgress(assembly),
@@ -404,6 +412,12 @@ export function* planComponentDescription(): Operation<DeclaredMarkdownComponent
 function describedPrivates(): readonly IdentityComponent[] {
   const described: readonly Omit<IdentityComponent, "origin" | "factory">[] = [
     {
+      name: "Syntax",
+      props: NO_PROPS,
+      returns: { type: "string" },
+      forms: ["self-closing"],
+    },
+    {
       name: "PlanInputs",
       props: INPUTS_PROPS,
       returns: INPUTS_RETURNS,
@@ -429,17 +443,53 @@ function* uninvocable(): Operation<never> {
   );
 }
 
+/** Read the author-visible run vocabulary supplied by this Plan's host. */
+function planSyntax(assembly: PlanComponentAssembly): IdentityComponent {
+  return {
+    name: "Syntax",
+    origin: `${PLAN_ORIGIN}#Syntax`,
+    forms: ["self-closing"],
+    props: NO_PROPS,
+    returns: { type: "string" },
+    factory: (claim: IdentityClaimant) =>
+      function* Syntax(
+        _props: Record<string, Json>,
+        invocation: ComponentInvocation,
+      ): Operation<Json> {
+        const id = yield* claim(invocation);
+        const frozen = yield* durablePlanOperation<Json>(`plan:syntax:${id}`, function* () {
+          return { syntax: yield* assembly.catalog() };
+        });
+        const retained = readSyntax(frozen);
+        if (retained === undefined) {
+          throw new StaleInputError(UNREADABLE_SYNTAX);
+        }
+        return retained;
+      },
+  };
+}
+
+function readSyntax(value: Json): string | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const { syntax } = value;
+  if (Object.keys(value).length !== 1 || typeof syntax !== "string") {
+    return undefined;
+  }
+  return syntax;
+}
+
+const UNREADABLE_SYNTAX =
+  "the retained Plan syntax cannot be read as syntax, so no Plan source was produced.";
+
 /**
  * Freeze this invocation's authorship inputs, and retain them.
  *
- * The catalog is an observation the first Agent turn is built from, so it is
- * journaled: a continuation restores what the run actually showed the agent
- * rather than rebuilding one from a working tree that has moved. The instruction
- * identity beside it is what makes a continuation answerable at all: this is the
- * first durable record of the invocation, so comparing it here refuses a Plan
- * asked for different instructions before a directory, a provider, a turn, a
- * review or an admission exists — the only place that can refuse without having
- * already done some of the work it would be refusing.
+ * The syntax is the retained observation `<Syntax>` supplied. The instruction
+ * identity here makes a continuation answerable at all: comparing it refuses a
+ * Plan asked under another prompt before a directory, a provider, a turn, a
+ * review or an admission exists.
  *
  * The session placement is derived here too, from the durable identity canonical
  * execution minted for this exact expansion — which is what makes two `<Plan>`
@@ -467,9 +517,10 @@ function planInputs(assembly: PlanComponentAssembly): IdentityComponent {
         const session = placementFor(assembly, id, authored);
 
         const instruction = sourceDigest(String(props.instruction));
+        const syntax = String(props.syntax);
 
         const frozen = yield* durablePlanOperation<Json>(`plan:inputs:${id}`, function* () {
-          return { syntax: yield* assembly.catalog(), instruction };
+          return { instruction };
         });
 
         // A history is input, so it is parsed rather than trusted.
@@ -482,7 +533,7 @@ function planInputs(assembly: PlanComponentAssembly): IdentityComponent {
         }
 
         return {
-          syntax: retained.syntax,
+          syntax,
           session,
           surface: assembly.surface,
           durable: durability(assembly, authored),
@@ -692,14 +743,13 @@ function checkDraft(validate: StructuralValidation): IdentityComponent {
 
 /** What the frozen inputs retained, or nothing when the record is not one. */
 interface RetainedInputs {
-  readonly syntax: string;
   readonly instruction: string;
 }
 
 /**
  * The frozen inputs a record holds, read as a closed protocol.
  *
- * Exactly two members, both strings. A record missing one, carrying a member
+ * Exactly one string member. A record missing it, carrying a member
  * this version does not know, or holding one of the wrong type is a record this
  * version cannot read — not one to fill in a default for, because every default
  * here is a guess about what an earlier run actually asked.
@@ -708,14 +758,14 @@ function readInputs(value: Json): RetainedInputs | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }
-  const { syntax, instruction } = value;
-  if (Object.keys(value).length !== 2) {
+  const { instruction } = value;
+  if (Object.keys(value).length !== 1) {
     return undefined;
   }
-  if (typeof syntax !== "string" || typeof instruction !== "string") {
+  if (typeof instruction !== "string") {
     return undefined;
   }
-  return { syntax, instruction };
+  return { instruction };
 }
 
 /**

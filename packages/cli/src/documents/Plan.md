@@ -71,7 +71,8 @@ word a person reads, for the same reason.
 Getting the available XMD components and constructs and setting up the planning session.
 </PlanProgress>
 
-<PlanInputs session={props.session} instruction={prompt} as="inputs" />
+<Syntax as="syntax" />
+<PlanInputs session={props.session} instruction={prompt} syntax={syntax} as="inputs" />
 
 ## Say what this surface calls things
 
