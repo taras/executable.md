@@ -28,6 +28,7 @@ import {
 } from "../storage/members.ts";
 import {
   type DefinitionRetrieval,
+  type DocumentExecutionRecord,
   parseRunId,
   parseWorkflowRunStatus,
   parseWorkflowStopReason,
@@ -139,5 +140,40 @@ export function parseRemoteJournalEntry(value: unknown): JournalEntry {
     eventId,
     event: event.value,
     workspaceRootId: rootId(members.get("workspaceRootId"), "$.workspaceRootId"),
+  });
+}
+
+/**
+ * One document execution, read out of a value nothing has checked.
+ *
+ * The shared rules the local host holds its own rows to, applied to what
+ * arrived. A stopped execution has to carry its status, and a stop reason has
+ * to agree with the way the record spells one — an execution that stopped for a
+ * reason the shape does not admit is not a record this build can act on.
+ */
+export function parseRemoteExecution(value: unknown): DocumentExecutionRecord {
+  const found = parseMembers(value, "$", fail);
+  const executionId = parseStringMember(found, "executionId", "$", fail);
+  if (executionId === "") {
+    throw fail("expected a non-empty identity", "$.executionId");
+  }
+  const record: DocumentExecutionRecord = {
+    executionId,
+    startedAt: instant(found.get("startedAt"), "$.startedAt"),
+  };
+  if (!found.has("stoppedAt")) {
+    return Object.freeze(record);
+  }
+  const stopped: DocumentExecutionRecord = {
+    ...record,
+    stoppedAt: instant(found.get("stoppedAt"), "$.stoppedAt"),
+    stopStatus: parseWorkflowRunStatus(found.get("stopStatus"), "$.stopStatus", fail),
+  };
+  if (!found.has("stopReason")) {
+    return Object.freeze(stopped);
+  }
+  return Object.freeze({
+    ...stopped,
+    stopReason: parseWorkflowStopReason(found.get("stopReason"), "$.stopReason", fail),
   });
 }

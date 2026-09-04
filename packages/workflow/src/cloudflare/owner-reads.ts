@@ -26,7 +26,7 @@
  */
 
 import { parseDurableEvent } from "@executablemd/durable-streams";
-import { readRetrieval, readRunRecord, type Row } from "../sqlite/rows.ts";
+import { readDocumentExecution, readRetrieval, readRunRecord, type Row } from "../sqlite/rows.ts";
 import { WorkflowRecordMalformedError } from "../storage/errors.ts";
 import {
   parseWorkspaceRootManifest,
@@ -37,6 +37,8 @@ import {
 import { type ContentManifest, decodeContentManifest } from "../workspace/content-manifest.ts";
 import {
   CommandError,
+  EXECUTION_PAGE_BYTES,
+  EXECUTION_PAGE_ENTRIES,
   JOURNAL_PAGE_BYTES,
   JOURNAL_PAGE_ENTRIES,
   MAX_CONTENT_BYTES,
@@ -465,4 +467,89 @@ function piece(
     return corrupt("a blob is not referenced by the named DOFS manifest");
   }
   return validatedBlob(storage, rootId, root.manifests, digest);
+}
+
+/** One page of document executions, anchored to the snapshot that began it. */
+export interface ExecutionsValue {
+  readonly runId: string;
+  readonly anchor: number | null;
+  readonly after: number | null;
+  readonly rows: readonly { readonly sequence: number; readonly record: Row }[];
+  readonly done: boolean;
+}
+
+/**
+ * Read one bounded page of the executions this run has begun.
+ *
+ * Anchored the way the journal is, and for the same reason: a caller assembling
+ * a list across several requests must see one snapshot rather than whatever the
+ * table held at each moment. The first page fixes the terminal sequence; every
+ * later page is constrained to it, so an execution begun while the read is in
+ * flight cannot appear halfway through the answer.
+ *
+ * The run identity travels with the page so the runner can refuse an answer
+ * from another run, and the sequence travels so it can prove adjacency. Neither
+ * becomes part of the semantic record.
+ */
+export function readExecutions(
+  storage: OwnerStorage,
+  runId: string,
+  anchor: number | null,
+  after: number | null,
+): ExecutionsValue {
+  if (anchor === null) {
+    const last = byteRows(
+      storage,
+      "SELECT sequence FROM document_executions ORDER BY sequence DESC LIMIT 1",
+    )[0];
+    if (last !== undefined) {
+      return corrupt("an empty execution snapshot was anchored against existing rows");
+    }
+    return { runId, anchor, after, rows: [], done: true };
+  }
+
+  const found = byteRows(
+    storage,
+    `SELECT sequence, execution_id, started_at, stopped_at, stop_status,
+            stop_reason_kind, stop_reason_code, stop_reason_event_id
+       FROM document_executions
+      WHERE sequence > ? AND sequence <= ? ORDER BY sequence ASC LIMIT ?`,
+    after ?? 0,
+    anchor,
+    EXECUTION_PAGE_ENTRIES + 1,
+  );
+
+  const page: { sequence: number; record: Row }[] = [];
+  let encoded = 0;
+  for (const row of found.slice(0, EXECUTION_PAGE_ENTRIES)) {
+    const at = safeInteger(row["sequence"], "execution sequence");
+    // Parsed here as well as on the runner: a row this owner cannot read is
+    // storage damage, and sending it would make the runner report damage it
+    // cannot attribute.
+    readDocumentExecution(row);
+    const bytes = new TextEncoder().encode(JSON.stringify(row)).length;
+    if (page.length > 0 && encoded + bytes > EXECUTION_PAGE_BYTES) {
+      break;
+    }
+    if (bytes > MAX_CONTENT_BYTES) {
+      throw new CommandError("too-large");
+    }
+    page.push({ sequence: at, record: row });
+    encoded += bytes;
+  }
+
+  const done = found.length <= page.length;
+  if (done && page.at(-1)?.sequence !== anchor) {
+    return corrupt("an anchored execution snapshot is incomplete");
+  }
+  return { runId, anchor, after, rows: page, done };
+}
+
+/** The terminal execution sequence right now, or `null` when there is none. */
+export function executionAnchor(storage: OwnerStorage): number | null {
+  const last = byteRows(
+    storage,
+    "SELECT sequence FROM document_executions ORDER BY sequence DESC LIMIT 1",
+  )[0];
+  return last === undefined ? null : safeInteger(last["sequence"], "execution sequence");
 }

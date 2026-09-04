@@ -51,6 +51,7 @@ import { MAX_CONTENT_BYTES } from "./commands.ts";
 import { sha256Hex } from "../workspace/sha256.ts";
 import { CommandError, type CommitCommand, type ProposedMapping } from "./commands.ts";
 import { validateRetainedRoot } from "./owner-reads.ts";
+import { readRetrieval } from "../sqlite/rows.ts";
 import { bytesOf } from "./encoding.ts";
 import { STAGING_TABLE } from "./private-schema.ts";
 import type { OwnerStorage } from "./storage.ts";
@@ -677,4 +678,85 @@ function applyMapping(storage: OwnerStorage, mapping: ProposedMapping): void {
   ) {
     throw new CommandError("mapping-conflict");
   }
+}
+
+/** What the owner answers a performed retrieval replacement with. */
+export interface RetrievalValue {
+  readonly retrieval: {
+    readonly metadata: unknown;
+    readonly revision: number;
+    readonly updatedAt: string;
+  } | null;
+}
+
+/**
+ * Replace or clear where this run's definition can be fetched from.
+ *
+ * Its own mutation rather than a degenerate commit. Nothing is appended to the
+ * journal, no root moves, and the revision is the owner's arithmetic over what
+ * is stored rather than a number the runner proposed — two handles that both
+ * read revision one before either wrote would otherwise both write two, and the
+ * second would silently lose the first.
+ *
+ * The expected root is revalidated here, inside the transaction that writes, so
+ * a replacement proposed against a frontier that has moved is refused on the
+ * same terms a commit is.
+ */
+export function applyRetrieval(
+  storage: OwnerStorage,
+  command: { expectedWorkspaceRootId: string; metadata: string | null },
+  now: () => string,
+): RetrievalValue {
+  const state = rows(storage, "SELECT current_root_id FROM workspace_state WHERE singleton_id = 1");
+  const current = state[0]?.["current_root_id"];
+  if (state.length !== 1 || typeof current !== "string") {
+    return corrupt("the Workspace has no single current root");
+  }
+  if (current !== command.expectedWorkspaceRootId) {
+    throw new CommandError("stale-root");
+  }
+  validateRetainedRoot(storage, current);
+
+  if (command.metadata === null) {
+    // Clearing removes the row. The next replacement starts counting again,
+    // because a revision counts replacements since the metadata last existed.
+    storage.sql.exec("DELETE FROM definition_retrieval WHERE id = 1");
+    return { retrieval: null };
+  }
+
+  const held = rows(storage, "SELECT revision FROM definition_retrieval WHERE id = 1")[0];
+  const revision = held === undefined ? 1 : safeRevision(held["revision"]) + 1;
+  const updatedAt = now();
+  storage.sql.exec(
+    `INSERT INTO definition_retrieval (id, metadata, revision, updated_at) VALUES (1, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET metadata = excluded.metadata,
+        revision = excluded.revision, updated_at = excluded.updated_at`,
+    command.metadata,
+    revision,
+    updatedAt,
+  );
+
+  const written = rows(
+    storage,
+    "SELECT metadata, revision, updated_at FROM definition_retrieval WHERE id = 1",
+  )[0];
+  if (written === undefined) {
+    return corrupt("a retrieval replacement wrote no row");
+  }
+  // Read back and parsed, so the answer describes what is actually stored.
+  const parsed = readRetrieval(written);
+  return {
+    retrieval: {
+      metadata: parsed.metadata,
+      revision: parsed.revision,
+      updatedAt: parsed.updatedAt,
+    },
+  };
+}
+
+function safeRevision(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    return corrupt("a retained retrieval revision is not a positive whole number");
+  }
+  return value;
 }

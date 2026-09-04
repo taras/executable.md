@@ -35,6 +35,7 @@ import type { CommitIntent, OwnerLink, StartingFrontier } from "../remote/collec
 import type { CommitDecision } from "../remote/publication.ts";
 import { OwnerLinkError, type OwnerAnswer, type OwnerConnection } from "../remote/client.ts";
 import {
+  parseRemoteExecution,
   parseRemoteJournalEntry,
   parseRemoteRetrieval,
   parseRemoteRunRecord,
@@ -54,7 +55,16 @@ import {
   type WorkspaceRootManifest,
 } from "../workspace/root-manifest.ts";
 import { decodeContentManifest } from "../workspace/content-manifest.ts";
-import { JOURNAL_PAGE_ENTRIES, MAX_CONTENT_BYTES } from "./commands.ts";
+import { EXECUTION_PAGE_ENTRIES, JOURNAL_PAGE_ENTRIES, MAX_CONTENT_BYTES } from "./commands.ts";
+import type { RemoteRunLink } from "../remote/database.ts";
+import {
+  WorkflowDatabaseCorruptError,
+  WorkflowRecordMalformedError,
+  WorkflowRequestError,
+  WorkflowStorageError,
+  WorkflowTransactionError,
+} from "../storage/errors.ts";
+import type { DocumentExecutionRecord } from "../storage/record.ts";
 import { decodeBase64, encodeBase64, sha256Hex } from "./encoding.ts";
 
 export type PrivateRefusal =
@@ -70,6 +80,9 @@ export type PrivateRefusal =
   | "command:duplicate-conflict"
   | "command:capacity"
   | "command:unavailable"
+  | "command:stale-root"
+  | "command:stale-journal"
+  | "command:mapping-conflict"
   | "storage:foreign"
   | "storage:unsupported-version"
   | "storage:corrupt";
@@ -143,6 +156,9 @@ function privateRefusal(value: string): PrivateRefusal {
     case "command:duplicate-conflict":
     case "command:capacity":
     case "command:unavailable":
+    case "command:stale-root":
+    case "command:stale-journal":
+    case "command:mapping-conflict":
     case "storage:foreign":
     case "storage:unsupported-version":
     case "storage:corrupt":
@@ -558,4 +574,192 @@ export function* stageCloudflareContent(
       privateRefusal,
     ),
   );
+}
+
+/**
+ * The runner's production link to everything the database asks for.
+ *
+ * Wraps the publication link with the two reads and one mutation the database
+ * needs, so a handle receives one seam rather than assembling the protocol
+ * itself. Every answer is parsed and cross-checked against the request before
+ * it becomes a semantic value, and every failure crosses as a provider-neutral
+ * storage error rather than as a private refusal.
+ */
+export function cloudflareRunLink(
+  connection: OwnerConnection,
+  reads: RemoteReadLink,
+  nextId: () => string,
+): RemoteRunLink {
+  const publication = cloudflareOwnerLink(connection, reads, nextId);
+  return {
+    frontier: publication.frontier,
+    commit: publication.commit,
+
+    *frontierSnapshot(): Operation<RemoteFrontierSnapshot> {
+      return yield* reads.frontier();
+    },
+
+    *replaceRetrieval(
+      expectedWorkspaceRootId: string,
+      metadata: string | null,
+    ): Operation<Result<DefinitionRetrieval | undefined>> {
+      // One identity per invocation, minted here. Two calls carrying identical
+      // metadata are two replacements and must not collapse into one, so the
+      // identity is not derived from the request's content.
+      const id = nextId();
+      try {
+        const answered = yield* connection.ask(
+          id,
+          { command: "retrieval", expectedWorkspaceRootId, metadata },
+          (value) => {
+            const found = members(value, ["retrieval"]);
+            const held = found.get("retrieval");
+            if (held === null) {
+              if (metadata !== null) {
+                return fail("a retrieval answer cleared a replacement that was not a clear");
+              }
+              return undefined;
+            }
+            const parsed = parseRemoteRetrieval(held);
+            if (parsed === undefined || metadata === null) {
+              return fail("a retrieval answer disagreed with the replacement it answered");
+            }
+            return parsed;
+          },
+          privateRefusal,
+        );
+        return answered.outcome === "refused"
+          ? Err(storageFailure(privateRefusal(answered.refusal)))
+          : Ok(answered.value);
+      } catch (error) {
+        return Err(translate(error));
+      }
+    },
+
+    *readExecutions(): Operation<Result<DocumentExecutionRecord[]>> {
+      try {
+        const found: { sequence: number; record: DocumentExecutionRecord }[] = [];
+        let anchor: number | null | undefined;
+        let after: number | null = null;
+        let done = false;
+        while (!done) {
+          const page: ExecutionPage = yield* askPage(connection, nextId(), anchor ?? null, after);
+          anchor ??= page.anchor;
+          if (page.anchor !== (anchor ?? null) || page.after !== after) {
+            return Err(
+              new WorkflowRecordMalformedError(
+                "document executions",
+                "a page did not continue its anchored snapshot",
+              ),
+            );
+          }
+          for (const row of page.rows) {
+            found.push(row);
+          }
+          after = page.rows.at(-1)?.sequence ?? after;
+          done = page.done;
+        }
+        return Ok(found.map((row) => row.record));
+      } catch (error) {
+        return Err(translate(error));
+      }
+    },
+  };
+}
+
+/** One execution page, with the private ordering the runner checks adjacency by. */
+interface ExecutionPage {
+  readonly anchor: number | null;
+  readonly after: number | null;
+  readonly rows: readonly { readonly sequence: number; readonly record: DocumentExecutionRecord }[];
+  readonly done: boolean;
+}
+
+function* askPage(
+  connection: OwnerConnection,
+  id: string,
+  anchor: number | null,
+  after: number | null,
+): Operation<ExecutionPage> {
+  const answered = yield* connection.ask(
+    id,
+    { command: "executions", anchor: anchor === 0 ? null : anchor, after },
+    (value): ExecutionPage => {
+      const found = members(value, ["runId", "anchor", "after", "rows", "done"]);
+      const offered = found.get("rows");
+      if (!Array.isArray(offered) || offered.length > EXECUTION_PAGE_ENTRIES) {
+        return fail("an execution page was not one bounded page");
+      }
+      if (typeof found.get("done") !== "boolean") {
+        return fail("an execution page did not say whether it was terminal");
+      }
+      let previous = after;
+      const rows = offered.map((entry) => {
+        const item = members(entry, ["sequence", "record"]);
+        const sequence = item.get("sequence");
+        if (typeof sequence !== "number" || !Number.isSafeInteger(sequence) || sequence < 1) {
+          return fail("an execution row did not carry a position");
+        }
+        if (previous !== null && sequence <= previous) {
+          return fail("an execution page repeated or reordered a row");
+        }
+        previous = sequence;
+        return { sequence, record: parseRemoteExecution(item.get("record")) };
+      });
+      return {
+        anchor: nullableSequence(found.get("anchor")),
+        after: nullableSequence(found.get("after")),
+        rows,
+        done: found.get("done") === true,
+      };
+    },
+    privateRefusal,
+  );
+  if (answered.outcome === "refused") {
+    throw new CloudflareOwnerRefusalError(privateRefusal(answered.refusal));
+  }
+  return answered.value;
+}
+
+function nullableSequence(value: unknown): number | null {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    return fail("an execution page did not name a position");
+  }
+  return value;
+}
+
+/**
+ * The provider-neutral failure one private refusal becomes.
+ *
+ * A caller learns the category the local host would have reported for the same
+ * condition. Command names, refusal spellings, rows and cursors stay below this
+ * line: they describe a protocol nobody above here is party to.
+ */
+function storageFailure(refusal: PrivateRefusal): WorkflowStorageError {
+  if (refusal.startsWith("storage:")) {
+    return new WorkflowDatabaseCorruptError("the workflow run's remote storage", refusal.slice(8));
+  }
+  if (refusal === "command:stale-root" || refusal === "command:stale-journal") {
+    return new WorkflowTransactionError(
+      "this run has moved since the operation read it, so the change was not applied.",
+    );
+  }
+  if (refusal === "command:capacity") {
+    return new WorkflowRequestError("this run's owner cannot accept more work on this connection.");
+  }
+  return new WorkflowTransactionError("this run's owner refused the operation.");
+}
+
+/** Any failure from the private protocol, as a provider-neutral one. */
+function translate(error: unknown): WorkflowStorageError {
+  if (error instanceof CloudflareOwnerRefusalError) {
+    return storageFailure(error.refusal);
+  }
+  if (error instanceof WorkflowStorageError) {
+    return error;
+  }
+  return new WorkflowTransactionError("this run's owner could not be reached.");
 }

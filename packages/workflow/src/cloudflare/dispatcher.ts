@@ -44,14 +44,34 @@ import {
   type RunnerCommand,
 } from "./commands.ts";
 import { bytesOf, decodeBase64, sha256Hex } from "./encoding.ts";
-import { readContent, readFrontier, readJournalPage, readRoot } from "./owner-reads.ts";
+import {
+  readContent,
+  readExecutions,
+  readFrontier,
+  readJournalPage,
+  readRoot,
+} from "./owner-reads.ts";
 import type { OwnerTransactions } from "./owner-transaction.ts";
 import { COMMAND_TABLE, MUTATION_TABLE, STAGING_TABLE } from "./private-schema.ts";
-import { applyCommit } from "./publish.ts";
+import { applyCommit, applyRetrieval } from "./publish.ts";
 import { recognizeObject } from "./recognition.ts";
 
 function requestFingerprint(command: RunnerCommand): string {
-  return sha256Hex(JSON.stringify(command));
+  // The command name is part of the fingerprint, so one textual id used for a
+  // commit and for a retrieval replacement is two different requests rather
+  // than one recognized retry.
+  return sha256Hex(JSON.stringify({ kind: command.command, command }));
+}
+
+/**
+ * Whether this command changes the run, and therefore whether its decision has
+ * to outlive the connection that asked for it.
+ *
+ * A read can be asked again; a mutation cannot, so its answer is retained where
+ * the next connection can find it.
+ */
+function mutating(command: RunnerCommand): boolean {
+  return command.command === "commit" || command.command === "retrieval";
 }
 
 function integer(value: unknown): number {
@@ -103,10 +123,23 @@ function mintEventId(): string {
   return crypto.randomUUID();
 }
 
+/**
+ * The moment the owner records against a mutation it just made.
+ *
+ * The owner's clock, not the runner's. A time a runner supplied would be a
+ * caller deciding when the run's history happened.
+ */
+function ownerTime(): string {
+  return new Date().toISOString();
+}
+
 function retainedDecision(command: RunnerCommand, result: CommandResult): string {
   if (
     result.outcome === "performed" &&
-    (command.command === "journal" || command.command === "root" || command.command === "content")
+    (command.command === "journal" ||
+      command.command === "root" ||
+      command.command === "content" ||
+      command.command === "executions")
   ) {
     return JSON.stringify({ id: command.id, outcome: "reconstruct" });
   }
@@ -219,6 +252,20 @@ function perform(
       value: applyCommit(ctx.storage, acquisitionId, command, mintEventId),
     };
   }
+  if (command.command === "retrieval") {
+    return {
+      id: command.id,
+      outcome: "performed",
+      value: applyRetrieval(ctx.storage, command, ownerTime),
+    };
+  }
+  if (command.command === "executions") {
+    return {
+      id: command.id,
+      outcome: "performed",
+      value: readExecutions(ctx.storage, runId, command.anchor, command.after),
+    };
+  }
   // `settle` is a later checkpoint's. It parses strictly and is declined,
   // because a placeholder that reported success is the one answer a runner
   // cannot recover from.
@@ -245,7 +292,7 @@ export function dispatchCommand(
     // The case this exists for is the one where the connection that asked is
     // gone: the owner committed, the answer never arrived, and the runner
     // reconnected to ask the same question again.
-    if (command.command === "commit") {
+    if (mutating(command)) {
       const decided = ctx.storage.sql
         .exec(
           `SELECT request_fingerprint, response FROM ${MUTATION_TABLE} WHERE command_id = ?`,
@@ -312,7 +359,7 @@ export function dispatchCommand(
       encoded,
       responseBytes,
     );
-    if (command.command === "commit") {
+    if (mutating(command)) {
       // Recorded in this same transaction as the mutation it describes, so a
       // crash cannot leave one without the other.
       const mutations = ctx.storage.sql

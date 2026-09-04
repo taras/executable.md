@@ -451,7 +451,9 @@ describe("the remote owner protocol", () => {
     expect(await on(stub, (owner) => owner.scratch())).toEqual({ commands: 1, staged: 1 });
     const before = await on(stub, (owner) => owner.authoritative());
     const replaced = await on(stub, (owner) => owner.acquisitionId());
-    await admit(stub);
+    // A real accepted connection for the replacement: the rest of this test
+    // reads across several object round trips.
+    const successor = await connect(stub);
     // A second acquisition, and the first one's scratch is gone rather than
     // inherited: it cannot be retried, adopted or read.
     expect(await on(stub, (owner) => owner.acquisitionId())).not.toBe(replaced);
@@ -461,7 +463,7 @@ describe("the remote owner protocol", () => {
     // bytes writes a new row rather than finding the abandoned one. Nothing was
     // inherited; it was discarded and done afresh.
     expect(
-      await send(stub, "stage", {
+      await ask(successor, "stage", {
         command: "stage",
         kind: "blob",
         digest,
@@ -469,7 +471,7 @@ describe("the remote owner protocol", () => {
       }),
     ).toMatchObject({ outcome: "performed", value: { digest } });
     expect(await on(stub, (owner) => owner.scratch())).toEqual({ commands: 1, staged: 1 });
-    expect(await send(stub, "frontier-new", { command: "frontier" })).toMatchObject({
+    expect(await ask(successor, "frontier-new", { command: "frontier" })).toMatchObject({
       outcome: "performed",
       value: { workspaceRootId: ROOT_ID },
     });

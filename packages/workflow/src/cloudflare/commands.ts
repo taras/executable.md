@@ -20,6 +20,10 @@ export const MAX_COMMANDS = 256;
 export const MAX_LEDGER_BYTES = 2 * 1024 * 1024;
 export const JOURNAL_PAGE_ENTRIES = 128;
 export const JOURNAL_PAGE_BYTES = 512 * 1024;
+/** The most document-execution rows one private page carries. */
+export const EXECUTION_PAGE_ENTRIES = 128;
+/** The most serialized bytes of retained execution rows one page carries. */
+export const EXECUTION_PAGE_BYTES = 512 * 1024;
 /** The most content identities one proposal may name. */
 export const MAX_PROPOSED_PIECES = 8192;
 /** The most retained mapping changes one proposal may carry. */
@@ -34,6 +38,8 @@ export type CommandName =
   | "content"
   | "stage"
   | "commit"
+  | "retrieval"
+  | "executions"
   | "settle";
 
 export type CommandRefusal =
@@ -143,6 +149,40 @@ export type ProposedMapping =
   | { readonly kind: "worktree"; readonly record: WorktreeRecord }
   | { readonly kind: "agent-session"; readonly record: AgentSessionRecord };
 
+/**
+ * Replace or clear where the definition can be fetched from.
+ *
+ * Its own mutation rather than a degenerate commit: it appends no journal
+ * event, publishes no root, and its revision is authoritative rather than
+ * proposed. `metadata` is `null` to clear, which is a different act from
+ * writing an empty object — clearing removes the row and the next replacement
+ * starts counting again.
+ *
+ * The expected root travels with it so the owner can refuse a replacement
+ * proposed against a frontier that has moved, the same way a commit is refused.
+ */
+export interface RetrievalCommand extends CommandEnvelope {
+  readonly command: "retrieval";
+  readonly expectedWorkspaceRootId: string;
+  /** Canonical JSON, already encoded by the runner, or `null` to clear. */
+  readonly metadata: string | null;
+}
+
+/**
+ * One page of the document executions this run has begun.
+ *
+ * Anchored like the journal: the first page fixes the last execution that
+ * existed when the read began, and every later page is constrained to it, so an
+ * execution started while the read is in flight cannot appear halfway through.
+ */
+export interface ExecutionsCommand extends CommandEnvelope {
+  readonly command: "executions";
+  /** The terminal sequence this snapshot is anchored to, or `null` for empty. */
+  readonly anchor: number | null;
+  /** The sequence the previous page ended at, or `null` for the first page. */
+  readonly after: number | null;
+}
+
 export interface SettleCommand extends CommandEnvelope {
   readonly command: "settle";
   readonly completion: DocumentExecutionCompletion;
@@ -156,6 +196,8 @@ export type RunnerCommand =
   | ContentCommand
   | StageCommand
   | CommitCommand
+  | RetrievalCommand
+  | ExecutionsCommand
   | SettleCommand;
 
 export type CommandResult =
@@ -179,6 +221,8 @@ const MEMBERS: Record<CommandName, readonly string[]> = {
     "mappings",
     "events",
   ],
+  retrieval: [...ENVELOPE, "expectedWorkspaceRootId", "metadata"],
+  executions: [...ENVELOPE, "anchor", "after"],
   settle: [...ENVELOPE, "completion", "expectedWorkspaceRootId"],
 };
 
@@ -255,6 +299,18 @@ function kind(members: Map<string, unknown>): ContentKind {
  * Re-encoding a nearly-right record would be worse: the owner would retain
  * something the runner never proposed.
  */
+/** A physical sequence, which is a positive whole number or nothing. */
+function sequence(members: Map<string, unknown>, key: string): number | null {
+  const value = members.get(key);
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    throw new CommandError("malformed-member");
+  }
+  return value;
+}
+
 function eventRecords(value: unknown): string[] {
   if (!Array.isArray(value)) {
     throw new CommandError("malformed-member");
@@ -294,6 +350,8 @@ export function parseCommand(raw: string): RunnerCommand {
     command !== "content" &&
     command !== "stage" &&
     command !== "commit" &&
+    command !== "retrieval" &&
+    command !== "executions" &&
     command !== "settle"
   ) {
     throw new CommandError("unknown-command");
@@ -337,6 +395,33 @@ export function parseCommand(raw: string): RunnerCommand {
       digest: digest(members, "digest"),
       bytes: text(members, "bytes", Math.ceil((MAX_CONTENT_BYTES * 4) / 3) + 4),
     };
+  }
+  if (command === "retrieval") {
+    const metadata = members.get("metadata");
+    if (metadata !== null && (typeof metadata !== "string" || metadata === "")) {
+      throw new CommandError("malformed-member");
+    }
+    if (metadata !== null && new TextEncoder().encode(metadata).length > MAX_MESSAGE_BYTES) {
+      throw new CommandError("too-large");
+    }
+    return {
+      id,
+      command,
+      expectedWorkspaceRootId: digest(members, "expectedWorkspaceRootId"),
+      metadata,
+    };
+  }
+  if (command === "executions") {
+    const anchor = sequence(members, "anchor");
+    const after = sequence(members, "after");
+    if (anchor === null && after !== null) {
+      // An empty snapshot has nothing to continue from.
+      throw new CommandError("malformed-member");
+    }
+    if (anchor !== null && after !== null && after >= anchor) {
+      throw new CommandError("malformed-member");
+    }
+    return { id, command, anchor, after };
   }
   if (command === "settle") {
     const completion = parseDocumentExecutionCompletion(members.get("completion"));
