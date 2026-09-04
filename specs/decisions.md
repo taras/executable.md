@@ -736,3 +736,73 @@ journal- and root-publication-stability snapshots in
 `packages/cli/tests/workflow-suspension.test.ts`, where an `API.Files` call
 count is explicitly not once-only evidence — document re-expansion legitimately
 enters that boundary before the durable effect underneath restores.
+
+## DEC-016: Terminal domain and tmux adapter are separate workspace packages
+
+**Status:** Decided
+
+**Date:** 2026-09-03
+
+### Context
+
+The terminal-grid delivery proved one provider-neutral lifecycle and one tmux
+implementation, but their modules remained distributed across runtime, core,
+and CLI. That placement makes a second presentation provider depend on CLI
+internals and makes the neutral terminal authority appear to be core-specific.
+Keeping the lifecycle in core would preserve that coupling. Putting the neutral
+domain and tmux in one package would remove the CLI dependency but make every
+provider consumer acquire tmux-specific code and host assumptions.
+
+Existing consumers also import terminal symbols from `@executablemd/runtime`
+and `@executablemd/core`. The contextual API descriptors and error constructors
+among those exports are identity-bearing; reproducing an equivalent descriptor,
+wrapper, or class would split middleware composition and `instanceof` behavior.
+
+### Decision
+
+Terminal ownership is divided between two publishable workspace packages:
+
+- `@executablemd/terminal` owns the provider-neutral terminal domain: native
+  launch routing, terminal requests and composites, provider registration and
+  direct authority delivery, claims and readiness, row-major layout, the live
+  and durable grid lifecycle, pane routing, retained outcomes, process
+  observation contracts, quiescence, and controlled test surfaces.
+- `@executablemd/terminal-tmux` implements that domain with tmux: capability
+  probing, private server and client control, explicit pane placement,
+  authenticated worker channels and protocol, worker child creation, display,
+  close-signal distinction, and ordered teardown.
+
+Core continues to own the authored `Terminal.Grid` and `Terminal` syntax,
+source-position journal descriptions, execution-profile composition, Agent
+sessions, and expansion integration. Runtime continues to own unrelated host
+APIs. CLI chooses and wires the provider for each entrypoint; it does not own a
+terminal provider implementation.
+
+The canonical descriptors, functions, types, constants, and errors move to the
+new packages. The former runtime and core entrypoints re-export those exact
+objects from their canonical definitions. They contain no duplicate descriptor,
+wrapper, subclass, or compatibility implementation. Existing imports therefore
+remain valid and object-identical in this extraction.
+
+The neutral package has no dependency on runtime, core, CLI, or the tmux
+package. Core depends on terminal. The tmux package depends on terminal and
+does not depend on runtime, core, or CLI. CLI depends on both packages and on
+core and runtime. Runtime depends on terminal only for its compatibility
+re-exports. Host-specific POSIX observation is an explicit terminal adapter;
+Deno and compiled entrypoints install it in the supervising host and the pane
+worker, while Node and Bun continue to install neither observer nor provider.
+
+### Consequences
+
+Any terminal provider implements the public neutral contract without
+importing CLI or tmux. Consumers can migrate to the canonical package names at
+their own pace; removing the old runtime or core exports is a separate breaking
+decision. The extraction changes no authored syntax, provider name, hidden
+worker invocation, durable record, private tmux protocol, diagnostic text,
+terminal behavior, or provider identity.
+
+Both packages participate in workspace version lockstep, npm and JSR
+publication, generated dependency ordering, package discovery, runtime test
+discovery, and release verification. Moving tests changes the measured corpus,
+so its weights are remeasured by the repository workflow rather than edited by
+hand.
