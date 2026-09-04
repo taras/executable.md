@@ -14,7 +14,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, spawn, withResolvers } from "effection";
+import { ensure, scoped, spawn, withResolvers } from "effection";
 import { EventEmitter } from "node:events";
 import process from "node:process";
 import { deliverWhole } from "../src/stdout-delivery.ts";
@@ -108,8 +108,13 @@ describe("Tier SDL — the listener lives for one delivery", () => {
   it("SDL2: the trailing event still finds the listener, which is gone after it", function* () {
     const sink = new RecordingSink(CALLBACK_THEN_EVENT);
     // A sentinel, so that detaching too early is this row's assertion rather
-    // than an unhandled `error` event thrown from a timer.
-    sink.on("error", () => {});
+    // than an unhandled `error` event thrown from a timer. It belongs to the
+    // test, and comes off with it.
+    const sentinel = (): void => {};
+    yield* ensure(() => {
+      sink.off("error", sentinel);
+    });
+    sink.on("error", sentinel);
     const before = listeners(sink);
 
     const result = yield* deliverWhole("catalog", sink);
@@ -170,7 +175,13 @@ describe("Tier SDL — the listener lives for one delivery", () => {
   it("SDL7: no finished delivery absorbs a later, unrelated failure", function* () {
     const sink = new RecordingSink(ACCEPTS);
     const seen: Error[] = [];
-    sink.on("error", (error: Error) => seen.push(error));
+    const sentinel = (error: Error): void => {
+      seen.push(error);
+    };
+    yield* ensure(() => {
+      sink.off("error", sentinel);
+    });
+    sink.on("error", sentinel);
 
     yield* deliverWhole("catalog", sink);
     sink.emit("error", OTHER);

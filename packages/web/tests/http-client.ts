@@ -27,6 +27,15 @@ export interface HttpResponse {
 }
 
 export interface HttpConnection {
+  /** The connection itself, so a case can say what it is still observing. */
+  socket: Socket;
+  /**
+   * How many times this client's own handlers have run.
+   *
+   * A cancelled connection must stop counting: a chunk delivered after
+   * teardown that still moved this would be a handler nobody released.
+   */
+  callbacks(): number;
   /** Send text, encoded as UTF-8. */
   write(text: string): void;
   /**
@@ -53,9 +62,13 @@ export interface HttpConnection {
  * provokes one would fail for the wrong reason. A reset and a clean close settle
  * `ended` alike, because after a mid-stream refusal the peer may present either.
  */
-export function useConnection(port: number): Operation<HttpConnection> {
+export function useConnection(
+  port: number,
+  observe?: (socket: Socket) => void,
+): Operation<HttpConnection> {
   return resource(function* (provide) {
     const socket = connect(port, "127.0.0.1");
+    observe?.(socket);
     yield* ensure(() => {
       socket.destroy();
     });
@@ -63,11 +76,11 @@ export function useConnection(port: number): Operation<HttpConnection> {
     yield* action<void>((resolve, reject) => {
       const onConnect = (): void => resolve();
       const onError = (error: Error): void => reject(error);
-      socket.once("connect", onConnect);
-      socket.once("error", onError);
+      socket.on("connect", onConnect);
+      socket.on("error", onError);
       return () => {
-        socket.removeListener("connect", onConnect);
-        socket.removeListener("error", onError);
+        socket.off("connect", onConnect);
+        socket.off("error", onError);
       };
     });
 
@@ -87,18 +100,31 @@ export function useConnection(port: number): Operation<HttpConnection> {
       notify?.();
     };
 
-    socket.on("data", (chunk: Buffer) => {
+    const onData = (chunk: Buffer): void => {
       buffer += chunk.toString("utf8");
       advance();
-    });
-    socket.on("error", (error: Error) => {
+    };
+    const onError = (error: Error): void => {
       ended.resolve(`error:${error.message}`);
       advance();
-    });
-    socket.on("close", () => {
+    };
+    const onClose = (): void => {
       ended.resolve("close");
       advance();
+    };
+
+    // Established before the handlers exist, because `yield* ensure(...)` is
+    // itself a suspension: an owner halted while it registers unwinds with no
+    // cleanup at all.
+    yield* ensure(() => {
+      socket.off("data", onData);
+      socket.off("error", onError);
+      socket.off("close", onClose);
     });
+
+    socket.on("data", onData);
+    socket.on("error", onError);
+    socket.on("close", onClose);
 
     function* untilAfter(seen: number): Operation<void> {
       if (version !== seen) {
@@ -113,6 +139,10 @@ export function useConnection(port: number): Operation<HttpConnection> {
     }
 
     yield* provide({
+      socket,
+      callbacks(): number {
+        return version;
+      },
       write(text: string): void {
         socket.write(new Uint8Array(new TextEncoder().encode(text)));
       },

@@ -18,7 +18,8 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { ensure, type Operation, resource, until } from "effection";
+import { each, ensure, type Operation, resource, until, useScope } from "effection";
+import { fromReadable } from "@effectionx/node";
 import type {
   GitHubAccess,
   GitHubHttpRequest,
@@ -651,10 +652,20 @@ export function mutations(store: GitHubStore): string[] {
  */
 export function useGitHubServer(store: GitHubStore): Operation<string> {
   return resource(function* (provide) {
+    // Each request body is read by a task of this server's own scope, so
+    // tearing the server down ends the reads still in progress rather than
+    // leaving their listeners on sockets it is about to destroy. `fromReadable`
+    // is the scope-bound adapter for that: it attaches and detaches the
+    // stream's own handlers with the task.
+    const scope = yield* useScope();
     const server = createServer((incoming: IncomingMessage, outgoing: ServerResponse) => {
-      const chunks: Buffer[] = [];
-      incoming.on("data", (chunk: Buffer) => chunks.push(chunk));
-      incoming.on("end", () => {
+      scope.run(function* () {
+        const chunks: Uint8Array[] = [];
+        for (const chunk of yield* each(fromReadable(incoming))) {
+          chunks.push(chunk);
+          yield* each.next();
+        }
+
         const headers: Record<string, string> = {};
         for (const [name, value] of Object.entries(incoming.headers)) {
           headers[name === "authorization" ? "Authorization" : name] = String(value);

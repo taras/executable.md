@@ -18,11 +18,24 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { once } from "@effectionx/node/events";
+import { Buffer } from "node:buffer";
+import { connect } from "node:net";
+import type { ChildProcess } from "node:child_process";
 import process from "node:process";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { exec as execProcess } from "@effectionx/process";
-import { call, type Operation, race, scoped, spawn, withResolvers } from "effection";
+import {
+  call,
+  ensure,
+  type Operation,
+  race,
+  scoped,
+  spawn,
+  suspend,
+  withResolvers,
+} from "effection";
 import { WorkflowRunStorage } from "../mod.ts";
 import { GIT_HOST_EFFECT } from "../src/git-host/effect.ts";
 import { parseGitHostReconciliationRecord } from "../src/git-host/records.ts";
@@ -44,6 +57,17 @@ import { useInvokingHome } from "./support/credential-home.ts";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
 import { denoGitAuthentication } from "../src/deno/composition/authentication.ts";
 import { TEST_HELPER } from "./support/composition.ts";
+
+/** What one backend child is carrying on the streams the fixture observes. */
+function attached(child: ChildProcess): number[] {
+  return [
+    child.listenerCount("error"),
+    child.listenerCount("close"),
+    child.stdout?.listenerCount("data") ?? 0,
+    child.stdout?.listenerCount("end") ?? 0,
+    child.stdin?.listenerCount("error") ?? 0,
+  ];
+}
 
 const REPOSITORY = fileURLToPath(new URL("../../..", import.meta.url));
 const CRASH_CHILD = fileURLToPath(new URL("./support/git-crash-child.ts", import.meta.url));
@@ -187,11 +211,17 @@ describe("workflow Git.Push across a process boundary", () => {
   it("adopts a protected publication under authentication it acquired afresh", function* () {
     const root = yield* useStorageRoot();
     const bare = yield* useBareRemote(REMOTE);
+    // Every backend the fixture spawns, with what its streams were carrying
+    // before the request task attached anything — the runtime keeps listeners
+    // of its own on a child's stdout, so the baseline is measured rather than
+    // assumed to be nothing.
+    const backends: { child: ChildProcess; before: number[] }[] = [];
     const served = yield* useGitHttpRemote({
       remote: bare,
       label: "protected",
       username: "crash-user",
       password: "crash-secret",
+      observeBackend: (child) => backends.push({ child, before: attached(child) }),
     });
     const crashHome = yield* useInvokingHome([
       { host: served.host, path: "remote.git", username: "crash-user", password: "crash-secret" },
@@ -345,5 +375,113 @@ describe("workflow Git.Push across a process boundary", () => {
 
       expect(remoteBranch(bare, PUSH_BRANCH)).toBe(pushedCommit);
     });
+
+    // Each backend belonged to the request task that spawned it, and that task
+    // has ended. The counts are read before the events are replayed, because a
+    // handler removed by its own event would leave the same counts behind as
+    // one the task released.
+    expect(backends.length).toBeGreaterThan(0);
+    for (const { child, before } of backends) {
+      expect(attached(child)).toEqual(before);
+    }
+
+    // And nothing the fixture kept can still be reached through them.
+    const answered = served.requests.length;
+    for (const { child } of backends) {
+      child.emit("close", 0, null);
+      child.stdout?.emit("data", Buffer.from("late"));
+      child.stdout?.emit("end");
+    }
+
+    expect(served.requests.length).toBe(answered);
+    for (const { child, before } of backends) {
+      expect(attached(child)).toEqual(before);
+    }
+  });
+  /**
+   * A backend the fixture is still talking to belongs to the request task that
+   * spawned it, and that task belongs to the server. Held open on the server
+   * side rather than timed, so the teardown below lands while the child is
+   * alive and every handler is attached: what it must prove is that the task
+   * killed and reaped the child and released all five before the events are
+   * replayed.
+   */
+  it("kills and releases a backend the server was still talking to", function* () {
+    const bare = yield* useBareRemote(REMOTE);
+    const held = withResolvers<void>();
+    const backends: { child: ChildProcess; before: number[] }[] = [];
+    let live: number[] = [];
+    let answered = false;
+
+    yield* scoped(function* () {
+      const served = yield* useGitHttpRemote({
+        remote: bare,
+        label: "held",
+        username: "held-user",
+        password: "held-secret",
+        observeBackend: (child) => backends.push({ child, before: attached(child) }),
+        *holdBackend() {
+          held.resolve();
+          yield* suspend();
+        },
+      });
+
+      const [host, port] = served.host.split(":");
+      const name = served.locator.slice(served.locator.lastIndexOf("/") + 1);
+      const socket = connect(Number(port), host ?? "127.0.0.1");
+      const onError = (): void => {};
+      const onData = (): void => {
+        answered = true;
+      };
+
+      yield* ensure(() => {
+        socket.off("error", onError);
+        socket.off("data", onData);
+        socket.destroy();
+      });
+
+      socket.on("error", onError);
+      socket.on("data", onData);
+
+      yield* once(socket, "connect");
+      const authorization = Buffer.from("held-user:held-secret").toString("base64");
+      socket.write(
+        `GET /${name}/info/refs?service=git-upload-pack HTTP/1.1\r\n` +
+          `Host: ${served.host}\r\nAuthorization: Basic ${authorization}\r\n` +
+          `Connection: close\r\n\r\n`,
+      );
+
+      yield* held.operation;
+
+      const observed = backends[0];
+      if (!observed) {
+        throw new Error("the fixture spawned no backend");
+      }
+      live = attached(observed.child);
+    });
+
+    const first = backends[0];
+    if (!first) {
+      throw new Error("the fixture spawned no backend");
+    }
+
+    // Five: `error` and `close` on the child, `data` and `end` on its stdout,
+    // and `error` on its stdin — each on top of what the runtime already held.
+    live.forEach((count, index) => {
+      expect(count).toBeGreaterThanOrEqual(first.before[index] + 1);
+    });
+
+    // The task killed it and waited for it to be gone before letting go.
+    expect(first.child.exitCode !== null || first.child.signalCode !== null).toBe(true);
+    const released = live.map((count) => count - 1);
+
+    expect(attached(first.child)).toEqual(released);
+
+    first.child.emit("close", 0, null);
+    first.child.stdout?.emit("data", Buffer.from("after the server was torn down"));
+
+    expect(attached(first.child)).toEqual(released);
+    // And the client was never answered, because the request never finished.
+    expect(answered).toBe(false);
   });
 });

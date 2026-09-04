@@ -19,7 +19,8 @@
     "local/no-sync-filesystem": "error",
     "local/no-yield-in-finally": "error",
     "local/prefer-effection-operation": "error",
-    "local/prefer-effection-result": "error"
+    "local/prefer-effection-result": "error",
+    "local/require-scope-bound-event-registration": "error"
   },
 
   "overrides": [

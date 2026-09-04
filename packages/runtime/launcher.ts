@@ -28,7 +28,8 @@
  */
 
 import { type Api, createApi } from "@effectionx/context-api";
-import { ensure, race, resource, scoped, until, withResolvers } from "effection";
+import { ensure, race, resource, scoped, until } from "effection";
+import { once } from "@effectionx/node/events";
 import type { Operation } from "effection";
 import { spawn as spawnChild } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
@@ -219,8 +220,6 @@ function runForeground(request: NativeLaunchRequest): Operation<NativeLaunchOutc
       throw new Error("native launch: command must not be empty");
     }
 
-    const settled = withResolvers<NativeLaunchOutcome>();
-    const failed = withResolvers<never>();
     let child: ChildProcess | undefined;
 
     // Interrupt, then insist. A cancelled document may not continue — or
@@ -233,30 +232,43 @@ function runForeground(request: NativeLaunchRequest): Operation<NativeLaunchOutc
     // `inherit` is the whole point: the child reads this terminal and draws on
     // it directly, so nothing between it and the person using it can buffer,
     // reorder, capture or journal what passes.
-    child = spawnChild(command, args, {
+    const started = spawnChild(command, args, {
       cwd: request.cwd,
       env: request.env,
       stdio: "inherit",
     });
+    child = started;
 
-    child.once("error", (error: Error) => failed.reject(error));
-    child.once("exit", (code: number | null, signal: string | null) => {
-      const outcome: NativeLaunchOutcome = {};
-      if (code !== null) {
-        outcome.exitCode = code;
-      }
-      if (signal !== null) {
-        outcome.signal = signal;
-      }
-      settled.resolve(outcome);
-    });
-
-    return yield* race([settled.operation, failed.operation]);
+    // Raced inline, in the same synchronous run as the spawn, so both arms are
+    // attached before the child can report anything — a spawned race attaches
+    // a turn later. Whichever loses is halted, which is what detaches it.
+    return yield* race([
+      (function* (): Operation<NativeLaunchOutcome> {
+        const [code, signal] = yield* once<[number | null, string | null]>(started, "exit");
+        const outcome: NativeLaunchOutcome = {};
+        if (code !== null) {
+          outcome.exitCode = code;
+        }
+        if (signal !== null) {
+          outcome.signal = signal;
+        }
+        return outcome;
+      })(),
+      (function* (): Operation<never> {
+        const [error] = yield* once<[Error]>(started, "error");
+        throw error;
+      })(),
+    ]);
   });
 }
 
 /**
  * End one foreground child and wait for it to be gone.
+ *
+ * Exported for `packages/runtime/tests/native-launcher.test.ts` and not from
+ * `mod.ts`: the listener this installs belongs to a bounded Promise, and the
+ * only way to observe that it is released on every settlement path is to hold
+ * the child.
  *
  * Deliberately one promise rather than an Effection race: this runs while the
  * scope is already being dismantled, and the cheapest correct thing to do
@@ -267,7 +279,7 @@ function runForeground(request: NativeLaunchRequest): Operation<NativeLaunchOutc
  * is spent — a native UI holding the terminal is not something a cancelled run
  * can afford to wait on indefinitely.
  */
-function reap(child: ChildProcess): Promise<void> {
+export function reap(child: ChildProcess): Promise<void> {
   const pid = child.pid;
   if (pid === undefined || child.exitCode !== null || child.signalCode !== null) {
     return Promise.resolve();
@@ -290,6 +302,10 @@ function reap(child: ChildProcess): Promise<void> {
       clearInterval(poll);
       clearTimeout(escalation);
       clearTimeout(deadline);
+      // The one funnel every settlement goes through — the exit event, the
+      // reachability poll, the escalation deadline, and the refusal that
+      // rejects — so the handler comes off however this ends.
+      child.off("exit", onExit);
       // Deno's `node:child_process` stops reporting a child's exit once a
       // signal that child ignored has been delivered, and holds the runtime
       // open on the handle it will now never settle. Dropping the reference is
@@ -306,8 +322,9 @@ function reap(child: ChildProcess): Promise<void> {
       }
       resolve();
     };
+    const onExit = (): void => done();
 
-    child.once("exit", () => done());
+    child.on("exit", onExit);
     // Reachability rather than the exit event, because that is the fact this
     // has to establish and the event is not dependable across runtimes here.
     const poll = setInterval(() => {

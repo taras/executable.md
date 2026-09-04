@@ -8,8 +8,9 @@
  * point of the refusal paths.
  */
 
-import { spawn, withResolvers } from "effection";
+import { race, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
+import { once } from "@effectionx/node/events";
 import { connect } from "node:net";
 
 import { compileForm } from "../src/compile.ts";
@@ -90,12 +91,22 @@ export function* watchSubmission(server: FormServer): Operation<() => Submission
 /** Whether a fresh connection to this port is refused. */
 export function* portRefuses(port: number): Operation<boolean> {
   const socket = connect(port, "127.0.0.1");
-  const settled = withResolvers<boolean>();
-  socket.once("connect", () => settled.resolve(false));
-  socket.once("error", () => settled.resolve(true));
-  const refused = yield* settled.operation;
-  socket.destroy();
-  return refused;
+  try {
+    // Raced inline, in the same synchronous run as `connect`: a spawned race
+    // attaches its arms a turn later, and the socket can settle in that turn.
+    return yield* race([
+      (function* (): Operation<boolean> {
+        yield* once(socket, "connect");
+        return false;
+      })(),
+      (function* (): Operation<boolean> {
+        yield* once(socket, "error");
+        return true;
+      })(),
+    ]);
+  } finally {
+    socket.destroy();
+  }
 }
 
 /** A JSON body whose UTF-8 encoding is exactly `bytes` long. */

@@ -9,6 +9,7 @@
 import { createChannel, each, ensure, race, resource, spawn, withResolvers } from "effection";
 import type { Operation, Stream, Task } from "effection";
 import { fromReadable, on } from "@effectionx/node";
+import { once } from "@effectionx/node/events";
 import { lines } from "@effectionx/stream-helpers";
 import { connect, createServer } from "node:net";
 import type { Socket } from "node:net";
@@ -34,21 +35,29 @@ export interface LineSocket {
 export function useLineSocket(socket: Socket): Operation<LineSocket> {
   return resource(function* (provide) {
     const closed = withResolvers<void>();
-    socket.once("close", () => closed.resolve());
-    yield* ensure(() => {
+    const onClose = (): void => closed.resolve();
+
+    // A lexical finalizer rather than `ensure()`: entering the `try` is
+    // synchronous, so there is no instant at which this socket is observed and
+    // the release is not yet armed. Detached first, because the destroy below
+    // emits the event this was observing.
+    try {
+      socket.on("close", onClose);
+      yield* provide({
+        lines: lines()(fromReadable(socket)),
+        send(line) {
+          socket.write(line);
+        },
+        end() {
+          socket.end();
+        },
+        closed: closed.operation,
+      });
+    } finally {
+      socket.off("close", onClose);
       socket.destroy();
       closed.resolve(); // settle on cancellation even if no 'close' follows
-    });
-    yield* provide({
-      lines: lines()(fromReadable(socket)),
-      send(line) {
-        socket.write(line);
-      },
-      end() {
-        socket.end();
-      },
-      closed: closed.operation,
-    });
+    }
   });
 }
 
@@ -81,24 +90,35 @@ export function useLineServer(
       }
       // Attach the close listener before close() (no missed-event race), and
       // only when the server actually came up, so a never-started or
-      // already-closed server leaves no pending operation.
+      // already-closed server leaves no pending operation. It stays attached
+      // through the wait — it is what the wait is for — and comes off
+      // synchronously afterwards, whether that wait settled or was halted.
       if (server.listening) {
         const closed = withResolvers<void>();
-        server.once("close", () => closed.resolve());
-        server.close();
-        yield* closed.operation;
+        const onClose = (): void => closed.resolve();
+
+        server.on("close", onClose);
+        try {
+          server.close();
+          yield* closed.operation;
+        } finally {
+          server.off("close", onClose);
+        }
       }
     });
 
-    // Attach the readiness listeners before listen, so the event is never
-    // missed by a later subscription.
-    const listening = withResolvers<void>();
-    server.once("listening", () => listening.resolve());
-    server.once("error", (error) => {
-      listening.reject(error instanceof Error ? error : new Error(String(error)));
-    });
+    // Raced inline, in the same synchronous run as `listen`, so both arms are
+    // attached before either event can be delivered — `listen` never emits in
+    // the turn it was called in, and a spawned race would attach a turn late.
+    // The loser is halted, which is what detaches it.
     server.listen(0, host);
-    yield* listening.operation;
+    yield* race([
+      once(server, "listening"),
+      (function* (): Operation<never> {
+        const [error] = yield* once(server, "error");
+        throw error instanceof Error ? error : new Error(String(error));
+      })(),
+    ]);
 
     const address = server.address();
     if (!address || typeof address !== "object") {
@@ -140,14 +160,24 @@ export function useLineClient<T>(
 ): Operation<LineClient<T>> {
   return resource(function* (provide) {
     const socket = connect(port, host);
-    // Attach connect/error listeners before yielding, so neither is missed.
-    const connected = withResolvers<void>();
-    socket.once("connect", () => connected.resolve());
-    socket.once("error", (error) => {
-      connected.reject(error instanceof Error ? error : new Error(String(error)));
+    // Owned before the handshake is awaited: a connect that fails has to leave
+    // no socket behind, and `useLineSocket` cannot take ownership of one until
+    // the handshake has settled.
+    yield* ensure(() => {
+      socket.destroy();
     });
+
+    // Raced inline, in the same synchronous run as `connect`, for the reason
+    // given in `useLineServer`.
+    yield* race([
+      once(socket, "connect"),
+      (function* (): Operation<never> {
+        const [error] = yield* once(socket, "error");
+        throw error instanceof Error ? error : new Error(String(error));
+      })(),
+    ]);
+
     const connection = yield* useLineSocket(socket);
-    yield* connected.operation;
 
     const inbound = createChannel<T, void>();
     const subscription = yield* inbound; // subscribe before the pump: no loss

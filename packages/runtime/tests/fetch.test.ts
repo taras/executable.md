@@ -19,7 +19,7 @@ import { ensure, resource, scoped, sleep, spawn, withResolvers } from "effection
 import type { Operation } from "effection";
 import { when } from "@effectionx/converge";
 import { createServer } from "node:http";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { API, fetch } from "../apis.ts";
 import type { RuntimeFetchResponse } from "../apis.ts";
 import { Config } from "../config.ts";
@@ -27,6 +27,8 @@ import { Config } from "../config.ts";
 interface Loopback {
   /** Where the server is listening. */
   readonly origin: string;
+  /** The listener itself, so a case can say what it is still observing. */
+  readonly server: Server;
   /** One entry per request the server accepted, in order. */
   readonly requests: Array<{ method: string; path: string; headers: Record<string, string> }>;
 }
@@ -48,7 +50,23 @@ function useLoopback(
     });
 
     const listening = withResolvers<void>();
-    server.on("error", (error: Error) => listening.reject(error));
+    // Removed with the resource rather than after the first error: a listening
+    // server outlives its bind, and a handler left behind would still be
+    // holding a rejected resolver when the next test binds its own.
+    //
+    // Established before the handler exists, because `yield* ensure(...)` is
+    // itself a suspension: an owner halted while it registers unwinds with no
+    // cleanup at all, so nothing may be attached until it has completed.
+    let onError: ((error: Error) => void) | undefined;
+
+    yield* ensure(() => {
+      if (onError) {
+        server.off("error", onError);
+      }
+    });
+
+    onError = (error: Error) => listening.reject(error);
+    server.on("error", onError);
     server.listen(0, "127.0.0.1", () => listening.resolve());
     yield* listening.operation;
 
@@ -66,7 +84,7 @@ function useLoopback(
       throw new Error("the loopback server reported no TCP address");
     }
 
-    yield* provide({ origin: `http://127.0.0.1:${address.port}`, requests });
+    yield* provide({ origin: `http://127.0.0.1:${address.port}`, requests, server });
   });
 }
 
@@ -358,5 +376,48 @@ describe("Tier FR — the chainable calling shape", () => {
     });
 
     expect(failure?.message).toContain("timed out after 60ms");
+  });
+  /**
+   * The listener's error observer belongs to the loopback resource, not to the
+   * first error it sees. The count is read after the resource has been torn
+   * down and before the event is replayed, because an observer removed by its
+   * own event would leave the same count behind as one that was released.
+   */
+  it("releases the loopback's error observer with the resource", function* () {
+    let observed: Server | undefined;
+    let live = 0;
+    let baseline = 0;
+
+    yield* scoped(function* () {
+      const loopback = yield* useLoopback((_request, response) => response.end("{}"));
+      observed = loopback.server;
+      baseline = 0;
+      live = loopback.server.listenerCount("error");
+    });
+
+    if (!observed) {
+      throw new Error("the loopback never came up");
+    }
+
+    expect(live).toBeGreaterThanOrEqual(baseline + 1);
+    expect(observed.listenerCount("error")).toBe(live - 1);
+
+    // Delivered through a sentinel of this case's own, because an `error` an
+    // emitter has no listener for is thrown rather than dropped — so the
+    // replay needs one observer, and exactly one is what it must find.
+    let seen = 0;
+    const sentinel = (): void => {
+      seen += 1;
+    };
+
+    observed.on("error", sentinel);
+    try {
+      observed.emit("error", new Error("after the loopback was torn down"));
+    } finally {
+      observed.off("error", sentinel);
+    }
+
+    expect(seen).toBe(1);
+    expect(observed.listenerCount("error")).toBe(live - 1);
   });
 });

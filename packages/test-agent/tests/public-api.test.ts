@@ -7,10 +7,10 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped, withResolvers } from "effection";
+import { ensure, race, scoped } from "effection";
 import type { Operation } from "effection";
 import { connect } from "node:net";
-import { once } from "@effectionx/node";
+import { once } from "@effectionx/node/events";
 import * as os from "node:os";
 import { useTestAgentController } from "../mod.ts";
 import { parseRoute } from "../src/protocol.ts";
@@ -26,16 +26,24 @@ function* reachable(route: string): Operation<boolean> {
   // The socket is closed, and its close observed, before the probe answers,
   // so a later probe never races the previous connection's teardown.
   return yield* scoped(function* () {
-    const settled = withResolvers<boolean>();
     const socket = connect({ host: parsed.value.host, port: parsed.value.port });
     yield* ensure(function* () {
       socket.destroy();
       yield* once(socket, "close");
     });
 
-    socket.once("connect", () => settled.resolve(true));
-    socket.once("error", () => settled.resolve(false));
-    return yield* settled.operation;
+    // Raced inline, in the same synchronous run as `connect`: a spawned race
+    // attaches its arms a turn later, and the socket can settle in that turn.
+    return yield* race([
+      (function* (): Operation<boolean> {
+        yield* once(socket, "connect");
+        return true;
+      })(),
+      (function* (): Operation<boolean> {
+        yield* once(socket, "error");
+        return false;
+      })(),
+    ]);
   });
 }
 

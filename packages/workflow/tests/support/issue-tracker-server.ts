@@ -13,7 +13,8 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { ensure, type Operation, resource, until } from "effection";
+import { each, ensure, type Operation, resource, until, useScope } from "effection";
+import { fromReadable } from "@effectionx/node";
 
 /**
  * The credential this tracker requires, held here and never in a document.
@@ -93,6 +94,14 @@ export interface ServerOptions {
   readonly issues?: readonly ServedIssue[];
   /** The credential every request must carry, so a scenario can prove one was. */
   readonly token?: string;
+  /**
+   * Run inside the request task, after the body is read and before the answer
+   * is written.
+   *
+   * Package-private, for the cancellation regression: a request task is only
+   * observable while it is still running, and this is what holds one there.
+   */
+  readonly hold?: () => Operation<void>;
 }
 
 /**
@@ -112,10 +121,24 @@ export function useIssueTrackerServer(options: ServerOptions = {}): Operation<Is
     const substitutions = new Map<number, number>();
     let origin = "";
 
+    // Each request body is read by a task of this server's own scope, so
+    // tearing the server down ends the reads still in progress rather than
+    // leaving their listeners on sockets it is about to destroy. `fromReadable`
+    // is the scope-bound adapter for that: it attaches and detaches the
+    // stream's own handlers with the task.
+    const scope = yield* useScope();
     const server = createServer((incoming: IncomingMessage, outgoing: ServerResponse) => {
-      const chunks: Buffer[] = [];
-      incoming.on("data", (chunk: Buffer) => chunks.push(chunk));
-      incoming.on("end", () => {
+      scope.run(function* () {
+        const chunks: Uint8Array[] = [];
+        for (const chunk of yield* each(fromReadable(incoming))) {
+          chunks.push(chunk);
+          yield* each.next();
+        }
+
+        if (options.hold) {
+          yield* options.hold();
+        }
+
         const raw = Buffer.concat(chunks).toString("utf8");
         const url = new URL(incoming.url ?? "/", origin);
         let body: unknown;

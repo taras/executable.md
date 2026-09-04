@@ -61,6 +61,8 @@ import { remoteBranch, remoteRefs, useBareRemote } from "./support/git-remotes.t
 import { useGitHttpRemote } from "./support/git-http.ts";
 import type { GitHttpRemote } from "./support/git-http.ts";
 import { useHomeWithoutAuthentication, useInvokingHome } from "./support/credential-home.ts";
+import { once } from "@effectionx/node/events";
+import { connect } from "node:net";
 import { credential, useIssueTrackerServer } from "./support/issue-tracker-server.ts";
 import {
   fixture as pullRequestFixture,
@@ -1393,6 +1395,57 @@ describe("workflow GitHub source sessions", () => {
     // Reduced to a verdict before it is asserted, so a failure prints whether
     // the request carried this process's credential rather than printing it.
     expect(server.requests[0]?.authorization === `Bearer ${credential()}`).toBe(true);
+  });
+
+  /**
+   * A request the fixture is still answering is a task of the server's own
+   * scope, so tearing the server down ends it. Held on the server side rather
+   * than timed, and observed through the task's own cleanup, so what is proved
+   * is that the task was halted rather than that a socket closed.
+   */
+  it("halts an in-flight request task when the server is torn down", function* () {
+    const reached = withResolvers<void>();
+    let cancelled = false;
+    let answered = false;
+
+    yield* scoped(function* () {
+      const server = yield* useIssueTrackerServer({
+        *hold() {
+          yield* ensure(() => {
+            cancelled = true;
+          });
+          reached.resolve();
+          yield* suspend();
+        },
+      });
+      const { port } = new URL(server.url);
+
+      const socket = connect(Number(port), "127.0.0.1");
+      const onError = (): void => {};
+      const onData = (): void => {
+        answered = true;
+      };
+
+      yield* ensure(() => {
+        socket.off("error", onError);
+        socket.off("data", onData);
+        socket.destroy();
+      });
+
+      socket.on("error", onError);
+      socket.on("data", onData);
+
+      yield* once(socket, "connect");
+      socket.write(
+        `GET /repos/octo/project/issues/7 HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n` +
+          `Authorization: Bearer ${credential()}\r\nConnection: close\r\n\r\n`,
+      );
+
+      yield* reached.operation;
+    });
+
+    expect(cancelled).toBe(true);
+    expect(answered).toBe(false);
   });
 });
 

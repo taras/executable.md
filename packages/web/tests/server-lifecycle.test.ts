@@ -1,10 +1,16 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, spawn, withResolvers } from "effection";
+import { ensure, resource, scoped, sleep, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
+import { once } from "@effectionx/node/events";
+import { when } from "@effectionx/converge";
+import { Buffer } from "node:buffer";
+import { createServer } from "node:http";
+import type { ServerResponse } from "node:http";
 import { connect } from "node:net";
 import type { Socket } from "node:net";
 
+import { nodeResponseChannel } from "../src/response-channel.ts";
 import type { ResponseChannel } from "../src/response-channel.ts";
 import { useFormServer } from "../src/server.ts";
 import type { FormServer } from "../src/server.ts";
@@ -20,30 +26,31 @@ interface HeldChannel {
   closeWithoutFinish: () => void;
 }
 
-function heldChannel(): { seam: () => ResponseChannel; held: HeldChannel } {
+function heldChannel(): { seam: () => Operation<ResponseChannel>; held: HeldChannel } {
   const ends: { status: number; body: string | undefined }[] = [];
   const releases: { finish: () => void; fail: (error: Error) => void }[] = [];
   const firstEnd = withResolvers<void>();
 
   return {
-    seam: () => {
-      const settled = withResolvers<void>();
-      let status = 0;
-      releases.push({
-        finish: () => settled.resolve(),
-        fail: (error: Error) => settled.reject(error),
-      });
-      return {
-        head(next: number): void {
-          status = next;
-        },
-        end(body?: string): void {
-          ends.push({ status, body });
-          firstEnd.resolve();
-        },
-        finished: settled.operation,
-      };
-    },
+    seam: () =>
+      resource(function* (provide) {
+        const settled = withResolvers<void>();
+        let status = 0;
+        releases.push({
+          finish: () => settled.resolve(),
+          fail: (error: Error) => settled.reject(error),
+        });
+        yield* provide({
+          head(next: number): void {
+            status = next;
+          },
+          end(body?: string): void {
+            ends.push({ status, body });
+            firstEnd.resolve();
+          },
+          finished: settled.operation,
+        });
+      }),
     held: {
       ends: () => ends,
       ended: firstEnd.operation,
@@ -106,6 +113,7 @@ describe("form server: the submission resolves only after its response is sent",
   it("fails rather than resolving when the response closes before finishing", function* () {
     let refusedPort = 0;
     let leftover: KeepAlive | undefined;
+    const keepAlives = yield* useKeepAlives();
 
     yield* scoped(function* () {
       const { seam, held } = heldChannel();
@@ -114,7 +122,7 @@ describe("form server: the submission resolves only after its response is sent",
       refusedPort = addressOf(server.url).port;
 
       // A keep-alive connection that must not survive teardown.
-      leftover = yield* openKeepAlive(refusedPort);
+      leftover = yield* keepAlives.open(refusedPort);
 
       yield* submitValid(server);
       yield* held.ended;
@@ -145,13 +153,14 @@ describe("form server: failure reaches the caller", () => {
     let recordedPort = 0;
     let keepAlive: KeepAlive | undefined;
     let acquired = false;
+    const keepAlives = yield* useKeepAlives();
 
     yield* scoped(function* () {
       try {
         yield* useFormServer(formInput(), {
           *afterListen(address) {
             recordedPort = address.port;
-            keepAlive = yield* openKeepAlive(address.port);
+            keepAlive = yield* keepAlives.open(address.port);
             throw new Error("setup failed after the listener came up");
           },
         });
@@ -205,11 +214,12 @@ describe("form server: teardown", () => {
   it("closes the port and its connections after a successful submission", function* () {
     let port = 0;
     let keepAlive: KeepAlive | undefined;
+    const keepAlives = yield* useKeepAlives();
 
     yield* scoped(function* () {
       const server = yield* useFormServer(formInput());
       port = addressOf(server.url).port;
-      keepAlive = yield* openKeepAlive(port);
+      keepAlive = yield* keepAlives.open(port);
       yield* submitValid(server);
       yield* server.submission;
     });
@@ -233,11 +243,12 @@ describe("form server: teardown", () => {
    */
   it("releases the listener when the owning task is halted mid-wait", function* () {
     const ready = withResolvers<{ port: number; keepAlive: KeepAlive }>();
+    const keepAlives = yield* useKeepAlives();
 
     const owner = yield* spawn(function* () {
       const server = yield* useFormServer(formInput());
       const port = addressOf(server.url).port;
-      ready.resolve({ port, keepAlive: yield* openKeepAlive(port) });
+      ready.resolve({ port, keepAlive: yield* keepAlives.open(port) });
       // Still waiting for a submission that never comes when the halt lands.
       yield* server.submission;
     });
@@ -253,6 +264,94 @@ describe("form server: teardown", () => {
     yield* owner.halt();
 
     expect(yield* portRefuses(port)).toBe(true);
+  });
+});
+
+/**
+ * A loopback that hands the test the live `ServerResponse` of one request.
+ *
+ * The response channel's listeners are what this measures, and they can only
+ * be counted on a response Node itself made.
+ */
+function useResponseUnderTest(): Operation<ServerResponse> {
+  return resource(function* (provide) {
+    const arrived = withResolvers<ServerResponse>();
+    const server = createServer((incoming, outgoing) => {
+      incoming.resume();
+      arrived.resolve(outgoing);
+    });
+
+    const listening = withResolvers<void>();
+    const onError = (error: Error): void => listening.reject(error);
+
+    yield* ensure(() => {
+      server.off("error", onError);
+    });
+    server.on("error", onError);
+
+    server.listen(0, "127.0.0.1", () => listening.resolve());
+    yield* listening.operation;
+
+    yield* ensure(function* () {
+      server.closeAllConnections();
+      const closed = withResolvers<void>();
+      const onClose = (): void => closed.resolve();
+
+      server.on("close", onClose);
+      try {
+        server.close();
+        yield* closed.operation;
+      } finally {
+        server.off("close", onClose);
+      }
+    });
+
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("the response fixture did not listen on a TCP port");
+    }
+
+    const connection = yield* useConnection(address.port);
+    connection.write(requestText({ method: "GET", path: "/", host: `127.0.0.1:${address.port}` }));
+
+    yield* provide(yield* arrived.operation);
+  });
+}
+
+describe("form server: a response channel belongs to its request task", () => {
+  /**
+   * A request abandoned before it answered is the case `finish` never comes
+   * for, so the channel cannot be relying on it to let go. The counts are read
+   * on the response itself, and the one after the halt is read before the
+   * event is emitted: a handler that removed itself when `finish` finally
+   * arrived would leave the same count behind as one that was never there.
+   */
+  it("detaches from the response when the task is halted, and a later finish changes nothing", function* () {
+    const res = yield* useResponseUnderTest();
+    const counts = (): number[] => [res.listenerCount("finish"), res.listenerCount("close")];
+    const before = counts();
+
+    const owner = yield* spawn(function* () {
+      yield* nodeResponseChannel(res);
+      yield* suspend();
+    });
+    yield* sleep(0);
+
+    // Anchored to what was live, not to a delta from the baseline: how many
+    // handlers a runtime keeps on its own `ServerResponse`, and when it adds
+    // them, is the runtime's business — Bun attaches one to `finish` that the
+    // others do not. What this case owns is the pair the channel added.
+    const live = counts();
+    expect(live[0]).toBeGreaterThan(before[0]);
+    expect(live[1]).toBeGreaterThan(before[1]);
+
+    yield* owner.halt();
+
+    expect(counts()).toEqual([live[0] - 1, live[1] - 1]);
+
+    res.emit("finish");
+
+    expect(counts()).toEqual([live[0] - 1, live[1] - 1]);
   });
 });
 
@@ -291,16 +390,154 @@ export interface KeepAlive {
  * the server failed to destroy would hang teardown outright. The test returning
  * is the evidence, and `portRefuses` confirms the port went with it.
  */
-function* openKeepAlive(port: number): Operation<KeepAlive> {
-  const socket = connect(port, "127.0.0.1");
-  socket.on("error", () => {});
-  // Flowing rather than paused, so the connection behaves like a real client's
-  // and never holds unread bytes against teardown.
-  socket.resume();
+/**
+ * Somewhere to open keep-alive connections whose error observers outlive the
+ * server that destroys them.
+ *
+ * The reset a destroyed connection delivers must still reach a listener, and
+ * it arrives *during* the server's teardown. A connection acquired inside the
+ * server's own scope would have its observer removed first — destructors run
+ * in reverse order of registration — and the reset would surface as an
+ * uncaught error. So the holder is acquired before the server, which is what
+ * puts its cleanup after the server's.
+ */
+function useKeepAlives(): Operation<{
+  open(port: number): Operation<KeepAlive>;
+  count(): number;
+  listeners(socket: Socket): number;
+}> {
+  return resource(function* (provide) {
+    const observers = new Map<Socket, () => void>();
 
-  const opened = withResolvers<void>();
-  socket.once("connect", () => opened.resolve());
-  yield* opened.operation;
+    yield* ensure(() => {
+      for (const [socket, onError] of observers) {
+        socket.off("error", onError);
+      }
+      observers.clear();
+    });
 
-  return { socket, establishedWith: socket.remoteAddress };
+    // Declared here rather than inside `open` below, so the subscription and
+    // the teardown that walks it belong to the same owner: a nested generator
+    // is a scope of its own, and it ends long before this resource does.
+    const observe = (socket: Socket): void => {
+      const onError = (): void => {};
+
+      socket.on("error", onError);
+      observers.set(socket, onError);
+    };
+
+    yield* provide({
+      *open(port: number): Operation<KeepAlive> {
+        const socket = connect(port, "127.0.0.1");
+
+        observe(socket);
+        // Flowing rather than paused, so the connection behaves like a real
+        // client's and never holds unread bytes against teardown.
+        socket.resume();
+
+        // Interpreted in the same synchronous run as `connect`, so the event
+        // cannot land before the wait is attached.
+        yield* once(socket, "connect");
+
+        return { socket, establishedWith: socket.remoteAddress };
+      },
+      count: () => observers.size,
+      listeners: (socket: Socket) => socket.listenerCount("error"),
+    });
+  });
 }
+
+/** What a raw client's own socket is carrying. */
+function clientCounts(socket: Socket): number[] {
+  return [
+    socket.listenerCount("data"),
+    socket.listenerCount("error"),
+    socket.listenerCount("close"),
+  ];
+}
+
+describe("form server: accepted sockets and raw clients", () => {
+  /**
+   * One close handler per accepted socket, and a raw client's own three, both
+   * cancelled while they are live. Each count is measured against what the
+   * runtime was already holding, read once while the owner runs, again after
+   * it is torn down and before the events are replayed, and once more
+   * afterwards — together with what the client had received, so a late chunk
+   * reaching a still-accumulating buffer would show.
+   */
+  it("releases the accepted socket's close handler and the client's own on cancellation", function* () {
+    const accepted: { socket: Socket; before: number }[] = [];
+    let client: Socket | undefined;
+    let clientBefore: number[] = [];
+    let acceptedLive = 0;
+    let clientLive: number[] = [];
+    let received: () => string = () => "";
+    let callbacks: () => number = () => 0;
+
+    const owner = yield* spawn(function* () {
+      const server = yield* useFormServer(formInput(), {
+        observeSocket: (socket) => accepted.push({ socket, before: socket.listenerCount("close") }),
+      });
+      const { port } = addressOf(server.url);
+      const connection = yield* useConnection(port, (socket) => {
+        client = socket;
+        clientBefore = clientCounts(socket);
+      });
+
+      received = () => connection.receivedSoFar();
+      callbacks = () => connection.callbacks();
+      connection.write(requestText({ method: "GET", path: "/", host: `127.0.0.1:${port}` }));
+      yield* connection.response();
+
+      acceptedLive = accepted[0]?.socket.listenerCount("close") ?? 0;
+      clientLive = client ? clientCounts(client) : [];
+      yield* suspend();
+    });
+
+    // Synchronized on the exchange having happened, so both owners are live
+    // with everything attached when the halt lands.
+    yield* when(function* () {
+      expect(clientLive.length).toBeGreaterThan(0);
+    });
+
+    const first = accepted[0];
+    if (!first || !client) {
+      throw new Error("no connection was accepted");
+    }
+
+    // At least what each owner attached, not exactly it: how many handlers a
+    // runtime keeps on its own sockets, and when it adds them, is the
+    // runtime's business — Bun on Linux holds one the others do not. What
+    // these cases own is the pair each added, so the release below is measured
+    // against what was live rather than against the baseline.
+    expect(acceptedLive).toBeGreaterThanOrEqual(first.before + 1);
+    clientLive.forEach((count, index) => {
+      expect(count).toBeGreaterThanOrEqual(clientBefore[index] + 1);
+    });
+
+    // Empty, because the exchange above consumed it — which is what makes the
+    // replayed chunk below visible if anything is still appending. The
+    // callback count is not: the exchange ran the client's handlers, and a
+    // replayed event reaching one would move it again.
+    const seen = received();
+    const ran = callbacks();
+
+    expect(ran).toBeGreaterThan(0);
+
+    yield* owner.halt();
+
+    const released = clientLive.map((count) => count - 1);
+
+    expect(first.socket.listenerCount("close")).toBe(acceptedLive - 1);
+    expect(clientCounts(client)).toEqual(released);
+
+    first.socket.emit("close");
+    client.emit("data", Buffer.from("after the client was cancelled"));
+    client.emit("close");
+
+    expect(first.socket.listenerCount("close")).toBe(acceptedLive - 1);
+    expect(clientCounts(client)).toEqual(released);
+    expect(received()).toBe(seen);
+    expect(callbacks()).toBe(ran);
+  });
+});

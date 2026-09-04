@@ -371,34 +371,53 @@ function runChild(
       options.live.delete(running.pid);
     });
 
-    child = spawnChild(command, args, {
+    const started = spawnChild(command, args, {
       cwd: options.cwd,
       stdio: ["pipe", "pipe", "pipe"],
       ...(options.env === undefined ? {} : { env: options.env }),
     });
-    if (child.pid) {
-      options.live.add(child.pid);
+    child = started;
+    if (started.pid) {
+      options.live.add(started.pid);
     }
     let stdout = "";
     let stderr = "";
-    child.stdout?.on("data", (chunk: Buffer) => {
+
+    const onStdout = (chunk: Buffer): void => {
       stdout += chunk.toString();
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
+    };
+    const onStderr = (chunk: Buffer): void => {
       stderr += chunk.toString();
-    });
-    child.once("error", (error: Error) => failed.reject(error));
-    child.once("close", (code: number | null, signal: string | null) => {
-      if (child?.pid) {
-        options.live.delete(child.pid);
+    };
+    const onError = (error: Error): void => failed.reject(error);
+    const onClose = (code: number | null, signal: string | null): void => {
+      if (started.pid) {
+        options.live.delete(started.pid);
       }
       settled.resolve({ code, signal, stdout, stderr });
+    };
+
+    // Registered after the cleanup above and so torn down before it: the child
+    // stops being observed before it is signalled, and a race this arm loses
+    // leaves nothing attached to a process somebody else is still reading.
+    // Established before the subscriptions, because `yield* ensure(...)` is
+    // itself a suspension an owner can be halted at.
+    yield* ensure(() => {
+      started.stdout?.off("data", onStdout);
+      started.stderr?.off("data", onStderr);
+      started.off("error", onError);
+      started.off("close", onClose);
     });
 
+    started.stdout?.on("data", onStdout);
+    started.stderr?.on("data", onStderr);
+    started.on("error", onError);
+    started.on("close", onClose);
+
     if (options.input !== undefined) {
-      child.stdin?.write(options.input);
+      started.stdin?.write(options.input);
     }
-    child.stdin?.end();
+    started.stdin?.end();
 
     return yield* race([settled.operation, failed.operation]);
   })();
@@ -523,16 +542,17 @@ function ptyRun<T>(
       options.live.delete(running.pid);
     });
 
-    child = spawnChild("/usr/bin/script", ["-q", "/dev/null", command, ...args], {
+    const started = spawnChild("/usr/bin/script", ["-q", "/dev/null", command, ...args], {
       cwd: options.cwd,
       env: options.env,
       stdio: ["pipe", "pipe", "pipe"],
     });
-    if (child.pid) {
-      options.live.add(child.pid);
+    child = started;
+    if (started.pid) {
+      options.live.add(started.pid);
     }
 
-    const react = (chunk: Buffer) => {
+    const react = (chunk: Buffer): void => {
       text += chunk.toString();
       const waiter = pending;
       if (waiter && waiter.predicate(text.slice(consumed))) {
@@ -541,16 +561,30 @@ function ptyRun<T>(
         waiter.resolve("");
       }
     };
-    child.stdout?.on("data", react);
-    child.stderr?.on("data", react);
-    child.once("error", (error: Error) => failed.reject(error));
-    child.once("close", (status: number | null) => {
+    const onError = (error: Error): void => failed.reject(error);
+    const onClose = (status: number | null): void => {
       code = status ?? -1;
-      if (child?.pid) {
-        options.live.delete(child.pid);
+      if (started.pid) {
+        options.live.delete(started.pid);
       }
       settled.resolve();
+    };
+
+    // Registered after the interrupt cleanup above and so torn down before it:
+    // the terminal stops being read before the process holding it is signalled.
+    // Established before the subscriptions, because `yield* ensure(...)` is
+    // itself a suspension an owner can be halted at.
+    yield* ensure(() => {
+      started.stdout?.off("data", react);
+      started.stderr?.off("data", react);
+      started.off("error", onError);
+      started.off("close", onClose);
     });
+
+    started.stdout?.on("data", react);
+    started.stderr?.on("data", react);
+    started.on("error", onError);
+    started.on("close", onClose);
 
     const write = (bytes: string) => {
       // Everything already on screen belongs to the surface being answered, so

@@ -7,7 +7,7 @@
     ".": "./mod.ts"
   },
   "dependencies": {
-    "@effectionx/node": "0.2.4",
+    "@effectionx/node": "0.2.5",
     "@executablemd/core": "workspace:*",
     "@executablemd/durable-streams": "workspace:*",
     "@executablemd/runtime": "workspace:*",

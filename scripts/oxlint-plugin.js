@@ -5,6 +5,7 @@ import { noSyncFilesystem } from "./oxlint-rules/no-sync-filesystem.js";
 import { noYieldInFinally } from "./oxlint-rules/no-yield-in-finally.js";
 import { preferEffectionOperation } from "./oxlint-rules/prefer-effection-operation.js";
 import { preferEffectionResult } from "./oxlint-rules/prefer-effection-result.js";
+import { requireScopeBoundEventRegistration } from "./oxlint-rules/require-scope-bound-event-registration.js";
 
 export default {
   meta: { name: "executablemd" },
@@ -16,5 +17,6 @@ export default {
     "no-yield-in-finally": noYieldInFinally,
     "prefer-effection-operation": preferEffectionOperation,
     "prefer-effection-result": preferEffectionResult,
+    "require-scope-bound-event-registration": requireScopeBoundEventRegistration,
   },
 };

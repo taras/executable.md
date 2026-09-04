@@ -14,7 +14,7 @@
  * when it chooses.
  */
 
-import { withResolvers } from "effection";
+import { ensure, resource, withResolvers } from "effection";
 import type { Operation } from "effection";
 import type { ServerResponse } from "node:http";
 
@@ -41,37 +41,47 @@ export class ResponseClosedError extends Error {
 }
 
 /**
- * Wrap a Node response.
+ * Wrap a Node response, for as long as the request task that acquires it runs.
  *
- * The listeners are armed here, when the channel is built, rather than when
- * `finished` is first awaited. `finish` can fire between `end()` and the
- * `yield*` that observes it, and a listener attached after the fact would wait
- * for an event that already happened. Arming once, before anything is written,
- * removes that window without depending on `writableFinished` being reported the
- * same way by every runtime.
+ * The listeners are armed on acquisition, before anything is written, rather
+ * than when `finished` is first awaited. `finish` can fire between `end()` and
+ * the `yield*` that observes it, and a listener attached after the fact would
+ * wait for an event that already happened. Arming once removes that window
+ * without depending on `writableFinished` being reported the same way by every
+ * runtime.
+ *
+ * Both handlers come off when the task ends, however it ends. The first
+ * settlement is the answer — a `close` after a `finish` changes nothing — so
+ * the two no longer need to remove each other, and a request abandoned before
+ * either event leaves nothing attached to a response the server is about to
+ * destroy.
  */
-export function nodeResponseChannel(res: ServerResponse): ResponseChannel {
-  const settled = withResolvers<void>();
+export function nodeResponseChannel(res: ServerResponse): Operation<ResponseChannel> {
+  return resource(function* (provide) {
+    const settled = withResolvers<void>();
 
-  const onFinish = (): void => {
-    res.removeListener("close", onClose);
-    settled.resolve();
-  };
-  const onClose = (): void => {
-    res.removeListener("finish", onFinish);
-    settled.reject(new ResponseClosedError());
-  };
+    const onFinish = (): void => settled.resolve();
+    const onClose = (): void => settled.reject(new ResponseClosedError());
 
-  res.once("finish", onFinish);
-  res.once("close", onClose);
+    // A lexical finalizer rather than `ensure()`: entering the `try` is
+    // synchronous, so there is no instant at which this response is observed
+    // and the release is not yet armed.
+    try {
+      res.on("finish", onFinish);
+      res.on("close", onClose);
 
-  return {
-    head(status: number, headers: Record<string, string>): void {
-      res.writeHead(status, headers);
-    },
-    end(body?: string): void {
-      res.end(body);
-    },
-    finished: settled.operation,
-  };
+      yield* provide({
+        head(status: number, headers: Record<string, string>): void {
+          res.writeHead(status, headers);
+        },
+        end(body?: string): void {
+          res.end(body);
+        },
+        finished: settled.operation,
+      });
+    } finally {
+      res.off("finish", onFinish);
+      res.off("close", onClose);
+    }
+  });
 }
