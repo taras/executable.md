@@ -17,8 +17,6 @@
  *   this xmd, and eval-block compilation
  *   (`cwd`, `env`, `platform`, `command`, `compile`)
  * - `API.Service` — scoped attached service startup (`startService`)
- * - `NativeLauncher` — handing one native agent UI the foreground terminal
- *   (`reserveTerminal`, `flushOutput`, `nativeLaunch`)
  * - `Config` — shared execution config (`timeout`, `timeoutExec`, `timeoutFetch`,
  *   `verbose`)
  *
@@ -129,66 +127,6 @@ export type {
   FileWriteTarget,
   GlobInput,
 } from "./files.ts";
-export {
-  flushOutput,
-  installControlledLauncher,
-  installForegroundLauncher,
-  NATIVE_LAUNCHER_UNAVAILABLE,
-  NativeLauncher,
-  NativeLauncherUnavailableError,
-  nativeLaunch,
-  NO_TERMINAL,
-  reserveTerminal,
-} from "./launcher.ts";
-export type {
-  ControlledLauncherOptions,
-  NativeLauncherHandler,
-  NativeLaunchOutcome,
-  NativeLaunchRequest,
-} from "./launcher.ts";
-export {
-  prepareControlledComposite,
-  TERMINAL_GRIDS_API,
-  TERMINAL_PROVIDER_UNAVAILABLE,
-  TerminalGrids,
-  terminalProviderLog,
-  TerminalProviderUnavailableError,
-} from "./terminal.ts";
-export type {
-  ControlledCompositeOptions,
-  TerminalComposite,
-  TerminalGridApi,
-  TerminalGridRequest,
-  TerminalPaneRequest,
-  TerminalPaneState,
-  TerminalProviderLog,
-  TerminalProviderResources,
-  TerminalShellOutcome,
-} from "./terminal.ts";
-export {
-  descendantsOf,
-  deliverSignal,
-  establishQuiescence,
-  groupMembers,
-  paneOccupants,
-  processReachable,
-  processTable,
-  TERMINAL_PROCESSES_API,
-  TERMINAL_PROCESSES_UNAVAILABLE,
-  TerminalProcesses,
-  TerminalProcessesUnavailableError,
-  terminalHolders,
-} from "./terminal-processes.ts";
-export type {
-  PaneOccupants,
-  PaneQuiescence,
-  ProcessFacts,
-  SignalDelivery,
-  TerminalProcessHandler,
-  TerminalSignal,
-} from "./terminal-processes.ts";
-export { installDenoTerminalProcesses, posixProcessProbes } from "./deno-terminal-processes.ts";
-export type { ProcessProbes } from "./deno-terminal-processes.ts";
 export { hostFilesHandler, useHostFiles } from "./host-files.ts";
 export type { HostFilesEvent, HostFilesObserver, HostFilesOptions } from "./host-files.ts";
 export {

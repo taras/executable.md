@@ -23,17 +23,16 @@
 import { ensure, resource, withResolvers } from "effection";
 import process from "node:process";
 import type { Operation } from "effection";
-import { TerminalGrids } from "@executablemd/runtime";
+import { registerTerminalProvider, TerminalGrids } from "@executablemd/terminal";
 import type {
   NativeLaunchOutcome,
   NativeLaunchRequest,
   TerminalComposite,
   TerminalGridRequest,
   TerminalPaneState,
+  TerminalProviderFactory,
   TerminalShellOutcome,
-} from "@executablemd/runtime";
-import { registerTerminalProvider } from "@executablemd/core";
-import type { TerminalProviderFactory } from "@executablemd/core";
+} from "@executablemd/terminal";
 import { usePaneChannels } from "./pane-channel.ts";
 import { requireQuiescent } from "./pane-worker.ts";
 import type { PaneLink } from "./pane-channel.ts";

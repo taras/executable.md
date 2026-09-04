@@ -15,6 +15,7 @@
     "@executablemd/core": "workspace:*",
     "@executablemd/durable-streams": "workspace:*",
     "@executablemd/runtime": "workspace:*",
+    "@executablemd/terminal": "workspace:*",
     "@executablemd/testing": "workspace:*",
     "acorn": "^8.16.0",
     "acpx": "0.12.0",

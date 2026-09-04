@@ -21,7 +21,8 @@ import { exists, readTextFile } from "@effectionx/fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import process from "node:process";
-import { API, NativeLauncher, useHostFiles } from "@executablemd/runtime";
+import { API, useHostFiles } from "@executablemd/runtime";
+import { NativeLauncher } from "@executablemd/terminal";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import {
   Agent,

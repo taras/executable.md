@@ -25,8 +25,8 @@ import {
   TerminalGrids,
   terminalProviderLog,
   TerminalProviderUnavailableError,
-} from "../terminal.ts";
-import type { TerminalGridRequest } from "../terminal.ts";
+} from "../src/terminal.ts";
+import type { TerminalGridRequest } from "../src/terminal.ts";
 
 /** A two-by-one grid: the smallest request that still has two ordinals. */
 function request(overrides: Partial<TerminalGridRequest> = {}): TerminalGridRequest {

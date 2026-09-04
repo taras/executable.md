@@ -19,8 +19,8 @@ import {
   isCredentialHelperMode,
   runCredentialHelper,
 } from "@executablemd/workflow/credential-helper";
-import { paneWorkerInvocation, runPaneWorkerProcess } from "./terminal/pane-worker.ts";
-import { foregroundTerminalGrid } from "./terminal/host.ts";
+import { paneWorkerInvocation, runPaneWorkerProcess } from "@executablemd/terminal-tmux";
+import { foregroundTerminalGrid } from "./grid-host.ts";
 import type { HelperAssembly } from "@executablemd/workflow/credential-helper";
 import { useCompiledService } from "./compiled-service.ts";
 

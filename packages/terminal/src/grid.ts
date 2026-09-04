@@ -42,8 +42,9 @@ import {
   ephemeral,
 } from "@executablemd/durable-streams";
 import type { Json, Workflow } from "@executablemd/durable-streams";
-import { flushOutput, reserveTerminal, TerminalGrids } from "@executablemd/runtime";
-import type { TerminalComposite, TerminalGridRequest } from "@executablemd/runtime";
+import { TerminalGrids } from "./terminal.ts";
+import { flushOutput, reserveTerminal } from "./launcher.ts";
+import type { TerminalComposite, TerminalGridRequest } from "./terminal.ts";
 
 import {
   awaitReadiness,
@@ -52,7 +53,7 @@ import {
   terminalInstallation,
 } from "./authority.ts";
 import type { LiveGrid, TerminalPaneClaim } from "./authority.ts";
-import type { TerminalGridLayout } from "../terminal-grid.ts";
+import type { TerminalGridLayout } from "./layout.ts";
 
 /**
  * The live boundary reader close crosses (architecture.md §Atomic presentation

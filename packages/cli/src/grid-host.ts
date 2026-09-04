@@ -1,6 +1,11 @@
 /**
  * Which hosts open a terminal grid, and which only describe one
- * (architecture.md §Interactive terminal grids).
+ * (architecture.md §Package ownership).
+ *
+ * Host composition, not a terminal implementation — which is why it sits here
+ * rather than under a `terminal/` path. The domain is
+ * `@executablemd/terminal`'s and the provider is `@executablemd/terminal-tmux`'s;
+ * what this module does is decide, per entrypoint, whether to install them.
  *
  * The Deno source entrypoint and the compiled binary present grids when the
  * invocation has a terminal and a usable tmux. Node and Bun keep the same
@@ -18,11 +23,15 @@ import { ensure, race, resource, withResolvers } from "effection";
 import type { Operation } from "effection";
 import process from "node:process";
 import { Execution, installTerminalGridProfile } from "@executablemd/core";
-import { command as hostCommand, installDenoTerminalProcesses } from "@executablemd/runtime";
-import { installTmuxGridProvider, TMUX_PROVIDER } from "./provider.ts";
-import type { TmuxProviderDependencies } from "./provider.ts";
-import { paneEnvironment } from "./tmux.ts";
-import { PANE_WORKER_COMMAND } from "./pane-worker.ts";
+import { command as hostCommand } from "@executablemd/runtime";
+import { installDenoTerminalProcesses } from "@executablemd/terminal/posix";
+import {
+  installTmuxGridProvider,
+  paneEnvironment,
+  PANE_WORKER_COMMAND,
+  TMUX_PROVIDER,
+} from "@executablemd/terminal-tmux";
+import type { TmuxProviderDependencies } from "@executablemd/terminal-tmux";
 
 /** How a host installs whatever presents its terminal grids. */
 export type TerminalGridInstaller = () => Operation<void>;

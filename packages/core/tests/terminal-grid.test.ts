@@ -41,20 +41,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
+import { reserveTerminal, TerminalGrids } from "@executablemd/terminal";
 import {
   installControlledLauncher,
   prepareControlledComposite,
-  reserveTerminal,
-  TerminalGrids,
   terminalProviderLog,
-} from "@executablemd/runtime";
+} from "@executablemd/terminal/test";
+import type { TerminalComposite, TerminalGridRequest } from "@executablemd/terminal";
 import type {
   ControlledCompositeOptions,
-  TerminalComposite,
-  TerminalGridRequest,
   TerminalProviderLog,
   TerminalProviderResources,
-} from "@executablemd/runtime";
+} from "@executablemd/terminal/test";
 
 import { Component } from "../src/component-api.ts";
 import { execute } from "../src/execute.ts";
@@ -63,16 +61,16 @@ import {
   createTerminalGridClaims,
   TerminalAuthorityError,
   useTerminalInstallation,
-} from "../src/terminal/authority.ts";
-import type { TerminalGridAuthority } from "../src/terminal/authority.ts";
+} from "@executablemd/terminal/lifecycle";
+import type { TerminalGridAuthority } from "@executablemd/terminal/lifecycle";
+import { installTerminalProvider } from "@executablemd/terminal/lifecycle";
 import {
-  installTerminalProvider,
   registerTerminalProvider,
   TerminalProviderInstallError,
   TerminalProviders,
-} from "../src/terminal/provider-api.ts";
+} from "@executablemd/terminal";
 import { installTerminalGridProfile } from "../src/terminal/profile.ts";
-import { paneTerminal } from "../src/terminal/pane.ts";
+import { paneTerminal } from "@executablemd/terminal";
 import type { Json } from "../src/types.ts";
 
 /** One document run against a controlled grid host. */

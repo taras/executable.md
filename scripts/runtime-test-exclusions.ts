@@ -643,9 +643,15 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
  */
 const DENO_ONLY_TERMINAL_GRID: RuntimeExclusion[] = [
   {
-    path: "packages/cli/tests/terminal-grid-tmux.test.ts",
+    path: "packages/terminal-tmux/tests/terminal-grid-tmux.test.ts",
     reason:
       "the subject is the tmux provider, whose panes are this executable re-invoked as `terminal-worker` — a subcommand only the grid-presenting entrypoints register; under Node and Bun that vector names a document instead, so the worker exits with ENOENT and the pane's admission never completes",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/cli/tests/terminal-host.test.ts",
+    reason:
+      "the host rows open a real grid through the tmux provider, so they spawn the same `terminal-worker` re-invocation; on Node and Bun that vector names a document and the pane never reports, exactly as for the adapter's own suite",
     issue: DERIVED_SCOPE,
   },
 ];

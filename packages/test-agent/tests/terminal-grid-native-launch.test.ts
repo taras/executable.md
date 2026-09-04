@@ -30,25 +30,23 @@ import {
   agentIdentityComponents,
   installAgentComponents,
   installTerminalGridProfile,
-  registerTerminalProvider,
   useTempFileCompiler,
 } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { Json } from "@executablemd/core";
+import { API, useHostFiles } from "@executablemd/runtime";
+import { registerTerminalProvider, TerminalGrids } from "@executablemd/terminal";
 import {
-  API,
   installControlledLauncher,
   prepareControlledComposite,
-  TerminalGrids,
   terminalProviderLog,
-  useHostFiles,
-} from "@executablemd/runtime";
+} from "@executablemd/terminal/test";
 import type {
   NativeLaunchOutcome,
   NativeLaunchRequest,
   TerminalGridRequest,
   TerminalPaneState,
-} from "@executablemd/runtime";
+} from "@executablemd/terminal";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { installTestAgentComponents } from "../src/components.ts";

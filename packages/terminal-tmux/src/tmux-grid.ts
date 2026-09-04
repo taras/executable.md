@@ -30,7 +30,7 @@ import { exec } from "@effectionx/process";
 import { lines } from "@effectionx/stream-helpers";
 import { createSignal, ensure, resource, sleep, spawn } from "effection";
 import type { Operation } from "effection";
-import { processReachable } from "@executablemd/runtime";
+import { processReachable } from "@executablemd/terminal/processes";
 import { layoutString, swapsInto } from "./layout.ts";
 import type { LayoutCell } from "./layout.ts";
 import { useAttachClient } from "./attach-client.ts";

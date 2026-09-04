@@ -12,7 +12,14 @@
  * rows that many panes fill, and which cell each pane occupies.
  */
 
-import type { TerminalPane } from "./structural-rules.ts";
+/**
+ * Whether a pane runs the markdown it holds or the host's default shell.
+ *
+ * Declared here rather than imported: the layout is provider-neutral data, and
+ * core's authored pane — which carries the element it was written as — would
+ * point this package back at the document engine it is placed for.
+ */
+export type PaneForm = "paired" | "self-closing";
 
 /** One pane, placed. */
 export interface TerminalGridCell {
@@ -25,7 +32,7 @@ export interface TerminalGridCell {
   /** The label it displays. Two cells may carry the same one. */
   readonly title: string;
   /** Whether it runs the markdown the pane holds or the host's default shell. */
-  readonly form: TerminalPane["form"];
+  readonly form: PaneForm;
 }
 
 /** The complete grid one `<Terminal.Grid>` asked for. */
@@ -40,7 +47,7 @@ export interface TerminalGridLayout {
 /** One pane's placeable facts, once its title has been resolved. */
 export interface PlacedPane {
   readonly title: string;
-  readonly form: TerminalPane["form"];
+  readonly form: PaneForm;
 }
 
 /**
