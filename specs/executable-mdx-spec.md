@@ -4411,6 +4411,8 @@ interface, and each operation is also exported directly:
 | `hasBinding()` | Whether the invocation has an engine-owned result binding — whether `as` was written (§6.10) | throws a missing-provider error |
 | `hasCapture(name)` | Whether the invocation wrote this capture prop at all (§6.5) | `false` |
 | `capture(name)` | Evaluate a capture prop now, against the caller's bindings, and deliver the result by reference (§6.5) | throws: not inside a function component invocation |
+| `expandProgram(program)` | Expand a complete XMD program at this invocation's site, under the authority the enclosing expansion holds, after settling that every retained component identity still describes this site (§5.7) | throws: not inside a function component invocation |
+| `resolveProgramSite(named)` | What each name a complete program writes resolves to at this site, resolved through the ordinary import chain, for the admission to retain (§5.7). Observable and short-circuitable; the compatibility decision is canonical execution's own and rests on nothing answered here | throws: not inside a function component invocation |
 | `handleFailure(failure)` | What an ordinary function-component failure means, after complete invocation teardown (§6.9) | fails the operation with `failure.error` |
 | `retain(resource)` | Create a resource in the invocation-site scope, so it outlives this invocation (§4.4) | throws: not inside a component invocation |
 
@@ -4440,17 +4442,22 @@ by being handled first.
 `registerComponents`, on the terms above. One that names durable work after its
 own invocation is supplied differently: the host declares it to the execution,
 which calls the host's factory once with the claimant it minted and registers
-what comes back (§5.3, §5.6). The workflow host supplies
-`<Evaluate source={…} />` that way, for a live or partial run — the operation an
-authored workflow document writes where an Agent's proposed fragment should be
-admitted and performed. Its schema is closed on one required string prop and one
-optional `allow` array selecting from the closed effect classes `read` and
-`write`, and paired content is refused. It declares no `returns` and answers
-with a detached value — `{ observations: [{ name, value }], output }`, each
-admitted read's own returned value under the name the fragment invoked it by,
-with an admitted mutation contributing none — so it renders nothing where it is
-written; an ordinary `as` captures it by reference for every selection, and an
-authored `<Json>` turns it into the text a next `<Prompt>` carries. Availability is all
+what comes back (§5.3, §5.6). `<Evaluate>` is supplied that way by every host
+that offers it. The ordinary run profile supplies its complete-program forms,
+which evaluate an admitted root in the current execution (§5.7).
+
+The workflow host supplies those forms and, beside them, the restricted
+`<Evaluate source={…} />` — the operation an authored workflow document writes
+where an Agent's proposed fragment should be admitted and performed, for a live
+or partial run. That form takes a `source` string and an optional `allow` array
+selecting from the closed effect classes `read` and `write`, refuses paired
+content, and cannot be combined with `program`, with paired content, or with
+`props`. On it the component declares no `returns` and answers with a detached
+value — `{ observations: [{ name, value }], output }`, each admitted read's own
+returned value under the name the fragment invoked it by, with an admitted
+mutation contributing none — so it renders nothing where it is written; an
+ordinary `as` captures it by reference for every selection, and an authored
+`<Json>` turns it into the text a next `<Prompt>` carries. Availability is all
 the registration decides; the ceilings it runs under come from values the host
 captured before any document existed, and no prop, binding or middleware return
 value supplies or widens one. [Workflow workspaces](./workflow-workspace-spec.md)
@@ -4732,6 +4739,221 @@ inside another execution without moving what an invocation may name.
 
 `Expansion` and `getExpansion()` belong to `@executablemd/core`, so ordinary
 document execution receives expansion identity with no extension installed.
+
+### 5.7 Complete-program evaluation
+
+Producing a program and running one are separate choices. `<Plan>` produces
+approved XMD source and never evaluates it (§5.4); `<Evaluate>` is the element
+an author writes where a program should run. It has two complete-program forms,
+and they say the same thing about different moments:
+
+```md
+<Evaluate>
+  <Plan>Inspect the release inputs and recommend a version.</Plan>
+</Evaluate>
+```
+
+```md
+<Plan as="plan">Inspect the release inputs and recommend a version.</Plan>
+
+<Evaluate program={plan} />
+```
+
+`<Evaluate>` is declared to an execution rather than registered, because its
+implementation names durable work after its own invocation (§5.6). A host that
+declares none has no `<Evaluate>` at all. The ordinary run profile declares the
+complete-program forms; the workflow host declares those and its own restricted
+generated-fragment form beside them (workflow-workspace-spec §8.4).
+
+**It is a composition site, not a child document.** The program runs in the
+current execution: its lifecycle, its journal, its cancellation scope, its
+contextual providers, its working directory or Workspace, and the authority in
+force where the element was written. No child process, no second host profile,
+no second root lifecycle, no journal of its own. Program source *requests*
+behavior and grants none.
+
+What does not cross is the producer's temporary authority. By the time a program
+is admitted, `<Plan>`'s authorship profile and its private phases have torn
+down, and a private component belongs to the declaration whose exact bytes
+authored it — so a private name written in a program resolves to nothing.
+Ordinary imports and capabilities genuinely present at the site remain
+available.
+
+**The forms are disjoint.** Paired content and `program` are mutually exclusive
+and one of them is required; `props` is valid only for a complete program.
+Every ambiguous or misplaced combination refuses before program content is
+produced and before any program effect runs, so an ambiguous element performs
+nothing at all — including the producer it was written around.
+
+**Paired content is a private program buffer, not a quotation.** What is written
+inside runs under ordinary XMD semantics while it produces text, and that text
+is what admission is offered; none of it reaches the surrounding document. The
+element removes the framing its own wrapper contributed — the line break after
+the opening tag with the indentation that follows it, the line break before the
+closing tag with the indentation that precedes it, and the indentation those
+lines share — and nothing else. Interior bytes are untouched. A producer's
+result is spliced in as one value and keeps its own trailing newline, which is
+why a sole `<Plan>` producer and `program={plan}` admit the same bytes and the
+same content digest.
+
+`program={value}` is exact supplied source. Whitespace an author put at either
+end of it is part of the program, and no trimming, dedenting or newline
+adjustment is applied to it.
+
+**The root's own contract decides the result.** The admitted source is a root,
+so its frontmatter, imports, metadata, props schema, `returns` declaration and
+`<Output>` selection apply (§5.4). A text root renders its selected output where
+the element was written; with `as` it still executes, binds that selected text
+as a string, and emits none of it. A value root requires `as` and binds its
+schema-validated result — without one it refuses before the first program
+effect, because the result would have nowhere to go.
+
+Root props are the explicit `props` object and default to `{}`. Ambient root
+props are never adopted. They are validated against the program's own schema
+before the first program effect. Ordinary non-props caller bindings are visible
+to the program, and visibly read-only: the program reads a copy, so a binding it
+creates or overwrites reaches no caller. Relative paths resolve from the source
+origin of the authored `<Evaluate>` site.
+
+**Admission is this boundary's own durable event.** A complete program records
+`evaluate_program`, never `generated_xmd` (§10). Before the first program effect
+the run retains the exact source and its digest, the explicit props and the
+props they validated to, the evaluation-site source origin, whether the result
+is captured, the root mode, and — for every element the program writes, in the
+order it writes them — the name, the authored form, and **the identity
+canonical resolution selects for that name at this site**. A partial
+continuation expands the retained source and restores the nested effects that
+already committed. A changed program at the same evaluation occurrence is stale
+input: it refuses before either the current or the retained source runs, so
+neither silently wins.
+
+**The identity is the answer's, not the selector's.** What runs is what the
+ordinary `Component.importComponent` chain returns, and a provider may answer
+without delegating or replace what came back. So the identity is taken from the
+final answer that chain supplied, by resolving through it. Describing the name a
+second way would retain an identity for a definition nobody invokes, and two
+different middleware answers would then compare equal.
+
+A retained identity is a closed tagged record, and every tier that can answer a
+name contributes a distinguishable tag: `structural`, `registered`,
+`repository`, `workflow`, `declared-markdown`, `middleware`, and `unresolved`
+for a name nothing at this site answers — a private name included, because
+selection resolves one to nothing outside the declaration that carries it
+(§5.3). A canonical tier's answer keeps its canonical identity.
+
+An answer an **identified middleware provider** supplied keeps that provider's
+own identity: a stable origin, the provider's stable key for the name, and a
+revision that changes whenever the supplied implementation changes. The provider
+states those terms at its installation boundary through `useImportProvider()`,
+and canonical execution mints it a claimant for that one execution, reading the
+origin and revision exactly once and closing over copies. A getter that answers
+one origin to the duplicate check and another to the claim, or an object edited
+after registration, changes nothing about the identity that claimant marks
+answers with. Marking an
+answer binds the terms to that exact object in execution-private state — never
+on the definition, which is data an answer can copy, and never through a
+replaceable Context answer. The identity is an assertion by the authority
+installed at the site, exactly as a registration's origin is: reusing one
+revision for a different implementation is that provider breaking its own
+contract, and the engine does not try to repair it by reading the definition.
+Two live providers under one origin refuse, and so does a second claim on one
+answer.
+
+An answer **nobody identified** is not refused for ordinary expansion — a
+document that installs a raw replacement keeps working exactly as it did — but a
+complete program cannot be admitted against one, because a continuation would
+have nothing to compare and would invoke whatever answered on the day it
+resumed.
+
+**Resolution is its own path.** It runs the site's ordinary chain under a
+resolution-only terminal: it selects and loads exactly what an authored import
+would, invokes no component implementation, and journals nothing. So
+`evaluate_program` commits before the program's own ordinary import record
+rather than after it.
+
+**The site's closed authority still decides.** A name a workflow bundle or a
+declared-Markdown host closed is answered by that tier, exactly as it is in
+ordinary expansion, and an identified replacement of such a name is refused
+rather than becoming the identity a program is admitted under. A
+provider-supplied answer is witnessed, not issued: it authorizes nothing for a
+closed name.
+
+**Structural syntax never reaches component import.** `<If>`, `<Return>` and
+every other reserved construct resolve directly to their structural identity —
+no lookup, no provider consulted, and no import record.
+
+**A continuation is held to the site it was admitted at.** Before the first
+program effect, canonical execution resolves every retained name again through
+the same chain and refuses when any identity or form has moved. That comparison
+is canonical execution's own: the resolver is built by the execution, travels on
+the expansion authority, and is reachable from no document, component,
+contextual Api answer or middleware return value. A host may observe the
+admission's own resolution through `Component.resolveProgramSite()`, and
+answering it dishonestly refuses the evaluation rather than widening it, because
+the canonical comparison is what decides.
+
+**The comparison and the invocation are one decision, and it is made per
+occurrence.** Each element the program writes is resolved on its own, in the
+order the admission retained, and the answer that passed the comparison is bound
+to *that* element rather than to its name. A program writing one name twice
+resolved it twice: if a provider supplies two implementations under two stable
+keys, the two elements invoke the two implementations, in order. An element
+settled as **unresolved** is settled too — it reports the ordinary unresolved
+failure and never falls through to the open chain, where a later lookup could
+answer what reconciliation did not.
+
+Canonical execution keeps its own copy of each answer, taken when it was
+witnessed, and hands those copies to the program's expansion: a settled element
+does not reach `Component.importComponent` at all. The chain is entered twice
+for one evaluation — once for the admission's resolution, once for
+reconciliation — and never again, so there is no third lookup for a provider to
+answer differently.
+
+Settlements belong to the program's own parsed body. A component the program
+invokes expands its own bytes, which nothing reconciled, so it imports exactly
+as it always did.
+
+A **resolved** occurrence still makes its ordinary durable import: one
+`import_component` record per resolved occurrence, written after the admission.
+An unresolved occurrence loads no component and records no such event — there is
+nothing to import.
+Its result is a closed shape of exactly two members — `settled`, holding
+`"program-occurrence"`, and `name` — and a continuation parses it as the hostile
+replay data it is before anything is invoked: the value is detached into plain
+JSON under a failure boundary and only that copy is inspected, so a member that
+answers differently on a second read decides nothing and a value that will not
+detach is simply not the record. A record missing a member,
+carrying one nobody wrote, spelling one differently, holding an unknown tag, or
+naming another component is refused, and the component does not run. A retained
+value that refuses to be read at all — a Proxy trapping `ownKeys` or a
+descriptor, a throwing accessor, a cycle — is refused earlier still, by the
+run's own retention check, before the document body starts; that refusal is the
+journal's and carries the journal's wording. Identity
+domain and form selection are recorded from the already-authorized answer; the
+record rediscovers no authority.
+
+**The retained record is hostile data.** A journal is a file, and replay hands
+back whatever it holds. The admitted and refused decisions and every nested
+record are closed shapes: a missing member, an additional member and a
+misspelled member are each read as "not a record this evaluation wrote". Beyond
+shape, the record must agree with itself before anything expands — the retained
+source hashes to the retained digest; reparsing it produces the retained root
+mode and a valid body structure; the retained elements are the ones that source
+writes, in that order and in those forms; and the supplied props validate to the
+retained validated props. A record that fails any of them, at any depth, is
+refused as unreadable, and neither the retained nor the current program performs
+an effect.
+
+**The digest identifies the artifact; the site identifies the occurrence.** The
+authored element and the loop iteration it was reached through are what make one
+execution of a program. Evaluating the same approved program at two sites is two
+executions with two nested effect identities, and the digest never deduplicates
+them.
+
+Canonical execution answers `Component.expandProgram()` (§5.5) for the
+invocation, from the authority and block counter it is already holding. That is
+what makes "the site's authority" a fact about the frame rather than something a
+prop, a binding or a middleware return value could supply.
 
 ## 6. Expansion
 
@@ -9703,6 +9925,7 @@ trusted-host events may have no authored source.
 | Resolve components (glob) | `glob` | `resolve:{dir}` | Only when `useDurableGlobResolver` middleware is installed |
 | Read over HTTP | `fetch` | `fetch:{expansion id}` | Normalized request in `description.input`; status, detached headers and text body in the result (§6.18) |
 | Admit generated XMD | `generated_xmd` | `generated:{fragment id}` | The canonical class selection, retained roots, selected root, every selected entry as a name, identity and admitted forms, and the exact request policy in `description.input`; the admitted source, that same policy, and the identity and form of each element the fragment named in the result (workflow-workspace-spec §8.4) |
+| Admit a complete program | `evaluate_program` | `program:{evaluation id}` | The source digest, explicit props, evaluation-site source origin and whether the result is captured in `description.input`. The result is one of two closed shapes: an admitted one of exactly `decision`, `source`, `mode`, `named`, `terms` and `validated` — where each `named` entry is exactly `name`, `form` and `identity`, each `identity` is a closed tagged record holding exactly the members its tag has — `structural`/`construct`, `registered`/`origin`/`reserved`, `repository`/`path`, `workflow`/`path`/`object`, `declared-markdown`/`origin`/`digest`, `middleware`/`origin`/`key`/`revision`, or `unresolved` alone — and `terms` is exactly `digest`, `props`, `origin` and `captured` — or a refused one of exactly `decision` and `refused`, carrying the refused class and nothing of the source. A record with a missing, additional or misspelled member at any depth, or one that disagrees with itself, is unreadable rather than partially believed (§5.7) |
 
 ### 10.2 Example journal for a multi-component document
 
@@ -12196,6 +12419,59 @@ user's own `~/.xmd/repositories`.
 | ORC20 | Retained workflow regression | Repository and Worktree replay, transactional Git, Push and pull-request history evidence, Issue effects, forks and completed replay keep their records, identities, provider call counts and native-launch refusal unchanged; directory ensure adds only its own `workspace_file` event and resulting retained root |
 | ORC21 | Compiled binary | A compiled smoke creates a root-level ambient Worktree, runs a command there, proves `.git` is a file and the checkout persists after exit; a second gated process proves lock refusal and release |
 
+### Tier PE — Complete-program evaluation (§5.7)
+
+Canonical evidence runs a document with `<Evaluate>` declared exactly as a host
+profile declares it, so what is measured is the element a person writes rather
+than an operation only a test can reach. Tier EP is the same claims under a
+shelled-out `xmd run`, and Tier WGAC covers the workflow profile, where these
+forms sit beside the restricted one.
+
+| # | Test | Verify |
+|---|------|--------|
+| PE1 | Deferred composition | `program={plan}` admits and evaluates the bound source once, recording one `evaluate_program` event |
+| PE2 | Direct composition | A producer written as content evaluates once and none of its approved source reaches the surrounding document |
+| PE3 | The two forms agree | A sole producer's paired projection and `program={plan}` admit the same bytes and the same content digest |
+| PE4 | Wrapper framing | The paired form removes one line break and the shared indentation at each end and nothing else; interior bytes, including a producer's own trailing newline, survive |
+| PE5 | Supplied source is exact | `program={value}` is neither trimmed, dedented nor newline-adjusted, so leading and trailing whitespace change the digest |
+| PE6–PE9 | Program forms | A value root binds its schema-validated result under `as`; a text root renders its selected output, or binds it as a string under `as` and emits none of it |
+| PE7 | Value root without `as` | Refused before the first program effect |
+| PE10–PE11 | Root props | An omitted `props` gives the program its own defaults rather than the caller's root props; props the program's schema refuses are refused before effects |
+| PE12–PE13 | Ambiguous forms | `program` written with content, and an element naming no program at all, each refuse with no admission recorded |
+| PE14 | Repeated evaluation | Two sites evaluate one artifact independently under two durable names; the digest deduplicates neither |
+| PE15 | Changed evaluation source | A partial continuation whose producer returns different source refuses as stale input, and neither the current nor the retained program performs its effect |
+| PE16 | Evaluation replay | A partial continuation expands the retained source and restores a completed nested effect without performing it again, proven by the producer re-rendering on that run |
+| PE17 | A failing program | A program stops where it failed: the effect written before the failure happened and the one after it did not |
+| PE18 | A retained source that moved | Altering only the retained source, with its digest and the current request untouched, refuses as unreadable and runs neither program |
+| PE19 | Every corrupted member | Corrupted validated props, root mode, a missing, additional or misspelled member, a corrupted component entry, a corrupted entry shape, corrupted term shape and a record that is not an object each refuse as unreadable with nothing run |
+| PE20 | A site that answers differently | The same source and request, with one named component registered under another origin, refuses before either implementation runs; the unchanged site resumes |
+| PE21 | Structural preflight | A durable effect written before a later malformed structural construct never runs: structural admission refuses first |
+| PE22 | The producer's private closure | A program evaluated inside a declaration carrying a private component cannot resolve that name and never enters its implementation, while an ordinary site-authorized component in the same program runs |
+| PE23 | An answer that moved | A program naming a middleware-supplied `<Open />` admits under identity A; a continuation whose provider supplies B under identity B refuses before either implementation runs, and the same prefix with A unchanged resumes and runs A once |
+| PE24 | The identity is the answer's | A middleware-only component retains the provider's identity, where an independent selector would have retained `unresolved` for every implementation |
+| PE25 | An unidentified answer | A program naming a raw replacement refuses before it runs, and records no admission |
+| PE26 | Check and use are one decision | An answer that changed after the comparison passed is refused where it would be invoked; the later implementation never runs |
+| PE27 | One origin, one authority | Two providers installed under one origin refuse |
+| PE28 | A malformed retained identity | A missing, empty, additional or mis-tagged identity member is unreadable and runs nothing |
+| PE29 | Delegation | A provider that delegates and returns the answer unchanged preserves the canonical identity |
+| PE30 | Replacement | A provider replacing a canonical answer retains its own identity, and the replaced registration never runs |
+| PE31 | Mutation after the claim | An answer changed on its way back through the chain refuses |
+| PE32 | Two claims on one answer | A second provider claiming an answer another already claimed refuses |
+| PE33 | One import, after the admission | Exactly one ordinary `import_component` follows `evaluate_program` for a program's component, and none precedes it |
+| PE34 | Two lookups, not three | The provider chain is entered for the admission's resolution and for reconciliation, and never for expansion |
+| PE35 | Structural syntax | `<If>` retains the structural tag, consults no provider and records no import |
+| PE36 | A closed name | An identified replacement of a declared component is refused, and its implementation never runs |
+| PE37 | The closed positive control | With no replacement, the declared answer is what the program invokes and what the admission retains |
+| PE38 | Identity captured once | Editing the stated identity after the claimant exists does not change what its claims are marked with |
+| PE39 | An alternating origin | A getter cannot answer the duplicate check and the claim differently |
+| PE40 | Two occurrences of one name | A program writing `<Open /><Open />` against a provider supplying A then B under distinct keys invokes A then B, not A twice |
+| PE41 | An unresolved occurrence | A provider that delegates through both resolution passes and would answer a third leaves the element unresolved: the third lookup never happens, the late implementation never runs, and no `import_component` is recorded for it |
+| PE43 | A settled import that will not read | A retained result holding a member no JSON has reaches this boundary and produces its fixed unreadable diagnostic, planting nothing in it, with the component never invoked |
+| PE44 | A detached read | The result is read once into detached JSON, so a member answering differently on a second read decides nothing |
+| PE45 | A value the journal will not retain | A Proxy refusing `ownKeys` or a descriptor, a throwing accessor, and a circular value are refused by the run's own retention check before the document body starts; the component is never invoked |
+| PE42 | A corrupted settled import | A missing, additional, mistyped or unknown member in the settled `import_component` result, and one naming another component, each refuse before the component is invoked |
+| EP1–EP8 | Run profile | The ordinary run profile declares `<Evaluate>`; the forms, props, refusals and catalog entry hold through the real binary, and a program cannot reach `<Plan>`'s private components |
+| WGAC17–WGAC20 | Workflow profile | A complete program records `evaluate_program` and no `generated_xmd`; the three forms cannot be combined; complete-program support is not reachable through `source` |
 
 ---
 

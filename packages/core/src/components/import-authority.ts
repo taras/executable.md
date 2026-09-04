@@ -22,6 +22,8 @@ import type { ComponentDefinition, FunctionComponentDefinition } from "../types.
 import type { FormSelections, InvocationIdentities } from "../invocation-identity.ts";
 import type { DeclaredImports, PrivateClosure } from "./declared-markdown.ts";
 import type { ExactSource } from "../output/exact-source.ts";
+import { ProgramEvaluationError } from "../program-identity.ts";
+import type { ProgramResolver, ProgramSettlement } from "../program-identity.ts";
 
 /** A definition an import may answer with. */
 export type ImportedDefinition = ComponentDefinition | FunctionComponentDefinition;
@@ -101,6 +103,45 @@ export interface ExpansionAuthority {
    * a component or middleware can name reaches it.
    */
   readonly forms?: FormSelections;
+  /**
+   * What canonical resolution selects for a name at this site, without
+   * importing it.
+   *
+   * Complete-program admission retains the identity behind every name its
+   * program writes and holds a continuation to it (§5.7). That is
+   * reconciliation, so it must not be answerable through the composable chain:
+   * this closure is built by canonical execution, handed to core's own
+   * expansion by value like everything else on this object, and reachable from
+   * no document, component or middleware.
+   *
+   * Absent for an expansion canonical execution did not build one for, in which
+   * case a program's components are compared by name and form alone.
+   */
+  readonly resolve?: ProgramResolver;
+  /**
+   * What an admitted program's own occurrences settled to, before its first
+   * effect, keyed by where each element was written.
+   *
+   * Canonical execution resolved these through the site's own chain, compared
+   * them against the retained admission, and kept its own copy of each. An
+   * element written at one of these offsets does not reach
+   * `Component.importComponent` at all: the chain has already answered, and
+   * asking it again would let a provider answer one way while the site was
+   * checked and another way while the program ran.
+   *
+   * Keyed by occurrence rather than by name, because a program writing one name
+   * twice resolved it twice and the two answers are two settlements. An
+   * unresolved occurrence is here too, so it cannot fall through to the open
+   * chain.
+   *
+   * It belongs to the program's own parsed body and travels no further: a
+   * component the program invokes expands its own bytes, and settling a name
+   * for that body would be a name-wide override nobody reconciled.
+   *
+   * Held by the execution and handed here by value, like everything else on
+   * this object.
+   */
+  readonly settled?: ReadonlyMap<number, ProgramSettlement>;
 }
 
 /** Why an answer is not the one canonical execution produced for this name. */
@@ -110,6 +151,15 @@ export type ImportRefusal = "unissued" | "another-name" | "changed";
 interface Witness {
   readonly name: string;
   /**
+   * The provider that supplied this answer, when an identified one did.
+   *
+   * Absent for an answer canonical execution produced itself, whose identity is
+   * the selection's. Stated by the provider at its installation boundary and
+   * bound here, outside the definition, because a definition is data an answer
+   * can copy and an identity a copy carries identifies nothing.
+   */
+  readonly supplied?: SuppliedIdentity;
+  /**
    * Core's own copy of its own answer, taken before the public chain could see
    * the definition and reachable from nowhere but here.
    *
@@ -118,6 +168,20 @@ interface Witness {
    * the object middleware was holding.
    */
   readonly canonical: ImportedDefinition | undefined;
+}
+
+/** What an identified provider stated about one answer it supplied. */
+export interface SuppliedIdentity {
+  readonly origin: string;
+  readonly key: string;
+  readonly revision: string;
+}
+
+/** What canonical execution knows about the answer the chain returned. */
+export interface AnswerWitness {
+  readonly name: string;
+  readonly canonical: ImportedDefinition | undefined;
+  readonly supplied?: SuppliedIdentity;
 }
 
 /**
@@ -237,6 +301,55 @@ export class CanonicalImports {
   }
 
   /**
+   * Record that an identified middleware provider supplied this answer.
+   *
+   * The copy is taken here for the same reason canonical answers are copied:
+   * the object that travelled through the rest of the chain is never the object
+   * invoked. A second claim on one answer is refused rather than overwritten —
+   * two providers each saying an answer is theirs is an ambiguity, not a later
+   * one winning.
+   */
+  supply(
+    name: string,
+    supplied: SuppliedIdentity,
+    definition: ImportedDefinition,
+  ): ImportedDefinition {
+    const held = this.#issued.get(definition);
+    if (held !== undefined) {
+      // One provider answering the same import twice with the same definition
+      // is ordinary: a name resolved for a program's admission and again for
+      // its expansion is two imports of one answer. What is refused is a second
+      // *claim* — another provider, another name, or the same provider under a
+      // changed revision — because then no single authority stands behind it.
+      const same =
+        held.name === name &&
+        held.supplied !== undefined &&
+        held.supplied.origin === supplied.origin &&
+        held.supplied.key === supplied.key &&
+        held.supplied.revision === supplied.revision;
+      if (!same) {
+        throw new ProgramEvaluationError(
+          "Component.importComponent middleware claimed an answer another provider had claimed.",
+        );
+      }
+      return definition;
+    }
+    this.#issued.set(definition, { name, canonical: retain(definition), supplied });
+    return definition;
+  }
+
+  /**
+   * What canonical execution knows about the answer the chain returned.
+   *
+   * Absent for an answer nobody issued or supplied, which is a replacement no
+   * authority stands behind. Ordinary expansion still runs it; a durable grant
+   * cannot be made against it.
+   */
+  witness(answer: ImportedDefinition): AnswerWitness | undefined {
+    return typeof answer === "object" && answer !== null ? this.#issued.get(answer) : undefined;
+  }
+
+  /**
    * Core's own copy of the definition this import may invoke.
    *
    * Verified at the call site, after the public chain has returned and before
@@ -250,7 +363,12 @@ export class CanonicalImports {
   ): ImportedDefinition {
     const witness =
       typeof answer === "object" && answer !== null ? this.#issued.get(answer) : undefined;
-    if (witness === undefined) {
+    // A provider-supplied answer is witnessed, not issued. It says which
+    // provider stands behind it, which is what a complete program's admission
+    // reads — and it is not canonical execution's own answer, so it authorizes
+    // nothing for a name a tier closed. A bundled or declared component is that
+    // tier's to answer whatever middleware supplies beside it.
+    if (witness === undefined || witness.supplied !== undefined) {
       throw refuse("unissued");
     }
     if (witness.name !== name) {
@@ -302,11 +420,19 @@ export interface ImportTier {
  * an answer decides only how a refusal reads, never whether one is authorized.
  */
 export class ExecutionImports implements ImportAuthority {
-  readonly #imports = new CanonicalImports();
+  readonly #imports: CanonicalImports;
   readonly #tiers: readonly ImportTier[];
 
-  constructor(tiers: readonly ImportTier[]) {
+  /**
+   * The witness table is the execution's, not this authority's.
+   *
+   * One execution has one answer per import, and an open execution witnesses
+   * its answers too — a complete program's admission has to tell a canonical
+   * answer from a supplied one whether or not any tier closes an import.
+   */
+  constructor(tiers: readonly ImportTier[], imports: CanonicalImports = new CanonicalImports()) {
     this.#tiers = tiers;
+    this.#imports = imports;
   }
 
   /** Record that canonical execution produced this answer for this name. */

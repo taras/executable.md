@@ -94,6 +94,15 @@ import {
   useSegmentCauses,
 } from "./errors.ts";
 import { Component, importComponent, raise } from "./component-api.ts";
+import {
+  ANSWER_CHANGED,
+  ProgramEvaluationError,
+  providerIdentity,
+  selectionIdentity,
+  UNRESOLVED,
+} from "./program-identity.ts";
+import type { ResolvedProgramComponent } from "./program-identity.ts";
+import { createImportProviderRegistry, ImportProviders } from "./program-imports.ts";
 import { sourceDescription } from "./source-position.ts";
 import { renderSegment } from "./render.ts";
 import { createExactSource } from "./output/exact-source.ts";
@@ -137,7 +146,10 @@ import {
   parseFormDeclaration,
 } from "./invocation-identity.ts";
 import type { IdentityComponent } from "./invocation-identity.ts";
-import { ExecutionImports } from "./components/import-authority.ts";
+import { CanonicalImports, ExecutionImports } from "./components/import-authority.ts";
+import { RESERVED_STRUCTURAL } from "./structural.ts";
+import { stillDescribes } from "./components/import-authority.ts";
+import type { ImportedDefinition } from "./components/import-authority.ts";
 import type { ExpansionAuthority, ImportTier } from "./components/import-authority.ts";
 import type { WorkflowComponentBundle, WorkflowImportAuthority } from "./components/bundle.ts";
 import type { CodeBlockContext, CodeBlockResult, EvalEnv } from "./types.ts";
@@ -394,120 +406,135 @@ function targetFailureRecord(failure: DocumentTargetFailure): TargetFailureRecor
   };
 }
 
-function* durableImportComponent(
+/**
+ * Which definition answers this name, as the record describes it.
+ *
+ * The selection half of an import, separated from the journal so the same
+ * decision can be made twice for two different reasons: once inside the durable
+ * operation an authored element records, and once by the resolution-only path
+ * a complete program's admission settles its site through. That path journals
+ * nothing, so an admission commits before the program's own import record.
+ */
+/** One read of an answer that may refuse to be read. */
+function readAnswer<T>(inspect: () => T): T | undefined {
+  try {
+    return inspect();
+  } catch {
+    return undefined;
+  }
+}
+
+function* selectDurableComponent(
   name: string,
   root: RootDocumentSource | undefined,
   searchPaths: string[],
   registry: ComponentRegistry,
-  position: Readonly<SourcePosition> | undefined,
   bundle: WorkflowImportAuthority | undefined,
   declared: DeclaredImports | undefined,
-): Workflow<ComponentDefinition | FunctionComponentDefinition> {
-  // Taken before the durable operation and outside it, because the offer is
-  // canonical core's own and a replay has to reach this the same way the live
-  // run did: the element asking is inside the declaration's body, or it is not.
-  const claimed = name === "__root__" ? undefined : declared?.claim(name);
-  const recorded = yield createDurableOperation<DurableSelection>(
-    // The root import is the run's own entry rather than an authored element,
-    // so it carries no source however it was reached.
-    { type: "import_component", name, ...(root ? {} : sourceDescription(position)) },
-    function* (): Operation<DurableSelection> {
-      if (name === "__root__" && root) {
-        // Inside the durable operation, so the journal holds the root's identity
-        // and its text: a replay restores both without reading anything, whether
-        // the source was a file or supplied.
-        //
-        // The selector resolves here too, against the text this operation is
-        // about to record, so the exact target the run executed is part of the
-        // record rather than something a later read has to rediscover. Only the
-        // exact target is recorded — a glob describes what the caller asked
-        // for, not what ran.
-        const path = rootSourcePath(root);
-        const content = yield* readRootSource(root);
-        if (root.target === undefined) {
-          return { kind: "repository", path, content };
-        }
-        const resolved = resolveDocumentTarget(path, content, root.target);
-        if (resolved.ok) {
-          return { kind: "repository", path, content, target: resolved.value };
-        }
-        const failure = asDocumentTargetError(resolved.error);
-        if (failure === undefined) {
-          throw resolved.error;
-        }
-        return {
-          kind: "target-failure",
-          path,
-          content,
-          failure: targetFailureRecord(failure.data),
-        };
-      }
-
-      if (claimed !== undefined) {
-        return { kind: "declared-private", origin: claimed.origin };
-      }
-
-      const selected = yield* selectComponent(name, {
-        includes: searchPaths,
-        registry,
-        ...(bundle === undefined ? {} : { workflow: bundle }),
-        ...(declared === undefined ? {} : { declared: declared.catalog }),
-      });
-
-      switch (selected.kind) {
-        case "repository":
-          return {
-            kind: "repository",
-            path: selected.path,
-            content: yield* readTextFile(selected.path),
-          };
-        case "workflow":
-          // The exact pinned source, already in hand: the bundle was read from
-          // the definition's own commit before this run existed, so recording it
-          // reads nothing and a replay reconstructs it without resolving a name.
-          return {
-            kind: "workflow",
-            path: selected.path,
-            sourceHash: selected.sourceHash,
-            content: selected.content,
-          };
-        case "declared-markdown":
-          // The exact declared bytes, already in hand: they were admitted
-          // before this run imported a root, so recording them reads nothing
-          // and a replay reconstructs the component without resolving a name.
-          return {
-            kind: "declared-markdown",
-            origin: selected.origin,
-            digest: selected.digest,
-            content: selected.source,
-            // Recorded only when it holds, so an ordinary declaration's record
-            // is exactly what it always was.
-            ...(selected.exact ? { exact: true } : {}),
-          };
-        case "registered":
-          return {
-            kind: "registered",
-            origin: selected.origin.kind === "registered" ? selected.origin.origin : "",
-            reserved: selected.origin.kind === "registered" && selected.origin.reserved,
-          };
-        case "structural":
-          throw new Error(
-            `${name} is structural syntax the engine owns, so it never resolves a component`,
-          );
-        case "unresolved":
-          throw new Error(unresolvedMessage(name, selected.searched));
-      }
-    },
-  );
-
-  // Parsed rather than asserted: a replay hands back whatever the journal holds,
-  // and a history somebody else wrote is not a `DurableSelection` because it
-  // type-checked on the way in.
-  const selection = readDurableSelection(recorded);
-  if (selection === undefined) {
-    throw new Error(name === "__root__" ? UNREADABLE_ROOT_RECORD : UNREADABLE_IMPORT_RECORD);
+  claimed: { origin: string; definition: ImportedDefinition } | undefined,
+): Operation<DurableSelection> {
+  if (name === "__root__" && root) {
+    // Inside the durable operation, so the journal holds the root's identity
+    // and its text: a replay restores both without reading anything, whether
+    // the source was a file or supplied.
+    //
+    // The selector resolves here too, against the text this operation is
+    // about to record, so the exact target the run executed is part of the
+    // record rather than something a later read has to rediscover. Only the
+    // exact target is recorded — a glob describes what the caller asked
+    // for, not what ran.
+    const path = rootSourcePath(root);
+    const content = yield* readRootSource(root);
+    if (root.target === undefined) {
+      return { kind: "repository", path, content };
+    }
+    const resolved = resolveDocumentTarget(path, content, root.target);
+    if (resolved.ok) {
+      return { kind: "repository", path, content, target: resolved.value };
+    }
+    const failure = asDocumentTargetError(resolved.error);
+    if (failure === undefined) {
+      throw resolved.error;
+    }
+    return {
+      kind: "target-failure",
+      path,
+      content,
+      failure: targetFailureRecord(failure.data),
+    };
   }
 
+  if (claimed !== undefined) {
+    return { kind: "declared-private", origin: claimed.origin };
+  }
+
+  const selected = yield* selectComponent(name, {
+    includes: searchPaths,
+    registry,
+    ...(bundle === undefined ? {} : { workflow: bundle }),
+    ...(declared === undefined ? {} : { declared: declared.catalog }),
+  });
+
+  switch (selected.kind) {
+    case "repository":
+      return {
+        kind: "repository",
+        path: selected.path,
+        content: yield* readTextFile(selected.path),
+      };
+    case "workflow":
+      // The exact pinned source, already in hand: the bundle was read from
+      // the definition's own commit before this run existed, so recording it
+      // reads nothing and a replay reconstructs it without resolving a name.
+      return {
+        kind: "workflow",
+        path: selected.path,
+        sourceHash: selected.sourceHash,
+        content: selected.content,
+      };
+    case "declared-markdown":
+      // The exact declared bytes, already in hand: they were admitted
+      // before this run imported a root, so recording them reads nothing
+      // and a replay reconstructs the component without resolving a name.
+      return {
+        kind: "declared-markdown",
+        origin: selected.origin,
+        digest: selected.digest,
+        content: selected.source,
+        // Recorded only when it holds, so an ordinary declaration's record
+        // is exactly what it always was.
+        ...(selected.exact ? { exact: true } : {}),
+      };
+    case "registered":
+      return {
+        kind: "registered",
+        origin: selected.origin.kind === "registered" ? selected.origin.origin : "",
+        reserved: selected.origin.kind === "registered" && selected.origin.reserved,
+      };
+    case "structural":
+      throw new Error(
+        `${name} is structural syntax the engine owns, so it never resolves a component`,
+      );
+    case "unresolved":
+      throw new Error(unresolvedMessage(name, selected.searched));
+  }
+}
+
+/**
+ * The definition one recorded selection produces.
+ *
+ * Rebuilt from the record rather than carried out of the durable operation, so
+ * a replayed selection and a live one raise the same error with the same
+ * fields — and so the resolution-only path produces exactly what the authored
+ * import will.
+ */
+function* definitionFromSelection(
+  name: string,
+  selection: DurableSelection,
+  registry: ComponentRegistry,
+  declared: DeclaredImports | undefined,
+  claimed: { origin: string; definition: ImportedDefinition } | undefined,
+): Operation<ComponentDefinition | FunctionComponentDefinition> {
   // Rebuilt here rather than carried out of the durable operation, so a replayed
   // failed selection and a live one raise the same error with the same fields.
   // Parsed rather than trusted: the record is journal data.
@@ -639,6 +666,63 @@ function* durableImportComponent(
     return (yield* ephemeral(parseRootMarkdownDefinition(name, path, content, target))).definition;
   }
   return yield* ephemeral(parseMarkdownDefinition(name, path, content));
+}
+
+function* durableImportComponent(
+  name: string,
+  root: RootDocumentSource | undefined,
+  searchPaths: string[],
+  registry: ComponentRegistry,
+  position: Readonly<SourcePosition> | undefined,
+  bundle: WorkflowImportAuthority | undefined,
+  declared: DeclaredImports | undefined,
+): Workflow<ComponentDefinition | FunctionComponentDefinition> {
+  // Taken before the durable operation and outside it, because the offer is
+  // canonical core's own and a replay has to reach this the same way the live
+  // run did: the element asking is inside the declaration's body, or it is not.
+  const claimed = name === "__root__" ? undefined : declared?.claim(name);
+  const recorded = yield createDurableOperation<DurableSelection>(
+    // The root import is the run's own entry rather than an authored element,
+    // so it carries no source however it was reached.
+    { type: "import_component", name, ...(root ? {} : sourceDescription(position)) },
+    () => selectDurableComponent(name, root, searchPaths, registry, bundle, declared, claimed),
+  );
+
+  // Parsed rather than asserted: a replay hands back whatever the journal holds,
+  // and a history somebody else wrote is not a `DurableSelection` because it
+  // type-checked on the way in.
+  const selection = readDurableSelection(recorded);
+  if (selection === undefined) {
+    throw new Error(name === "__root__" ? UNREADABLE_ROOT_RECORD : UNREADABLE_IMPORT_RECORD);
+  }
+  return yield* ephemeral(definitionFromSelection(name, selection, registry, declared, claimed));
+}
+
+/**
+ * Which definition answers this name, without journaling the decision.
+ *
+ * The resolution-only path. It selects and loads exactly what an authored
+ * import would, and records nothing: `evaluate_program` commits before the
+ * program's own ordinary import record rather than after it.
+ */
+export function* resolveComponentDefinition(
+  name: string,
+  searchPaths: string[],
+  registry: ComponentRegistry,
+  bundle: WorkflowImportAuthority | undefined,
+  declared: DeclaredImports | undefined,
+): Operation<ComponentDefinition | FunctionComponentDefinition> {
+  const claimed = declared?.claim(name);
+  const selection = yield* selectDurableComponent(
+    name,
+    undefined,
+    searchPaths,
+    registry,
+    bundle,
+    declared,
+    claimed,
+  );
+  return yield* definitionFromSelection(name, selection, registry, declared, claimed);
 }
 
 function isFunctionComponent(value: unknown): value is FunctionComponent {
@@ -2110,6 +2194,14 @@ function* executeDocument(
   bundles: readonly WorkflowComponentBundle[] = [],
   identityComponents: readonly IdentityComponent[] = [],
   declarations: readonly DeclaredMarkdownComponent[] = [],
+  /**
+   * The witness table this execution's providers were minted against.
+   *
+   * Created where the installations run, because that is where an identified
+   * import provider is installed and a provider minted against a different
+   * table would witness nothing this execution reads.
+   */
+  witnesses: CanonicalImports = new CanonicalImports(),
 ): Operation<DocumentExecution> {
   const {
     stream,
@@ -2263,12 +2355,168 @@ function* executeDocument(
       if (declaredImports !== undefined) {
         tiers.push(declaredImports);
       }
-      const imports = tiers.length === 0 ? undefined : new ExecutionImports(tiers);
+      // One witness table for the whole execution, whether or not any tier
+      // closes an import. An open run needs it too: a complete program's
+      // admission has to tell an answer canonical execution produced from one a
+      // provider supplied, and from one nobody stands behind at all.
+      const imports = tiers.length === 0 ? undefined : new ExecutionImports(tiers, witnesses);
       const authority: ExpansionAuthority = {
         ...(imports === undefined ? {} : { imports }),
         ...(declaredImports === undefined ? {} : { declared: declaredImports }),
         identities: identity.identities,
         forms,
+        // What complete-program admission retains behind each name its program
+        // writes, and what a continuation is compared against (§5.7). It reads
+        // the same inputs the import provider above reads and imports nothing:
+        // resolving a name decides which definition answers it, and loading one
+        // is the program's own durable effect where the element is written.
+        //
+        // On the authority rather than on the Component Api, because this
+        // decides whether a retained admission still describes this site.
+        // Reconciliation never trusts an answer middleware can replace.
+        *resolve(name: string): Operation<ResolvedProgramComponent> {
+          const absent = (unidentified = false): ResolvedProgramComponent => ({
+            name,
+            form: "self-closing",
+            // The occurrence is the caller's — this answers about a name — and
+            // is filled in where the two are put together.
+            offset: -1,
+            identity: UNRESOLVED,
+            definition: undefined,
+            unidentified,
+          });
+
+          // Structural syntax is the engine's own and never reaches component
+          // import at all, so there is nothing to look up and nothing for a
+          // provider to claim. Answering it here is what keeps `<If>` from
+          // producing a middleware lookup or an import record.
+          if (RESERVED_STRUCTURAL.has(name)) {
+            return {
+              name,
+              form: "self-closing",
+              offset: -1,
+              identity: { tag: "structural", construct: name },
+              definition: undefined,
+              unidentified: false,
+            };
+          }
+
+          // Through the ordinary chain, because the answer the chain returns is
+          // the answer that would run — but under a resolution-only terminal.
+          // This phase settles which definition answers a name; it invokes no
+          // implementation and journals nothing, so `evaluate_program` commits
+          // before the program's own ordinary import record.
+          let answer: ImportedDefinition;
+          try {
+            answer = yield* scoped(function* () {
+              yield* Component.around(
+                {
+                  *importComponent([asked], _next) {
+                    const registered = yield* Component.operations.registry;
+                    const resolved = yield* resolveComponentDefinition(
+                      asked,
+                      includes,
+                      registered,
+                      bundle,
+                      declaredImports,
+                    );
+                    return witnesses.issue(asked, resolved);
+                  },
+                },
+                { at: "min" },
+              );
+              return yield* importComponent(name);
+            });
+          } catch (error) {
+            // A name nothing answers is an ordinary outcome and settles as
+            // unresolved. A refusal this boundary raised — a second provider
+            // claiming one answer, an answer changed after it was claimed — is
+            // not an outcome about the name and must not be read as one.
+            if (error instanceof ProgramEvaluationError) {
+              throw error;
+            }
+            return absent();
+          }
+
+          const witness = witnesses.witness(answer);
+          if (witness !== undefined) {
+            // What came back has to still be what was witnessed. A provider
+            // that marked an answer and then edited it, or handed back
+            // something else, has left nothing to admit a program against.
+            const canonical = witness.canonical;
+            if (
+              witness.name !== name ||
+              canonical === undefined ||
+              readAnswer(() => stillDescribes(canonical, answer)) !== true
+            ) {
+              throw new ProgramEvaluationError(ANSWER_CHANGED);
+            }
+          }
+          if (witness === undefined) {
+            // A replacement no authority stands behind. Ordinary expansion runs
+            // it; a durable grant cannot be made against it.
+            return absent(true);
+          }
+
+          // The site's own closed authority decides first, exactly as ordinary
+          // expansion does. A bundled or declared name is answered by the tier
+          // that closed it, so an identified replacement is refused here rather
+          // than becoming the identity a program is admitted under.
+          if (imports?.closes(name) === true) {
+            const authorized = imports.authorize(name, answer);
+            const registered = yield* Component.operations.registry;
+            const selection = yield* ephemeral(
+              selectComponent(name, {
+                includes,
+                registry: registered,
+                ...(bundle === undefined ? {} : { workflow: bundle }),
+                ...(catalog === undefined ? {} : { declared: catalog }),
+              }),
+            );
+            return {
+              name,
+              form: "self-closing",
+              offset: -1,
+              identity: selectionIdentity(selection),
+              definition: authorized,
+              unidentified: false,
+            };
+          }
+
+          if (witness.supplied !== undefined) {
+            return {
+              name,
+              form: "self-closing",
+              offset: -1,
+              identity: providerIdentity(
+                { origin: witness.supplied.origin, revision: witness.supplied.revision },
+                witness.supplied.key,
+              ),
+              definition: witness.canonical,
+              unidentified: false,
+            };
+          }
+          // Canonical execution's own answer keeps its canonical identity. The
+          // selection that produced it is what names it, and asking for it here
+          // describes the definition this import actually settled on.
+          const registered = yield* Component.operations.registry;
+          const selection = yield* ephemeral(
+            selectComponent(name, {
+              includes,
+              registry: registered,
+              ...(bundle === undefined ? {} : { workflow: bundle }),
+              ...(catalog === undefined ? {} : { declared: catalog }),
+            }),
+          );
+          return {
+            name,
+            form: "self-closing",
+            offset: -1,
+            identity: selectionIdentity(selection),
+            definition: witness.canonical,
+            unidentified: false,
+          };
+        },
         // Created here, held here, and reclaimed with this execution. Nothing a
         // document, a component, middleware or a separately loaded copy can
         // name reaches this object.
@@ -2308,7 +2556,10 @@ function* executeDocument(
             // The witness for this answer. It is issued where the answer is
             // produced and verified where it is invoked, so what a handler does
             // to the value in between is visible rather than authoritative.
-            return imports === undefined ? definition : imports.issue(name, definition);
+            // Always witnessed, closed execution or not: what the chain hands
+            // back is compared against this, and an answer nobody stands behind
+            // has to be tellable from one canonical execution produced.
+            return witnesses.issue(name, definition);
           },
           *applyModifiers([modifiers, context], _next) {
             const chain = composeModifierChain(modifiers, context, registry);
@@ -2937,6 +3188,12 @@ function* invoke(
     ),
   );
 
+  // The witness table this execution reads, created before its providers are
+  // installed. An identified provider is minted a claimant here, against this
+  // table, so what it marks is what canonical resolution later reads.
+  const witnesses = new CanonicalImports();
+  yield* ImportProviders.set(createImportProviderRegistry(witnesses));
+
   for (const installation of installations) {
     if (installation.install) {
       yield* installation.install();
@@ -2975,6 +3232,7 @@ function* invoke(
     bundles,
     identityComponents,
     declarations,
+    witnesses,
   );
 }
 

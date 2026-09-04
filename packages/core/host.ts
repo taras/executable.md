@@ -119,6 +119,52 @@ export type { DeclaredMarkdownComponent } from "./src/components/declared-markdo
  * author.
  */
 export { installInvocationAgentProvider } from "./src/agent/launch-install.ts";
+/**
+ * Complete-program evaluation, for the hosts that expose `<Evaluate>`.
+ *
+ * The seventh act of infrastructure, and the counterpart of generated XMD
+ * beside it. A complete program is admitted and evaluated *in the current
+ * execution* — its lifecycle, journal, cancellation scope, providers, working
+ * directory and authority — so what a host contributes is the declaration, and
+ * canonical core owns the admission, the retained terms and the expansion.
+ *
+ * It records its own durable event. The restricted `generated_xmd` admission is
+ * a different decision about a different kind of source, and widening it to
+ * carry programs would make one record answer for two contracts.
+ */
+export {
+  EVALUATE_DESCRIPTION,
+  EVALUATE_ORIGIN,
+  evaluateProgramElement,
+  programEvaluationComponents,
+  programProperties,
+  programProps,
+  props as evaluateProgramProps,
+  selectProgramForm,
+} from "./src/components/Evaluate.ts";
+/**
+ * How an import-middleware provider states a stable identity for the answers it
+ * supplies (§5.7).
+ *
+ * A provider that answers without delegating, or replaces what came back, is
+ * part of the authority genuinely available at an evaluation site. A complete
+ * program can only be admitted against such an answer when the provider says
+ * who it is, because a continuation has to be told whether the implementation
+ * changed. Ordinary expansion is unaffected either way.
+ */
+export { useImportProvider } from "./src/program-imports.ts";
+export type { ImportProviderClaimant } from "./src/program-imports.ts";
+export type { ImportProviderIdentity, ProgramIdentity } from "./src/program-identity.ts";
+
+export {
+  EVALUATE_PROGRAM,
+  evaluateProgram,
+  programDigest,
+  ProgramEvaluationError,
+  pairedProgramSource,
+} from "./src/program-evaluation.ts";
+export type { ProgramEvaluationRequest } from "./src/program-evaluation.ts";
+
 export {
   evaluateGeneratedXmd,
   GeneratedXmdError,

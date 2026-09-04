@@ -372,6 +372,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "packages/cli/tests/evaluate-program-workflow.test.ts",
+    reason:
+      "starts a real workflow run with `xmd workflow start` to prove a workflow's own `<Evaluate>` is the only one that execution is given; the workflow commands exist on the Deno entrypoints alone, so under Node and Bun the command refuses before a run exists and the case would assert nothing. Tier EP's portable half is packages/cli/tests/evaluate-program-component.test.ts",
+    issue: "https://github.com/taras/executable.md/issues/713",
+  },
+  {
     path: "packages/cli/tests/workflow-retention.test.ts",
     reason:
       "reads what `xmd workflow start` retained from its node:sqlite run store, which only the Deno entrypoints open; the portable half of the same contract is packages/cli/tests/process-retention.test.ts",

@@ -1,0 +1,1586 @@
+/**
+ * Tier PE — evaluating a complete XMD program
+ * (specs/executable-mdx-spec.md §5.7).
+ *
+ * `<Evaluate>` is a composition site: it admits a complete root and runs it in
+ * the current execution. Everything here is about one of four claims.
+ *
+ * **Composition is explicit, and the two forms mean the same thing.** A program
+ * produced inside the element and a program supplied as `program` admit the
+ * same bytes and the same digest, and a producer's own output never reaches the
+ * surrounding document.
+ *
+ * **The root's own contract decides the result.** Text and value roots follow
+ * their `<Output>` and `returns` rules, and explicit props are validated
+ * against the program's schema before anything runs.
+ *
+ * **Ambiguity refuses before effects.** A structural preflight case puts a
+ * negative-control effect after a malformed construct and proves it did not
+ * run.
+ *
+ * **One occurrence keeps one decision.** The admission retains the exact
+ * source, digest, props, origin and mode; a continuation restores it, a changed
+ * program at the same site is stale input, and two sites are two executions
+ * whatever their digests say.
+ */
+
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
+import { scoped } from "effection";
+import type { Operation } from "effection";
+
+import { createDurableOperation, InMemoryStream } from "@executablemd/durable-streams";
+import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
+
+import { Component } from "../src/component-api.ts";
+import { executeInstalled, programEvaluationComponents, sourceDigest } from "../host.ts";
+import { useImportProvider } from "../host.ts";
+import type { ImportProviderIdentity } from "../host.ts";
+import type { FunctionComponentDefinition, JsonObject } from "../src/types.ts";
+import type { DeclaredMarkdownComponent, IdentityClaimant, IdentityComponent } from "../host.ts";
+import type { ComponentInvocation } from "../src/invocation-identity.ts";
+import { pairedProgramSource, programDigest } from "../host.ts";
+import { retainedSource } from "../src/root-source.ts";
+import type { Json } from "../src/types.ts";
+
+const ROOT_PATH = "documents/compose.md";
+
+interface Attempt {
+  readonly output?: string;
+  readonly failure?: string;
+  readonly events: DurableEvent[];
+}
+
+/**
+ * A durable effect a program can perform, and a record of every time it really
+ * happened.
+ *
+ * The list is what tells a restored effect from a repeated one: replay hands
+ * back the retained result without entering the executor, so an entry here
+ * means this run performed the effect rather than remembering it.
+ */
+const performed: string[] = [];
+
+/**
+ * The approved bytes a source-producing component returns.
+ *
+ * This is what `<Plan>` hands back: a complete root ending in its own newline.
+ * Core has no `<Plan>`, so the equivalence of the two compositions is proved
+ * against a stand-in that returns exactly what one does.
+ */
+const APPROVED = "# Report\n\nThe program ran.\n";
+
+/**
+ * What the producer returns on the next run.
+ *
+ * A resumed evaluation is one where the document is unchanged and the producer
+ * is not: the element is the same occurrence, written at the same offset, and
+ * what it is being handed differs. Changing the document text instead would
+ * move the element and ask about a different occurrence entirely.
+ */
+let approved = APPROVED;
+
+/** Every time a producer really rendered its approved source. */
+const produced: string[] = [];
+
+function probeComponents(origin = "test/probe"): readonly IdentityComponent[] {
+  return [
+    {
+      name: "Source",
+      origin: "test/source",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      // The claim is unspent: this stands in for a text component that returns
+      // approved source, and naming durable work is not what it is here for.
+      factory: () =>
+        // deno-lint-ignore require-yield
+        function* Source(): Operation<Json> {
+          produced.push(approved);
+          return approved;
+        },
+    },
+    {
+      name: "Probe",
+      origin,
+      props: {
+        type: "object",
+        properties: { mark: { type: "string" } },
+        required: ["mark"],
+        additionalProperties: false,
+      },
+      factory: (claim: IdentityClaimant) =>
+        function* Probe(
+          elementProps: Record<string, Json>,
+          invocation: ComponentInvocation,
+        ): Operation<Json> {
+          const mark = String(elementProps.mark);
+          const id = yield* claim(invocation);
+          const stored = yield createDurableOperation<string>(
+            { type: "probe", name: `probe:${id}` },
+            // deno-lint-ignore require-yield
+            function* () {
+              performed.push(mark);
+              return `performed ${mark}`;
+            },
+          );
+          return String(stored);
+        },
+    },
+  ];
+}
+
+/** Run one document with `<Evaluate>` declared, exactly as a run profile does. */
+function run(
+  source: string,
+  options: {
+    stream?: DurableStream;
+    /** The origin `<Probe>` is registered under, so a site can be moved. */
+    probeOrigin?: string;
+    declarations?: readonly DeclaredMarkdownComponent[];
+    privates?: readonly IdentityComponent[];
+    /** An ordinary open import-middleware provider, installed as a host's is. */
+    install?: () => Operation<void>;
+  } = {},
+): Operation<Attempt> {
+  return scoped(function* () {
+    const stream: DurableStream = options.stream ?? new InMemoryStream();
+    // An installation that refuses throws out of `executeInstalled` rather than
+    // settling a document result, so both endings are reported the same way.
+    let execution;
+    try {
+      execution = yield* executeInstalled(
+        { ...retainedSource(ROOT_PATH, source), stream, includes: [] },
+        [
+          {
+            components: [...programEvaluationComponents(), ...probeComponents(options.probeOrigin)],
+            ...(options.declarations === undefined ? {} : { declarations: options.declarations }),
+            ...(options.install === undefined ? {} : { install: options.install }),
+          },
+        ],
+      );
+    } catch (error) {
+      return { failure: error instanceof Error ? error.message : String(error), events: [] };
+    }
+    const result = yield* execution;
+    const events = yield* stream.readAll();
+    return result.ok
+      ? { output: typeof result.value === "string" ? result.value : "", events }
+      : { failure: result.error.message, events };
+  });
+}
+
+/**
+ * The journal a run interrupted immediately after one effect would hold.
+ *
+ * A completed journal replays as a terminal result, which proves nothing about
+ * restoration: the run never re-enters its own body. Truncating after the event
+ * a run committed is exactly the history an interruption leaves behind, and it
+ * is what a partial continuation is offered.
+ */
+function through(events: DurableEvent[], type: string): DurableEvent[] {
+  const index = events.findIndex(
+    (event) => event.type === "yield" && event.description.type === type,
+  );
+  if (index === -1) {
+    throw new Error(`the run recorded no ${type} event`);
+  }
+  return events.slice(0, index + 1);
+}
+
+/** Every complete-program admission this run recorded. */
+function admissions(events: DurableEvent[]): DurableEvent[] {
+  return events.filter(
+    (event) => event.type === "yield" && event.description.type === "evaluate_program",
+  );
+}
+
+/** What one admission decided, and the terms it was granted under. */
+function decision(event: DurableEvent): Record<string, Json> {
+  const result = event.type === "yield" ? event.result : undefined;
+  if (result === undefined || result.status !== "ok") {
+    throw new Error("the admission did not settle successfully");
+  }
+  return result.value as Record<string, Json>;
+}
+
+describe("Tier PE — complete-program evaluation", () => {
+  it("PE1 evaluates a program supplied as `program`", function* () {
+    const attempt = yield* run(
+      [
+        '<Let value={"# Report\\n\\nThe program ran.\\n"} as="plan" />',
+        "",
+        "<Evaluate program={plan} />",
+        "",
+      ].join("\n"),
+    );
+
+    expect(attempt.failure).toBeUndefined();
+    expect(attempt.output).toContain("The program ran.");
+    expect(admissions(attempt.events)).toHaveLength(1);
+  });
+
+  it("PE2 evaluates a producer's program once and emits none of its source", function* () {
+    produced.length = 0;
+    const attempt = yield* run(["<Evaluate>", "  <Source />", "</Evaluate>", ""].join("\n"));
+
+    expect(attempt.failure).toBeUndefined();
+    // The program ran, so its own rendered line is here.
+    expect(attempt.output).toContain("The program ran.");
+    // Once. The producer rendered the source into the private buffer and none
+    // of those bytes reached the document: a second copy would mean the
+    // approved source was emitted beside the evaluation.
+    expect(attempt.output?.split("The program ran.")).toHaveLength(2);
+    // The heading is the program's own rendered output, and it appears once
+    // for the same reason: the source the producer emitted was buffered, not
+    // written into the document beside the evaluation.
+    expect(attempt.output?.split("# Report")).toHaveLength(2);
+    expect(produced).toEqual([APPROVED]);
+  });
+
+  it("PE3 admits the same bytes and digest for the direct and deferred forms", function* () {
+    const paired = yield* run(["<Evaluate>", "  <Source />", "</Evaluate>", ""].join("\n"));
+    const deferred = yield* run(
+      [
+        `<Let value={${JSON.stringify(APPROVED)}} as="plan" />`,
+        "",
+        "<Evaluate program={plan} />",
+        "",
+      ].join("\n"),
+    );
+
+    const pairedTerms = decision(admissions(paired.events)[0]!);
+    const deferredTerms = decision(admissions(deferred.events)[0]!);
+    // The paired projection equals the captured bytes naturally: the wrapper's
+    // own line breaks came off and the producer's newline stayed.
+    expect(pairedTerms.source).toBe(APPROVED);
+    expect(deferredTerms.source).toBe(APPROVED);
+    expect((pairedTerms.terms as Record<string, Json>).digest).toBe(
+      (deferredTerms.terms as Record<string, Json>).digest,
+    );
+  });
+});
+
+describe("Tier PE — the program source a form admits", () => {
+  // deno-lint-ignore require-yield
+  it("PE4 takes off the paired wrapper's framing and nothing else", function* () {
+    // A producer's result spliced after the wrapper's line break and indent.
+    // One line break comes off each end, so the producer's own trailing
+    // newline survives.
+    expect(pairedProgramSource("\n  # Report\n\nBody\n\n")).toBe("# Report\n\nBody\n");
+    // A program written out literally: the indentation every line shares is the
+    // wrapper's, and the last line break is the closing tag's.
+    expect(pairedProgramSource("\n  # Report\n\n  Body\n")).toBe("# Report\n\nBody");
+    // Blank lines inside keep whatever the author put on them.
+    expect(pairedProgramSource("\n  # Report\n  \n  Body\n")).toBe("# Report\n  \nBody");
+    // Written on one line, there is no framing to take off.
+    expect(pairedProgramSource("# Report")).toBe("# Report");
+  });
+
+  // deno-lint-ignore require-yield
+  it("PE5 leaves `program` bytes exactly as supplied", function* () {
+    // The discriminator: whitespace at either end of a supplied program is part
+    // of the program. Nothing here goes through the paired framing rule, so a
+    // digest taken of it is a digest of what the author handed over.
+    const padded = "\n\n# Report\n\n\n";
+    expect(programDigest(padded)).not.toBe(programDigest("# Report\n"));
+    expect(programDigest(padded)).not.toBe(programDigest(pairedProgramSource(padded)));
+    expect(programDigest("# R\n")).not.toBe(programDigest("# S\n"));
+  });
+});
+
+/** A value root that answers with what its props said. */
+const VALUE_PROGRAM = [
+  "---",
+  "props:",
+  "  release:",
+  "    type: string",
+  "returns:",
+  "  type: object",
+  "  properties:",
+  "    version: { type: string }",
+  "  required: [version]",
+  "---",
+  "",
+  "<Return value={{ version: props.release }} />",
+  "",
+].join("\n");
+
+/** A text root that reads a prop its own schema declares. */
+const TEXT_PROGRAM = [
+  "---",
+  "props:",
+  "  release:",
+  "    type: string",
+  "    default: none",
+  "---",
+  "",
+  "Release {props.release} ran.",
+  "",
+].join("\n");
+
+describe("Tier PE — program forms", () => {
+  it("PE6 binds a value root's schema-validated result under `as`", function* () {
+    const attempt = yield* run(
+      [
+        `<Let value={${JSON.stringify(VALUE_PROGRAM)}} as="plan" />`,
+        "",
+        '<Evaluate program={plan} props={{ release: "1.4.0" }} as="decided" />',
+        "",
+        "Version {decided.version}.",
+        "",
+      ].join("\n"),
+    );
+
+    expect(attempt.failure).toBeUndefined();
+    expect(attempt.output).toContain("Version 1.4.0.");
+  });
+
+  it("PE7 refuses a value root written without `as`, before program effects", function* () {
+    const attempt = yield* run(
+      [
+        `<Let value={${JSON.stringify(VALUE_PROGRAM)}} as="plan" />`,
+        "",
+        '<Evaluate program={plan} props={{ release: "1.4.0" }} />',
+        "",
+      ].join("\n"),
+    );
+
+    expect(attempt.failure ?? attempt.output ?? "").toContain("requires `as`");
+  });
+
+  it("PE8 renders a text root's output where it is written", function* () {
+    const attempt = yield* run(
+      [
+        `<Let value={${JSON.stringify(TEXT_PROGRAM)}} as="plan" />`,
+        "",
+        '<Evaluate program={plan} props={{ release: "1.4.0" }} />',
+        "",
+      ].join("\n"),
+    );
+
+    expect(attempt.failure).toBeUndefined();
+    expect(attempt.output).toContain("Release 1.4.0 ran.");
+  });
+
+  it("PE9 binds a text root's selected output under `as` and emits none of it", function* () {
+    const attempt = yield* run(
+      [
+        `<Let value={${JSON.stringify(TEXT_PROGRAM)}} as="plan" />`,
+        "",
+        '<Evaluate program={plan} props={{ release: "1.4.0" }} as="report" />',
+        "",
+        "Captured: {report}",
+        "",
+      ].join("\n"),
+    );
+
+    expect(attempt.failure).toBeUndefined();
+    expect(attempt.output).toMatch(/Captured:\s*Release 1\.4\.0 ran\./);
+    expect(attempt.output?.split("Release 1.4.0 ran.")).toHaveLength(2);
+  });
+});
+
+describe("Tier PE — root props", () => {
+  it("PE10 defaults to no props rather than adopting the caller's", function* () {
+    const attempt = yield* run(
+      [
+        `<Let value={${JSON.stringify(TEXT_PROGRAM)}} as="plan" />`,
+        "",
+        "<Evaluate program={plan} />",
+        "",
+      ].join("\n"),
+    );
+
+    expect(attempt.failure).toBeUndefined();
+    expect(attempt.output).toContain("Release none ran.");
+  });
+
+  it("PE11 refuses props the program's own schema refuses", function* () {
+    const attempt = yield* run(
+      [
+        `<Let value={${JSON.stringify(VALUE_PROGRAM)}} as="plan" />`,
+        "",
+        '<Evaluate program={plan} props={{ release: 14 }} as="decided" />',
+        "",
+      ].join("\n"),
+    );
+
+    expect(attempt.failure ?? attempt.output ?? "").toContain("props the program's own schema");
+  });
+});
+
+describe("Tier PE — ambiguous and misplaced forms", () => {
+  it("PE12 refuses `program` written with content, before the content runs", function* () {
+    const attempt = yield* run(
+      [
+        '<Let value={"Ran.\\n"} as="plan" />',
+        "",
+        "<Evaluate program={plan}>",
+        "Body that must not become a program.",
+        "</Evaluate>",
+        "",
+      ].join("\n"),
+    );
+
+    expect(attempt.failure ?? attempt.output ?? "").toContain("not both");
+    expect(admissions(attempt.events)).toHaveLength(0);
+  });
+
+  it("PE13 refuses an element that names no program at all", function* () {
+    const attempt = yield* run("<Evaluate />\n");
+
+    expect(attempt.failure ?? attempt.output ?? "").toContain("evaluates a program");
+    expect(admissions(attempt.events)).toHaveLength(0);
+  });
+});
+
+describe("Tier PE — one artifact, one occurrence", () => {
+  it("PE14 executes two sites independently and does not deduplicate by digest", function* () {
+    const attempt = yield* run(
+      [
+        '<Let value={"Ran once.\\n"} as="plan" />',
+        "",
+        "<Evaluate program={plan} />",
+        "",
+        "<Evaluate program={plan} />",
+        "",
+      ].join("\n"),
+    );
+
+    expect(attempt.failure).toBeUndefined();
+    expect(attempt.output?.split("Ran once.")).toHaveLength(3);
+    const recorded = admissions(attempt.events);
+    expect(recorded).toHaveLength(2);
+    const names = recorded.map((event) =>
+      event.type === "yield" ? event.description.name : undefined,
+    );
+    expect(new Set(names).size).toBe(2);
+  });
+
+  it("PE15 refuses a changed program at the same occurrence, and neither runs", function* () {
+    const document = ["<Evaluate>", "  <Source />", "</Evaluate>", ""].join("\n");
+    performed.length = 0;
+    approved = '<Probe mark="first" />\n';
+
+    const first = yield* run(document);
+    expect(first.failure).toBeUndefined();
+    expect(performed).toEqual(["first"]);
+
+    // The history an interruption right after the admission leaves behind. A
+    // completed journal would replay as a terminal result and never re-enter
+    // this element at all, which would prove nothing about what it decides.
+    const interrupted = through(first.events, "evaluate_program");
+    performed.length = 0;
+    approved = '<Probe mark="second" />\n';
+
+    const replayed = yield* run(document, { stream: new InMemoryStream(interrupted) });
+
+    expect(replayed.failure ?? replayed.output ?? "").toContain("different program");
+    // Neither source won: the current program never ran, and the retained one
+    // was not run in its place.
+    expect(performed).toEqual([]);
+    approved = APPROVED;
+  });
+
+  it("PE16 resumes on the retained program and restores its completed effect", function* () {
+    const document = ["<Evaluate>", "  <Source />", "</Evaluate>", ""].join("\n");
+    performed.length = 0;
+    approved = '<Probe mark="one" />\n\nRestored program.\n';
+
+    const first = yield* run(document);
+    expect(first.failure).toBeUndefined();
+    expect(first.output).toContain("Restored program.");
+    expect(performed).toEqual(["one"]);
+
+    // Interrupted after the program's own nested effect committed.
+    const interrupted = through(first.events, "probe");
+    performed.length = 0;
+    produced.length = 0;
+
+    const replayed = yield* run(document, { stream: new InMemoryStream(interrupted) });
+
+    expect(replayed.failure).toBeUndefined();
+    expect(replayed.output).toContain("Restored program.");
+    // This run really re-entered the element rather than replaying a terminal
+    // result: the producer rendered again. Without it the rest of this case
+    // would pass against a history that was never continued.
+    expect(produced).toHaveLength(1);
+    // The effect was restored from the journal rather than performed again:
+    // nothing entered its executor on this run.
+    expect(performed).toEqual([]);
+    expect(admissions(replayed.events)).toHaveLength(1);
+    approved = APPROVED;
+  });
+});
+
+describe("Tier PE — a program that fails", () => {
+  it("PE17 stops at the failure and runs nothing after it", function* () {
+    performed.length = 0;
+    const attempt = yield* run(
+      [
+        `<Let value={${JSON.stringify(
+          '<Probe mark="before" />\n\n<Fail message="the program stopped" />\n\n<Probe mark="after" />\n',
+        )}} as="plan" />`,
+        "",
+        "<Evaluate program={plan} />",
+        "",
+      ].join("\n"),
+    );
+
+    expect(attempt.failure ?? attempt.output ?? "").toContain("the program stopped");
+    // The effect written before the failure happened; the one after it did not.
+    // A program that stopped must not leave later steps looking as though they
+    // ran.
+    expect(performed).toEqual(["before"]);
+  });
+});
+
+/**
+ * Rewrite what the retained admission says, leaving the run's own history
+ * otherwise intact.
+ *
+ * The record is the one thing a continuation trusts, and a journal is a file:
+ * this is what it looks like when the file no longer says what this evaluation
+ * wrote. Nothing else about the interrupted run is touched, so a case that
+ * refuses here refuses because of the record and not because the history around
+ * it stopped adding up.
+ */
+function tamper(
+  events: DurableEvent[],
+  change: (record: Record<string, Json>) => Json,
+): DurableEvent[] {
+  return events.map((event) => {
+    if (event.type !== "yield" || event.description.type !== "evaluate_program") {
+      return event;
+    }
+    const result = event.result;
+    if (result.status !== "ok") {
+      return event;
+    }
+    const record = result.value as Record<string, Json>;
+    return { ...event, result: { ...result, value: change({ ...record }) } };
+  });
+}
+
+/** A program whose one effect is a probe, so "did anything run" is answerable. */
+const PROBING = '<Probe mark="one" />\n\nRestored program.\n';
+
+/** The document every hostile-record case resumes, unchanged between runs. */
+const PROBING_DOCUMENT = ["<Evaluate>", "  <Source />", "</Evaluate>", ""].join("\n");
+
+/** Interrupt a run of `PROBING` right after its admission committed. */
+function* admitted(): Operation<DurableEvent[]> {
+  performed.length = 0;
+  approved = PROBING;
+  const first = yield* run(PROBING_DOCUMENT);
+  expect(first.failure).toBeUndefined();
+  expect(performed).toEqual(["one"]);
+  return through(first.events, "evaluate_program");
+}
+
+describe("Tier PE — the retained admission is hostile data", () => {
+  it("PE18 refuses a retained source that no longer hashes to its digest", function* () {
+    const interrupted = yield* admitted();
+    performed.length = 0;
+
+    // Only the source moves. The digest, the terms and the current request are
+    // all exactly what they were, so nothing but the record's own internal
+    // agreement can catch this.
+    const replayed = yield* run(PROBING_DOCUMENT, {
+      stream: new InMemoryStream(
+        tamper(interrupted, (record) => ({
+          ...record,
+          source: '<Probe mark="substituted" />\n\nRestored program.\n',
+        })),
+      ),
+    });
+
+    expect(replayed.failure ?? replayed.output ?? "").toContain("cannot be read as one");
+    // Neither source ran: not the substituted one, and not the one the current
+    // producer would have offered in its place.
+    expect(performed).toEqual([]);
+  });
+
+  it("PE19 refuses every corrupted member of the retained record", function* () {
+    const interrupted = yield* admitted();
+
+    const corruptions: Record<string, (record: Record<string, Json>) => Json> = {
+      "validated props": (record) => ({ ...record, validated: { release: "substituted" } }),
+      "root mode": (record) => ({ ...record, mode: "value" }),
+      "a missing member": ({ validated: _validated, ...rest }) => rest,
+      "an additional member": (record) => ({ ...record, admitted: true }),
+      "a misspelled member": ({ validated, ...rest }) => ({ ...rest, validatedProps: validated }),
+      "a component entry": (record) => ({
+        ...record,
+        named: [{ name: "Probe", form: "paired", identity: "registered:default:test/probe" }],
+      }),
+      "a component entry's shape": (record) => ({
+        ...record,
+        named: [{ name: "Probe", form: "self-closing" }],
+      }),
+      "the terms' shape": (record) => ({
+        ...record,
+        terms: { ...(record.terms as Record<string, Json>), extra: 1 },
+      }),
+      "the whole record": () => "admitted",
+    };
+
+    for (const [what, change] of Object.entries(corruptions)) {
+      performed.length = 0;
+      const replayed = yield* run(PROBING_DOCUMENT, {
+        stream: new InMemoryStream(tamper(interrupted, change)),
+      });
+
+      expect(`${what}: ${replayed.failure ?? replayed.output ?? ""}`).toContain(
+        "cannot be read as one",
+      );
+      expect([what, performed]).toEqual([what, []]);
+    }
+  });
+
+  it("PE20 refuses a continuation whose site answers a name differently", function* () {
+    const interrupted = yield* admitted();
+
+    // The same document, the same producer, the same bytes — and `<Probe>`
+    // registered under another origin, which is a different implementation
+    // however identically it behaves.
+    performed.length = 0;
+    const moved = yield* run(PROBING_DOCUMENT, {
+      stream: new InMemoryStream(interrupted),
+      probeOrigin: "test/probe-replacement",
+    });
+
+    expect(moved.failure ?? moved.output ?? "").toContain("resolves differently");
+    expect(performed).toEqual([]);
+
+    // The unchanged site resumes, which is what makes the refusal above about
+    // the identity rather than about resuming at all.
+    performed.length = 0;
+    const unchanged = yield* run(PROBING_DOCUMENT, {
+      stream: new InMemoryStream(interrupted),
+    });
+
+    expect(unchanged.failure).toBeUndefined();
+    expect(unchanged.output).toContain("Restored program.");
+    // The history stops at the admission, so the program's own effect had not
+    // committed and legitimately happens now. What matters is that it happened
+    // at all: the refusal above stopped a run this one completes.
+    expect(performed).toEqual(["one"]);
+  });
+});
+
+describe("Tier PE — structural admission precedes every program effect", () => {
+  it("PE21 refuses a malformed construct after an effect, and the effect never runs", function* () {
+    performed.length = 0;
+    // The negative control is first, so a preflight that ran while the program
+    // expanded would have performed it before reaching the malformed element.
+    approved = ['<Probe mark="before" />', "", "<Return value={1} />", ""].join("\n");
+
+    const attempt = yield* run(PROBING_DOCUMENT);
+
+    expect(attempt.failure ?? attempt.output ?? "").toContain("body structure is not valid");
+    expect(performed).toEqual([]);
+    approved = APPROVED;
+  });
+});
+
+/** The origin the declared outer component reports. */
+const POLICY_ORIGIN = "@executablemd/test/Policy.md";
+
+/**
+ * A private component that records each entry into its implementation.
+ *
+ * A tripwire rather than a fake: what this case has to show is that the
+ * implementation did not run, and a refusal in the output cannot show that on
+ * its own.
+ */
+function watching(entered: string[]): IdentityComponent {
+  return {
+    name: "Secret",
+    origin: `${POLICY_ORIGIN}#Secret`,
+    props: { type: "object", properties: {}, additionalProperties: false },
+    returns: { type: "string" },
+    forms: ["self-closing"],
+    // deno-lint-ignore require-yield
+    factory: (_claim: IdentityClaimant) =>
+      function* Secret(): Operation<string> {
+        entered.push("Secret");
+        return "the private answer";
+      },
+  };
+}
+
+describe("Tier PE — a producer's private closure does not cross", () => {
+  it("PE22 leaves a declaration's private name unavailable to the program it evaluates", function* () {
+    const entered: string[] = [];
+    performed.length = 0;
+    // The program names the private component the *enclosing declaration*
+    // carries, and an ordinary site-authorized one beside it.
+    approved = ['<Probe mark="control" />', "", "<Secret />", ""].join("\n");
+
+    const body = ["<Evaluate>", "  <Source />", "</Evaluate>", ""].join("\n");
+    const attempt = yield* run("<Policy />\n", {
+      declarations: [
+        {
+          name: "Policy",
+          origin: POLICY_ORIGIN,
+          source: body,
+          digest: sourceDigest(body),
+          privates: [watching(entered)],
+        },
+      ],
+    });
+
+    const reported = attempt.failure ?? attempt.output ?? "";
+    // The name resolves to nothing inside the program, exactly as it does for
+    // any other bytes that are not the declaration's own.
+    expect(reported).toContain("Cannot resolve component: Secret");
+    // And nothing of it ran: a refusal that reached the implementation first
+    // would leave a mark here.
+    expect(entered).toEqual([]);
+    // The positive control: a component the site does authorize runs normally,
+    // so this is about the closure rather than about programs reaching nothing.
+    expect(performed).toEqual(["control"]);
+    approved = APPROVED;
+  });
+});
+
+/** Every implementation an open middleware provider actually entered. */
+const opened: string[] = [];
+
+/** Every name the open provider's handler was consulted for. */
+const consulted: string[] = [];
+
+/** One implementation of `<Open />`, distinguishable by what it renders. */
+function openImplementation(mark: string, props?: JsonObject): FunctionComponentDefinition {
+  return {
+    kind: "function",
+    name: "Open",
+    props: props ?? { type: "object", properties: {}, additionalProperties: false },
+    // deno-lint-ignore require-yield
+    fn: function* Open(): Operation<string> {
+      opened.push(mark);
+      return `open ${mark}`;
+    },
+  };
+}
+
+/**
+ * An ordinary open `Component.importComponent` provider, of the kind a host or
+ * a package installs.
+ *
+ * It answers without delegating, which is exactly the case an independent
+ * second resolution cannot describe: the selector would report that `Open`
+ * resolves to nothing while this is what runs.
+ */
+function openProvider(options: {
+  mark: string;
+  identity?: ImportProviderIdentity;
+  /** Answer this from the given lookup onwards, to model a check/use split. */
+  then?: string;
+  /** Which lookup starts answering `then`. */
+  switchAfter?: number;
+  /** Answer each successive lookup from this list, under one key each. */
+  sequence?: readonly string[];
+  /** Delegate to nothing for this many lookups, then answer `then`. */
+  absentFor?: number;
+}): () => Operation<void> {
+  return function* install(): Operation<void> {
+    const claim = yield* useImportProvider(
+      options.identity ?? { origin: "test/open", revision: options.mark },
+    );
+    let answered = 0;
+    const sequenced = new Map<string, FunctionComponentDefinition>();
+    const first = openImplementation(options.mark);
+    const later = options.then === undefined ? first : openImplementation(options.then);
+    yield* Component.around(
+      {
+        *importComponent([name, position], next) {
+          consulted.push(name);
+          if (name !== "Open") {
+            return yield* next(name, position);
+          }
+          answered += 1;
+          if (options.absentFor !== undefined) {
+            // Delegates while the site is resolved and reconciled, and would
+            // answer only on a lookup that must never happen.
+            if (answered <= options.absentFor) {
+              return yield* next(name, position);
+            }
+            const late = openImplementation(options.then ?? "late");
+            return claim(name, "Open", late);
+          }
+          if (options.sequence !== undefined) {
+            // One implementation per occurrence, each under its own stable key,
+            // answered in the order the program writes them.
+            const index = Math.min(answered, options.sequence.length) - 1;
+            const mark = options.sequence[index] ?? options.mark;
+            const supplied = sequenced.get(mark) ?? openImplementation(mark);
+            sequenced.set(mark, supplied);
+            return claim(name, `Open:${mark}`, supplied);
+          }
+          const definition = answered <= (options.switchAfter ?? 1) ? first : later;
+          return options.identity === null ? definition : claim(name, "Open", definition);
+        },
+      },
+      { at: "max" },
+    );
+  };
+}
+
+/** A program whose only element is the middleware-supplied component. */
+const OPEN_PROGRAM = "<Open />\n";
+
+describe("Tier PE — the identity is the answer's, not the selector's", () => {
+  it("PE23 refuses a continuation whose middleware supplies another implementation", function* () {
+    opened.length = 0;
+    approved = OPEN_PROGRAM;
+
+    // 1. The first run's live middleware supplies A under identity A.
+    const first = yield* run(PROBING_DOCUMENT, {
+      install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+    });
+    expect(first.failure).toBeUndefined();
+    expect(first.output).toContain("open A");
+    expect(opened).toEqual(["A"]);
+
+    // 2. Keep the journal only through the committed admission, and forget
+    //    every implementation observation.
+    const interrupted = through(first.events, "evaluate_program");
+    opened.length = 0;
+
+    // 3. Continue with the same source and props while middleware supplies B.
+    const moved = yield* run(PROBING_DOCUMENT, {
+      stream: new InMemoryStream(interrupted),
+      install: openProvider({ mark: "B", identity: { origin: "test/open", revision: "B" } }),
+    });
+
+    // 4. The site refusal, before A or B runs.
+    expect(moved.failure ?? moved.output ?? "").toContain("resolves differently");
+    expect(opened).toEqual([]);
+
+    // 5. The same retained prefix with A unchanged resumes and runs A once.
+    opened.length = 0;
+    const resumed = yield* run(PROBING_DOCUMENT, {
+      stream: new InMemoryStream(interrupted),
+      install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+    });
+
+    expect(resumed.failure).toBeUndefined();
+    expect(resumed.output).toContain("open A");
+    expect(opened).toEqual(["A"]);
+    approved = APPROVED;
+  });
+
+  it("PE24 retains the provider's identity, not the selector's answer", function* () {
+    opened.length = 0;
+    approved = OPEN_PROGRAM;
+
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+    });
+
+    expect(attempt.failure).toBeUndefined();
+    const record = decision(admissions(attempt.events)[0]!);
+    const named = record.named as Record<string, Json>[];
+    // The selector answers nothing for this name — a middleware-only component
+    // is on no search path and in no registry — so an independent resolution
+    // would have retained `unresolved` for both implementations.
+    expect(named).toEqual([
+      {
+        name: "Open",
+        form: "self-closing",
+        identity: { tag: "middleware", origin: "test/open", key: "Open", revision: "A" },
+      },
+    ]);
+    approved = APPROVED;
+  });
+
+  it("PE25 refuses a program naming an unidentified middleware answer", function* () {
+    opened.length = 0;
+    approved = OPEN_PROGRAM;
+
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      install: openProvider({ mark: "A", identity: null as unknown as undefined }),
+    });
+
+    expect(attempt.failure ?? attempt.output ?? "").toContain("states no identity");
+    // Nothing of it ran, and no grant was recorded against a site that cannot
+    // be described.
+    expect(opened).toEqual([]);
+    expect(admissions(attempt.events)).toHaveLength(0);
+    approved = APPROVED;
+  });
+
+  it("PE26 invokes the snapshot that passed reconciliation, asking nothing again", function* () {
+    opened.length = 0;
+    approved = OPEN_PROGRAM;
+
+    // The provider answers A for the admission's resolution and for canonical
+    // execution's own comparison, then B for the lookup expansion would make.
+    // Expansion must invoke the answer the comparison passed, not ask again.
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      install: openProvider({
+        mark: "A",
+        then: "B",
+        switchAfter: 2,
+        identity: { origin: "test/open", revision: "A" },
+      }),
+    });
+
+    // Expansion invokes the snapshot that passed reconciliation, so the third
+    // lookup never happens and the effect planted in it never occurs.
+    expect(attempt.failure).toBeUndefined();
+    expect(attempt.output).toContain("open A");
+    expect(opened).toEqual(["A"]);
+    approved = APPROVED;
+  });
+
+  it("PE27 refuses two providers installed under one origin", function* () {
+    approved = OPEN_PROGRAM;
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      *install() {
+        yield* useImportProvider({ origin: "test/open", revision: "A" });
+        yield* useImportProvider({ origin: "test/open", revision: "B" });
+      },
+    });
+
+    expect(attempt.failure ?? attempt.output ?? "").toContain("no single authority");
+    approved = APPROVED;
+  });
+
+  it("PE28 refuses a retained middleware identity that is malformed", function* () {
+    opened.length = 0;
+    approved = OPEN_PROGRAM;
+    const first = yield* run(PROBING_DOCUMENT, {
+      install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+    });
+    expect(first.failure).toBeUndefined();
+
+    const interrupted = through(first.events, "evaluate_program");
+    const malformed: Record<string, Json>[] = [
+      { tag: "middleware", origin: "test/open", key: "Open" },
+      { tag: "middleware", origin: "test/open", key: "Open", revision: "" },
+      { tag: "middleware", origin: "test/open", key: "Open", revision: "A", extra: 1 },
+      { tag: "registered", origin: "test/open", key: "Open", revision: "A" },
+      { tag: "unknown-tier", origin: "test/open" },
+    ];
+
+    for (const identity of malformed) {
+      opened.length = 0;
+      const replayed = yield* run(PROBING_DOCUMENT, {
+        stream: new InMemoryStream(
+          tamper(interrupted, (record) => ({
+            ...record,
+            named: [{ name: "Open", form: "self-closing", identity }],
+          })),
+        ),
+        install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+      });
+
+      expect(`${JSON.stringify(identity)}: ${replayed.failure ?? replayed.output ?? ""}`).toContain(
+        "cannot be read as one",
+      );
+      expect([identity, opened]).toEqual([identity, []]);
+    }
+    approved = APPROVED;
+  });
+});
+
+describe("Tier PE — what a provider does to the chain's answer", () => {
+  it("PE29 keeps the canonical identity when a provider delegates unchanged", function* () {
+    performed.length = 0;
+    approved = '<Probe mark="delegated" />\n';
+
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      *install() {
+        // Identified, but it answers nothing: it delegates and returns what
+        // came back. The canonical answer keeps its canonical identity.
+        yield* useImportProvider({ origin: "test/passthrough", revision: "1" });
+        yield* Component.around(
+          {
+            *importComponent([name, position], next) {
+              return yield* next(name, position);
+            },
+          },
+          { at: "max" },
+        );
+      },
+    });
+
+    expect(attempt.failure).toBeUndefined();
+    expect(performed).toEqual(["delegated"]);
+    const named = decision(admissions(attempt.events)[0]!).named as Record<string, Json>[];
+    expect(named).toEqual([
+      {
+        name: "Probe",
+        form: "self-closing",
+        identity: { tag: "registered", origin: "test/probe", reserved: false },
+      },
+    ]);
+    approved = APPROVED;
+  });
+
+  it("PE30 retains the provider's identity when it replaces a canonical answer", function* () {
+    performed.length = 0;
+    approved = '<Probe mark="replaced" />\n';
+
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      *install() {
+        const claim = yield* useImportProvider({ origin: "test/replacer", revision: "7" });
+        // One implementation, held by the provider, as a provider with a stable
+        // revision holds one. Building a new object per import would be the
+        // provider saying its answer is unchanged while handing over a
+        // different one, which is the case PE26 covers.
+        const replacement = openImplementation("replaced", {
+          type: "object",
+          properties: { mark: { type: "string" } },
+          additionalProperties: false,
+        });
+        yield* Component.around(
+          {
+            *importComponent([name, position], next) {
+              const answered = yield* next(name, position);
+              if (name !== "Probe") {
+                return answered;
+              }
+              // Canonical selection settled a registration; this replaces it.
+              return claim(name, "Probe", replacement);
+            },
+          },
+          { at: "max" },
+        );
+      },
+    });
+
+    expect(attempt.failure).toBeUndefined();
+    const named = decision(admissions(attempt.events)[0]!).named as Record<string, Json>[];
+    // Not `registered:test/probe`: what runs is the replacement, so what the
+    // admission describes is the replacement.
+    expect(named).toEqual([
+      {
+        name: "Probe",
+        form: "self-closing",
+        identity: { tag: "middleware", origin: "test/replacer", key: "Probe", revision: "7" },
+      },
+    ]);
+    // The registration never ran; the replacement did.
+    expect(performed).toEqual([]);
+    expect(opened).toContain("replaced");
+    approved = APPROVED;
+  });
+
+  it("PE31 refuses an answer mutated after it was claimed", function* () {
+    opened.length = 0;
+    approved = OPEN_PROGRAM;
+
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      *install() {
+        const claim = yield* useImportProvider({ origin: "test/open", revision: "A" });
+        yield* Component.around(
+          {
+            *importComponent([name, position], next) {
+              if (name !== "Open") {
+                return yield* next(name, position);
+              }
+              const definition = openImplementation("A");
+              const claimed = claim(name, "Open", definition);
+              // Changed after the claim, on its way back through the chain.
+              (claimed as { name: string }).name = "Substituted";
+              return claimed;
+            },
+          },
+          { at: "max" },
+        );
+      },
+    });
+
+    expect(attempt.failure ?? attempt.output ?? "").toMatch(/changed|cannot be read as one/);
+    expect(opened).toEqual([]);
+    approved = APPROVED;
+  });
+
+  it("PE32 refuses a second provider claiming one answer", function* () {
+    opened.length = 0;
+    approved = OPEN_PROGRAM;
+    const shared = openImplementation("A");
+
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      *install() {
+        const first = yield* useImportProvider({ origin: "test/first", revision: "1" });
+        const second = yield* useImportProvider({ origin: "test/second", revision: "1" });
+        yield* Component.around(
+          {
+            *importComponent([name, position], next) {
+              if (name !== "Open") {
+                return yield* next(name, position);
+              }
+              first(name, "Open", shared);
+              return second(name, "Open", shared);
+            },
+          },
+          { at: "max" },
+        );
+      },
+    });
+
+    expect(attempt.failure ?? attempt.output ?? "").toContain("another provider had claimed");
+    expect(opened).toEqual([]);
+    approved = APPROVED;
+  });
+});
+
+/** Every ordinary import this run recorded for one component name. */
+function importsOf(events: DurableEvent[], name: string): number[] {
+  return events.flatMap((event, index) =>
+    event.type === "yield" &&
+    event.description.type === "import_component" &&
+    event.description.name === name
+      ? [index]
+      : [],
+  );
+}
+
+/** Where the complete-program admission sits in the journal. */
+function admissionIndex(events: DurableEvent[]): number {
+  return events.findIndex(
+    (event) => event.type === "yield" && event.description.type === "evaluate_program",
+  );
+}
+
+describe("Tier PE — resolution settles before the program's own import", () => {
+  it("PE33 records exactly one ordinary import, after the admission", function* () {
+    opened.length = 0;
+    consulted.length = 0;
+    approved = OPEN_PROGRAM;
+
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+    });
+
+    expect(attempt.failure).toBeUndefined();
+    const admitted = admissionIndex(attempt.events);
+    const records = importsOf(attempt.events, "Open");
+    // Resolution journals nothing, so the admission commits first and the
+    // authored element's own import is the only one that follows it.
+    expect(records).toHaveLength(1);
+    expect(records[0]).toBeGreaterThan(admitted);
+    approved = APPROVED;
+  });
+
+  it("PE34 consults the provider for admission and reconciliation only", function* () {
+    opened.length = 0;
+    consulted.length = 0;
+    approved = OPEN_PROGRAM;
+
+    yield* run(PROBING_DOCUMENT, {
+      install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+    });
+
+    // Twice: once for the admission's resolution, once for canonical
+    // reconciliation. Expansion invokes the snapshot instead of asking again.
+    expect(consulted.filter((name) => name === "Open")).toHaveLength(2);
+    approved = APPROVED;
+  });
+
+  it("PE35 resolves structural syntax directly, consulting nobody", function* () {
+    opened.length = 0;
+    consulted.length = 0;
+    approved = ["<If condition={true}>", "structural ran", "</If>", "", "<Open />", ""].join("\n");
+
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+    });
+
+    expect(attempt.failure).toBeUndefined();
+    expect(attempt.output).toContain("structural ran");
+    const named = decision(admissions(attempt.events)[0]!).named as Record<string, Json>[];
+    expect(named[0]).toEqual({
+      name: "If",
+      form: "paired",
+      identity: { tag: "structural", construct: "If" },
+    });
+    // No lookup and no record: structural syntax is the engine's own.
+    expect(consulted).not.toContain("If");
+    expect(importsOf(attempt.events, "If")).toHaveLength(0);
+    approved = APPROVED;
+  });
+});
+
+describe("Tier PE — the site's closed authority still decides", () => {
+  it("PE36 refuses an identified replacement of a declared component", function* () {
+    opened.length = 0;
+    approved = "<Policy />\n";
+    const policy = "the declared policy ran\n";
+
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      declarations: [
+        {
+          name: "Policy",
+          origin: POLICY_ORIGIN,
+          source: policy,
+          digest: sourceDigest(policy),
+        },
+      ],
+      *install() {
+        const claim = yield* useImportProvider({ origin: "test/usurper", revision: "1" });
+        const replacement = openImplementation("usurped");
+        yield* Component.around(
+          {
+            *importComponent([name, position], next) {
+              if (name !== "Policy") {
+                return yield* next(name, position);
+              }
+              yield* next(name, position);
+              return claim(name, "Policy", replacement);
+            },
+          },
+          { at: "max" },
+        );
+      },
+    });
+
+    // The declared tier closes this name, so it answers for it. The
+    // replacement is refused before the program runs anything.
+    expect(attempt.failure ?? attempt.output ?? "").not.toContain("usurped");
+    expect(opened).toEqual([]);
+    approved = APPROVED;
+  });
+
+  it("PE37 lets a declared component answer its own name inside a program", function* () {
+    opened.length = 0;
+    approved = "<Policy />\n";
+    const policy = "the declared policy ran\n";
+
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      declarations: [
+        {
+          name: "Policy",
+          origin: POLICY_ORIGIN,
+          source: policy,
+          digest: sourceDigest(policy),
+        },
+      ],
+    });
+
+    // The positive control for PE36: with no replacement, the closed answer is
+    // exactly what the program invokes.
+    expect(attempt.failure).toBeUndefined();
+    expect(attempt.output).toContain("the declared policy ran");
+    const named = decision(admissions(attempt.events)[0]!).named as Record<string, Json>[];
+    expect(named[0]).toEqual({
+      name: "Policy",
+      form: "self-closing",
+      identity: { tag: "declared-markdown", origin: POLICY_ORIGIN, digest: sourceDigest(policy) },
+    });
+    approved = APPROVED;
+  });
+});
+
+describe("Tier PE — a provider's stated identity is captured once", () => {
+  it("PE38 ignores mutation of the identity object after the claimant exists", function* () {
+    opened.length = 0;
+    approved = OPEN_PROGRAM;
+    const stated = { origin: "test/open", revision: "A" };
+
+    const first = yield* run(PROBING_DOCUMENT, {
+      *install() {
+        const claim = yield* useImportProvider(stated);
+        // Edited after registration. What the claimant marks answers with is
+        // what was read and validated, not what this object says now.
+        stated.revision = "B";
+        const definition = openImplementation("A");
+        yield* Component.around(
+          {
+            *importComponent([name, position], next) {
+              if (name !== "Open") {
+                return yield* next(name, position);
+              }
+              return claim(name, "Open", definition);
+            },
+          },
+          { at: "max" },
+        );
+      },
+    });
+
+    expect(first.failure).toBeUndefined();
+    const named = decision(admissions(first.events)[0]!).named as Record<string, Json>[];
+    expect(named).toEqual([
+      {
+        name: "Open",
+        form: "self-closing",
+        identity: { tag: "middleware", origin: "test/open", key: "Open", revision: "A" },
+      },
+    ]);
+    approved = APPROVED;
+  });
+
+  it("PE39 refuses an alternating origin that would evade duplicate detection", function* () {
+    approved = OPEN_PROGRAM;
+    let reads = 0;
+    const alternating: ImportProviderIdentity = {
+      get origin() {
+        reads += 1;
+        return reads === 1 ? "test/open" : "test/other";
+      },
+      revision: "A",
+    };
+
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      *install() {
+        yield* useImportProvider({ origin: "test/open", revision: "A" });
+        yield* useImportProvider(alternating);
+      },
+    });
+
+    // The origin is read once, so the getter answers the duplicate check and
+    // the claim with one value — and that value is already taken.
+    expect(attempt.failure ?? attempt.output ?? "").toContain("no single authority");
+    approved = APPROVED;
+  });
+});
+
+describe("Tier PE — a settlement belongs to an occurrence", () => {
+  it("PE40 invokes A then B for two occurrences of one name", function* () {
+    opened.length = 0;
+    consulted.length = 0;
+    approved = "<Open />\n\n<Open />\n";
+
+    // Two occurrences, resolved twice in each pass. The provider answers A for
+    // the first and B for the second, under distinct stable keys.
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      install: openProvider({
+        mark: "A",
+        sequence: ["A", "B", "A", "B"],
+        identity: { origin: "test/open", revision: "1" },
+      }),
+    });
+
+    expect(attempt.failure).toBeUndefined();
+    // A then B, in the order the program writes them — not A twice, which is
+    // what a name-keyed settlement produces.
+    expect(opened).toEqual(["A", "B"]);
+    const named = decision(admissions(attempt.events)[0]!).named as Record<string, Json>[];
+    expect(named.map((entry) => (entry.identity as Record<string, Json>).key)).toEqual([
+      "Open:A",
+      "Open:B",
+    ]);
+    approved = APPROVED;
+  });
+
+  it("PE41 keeps an unresolved occurrence from reaching a later lookup", function* () {
+    opened.length = 0;
+    consulted.length = 0;
+    approved = OPEN_PROGRAM;
+
+    // The provider delegates for the admission's resolution and for
+    // reconciliation, and would answer on a third lookup.
+    const attempt = yield* run(PROBING_DOCUMENT, {
+      install: openProvider({
+        mark: "A",
+        absentFor: 2,
+        then: "late",
+        identity: { origin: "test/open", revision: "1" },
+      }),
+    });
+
+    // Settled as unresolved, so the element says so rather than falling
+    // through to the open chain.
+    expect(attempt.failure ?? attempt.output ?? "").toContain("Cannot resolve component: Open");
+    // The third lookup never happened, so the late implementation never ran.
+    expect(consulted.filter((name) => name === "Open")).toHaveLength(2);
+    expect(opened).toEqual([]);
+    // And nothing was loaded: an unresolved occurrence imports no component, so
+    // it records no import of one.
+    expect(importsOf(attempt.events, "Open")).toHaveLength(0);
+    approved = APPROVED;
+  });
+
+  it("PE42 refuses a corrupted settled-import record before invoking anything", function* () {
+    opened.length = 0;
+    approved = OPEN_PROGRAM;
+
+    const first = yield* run(PROBING_DOCUMENT, {
+      install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+    });
+    expect(first.failure).toBeUndefined();
+    expect(opened).toEqual(["A"]);
+
+    /**
+     * The history an interruption right after the settled import leaves, with
+     * that record rewritten.
+     *
+     * Truncated, because a completed journal replays as a terminal result and
+     * the element is never re-entered — which would prove nothing about what a
+     * continuation reads.
+     */
+    const rewrite = (change: (record: Record<string, Json>) => Json): DurableEvent[] => {
+      const at = importsOf(first.events, "Open")[0]!;
+      return first.events.slice(0, at + 1).map((event, index) => {
+        if (index !== at || event.type !== "yield" || event.result.status !== "ok") {
+          return event;
+        }
+        const record = event.result.value as Record<string, Json>;
+        return { ...event, result: { ...event.result, value: change({ ...record }) } };
+      });
+    };
+
+    const corruptions: Record<string, (record: Record<string, Json>) => Json> = {
+      "a missing member": ({ name: _name, ...rest }) => rest,
+      "an additional member": (record) => ({ ...record, extra: 1 }),
+      "a mistyped member": (record) => ({ ...record, name: 7 }),
+      "an unknown tag": (record) => ({ ...record, settled: "something-else" }),
+      "another component's name": (record) => ({ ...record, name: "Probe" }),
+      "no record at all": () => "settled",
+    };
+
+    for (const [what, change] of Object.entries(corruptions)) {
+      opened.length = 0;
+      const replayed = yield* run(PROBING_DOCUMENT, {
+        stream: new InMemoryStream(rewrite(change)),
+        install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+      });
+
+      expect(`${what}: ${replayed.failure ?? replayed.output ?? ""}`).toContain(
+        "cannot be read as one",
+      );
+      expect([what, opened]).toEqual([what, []]);
+    }
+    approved = APPROVED;
+  });
+});
+
+/**
+ * A journal that hands its events back exactly as they were put in.
+ *
+ * `InMemoryStream` structured-clones what it stores, which is the right thing
+ * for a journal and the wrong thing for this case: a value that refuses to be
+ * read would be rejected by the clone, long before the parser under test sees
+ * it. This keeps the reference, so what a continuation reads is the hostile
+ * value itself.
+ */
+function unclonedStream(events: readonly DurableEvent[]): DurableStream {
+  const held = [...events];
+  return {
+    // deno-lint-ignore require-yield
+    *readAll(): Operation<DurableEvent[]> {
+      return held;
+    },
+    // deno-lint-ignore require-yield
+    *append(event: DurableEvent): Operation<void> {
+      held.push(event);
+    },
+  };
+}
+
+/** What a hostile retained value tried to smuggle into a diagnostic. */
+const PLANTED = "planted-by-the-journal-a3f9";
+
+/** The tag a settled program occurrence records. */
+const SETTLED_IMPORT_TAG = "program-occurrence";
+
+describe("Tier PE — a settled import that will not be read", () => {
+  /** The interrupted history, with the settled import's result replaced. */
+  function* holding(value: unknown): Operation<{ events: DurableEvent[]; at: number }> {
+    opened.length = 0;
+    approved = OPEN_PROGRAM;
+    const first = yield* run(PROBING_DOCUMENT, {
+      install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+    });
+    expect(first.failure).toBeUndefined();
+    expect(opened).toEqual(["A"]);
+    const at = importsOf(first.events, "Open")[0]!;
+    return {
+      at,
+      events: first.events.slice(0, at + 1).map((event, index) => {
+        if (index !== at || event.type !== "yield" || event.result.status !== "ok") {
+          return event;
+        }
+        return { ...event, result: { ...event.result, value: value as Json } };
+      }),
+    };
+  }
+
+  function resume(events: DurableEvent[]): Operation<Attempt> {
+    opened.length = 0;
+    return run(PROBING_DOCUMENT, {
+      stream: unclonedStream(events),
+      install: openProvider({ mark: "A", identity: { origin: "test/open", revision: "A" } }),
+    });
+  }
+
+  it("PE43 refuses a value the parser can reach but not read, planting nothing", function* () {
+    // A member no JSON holds. It survives the journal's own retention checks
+    // and reaches this boundary, which answers with its one fixed sentence.
+    const planted = { settled: SETTLED_IMPORT_TAG, name: () => PLANTED };
+    const replayed = yield* resume((yield* holding(planted)).events);
+
+    expect(replayed.failure ?? replayed.output ?? "").toContain("cannot be read as one");
+    expect(replayed.failure ?? replayed.output ?? "").not.toContain(PLANTED);
+    expect(opened).toEqual([]);
+    approved = APPROVED;
+  });
+
+  it("PE44 reads a detached copy, so an alternating answer decides nothing", function* () {
+    // Read once into detached JSON, so a member that answers differently on a
+    // second read has no second read to answer. The first answer is the record,
+    // and it is the right one.
+    let reads = 0;
+    const alternating = {
+      settled: SETTLED_IMPORT_TAG,
+      get name(): string {
+        reads += 1;
+        return reads === 1 ? "Open" : PLANTED;
+      },
+    };
+    const replayed = yield* resume((yield* holding(alternating)).events);
+
+    expect(replayed.failure).toBeUndefined();
+    expect(replayed.output).toContain("open A");
+    expect(opened).toEqual(["A"]);
+    approved = APPROVED;
+  });
+
+  it("PE45 refuses a value the journal itself will not retain, invoking nothing", function* () {
+    // These never reach this boundary: the run's own retention check reads
+    // every retained result before the document body starts, and a value that
+    // refuses there is refused there. What this proves is the part that is
+    // this boundary's to promise — the component is never invoked.
+    const hostile: Record<string, unknown> = {
+      "a proxy refusing ownKeys": new Proxy(
+        { settled: SETTLED_IMPORT_TAG, name: "Open" },
+        {
+          ownKeys() {
+            throw new Error(PLANTED);
+          },
+        },
+      ),
+      "a proxy refusing a descriptor": new Proxy(
+        { settled: SETTLED_IMPORT_TAG, name: "Open" },
+        {
+          getOwnPropertyDescriptor() {
+            throw new Error(PLANTED);
+          },
+        },
+      ),
+      "a throwing accessor": {
+        settled: SETTLED_IMPORT_TAG,
+        get name(): string {
+          throw new Error(PLANTED);
+        },
+      },
+      "a circular value": (() => {
+        const circular: Record<string, unknown> = { settled: SETTLED_IMPORT_TAG, name: "Open" };
+        circular.self = circular;
+        return circular;
+      })(),
+    };
+
+    for (const [what, value] of Object.entries(hostile)) {
+      const replayed = yield* resume((yield* holding(value)).events);
+      expect([what, replayed.output ?? ""]).toEqual([what, ""]);
+      expect([what, opened]).toEqual([what, []]);
+    }
+    approved = APPROVED;
+  });
+});

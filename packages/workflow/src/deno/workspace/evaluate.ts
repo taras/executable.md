@@ -77,13 +77,16 @@
  */
 
 import type { Operation } from "effection";
-import { getExpansion, hasContent } from "@executablemd/core";
+import { getExpansion } from "@executablemd/core";
 import type { SourcePosition } from "@executablemd/core";
 import {
+  EVALUATE_DESCRIPTION,
+  evaluateProgramElement,
   pinnedFileDelete,
   pinnedFileRead,
   pinnedFileWrite,
   pinnedMutation,
+  programProperties,
 } from "@executablemd/core/host";
 import type {
   GeneratedEffectClass,
@@ -128,8 +131,10 @@ export const props = {
       uniqueItems: true,
       items: { enum: [...EFFECT_CLASSES] },
     },
+    // The complete-program half, taken from core rather than restated here so
+    // the two profiles cannot describe one component differently.
+    ...programProperties,
   },
-  required: ["source"],
   additionalProperties: false,
 };
 
@@ -267,13 +272,44 @@ function createEvaluate(
     elementProps: Record<string, Json>,
     invocation: ComponentInvocation,
   ): Operation<Json> {
-    if (yield* hasContent()) {
+    // Which grammar this element is written in, decided from the props alone.
+    // Neither half of it reads the authored form, so both are settled before
+    // the durable name is claimed: a combination this host does not have is not
+    // a fragment or a program being refused.
+    const fragment = elementProps.source;
+    if (fragment !== undefined && elementProps.program !== undefined) {
       throw new GeneratedEvaluationError(
-        "<Evaluate> takes the generated source as its `source` prop and renders no content of " +
-          "its own. Write it self-closing.",
+        "<Evaluate> evaluates either a restricted generated fragment through `source` or a " +
+          "complete program through `program`, not both.",
       );
     }
-    const source = elementProps.source;
+    if (fragment !== undefined && elementProps.props !== undefined) {
+      throw new GeneratedEvaluationError(
+        "<Evaluate> takes `props` only for a complete program: a restricted generated fragment " +
+          "has no root props.",
+      );
+    }
+    if (fragment === undefined && elementProps.allow !== undefined) {
+      // `allow` narrows the restricted evaluator's tables and means nothing to a
+      // program, which runs under this site's own authority — something no prop
+      // selects from.
+      throw new GeneratedEvaluationError(
+        "<Evaluate> takes `allow` only with `source`, which selects what a restricted " +
+          "generated fragment may reach.",
+      );
+    }
+
+    if (fragment === undefined) {
+      return yield* evaluateProgramElement(
+        elementProps,
+        invocation,
+        claim,
+        "<Evaluate> evaluates a complete program written as its content or supplied as " +
+          "`program`, or a restricted generated fragment supplied as `source`.",
+      );
+    }
+
+    const source = fragment;
     if (typeof source !== "string") {
       throw new GeneratedEvaluationError("<Evaluate> requires a `source` string to evaluate.");
     }
@@ -293,6 +329,16 @@ function createEvaluate(
     // composable, and any of them would let two `<Evaluate>` sites share one
     // durable name and each replay the other's admitted fragment.
     const id = yield* claim(invocation);
+
+    // After the claim, so the shape read here is the one the claim proved this
+    // element was written in. A borrowed invocation reports somebody else's
+    // element, and refusing it is the claimant's answer rather than this one.
+    if (invocation.hasContent()) {
+      throw new GeneratedEvaluationError(
+        "<Evaluate> takes the generated source as its `source` prop and renders no content of " +
+          "its own. Write it self-closing.",
+      );
+    }
 
     // Read where the work is not journaled: the element's shape and the run's
     // current roots are both ordinary operations, and only the admission below
@@ -344,6 +390,12 @@ export function evaluationComponents(
     {
       name: "Evaluate",
       origin: ORIGIN,
+      // The run profile's sentence plus the one form only this profile has.
+      // Stated here rather than in core because a catalog must not advertise a
+      // prop the profile it describes would refuse.
+      description:
+        `${EVALUATE_DESCRIPTION} Use \`<Evaluate source={fragment} allow={["read"]} />\` for a ` +
+        "restricted generated fragment.",
       props,
       factory: (claim: IdentityClaimant) => createEvaluate(database, options, claim),
     },
