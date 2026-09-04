@@ -33,6 +33,28 @@ export const APPLICATION_ID = 0x584d4431;
 /** The only schema version this build reads or writes. */
 export const SCHEMA_VERSION = 1;
 
+/**
+ * The largest value the schema version can be carried in.
+ *
+ * The logical carrier is SQLite's `user_version`, a signed 32-bit integer. Any
+ * host holding this schema has to represent the same versions, so the bound is
+ * the carrier's rather than one adapter's.
+ */
+export const MAX_SCHEMA_VERSION = 0x7fffffff;
+
+/**
+ * Whether a retained value could name a schema version at all.
+ *
+ * Version numbering starts at 1 and rises. Zero is a database carrying the XMD
+ * identity without a complete schema, which is a partial initialization and so
+ * damage; a negative or out-of-range value is retained data that no build of
+ * this project ever wrote. Neither is a version this build has not learned, so
+ * neither may travel as one.
+ */
+export function isSchemaVersion(value: number): boolean {
+  return Number.isInteger(value) && value >= 1 && value <= MAX_SCHEMA_VERSION;
+}
+
 const STATUSES = "'running', 'suspended', 'interrupted', 'completed', 'failed', 'cancelled'";
 
 /**

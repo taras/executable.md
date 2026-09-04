@@ -69,11 +69,33 @@ describe("recognizing an owner object", () => {
     expect(await on(stub, (o) => o.recognize())).toBe("refused:unsupported-version");
   });
 
-  it("refuses version zero the same way", async () => {
+  it("calls version zero a partial initialization rather than an old version", async () => {
+    // This project's identity with nothing finished under it. There has never
+    // been a version zero to be behind, so reporting one would send a host
+    // looking for a migration that cannot exist.
     const stub = owner();
     await on(stub, (o) => o.initialize());
     await on(stub, (o) => o.rewriteMarker(0x584d4431, 0));
+    expect(await on(stub, (o) => o.recognize())).toBe("refused:corrupt");
+  });
+
+  it("carries a version wider than the refusal's old grammar", async () => {
+    const stub = owner();
+    await on(stub, (o) => o.initialize());
+    await on(stub, (o) => o.rewriteMarker(0x584d4431, 1_000_000));
     expect(await on(stub, (o) => o.recognize())).toBe("refused:unsupported-version");
+  });
+
+  it("calls a version the carrier could never hold damaged retained data", async () => {
+    // Negative, and past the signed 32-bit carrier: no build of this project
+    // wrote either. A version this build has not learned and a row that cannot
+    // be a version are different facts.
+    for (const version of [-1, 0x80000000]) {
+      const stub = owner();
+      await on(stub, (o) => o.initialize());
+      await on(stub, (o) => o.rewriteMarker(0x584d4431, version));
+      expect([version, await on(stub, (o) => o.recognize())]).toEqual([version, "refused:corrupt"]);
+    }
   });
 
   it("refuses a shape that disagrees with what version 1 declares", async () => {

@@ -163,7 +163,9 @@ export function recognizeObject(storage: OwnerStorage): void {
           ? "its schema marker table holds no identity row"
           : marker.kind === "duplicated"
             ? "its schema marker table holds more than one identity row"
-            : "its schema marker row does not describe an identity",
+            : marker.kind === "incomplete-version"
+              ? "it carries the XMD application identity without a complete version-1 schema"
+              : "its schema marker row does not describe an identity",
     });
   }
 

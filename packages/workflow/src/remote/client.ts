@@ -44,6 +44,17 @@ export type LinkRefusal =
   | "send-failed"
   | "socket-error";
 
+/**
+ * A parser's own failure, as something that can be settled and reported.
+ *
+ * A parser may throw anything. What travels back to the caller has to be an
+ * `Error`, and it has to stay the parser's failure rather than becoming the
+ * channel's, so the boundary that knows what the value meant can classify it.
+ */
+function unreadable(error: unknown): Error {
+  return error instanceof Error ? error : new OwnerLinkError("malformed-answer");
+}
+
 export class OwnerLinkError extends Error {
   override name = "OwnerLinkError";
 
@@ -210,10 +221,13 @@ export function useOwnerConnection(socket: OwnerSocket): Operation<OwnerConnecti
      *
      * The command's own type stays inside the closure `ask()` built, so the
      * reader settles an answer without naming it and nothing here has to assert
-     * what a value is. `deliver` answers whether the value could be read.
+     * what a value is. `deliver` settles the request either way and returns the
+     * failure that made an answer unreadable, so the caller that asked learns
+     * what was wrong with its own answer rather than only that the channel
+     * ended.
      */
     interface Waiter {
-      deliver(answer: RawAnswer): boolean;
+      deliver(answer: RawAnswer): Error | undefined;
       fail(error: OwnerLinkError): void;
     }
     const waiting = new Map<string, Waiter>();
@@ -252,11 +266,11 @@ export function useOwnerConnection(socket: OwnerSocket): Operation<OwnerConnecti
       }
       waiting.delete(read.id);
       settled.add(read.id);
-      if (!pending.deliver(read.answer)) {
+      if (pending.deliver(read.answer) !== undefined) {
         // The owner performed the command and described the result in a way
         // this build cannot read. Handing the caller an unparsed value is the
-        // one outcome that must not happen.
-        waiting.set(read.id, pending);
+        // one outcome that must not happen — but the caller that asked has
+        // already been told why, so teardown here is about everyone else.
         teardown("malformed-answer");
       }
     };
@@ -327,25 +341,30 @@ export function useOwnerConnection(socket: OwnerSocket): Operation<OwnerConnecti
         }
         const settle = withResolvers<OwnerAnswer<T>>();
         waiting.set(id, {
-          deliver(answer: RawAnswer): boolean {
+          deliver(answer: RawAnswer): Error | undefined {
             if (answer.outcome === "refused") {
               let refusal: string;
               try {
                 refusal = parseRefusal(answer.refusal);
-              } catch {
-                return false;
+              } catch (error) {
+                settle.reject(unreadable(error));
+                return unreadable(error);
               }
               settle.resolve({ outcome: "refused", refusal });
-              return true;
+              return undefined;
             }
             let value: T;
             try {
               value = parse(answer.value);
-            } catch {
-              return false;
+            } catch (error) {
+              // The request that asked learns why its own answer could not be
+              // read. Whoever else is waiting learns the channel ended, which
+              // is all that is true for them.
+              settle.reject(unreadable(error));
+              return unreadable(error);
             }
             settle.resolve({ outcome: "performed", value });
-            return true;
+            return undefined;
           },
           fail(error: OwnerLinkError): void {
             settle.reject(error);

@@ -23,17 +23,28 @@ import {
   cloudflareRunLink,
   stageCloudflareContent,
 } from "../src/cloudflare/client.ts";
-import { WorkflowSchemaVersionError, WorkflowStorageError } from "../src/storage/errors.ts";
+import {
+  WorkflowRecordMalformedError,
+  WorkflowRequestError,
+  WorkflowSchemaVersionError,
+  WorkflowStorageError,
+} from "../src/storage/errors.ts";
+import { useRemoteRunDatabase } from "../src/remote/database.ts";
+import { MAX_MESSAGE_BYTES } from "../src/remote/client.ts";
+import type { Result } from "effection";
+import type { DefinitionRetrieval } from "../src/storage/record.ts";
 import { SCHEMA_VERSION } from "../src/sqlite/workflow-schema.ts";
 import { createTransactionGate, transactRemotely } from "../src/remote/collector.ts";
 import { encodeBase64 } from "../src/cloudflare/encoding.ts";
 import type { OwnerSocket, SocketListener } from "../src/remote/client.ts";
 import { OwnerLinkError, useOwnerConnection } from "../src/remote/client.ts";
+import { RemoteRecordError } from "../src/remote/records.ts";
 import {
   EMPTY_WORKSPACE_MANIFEST,
   EMPTY_WORKSPACE_ROOT_ID,
   workspaceRootId,
 } from "../src/deno/workspace/manifest.ts";
+import { EXECUTION_PAGE_BYTES, executionPageBytes } from "../src/cloudflare/commands.ts";
 import { WORKSPACE_ROOT_DOMAIN } from "../src/workspace/root-manifest.ts";
 import { sha256Hex } from "../src/workspace/sha256.ts";
 
@@ -116,6 +127,16 @@ function wire(answer: (request: Record<string, unknown>) => Record<string, unkno
   };
 }
 
+/** The frontier a database handle opens from, as the owner would answer it. */
+function frontierValue(): Record<string, unknown> {
+  return {
+    record: runRecord(),
+    retrieval: null,
+    workspaceRootId: ROOT_ID,
+    journalEventId: null,
+  };
+}
+
 function ids(): () => string {
   let id = 0;
   return () => `request-${(id += 1)}`;
@@ -139,6 +160,21 @@ function failure(error: unknown): string {
     throw new Error(`expected an OwnerLinkError, received ${String(error)}`);
   }
   return error.refusal;
+}
+
+/**
+ * The parser's own failure, having proved it is one.
+ *
+ * The request whose answer could not be read keeps that failure rather than
+ * the channel's, because only the boundary above it can say what the value was
+ * supposed to mean. Reading it as a string would let an unrelated error pass
+ * for the category a test expected.
+ */
+function unreadable(error: unknown): string {
+  if (!(error instanceof RemoteRecordError)) {
+    throw new Error(`expected a RemoteRecordError, received ${String(error)}`);
+  }
+  return "malformed-record";
 }
 
 describe("semantic reads from a Cloudflare owner", () => {
@@ -318,7 +354,7 @@ describe("semantic reads from a Cloudflare owner", () => {
           raised = error;
         }
       });
-      expect([description, failure(raised)]).toEqual([description, "malformed-answer"]);
+      expect([description, unreadable(raised)]).toEqual([description, "malformed-record"]);
       expect([description, transport.closes]).toEqual([description, 1]);
       expect([description, transport.listeners]).toEqual([description, 0]);
     }
@@ -335,7 +371,7 @@ describe("semantic reads from a Cloudflare owner", () => {
         raised = error;
       }
     });
-    expect(failure(raised)).toBe("malformed-answer");
+    expect(unreadable(raised)).toBe("malformed-record");
     expect(transport.closes).toBe(1);
   });
 
@@ -368,30 +404,175 @@ describe("semantic reads from a Cloudflare owner", () => {
     expect(transport.closes).toBe(1);
   });
 
+  it("returns a malformed record to the caller, and leaves nothing usable behind", function* () {
+    // The whole point of carrying the parser's failure: the public boundary
+    // says the owner returned a record this build cannot read, which is what
+    // happened, rather than that the owner could not be reached.
+    const mutations: Record<string, unknown>[] = [];
+    const transport = wire((request) => {
+      if (request["command"] === "frontier") {
+        return { outcome: "performed", value: frontierValue() };
+      }
+      mutations.push(request);
+      return {
+        outcome: "performed",
+        value: {
+          retrieval: {
+            metadata: { locator: "something else entirely" },
+            revision: 1,
+            updatedAt: "2026-09-04T00:00:01.000Z",
+          },
+        },
+      };
+    });
+    let refused: Result<void> | undefined;
+    let after: Result<void> | undefined;
+    let held: DefinitionRetrieval | undefined;
+    yield* scoped(function* () {
+      const connection = yield* useOwnerConnection(transport.socket);
+      // One generator for both halves: two would mint the same correlation id
+      // and the connection would fail closed on the duplicate.
+      const next = ids();
+      const link = cloudflareRunLink(
+        connection,
+        cloudflareReadLink(connection, next, RUN_ID),
+        next,
+        RUN_ID,
+      );
+      const database = yield* useRemoteRunDatabase(link, yield* link.frontierSnapshot());
+      refused = yield* database.replaceRetrievalMetadata({ locator: "what was asked" });
+      held = database.retrieval;
+      expect(mutations).toHaveLength(1);
+      after = yield* database.replaceRetrievalMetadata({ locator: "later" });
+      // The channel is gone, so the second call never reached the owner.
+      expect(mutations).toHaveLength(1);
+    });
+    expect(refused?.ok).toBe(false);
+    expect(refused?.ok === false && refused.error).toEqual(
+      expect.any(WorkflowRecordMalformedError),
+    );
+    // Nothing private crossed with it.
+    expect(String(refused?.ok === false && refused.error)).not.toContain("something else");
+    // The snapshot is what the frontier established: an answer about another
+    // value installs nothing, because it decides where the definition is read.
+    expect(held).toEqual(undefined);
+    expect(after?.ok).toBe(false);
+    expect(after?.ok === false && after.error).toEqual(expect.any(WorkflowStorageError));
+    expect(transport.closes).toBe(1);
+  });
+
+  it("returns a request failure when the whole request cannot be carried", function* () {
+    // Metadata that fits the bound on its own and does not once the command
+    // around it and its correlation id are counted. The public boundary has to
+    // say the request was too large, not that the owner was unreachable.
+    const mutations: Record<string, unknown>[] = [];
+    const transport = wire((request) => {
+      if (request["command"] === "frontier") {
+        return { outcome: "performed", value: frontierValue() };
+      }
+      mutations.push(request);
+      // An honest owner: it performed exactly the replacement it was asked for.
+      return {
+        outcome: "performed",
+        value: {
+          retrieval: {
+            metadata: JSON.parse(String(request["metadata"])),
+            revision: 1,
+            updatedAt: "2026-09-04T00:00:01.000Z",
+          },
+        },
+      };
+    });
+    let refused: Result<void> | undefined;
+    let accepted: Result<void> | undefined;
+    yield* scoped(function* () {
+      const connection = yield* useOwnerConnection(transport.socket);
+      // One generator for both halves: two would mint the same correlation id
+      // and the connection would fail closed on the duplicate.
+      const next = ids();
+      const link = cloudflareRunLink(
+        connection,
+        cloudflareReadLink(connection, next, RUN_ID),
+        next,
+        RUN_ID,
+      );
+      const database = yield* useRemoteRunDatabase(link, yield* link.frontierSnapshot());
+      refused = yield* database.replaceRetrievalMetadata({
+        locator: "m".repeat(MAX_MESSAGE_BYTES - 64),
+      });
+      // Never sent, so the owner has no idea this was asked.
+      expect(mutations).toEqual([]);
+      // The connection was not spent on it either: the next one goes through.
+      accepted = yield* database.replaceRetrievalMetadata({ locator: "small" });
+      expect(mutations).toHaveLength(1);
+    });
+    expect(refused?.ok).toBe(false);
+    expect(refused?.ok === false && refused.error).toEqual(expect.any(WorkflowRequestError));
+    expect(String(refused?.ok === false && refused.error)).not.toContain("too-large");
+    expect(accepted?.ok).toBe(true);
+    expect(transport.closes).toBe(1);
+  });
+
+  it("refuses a version spelling outside what a version can be", function* () {
+    // Zero is a partial initialization and anything past the carrier is
+    // damaged retained data. Neither is a version this build is behind, so a
+    // same-release owner never sends one and this client never reads one.
+    for (const refusal of [
+      "storage:unsupported-version-v0",
+      "storage:unsupported-version-v99999999999",
+    ]) {
+      const transport = wire(() => ({ outcome: "refused", refusal }));
+      let outcome: unknown;
+      yield* scoped(function* () {
+        const connection = yield* useOwnerConnection(transport.socket);
+        const next = ids();
+        const link = cloudflareRunLink(
+          connection,
+          cloudflareReadLink(connection, next, RUN_ID),
+          next,
+          RUN_ID,
+        );
+        outcome = yield* link.readExecutions();
+      });
+      const failed = outcome as { ok: boolean; error: Error };
+      expect([refusal, failed.ok]).toEqual([refusal, false]);
+      expect([refusal, failed.error]).toEqual([refusal, expect.any(WorkflowStorageError)]);
+      // Not a version report, and nothing of the spelling crossed.
+      expect(failed.error).not.toEqual(expect.any(WorkflowSchemaVersionError));
+      expect(String(failed.error)).not.toContain("storage:");
+      expect([refusal, transport.closes]).toEqual([refusal, 1]);
+    }
+  });
+
   it("reports the schema version the owner actually read", function* () {
     // A version this build cannot open is the one fact the refusal exists to
     // carry. Reporting a placeholder would state something the owner never
     // said, and a host deciding whether to upgrade would act on it.
-    const transport = wire(() => ({
-      outcome: "refused",
-      refusal: "storage:unsupported-version-v7",
-    }));
-    let outcome: unknown;
-    yield* scoped(function* () {
-      const connection = yield* useOwnerConnection(transport.socket);
-      const link = cloudflareRunLink(
-        connection,
-        cloudflareReadLink(connection, ids(), RUN_ID),
-        ids(),
-        RUN_ID,
-      );
-      outcome = yield* link.readExecutions();
-    });
-    const failed = outcome as { ok: boolean; error: Error };
-    expect(failed.ok).toBe(false);
-    expect(failed.error).toEqual(expect.any(WorkflowSchemaVersionError));
-    const version = failed.error as WorkflowSchemaVersionError;
-    expect([version.stored, version.supported]).toEqual([7, SCHEMA_VERSION]);
+    // Seven, and a value wider than the grammar this refusal once had: both
+    // are versions the owner can recognize, so both must arrive exactly.
+    for (const stored of [7, 1_000_000]) {
+      const transport = wire(() => ({
+        outcome: "refused",
+        refusal: `storage:unsupported-version-v${stored}`,
+      }));
+      let outcome: unknown;
+      yield* scoped(function* () {
+        const connection = yield* useOwnerConnection(transport.socket);
+        const next = ids();
+        const link = cloudflareRunLink(
+          connection,
+          cloudflareReadLink(connection, next, RUN_ID),
+          next,
+          RUN_ID,
+        );
+        outcome = yield* link.readExecutions();
+      });
+      const failed = outcome as { ok: boolean; error: Error };
+      expect([stored, failed.ok]).toEqual([stored, false]);
+      expect([stored, failed.error]).toEqual([stored, expect.any(WorkflowSchemaVersionError)]);
+      const version = failed.error as WorkflowSchemaVersionError;
+      expect([version.stored, version.supported]).toEqual([stored, SCHEMA_VERSION]);
+    }
   });
 
   it("closes when content bytes disagree with the requested identity", function* () {
@@ -417,7 +598,7 @@ describe("semantic reads from a Cloudflare owner", () => {
         raised = error;
       }
     });
-    expect(failure(raised)).toBe("malformed-answer");
+    expect(unreadable(raised)).toBe("malformed-record");
     expect(transport.closes).toBe(1);
   });
   it("hands the collector one assembled frontier and no page mechanics", function* () {
@@ -515,6 +696,12 @@ describe("semantic reads from a Cloudflare owner", () => {
       "a record that stopped without saying how": page([
         { sequence: 1, record: { ...record("a"), stopStatus: "completed" } },
       ]),
+      // Measured the same way the owner measures it, over the same wrappers.
+      // A page past the bound is refused whole: no prefix of it is returned.
+      "a page past the byte bound": page([
+        row(1, "a"),
+        { sequence: 2, record: record("b".repeat(EXECUTION_PAGE_BYTES)) },
+      ]),
     };
 
     for (const [description, answer] of Object.entries(refused)) {
@@ -541,6 +728,44 @@ describe("semantic reads from a Cloudflare owner", () => {
         expect(String(failed.error)).not.toContain("command:");
       }
     }
+  });
+
+  it("accepts a page filled to the byte bound", function* () {
+    // The boundary itself, from the runner's side: one page whose serialized
+    // rows land at or just under the bound is honest and is assembled. If the
+    // two ends measured different things, this is the page they would
+    // disagree about.
+    const fill = (size: number) => ({
+      sequence: 1,
+      record: { executionId: "e".repeat(size), startedAt: "2026-09-04T00:00:00.000Z" },
+    });
+    // The identity is ASCII, so one byte of it is one byte of the page and the
+    // largest that fits follows from the wrapper's own size.
+    const overhead = executionPageBytes([fill(0)]);
+    const largest = fill(EXECUTION_PAGE_BYTES - overhead);
+    expect(executionPageBytes([largest])).toBe(EXECUTION_PAGE_BYTES);
+    expect(executionPageBytes([fill(EXECUTION_PAGE_BYTES - overhead + 1)])).toBeGreaterThan(
+      EXECUTION_PAGE_BYTES,
+    );
+
+    const transport = wire(() => ({
+      outcome: "performed",
+      value: { runId: RUN_ID, anchor: 1, after: null, rows: [largest], done: true },
+    }));
+    let outcome: unknown;
+    yield* scoped(function* () {
+      const connection = yield* useOwnerConnection(transport.socket);
+      const next = ids();
+      outcome = yield* cloudflareRunLink(
+        connection,
+        cloudflareReadLink(connection, next, RUN_ID),
+        next,
+        RUN_ID,
+      ).readExecutions();
+    });
+    const found = outcome as { ok: boolean; value: { executionId: string }[] };
+    expect(found.ok).toBe(true);
+    expect(found.value.map((held) => held.executionId)).toEqual([largest.record.executionId]);
   });
 
   it("assembles an honest snapshot across pages, and an empty one", function* () {

@@ -32,7 +32,7 @@ import {
   VALID_CLAIMS,
 } from "./support/executor-object.ts";
 import { generateKeys, signToken, type TestKeys } from "./support/tokens.ts";
-import { call, run } from "effection";
+import { run } from "effection";
 import {
   type OwnerSocket,
   type SocketListener,
@@ -133,23 +133,35 @@ function askFrame(
  * wider than the four members the client uses, so the binding is written out
  * rather than asserted.
  */
-function ownerSocket(socket: WebSocket): OwnerSocket {
+function ownerSocket(socket: WebSocket, beforeSend?: (raw: string) => Promise<void> | undefined) {
   const listeners = new Map<SocketListener, EventListener>();
-  return {
-    send: (data) => socket.send(data),
+  const bound: OwnerSocket = {
+    send(data) {
+      // A frame may be held back before it reaches the owner, which is how a
+      // test puts a write between two pages of one read without reaching
+      // inside the client.
+      const waiting = beforeSend?.(data);
+      if (waiting === undefined) {
+        socket.send(data);
+        return;
+      }
+      void waiting.then(() => socket.send(data));
+    },
     close: () => socket.close(),
     addEventListener(type, listener) {
-      const bound: EventListener = (event) => listener(event as { data?: unknown });
-      listeners.set(listener, bound);
-      socket.addEventListener(type, bound);
+      const forward: EventListener = (event) => listener(event as { data?: unknown });
+      listeners.set(listener, forward);
+      socket.addEventListener(type, forward);
     },
     removeEventListener(type, listener) {
       const bound = listeners.get(listener);
-      if (bound !== undefined) {
-        socket.removeEventListener(type, bound);
+      const found = listeners.get(listener);
+      if (found !== undefined) {
+        socket.removeEventListener(type, found);
       }
     },
   };
+  return bound;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -326,8 +338,25 @@ describe("the remote owner protocol", () => {
 
     const socket = await connect(stub);
     let identifier = 0;
+    // 129 rows page at 128, so the read takes two requests. The later row is
+    // written between them: after the first page fixed the anchor, and before
+    // the owner is asked for the second. That is the moment the anchor exists
+    // to survive, and asserting it any later would prove nothing about paging.
+    let requests = 0;
+    let inserted = false;
+    const wire = ownerSocket(socket, (raw) => {
+      if (!raw.includes('"executions"')) {
+        return undefined;
+      }
+      requests += 1;
+      if (requests !== 2) {
+        return undefined;
+      }
+      inserted = true;
+      return on(stub, (owner) => owner.beginExecution("execution-later", NEW_START));
+    });
     const outcome = await run(function* () {
-      const connection = yield* useOwnerConnection(ownerSocket(socket));
+      const connection = yield* useOwnerConnection(wire);
       const ids = () => `read-${(identifier += 1)}`;
       const link = cloudflareRunLink(
         connection,
@@ -336,11 +365,10 @@ describe("the remote owner protocol", () => {
         RUN_ID,
       );
       const first = yield* link.readExecutions();
-      // Appended after the snapshot was anchored, and while the read is still
-      // paging: the anchor is what decides, not when the rows were written.
-      yield* call(() => on(stub, (owner) => owner.beginExecution("execution-later", NEW_START)));
       return { first, second: yield* link.readExecutions() };
     });
+    // The write really did land between the two page requests.
+    expect([requests >= 2, inserted]).toEqual([true, true]);
 
     if (!outcome.first.ok) {
       throw outcome.first.error;
@@ -376,6 +404,71 @@ describe("the remote owner protocol", () => {
     // The later row is outside the first anchored snapshot and inside the next.
     expect(outcome.second.value).toHaveLength(130);
     expect(outcome.second.value[129]?.executionId).toBe("execution-later");
+  });
+
+  it("ends a page on the byte bound, and refuses a record that can never fit", async () => {
+    // The entry bound is 128 rows; this one is reached by bytes first. Both
+    // ends measure the same serialized `rows` array, so what the owner decides
+    // fits is exactly what the runner accepts — and the whole history still
+    // arrives, in order, across however many pages that takes.
+    const stub = executor();
+    await on(stub, (owner) => owner.initialize());
+    const padding = "p".repeat(64 * 1024);
+    for (let index = 0; index < 20; index += 1) {
+      const id = `${String(index).padStart(2, "0")}-${padding}`;
+      await on(stub, (owner) => owner.beginExecution(id, "2026-01-01T00:00:00.000Z"));
+    }
+    const socket = await connect(stub);
+    let identifier = 0;
+    let requests = 0;
+    const wire = ownerSocket(socket, (raw) => {
+      if (raw.includes('"executions"')) {
+        requests += 1;
+      }
+      return undefined;
+    });
+    const outcome = await run(function* () {
+      const connection = yield* useOwnerConnection(wire);
+      const ids = () => `page-${(identifier += 1)}`;
+      return yield* cloudflareRunLink(
+        connection,
+        cloudflareReadLink(connection, ids, RUN_ID),
+        ids,
+        RUN_ID,
+      ).readExecutions();
+    });
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+    expect(outcome.value).toHaveLength(20);
+    expect(outcome.value.map((held) => held.executionId.slice(0, 2))).toEqual(
+      Array.from({ length: 20 }, (_, index) => String(index).padStart(2, "0")),
+    );
+    // Well under 128 entries a page, so bytes ended these pages, not the count.
+    expect(requests).toBeGreaterThan(1);
+
+    // One record larger than a whole page. There is no page that could carry
+    // it, so the owner refuses rather than answering with something the runner
+    // is required to reject.
+    const single = executor();
+    await on(single, (owner) => owner.initialize());
+    const huge = "h".repeat(600 * 1024);
+    await on(single, (owner) => owner.beginExecution(huge, "2026-01-01T00:00:00.000Z"));
+    const alone = await connect(single);
+    let count = 0;
+    const refused = await run(function* () {
+      const connection = yield* useOwnerConnection(ownerSocket(alone));
+      const ids = () => `huge-${(count += 1)}`;
+      return yield* cloudflareRunLink(
+        connection,
+        cloudflareReadLink(connection, ids, RUN_ID),
+        ids,
+        RUN_ID,
+      ).readExecutions();
+    });
+    expect(refused.ok).toBe(false);
+    // Provider-neutral, with no private refusal spelling in it.
+    expect(String(refused.ok === false && refused.error)).not.toContain("command:");
   });
 
   it("returns only content referenced by one validated root", async () => {

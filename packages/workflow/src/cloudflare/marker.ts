@@ -20,7 +20,7 @@
  * refused rather than migrated.
  */
 
-import { APPLICATION_ID, SCHEMA_VERSION } from "../sqlite/workflow-schema.ts";
+import { APPLICATION_ID, isSchemaVersion, SCHEMA_VERSION } from "../sqlite/workflow-schema.ts";
 
 /** The adapter-private table carrying this database's identity. */
 export const MARKER_TABLE = "_xmd_workflow_schema";
@@ -43,6 +43,7 @@ export type MarkerFailure =
   | { readonly kind: "duplicated"; readonly rows: number }
   | { readonly kind: "malformed" }
   | { readonly kind: "foreign-application"; readonly applicationId: number }
+  | { readonly kind: "incomplete-version" }
   | { readonly kind: "unknown-version"; readonly schemaVersion: number };
 
 /**
@@ -75,6 +76,16 @@ export function readMarker(rows: readonly Record<string, unknown>[]): SchemaMark
   }
   if (applicationId !== APPLICATION_ID) {
     return { kind: "foreign-application", applicationId };
+  }
+  if (schemaVersion === 0) {
+    // The identity is this project's and the version says nothing was
+    // finished. That is a database left partly initialized, not an older one.
+    return { kind: "incomplete-version" };
+  }
+  if (!isSchemaVersion(schemaVersion)) {
+    // Outside what the version carrier can hold, so no build wrote it. The row
+    // is damaged retained data rather than a version to report.
+    return { kind: "malformed" };
   }
   if (schemaVersion !== SCHEMA_VERSION) {
     return { kind: "unknown-version", schemaVersion };

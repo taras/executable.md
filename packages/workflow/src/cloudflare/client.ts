@@ -63,7 +63,7 @@ import {
   MAX_CONTENT_BYTES,
 } from "./commands.ts";
 import type { RemoteRunLink } from "../remote/database.ts";
-import { SCHEMA_VERSION } from "../sqlite/workflow-schema.ts";
+import { isSchemaVersion, SCHEMA_VERSION } from "../sqlite/workflow-schema.ts";
 import { canonicalJson } from "../storage/record.ts";
 import {
   WorkflowDatabaseCorruptError,
@@ -175,9 +175,9 @@ function privateRefusal(value: string): PrivateRefusal {
     default: {
       // The one category that carries a value: the schema version the owner
       // actually read, bounded and parsed rather than guessed.
-      const unsupported = /^storage:unsupported-version-v(\d{1,6})$/.exec(value);
-      if (unsupported !== null) {
-        return `storage:unsupported-version-v${Number(unsupported[1])}`;
+      const unsupported = readUnsupportedVersion(value);
+      if (unsupported !== undefined) {
+        return `storage:unsupported-version-v${unsupported}`;
       }
       return fail("it named an unknown refusal category");
     }
@@ -305,6 +305,22 @@ function parseContent(value: unknown): RemoteContent {
   return { kind, digest, bytes };
 }
 
+/**
+ * The schema version an unsupported-version refusal names, if it names one.
+ *
+ * The grammar covers exactly the versions the owner can recognize as
+ * unsupported, so a same-release owner and client never disagree about whether
+ * a refusal is readable. Anything else is not this category.
+ */
+function readUnsupportedVersion(refusal: string): number | undefined {
+  const found = /^storage:unsupported-version-v(\d{1,10})$/.exec(refusal);
+  if (found === null) {
+    return undefined;
+  }
+  const version = Number(found[1]);
+  return isSchemaVersion(version) ? version : undefined;
+}
+
 export function cloudflareReadLink(
   connection: OwnerConnection,
   nextId: () => string,
@@ -426,9 +442,10 @@ export function cloudflareOwnerLink(
           ? Err(new CloudflareOwnerRefusalError(answered.refusal))
           : Ok(answered.decision);
       } catch (error) {
-        if (error instanceof OwnerLinkError) {
-          // The connection went while the answer was in flight. Whether the
-          // owner committed is exactly what cannot be known from here, so the
+        if (error instanceof OwnerLinkError || error instanceof RemoteRecordError) {
+          // The connection went while the answer was in flight, or the owner
+          // answered in a way this build cannot read. Whether the owner
+          // committed is exactly what cannot be known from either, so the
           // caller learns the outcome is undecided rather than being told it
           // failed — retrying this same id is what settles it.
           return Err(error);
@@ -835,9 +852,9 @@ function storageFailure(refusal: PrivateRefusal): WorkflowStorageError {
   if (refusal === "storage:foreign") {
     return new WorkflowDatabaseFormatError(REMOTE_STORE, "it belongs to something else");
   }
-  const unsupported = /^storage:unsupported-version-v(\d{1,6})$/.exec(refusal);
-  if (unsupported !== null) {
-    return new WorkflowSchemaVersionError(REMOTE_STORE, Number(unsupported[1]), SCHEMA_VERSION);
+  const unsupported = readUnsupportedVersion(refusal);
+  if (unsupported !== undefined) {
+    return new WorkflowSchemaVersionError(REMOTE_STORE, unsupported, SCHEMA_VERSION);
   }
   if (refusal === "storage:corrupt") {
     return new WorkflowDatabaseCorruptError(REMOTE_STORE, "its retained records do not agree");
@@ -883,6 +900,14 @@ function translate(error: unknown): WorkflowStorageError {
     );
   }
   if (error instanceof OwnerLinkError) {
+    if (error.refusal === "too-large") {
+      // The channel measured the whole request and never sent it. That is a
+      // request this caller cannot make, not an owner it could not reach, and
+      // the two lead a host to do different things.
+      return new WorkflowRequestError(
+        "this request is larger than one message may carry, so it was not sent.",
+      );
+    }
     return new WorkflowTransactionError("this run's owner could not be reached.");
   }
   return new WorkflowTransactionError("this run's owner could not answer the operation.");

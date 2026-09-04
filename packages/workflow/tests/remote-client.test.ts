@@ -272,7 +272,7 @@ describe("a connection to a run's owner", () => {
     expect(refusalOf(raised)).toBe("unknown-answer");
   });
 
-  it("fails every waiter when a success value cannot be parsed", function* () {
+  it("tells the asker why its own answer was unreadable, and everyone else the channel ended", function* () {
     const wire = fakeSocket();
     const raised: unknown[] = [];
     yield* scoped(function* () {
@@ -300,9 +300,15 @@ describe("a connection to a run's owner", () => {
       yield* second;
     });
     expect(raised).toHaveLength(2);
-    for (const error of raised) {
-      expect(refusalOf(error)).toBe("malformed-answer");
-    }
+    // The request whose answer failed keeps the parser's own failure: the
+    // boundary above it can only classify what a value meant if it still holds
+    // the failure that said so. Reporting an unreachable owner here would be
+    // untrue — the owner answered, and this build could not read it.
+    const asker = raised.find((error) => !(error instanceof OwnerLinkError));
+    expect(String(asker)).toContain("expected a string");
+    // Nothing else is true for the other waiter except that the channel ended.
+    const other = raised.filter((error) => error !== asker);
+    expect(other.map(refusalOf)).toEqual(["malformed-answer"]);
     expect(wire.closes).toBe(1);
     expect(wire.listening).toBe(0);
   });
