@@ -1900,7 +1900,15 @@ function* documentWorkflow(
     (function* (): Operation<ComponentDefinition | FunctionComponentDefinition> {
       const imported = yield* importComponent("__root__");
       const imports = authority.imports;
-      return imports === undefined ? imported : imports.authorize("__root__", imported);
+      // Asked only when a tier actually closes this name, exactly as an
+      // ordinary import is. The authority used to be absent altogether for a
+      // run with no bundle and no declarations, so this could authorize
+      // unconditionally; the protected tier is present in *every* execution, so
+      // an unguarded call now refuses the root of every ordinary run — nothing
+      // claims `__root__` unless a bundle closes the execution.
+      return imports?.closes("__root__") === true
+        ? imports.authorize("__root__", imported)
+        : imported;
     })(),
   );
 

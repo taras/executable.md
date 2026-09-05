@@ -48,6 +48,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "scripts/tests/documentation-validation.test.ts",
+    reason:
+      "runs the repository's build gate as a subprocess — `deno run scripts/validate-documentation.ts` — and the Node and Bun shards have no `deno` on PATH, so every case fails with `Executable not found in $PATH`. The subject is the gate, which is a Deno entrypoint; a local Bun run passes only because a developer machine happens to have Deno installed",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "scripts/tests/jsr-consumer-documentation.test.ts",
     reason:
       "its subject is the JSR distribution: it runs `deno publish --dry-run` to learn what the publish filter selects, stages exactly those files, and runs a consumer under `deno run` against them. Every step is Deno's own packaging, so there is nothing here a Node or Bun run would be exercising",
