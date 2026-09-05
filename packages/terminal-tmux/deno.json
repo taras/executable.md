@@ -3,6 +3,6 @@
   "version": "0.11.0",
   "exports": {
     ".": "./mod.ts",
-    "./test": "./test.ts"
+    "./test": "./testing.ts"
   }
 }

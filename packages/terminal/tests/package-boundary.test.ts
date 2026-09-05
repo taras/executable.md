@@ -227,7 +227,9 @@ describe("Tier TG21 — the terminal package boundary", () => {
     expect(posix.some((module) => module.endsWith("/posix-processes.ts"))).toBe(true);
     expect(posix.includes("node:child_process")).toBe(true);
 
-    const fixtures = yield* graphOf("test.ts");
+    // `testing.ts`, not `test.ts`: Deno's own test-file pattern matches a bare
+    // `test.ts`, so an entrypoint by that name would be loaded as a test file.
+    const fixtures = yield* graphOf("testing.ts");
     expect(fixtures.some((module) => module.endsWith("/controlled-launcher.ts"))).toBe(true);
     expect(fixtures.some((module) => module.endsWith("/controlled-composite.ts"))).toBe(true);
   });
