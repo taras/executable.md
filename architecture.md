@@ -3702,10 +3702,17 @@ evaluation — so a nested author can be told how a component works where they m
 not run one, without being left to infer that documentation implies authority.
 #713 installs that boundary; this stack supplies and proves the seam.
 
-The documentation itself is the owning package's. A registration bundle keeps
-`components.md` beside its own boundary, located from that module's URL rather
-than the working directory or `--include`, and every distribution loads the same
-bytes. One validated index serves `<Syntax names={…}>`, `xmd syntax Elicit` and
+The documentation itself is the owning package's. Every registration boundary
+that contributes public components keeps a `components.md` beside itself — core,
+its Agent registrations, the CLI, testing, web and repository composition — with
+a contribution derived from the same declarations it registers, so adding a
+component demands documentation rather than relying on a hand-kept list. The
+assembled contributions travel by value on the execution installation, which is
+what makes the command and the component read one index. Assets are located from
+their own module's URL rather than the working directory or `--include`, and
+every distribution loads the same bytes; one shared entrypoint builds the
+complete index and refuses a missing, unknown or duplicated section before any
+distribution is produced. One validated index serves `<Syntax names={…}>`, `xmd syntax Elicit` and
 #678's release reference, so three surfaces cannot describe one component three
 ways. It joins by name *and* owning package: a repository `Elicit.md` has a
 repository origin, which names no package, so the built-in's prose is never

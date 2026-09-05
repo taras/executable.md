@@ -2712,9 +2712,15 @@ Documentation joins to metadata by component name **and owning package**. Only a
 registration and a protected component come from a package; a repository file, a
 bundled blob and declared Markdown are this run's, so a repository `Elicit.md`
 receives none of the built-in `Elicit`'s prose. **A first-party package documents every component it supplies.** The index is
-built from one `components.md` per registration boundary, contributed at the
-trusted installation boundary, and a boundary that supplies a component with no
-section refuses the whole index — as does an unknown heading, a duplicate, and a
+built from one `components.md` per registration boundary — core's own, its Agent
+registrations, the CLI, testing, web and the repository-composition set — each
+contributed at the trusted installation boundary from the same declarations that
+boundary registers, so a component added to a package demands documentation
+without anyone maintaining a second list. Contributions travel by value on the
+execution installation, which is what makes `xmd syntax NAME` and a document's
+own `<Syntax names={…}>` read one index rather than two.
+
+A boundary that supplies a component with no section refuses the whole index — as does an unknown heading, a duplicate, and a
 component documented twice for one package. A partially documented first-party
 package is not a valid build: a reader cannot tell an undocumented component
 from one that has nothing to say, and the product's own reference would be
@@ -10907,6 +10913,9 @@ component that observes one at an authored site.
 | SYN35–SYN37 | Building the index | A heading naming something the package does not supply refuses; one component documented twice refuses; documentation attaches by name and owning package, never to a repository replacement |
 | SYN38 | Exact coverage | A package supplying a component it does not document refuses the whole index — deleting any one built-in's section fails — with a fully covered package as the positive control |
 | SYN40 | The protection boundary | A repository component wrapping the named form with planted `API.Fs` middleware cannot change what the documentation says, and the read never reaches that Api |
+| SYN41–SYN45 | The build gate | `scripts/validate-documentation.ts` assembles the complete first-party index before any distribution is produced: the shipped set passes, and a deleted section, an unknown heading, a duplicated section, and drift in a package outside core each fail it |
+| SYN46 | Cancelling a named observation | Teardown completes and no successful `syntax_catalog` record is committed |
+| SX17 | One index, two surfaces | `xmd syntax NAME` and `<Syntax names={[NAME]} />` return the same text for a component outside core's own file |
 
 ### Tier SX — The `xmd syntax` command
 

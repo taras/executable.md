@@ -363,6 +363,40 @@ describe("Tier SYN — the named form", () => {
     });
   });
 
+  it("SYN46: a cancelled named observation tears down and commits nothing", function* () {
+    const torn: string[] = [];
+    const stream = new InMemoryStream();
+
+    // A host whose catalog contribution suspends: the named form is inside the
+    // observation when the scope is cancelled, which is the window a record
+    // could be written in.
+    const suspending: ExecutionInstallation = {
+      *catalog(): Operation<SyntaxCatalog> {
+        yield* ensure(() => {
+          torn.push("observation");
+        });
+        yield* suspend();
+        return catalogOf("Unreachable");
+      },
+    };
+
+    yield* scoped(function* () {
+      const task = yield* spawn(function* () {
+        return yield* run('<Syntax names={["Elicit"]} />\n', [suspending], stream);
+      });
+      // Let the observation get inside its operation before cancelling it.
+      yield* sleep(20);
+      yield* task.halt();
+    });
+
+    // Teardown ran, so the observation's own cleanup completed rather than
+    // being abandoned mid-flight.
+    expect(torn).toEqual(["observation"]);
+    // And nothing successful was retained: a continuation has no catalog to
+    // restore, which is the honest state for work that never finished.
+    expect(retained(yield* stream.readAll())).toHaveLength(0);
+  });
+
   it("SYN39: retains the named text, and a continuation restores it whole", function* () {
     const stream = new InMemoryStream();
     const first = String(yield* run('<Syntax names={["Elicit"]} />\n', [], stream));

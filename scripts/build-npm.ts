@@ -22,6 +22,7 @@
  */
 
 import { ensure, exit, main, scoped, until } from "effection";
+import { validateDocumentation } from "./validate-documentation.ts";
 import type { Operation } from "effection";
 import { build } from "jsr:@deno/dnt@0.42.3";
 import {
@@ -54,13 +55,15 @@ function* packagedDocuments(pkgDir: URL): Operation<string[]> {
   // Component documentation lives beside the registration boundary it
   // documents rather than in `src/documents/`, because that is where the
   // components are and moving it would separate the two things that have to
-  // stay in step. Named by its exact path for the same reason the directory
-  // above is enumerated rather than swept for: being listed here is what
-  // declares an asset part of the product.
-  // One entry per registration boundary that documents its components. Named
-  // rather than swept for, because `src/` also holds test documents and
-  // scenario fixtures: being listed here is what declares an asset shipped.
-  for (const relative of ["src/components/components.md", "src/agent/components.md"]) {
+  // stay in step. One entry per boundary, named rather than swept for: `src/`
+  // also holds test documents and scenario fixtures, so being listed here is
+  // what declares an asset shipped.
+  for (const relative of [
+    "src/components/components.md",
+    "src/agent/components.md",
+    "src/components.md",
+    "src/composition/components.md",
+  ]) {
     if (yield* exists(new URL(relative, pkgDir))) {
       shipped.push(relative);
     }
@@ -127,6 +130,14 @@ await main(function* (args) {
     yield* exit(1);
     return;
   }
+
+  // Before anything is emitted. Copying the documentation assets is not the
+  // same as validating them: a package built from a set that has drifted from
+  // the components it documents would install cleanly and refuse the first time
+  // somebody asked it for documentation. The same assembly the run profile uses
+  // runs here, so a missing, unknown or duplicated section fails the build for
+  // exactly the reason it would fail a run.
+  yield* validateDocumentation();
 
   const repoRoot = new URL("../", import.meta.url);
 

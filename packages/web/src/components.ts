@@ -11,13 +11,22 @@
  * act — `installWebElicitation()` — and nothing about it is component metadata.
  */
 
-import { documented, registerComponents } from "@executablemd/core";
-import type { ComponentRegistration } from "@executablemd/core";
+import { documented, packageDocumentation, registerComponents } from "@executablemd/core";
+import type { ComponentRegistration, DocumentationContribution } from "@executablemd/core";
 import type { Operation } from "effection";
 
 import { WEB_FORM_PROPS, WEB_FORM_RETURNS, WebForm } from "./WebForm.ts";
 
 export const WEB_ORIGIN = "@executablemd/web";
+
+/** This package's long-form documentation, derived from its registrations. */
+export function* webDocumentation(): Operation<DocumentationContribution> {
+  return yield* packageDocumentation(
+    new URL("./components.md", import.meta.url),
+    { owner: WEB_ORIGIN, asset: "packages/web/src/components.md" },
+    WEB_REGISTRATIONS.map((registration) => registration.name),
+  );
+}
 
 export const WEB_REGISTRATIONS: readonly ComponentRegistration[] = [
   {

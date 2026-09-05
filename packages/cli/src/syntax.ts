@@ -30,10 +30,10 @@ import {
   selectDocumented,
 } from "@executablemd/core";
 import type { DocumentationContribution, SyntaxCatalog } from "@executablemd/core";
-import { TESTING_REGISTRATIONS } from "@executablemd/testing";
-import { WEB_REGISTRATIONS } from "@executablemd/web";
-import { VERBOSE_REGISTRATION } from "./verbose-component.ts";
-import { COMPOSITION_REGISTRATIONS } from "@executablemd/workflow";
+import { TESTING_REGISTRATIONS, testingDocumentation } from "@executablemd/testing";
+import { WEB_REGISTRATIONS, webDocumentation } from "@executablemd/web";
+import { cliDocumentation, VERBOSE_REGISTRATION } from "./verbose-component.ts";
+import { COMPOSITION_REGISTRATIONS, compositionDocumentation } from "@executablemd/workflow";
 
 export { renderSyntaxMarkdown };
 
@@ -107,7 +107,16 @@ export function* useRunProfileRegistry(): Operation<void> {
  * does.
  */
 export function* runProfileDocumentation(): Operation<DocumentationContribution[]> {
-  return [yield* agentDocumentation()];
+  // One entry per boundary `useRunProfileRegistry()` installs, in the same
+  // order and from the same declarations. Core's own is added by
+  // `documentationIndexFor()`; these are the boundaries outside it.
+  return [
+    yield* agentDocumentation(),
+    yield* cliDocumentation(),
+    yield* testingDocumentation(),
+    yield* webDocumentation(),
+    yield* compositionDocumentation(),
+  ];
 }
 
 /**

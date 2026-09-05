@@ -88,6 +88,25 @@ export function* readCoreDocumentation(): Operation<DocumentationSource> {
   }
 }
 
+/**
+ * A contribution built from the registrations it documents.
+ *
+ * The set is derived from the same declarations the package installs, so a
+ * component added to a boundary demands documentation without anyone having to
+ * remember to list it here. That is the whole point of deriving it: a
+ * hand-maintained second list is exactly the thing that goes stale.
+ */
+export function* packageDocumentation(
+  url: URL,
+  named: { owner: string; asset: string },
+  supplies: Iterable<string>,
+): Operation<DocumentationContribution> {
+  return {
+    source: yield* readPackagedDocumentation(url, named),
+    supplies: new Set(supplies),
+  };
+}
+
 /** One packaged documentation asset, read the same guarded way. */
 export function* readPackagedDocumentation(
   url: URL,

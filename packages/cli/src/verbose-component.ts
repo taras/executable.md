@@ -14,8 +14,8 @@
  * observed.
  */
 
-import { content, verbose } from "@executablemd/core";
-import type { ComponentRegistration, Json } from "@executablemd/core";
+import { content, packageDocumentation, verbose } from "@executablemd/core";
+import type { ComponentRegistration, DocumentationContribution, Json } from "@executablemd/core";
 import type { Operation } from "effection";
 
 export const VERBOSE_ORIGIN = "@executablemd/cli";
@@ -31,6 +31,15 @@ function* Verbose(_props: Record<string, Json>): Operation<string> {
     return "";
   }
   return yield* content();
+}
+
+/** This command's long-form documentation, derived from what it registers. */
+export function* cliDocumentation(): Operation<DocumentationContribution> {
+  return yield* packageDocumentation(
+    new URL("./components.md", import.meta.url),
+    { owner: VERBOSE_ORIGIN, asset: "packages/cli/src/components.md" },
+    [VERBOSE_REGISTRATION.name],
+  );
 }
 
 /** The one declaration the run profile registers and `xmd syntax` describes. */
