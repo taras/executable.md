@@ -5,7 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./mod.ts",
-    "./test": "./test.ts"
+    "./test": "./testing.ts"
   },
   "dependencies": {
     "@effectionx/fs": "0.3.0",

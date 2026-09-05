@@ -6,6 +6,6 @@
     "./lifecycle": "./lifecycle.ts",
     "./processes": "./processes.ts",
     "./posix": "./posix.ts",
-    "./test": "./test.ts"
+    "./test": "./testing.ts"
   }
 }

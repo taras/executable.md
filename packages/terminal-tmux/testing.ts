@@ -5,6 +5,10 @@
  * Not a second provider API. These are the pieces a row needs to hold one
  * layer to its contract — a channel without a server, a worker without tmux, a
  * layout string without a window — and production code imports none of them.
+ *
+ * The export is `./test`; the file is `testing.ts` because Deno's own test-file
+ * pattern matches a bare `test.ts`, which would make the test runner load this
+ * entrypoint as a test file in every shard.
  */
 
 export { useAttachClient } from "./src/attach-client.ts";
