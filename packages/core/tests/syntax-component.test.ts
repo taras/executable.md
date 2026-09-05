@@ -545,6 +545,52 @@ describe("Tier SYN — the named form", () => {
     expect(ordinary).not.toContain("SUBSTITUTED BY THE OTHER EXECUTION");
   });
 
+  it("SYN49: a named root occurrence resolves its catalog exactly once", function* () {
+    // A contribution that *changes* between calls, so a second resolution is
+    // not merely wasteful but visible: an entry's metadata would come from one
+    // catalog and the availability beside it from another.
+    const calls = { count: 0 };
+    const moving: ExecutionInstallation = {
+      // deno-lint-ignore require-yield
+      *catalog(): Operation<SyntaxCatalog> {
+        calls.count += 1;
+        return catalogOf(`Marker${calls.count}`);
+      },
+    };
+
+    const stream = new InMemoryStream();
+    const first = String(yield* run('<Syntax names={["Marker1"]} />\n', [moving], stream));
+
+    // Once — not once for selection and again for availability.
+    expect(calls.count).toBe(1);
+    // And both decisions came from that one value: the entry is rendered, and
+    // it is available. A second resolution would have produced `Marker2`,
+    // leaving `Marker1` unselectable or unavailable.
+    expect(first).toContain("### `<Marker1>`");
+    expect(first).toContain("**Available in this evaluation:** yes");
+
+    // Two occurrences still observe independently: this is one catalog per
+    // occurrence, not one per execution.
+    calls.count = 0;
+    const both = String(
+      yield* run(
+        ['<Syntax names={["Marker1"]} />', "", '<Syntax names={["Marker2"]} />', ""].join("\n"),
+        [moving],
+      ),
+    );
+    expect(calls.count).toBe(2);
+    expect(both).toContain("### `<Marker1>`");
+    expect(both).toContain("### `<Marker2>`");
+
+    // A continuation restores the retained text without asking again.
+    calls.count = 0;
+    const resumed = String(
+      yield* run('<Syntax names={["Marker1"]} />\n', [moving], yield* continuing(stream)),
+    );
+    expect(resumed.trim()).toBe(first.trim());
+    expect(calls.count).toBe(0);
+  });
+
   it("SYN39: retains the named text, and a continuation restores it whole", function* () {
     const stream = new InMemoryStream();
     const first = String(yield* run('<Syntax names={["Elicit"]} />\n', [], stream));

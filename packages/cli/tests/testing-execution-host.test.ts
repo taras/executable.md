@@ -362,6 +362,52 @@ describe("nested execution under the production run host", () => {
     expect(outer.stdout).toContain("### `<Greeting>`");
   });
 
+  it("gives a nested run child the documentation for what it registers", function* () {
+    // `<WebForm>` is the web package's, which the run profile registers — so a
+    // child that is the run profile can run it, and must be able to explain it.
+    // Prose from `packages/web/src/components.md`, not the catalog description
+    // an entry already carries: a child whose index held core's contributions
+    // alone would render the entry and then say it is undocumented.
+    const project = yield* useProject({
+      "elsewhere/Greeting.md": doc("hello"),
+      // Not `webform.md`: this filesystem is case-insensitive, so a document
+      // of that name is found as the repository component `WebForm` and
+      // shadows the registration — the fallback would then be correct, and the
+      // case would be measuring the wrong thing.
+      "lookup.md": doc('<Syntax names={["WebForm"]} />'),
+      "README.md": doc(
+        '<Test name="nested documentation">',
+        '<Execution host="run" source={"<Syntax names={[\\"WebForm\\"]} />\\n"} as="child">',
+        '<CollectOutput as="output" />',
+        "",
+        '<AssertStringIncludes actual={output} expected="### `<WebForm>`" />',
+        // Unique to the long-form documentation.
+        '<AssertStringIncludes actual={output} expected="anything awkward to type at a" />',
+        // And never the fallback, which is what this regression is about.
+        "<AssertNotMatch actual={output} expected={/No long-form documentation/} />",
+        // The child's own isolation is unchanged: the outer include still does
+        // not reach it.
+        "<AssertNotMatch actual={output} expected={/### `<Greeting>`/} />",
+        "</Execution>",
+        "</Test>",
+      ),
+    });
+
+    const nested = yield* runCli(["test", "README.md", "--include", "elsewhere"], {
+      cwd: project,
+    }).join();
+    expect(nested.code).toBe(0);
+
+    // The ordinary-run control: both profiles read the same owning package's
+    // documentation, so the child above is not a special case that happens to
+    // agree.
+    const ordinary = yield* runCli(["run", "lookup.md"], { cwd: project }).join();
+    expect(ordinary.code).toBe(0);
+    expect(ordinary.stdout).toContain("### `<WebForm>`");
+    expect(ordinary.stdout).toContain("anything awkward to type at a");
+    expect(ordinary.stdout).not.toContain("No long-form documentation");
+  });
+
   it("refuses <Execution> outside a canonical <Test>", function* () {
     const project = yield* useProject({
       "child.md": doc("child"),

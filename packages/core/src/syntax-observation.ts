@@ -151,7 +151,10 @@ export function rootCatalogObservation(
   // ones the installation boundary captured rather than whatever the caller's
   // objects hold by the time a document asks.
   const captured = snapshotContributions(documentation);
-  return observing(current, current, captured, read);
+  // No admission at a root: nothing has narrowed what may execute, so the one
+  // catalog this resolves is both what a document may write and what it may
+  // read about.
+  return observing(current, undefined, captured, read);
 }
 
 /**
@@ -162,35 +165,40 @@ export function rootCatalogObservation(
  * and replaces the executable, which is the whole of the seam.
  */
 function observing(
+  /** The authoring catalog: what may be read about here. */
   reference: () => Operation<SyntaxCatalog>,
-  executable: () => Operation<SyntaxCatalog>,
+  /**
+   * What may *execute* here, when a boundary has narrowed it.
+   *
+   * Absent at a root, where the two are the same catalog — and must be the same
+   * *value*. Resolving twice would call the trusted catalog contribution twice
+   * for one occurrence, and the environment could move between the two calls:
+   * an entry's metadata would then come from a different catalog than the
+   * availability reported beside it.
+   */
+  admitted: SyntaxCatalog | undefined,
   documentation: readonly DocumentationContribution[],
   read: DocumentationReader,
 ): CatalogObservation {
   return {
     *observe(): Operation<string> {
-      return renderSyntaxMarkdown(yield* executable());
+      // A narrowed observation reports its admission and asks the enclosing
+      // catalog for nothing — the bare form is about what runs.
+      return renderSyntaxMarkdown(admitted ?? (yield* reference()));
     },
     *document(names: readonly string[]): Operation<string> {
+      // One resolution, both decisions.
       const authoring = yield* reference();
-      const runnable = yield* executable();
+      const runnable = admitted ?? authoring;
       const index = yield* documentationIndexFor(documentation, read);
       return renderSelectedDocumentation(select(authoring, runnable, names, index));
     },
-    narrow(admitted: SyntaxCatalog): CatalogObservation {
+    narrow(next: SyntaxCatalog): CatalogObservation {
       // The enclosing reference and the enclosing index, unchanged. Only what
       // may execute is replaced, so a nested author keeps the documentation
       // they had and every entry reports its availability against the
       // admission.
-      // deno-lint-ignore require-yield
-      return observing(
-        reference,
-        function* () {
-          return admitted;
-        },
-        documentation,
-        read,
-      );
+      return observing(reference, next, documentation, read);
     },
   };
 }
@@ -362,10 +370,7 @@ export function fixedCatalogObservation(
     function* () {
       return reference;
     },
-    // deno-lint-ignore require-yield
-    function* () {
-      return catalog;
-    },
+    catalog,
     captured,
     read,
   );

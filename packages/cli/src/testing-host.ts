@@ -58,6 +58,7 @@ import type {
   TestAgentChildConfiguration,
 } from "@executablemd/testing";
 import { installDocumentComponents } from "./cli.ts";
+import { runProfileDocumentation } from "./syntax.ts";
 import type { HostServiceInstaller } from "./cli.ts";
 import type { RepositoryInstaller } from "./run-repositories.ts";
 
@@ -329,6 +330,13 @@ function* runProfileChild(
           : { observeAuthorship: settings.observePlanAuthorship }),
       }),
     ],
+    // The documentation for the same profile's registrations, beside the
+    // declarations rather than anywhere else. A child that registered the run
+    // profile's components without their documentation would answer
+    // `<Syntax names={["WebForm"]} />` with the no-documentation sentence — a
+    // component it can run, described as undocumented — because the index it
+    // built would hold core's contributions alone.
+    documentation: yield* runProfileDocumentation(),
   });
   // A child gets what `xmd run` gets, and the browser form is part of that.
   // Installed here rather than inherited: this scope is isolated from the
