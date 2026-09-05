@@ -52,6 +52,7 @@ import { createTransactionGate, type OwnerLink, transactRemotely } from "./colle
 import type { EnlistWorkspace, TransactionAnchor } from "./collector.ts";
 import type { RemoteContent, RemoteContentRequest, RemoteFrontierSnapshot } from "./read.ts";
 import type { RemoteInvocationSnapshot } from "./records.ts";
+import type { CreateWorkflowRunRequest } from "../storage/api.ts";
 import type { WorkspaceRootManifest } from "../workspace/root-manifest.ts";
 
 /** What a remote handle needs to answer everything the interface asks. */
@@ -78,6 +79,18 @@ export interface RemoteRunLink extends OwnerLink {
  * downstream could notice. There is no such pair to make.
  */
 export interface RemoteWorkspaceLink extends RemoteRunLink {
+  /**
+   * Find this run on its owner, or create it exactly once.
+   *
+   * On the link rather than beside it. An opener supplied separately could
+   * have been admitted for another owner, and a create authorized by one owner
+   * would then return a handle that reads and commits through the other.
+   * Opening and operating are the same authority, so they are the same object.
+   */
+  open(
+    runId: string,
+    creation: CreateWorkflowRunRequest | null,
+  ): Operation<Result<RemoteFrontierSnapshot>>;
   /** The one coherent admitted state a Workspace invocation begins from. */
   invocationSnapshot(): Operation<RemoteInvocationSnapshot>;
   root(workspaceRootId: string): Operation<WorkspaceRootManifest>;

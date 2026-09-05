@@ -354,3 +354,14 @@ export function validateCanonicalWorkspacePath(value: string, reject: WorkspaceR
     }
   }
 }
+
+/**
+ * The Workspace every run starts from.
+ *
+ * One directory and nothing in it. Shared rather than written twice: the root
+ * identity is the hash of these exact bytes, so two spellings of "empty" would
+ * be two different starting Workspaces, and a run created by one host would not
+ * be recognized by the other.
+ */
+export const EMPTY_WORKSPACE_MANIFEST =
+  '{"format":1,"entries":[{"path":"/","kind":"directory","mode":493,"mtime":0}]}';

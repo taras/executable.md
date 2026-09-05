@@ -6,6 +6,7 @@ import {
   SHA256,
   validateCanonicalWorkspacePath,
   validateWorkspaceRootEntries,
+  EMPTY_WORKSPACE_MANIFEST,
   WORKSPACE_ROOT_DOMAIN,
   WORKSPACE_ROOT_FORMAT,
   type WorkspaceRejection,
@@ -18,6 +19,7 @@ export {
   hasUnpairedSurrogate,
   parentFirst,
   parentPath,
+  EMPTY_WORKSPACE_MANIFEST,
   WORKSPACE_ROOT_DOMAIN,
   WORKSPACE_ROOT_FORMAT,
 } from "../../workspace/root-manifest.ts";
@@ -45,9 +47,6 @@ export interface StoredWorkspaceRoot {
   readonly manifestHashes: readonly string[];
   readonly blobHashes: readonly string[];
 }
-
-export const EMPTY_WORKSPACE_MANIFEST =
-  '{"format":1,"entries":[{"path":"/","kind":"directory","mode":493,"mtime":0}]}';
 
 export const EMPTY_WORKSPACE_ROOT = workspaceRoot(EMPTY_WORKSPACE_MANIFEST, [], []);
 export const EMPTY_WORKSPACE_ROOT_ID = EMPTY_WORKSPACE_ROOT.rootId;

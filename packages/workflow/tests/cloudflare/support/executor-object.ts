@@ -307,6 +307,43 @@ export class ExecutorObject extends WorkflowOwnerObject {
   }
 
   /** Everything a reader could observe about the published frontier. */
+  /** The one run row, as it is stored, or nothing when there is none. */
+  runRow(): Record<string, unknown> | null {
+    return this.ctx.storage.sql.exec("SELECT * FROM workflow_run").toArray()[0] ?? null;
+  }
+
+  /** How many objects this storage declares at all. */
+  objectCount(): number {
+    return this.ctx.storage.sql
+      .exec("SELECT name FROM sqlite_master WHERE name NOT LIKE '_cf_%'")
+      .toArray().length;
+  }
+
+  /** Whether this build's schema is here. */
+  hasWorkflowSchema(): boolean {
+    return (
+      this.ctx.storage.sql
+        .exec("SELECT name FROM sqlite_master WHERE name = 'workflow_run'")
+        .toArray().length > 0
+    );
+  }
+
+  /**
+   * Retain a different run here, intact.
+   *
+   * The record still parses and every reference still holds; it simply names
+   * another run. That is a different condition from damage, and a store that
+   * conflated them would send an operator looking for a backup.
+   */
+  retainAnotherRun(runId: string): void {
+    this.ctx.storage.sql.exec("UPDATE workflow_run SET run_id = ? WHERE id = 1", runId);
+  }
+
+  /** Put something here that is not a workflow run, and never was one. */
+  holdForeignObject(): void {
+    this.ctx.storage.sql.exec("CREATE TABLE somebody_else (id INTEGER PRIMARY KEY)");
+  }
+
   published(): Record<string, unknown> {
     const state = this.ctx.storage.sql
       .exec("SELECT current_root_id FROM workspace_state WHERE singleton_id = 1")

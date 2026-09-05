@@ -55,7 +55,9 @@ import {
   parseMembers,
   requireMemberNames,
 } from "../storage/members.ts";
-import { canonicalJson, parseRunId, type WorkflowRunRecord } from "../storage/record.ts";
+import { canonicalJson, type WorkflowRunRecord } from "../storage/record.ts";
+import { type CheckedRequest, checkRunId, parseCreateRequest } from "../storage/create-request.ts";
+export { checkRunId } from "../storage/create-request.ts";
 import { openWorkflowRunDatabase, readRunRow } from "./database.ts";
 import {
   type RunConnection,
@@ -162,20 +164,12 @@ export function authorizedRoot(root: string): string {
   return root;
 }
 
-/** A request whose every member has been checked rather than believed. */
-interface CheckedRequest {
-  readonly runId: string;
-  readonly definition: WorkflowDefinition;
-  readonly base: string;
-  readonly props: JsonObject;
-}
-
 function* createWorkflowRun(
   root: string,
   connections: WorkflowRunConnections,
   request: CreateWorkflowRunRequest,
 ): Operation<Result<WorkflowRunDatabase>> {
-  const checked = checkRequest(request);
+  const checked = parseCreateRequest(request);
   if (!checked.ok) {
     return checked;
   }
@@ -368,78 +362,3 @@ const REQUEST_MEMBERS = ["runId", "definition", "base", "props"];
  * without types, or one that read the id out of a file, can hand over anything
  * at all, and hashing that would fail somewhere far less legible.
  */
-export function checkRunId(runId: unknown): Result<string> {
-  try {
-    return Ok(parseRunId(runId, "$", runIdFailure));
-  } catch (error) {
-    if (error instanceof WorkflowRequestError) {
-      return Err(error);
-    }
-    throw error;
-  }
-}
-
-function runIdFailure(reason: string): Error {
-  return new WorkflowRequestError(`${reason}.`);
-}
-
-/**
- * The whole request, parsed as a closed shape before any member is read.
- *
- * The type describes what a caller meant. What arrives is whatever the
- * language allows, and reading `.runId` off `null` fails as a `TypeError`
- * rather than as an answer about the request.
- */
-function checkRequest(offered: CreateWorkflowRunRequest): Result<CheckedRequest> {
-  let members: Members;
-  try {
-    members = parseMembers(offered, "$", requestFailure);
-    requireMemberNames(members, REQUEST_MEMBERS, "$", requestFailure);
-  } catch (error) {
-    if (error instanceof WorkflowRequestError) {
-      return Err(error);
-    }
-    throw error;
-  }
-
-  const runId = checkRunId(members.get("runId"));
-  if (!runId.ok) {
-    return runId;
-  }
-
-  const base = members.get("base");
-  if (typeof base !== "string" || base === "") {
-    return Err(
-      new WorkflowRequestError("a base is required: it is what the run's starting state is."),
-    );
-  }
-
-  const definition = parseWorkflowDefinition(members.get("definition"));
-  if (!definition.ok) {
-    return definition;
-  }
-
-  let props: JsonObject;
-  try {
-    props = parseJsonObject(members.get("props"), "$", propsFailure);
-  } catch (error) {
-    if (error instanceof WorkflowRequestError) {
-      return Err(error);
-    }
-    throw error;
-  }
-
-  return Ok({ runId: runId.value, definition: definition.value, base, props });
-}
-
-function requestFailure(reason: string, path: string): Error {
-  return new WorkflowRequestError(
-    `the request does not describe a workflow run: ${reason} at ${path}`,
-  );
-}
-
-function propsFailure(reason: string, path: string): Error {
-  return new WorkflowRequestError(
-    `the normalized props are not a JSON value: ${reason} at ${path}`,
-  );
-}

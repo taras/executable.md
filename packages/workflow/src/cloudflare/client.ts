@@ -65,6 +65,12 @@ import {
   MAX_CONTENT_BYTES,
 } from "./commands.ts";
 import type { RemoteRunLink, RemoteWorkspaceLink } from "../remote/database.ts";
+import type { CreateWorkflowRunRequest } from "../storage/api.ts";
+import {
+  WorkflowRunConflictError,
+  WorkflowRunIdMismatchError,
+  WorkflowRunNotFoundError,
+} from "../storage/errors.ts";
 import { isSchemaVersion, SCHEMA_VERSION } from "../sqlite/workflow-schema.ts";
 import { canonicalJson } from "../storage/record.ts";
 import {
@@ -95,6 +101,8 @@ export type PrivateRefusal =
   | "command:stale-root"
   | "command:stale-journal"
   | "command:mapping-conflict"
+  | "command:absent"
+  | "command:wrong-run"
   | "storage:foreign"
   | `storage:unsupported-version-v${number}`
   | "storage:corrupt";
@@ -171,6 +179,8 @@ function privateRefusal(value: string): PrivateRefusal {
     case "command:stale-root":
     case "command:stale-journal":
     case "command:mapping-conflict":
+    case "command:absent":
+    case "command:wrong-run":
     case "storage:foreign":
     case "storage:corrupt":
       return value;
@@ -327,7 +337,33 @@ export function cloudflareReadLink(
   connection: OwnerConnection,
   nextId: () => string,
   expectedRunId: string,
-): RemoteReadLink {
+): AnchoringReadLink {
+  function* anchored(header: FrontierHeader): Operation<RemoteFrontierSnapshot> {
+    const entries: JournalEntry[] = [];
+    const seen = new Set<string>();
+    let afterEventId: string | null = null;
+    let done = header.journalEventId === null;
+    while (!done) {
+      const page: JournalPage = answer(
+        yield* connection.ask(
+          nextId(),
+          { command: "journal", anchorEventId: header.journalEventId, afterEventId },
+          (value) =>
+            parseAnchoredJournalPage(value, header.journalEventId ?? "", afterEventId, seen),
+          privateRefusal,
+        ),
+      );
+      for (const item of page.entries) {
+        const entry = item.entry;
+        seen.add(entry.eventId);
+        entries.push(entry);
+        afterEventId = entry.eventId;
+      }
+      done = page.done;
+    }
+    return { ...header, entries };
+  }
+
   return {
     *invocationSnapshot(): Operation<RemoteInvocationSnapshot> {
       return answer(
@@ -355,29 +391,18 @@ export function cloudflareReadLink(
           privateRefusal,
         ),
       );
-      const entries: JournalEntry[] = [];
-      const seen = new Set<string>();
-      let afterEventId: string | null = null;
-      let done = header.journalEventId === null;
-      while (!done) {
-        const page: JournalPage = answer(
-          yield* connection.ask(
-            nextId(),
-            { command: "journal", anchorEventId: header.journalEventId, afterEventId },
-            (value) =>
-              parseAnchoredJournalPage(value, header.journalEventId ?? "", afterEventId, seen),
-            privateRefusal,
-          ),
-        );
-        for (const item of page.entries) {
-          const entry = item.entry;
-          seen.add(entry.eventId);
-          entries.push(entry);
-          afterEventId = entry.eventId;
-        }
-        done = page.done;
-      }
-      return { ...header, entries };
+      return yield* anchored(header);
+    },
+
+    /**
+     * One header's complete journal, read as pages anchored to it.
+     *
+     * Separate so the command that opened a run can finish the same coherent
+     * frontier from the header it already has, rather than asking for the
+     * header again and assembling a handle from two observations.
+     */
+    *anchored(header: FrontierHeader): Operation<RemoteFrontierSnapshot> {
+      return yield* anchored(header);
     },
     *root(workspaceRootId: string): Operation<WorkspaceRootManifest> {
       const read = answer(
@@ -638,6 +663,66 @@ export function* stageCloudflareContent(
  * invocation is admitted from and the commits it publishes cannot be two
  * different owners. A caller holding this holds one authority.
  */
+/** The read link, plus the paging an open answer finishes its frontier with. */
+interface AnchoringReadLink extends RemoteReadLink {
+  anchored(header: FrontierHeader): Operation<RemoteFrontierSnapshot>;
+}
+
+/**
+ * What an owner answers when asked to open a run.
+ *
+ * A conflict is an answer rather than a refusal because it carries something:
+ * the exact immutable fields that differ. The values behind them stay on the
+ * owner — what differs is enough for a caller to act, and what it differs to
+ * is the run's own content.
+ */
+type Opened =
+  | { readonly kind: "open"; readonly header: FrontierHeader }
+  | { readonly kind: "conflict"; readonly fields: readonly string[] };
+
+/** The immutable fields a creation can differ in, in the order they are read. */
+const CONFLICT_FIELDS: readonly string[] = ["run id", "definition", "base", "props"];
+
+function parseOpened(value: unknown, expectedRunId: string, runId: string): Opened {
+  const found = members(value, ["conflict", "frontier"]);
+  const conflict = found.get("conflict");
+  if (conflict !== null) {
+    if (found.get("frontier") !== null) {
+      return fail("an open answer both opened a run and refused one");
+    }
+    return { kind: "conflict", fields: parseConflictFields(conflict) };
+  }
+  const parsed = parseFrontier(found.get("frontier"));
+  if (parsed.record.runId !== expectedRunId || parsed.record.runId !== runId) {
+    return fail("an open answer named another run");
+  }
+  return { kind: "open", header: parsed };
+}
+
+/**
+ * The differing fields, held to the closed set and the canonical order.
+ *
+ * Strict because it decides what a public error says. An unknown name, a
+ * repeat, an empty list or a reordering is an answer this build cannot read,
+ * and reading it leniently would put text in an error that nothing produced.
+ */
+function parseConflictFields(value: unknown): readonly string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    return fail("an open answer named no differing field");
+  }
+  let previous = -1;
+  const fields: string[] = [];
+  for (const entry of value) {
+    const at = typeof entry === "string" ? CONFLICT_FIELDS.indexOf(entry) : -1;
+    if (at < 0 || at <= previous) {
+      return fail("an open answer named a differing field this build does not read");
+    }
+    previous = at;
+    fields.push(CONFLICT_FIELDS[at] ?? "");
+  }
+  return Object.freeze(fields);
+}
+
 export function cloudflareRunLink(
   connection: OwnerConnection,
   nextId: () => string,
@@ -647,6 +732,51 @@ export function cloudflareRunLink(
   const publication = cloudflareOwnerLink(connection, reads, nextId);
   return {
     ...reads,
+
+    /**
+     * Find this run, or create it exactly once.
+     *
+     * The answer is one coherent frontier: the header this command returns,
+     * and the journal anchored to it. Nothing here reads the frontier a second
+     * time, so what a handle is built from is one owner observation.
+     */
+    *open(
+      runId: string,
+      creation: CreateWorkflowRunRequest | null,
+    ): Operation<Result<RemoteFrontierSnapshot>> {
+      try {
+        const opened = yield* connection.ask(
+          nextId(),
+          { command: "open", runId, creation },
+          (value) => parseOpened(value, expectedRunId, runId),
+          privateRefusal,
+        );
+        if (opened.outcome === "refused") {
+          // Parsed rather than asserted: the answer's refusal is a string
+          // until this build reads it as one of its own categories.
+          const refusal = privateRefusal(opened.refusal);
+          // The one category this command adds. Nothing is stored here, which
+          // is a different fact from storage this build cannot use.
+          if (refusal === "command:absent") {
+            return Err(new WorkflowRunNotFoundError(runId));
+          }
+          if (refusal === "command:wrong-run") {
+            // Intact storage that belongs to another run. The retained id is
+            // the other run's business and does not travel.
+            return Err(new WorkflowRunIdMismatchError(runId, REMOTE_STORE));
+          }
+          return Err(storageFailure(refusal));
+        }
+        if (opened.value.kind === "conflict") {
+          // The exact fields the owner found differing, and none of their
+          // values. A run wearing this id is not this run.
+          return Err(new WorkflowRunConflictError(runId, opened.value.fields));
+        }
+        return Ok(yield* reads.anchored(opened.value.header));
+      } catch (error) {
+        return Err(translate(error));
+      }
+    },
 
     /**
      * Both halves of the publication link, translated.

@@ -56,6 +56,7 @@ import type { OwnerTransactions } from "./owner-transaction.ts";
 import { COMMAND_TABLE, MUTATION_TABLE, STAGING_TABLE } from "./private-schema.ts";
 import { applyCommit, applyRetrieval } from "./publish.ts";
 import { recognizeObject } from "./recognition.ts";
+import { openRun } from "./owner-open.ts";
 
 function requestFingerprint(command: RunnerCommand): string {
   // The command name is part of the fingerprint, so one textual id used for a
@@ -289,12 +290,30 @@ export function dispatchCommand(
   command: RunnerCommand,
 ): CommandResult {
   const held = requireAcquisition(ctx, socket, runId);
+  if (command.command === "open") {
+    // Outside the dispatcher's transaction, because creating owns one of its
+    // own: initialization writes the schema, the run and the starting
+    // Workspace together, and nesting that inside another transaction would
+    // be a second one on the same storage.
+    //
+    // It needs no retained decision either. A repeat finds the run the first
+    // call created and compares immutable identity, which is the same answer;
+    // there is no pristine store left to fill twice.
+    return {
+      id: command.id,
+      outcome: "performed",
+      value: openRun(ctx.storage, transactions, command.runId, command.creation, ownerTime),
+    };
+  }
   const fingerprint = requestFingerprint(command);
   return transactions.run(ctx.storage, () => {
     const inside = requireAcquisition(ctx, socket, runId);
     if (inside.acquisitionId !== held.acquisitionId) {
       throw new CommandError("duplicate-conflict");
     }
+    // Every command that reaches here is asked of a run that already exists,
+    // so the store is held to this build's schema before it is read. `open` is
+    // the one that may find nothing, and it answered above.
     recognizeObject(ctx.storage);
 
     // A mutation's decision is looked for by the run, not by the connection.

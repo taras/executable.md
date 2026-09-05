@@ -12,6 +12,11 @@ import {
   type WorktreeRecord,
 } from "../composition/records.ts";
 import { type AgentSessionRecord, parseAgentSessionRecord } from "../storage/agent-session.ts";
+import { parseCreateRequest } from "../storage/create-request.ts";
+import type { CreateWorkflowRunRequest } from "../storage/api.ts";
+
+/** The most characters a public run id may carry. */
+const MAX_RUN_ID = 128;
 import { MAX_MESSAGE_BYTES } from "../remote/client.ts";
 
 export { MAX_MESSAGE_BYTES };
@@ -56,6 +61,7 @@ export type CommandName =
   | "retrieval"
   | "executions"
   | "mappings"
+  | "open"
   | "settle";
 
 export type CommandRefusal =
@@ -73,7 +79,17 @@ export type CommandRefusal =
   | "stale-journal"
   // A retained mapping already exists and describes something else. Creation
   // identity is immutable, so this is refused rather than rewritten.
-  | "mapping-conflict";
+  | "mapping-conflict"
+  /** No run is stored here at all. A lookup found nothing, and made nothing. */
+  | "absent"
+  /**
+   * A run is stored here, and it is not the run this request addresses.
+   *
+   * A retained record that parses and names another run. Distinct from damage:
+   * the storage is intact and this is simply not its run, and a caller that
+   * conflated them would go looking for a backup.
+   */
+  | "wrong-run";
 
 export class CommandError extends Error {
   override name = "CommandError";
@@ -204,6 +220,19 @@ export interface MappingsCommand extends CommandEnvelope {
   readonly command: "mappings";
 }
 
+/**
+ * Find this run, or create it exactly once.
+ *
+ * `creation` absent is a lookup and makes nothing. Present, it is the run's
+ * complete immutable identity, and repeating it is how a caller addresses the
+ * same run again rather than a second attempt at making one.
+ */
+export interface OpenCommand extends CommandEnvelope {
+  readonly command: "open";
+  readonly runId: string;
+  readonly creation: CreateWorkflowRunRequest | null;
+}
+
 export interface SettleCommand extends CommandEnvelope {
   readonly command: "settle";
   readonly completion: DocumentExecutionCompletion;
@@ -220,6 +249,7 @@ export type RunnerCommand =
   | RetrievalCommand
   | ExecutionsCommand
   | MappingsCommand
+  | OpenCommand
   | SettleCommand;
 
 export type CommandResult =
@@ -246,6 +276,7 @@ const MEMBERS: Record<CommandName, readonly string[]> = {
   retrieval: [...ENVELOPE, "expectedWorkspaceRootId", "metadata"],
   executions: [...ENVELOPE, "anchor", "after"],
   mappings: ENVELOPE,
+  open: [...ENVELOPE, "runId", "creation"],
   settle: [...ENVELOPE, "completion", "expectedWorkspaceRootId"],
 };
 
@@ -376,6 +407,7 @@ export function parseCommand(raw: string): RunnerCommand {
     command !== "retrieval" &&
     command !== "executions" &&
     command !== "mappings" &&
+    command !== "open" &&
     command !== "settle"
   ) {
     throw new CommandError("unknown-command");
@@ -437,6 +469,21 @@ export function parseCommand(raw: string): RunnerCommand {
   }
   if (command === "mappings") {
     return { id, command };
+  }
+  if (command === "open") {
+    const runId = text(members, "runId", MAX_RUN_ID);
+    const offered = members.get("creation");
+    if (offered === null) {
+      return { id, command, runId, creation: null };
+    }
+    // Parsed through the shared request parser, so what the owner will retain
+    // is what this build calls a creation request rather than an object that
+    // resembles one.
+    const creation = parseCreateRequest(offered);
+    if (!creation.ok || creation.value.runId !== runId) {
+      throw new CommandError("malformed-member");
+    }
+    return { id, command, runId, creation: creation.value };
   }
   if (command === "executions") {
     const anchor = sequence(members, "anchor");

@@ -271,6 +271,11 @@ const ANSWERED: readonly string[] = [
   "command:stale-root",
   "command:stale-journal",
   "command:mapping-conflict",
+  // Both are answers about this run rather than faults in the protocol: there
+  // is nothing stored here, or something is and it is not this run. A caller
+  // acts on either and goes on using the connection.
+  "command:absent",
+  "command:wrong-run",
 ];
 
 function fatal(answer: CommandResult): boolean {
