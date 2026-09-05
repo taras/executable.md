@@ -47,12 +47,15 @@ export function agentDocumentationUrl(): URL {
  * Agent components to document, and demanding their documentation would refuse
  * an index for a profile that is complete without them.
  */
-export function* agentDocumentation(): Operation<DocumentationContribution> {
+export function* agentDocumentation(
+  read: DocumentationReader = packagedAssetReader,
+): Operation<DocumentationContribution> {
   return {
-    source: yield* readPackagedDocumentation(agentDocumentationUrl(), {
-      owner: CORE_ORIGIN,
-      asset: "packages/core/src/agent/components.md",
-    }),
+    source: yield* readPackagedDocumentation(
+      agentDocumentationUrl(),
+      { owner: CORE_ORIGIN, asset: "packages/core/src/agent/components.md" },
+      read,
+    ),
     supplies: AGENT_COMPONENT_NAMES,
   };
 }
@@ -64,7 +67,9 @@ const AGENT_COMPONENT_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /** Core's documentation source, read from the package rather than the caller. */
-export function* readCoreDocumentation(): Operation<DocumentationSource> {
+export function* readCoreDocumentation(
+  read: DocumentationReader = packagedAssetReader,
+): Operation<DocumentationSource> {
   const url = componentDocumentationUrl();
   try {
     return {
@@ -78,7 +83,7 @@ export function* readCoreDocumentation(): Operation<DocumentationSource> {
       // out of its own package, so it goes to the filesystem directly, at a URL
       // derived from this module — package-relative whatever the working
       // directory and search path are.
-      text: yield* readAsset(url),
+      text: yield* read(url),
     };
   } catch (error) {
     throw new Error(
@@ -100,51 +105,38 @@ export function* packageDocumentation(
   url: URL,
   named: { owner: string; asset: string },
   supplies: Iterable<string>,
+  read: DocumentationReader = packagedAssetReader,
 ): Operation<DocumentationContribution> {
   return {
-    source: yield* readPackagedDocumentation(url, named),
+    source: yield* readPackagedDocumentation(url, named, read),
     supplies: new Set(supplies),
   };
 }
 
 /**
- * What reads a packaged asset, so a test can suspend inside index construction.
+ * How one execution reads its packaged assets.
  *
- * Module-private and deliberately not re-exported from `mod.ts`: it is not a
- * provider, not a Context and not a package hook, so nothing a document, a
- * component or an installed package can reach replaces it. What it exists for
- * is evidence — cancelling *inside the documentation work* is a different claim
- * from cancelling inside catalog discovery, and there is no other point in this
- * operation a test can stand at.
+ * Carried by value from where the execution is built, never held in module
+ * scope. A module-level reader would be one variable shared by every execution
+ * in the process: two runs in one process would read through each other's, and
+ * a test that substituted one would change what an unrelated execution is told
+ * the product says. It is also not a provider, a Context, an installation field
+ * or a hook — nothing a document, a component or an installed package can reach
+ * names it at all.
  */
-let readAsset: (url: URL) => Operation<string> = readTextFile;
+export type DocumentationReader = (url: URL) => Operation<string>;
 
-/**
- * Substitute the asset reader for the duration of `body`, then restore it.
- *
- * Called by core's own tests through the source module, never through the
- * package's public surface.
- */
-export function* withAssetReader<T>(
-  reader: (url: URL) => Operation<string>,
-  body: () => Operation<T>,
-): Operation<T> {
-  const previous = readAsset;
-  readAsset = reader;
-  try {
-    return yield* body();
-  } finally {
-    readAsset = previous;
-  }
-}
+/** The reader every ordinary execution uses. */
+export const packagedAssetReader: DocumentationReader = readTextFile;
 
 /** One packaged documentation asset, read the same guarded way. */
 export function* readPackagedDocumentation(
   url: URL,
   named: { owner: string; asset: string },
+  read: DocumentationReader = packagedAssetReader,
 ): Operation<DocumentationSource> {
   try {
-    return { ...named, text: yield* readAsset(url) };
+    return { ...named, text: yield* read(url) };
   } catch (error) {
     throw new Error(
       `the packaged component documentation ${named.asset} is missing from this build ` +
@@ -177,9 +169,17 @@ export function* documentationIndexFor(
    * could hide the documentation of a component it does.
    */
   contributed: readonly DocumentationContribution[] = [],
+  /**
+   * How this execution reads core's own asset.
+   *
+   * By value, from whoever built the observation. Nothing module-scoped, so two
+   * executions in one process each read through their own and neither can
+   * change what the other is told.
+   */
+  read: DocumentationReader = packagedAssetReader,
 ): Operation<DocumentationIndex> {
   const core: DocumentationContribution = {
-    source: yield* readCoreDocumentation(),
+    source: yield* readCoreDocumentation(read),
     supplies: CORE_COMPONENT_NAMES,
   };
   const all = [core, ...contributed];

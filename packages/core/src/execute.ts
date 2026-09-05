@@ -141,7 +141,8 @@ import { ExecutionImports } from "./components/import-authority.ts";
 import type { ExpansionAuthority, ImportTier } from "./components/import-authority.ts";
 import { PROTECTED_COMPONENTS, ProtectedImports } from "./components/protected.ts";
 import { rootCatalogObservation, snapshotContributions } from "./syntax-observation.ts";
-import type { DocumentationContribution } from "./component-documentation.ts";
+import { packagedAssetReader } from "./component-documentation.ts";
+import type { DocumentationContribution, DocumentationReader } from "./component-documentation.ts";
 import type { CatalogContribution } from "./syntax-observation.ts";
 import type { WorkflowComponentBundle, WorkflowImportAuthority } from "./components/bundle.ts";
 import type { CodeBlockContext, CodeBlockResult, EvalEnv } from "./types.ts";
@@ -2161,6 +2162,8 @@ function* executeDocument(
    * the profile actually assembled.
    */
   documentation: readonly DocumentationContribution[] = [],
+  /** This execution's packaged-asset reader, carried by value from the caller. */
+  readAsset: DocumentationReader = packagedAssetReader,
 ): Operation<DocumentExecution> {
   const {
     stream,
@@ -2348,6 +2351,7 @@ function* executeDocument(
           },
           catalogs[0],
           documentation,
+          readAsset,
         ),
       };
 
@@ -2735,6 +2739,13 @@ export const Execution: Api<ExecutionApi> = createApi<ExecutionApi>("Execution",
 function* runInvocation(
   options: ExecuteOptions,
   installations: readonly ExecutionInstallation[],
+  /**
+   * How this execution reads its packaged documentation assets.
+   *
+   * Defaulted to the real filesystem reader and carried by value from here into
+   * the observation, so it belongs to this execution alone.
+   */
+  readAsset: DocumentationReader = packagedAssetReader,
   observed?: () => void,
 ): Operation<DocumentExecution> {
   const ready = withResolvers<DocumentExecution>();
@@ -2767,7 +2778,7 @@ function* runInvocation(
     let published = false;
     try {
       yield* scoped(function* () {
-        const execution = yield* invoke(options, installations);
+        const execution = yield* invoke(options, installations, readAsset);
         published = true;
         ready.resolve(execution);
         state.document = yield* execution;
@@ -2953,6 +2964,8 @@ function detachedSchema<Schema extends PropsSchema | ReturnsSchema>(schema: Sche
 function* invoke(
   options: ExecuteOptions,
   installations: readonly ExecutionInstallation[],
+  /** This execution's packaged-asset reader, carried by value from its caller. */
+  readAsset: DocumentationReader = packagedAssetReader,
 ): Operation<DocumentExecution> {
   const admissions = Object.freeze(
     installations.flatMap((installation) => [...(installation.admissions ?? [])]),
@@ -3115,6 +3128,7 @@ function* invoke(
     declarations,
     catalogs,
     documentation,
+    readAsset,
   );
 }
 
@@ -3152,7 +3166,7 @@ export function executeObserved(
 ): Operation<DocumentExecution> {
   // The callback is read here, once, and passed on as a value. What the caller
   // does to its own record afterwards is its own business.
-  return runInvocation(options, [...installations], observers.observed);
+  return runInvocation(options, [...installations], packagedAssetReader, observers.observed);
 }
 
 /**
@@ -3168,6 +3182,28 @@ export function executeInstalled(
   installations: readonly ExecutionInstallation[],
 ): Operation<DocumentExecution> {
   return runInvocation(options, [...installations]);
+}
+
+/**
+ * One execution whose packaged-asset reads go through `read`.
+ *
+ * Core's own evidence seam, exported from this module and from neither `mod.ts`
+ * nor `host.ts`, so it is not part of the package's surface. It *builds a new
+ * execution* around the reader rather than changing anything an existing one
+ * holds — so importing it from a repository component, an installed package or
+ * a document's own code cannot reach the current execution's reader, and two
+ * executions in one process are unaffected by each other.
+ *
+ * It exists because cancelling *inside documentation-index construction* is a
+ * different claim from cancelling inside catalog discovery, and there is no
+ * other point in that operation a test can stand at.
+ */
+export function executeReadingAssetsWith(
+  options: ExecuteOptions,
+  installations: readonly ExecutionInstallation[],
+  readAsset: DocumentationReader,
+): Operation<DocumentExecution> {
+  return runInvocation(options, [...installations], readAsset);
 }
 
 /**

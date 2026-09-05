@@ -27,7 +27,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped, sleep, spawn, suspend, until } from "effection";
+import { ensure, scoped, sleep, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
@@ -51,7 +51,7 @@ import { retainedSource } from "../src/root-source.ts";
 import { renderSyntaxMarkdown } from "../src/syntax-markdown.ts";
 import { fixedCatalogObservation, rootCatalogObservation } from "../src/syntax-observation.ts";
 import type { CatalogObservation } from "../src/syntax-observation.ts";
-import { withAssetReader } from "../src/component-documentation.ts";
+import { executeReadingAssetsWith } from "../src/execute.ts";
 import type { DocumentationContribution } from "../src/component-documentation.ts";
 import { SYNTAX_COMPONENT } from "../src/components/Syntax.ts";
 import type { ImportedDefinition } from "../src/components/import-authority.ts";
@@ -418,26 +418,36 @@ describe("Tier SYN — the named form", () => {
     // reading the packaged asset — which is the window a record could be
     // written in, and is reachable only from inside the documentation work.
     // A lookup that skipped index construction would never enter it at all.
-    yield* withAssetReader(
-      function* (): Operation<string> {
-        torn.push("entered");
-        yield* ensure(() => {
-          torn.push("torn down");
-        });
-        yield* suspend();
-        return "## Elicit\n\nunreachable\n";
-      },
-      function* () {
-        yield* scoped(function* () {
-          const task = yield* spawn(function* () {
-            return yield* run('<Syntax names={["Elicit"]} />\n', [], stream);
-          });
-          // Let the lookup get inside the index before cancelling it.
-          yield* sleep(20);
-          yield* task.halt();
-        });
-      },
-    );
+    // The reader belongs to *this* execution, handed to it at construction.
+    // Nothing module-scoped: a second execution in this process reads through
+    // its own, which SYN48 below is about.
+    const suspending = function* (): Operation<string> {
+      torn.push("entered");
+      yield* ensure(() => {
+        torn.push("torn down");
+      });
+      yield* suspend();
+      return "## Elicit\n\nunreachable\n";
+    };
+
+    yield* scoped(function* () {
+      const task = yield* spawn(function* () {
+        return yield* collect(
+          yield* executeReadingAssetsWith(
+            {
+              ...retainedSource(ROOT_PATH, '<Syntax names={["Elicit"]} />\n'),
+              stream,
+              includes: [],
+            },
+            [],
+            suspending,
+          ),
+        );
+      });
+      // Let the lookup get inside the index before cancelling it.
+      yield* sleep(20);
+      yield* task.halt();
+    });
 
     const events = yield* stream.readAll();
     // Reached the work, then tore it down — in that order. Cancelling before
@@ -487,6 +497,52 @@ describe("Tier SYN — the named form", () => {
     // And the coverage it was captured with: adding a name afterwards neither
     // demands documentation for it nor refuses the index.
     expect(rendered).not.toContain("Substituted");
+  });
+
+  it("SYN48: an ordinary observation is unaffected by another execution's suspended one", function* () {
+    // Two executions overlapping in one process. One is stopped inside
+    // documentation-index construction; the other is ordinary and must read
+    // canonical documentation and finish on its own.
+    //
+    // This is what a module-scoped reader gets wrong: one variable shared by
+    // every execution means the suspended one's substitution is what the
+    // ordinary one reads, and it would either hang on the same suspend or
+    // render the substituted prose. Against the module-global implementation at
+    // 9d92bcbe this fails.
+    const entered = withResolvers<void>();
+    const stream = new InMemoryStream();
+
+    const ordinary = yield* scoped(function* () {
+      const held = yield* spawn(function* () {
+        return yield* collect(
+          yield* executeReadingAssetsWith(
+            {
+              ...retainedSource(ROOT_PATH, '<Syntax names={["Elicit"]} />\n'),
+              stream,
+              includes: [],
+            },
+            [],
+            function* (): Operation<string> {
+              entered.resolve();
+              yield* suspend();
+              return "## Elicit\n\nSUBSTITUTED BY THE OTHER EXECUTION.\n";
+            },
+          ),
+        );
+      });
+
+      // Only once the first execution is genuinely inside its own index work.
+      yield* entered.operation;
+
+      // A second, ordinary execution — no reader of its own, so it uses the
+      // real one.
+      const rendered = String(yield* run('<Syntax names={["Elicit"]} />\n'));
+      yield* held.halt();
+      return rendered;
+    });
+
+    expect(ordinary).toContain("Asks a person a structured question");
+    expect(ordinary).not.toContain("SUBSTITUTED BY THE OTHER EXECUTION");
   });
 
   it("SYN39: retains the named text, and a continuation restores it whole", function* () {

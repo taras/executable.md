@@ -34,8 +34,8 @@ import { inspectSyntax } from "./inspect.ts";
 import type { SyntaxCatalog } from "./inspect.ts";
 import { renderSelectedDocumentation, renderSyntaxMarkdown } from "./syntax-markdown.ts";
 import type { SelectedEntry } from "./syntax-markdown.ts";
-import { documentationIndexFor } from "./component-documentation.ts";
-import type { DocumentationContribution } from "./component-documentation.ts";
+import { documentationIndexFor, packagedAssetReader } from "./component-documentation.ts";
+import type { DocumentationContribution, DocumentationReader } from "./component-documentation.ts";
 import type { DocumentationIndex } from "./documentation-index.ts";
 import { UnknownComponentError } from "./documentation-index.ts";
 import type { WorkflowImportAuthority } from "./components/bundle.ts";
@@ -133,6 +133,16 @@ export function rootCatalogObservation(
    * fallback sentence inside a document.
    */
   documentation: readonly DocumentationContribution[] = [],
+  /**
+   * How this execution reads its packaged assets.
+   *
+   * Held by the observation, so it belongs to this execution and no other. It
+   * reaches here from where the execution was built and from nowhere else —
+   * there is no setter, no context and no installation field that names it, so
+   * a document, a component or an installed package cannot substitute one, and
+   * a second execution in the same process is unaffected by this one's.
+   */
+  read: DocumentationReader = packagedAssetReader,
 ): CatalogObservation {
   function* current(): Operation<SyntaxCatalog> {
     return contribution === undefined ? yield* derived(inputs) : yield* contribution();
@@ -141,7 +151,7 @@ export function rootCatalogObservation(
   // ones the installation boundary captured rather than whatever the caller's
   // objects hold by the time a document asks.
   const captured = snapshotContributions(documentation);
-  return observing(current, current, captured);
+  return observing(current, current, captured, read);
 }
 
 /**
@@ -155,6 +165,7 @@ function observing(
   reference: () => Operation<SyntaxCatalog>,
   executable: () => Operation<SyntaxCatalog>,
   documentation: readonly DocumentationContribution[],
+  read: DocumentationReader,
 ): CatalogObservation {
   return {
     *observe(): Operation<string> {
@@ -163,7 +174,7 @@ function observing(
     *document(names: readonly string[]): Operation<string> {
       const authoring = yield* reference();
       const runnable = yield* executable();
-      const index = yield* documentationIndexFor(documentation);
+      const index = yield* documentationIndexFor(documentation, read);
       return renderSelectedDocumentation(select(authoring, runnable, names, index));
     },
     narrow(admitted: SyntaxCatalog): CatalogObservation {
@@ -178,6 +189,7 @@ function observing(
           return admitted;
         },
         documentation,
+        read,
       );
     },
   };
@@ -341,6 +353,8 @@ export function fixedCatalogObservation(
    * installs the executable catalog; this is the index that goes with it.
    */
   documentation: readonly DocumentationContribution[] = [],
+  /** How this observation reads packaged assets — this execution's, by value. */
+  read: DocumentationReader = packagedAssetReader,
 ): CatalogObservation {
   const captured = snapshotContributions(documentation);
   return observing(
@@ -353,5 +367,6 @@ export function fixedCatalogObservation(
       return catalog;
     },
     captured,
+    read,
   );
 }
