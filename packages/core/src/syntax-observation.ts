@@ -120,7 +120,7 @@ export function rootCatalogObservation(
       // may execute, so what an author may read about and what they may run are
       // the same set, and every selected entry is available.
       const catalog = yield* current();
-      const index = yield* documentationIndexFor(catalog);
+      const index = yield* documentationIndexFor();
       return renderSelectedDocumentation(select(catalog, catalog, names, index));
     },
   };
@@ -217,7 +217,7 @@ export function fixedCatalogObservation(
       return rendered;
     },
     *document(names: readonly string[]): Operation<string> {
-      const index = yield* documentationIndexFor(reference);
+      const index = yield* documentationIndexFor();
       return renderSelectedDocumentation(select(reference, catalog, names, index));
     },
   };

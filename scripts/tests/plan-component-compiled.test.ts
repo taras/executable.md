@@ -111,9 +111,28 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
     expect(syntax[0].forms).toEqual(["self-closing"]);
     expect(syntax[0].returnMode).toBe("text");
     expect(syntax[0].description).toBe(
-      "Output available components and control flow constructs. `<Syntax />` renders the " +
-        "current catalog.",
+      "Inspect components and control-flow constructs. `<Syntax />` renders the current " +
+        'catalog; `<Syntax names={["Elicit"]} />` renders selected documentation.',
     );
+
+    // The documentation asset travels with the binary, not with a checkout. A
+    // build that forgot `--include` would still list the component and still
+    // print its metadata, and would silently have no prose to attach — so the
+    // probe is the documentation itself, asked for from a directory that is not
+    // the checkout.
+    const lookup = yield* timebox<ProcessResult>(TIMEOUT, function* () {
+      return yield* exec(BINARY, {
+        arguments: ["syntax", "Elicit", "--include", elsewhere],
+        cwd: elsewhere,
+      }).join();
+    });
+    if (lookup.timeout) {
+      throw new Error("the compiled binary timed out documenting one component");
+    }
+    expect(lookup.value.code).toBe(0);
+    expect(lookup.value.stdout).toContain("### `<Elicit>`");
+    expect(lookup.value.stdout).toContain("Asks a person a structured question");
+    expect(lookup.value.stdout).toContain("**Available in this evaluation:** yes");
 
     // The command surface those bytes belong to is source-only in this build
     // too: help describes both explicit compositions and names no option that

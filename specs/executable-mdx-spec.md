@@ -2697,8 +2697,39 @@ engine-owned `as` captures the same text and emits nothing.
 <Syntax as="syntax" />
 ```
 
-It is **self-closing only** and declares no props. A paired spelling and any
-authored prop are refused before a catalog is observed.
+It is **self-closing only** and declares one optional prop, `names`: a non-empty
+array of unique component-name strings. A paired spelling, any other prop, an
+empty list, a duplicate, a non-string member and a name this site has no
+component for are each refused before a catalog is observed, so a refusal
+produces no partial text and no successful retained result.
+
+**The named form renders documentation.** `<Syntax names={["Elicit", "File"]} />`
+renders each selected component's catalog metadata followed by the long-form
+documentation its owning package ships, once each, **in catalog order** whatever
+order they were asked for in. `as` captures the same text in either form.
+
+Documentation joins to metadata by component name **and owning package**. Only a
+registration and a protected component come from a package; a repository file, a
+bundled blob and declared Markdown are this run's, so a repository `Elicit.md`
+receives none of the built-in `Elicit`'s prose. A selected entry with no authored
+documentation renders its metadata and the sentence *No long-form documentation
+is available for this component.* rather than refusing.
+
+**Reference and availability are separate.** The observation carries two inputs.
+Bare `<Syntax />` reports what may **execute** at this site. The named form
+selects from the **enclosing authoring catalog** and states, per entry,
+`**Available in this evaluation:** yes` or `no`. At a root the two are one
+catalog and everything selected is available; a trusted evaluation boundary that
+narrows execution keeps the enclosing reference, so a nested author can be told
+how a component works where they may not run one — and is told which it is.
+Neither input carries definitions, import witnesses, invocation capabilities,
+providers, registrations or any other execution authority.
+
+`xmd syntax Elicit` is the same lookup — one selection, one index, one renderer —
+so the command and the component cannot describe one component two ways. The
+compact `xmd syntax` and its version-2 `--json` are unchanged: documentation is
+prose rather than a catalog member, and putting it in routine output would make
+every default Plan prompt unnecessarily large.
 
 **Canonical core owns the name.** A repository `Syntax.md`, `Syntax.ts` or
 directory candidate never wins selection; an ordinary or reserved registration
@@ -10847,6 +10878,13 @@ component that observes one at an authored site.
 | SYN26 | Another loaded copy | A protected implementation built by a second loaded copy answers for nothing in the active execution |
 | SYN27 | Protected provenance | The catalog reports the component under the `protected` origin kind in both the structured entry and the rendered Markdown, and never as a reserved registration; `inspectComponent` agrees |
 | SYN28 | Pinned provenance | A workflow-bundle component is reported at its path *and* blob object id, under the `workflow` origin kind, and stays in the user-provided category |
+| SYN29 | The named form | Selected entries render their metadata and documentation once each in catalog order, not request order, with nothing else of the catalog; `as` binds identical text |
+| SYN30 | Availability and absence | Each entry states whether it is available in the current evaluation; a selected entry with no authored documentation renders its metadata and says so |
+| SYN31 | Atomic refusal | An unknown name, an empty list, a duplicate, a non-string member, a non-array value and an undeclared prop each refuse with no successful retained result |
+| SYN39 | Named retention | The occurrence retains its final rendered text, a continuation restores it without rereading documentation or rebuilding the catalog, and a corrupted record refuses |
+| SYN25c | The narrowing seam | A narrowed observation reports the narrowed vocabulary bare, documents the enclosing catalog by name, and marks each entry's availability truthfully in both directions |
+| SYN32–SYN34 | Parsing one file | Bundle prose, a section per level-two heading with deeper headings kept inside it, a fenced heading read as the example it is, and a refusal for a duplicate section or a heading that is not a component name |
+| SYN35–SYN38 | Building the index | A heading naming something the package does not supply refuses; one component documented twice refuses; documentation attaches by name and owning package, never to a repository replacement; a partly documented package builds |
 
 ### Tier SX — The `xmd syntax` command
 

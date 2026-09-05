@@ -20,9 +20,8 @@ import type { Operation } from "effection";
 
 import { buildDocumentationIndex } from "./documentation-index.ts";
 import type { DocumentationIndex, DocumentationSource } from "./documentation-index.ts";
-import { CORE_ORIGIN } from "./components/registry.ts";
-import type { SyntaxCatalog } from "./inspect.ts";
-import { owningPackage } from "./documentation-index.ts";
+import { CORE_ORIGIN, CORE_REGISTRY } from "./components/registry.ts";
+import { PROTECTED_COMPONENT_NAMES } from "./components/protected.ts";
 
 /** Where core's own documentation lives, as a URL beside this module. */
 export function componentDocumentationUrl(): URL {
@@ -47,27 +46,31 @@ export function* readCoreDocumentation(): Operation<DocumentationSource> {
 }
 
 /**
- * The index for one catalog, validated against what that catalog actually holds.
+ * The index every documentation reader shares.
  *
- * The catalog supplies the known names, so a heading naming something this build
- * does not supply is caught here rather than becoming an entry nothing can ever
- * select. That is also what keeps the index and the catalog from disagreeing
- * about which components exist.
+ * Validated against what the *package* supplies, not against whichever catalog
+ * is in scope. Those are different sets and conflating them is a real bug: a
+ * narrowing evaluation boundary carries a catalog holding a handful of admitted
+ * components, and validating core's own documentation against that would report
+ * `Elicit` as a component core does not supply. What a heading has to name is a
+ * component this build actually ships; which of them a given site can select is
+ * a separate question the selection answers.
  */
-export function* documentationIndexFor(catalog: SyntaxCatalog): Operation<DocumentationIndex> {
+export function* documentationIndexFor(): Operation<DocumentationIndex> {
   const sources = [yield* readCoreDocumentation()];
-  return buildDocumentationIndex(sources, (owner) => namesOwnedBy(catalog, owner));
+  return buildDocumentationIndex(sources, (owner) =>
+    owner === CORE_ORIGIN ? CORE_COMPONENT_NAMES : new Set<string>(),
+  );
 }
 
-/** Every component in this catalog that the named package supplies. */
-function namesOwnedBy(catalog: SyntaxCatalog, owner: string): ReadonlySet<string> {
-  const names = new Set<string>();
-  for (const category of catalog.categories) {
-    for (const entry of category.entries) {
-      if (owningPackage(entry.origin) === owner) {
-        names.add(entry.name);
-      }
-    }
-  }
-  return names;
-}
+/**
+ * Every component canonical core supplies, by name.
+ *
+ * Its registrations and the protected tier together — the two ways core puts a
+ * component into an execution — read from the same declarations execution reads,
+ * so this cannot drift from what the package actually ships.
+ */
+const CORE_COMPONENT_NAMES: ReadonlySet<string> = new Set([
+  ...CORE_REGISTRY.keys(),
+  ...PROTECTED_COMPONENT_NAMES,
+]);

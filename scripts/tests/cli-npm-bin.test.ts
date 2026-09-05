@@ -240,8 +240,8 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     expect(syntax[0].forms).toEqual(["self-closing"]);
     expect(syntax[0].returnMode).toBe("text");
     expect(syntax[0].description).toBe(
-      "Output available components and control flow constructs. `<Syntax />` renders the " +
-        "current catalog.",
+      "Inspect components and control-flow constructs. `<Syntax />` renders the current " +
+        'catalog; `<Syntax names={["Elicit"]} />` renders selected documentation.',
     );
 
     // The command's public grammar travels with those bytes. `--run` is gone,

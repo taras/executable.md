@@ -16,7 +16,7 @@ not detect one.
 ## Running the command
 
 Three invocations, once each: the default Markdown format, the same catalog as
-version-1 JSON, and one more with two includes written in a deliberate order.
+version-2 JSON, and one more with two includes written in a deliberate order.
 
 ```bash exec as="markdown"
 "$XMD_SYNTAX_BIN" syntax --include packages/cli/tests/document-suites/syntax/components

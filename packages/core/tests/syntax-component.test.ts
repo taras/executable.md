@@ -303,6 +303,37 @@ describe("Tier SYN — the named form", () => {
     expect(undocumented).toContain("No long-form documentation is available for this component.");
   });
 
+  it("SYN39: retains the named text, and a continuation restores it whole", function* () {
+    const stream = new InMemoryStream();
+    const first = String(yield* run('<Syntax names={["Elicit"]} />\n', [], stream));
+    expect(first).toContain("Asks a person a structured question");
+
+    // Exactly what was rendered, not the compact catalog: the record is the
+    // occurrence's final text whichever form produced it.
+    const records = retained(yield* stream.readAll());
+    expect(records).toHaveLength(1);
+    const record = records[0];
+    const value =
+      record?.type === "yield" && record.result.status === "ok" ? record.result.value : undefined;
+    expect(Object.keys(value as object)).toEqual(["catalog"]);
+    // The component's own return, which the document then renders — so the two
+    // differ by the trailing newline presentation adds, and nothing else.
+    expect(String((value as { catalog: string }).catalog).trim()).toBe(first.trim());
+
+    // A continuation hands the same text back. The documentation asset is not
+    // reread and the catalog is not rebuilt: what an agent was shown is what it
+    // is shown again.
+    const resumed = String(
+      yield* run('<Syntax names={["Elicit"]} />\n', [], yield* continuing(stream)),
+    );
+    expect(resumed).toBe(first);
+
+    // And a record this version cannot read refuses rather than inventing one.
+    const corrupted = yield* tampered(stream, () => ({ catalog: "x", extra: 1 }));
+    const refused = yield* refusal(run('<Syntax names={["Elicit"]} />\n', [], corrupted));
+    expect(refused).toContain("not a catalog this version can read");
+  });
+
   it("SYN31: refuses an unusable list before observing anything", function* () {
     const stream = new InMemoryStream();
     const unknown = yield* refusal(run('<Syntax names={["Nonexistent"]} />\n', [], stream));
@@ -962,6 +993,42 @@ describe("Tier SYN — observation is never authority", () => {
     // Nothing of the enclosing site leaks into it: a name the wider profile has
     // is absent, because the catalog it was handed does not hold one.
     expect(yield* observation.observe()).not.toContain("### `<Syntax>`");
+  });
+
+  /**
+   * The seam #713 installs through, proved without an `<Evaluate>`.
+   *
+   * A narrowing boundary hands the observation two catalogs: what may execute
+   * in the subtree, and the enclosing authoring catalog selection reads from.
+   * Everything below is about them being genuinely two.
+   */
+  it("SYN25c: a narrowed observation documents the enclosing site and marks availability", function* () {
+    const enclosing = catalogOf("Admitted", "Withheld");
+    const narrowed = catalogOf("Admitted");
+    const observation = fixedCatalogObservation(narrowed, enclosing);
+
+    // What may execute here is the narrowed catalog, and the bare form reports
+    // exactly that.
+    const available = yield* observation.observe();
+    expect(available).toContain("### `<Admitted>`");
+    expect(available).not.toContain("### `<Withheld>`");
+
+    // Reference material comes from the enclosing catalog, so a component this
+    // subtree may not run can still be explained — and the entry says so
+    // rather than leaving a reader to assume they have both.
+    const documented = yield* observation.document(["Withheld"]);
+    expect(documented).toContain("### `<Withheld>`");
+    expect(documented).toContain("**Available in this evaluation:** no");
+
+    // And one that is admitted reports the other answer, so the field is
+    // discriminating rather than a constant.
+    const admitted = yield* observation.document(["Admitted"]);
+    expect(admitted).toContain("**Available in this evaluation:** yes");
+
+    // A boundary that narrows nothing has one catalog, and everything in it is
+    // available — the ordinary case.
+    const open = fixedCatalogObservation(enclosing);
+    expect(yield* open.document(["Withheld"])).toContain("**Available in this evaluation:** yes");
   });
 
   it("SYN25: an execution that carries no observation refuses rather than inventing one", function* () {

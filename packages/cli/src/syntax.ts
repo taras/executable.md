@@ -117,6 +117,6 @@ export function* renderSyntaxDocumentation(
   catalog: SyntaxCatalog,
   names: readonly string[],
 ): Operation<string> {
-  const index = yield* documentationIndexFor(catalog);
+  const index = yield* documentationIndexFor();
   return renderSelectedDocumentation(selectDocumented(catalog, catalog, names, index));
 }
