@@ -21,7 +21,7 @@
 
 import { all, createContext, ensure, withResolvers } from "effection";
 import type { Context, Operation } from "effection";
-import type { TerminalComposite, TerminalGridRequest } from "./terminal.ts";
+import type { TerminalComposite, TerminalGridRequest } from "./composite.ts";
 
 export class TerminalAuthorityError extends Error {
   override name = "TerminalAuthorityError";

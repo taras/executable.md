@@ -8,11 +8,11 @@
  * without tmux, a terminal, or a subprocess.
  */
 
-export { installControlledLauncher } from "./src/launcher.ts";
-export type { ControlledLauncherOptions } from "./src/launcher.ts";
-export { prepareControlledComposite, terminalProviderLog } from "./src/terminal.ts";
+export { installControlledLauncher } from "./src/controlled-launcher.ts";
+export type { ControlledLauncherOptions } from "./src/controlled-launcher.ts";
+export { prepareControlledComposite, terminalProviderLog } from "./src/controlled-composite.ts";
 export type {
   ControlledCompositeOptions,
   TerminalProviderLog,
   TerminalProviderResources,
-} from "./src/terminal.ts";
+} from "./src/controlled-composite.ts";

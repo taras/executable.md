@@ -12,7 +12,7 @@
  * grid rather than reporting one free it never checked.
  */
 
-export { installForegroundLauncher } from "./src/launcher.ts";
-export type { ForegroundLauncherOptions } from "./src/launcher.ts";
+export { installForegroundLauncher } from "./src/posix-launcher.ts";
+export type { ForegroundLauncherOptions } from "./src/posix-launcher.ts";
 export { installDenoTerminalProcesses, posixProcessProbes } from "./src/posix-processes.ts";
 export type { ProcessProbes } from "./src/posix-processes.ts";

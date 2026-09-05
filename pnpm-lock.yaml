@@ -150,6 +150,9 @@ importers:
       '@executablemd/runtime':
         specifier: workspace:*
         version: link:../runtime
+      '@executablemd/terminal':
+        specifier: workspace:*
+        version: link:../terminal
       acpx:
         specifier: 0.12.0
         version: 0.12.0
@@ -174,6 +177,12 @@ importers:
       '@executablemd/runtime':
         specifier: workspace:*
         version: link:../runtime
+      '@executablemd/terminal':
+        specifier: workspace:*
+        version: link:../terminal
+      '@executablemd/terminal-tmux':
+        specifier: workspace:*
+        version: link:../terminal-tmux
       '@executablemd/test-agent':
         specifier: workspace:*
         version: link:../test-agent
@@ -242,6 +251,9 @@ importers:
       '@executablemd/runtime':
         specifier: workspace:*
         version: link:../runtime
+      '@executablemd/terminal':
+        specifier: workspace:*
+        version: link:../terminal
       '@secretlint/core':
         specifier: 13.0.4
         version: 13.0.4
@@ -315,6 +327,45 @@ importers:
         specifier: 4.1.0
         version: 4.1.0
 
+  packages/terminal:
+    dependencies:
+      '@effectionx/context-api':
+        specifier: 0.6.0
+        version: 0.6.0(effection@4.1.0)
+      '@effectionx/fs':
+        specifier: 0.3.0
+        version: 0.3.0(effection@4.1.0)
+      '@effectionx/node':
+        specifier: 0.2.4
+        version: 0.2.4(effection@4.1.0)
+      '@effectionx/process':
+        specifier: 0.8.1
+        version: 0.8.1(effection@4.1.0)
+      '@executablemd/durable-streams':
+        specifier: workspace:*
+        version: link:../durable-streams
+      effection:
+        specifier: 4.1.0
+        version: 4.1.0
+
+  packages/terminal-tmux:
+    dependencies:
+      '@effectionx/fs':
+        specifier: 0.3.0
+        version: 0.3.0(effection@4.1.0)
+      '@effectionx/process':
+        specifier: 0.8.1
+        version: 0.8.1(effection@4.1.0)
+      '@executablemd/terminal':
+        specifier: workspace:*
+        version: link:../terminal
+      effection:
+        specifier: 4.1.0
+        version: 4.1.0
+      zod:
+        specifier: ^4.3.6
+        version: 4.4.3
+
   packages/test-agent:
     dependencies:
       '@agentclientprotocol/sdk':
@@ -341,6 +392,9 @@ importers:
       '@executablemd/runtime':
         specifier: workspace:*
         version: link:../runtime
+      '@executablemd/terminal':
+        specifier: workspace:*
+        version: link:../terminal
       '@executablemd/testing':
         specifier: workspace:*
         version: link:../testing

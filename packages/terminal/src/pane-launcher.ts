@@ -22,8 +22,8 @@
 
 import { resource } from "effection";
 import type { Operation } from "effection";
-import { NativeLauncher } from "./launcher.ts";
-import type { NativeLaunchOutcome, NativeLaunchRequest } from "./launcher.ts";
+import { NativeLauncher } from "./native-launcher.ts";
+import type { NativeLaunchOutcome, NativeLaunchRequest } from "./native-launcher.ts";
 
 import type { TerminalPaneClaim } from "./authority.ts";
 

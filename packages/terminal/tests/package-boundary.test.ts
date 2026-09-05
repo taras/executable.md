@@ -34,6 +34,42 @@ import * as path from "node:path";
 import { until } from "effection";
 import type { Operation } from "effection";
 
+/**
+ * Everything one entrypoint loads, transitively.
+ *
+ * Read from the module graph rather than from the entrypoint's own export
+ * list, because an export list is exactly what hid this: re-exporting three
+ * names out of a module that also spawns processes narrows what is *reachable
+ * by name* and nothing about what is *loaded*. A facade passes an export-shape
+ * check and fails this one.
+ */
+function* graphOf(entrypoint: string): Operation<string[]> {
+  const seen = new Set<string>();
+  const pending = [path.resolve("packages/terminal", entrypoint)];
+  while (pending.length > 0) {
+    const file = pending.pop();
+    if (file === undefined || seen.has(file)) {
+      continue;
+    }
+    seen.add(file);
+    const source = yield* readTextFile(file);
+    for (const match of source.matchAll(/from\s+"([^"]+)"/g)) {
+      const specifier = match[1];
+      if (specifier === undefined) {
+        continue;
+      }
+      if (specifier.startsWith("node:")) {
+        seen.add(specifier);
+        continue;
+      }
+      if (specifier.startsWith(".")) {
+        pending.push(path.resolve(path.dirname(file), specifier));
+      }
+    }
+  }
+  return [...seen];
+}
+
 /** Every production source of one workspace package, tests excluded. */
 function* productionSources(pkg: string): Operation<string[]> {
   const root = path.resolve("packages", pkg);
@@ -162,6 +198,40 @@ describe("Tier TG21 — the terminal package boundary", () => {
     }
   });
 
+  it("TG21i: the neutral entrypoints load no host process code and no fixture", function* () {
+    // The defect this replaced: the root re-exported a handful of neutral names
+    // from a module that also spawned children and carried a test double, so
+    // importing the domain loaded `node:child_process` and a fixture. Selective
+    // re-export narrows the names, never the load.
+    for (const entrypoint of ["mod.ts", "lifecycle.ts", "processes.ts"]) {
+      const graph = yield* graphOf(entrypoint);
+      const host = graph.filter(
+        (module) =>
+          module === "node:child_process" ||
+          module === "node:process" ||
+          module.endsWith("/posix-launcher.ts") ||
+          module.endsWith("/posix-processes.ts"),
+      );
+      const fixtures = graph.filter((module) => module.includes("/controlled-"));
+      expect([entrypoint, host]).toEqual([entrypoint, []]);
+      expect([entrypoint, fixtures]).toEqual([entrypoint, []]);
+    }
+  });
+
+  it("TG21j: the host and fixture facets are where that code actually lives", function* () {
+    // The complement, and the discriminator for the row above: if the split had
+    // simply deleted this code rather than moved it, TG21i would pass over an
+    // empty graph and prove nothing.
+    const posix = yield* graphOf("posix.ts");
+    expect(posix.some((module) => module.endsWith("/posix-launcher.ts"))).toBe(true);
+    expect(posix.some((module) => module.endsWith("/posix-processes.ts"))).toBe(true);
+    expect(posix.includes("node:child_process")).toBe(true);
+
+    const fixtures = yield* graphOf("test.ts");
+    expect(fixtures.some((module) => module.endsWith("/controlled-launcher.ts"))).toBe(true);
+    expect(fixtures.some((module) => module.endsWith("/controlled-composite.ts"))).toBe(true);
+  });
+
   it("TG21d: a walked package with no sources would not pass vacuously", function* () {
     // The rows above are absence claims, and an absence claim over an empty set
     // is free. This is the discriminator: the walk finds real files.
@@ -225,6 +295,38 @@ describe("Tier TG21 — the replaced paths are absent", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("TG21k: the tmux root exposes exactly its narrow provider API", function* () {
+    // Pinned as an exact set rather than a set of required names. `paneEnvironment`
+    // — a host's decision about which of *its own* variables a pane inherits —
+    // reached this root by being added to it, and a row that only checked for
+    // required names would have let it stay.
+    const tmux = yield* until(import("@executablemd/terminal-tmux"));
+    expect(Object.keys(tmux).toSorted()).toEqual(
+      [
+        // Provider installation and factory.
+        "TMUX_PROVIDER",
+        "installTmuxGridProvider",
+        "tmuxGridProvider",
+        // Worker dispatch.
+        "PANE_WORKER_COMMAND",
+        "PaneNotQuiescent",
+        "paneWorkerInvocation",
+        "runPaneWorkerProcess",
+        // The refusals a reader can actually meet.
+        "TMUX_UNAVAILABLE",
+        "TerminalTeardownFailed",
+        "TmuxUnavailableError",
+      ].toSorted(),
+    );
+
+    // The low-level seams stay behind `./test`, and are really there — so the
+    // assertion above is a boundary rather than an empty package.
+    const seams = yield* until(import("@executablemd/terminal-tmux/test"));
+    for (const name of ["useTmuxGrid", "usePaneChannels", "usePaneChild", "tmuxAt", "runInPane"]) {
+      expect([name, name in seams]).toEqual([name, true]);
+    }
+  });
+
   it("TG21h: each descriptor and public error constructor is defined once", function* () {
     // Identity used to be provable by comparing two import paths. With one path
     // left, the claim that replaces it is that there is only one definition to
@@ -266,7 +368,7 @@ describe("Tier TG21 — the replaced paths are absent", () => {
     }
     // And the scan is not vacuous: it found the descriptors it was told to look
     // for, in the package that owns them.
-    expect(definitions.get("NativeLauncher")?.[0]).toContain("terminal/src/launcher.ts");
+    expect(definitions.get("NativeLauncher")?.[0]).toContain("terminal/src/native-launcher.ts");
     expect(definitions.get("TerminalProcesses")?.[0]).toContain("terminal/src/processes.ts");
   });
 });

@@ -27,7 +27,6 @@ import { command as hostCommand } from "@executablemd/runtime";
 import { installDenoTerminalProcesses } from "@executablemd/terminal/posix";
 import {
   installTmuxGridProvider,
-  paneEnvironment,
   PANE_WORKER_COMMAND,
   TMUX_PROVIDER,
 } from "@executablemd/terminal-tmux";
@@ -102,6 +101,29 @@ export class TerminalLost extends Error {
         "had shown is gone with the terminal; nothing after the point it stopped ran.",
     );
   }
+}
+
+/**
+ * The environment every process in the topology receives.
+ *
+ * Named rather than inherited wholesale: a pane's child gets what a terminal
+ * program needs and nothing this process happens to be carrying.
+ *
+ * It is a host decision, so it is made here rather than by the provider. The
+ * adapter is handed an environment and passes exactly that along; which of
+ * *this* invocation's variables are worth passing is a question only the
+ * entrypoint composing the host can answer.
+ */
+function paneEnvironment(source: Record<string, string | undefined>): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const name of ["PATH", "HOME", "SHELL", "LANG", "TMPDIR", "USER", "LOGNAME"]) {
+    const value = source[name];
+    if (value !== undefined && value !== "") {
+      env[name] = value;
+    }
+  }
+  env.TERM = source.TERM ?? "xterm-256color";
+  return env;
 }
 
 /** The terminal this run is drawing on, as tmux needs to know it. */

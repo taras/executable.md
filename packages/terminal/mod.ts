@@ -12,6 +12,13 @@
  * controlled fixtures that prove the contract in `./test` — facets of one
  * package rather than separate definitions, so a symbol exported by two of them
  * is the same object.
+ *
+ * Those are boundaries in the module graph, not just in the export lists. This
+ * root, `./lifecycle` and `./processes` reach contracts and operations only:
+ * nothing they load spawns a process, reads `process.stdout`, or is a test
+ * fixture. Anything that performs a launch lives behind `./posix`, and anything
+ * that pretends to behind `./test`, so importing the domain to describe a grid
+ * pulls in nothing that could present or fake one.
  */
 
 export {
@@ -22,19 +29,19 @@ export {
   nativeLaunch,
   NO_TERMINAL,
   reserveTerminal,
-} from "./src/launcher.ts";
+} from "./src/native-launcher.ts";
 export type {
   NativeLauncherHandler,
   NativeLaunchOutcome,
   NativeLaunchRequest,
-} from "./src/launcher.ts";
+} from "./src/native-launcher.ts";
 
 export {
   TERMINAL_GRIDS_API,
   TERMINAL_PROVIDER_UNAVAILABLE,
   TerminalGrids,
   TerminalProviderUnavailableError,
-} from "./src/terminal.ts";
+} from "./src/composite.ts";
 export type {
   TerminalComposite,
   TerminalGridApi,
@@ -42,7 +49,7 @@ export type {
   TerminalPaneRequest,
   TerminalPaneState,
   TerminalShellOutcome,
-} from "./src/terminal.ts";
+} from "./src/composite.ts";
 
 export {
   registerTerminalProvider,
