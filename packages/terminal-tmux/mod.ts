@@ -25,9 +25,4 @@ export {
   runPaneWorkerProcess,
 } from "./src/pane-worker.ts";
 
-export {
-  paneEnvironment,
-  TerminalTeardownFailed,
-  TMUX_UNAVAILABLE,
-  TmuxUnavailableError,
-} from "./src/tmux.ts";
+export { TerminalTeardownFailed, TMUX_UNAVAILABLE, TmuxUnavailableError } from "./src/tmux.ts";

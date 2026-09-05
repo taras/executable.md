@@ -20,13 +20,12 @@ import { scoped } from "effection";
 import type { Operation } from "effection";
 
 import {
-  prepareControlledComposite,
   TERMINAL_PROVIDER_UNAVAILABLE,
   TerminalGrids,
-  terminalProviderLog,
   TerminalProviderUnavailableError,
-} from "../src/terminal.ts";
-import type { TerminalGridRequest } from "../src/terminal.ts";
+} from "../src/composite.ts";
+import type { TerminalGridRequest } from "../src/composite.ts";
+import { prepareControlledComposite, terminalProviderLog } from "../src/controlled-composite.ts";
 
 /** A two-by-one grid: the smallest request that still has two ordinals. */
 function request(overrides: Partial<TerminalGridRequest> = {}): TerminalGridRequest {

@@ -42,9 +42,9 @@ import {
   ephemeral,
 } from "@executablemd/durable-streams";
 import type { Json, Workflow } from "@executablemd/durable-streams";
-import { TerminalGrids } from "./terminal.ts";
-import { flushOutput, reserveTerminal } from "./launcher.ts";
-import type { TerminalComposite, TerminalGridRequest } from "./terminal.ts";
+import { TerminalGrids } from "./composite.ts";
+import { flushOutput, reserveTerminal } from "./native-launcher.ts";
+import type { TerminalComposite, TerminalGridRequest } from "./composite.ts";
 
 import {
   awaitReadiness,

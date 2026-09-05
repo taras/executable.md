@@ -162,23 +162,3 @@ function readVersion(reported: string): { major: number; minor: number } | undef
   }
   return { major: Number(major), minor: Number(minor) };
 }
-
-/**
- * The environment every process in the topology receives.
- *
- * Named rather than inherited wholesale: a pane's child gets what a terminal
- * program needs and nothing this process happens to be carrying.
- */
-export function paneEnvironment(
-  source: Record<string, string | undefined>,
-): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const name of ["PATH", "HOME", "SHELL", "LANG", "TMPDIR", "USER", "LOGNAME"]) {
-    const value = source[name];
-    if (value !== undefined && value !== "") {
-      env[name] = value;
-    }
-  }
-  env.TERM = source.TERM ?? "xterm-256color";
-  return env;
-}
