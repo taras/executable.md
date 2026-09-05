@@ -431,7 +431,7 @@ export function* planDeclarationHarness(options: {
  * look for without depending on the whole run profile being assembled.
  */
 export const CASE_CATALOG: SyntaxCatalog = {
-  version: 1,
+  version: 2,
   categories: [
     { kind: "structural", entries: [] },
     {

@@ -227,10 +227,26 @@ function describeOrigin(origin: ComponentOrigin): string {
   if (origin.kind === "registered") {
     return `${code(origin.origin)} (${origin.reserved ? "reserved registration" : "registered default"})`;
   }
+  if (origin.kind === "protected") {
+    // Not "reserved registration": a reader deciding whether they can supply
+    // this name themselves gets the opposite answer from the two phrases.
+    return `${code(origin.origin)} (protected component)`;
+  }
+  if (origin.kind === "workflow") {
+    // The object id as well as the path, so this cannot be read as a file the
+    // reader could edit. Abbreviated the way a commit is: enough to compare,
+    // short enough to sit in a table cell.
+    return `${code(origin.path)} (workflow bundle, ${code(abbreviate(origin.sourceHash))})`;
+  }
   if (origin.kind === "declared-markdown") {
     return `${code(origin.origin)} (declared Markdown)`;
   }
   return `structural syntax (${code(origin.construct)})`;
+}
+
+/** A blob id, shortened for a table cell but left whole when it is already short. */
+function abbreviate(sourceHash: string): string {
+  return sourceHash.length > 12 ? sourceHash.slice(0, 12) : sourceHash;
 }
 
 function code(text: string): string {

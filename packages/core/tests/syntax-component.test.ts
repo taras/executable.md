@@ -1,5 +1,5 @@
 /**
- * Tier SC — `<Syntax />`, the component canonical core owns.
+ * Tier SYN — `<Syntax />`, the component canonical core owns.
  *
  * What a document may write here is a public question, and this is the public
  * answer: the catalog for the site the element was written at, in the words
@@ -46,6 +46,7 @@ import { inspectComponent, inspectSyntax } from "../src/inspect.ts";
 import { validateDocumentStructure } from "../src/document-validation.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { selectComponent } from "../src/components/select.ts";
+import { installedBundle } from "../src/components/bundle.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { renderSyntaxMarkdown } from "../src/syntax-markdown.ts";
 import { fixedCatalogObservation } from "../src/syntax-observation.ts";
@@ -63,7 +64,7 @@ const DESCRIPTION =
 /** A catalog with one built-in entry per name, for a case that needs a marker. */
 function catalogOf(...names: readonly string[]): SyntaxCatalog {
   return {
-    version: 1,
+    version: 2,
     categories: [
       { kind: "structural", entries: [] },
       {
@@ -187,8 +188,8 @@ function useWorkingDirectory<T>(body: (dir: string) => Operation<T>): Operation<
   });
 }
 
-describe("Tier SC — what one occurrence answers", () => {
-  it("SC1: the bare form renders the catalog once, and `as` binds the same text", function* () {
+describe("Tier SYN — what one occurrence answers", () => {
+  it("SYN1: the bare form renders the catalog once, and `as` binds the same text", function* () {
     const { installation } = stating(catalogOf("Marker"));
     const bare = yield* run("<Syntax />\n", [installation]);
     expect(String(bare)).toContain("### `<Marker>`");
@@ -206,7 +207,7 @@ describe("Tier SC — what one occurrence answers", () => {
     expect(String(captured).split("### `<Marker>`").length - 1).toBe(1);
   });
 
-  it("SC2: it renders exactly what the shared Markdown renderer produces", function* () {
+  it("SYN2: it renders exactly what the shared Markdown renderer produces", function* () {
     const catalog = catalogOf("Marker", "Other");
     const { installation } = stating(catalog);
     const bare = yield* run('<Syntax as="catalog" />{catalog}', [installation]);
@@ -216,7 +217,7 @@ describe("Tier SC — what one occurrence answers", () => {
     expect(String(bare)).toBe(renderSyntaxMarkdown(catalog));
   });
 
-  it("SC3: a paired spelling and an authored prop refuse before any observation", function* () {
+  it("SYN3: a paired spelling and an authored prop refuse before any observation", function* () {
     const paired = stating(catalogOf("Marker"));
     expect(yield* refusal(run("<Syntax>content</Syntax>\n", [paired.installation]))).toContain(
       "written self-closing",
@@ -235,7 +236,7 @@ describe("Tier SC — what one occurrence answers", () => {
     expect(accepted.calls.count).toBe(1);
   });
 
-  it("SC4: one occurrence observes once, two observe independently, a binding observes neither again", function* () {
+  it("SYN4: one occurrence observes once, two observe independently, a binding observes neither again", function* () {
     const one = stating(catalogOf("Marker"));
     yield* run('<Syntax as="catalog" />{catalog}{catalog}{catalog}', [one.installation]);
     expect(one.calls.count).toBe(1);
@@ -251,8 +252,8 @@ describe("Tier SC — what one occurrence answers", () => {
   });
 });
 
-describe("Tier SC — the name canonical core owns", () => {
-  it("SC5: a repository Syntax.md, Syntax.ts and directory candidate never win", function* () {
+describe("Tier SYN — the name canonical core owns", () => {
+  it("SYN5: a repository Syntax.md, Syntax.ts and directory candidate never win", function* () {
     yield* useWorkingDirectory(function* (dir) {
       yield* writeTextFile(join(dir, "Syntax.md"), "a repository catalog\n");
       yield* writeTextFile(join(dir, "Nearby.md"), "a nearby repository component\n");
@@ -270,22 +271,22 @@ describe("Tier SC — the name canonical core owns", () => {
     });
   });
 
-  it("SC6: selection reports the protected tier ahead of every other", function* () {
+  it("SYN6: selection reports the protected tier ahead of every other", function* () {
     yield* useWorkingDirectory(function* (dir) {
       yield* writeTextFile(join(dir, "Syntax.md"), "a repository catalog\n");
       const selected = yield* selectComponent(SYNTAX_COMPONENT, { includes: [dir] });
       expect(selected.kind).toBe("protected");
-      // The origin is core's, and reserved — the catalog's word for a name a
-      // document cannot take back.
+      // Its own origin kind. Not a reserved registration: that is a host
+      // installing something under a name, which can be absent, replaced or
+      // refused, and none of those is true of a name core owns.
       expect(selected.kind === "protected" ? selected.origin : undefined).toEqual({
-        kind: "registered",
+        kind: "protected",
         origin: "@executablemd/core",
-        reserved: true,
       });
     });
   });
 
-  it("SC7: an ordinary and a reserved registration named Syntax are both refused", function* () {
+  it("SYN7: an ordinary and a reserved registration named Syntax are both refused", function* () {
     const refused = yield* refusal(
       scoped(function* () {
         yield* registerComponents([
@@ -322,7 +323,7 @@ describe("Tier SC — the name canonical core owns", () => {
     expect(reservedRefusal).toContain("canonical core owns that name");
   });
 
-  it("SC8: the refused batch registers nothing, and an adjacent registration still works", function* () {
+  it("SYN8: the refused batch registers nothing, and an adjacent registration still works", function* () {
     const good = {
       name: "Adjacent",
       origin: "@executablemd/test",
@@ -364,7 +365,7 @@ describe("Tier SC — the name canonical core owns", () => {
     ).toBe("registered");
   });
 
-  it("SC9: a host that declares Markdown called Syntax is refused before the root import", function* () {
+  it("SYN9: a host that declares Markdown called Syntax is refused before the root import", function* () {
     const source = "a declared catalog\n";
     const declaration: DeclaredMarkdownComponent = {
       name: "Syntax",
@@ -393,7 +394,7 @@ describe("Tier SC — the name canonical core owns", () => {
     );
   });
 
-  it("SC10: a workflow bundle member called Syntax is refused before the root import", function* () {
+  it("SYN10: a workflow bundle member called Syntax is refused before the root import", function* () {
     const bundled = {
       name: "Syntax",
       path: "components/Syntax.md",
@@ -418,7 +419,7 @@ describe("Tier SC — the name canonical core owns", () => {
   });
 });
 
-describe("Tier SC — what the chain may and may not do", () => {
+describe("Tier SYN — what the chain may and may not do", () => {
   /** A handler that answers `Syntax` with whatever `answer` produces. */
   function answering(
     answer: (real: ImportedDefinition) => ImportedDefinition,
@@ -440,7 +441,7 @@ describe("Tier SC — what the chain may and may not do", () => {
     };
   }
 
-  it("SC11: ordinary delegation reaches canonical Syntax", function* () {
+  it("SYN11: ordinary delegation reaches canonical Syntax", function* () {
     const seen: string[] = [];
     const observing: ExecutionInstallation = {
       *install() {
@@ -461,7 +462,7 @@ describe("Tier SC — what the chain may and may not do", () => {
     expect(seen).toContain(SYNTAX_COMPONENT);
   });
 
-  it("SC12: a handler that answers, substitutes, mutates or copies runs no replacement", function* () {
+  it("SYN12: a handler that answers, substitutes, mutates or copies runs no replacement", function* () {
     const replacement: FunctionComponent = function* () {
       return "a replaced catalog";
     };
@@ -497,7 +498,7 @@ describe("Tier SC — what the chain may and may not do", () => {
     }
   });
 
-  it("SC13: a handler that redirects the name, or delegates twice, answers nothing", function* () {
+  it("SYN13: a handler that redirects the name, or delegates twice, answers nothing", function* () {
     const redirecting: ExecutionInstallation = {
       *install() {
         yield* Component.around(
@@ -540,7 +541,7 @@ describe("Tier SC — what the chain may and may not do", () => {
     ).toBeTruthy();
   });
 
-  it("SC14: a deliberate middleware refusal stays a refusal", function* () {
+  it("SYN14: a deliberate middleware refusal stays a refusal", function* () {
     const refusing: ExecutionInstallation = {
       *install() {
         yield* Component.around(
@@ -563,7 +564,7 @@ describe("Tier SC — what the chain may and may not do", () => {
     expect(calls.count).toBe(0);
   });
 
-  it("SC15: a document-authored context and a look-alike observation change nothing", function* () {
+  it("SYN15: a document-authored context and a look-alike observation change nothing", function* () {
     // Nothing a document writes reaches the observation: it is not addressed by
     // name. The strongest thing an authored document can do is register and
     // bind, and the catalog is unchanged by both.
@@ -580,8 +581,8 @@ describe("Tier SC — what the chain may and may not do", () => {
   });
 });
 
-describe("Tier SC — the site the catalog describes", () => {
-  it("SC16: the derived catalog reports this execution's own includes and registry", function* () {
+describe("Tier SYN — the site the catalog describes", () => {
+  it("SYN16: the derived catalog reports this execution's own includes and registry", function* () {
     yield* useWorkingDirectory(function* (dir) {
       yield* writeTextFile(join(dir, "Local.md"), "a local component\n");
       // No host contribution: canonical core derives the catalog from the
@@ -591,11 +592,89 @@ describe("Tier SC — the site the catalog describes", () => {
       // And it describes itself, once, with the approved description.
       expect(output).toContain("### `<Syntax>`");
       expect(output).toContain(DESCRIPTION);
-      expect(output).toContain("`@executablemd/core` (reserved registration)");
+      // Its own provenance, not a registration's. A reader deciding whether
+      // they could supply this name themselves gets the opposite answer from
+      // the two phrases, so the catalog must not print the other one.
+      expect(output).toContain("`@executablemd/core` (protected component)");
+      expect(output).not.toContain("reserved registration");
     });
   });
 
-  it("SC17: a workflow root observes its own bundle without running a member", function* () {
+  it("SYN27: the catalog reports a protected component as protected, not registered", function* () {
+    const { installation } = stating(catalogOf("Marker"));
+    const catalog = yield* scoped(function* () {
+      yield* executeInstalled(
+        {
+          ...retainedSource(ROOT_PATH, "<Syntax />\n"),
+          stream: new InMemoryStream(),
+          includes: [],
+        },
+        [installation],
+      );
+      return yield* inspectSyntax({ includes: [] });
+    });
+    expect(catalog.version).toBe(2);
+
+    // Built-in: the second category, where a reader indexes for it.
+    const entry = catalog.categories[1].entries.find((candidate) => candidate.name === "Syntax");
+    if (entry === undefined) {
+      throw new Error("expected the catalog to describe <Syntax>");
+    }
+    // The structured origin, which is what a machine reader switches on.
+    expect(entry.origin).toEqual({ kind: "protected", origin: "@executablemd/core" });
+    expect(entry.sourceKind).toBe("protected");
+
+    // And `inspectComponent` agrees, so one name and the whole environment
+    // cannot describe the same component two ways.
+    const info = yield* scoped(function* () {
+      return yield* inspectComponent({ name: "Syntax", includes: [] });
+    });
+    if (info.kind !== "protected") {
+      throw new Error(`expected a protected component, got ${info.kind}`);
+    }
+    expect(info.origin).toEqual({ kind: "protected", origin: "@executablemd/core" });
+  });
+
+  it("SYN28: a bundled component is reported as pinned, not as a repository file", function* () {
+    const sourceHash = "1".repeat(40);
+    const bundle = {
+      components: [
+        {
+          name: "Bundled",
+          path: "components/Bundled.md",
+          sourceHash,
+          content: "a bundled component\n",
+        },
+      ],
+    };
+    const output = String(yield* run("<Syntax />\n", [{ bundle }]));
+
+    // The path alone would read as a file the reader could edit; the blob id is
+    // what says this is the exact source the run was defined against.
+    expect(output).toContain("`components/Bundled.md` (workflow bundle, `111111111111`)");
+
+    const catalog = yield* scoped(function* () {
+      const registry = yield* Component.operations.registry;
+      const workflow = installedBundle([bundle], registry);
+      if (workflow === undefined) {
+        throw new Error("expected the bundle to install");
+      }
+      return yield* inspectSyntax({ includes: [], workflow });
+    });
+    // User-provided: the third category.
+    const entry = catalog.categories[2].entries.find((candidate) => candidate.name === "Bundled");
+    if (entry === undefined || entry.inspectability !== "complete") {
+      throw new Error("expected the catalog to describe <Bundled> completely");
+    }
+    expect(entry.origin).toEqual({
+      kind: "workflow",
+      path: "components/Bundled.md",
+      sourceHash,
+    });
+    expect(entry.sourceKind).toBe("workflow-markdown");
+  });
+
+  it("SYN17: a workflow root observes its own bundle without running a member", function* () {
     const entered: string[] = [];
     const bundle = {
       components: [
@@ -620,7 +699,7 @@ describe("Tier SC — the site the catalog describes", () => {
     ).toBe(false);
   });
 
-  it("SC18: a declared Markdown component's own body observes the site it inherited", function* () {
+  it("SYN18: a declared Markdown component's own body observes the site it inherited", function* () {
     const source = ['<Syntax as="catalog" />', "policy sees {catalog}", ""].join("\n");
     const declaration: DeclaredMarkdownComponent = {
       name: "Policy",
@@ -637,8 +716,8 @@ describe("Tier SC — the site the catalog describes", () => {
   });
 });
 
-describe("Tier SC — the record one occurrence keeps", () => {
-  it("SC19: the retained payload is closed on exactly { catalog }", function* () {
+describe("Tier SYN — the record one occurrence keeps", () => {
+  it("SYN19: the retained payload is closed on exactly { catalog }", function* () {
     const stream = new InMemoryStream();
     yield* run("<Syntax />\n", [stating(catalogOf("Marker")).installation], stream);
     const [observation] = observations(yield* stream.readAll());
@@ -650,7 +729,7 @@ describe("Tier SC — the record one occurrence keeps", () => {
     expect(typeof value.catalog).toBe("string");
   });
 
-  it("SC20: a continuation restores the catalog after the environment moves, and asks nothing", function* () {
+  it("SYN20: a continuation restores the catalog after the environment moves, and asks nothing", function* () {
     const first = new InMemoryStream();
     const before = String(
       yield* run("<Syntax />\n", [stating(catalogOf("Before")).installation], first),
@@ -676,7 +755,7 @@ describe("Tier SC — the record one occurrence keeps", () => {
     ).toContain("### `<After>`");
   });
 
-  it("SC21: a missing, extra or wrong-typed retained payload refuses before output or binding", function* () {
+  it("SYN21: a missing, extra or wrong-typed retained payload refuses before output or binding", function* () {
     const cases: [string, (value: Json) => Json][] = [
       ["the member is missing", () => ({})],
       ["an unknown member was added", (value) => ({ ...Object(value), extra: true })],
@@ -697,7 +776,7 @@ describe("Tier SC — the record one occurrence keeps", () => {
     }
   });
 
-  it("SC22: a cancelled observation tears down and commits no catalog", function* () {
+  it("SYN22: a cancelled observation tears down and commits no catalog", function* () {
     const teardown: string[] = [];
     const stream = new InMemoryStream();
     const hanging: ExecutionInstallation = {
@@ -728,8 +807,8 @@ describe("Tier SC — the record one occurrence keeps", () => {
   });
 });
 
-describe("Tier SC — observation is never authority", () => {
-  it("SC23: a catalog naming a component neither registers nor resolves it", function* () {
+describe("Tier SYN — observation is never authority", () => {
+  it("SYN23: a catalog naming a component neither registers nor resolves it", function* () {
     // The strongest form: the trusted host itself states a catalog naming a
     // component nothing supplies.
     const { installation } = stating(catalogOf("Phantom"));
@@ -743,7 +822,7 @@ describe("Tier SC — observation is never authority", () => {
     expect((yield* selectComponent("Phantom", { includes: [] })).kind).toBe("unresolved");
   });
 
-  it("SC24: the component is described identically by inspection and by validation", function* () {
+  it("SYN24: the component is described identically by inspection and by validation", function* () {
     const catalog = yield* inspectSyntax({ includes: [] });
     const entry = catalog.categories[1].entries.find((candidate) => candidate.name === "Syntax");
     expect(entry).toBeDefined();
@@ -751,11 +830,7 @@ describe("Tier SC — observation is never authority", () => {
     expect(entry?.forms).toEqual(["self-closing"]);
     expect(entry?.returnMode).toBe("text");
     expect(entry?.props).toEqual({ type: "object", properties: {}, additionalProperties: false });
-    expect(entry?.origin).toEqual({
-      kind: "registered",
-      origin: "@executablemd/core",
-      reserved: true,
-    });
+    expect(entry?.origin).toEqual({ kind: "protected", origin: "@executablemd/core" });
     // Exactly one entry, in exactly one category.
     const everywhere = catalog.categories.flatMap((category) =>
       category.entries.filter((candidate) => candidate.name === "Syntax"),
@@ -763,7 +838,7 @@ describe("Tier SC — observation is never authority", () => {
     expect(everywhere.length).toBe(1);
 
     const described = yield* inspectComponent({ name: "Syntax", includes: [] });
-    expect(described.kind).toBe("registered");
+    expect(described.kind).toBe("protected");
 
     // Validation reads the same declaration, so a paired spelling is invalid
     // before anything runs and the self-closing one is valid.
@@ -789,7 +864,7 @@ describe("Tier SC — observation is never authority", () => {
    * Installing it for an evaluation subtree is #713's; that the observation is
    * the catalog and nothing more is this.
    */
-  it("SC25b: a narrowed observation answers with exactly the catalog it was given", function* () {
+  it("SYN25b: a narrowed observation answers with exactly the catalog it was given", function* () {
     const narrowed = catalogOf("Admitted");
     const observation = fixedCatalogObservation(narrowed);
     expect(yield* observation.observe()).toBe(renderSyntaxMarkdown(narrowed));
@@ -798,7 +873,7 @@ describe("Tier SC — observation is never authority", () => {
     expect(yield* observation.observe()).not.toContain("### `<Syntax>`");
   });
 
-  it("SC25: an execution that carries no observation refuses rather than inventing one", function* () {
+  it("SYN25: an execution that carries no observation refuses rather than inventing one", function* () {
     // `execute()` driven directly still carries one, so the case that has none
     // is an expansion driven outside an execution — which is what a component
     // reaching for a catalog with nothing established would meet.

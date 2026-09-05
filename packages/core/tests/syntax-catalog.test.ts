@@ -237,10 +237,10 @@ const DOCUMENTED = [
 ].join("\n");
 
 describe("Tier SY: the versioned shape", () => {
-  it("SY1: reports version 1 and the three categories in a fixed order", function* () {
+  it("SY1: reports version 2 and the three categories in a fixed order", function* () {
     const catalog = yield* catalogFor({ components: { kind: "directory" } }, ["components"]);
 
-    expect(catalog.version).toBe(1);
+    expect(catalog.version).toBe(2);
     expect(catalog.categories.map((category) => category.kind)).toEqual([
       "structural",
       "built-in",
@@ -321,7 +321,7 @@ describe("Tier SY: structural vocabulary", () => {
     const catalog = yield* catalogFor({}, []);
     const entries = structural(catalog);
 
-    expect(catalog.version).toBe(1);
+    expect(catalog.version).toBe(2);
     expect(find(entries, "Switch")).toEqual({
       kind: "structural",
       name: "Switch",

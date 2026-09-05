@@ -2722,6 +2722,17 @@ Seeing a component in a catalog grants nothing. It neither registers, resolves
 nor authorizes that component: what a name means is still this section's
 decision, and what may run is still the execution's.
 
+**The catalog says where it came from.** A protected component is reported under
+the catalog origin kind `protected`, carrying the canonical core origin — never
+as a reserved registration, which is a *host's* claim under a name and can be
+absent, replaced or refused where this cannot. A workflow-bundle member is
+reported under the kind `workflow`, carrying its canonical repository-relative
+path **and** the blob's own object id, so it stays distinguishable from a
+repository candidate, which is whatever that path holds now. Both kinds are
+additions, so the catalog is **version 2**: a version-1 reader was promised a
+closed set of origins, and neither emitting an unknown kind nor reusing a
+neighbouring one would keep that promise. Nothing else about the shape changed.
+
 **Each occurrence observes once.** It claims the durable identity the execution
 minted for it, performs one `syntax_catalog` durable observation, and retains
 exactly `{ catalog: string }`. On continuation that record is parsed as a closed
@@ -3574,6 +3585,26 @@ A component the workflow definition is closed over records its own shape:
     "sourceHash": "9fceb02d0ae598e95dc970b74767f19372d61af8",
     "content": "discovered.\n" } }
 ```
+
+A component canonical core claims the name of (§5.3.1) records the fact and
+nothing else:
+
+```json
+{ "type": "import_component", "name": "Syntax" }
+{ "status": "ok", "value": { "kind": "protected" } }
+```
+
+The record is closed on that single member because there is nothing else that
+would be true to write. A protected component has no path to record, no origin
+to look up, and no implementation to serialize: it is core's own declaration,
+present in every execution rather than supplied by anything this one installed.
+So the record says only *which tier answered*, and replay asks the running
+execution for the implementation it built for that name. An execution that built
+none refuses rather than resolving the name again — a replay that fell back to
+the ordinary tiers would run whatever a repository, a registry or a host is
+offering under that name today, which is the substitution the tier exists to
+prevent. A record carrying any member beside `kind`, or a `kind` this protocol
+does not define, is stale input.
 
 One journal entry per component, whatever it resolved to. A repository entry
 captures both *which file was found* (path) and *what was in it* (content); a
@@ -9766,6 +9797,7 @@ trusted-host events may have no authored source.
 | Resolve components (glob) | `glob` | `resolve:{dir}` | Only when `useDurableGlobResolver` middleware is installed |
 | Read over HTTP | `fetch` | `fetch:{expansion id}` | Normalized request in `description.input`; status, detached headers and text body in the result (§6.18) |
 | Admit generated XMD | `generated_xmd` | `generated:{fragment id}` | The canonical class selection, retained roots, selected root, every selected entry as a name, identity and admitted forms, and the exact request policy in `description.input`; the admitted source, that same policy, and the identity and form of each element the fragment named in the result (workflow-workspace-spec §8.4) |
+| Observe the catalog | `syntax_catalog` | `syntax_catalog:{expansion id}` | One per authored `<Syntax />` occurrence. The success payload is closed on exactly `{ catalog: string }` — the rendered Markdown the component returned — so a continuation restores the catalog the run actually showed without consulting the filesystem, registry, bundle, host or lexical observation again. A missing, additional or mistyped member is stale input and refuses before output or binding; a cancelled observation completes teardown and commits nothing (§5.3.1) |
 
 ### 10.2 Example journal for a multi-component document
 
@@ -10795,6 +10827,26 @@ and proves it unread: `-e -` refuses; bare `xmd -` executes the file named `-`
 and renders that file's marker; `xmd run -#Section` executes `Section` of that
 same file, rendering its marker and not its sibling section's; and `xmd test -`
 keeps the test command's own path behavior.
+
+### Tier SYN — The public `<Syntax />` component
+
+Named `SYN` rather than `SY` or `SL`, which already name the syntax catalog and
+own-scope context updates. The catalog *value* is Tier SY's; this tier is the
+component that observes one at an authored site.
+
+| # | Test | Verify |
+|---|------|--------|
+| SYN1–SYN4 | One occurrence | The bare form renders the catalog once and `as` binds the same text emitting nothing; a paired spelling and an authored prop refuse before any observation; two occurrences observe independently and a reused binding observes nothing again |
+| SYN5–SYN10 | The name canonical core owns | A repository `Syntax.md`, `Syntax.ts` and directory candidate never win selection, with an ordinary nearby component as the positive control that repository discovery is live; ordinary and reserved registrations are refused atomically; a workflow bundle member and a host's declared Markdown are each refused at admission before the root import |
+| SYN6 | The origin selection reports | Selection answers `{ kind: "protected", origin: "@executablemd/core" }` — its own kind, not a reserved registration |
+| SYN11–SYN15 | The import chain | Middleware that answers, substitutes, mutates, redirects, delegates twice or reuses another import's definition cannot run a replacement; ordinary delegation reaches canonical `<Syntax>`; a deliberate middleware refusal stays a refusal; document-authored context and a look-alike observation change nothing |
+| SYN16–SYN18 | The site described | An ordinary run reports its own includes and registry; a workflow root reports its bundle without importing or running a member; a declared Markdown component's body reports the site it inherited |
+| SYN20–SYN22 | The record kept | Continuation restores the retained catalog after the environment moves and rediscovers nothing; missing, additional and wrong-typed payloads refuse before output or binding; a cancelled observation completes teardown and commits nothing |
+| SYN23, SYN25b | Never authority | A catalog naming a component neither registers, resolves nor authorizes it; a fixed narrower observation answers with exactly the catalog it was handed and adds nothing — the seam `<Evaluate>` installs through |
+| SYN24 | One description | Inspection and validation describe the component identically, from one declaration |
+| SYN26 | Another loaded copy | A protected implementation built by a second loaded copy answers for nothing in the active execution |
+| SYN27 | Protected provenance | The catalog reports the component under the `protected` origin kind in both the structured entry and the rendered Markdown, and never as a reserved registration; `inspectComponent` agrees |
+| SYN28 | Pinned provenance | A workflow-bundle component is reported at its path *and* blob object id, under the `workflow` origin kind, and stays in the user-provided category |
 
 ### Tier SX — The `xmd syntax` command
 

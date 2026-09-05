@@ -158,6 +158,19 @@ export type ComponentInfo =
       props: PropsSchema;
       returns?: ReturnsSchema;
     } & DescribedContract)
+  /**
+   * A component canonical core claims the name of.
+   *
+   * Its own `kind` for the same reason its origin has one: a caller asking what
+   * `Syntax` is needs to learn that no registry supplies it and none can, which
+   * `registered` said the opposite of.
+   */
+  | ({
+      kind: "protected";
+      origin: ComponentOrigin;
+      props: PropsSchema;
+      returns?: ReturnsSchema;
+    } & DescribedContract)
   | ({
       kind: "markdown";
       origin: ComponentOrigin;
@@ -210,7 +223,7 @@ export function* inspectComponent(options: InspectComponentOptions): Operation<C
       };
     case "protected":
       return {
-        kind: "registered",
+        kind: "protected",
         origin: selected.origin,
         props: selected.component.props,
         ...(selected.component.returns === undefined
@@ -300,13 +313,21 @@ const BOTH_FORMS: readonly InvocationForm[] = ["self-closing", "paired"];
 /**
  * Everything a document may write here, as one value.
  *
- * Version 1, and the version is part of the contract rather than a note about
- * it: a consumer reads `version` before anything else and never has to guess
- * which shape it received. The three categories are a fixed tuple in a fixed
- * order, so a reader indexes them and a renderer walks them without sorting.
+ * The version is part of the contract rather than a note about it: a consumer
+ * reads `version` before anything else and never has to guess which shape it
+ * received. The three categories are a fixed tuple in a fixed order, so a reader
+ * indexes them and a renderer walks them without sorting.
+ *
+ * **Version 2** adds two origin kinds, `protected` and `workflow`, and that is
+ * why it is a new version rather than an addition to version 1. A version-1
+ * reader was promised a closed set of origins; quietly emitting a kind it has
+ * never seen would break it, and quietly *reusing* an existing kind — which is
+ * what version 1 did for both of these — told it something untrue. See
+ * `ComponentOrigin`. Nothing else about the shape changed, so a reader that
+ * switches exhaustively on `kind` needs two new arms and no other work.
  */
 export interface SyntaxCatalog {
-  readonly version: 1;
+  readonly version: 2;
   readonly categories: readonly [
     {
       readonly kind: "structural";
@@ -346,7 +367,20 @@ export interface CompleteComponentSyntaxEntry {
   readonly kind: "component";
   readonly name: string;
   readonly origin: Exclude<ComponentOrigin, { kind: "structural" }>;
-  readonly sourceKind: "registered" | "markdown" | "declared-markdown";
+  /**
+   * What kind of thing supplied the contract above.
+   *
+   * `protected` and `workflow-markdown` are version 2's additions. Both were
+   * previously folded into a neighbour — `registered` and `markdown` — which
+   * made a catalog reader unable to tell core's own component from a host's
+   * registration, or a pinned bundle member from a file on disk.
+   */
+  readonly sourceKind:
+    | "registered"
+    | "protected"
+    | "markdown"
+    | "workflow-markdown"
+    | "declared-markdown";
   readonly inspectability: "complete";
   readonly forms: readonly ("self-closing" | "paired")[];
   readonly props: PropsSchema;
@@ -499,7 +533,13 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxC
     // A repository override therefore removes the name from `built-in` and adds
     // its one selected entry to `user-provided`: selection chose once, and the
     // catalog reports what it chose rather than everything it could have.
-    if (entry.inspectability === "origin-only" || entry.origin.kind === "repository") {
+    //
+    // A workflow-bundle member belongs here for the same reason a repository
+    // file does — it is the run author's own Markdown, not something the engine
+    // or the host supplies — and it is named separately because its origin kind
+    // is no longer `repository`.
+    const authored = entry.origin.kind === "repository" || entry.origin.kind === "workflow";
+    if (entry.inspectability === "origin-only" || authored) {
       userProvided.push(entry);
     } else {
       builtIn.push(entry);
@@ -507,7 +547,7 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxC
   }
 
   return {
-    version: 1,
+    version: 2,
     categories: [
       { kind: "structural", entries: structural },
       { kind: "built-in", entries: builtIn },
@@ -568,7 +608,7 @@ function* componentEntry(
     // Described from the declaration alone. The factory is never called: it
     // takes an execution's claimant, and describing an environment mints no
     // execution and no claimant to give it.
-    return complete(name, origin, "registered", {
+    return complete(name, origin, "protected", {
       forms: component.forms ?? BOTH_FORMS,
       props: component.props,
       captures: component.captures ?? [],
@@ -605,16 +645,24 @@ function* componentEntry(
   if (selected.kind === "workflow") {
     // The pinned bytes, already in hand: the bundle was read from the
     // definition's own commit before this execution existed, so describing one
-    // reads no file, imports no module and runs nothing. It is the run author's
-    // own Markdown, reported at the canonical path it holds inside that commit.
+    // reads no file, imports no module and runs nothing. Reported at the
+    // canonical path it holds inside that commit *and* by the blob's own object
+    // id, because the path alone would read as a repository candidate — a
+    // mutable file that happens to sit there now — and this is the exact blob
+    // the run was defined against.
     const definition = yield* parseMarkdownDefinition(name, selected.path, selected.content);
-    return complete(name, { kind: "repository", path: selected.path }, "markdown", {
-      forms: BOTH_FORMS,
-      props: definition.props,
-      captures: [],
-      returns: definition.returns,
-      documentation: documentationOf(definition.meta),
-    });
+    return complete(
+      name,
+      { kind: "workflow", path: selected.path, sourceHash: selected.sourceHash },
+      "workflow-markdown",
+      {
+        forms: BOTH_FORMS,
+        props: definition.props,
+        captures: [],
+        returns: definition.returns,
+        documentation: documentationOf(definition.meta),
+      },
+    );
   }
 
   if (selected.kind !== "repository") {
@@ -662,7 +710,7 @@ interface CompleteContract {
 function complete(
   name: string,
   origin: Exclude<ComponentOrigin, { kind: "structural" }>,
-  sourceKind: "registered" | "markdown" | "declared-markdown",
+  sourceKind: CompleteComponentSyntaxEntry["sourceKind"],
   contract: CompleteContract,
 ): CompleteComponentSyntaxEntry {
   return {

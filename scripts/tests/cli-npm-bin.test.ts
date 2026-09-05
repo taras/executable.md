@@ -235,11 +235,8 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     // that lost the protected tier would either omit it or list it twice.
     const syntax = entries.filter((entry: { name?: string }) => entry?.name === "Syntax");
     expect(syntax).toHaveLength(1);
-    expect(syntax[0].origin).toEqual({
-      kind: "registered",
-      origin: "@executablemd/core",
-      reserved: true,
-    });
+    expect(syntax[0].origin).toEqual({ kind: "protected", origin: "@executablemd/core" });
+    expect(syntax[0].sourceKind).toBe("protected");
     expect(syntax[0].forms).toEqual(["self-closing"]);
     expect(syntax[0].returnMode).toBe("text");
     expect(syntax[0].description).toBe(

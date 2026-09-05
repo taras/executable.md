@@ -106,11 +106,8 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
     // that lost it would describe no catalog component at all.
     const syntax = entries.filter((entry: { name?: string }) => entry?.name === "Syntax");
     expect(syntax).toHaveLength(1);
-    expect(syntax[0].origin).toEqual({
-      kind: "registered",
-      origin: "@executablemd/core",
-      reserved: true,
-    });
+    expect(syntax[0].origin).toEqual({ kind: "protected", origin: "@executablemd/core" });
+    expect(syntax[0].sourceKind).toBe("protected");
     expect(syntax[0].forms).toEqual(["self-closing"]);
     expect(syntax[0].returnMode).toBe("text");
     expect(syntax[0].description).toBe(

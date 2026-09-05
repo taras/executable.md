@@ -66,8 +66,8 @@ function parseCatalog(text: string): SyntaxCatalog {
   }
   const version = Reflect.get(parsed, "version");
   const categories = Reflect.get(parsed, "categories");
-  if (version !== 1 || !Array.isArray(categories) || categories.length !== 3) {
-    throw new Error("the catalog is not the version-1 shape");
+  if (version !== 2 || !Array.isArray(categories) || categories.length !== 3) {
+    throw new Error("the catalog is not the version-2 shape");
   }
   return { version, categories: readCategories(categories) };
 }
@@ -107,7 +107,7 @@ function names(entries: readonly { name: string }[]): string[] {
 /** One built-in entry carrying `props`, for a renderer row that supplies its own. */
 function catalogWith(props: PropsSchema): SyntaxCatalog {
   return {
-    version: 1,
+    version: 2,
     categories: [
       { kind: "structural", entries: [] },
       {
@@ -189,11 +189,8 @@ describe("Tier SX — the run profile the command describes", () => {
     if (entry === undefined || entry.kind !== "component" || entry.inspectability !== "complete") {
       throw new Error("the catalog describes <Syntax> without a contract");
     }
-    expect(entry.origin).toEqual({
-      kind: "registered",
-      origin: "@executablemd/core",
-      reserved: true,
-    });
+    expect(entry.origin).toEqual({ kind: "protected", origin: "@executablemd/core" });
+    expect(entry.sourceKind).toBe("protected");
     expect(entry.forms).toEqual(["self-closing"]);
     expect(entry.props).toEqual({ type: "object", properties: {}, additionalProperties: false });
     expect(entry.captures).toEqual([]);
@@ -471,7 +468,7 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
     });
   });
 
-  it("SX10: writes markdown by default and version-1 JSON with --json", function* () {
+  it("SX10: writes markdown by default and version-2 JSON with --json", function* () {
     yield* useWorkspace(WORKSPACE, function* (cwd) {
       const markdown = yield* runCli(["syntax", "--include", "first"], { cwd }).expect();
       expect(markdown.stdout).toContain("## Built-in structural syntax");
@@ -480,7 +477,7 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
 
       const json = yield* runCli(["syntax", "--json", "--include", "first"], { cwd }).expect();
       const catalog = parseCatalog(json.stdout);
-      expect(catalog.version).toBe(1);
+      expect(catalog.version).toBe(2);
       expect(names(catalog.categories[2].entries)).toEqual(["Shared"]);
     });
   });
@@ -561,7 +558,7 @@ describe(
 
         expect(piped).toBe(redirected);
         const catalog = parseCatalog(piped);
-        expect(catalog.version).toBe(1);
+        expect(catalog.version).toBe(2);
         expect(names(catalog.categories[2].entries)).toContain("ZBeyondTheBuffer");
         expect(piped.lastIndexOf(`"ZBeyondTheBuffer"`)).toBeGreaterThan(PIPE_BUFFER);
       });

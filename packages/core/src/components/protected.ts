@@ -75,15 +75,18 @@ export function protectedComponent(name: string): ProtectedComponent | undefined
 /**
  * The origin a protected component reports.
  *
- * `reserved` is the catalog's word for a name a document cannot take back, which
- * is what this tier makes true of it. No new origin kind: a reader learns where
- * the component came from and that nothing shadows it, from the two fields the
- * schema already has.
+ * Its own kind, because reusing `registered` with `reserved: true` said
+ * something untrue. A reserved registration is a *host* installing a component
+ * under a name it wants kept, so it can be absent from another execution,
+ * replaced by a different host, or refused when two hosts claim it. A protected
+ * component is core's own declaration: present in every execution, supplied by
+ * no registry, and unable to be registered at all. Reporting one as the other
+ * told a reader the name was a host's to take.
  */
 export function protectedOrigin(
   component: ProtectedComponent,
-): Extract<ComponentOrigin, { kind: "registered" }> {
-  return { kind: "registered", origin: component.origin, reserved: true };
+): Extract<ComponentOrigin, { kind: "protected" }> {
+  return { kind: "protected", origin: component.origin };
 }
 
 /** A protected name a host, a bundle or a registration tried to claim. */

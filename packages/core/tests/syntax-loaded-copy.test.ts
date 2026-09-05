@@ -1,5 +1,5 @@
 /**
- * Tier SL — a protected implementation from a second loaded copy answers for
+ * Tier SYN — a protected implementation from a second loaded copy answers for
  * nothing.
  *
  * A component can be loaded from disk beside its own copy of core: that is what
@@ -163,8 +163,8 @@ function* refusal(operation: Operation<unknown>): Operation<string> {
   throw new Error("expected the operation to be refused");
 }
 
-describe("Tier SL — a separately loaded protected implementation", () => {
-  it("SL1: an implementation another copy built answers for nothing here", function* () {
+describe("Tier SYN — a separately loaded protected implementation", () => {
+  it("SYN26: an implementation another copy built answers for nothing here", function* () {
     const copy = yield* useSeparateCopy();
 
     // An installation the other copy performed: it minted the domain, built the
