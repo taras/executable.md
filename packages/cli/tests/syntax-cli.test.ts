@@ -494,6 +494,25 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
     expect(unknown.stdout).toBe("");
   });
 
+  it("SX17: the command and the component read one index, for every package", function* () {
+    // `Prompt` is an Agent component: a different registration boundary from
+    // core's own file, and the one that exposed this. The command assembled the
+    // profile's contributions while a document's own named form fell back to a
+    // core-only index, so one product answered the same question two ways.
+    const command = yield* runCli(["syntax", "Prompt", "--include", "."], { cwd: "." }).expect();
+    expect(command.stdout).toContain("### `<Prompt>`");
+    expect(command.stdout).toContain("Sends a prompt and renders the reply");
+
+    const document = yield* runCli(
+      ["run", "-e", '<Syntax names={["Prompt"]} />', "--include", "."],
+      { cwd: "." },
+    ).expect();
+    expect(document.stdout).toContain("Sends a prompt and renders the reply");
+    expect(document.stdout).not.toContain(
+      "No long-form documentation is available for this component.",
+    );
+  });
+
   it("SX10: writes markdown by default and version-2 JSON with --json", function* () {
     yield* useWorkspace(WORKSPACE, function* (cwd) {
       const markdown = yield* runCli(["syntax", "--include", "first"], { cwd }).expect();

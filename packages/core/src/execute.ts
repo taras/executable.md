@@ -141,6 +141,7 @@ import { ExecutionImports } from "./components/import-authority.ts";
 import type { ExpansionAuthority, ImportTier } from "./components/import-authority.ts";
 import { PROTECTED_COMPONENTS, ProtectedImports } from "./components/protected.ts";
 import { rootCatalogObservation } from "./syntax-observation.ts";
+import type { DocumentationContribution } from "./component-documentation.ts";
 import type { CatalogContribution } from "./syntax-observation.ts";
 import type { WorkflowComponentBundle, WorkflowImportAuthority } from "./components/bundle.ts";
 import type { CodeBlockContext, CodeBlockResult, EvalEnv } from "./types.ts";
@@ -2152,6 +2153,14 @@ function* executeDocument(
   identityComponents: readonly IdentityComponent[] = [],
   declarations: readonly DeclaredMarkdownComponent[] = [],
   catalogs: readonly CatalogContribution[] = [],
+  /**
+   * The documentation each installed package contributes.
+   *
+   * Carried by value from the installation boundary, like the catalog beside
+   * it, so the index a document's own `<Syntax names={…}>` reads is the index
+   * the profile actually assembled.
+   */
+  documentation: readonly DocumentationContribution[] = [],
 ): Operation<DocumentExecution> {
   const {
     stream,
@@ -2338,6 +2347,7 @@ function* executeDocument(
             ...(bundle === undefined ? {} : { workflow: bundle }),
           },
           catalogs[0],
+          documentation,
         ),
       };
 
@@ -2628,6 +2638,19 @@ export interface ExecutionInstallation {
    * rather than the authorship execution's. One execution accepts one.
    */
   readonly catalog?: CatalogContribution;
+  /**
+   * The long-form documentation this installation's packages ship.
+   *
+   * One entry per registration boundary that documents its components, derived
+   * from the same declarations the installation registers. Captured by value
+   * before any document code runs: a document that could add a contribution
+   * could describe components it does not have, and one that could remove a
+   * contribution could hide the documentation of a component it does.
+   *
+   * Several are ordinary, unlike `catalog` — a profile installing four packages
+   * has four boundaries — so they are collected rather than refused.
+   */
+  readonly documentation?: readonly DocumentationContribution[];
   install?(): Operation<void>;
 }
 
@@ -3029,6 +3052,16 @@ function* invoke(
       return catalog === undefined ? [] : [catalog];
     }),
   );
+  // The documentation each installed package contributes, captured here with
+  // the rest of the installation and carried by value. Unlike the catalog
+  // above, several are ordinary: one registration boundary is one file, and a
+  // profile that installs four packages has four. Collecting them here is what
+  // makes `<Syntax names={…}>` and `xmd syntax NAME` read one index — the
+  // component reached a core-only index before this, so an Agent component had
+  // documentation on the command line and the fallback sentence in a document.
+  const documentation = Object.freeze(
+    installations.flatMap((installation) => [...(installation.documentation ?? [])]),
+  );
   if (catalogs.length > 1) {
     throw new Error(
       "two installations stated the catalog this execution describes. One execution describes " +
@@ -3075,6 +3108,7 @@ function* invoke(
     identityComponents,
     declarations,
     catalogs,
+    documentation,
   );
 }
 

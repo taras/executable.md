@@ -132,6 +132,7 @@ import {
   renderSyntaxDocumentation,
   renderSyntaxJson,
   renderSyntaxMarkdown,
+  runProfileDocumentation,
   syntaxCatalog,
 } from "./syntax.ts";
 import { deliverWhole } from "./stdout-delivery.ts";
@@ -1171,6 +1172,12 @@ function* runDocument(
         // and does not gain `<Plan>` at its root — but the production run child
         // it can launch is the run profile, and gets it below.
         ...(mode.testing ? {} : { declarations: [plan] }),
+        // The documentation the packages this profile registers ship, beside
+        // the registrations themselves. Without it a document's own
+        // `<Syntax names={…}>` would read a core-only index and answer with the
+        // fallback sentence for a component `xmd syntax NAME` documents fully —
+        // one product, two answers.
+        documentation: yield* runProfileDocumentation(),
       },
       // The declarations a nested execution may configure a child with, named
       // by the exact definitions this command installed. Recognizing one is

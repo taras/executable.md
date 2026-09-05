@@ -197,26 +197,32 @@ rather than asking the network again.
 Lists the files matching a pattern, relative to the working directory.
 
 ```mdx
-<Glob pattern="docs/**/*.md" as="documents" />
+<Glob include={["docs/**/*.md"]} as="documents" />
 ```
 
-`as` is required: the component's result is the list, and there is no useful
-text to render. The list is sorted, so a document that iterates it produces the
-same output for the same tree. Directories and symbolic links are never results
-— only files.
+`include` is a list of patterns, so one element can gather several shapes of
+path in one pass. `as` is required: the component's result is the list of
+matched paths, and there is no useful text to render.
+
+The list is sorted, so a document that iterates it produces the same output for
+the same tree. Directories and symbolic links are never results — only files.
 
 ## CodeBlock
 
 Shows arbitrary text as a fenced Markdown code block.
 
 ```mdx
-<CodeBlock language="json">{payload}</CodeBlock>
+<CodeBlock value={source} language="markdown" />
 ```
 
-Use it when a value is going into a document that will be read as Markdown and
-must not be interpreted as Markdown: a fragment containing backticks, a diff, or
-anything an agent might otherwise read as instructions. It renders the fence for
-you, with a delimiter long enough to survive whatever the content contains.
+Self-closing: the text is the `value` prop rather than content. Use it when a
+value is going into a document that will be read as Markdown and must not be
+interpreted as Markdown — a fragment containing backticks, a diff, or anything
+an agent might otherwise read as instructions.
+
+It chooses a fence the value cannot break out of, so a value that itself
+contains fences is still shown rather than escaping into the surrounding
+document. `as` captures the exact fenced Markdown instead of emitting it.
 
 ## Json
 
@@ -265,12 +271,15 @@ service that may be having a bad day — rather than a reason to stop.
 Declares a test case.
 
 ```mdx
-<Test name="the plan names every input">
+<Test name="parses a manifest">
 …
 </Test>
 ```
 
-It runs only inside a `<Testing>` region; elsewhere it is skipped, so a document
-carrying its own tests stays runnable as an ordinary document. A failing command
-or assertion inside the case fails that case rather than the whole run, which is
-what lets one run report every failure rather than only the first.
+It runs under `xmd test`, or inside a `<Testing>` region. Elsewhere it is
+skipped, so a document carrying its own tests stays runnable as an ordinary
+document — the tests are inert until something asks for them.
+
+A failing command or assertion inside the case fails that case rather than the
+whole run, which is what lets one run report every failure rather than only the
+first.

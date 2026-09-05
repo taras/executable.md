@@ -35,6 +35,7 @@ import type { SyntaxCatalog } from "./inspect.ts";
 import { renderSelectedDocumentation, renderSyntaxMarkdown } from "./syntax-markdown.ts";
 import type { SelectedEntry } from "./syntax-markdown.ts";
 import { documentationIndexFor } from "./component-documentation.ts";
+import type { DocumentationContribution } from "./component-documentation.ts";
 import type { DocumentationIndex } from "./documentation-index.ts";
 import { UnknownComponentError } from "./documentation-index.ts";
 import type { WorkflowImportAuthority } from "./components/bundle.ts";
@@ -107,6 +108,15 @@ export interface CapturedCatalogInputs {
 export function rootCatalogObservation(
   inputs: CapturedCatalogInputs,
   contribution: CatalogContribution | undefined,
+  /**
+   * The documentation the installed packages contribute.
+   *
+   * Handed in rather than assumed, so a document's own named lookup reads the
+   * index its profile assembled. Defaulting to none is what made an Agent
+   * component answer with documentation on the command line and with the
+   * fallback sentence inside a document.
+   */
+  documentation: readonly DocumentationContribution[] = [],
 ): CatalogObservation {
   function* current(): Operation<SyntaxCatalog> {
     return contribution === undefined ? yield* derived(inputs) : yield* contribution();
@@ -120,7 +130,7 @@ export function rootCatalogObservation(
       // may execute, so what an author may read about and what they may run are
       // the same set, and every selected entry is available.
       const catalog = yield* current();
-      const index = yield* documentationIndexFor();
+      const index = yield* documentationIndexFor(documentation);
       return renderSelectedDocumentation(select(catalog, catalog, names, index));
     },
   };
@@ -247,6 +257,16 @@ export function fixedCatalogObservation(
    * the very components they are being asked to write about.
    */
   reference: SyntaxCatalog = catalog,
+  /**
+   * The enclosing execution's documentation contributions, carried across the
+   * seam.
+   *
+   * Narrowing what may *execute* does not narrow what an author may read about:
+   * the enclosing authoring documentation travels in with the enclosing
+   * catalog, so a nested author keeps the reference material they had. #713
+   * installs the executable catalog; this is the index that goes with it.
+   */
+  documentation: readonly DocumentationContribution[] = [],
 ): CatalogObservation {
   const rendered = renderSyntaxMarkdown(catalog);
   return {
@@ -255,7 +275,7 @@ export function fixedCatalogObservation(
       return rendered;
     },
     *document(names: readonly string[]): Operation<string> {
-      const index = yield* documentationIndexFor();
+      const index = yield* documentationIndexFor(documentation);
       return renderSelectedDocumentation(select(reference, catalog, names, index));
     },
   };
