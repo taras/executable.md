@@ -64,10 +64,7 @@ import {
 } from "@executablemd/workflow";
 import type { ForkSelection, WorkflowRun } from "@executablemd/workflow";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
-import type {
-  WorkflowExecutionTransitions,
-  WorkflowRunCreation,
-} from "@executablemd/workflow/deno";
+import type { WorkflowExecutionTransitions, WorkflowRunCreation } from "@executablemd/workflow";
 import type { EstablishedDefinition } from "./workflow-definition.ts";
 import type { WorkflowExecution } from "./workflow.ts";
 

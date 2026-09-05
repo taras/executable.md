@@ -1,0 +1,111 @@
+/**
+ * Admitting a Git locator, and naming one without publishing it.
+ *
+ * Two different questions. **Admission** decides whether a locator may be handed
+ * to Git at all. **Fingerprinting** produces the stable name the journal, the
+ * record and every compatibility comparison use, so a changed locator diverges
+ * without the bytes of either one being retained outside the single column that
+ * holds them.
+ *
+ * Admission is a closed allowlist rather than a search for bad shapes. Git's
+ * locator grammar reaches well past URLs — `ext::sh -c …` runs a command, a
+ * leading `-` is read as an option, and a transport helper is whatever is on
+ * `PATH` — so anything not recognized as one of the admitted forms is refused.
+ * Credentials in the string are refused rather than stripped: a locator that
+ * carries one is a secret a caller put in a durable input, and quietly editing
+ * it would retain a run nobody asked for.
+ *
+ * Both rules are shared because both hosts need them and neither may be more
+ * permissive than the other. The local host refuses a locator before Git sees
+ * it; the remote owner must refuse the same one before it becomes durable
+ * state, or an authenticated proposal could retain something the local host
+ * would never have produced. A second copy of an allowlist is the copy that
+ * ends up longer.
+ *
+ * Nothing here reaches a runtime. `URL` is the platform's, and the digest is
+ * the shared one.
+ */
+
+import { sha256Hex } from "../workspace/sha256.ts";
+
+/** Schemes this provider hands to Git. Everything else is refused. */
+const SCHEMES = new Set(["https", "http", "ssh", "git", "file"]);
+
+/** `user@host:path`, Git's scp-like form. A colon in the userinfo is a password. */
+const SCP_LIKE = /^([^/@:]+)@([^/@:]+):(.+)$/;
+
+function hasControlCharacters(value: string): boolean {
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code < 0x20 || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function admitUrl(locator: string): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(locator);
+  } catch {
+    return undefined;
+  }
+  const scheme = url.protocol.replace(/:$/, "");
+  if (!SCHEMES.has(scheme)) {
+    return undefined;
+  }
+  if (url.username !== "" || url.password !== "") {
+    return undefined;
+  }
+  // A query or a fragment is refused whole rather than searched for credentials.
+  // `?access_token=…` is the ordinary way a token is written into a URL, and a
+  // rule that named the parameters worth refusing would be a list of the ones
+  // somebody thought of — the same open-ended guessing this module rejects
+  // everywhere else. Git is given a repository's location, and neither part
+  // carries any of that location for the transports admitted here.
+  if (url.search !== "" || url.hash !== "") {
+    return undefined;
+  }
+  return locator;
+}
+
+/**
+ * The locator this string is, or `undefined` when this provider will not use it.
+ *
+ * The answer is the original bytes, never a rewritten form: what is admitted is
+ * what Git is given and what the fingerprint names, so the three cannot drift.
+ */
+export function admitLocator(locator: string): string | undefined {
+  if (locator === "" || hasControlCharacters(locator) || /\s/.test(locator)) {
+    return undefined;
+  }
+  if (locator.startsWith("-")) {
+    return undefined;
+  }
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(locator)) {
+    return admitUrl(locator);
+  }
+  const scpLike = SCP_LIKE.exec(locator);
+  if (scpLike !== null) {
+    return locator;
+  }
+  // A local path. Absolute only: a relative one would name a different
+  // repository depending on which directory the host happened to run in, and a
+  // workflow's retained identity must not depend on that.
+  if (locator.startsWith("/")) {
+    return locator;
+  }
+  return undefined;
+}
+
+/**
+ * The stable name an admitted locator is known by everywhere but its own column.
+ *
+ * Shared because both hosts retain it and both must derive it identically: a
+ * fingerprint is what a journal event carries in place of the locator, and two
+ * derivations would be two names for one repository.
+ */
+export function locatorFingerprintOf(locator: string): string {
+  return sha256Hex(locator);
+}

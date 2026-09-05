@@ -29,12 +29,9 @@ import {
   type WorktreeRecord,
 } from "../../composition/records.ts";
 import { reading } from "../reading.ts";
+import type { StoredRepository, WorkspaceMetadata } from "../../workspace/metadata.ts";
 
-/** A Repository row: its journal-safe record, and the locator only storage sees. */
-export interface StoredRepository {
-  readonly record: RepositoryRecord;
-  readonly locator: string;
-}
+export type { StoredRepository, WorkspaceMetadata } from "../../workspace/metadata.ts";
 
 const REPOSITORY_COLUMNS = `name, locator, locator_fingerprint, requested_base,
     creation_commit, primary_branch, object_format, checkout_path`;
@@ -193,23 +190,6 @@ export function insertWorktree(database: DatabaseSync, record: WorktreeRecord): 
       record.creationCommit,
       record.checkoutPath,
     );
-}
-
-/**
- * The metadata one Workspace transaction may read and write.
- *
- * Handed to a mutation beside the filesystem, so retained Git identity and
- * retained Git bytes move together inside one transaction. It is the provider's
- * surface and not a document's: a component reaches it only by asking the
- * composition provider to perform an effect.
- */
-export interface WorkspaceMetadata {
-  readRepository(name: string): StoredRepository | undefined;
-  readRepositories(): StoredRepository[];
-  insertRepository(stored: StoredRepository): void;
-  readWorktree(repositoryName: string, name: string): WorktreeRecord | undefined;
-  readWorktreesForRepository(repositoryName: string): WorktreeRecord[];
-  insertWorktree(record: WorktreeRecord): void;
 }
 
 export function createWorkspaceMetadata(

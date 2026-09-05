@@ -5,6 +5,9 @@
   "type": "module",
   "exports": {
     ".": "./mod.ts",
+    "./canonicalize": "./canonicalize.ts",
+    "./component-name": "./component-name.ts",
+    "./document-target": "./document-target.ts",
     "./host": "./host.ts"
   },
   "dependencies": {

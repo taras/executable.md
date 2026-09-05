@@ -114,6 +114,15 @@ base is any revision expression, so both are external text on the same terms as
 retained props. A value installed without a run id, a base or a pinned commit
 identifies no run and is refused before any document executes.
 
+A host that keeps its runs remotely has decided the same things in the same
+order, and installs the same value. `retainedWorkflowInstallation()` names a run
+its host already created and a commit its host already pinned; whether the
+record behind that name lives in a local file or in a remote owner is host
+arrangement the execution never learns. What the execution requires is
+unchanged: the run id, base and pinned commit it was handed must be exactly what
+the journal it reads records, and a journal recording a different run is
+`StaleInputError` wherever the journal is kept.
+
 ### 3.2 Where workflow-run identity is decided
 
 **Workflow-run identity is execution-owned, and it is not middleware of any
@@ -328,6 +337,16 @@ after an interruption. The Deno host installs its own with
 entrypoint is the only place SQLite, run-id hashing, filesystem paths and host
 behavior appear. Shared modules import none of them and detect no runtime.
 
+A second host installs its own the same way. Cloudflare is a runtime-named
+adapter beside the Deno one, not a second contract: it answers `create()` and
+`lookup()` with a `WorkflowRunDatabase` of its own, and every shared
+WorkflowRun surface above it stays host-neutral. The lifecycle transition and request types a host assembly speaks — `WorkflowExecutionTransitions`, `WorkflowBeginRequest`, `WorkflowExecutionBegun`, `WorkflowForkRequest`, `WorkflowForkSelection` and `WorkflowRunCreation` — are part of that neutral surface and are published from the package root; a runtime-named entrypoint may re-export them for source compatibility, but what belongs behind one is the implementation and its retained encoding, not the shape of the request. Nothing below changes for it —
+immutable run identity is compared the same way, recognition stays strict,
+events reach storage already filtered, a caller still owns the transaction it
+opened, and a completed run still replays without attaching a provider. What a
+remote adapter adds is where the bytes live and how an executor reaches them
+(§9.8), which identity and recognition already treat as host arrangement.
+
 A handle is a lease belonging to the scope that asked for it. Lease teardown
 makes that handle unusable, and every later call answers with a closed-handle
 failure rather than reopening the file. It does not close the run's physical
@@ -400,6 +419,23 @@ Where that object can be fetched from is deliberately not identity. A locator
 and a local checkout path are **retrieval metadata** — replaceable, excluded
 from the comparison, never containing credentials, and reauthorized by the host
 before use. A run that moves between hosts is the same run.
+
+#### A host may derive the id it selects
+
+A run id is opaque, and §3.3 of the Workspace specification already lets an
+authorized caller select one. A host may equally derive one from the subject the
+run is about, and a derived id is an ordinary selected id: it has to be a
+non-empty string containing no NUL, and it has to be the same string every time
+the same subject is admitted. Nothing else about it is constrained, and nothing
+here narrows the ids an ordinary caller may choose.
+
+The software factory derives its ids that way. A factory run id is the lowercase unpadded RFC 4648 Base32 encoding of the full SHA-256 digest of the UTF-8 bytes `github-issue-v1`, a NUL, the canonical GitHub authority, a NUL, and the exact GitHub issue GraphQL node ID — 52 characters of `a`-`z` and `2`-`7`, so the storage rule above is satisfied by construction.
+
+Those two inputs are the ones [the software factory](./github-actions-software-factory-spec.md) §1.1 defines, byte for byte, and this paragraph restates rather than generalizes them: the authority is the lowercase DNS hostname plus a non-default port, with no scheme, path, query, fragment, user information or trailing separator, and the node ID is GitHub's exact returned string with no case folding and no Unicode normalization. There is no broader Issue-provider authority in this hash — a hash whose inputs two documents spell differently is two hashes.
+
+That specification also owns every other factory protocol record: its §11.2 holds the closed versioned schemas, and no other document restates them.
+
+Because every input is immutable, admitting one issue twice derives one id and reaches one run through ordinary compatible reuse, and no separate idempotency concept appears. Two independent implementations given the same authority and node ID therefore produce the same id. A changed authority or node ID for a subject the host already retains is unsupported provider-identity drift, refused under §1.1 of that specification rather than derived into a second run.
 
 ### 9.2 Creating a run is also how it is found
 
@@ -832,6 +868,52 @@ lookup that finds nothing creates no file.
 Version 1 reads and writes version 1. Unsupported versions are refused without
 the file being touched; partial version-1 initialization is corruption and is
 also left unchanged.
+
+### 9.8 A remote host owns the same run
+
+Serialization decides who uses one connection next; it has never decided who may
+advance a run. A remote host keeps both answers and gives each a different
+mechanism.
+
+The owner of one run is selected from the public run id by the same arithmetic
+§9.3 uses, so a remote run has exactly one durable owner and no second registry
+can disagree with it. Inside that owner, operations on the run's storage are
+serialized and each runs in a transaction, exactly as §9.6 states: the
+connection queue, the transaction identities and the savepoint allocator are
+provider-private and say nothing about lifecycle authority.
+
+**Executor acquisition is an authenticated connection.** The acquisition is that
+connection's lifetime: the owner registers the exact acquisition when the
+connection is admitted and invalidates it when the connection closes, which is
+the staleness proof a remote host has in place of an operating system releasing
+a file lock. Like the local lock it is not a time lease — no duration, expiry,
+renewal, heartbeat, generation record or liveness poll — and closing it releases
+executor ownership without rolling back anything already committed. A second
+healthy executor follows or is refused, and cannot advance the run either way.
+
+**These requests require the acquisition**, and each validates the exact live
+acquisition and the expected Workspace root inside its own mutating
+transaction: start and resume, stale-execution recovery, document execution,
+Workspace mutation, provider attachment, native execution performed against a
+materialized root, lifecycle transition, accepted-outcome publication, and
+terminal settlement.
+
+**These requests take no acquisition.** Delivery retains one externally supplied
+value for one exact retained subject and does what typed answer delivery already
+does: it begins no document execution, attaches no Workspace, inserts no
+document-execution record, appends no journal event and changes no run status.
+What authorizes it is the subject, not the caller's position in the lifecycle —
+a suspension id the run's retained `suspension_request` names for an answer, and
+the exact retained decision subject for a terminal decision. A value for a
+subject the run is not holding is refused with nothing written.
+
+A **wake notification** is delivered on the same terms and is the one delivery that carries no value at all. A run may wait on a fact about a provider rather than on an answer, and that machine wait is a distinct event kind identified by a `waitId` rather than by a suspension id. An authenticated intake correlated to the exact wait subject retains a bounded notification saying that another observation may occur — no answer, verdict, stage, transition or observation result — and a later executor consumes it and appends the wake event in the run's own transaction. Delivery still stores and execution still decides; what changes is that here there is nothing stored for the execution to read except permission to look again. Read-only
+inspection takes no acquisition either, and returns the immutable snapshot
+surface of the lifecycle contract rather than a writable handle.
+
+A later executor is what turns retained delivery into progress: it consumes the
+value inside the run's own transaction, appends the accepted event once, and
+only then may execution continue past the wait.
 
 ## 10. The document filesystem of a run
 

@@ -60,7 +60,7 @@ import { reading } from "./reading.ts";
 import { readJournalEntries } from "./journal.ts";
 import type { ForkSourceSnapshot } from "./fork-source.ts";
 import { readForkLineage, writeForkInheritance, type ForkHeadEvents } from "./fork-write.ts";
-import { readDocumentExecution, readRetrieval, stopReasonColumns } from "./rows.ts";
+import { readDocumentExecution, readRetrieval, stopReasonColumns } from "../sqlite/rows.ts";
 import {
   initializeSchema,
   isSqliteForeignKeyConstraint,
