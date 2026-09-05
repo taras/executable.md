@@ -25,8 +25,88 @@ import { createQueue, ensure, resource, withResolvers } from "effection";
 import type { Operation, Queue } from "effection";
 import { z } from "zod";
 
+/**
+ * The wire format, written out.
+ *
+ * Declared rather than inferred from the schemas below, and the schemas are
+ * then annotated with these types so the compiler holds the two together — a
+ * schema that stopped producing its declared frame stops compiling, so there is
+ * no drift to keep an eye on.
+ *
+ * Written out because this package is published: an inferred zod type has no
+ * explicit form to publish, and the frames are the one part of this adapter
+ * whose shape a reader of the package genuinely needs. The schemas themselves
+ * stay private — how a frame is validated is nobody else's business, and
+ * `parseFromWorker`/`parseToWorker` are the seam.
+ */
+
 /** What one worker says about the pane it woke up in. */
-export const HelloSchema = z.object({
+export interface Hello {
+  type: "hello";
+  ordinal: number;
+  token: string;
+  pid: number;
+  pgid: number;
+  /** `ttys003`, or `??` when the worker has no controlling terminal. */
+  tty: string;
+  /** Whether stdin, stdout and stderr are terminals. All three must be. */
+  isatty: [boolean, boolean, boolean];
+}
+
+/** One process the settlement reached, and what reaching it established. */
+export interface Swept {
+  pid: number;
+  gone: boolean;
+}
+
+/**
+ * What a settlement established, in the order it established it.
+ *
+ * `quiet` is the only field a caller may act on, and it is true only when the
+ * child, everything the snapshot said was below or beside it, and every holder
+ * of the pane's terminal are gone. The rest is what a diagnostic says when it
+ * is not.
+ */
+export interface Settlement {
+  method: "exited" | "interrupted" | "killed";
+  quiet: boolean;
+  child?: number;
+  /** Snapshot members reached during the escalation. */
+  swept: Swept[];
+  /** Anything still holding the pane's terminal after the sweep. */
+  holders: Swept[];
+}
+
+/** Everything a worker may say. */
+export type FromWorker =
+  | Hello
+  | { type: "displayed"; seq: number }
+  /** The runtime's spawn event, and nothing earlier. */
+  | { type: "started"; id: string; pid: number }
+  | { type: "start-failed"; id: string; reason: string }
+  /** A launch asked for while one is live. */
+  | { type: "busy"; id: string }
+  | {
+      type: "exited";
+      id: string;
+      exitCode?: number;
+      signal?: string;
+      /** The settlement that preceded this; the pane is free once it arrives. */
+      settlement: Settlement;
+    }
+  | { type: "quiet"; id?: string; settlement: Settlement }
+  | { type: "bye"; holders: Swept[] };
+
+/** Everything the parent may say. */
+export type ToWorker =
+  | { type: "welcome" }
+  | { type: "display"; seq: number; text: string }
+  | { type: "launch"; id: string; argv: string[]; cwd: string; env: Record<string, string> }
+  | { type: "cancel"; id: string }
+  | { type: "shutdown" };
+
+/** What one worker says about the pane it woke up in. */
+const HelloSchema = z.object({
   type: z.literal("hello"),
   ordinal: z.number().int().nonnegative(),
   token: z.string(),
@@ -52,7 +132,7 @@ const SweptSchema = z.object({
  * of the pane's terminal are gone. The rest is what a diagnostic says when it
  * is not.
  */
-export const SettlementSchema = z.object({
+const SettlementSchema = z.object({
   method: z.enum(["exited", "interrupted", "killed"]),
   quiet: z.boolean(),
   child: z.number().int().optional(),
@@ -62,7 +142,7 @@ export const SettlementSchema = z.object({
   holders: z.array(SweptSchema),
 });
 
-export const FromWorkerSchema = z.discriminatedUnion("type", [
+const FromWorkerSchema = z.discriminatedUnion("type", [
   HelloSchema,
   z.object({ type: z.literal("displayed"), seq: z.number().int() }),
   /** The runtime's spawn event, and nothing earlier. */
@@ -86,7 +166,7 @@ export const FromWorkerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("bye"), holders: z.array(SweptSchema) }),
 ]);
 
-export const ToWorkerSchema = z.discriminatedUnion("type", [
+const ToWorkerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("welcome") }),
   z.object({ type: z.literal("display"), seq: z.number().int(), text: z.string() }),
   z.object({
@@ -100,10 +180,31 @@ export const ToWorkerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("shutdown") }),
 ]);
 
-export type Hello = z.infer<typeof HelloSchema>;
-export type FromWorker = z.infer<typeof FromWorkerSchema>;
-export type ToWorker = z.infer<typeof ToWorkerSchema>;
-export type Settlement = z.infer<typeof SettlementSchema>;
+// The schemas are held to the declared frames rather than the frames being
+// read off the schemas. A change to either that the other does not match is a
+// type error here, at the one place both are in view.
+const _hello: z.ZodType<Hello> = HelloSchema;
+const _settlement: z.ZodType<Settlement> = SettlementSchema;
+const _fromWorker: z.ZodType<FromWorker> = FromWorkerSchema;
+const _toWorker: z.ZodType<ToWorker> = ToWorkerSchema;
+
+/**
+ * Read one frame in each direction, or refuse it.
+ *
+ * The seam is the parse rather than the schema. A schema is how this module
+ * happens to decide what a frame is; what a caller — including this adapter's
+ * own tests — actually needs is "turn these bytes into a frame or throw", and
+ * a function saying exactly that keeps the shape of the wire format private.
+ * It also keeps it out of the published API, where an inferred zod type has no
+ * explicit form to publish.
+ */
+export function parseFromWorker(value: unknown): FromWorker {
+  return FromWorkerSchema.parse(value);
+}
+
+export function parseToWorker(value: unknown): ToWorker {
+  return ToWorkerSchema.parse(value);
+}
 
 /**
  * Where one pane's socket and token live.

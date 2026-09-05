@@ -38,9 +38,9 @@ import type { Operation } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { chmod } from "node:fs/promises";
 import {
-  FromWorkerSchema,
   paneSocketPath,
   paneTokenPath,
+  parseFromWorker,
   readFrames,
   writeFrame,
 } from "./pane-protocol.ts";
@@ -263,7 +263,7 @@ export function usePaneChannels(
     function* admit(ordinal: number, socket: Socket): Operation<void> {
       const slot = slots.get(ordinal);
       const token = tokens.get(ordinal);
-      const frames = yield* readFrames(socket, (value) => FromWorkerSchema.parse(value));
+      const frames = yield* readFrames(socket, (value) => parseFromWorker(value));
       const first = yield* race([frames.next(), silence()]);
       if (slot === undefined || token === undefined || first.done || first.value.type !== "hello") {
         refusals.push(`pane ${ordinal}: a connection that did not say hello`);

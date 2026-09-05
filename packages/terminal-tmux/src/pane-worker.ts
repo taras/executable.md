@@ -35,8 +35,8 @@ import type { PaneChild, PaneChildRequest } from "./pane-child.ts";
 import {
   paneSocketPath,
   paneTokenPath,
+  parseToWorker,
   readFrames,
-  ToWorkerSchema,
   writeFrame,
 } from "./pane-protocol.ts";
 import type { FromWorker, Settlement } from "./pane-protocol.ts";
@@ -241,7 +241,7 @@ export function* runPaneWorker(
     socket.off("error", onConnectError);
   }
 
-  const inbound = yield* readFrames(socket, (value) => ToWorkerSchema.parse(value));
+  const inbound = yield* readFrames(socket, (value) => parseToWorker(value));
   const say = (message: FromWorker) => writeFrame(socket, message);
 
   const table = yield* processTable();
