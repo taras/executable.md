@@ -21,13 +21,11 @@ export type {
   PaneStartFailure,
 } from "./src/pane-child.ts";
 export {
-  FromWorkerSchema,
-  HelloSchema,
   paneSocketPath,
   paneTokenPath,
+  parseFromWorker,
+  parseToWorker,
   readFrames,
-  SettlementSchema,
-  ToWorkerSchema,
   writeFrame,
 } from "./src/pane-protocol.ts";
 export type { FromWorker, Hello, Settlement, ToWorker } from "./src/pane-protocol.ts";

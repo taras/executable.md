@@ -64,11 +64,10 @@ import { chmod, readdir } from "node:fs/promises";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { PaneChannels, PaneLink } from "../src/pane-channel.ts";
 import {
-  FromWorkerSchema,
   paneSocketPath,
   paneTokenPath,
+  parseToWorker,
   readFrames,
-  ToWorkerSchema,
   writeFrame,
 } from "../src/pane-protocol.ts";
 import {
@@ -1710,7 +1709,7 @@ function useScriptedWorker(
     const socket = yield* useImpostor(directory, ordinal);
     const token = (yield* readTextFile(paneTokenPath(directory, ordinal))).trim();
     const heard: ToWorker["type"][] = [];
-    const frames = yield* readFrames(socket, (value) => ToWorkerSchema.parse(value));
+    const frames = yield* readFrames(socket, (value) => parseToWorker(value));
     yield* writeFrame(socket, {
       type: "hello",
       ordinal,
