@@ -6,8 +6,11 @@ forms, props and one-line description. This file holds the part that does not
 belong in a list: when to reach for a component, what it does at run time, and
 what it will refuse.
 
-A component with no section here is still ordinary and still usable. Selecting
-it by name reports that no long-form documentation is available for it yet.
+Every component this package supplies has a section here. A build in which one
+does not refuses rather than serving a reference with a silent hole in it: a
+reader cannot tell "nobody has written this yet" from "this component has
+nothing to say". The no-documentation sentence is for *custom* components, which
+no package governs.
 
 ## Syntax
 
@@ -110,3 +113,164 @@ read rather than re-reading a file that has since changed.
 
 A read of a path that does not exist fails. The write form creates the file and
 the directories above it as needed.
+
+## File.Delete
+
+Deletes a file, relative to the working directory.
+
+```mdx
+<File.Delete path="scratch/notes.md" />
+```
+
+Self-closing, and it renders nothing. Deleting a path that does not exist
+succeeds: the component's promise is that the file is gone afterwards, not that
+it was there first, which is what makes it safe to write in a cleanup step that
+may run more than once.
+
+Like `<File>`, it is an ordinary durable effect — a deletion that already
+happened is not repeated on a continuation.
+
+## TempDir
+
+Runs work in a temporary working directory.
+
+```mdx
+<TempDir>
+<File path="scratch.txt">working notes</File>
+</TempDir>
+```
+
+The paired form expands its content with the temporary directory as the working
+directory, so a `<File>` or a command inside writes there rather than in the
+directory the run started in. The self-closing form renders the path instead,
+which is what you want when something outside the region needs to know where it
+is:
+
+```mdx
+<TempDir as="workspace" />
+```
+
+Use it to keep intermediate work out of the user's tree, and to make a document
+that writes files safe to run from anywhere.
+
+## Fail
+
+Stops authored work with an actionable failure.
+
+```mdx
+<Fail message="No acceptable candidate was approved." />
+```
+
+Raises the message where it is written. It is the authored counterpart of an
+error a component raises on its own: the document has decided that what it found
+is not something it can proceed from, and says so in its own words rather than
+letting a later step fail obscurely.
+
+The message is the whole point — write what a reader would need in order to act,
+not that something went wrong.
+
+## Fetch
+
+Reads over HTTP.
+
+```mdx
+<Fetch url="https://example.com/status" as="response" />
+```
+
+Only GET and HEAD are currently supported. Without `as`, a non-2xx status fails
+the document. With `as`, the response binds instead — status included — which is
+what makes a status something to branch on rather than an error:
+
+```mdx
+<Fetch url="https://example.com/status" as="response" />
+
+<If condition={response.status === 404}>
+Nothing published yet.
+</If>
+```
+
+The request is journaled, so a continuation restores what the first run received
+rather than asking the network again.
+
+## Glob
+
+Lists the files matching a pattern, relative to the working directory.
+
+```mdx
+<Glob pattern="docs/**/*.md" as="documents" />
+```
+
+`as` is required: the component's result is the list, and there is no useful
+text to render. The list is sorted, so a document that iterates it produces the
+same output for the same tree. Directories and symbolic links are never results
+— only files.
+
+## CodeBlock
+
+Shows arbitrary text as a fenced Markdown code block.
+
+```mdx
+<CodeBlock language="json">{payload}</CodeBlock>
+```
+
+Use it when a value is going into a document that will be read as Markdown and
+must not be interpreted as Markdown: a fragment containing backticks, a diff, or
+anything an agent might otherwise read as instructions. It renders the fence for
+you, with a delimiter long enough to survive whatever the content contains.
+
+## Json
+
+Renders a value as JSON text.
+
+```mdx
+<Json value={config} />
+```
+
+Writes the JSON where the element is written, or binds it with `as`. The
+counterpart of `<Parse>`: this turns a value into text, that turns text into a
+value.
+
+## Parse
+
+Parses JSON text against a schema, and errors on invalid content.
+
+```mdx
+<Parse schema={settings} as="config">{raw}</Parse>
+```
+
+The content is the JSON text. `as` is required, because the parsed value is the
+result. Invalid content — malformed JSON, or JSON the schema rejects — fails the
+document, which is what you want when there is nothing sensible to do without
+the value.
+
+Use `<SafeParse>` instead when the document should decide what to do about
+invalid input.
+
+## SafeParse
+
+Parses JSON text against a schema, and returns a result object instead of
+failing.
+
+```mdx
+<SafeParse schema={settings} as="attempt">{raw}</SafeParse>
+```
+
+The bound result is either the validated value or the issues that rejected it,
+so the document can branch on which it got. Reach for this when invalid input is
+an expected case — reading something a person typed, or a response from a
+service that may be having a bad day — rather than a reason to stop.
+
+## Test
+
+Declares a test case.
+
+```mdx
+<Test name="the plan names every input">
+…
+</Test>
+```
+
+It runs only inside a `<Testing>` region; elsewhere it is skipped, so a document
+carrying its own tests stays runnable as an ordinary document. A failing command
+or assertion inside the case fails that case rather than the whole run, which is
+what lets one run report every failure rather than only the first.

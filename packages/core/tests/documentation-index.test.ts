@@ -168,14 +168,29 @@ describe("Tier SYN — building the index", () => {
     expect(index.documentationFor("Beta", REGISTERED)).toBeUndefined();
   });
 
-  it("SYN38: builds from a set that documents only some of what it supplies", function* () {
-    // A component with no section is legal: it renders the sentence `<Syntax>`
-    // states for one, and stays usable while its documentation is written.
-    const index = buildDocumentationIndex(
-      [source("## Alpha\n\nAbout Alpha.\n")],
+  it("SYN38: refuses a package that supplies a component it does not document", function* () {
+    // The negative control for coverage. A first-party package documents every
+    // public component it supplies, so a missing section refuses the whole
+    // index rather than letting that component fall back to the sentence —
+    // which would leave the product's own reference silently incomplete, with
+    // no way for a reader to tell an undocumented component from one that has
+    // nothing to say.
+    expect(() =>
+      buildDocumentationIndex([source("## Alpha\n\nAbout Alpha.\n")], supplies("Alpha", "Beta")),
+    ).toThrow(DocumentationIndexError);
+
+    // Deleting any one built-in's documentation is the same failure, which is
+    // what makes this a live check on the shipped files rather than a rule
+    // nothing enforces.
+    expect(() =>
+      buildDocumentationIndex([source("Bundle prose only.\n")], supplies("Alpha")),
+    ).toThrow(DocumentationIndexError);
+
+    // The positive control: exact coverage builds.
+    const complete = buildDocumentationIndex(
+      [source("## Alpha\n\nAbout Alpha.\n\n## Beta\n\nAbout Beta.\n")],
       supplies("Alpha", "Beta"),
     );
-    expect(index.documentationFor("Alpha", REGISTERED)).toBe("About Alpha.");
-    expect(index.documentationFor("Beta", REGISTERED)).toBeUndefined();
+    expect(complete.documentationFor("Beta", REGISTERED)).toBe("About Beta.");
   });
 });

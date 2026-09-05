@@ -185,7 +185,11 @@ export function select(
   // what makes one occurrence's retained result comparable with another's.
   for (const category of reference.categories) {
     for (const entry of category.entries) {
-      if (!requested.has(entry.name)) {
+      // Components only. `names` is a component lookup under the current
+      // contract, so a structural construct is not a thing this can select —
+      // and skipping it here leaves the name in `requested`, which refuses
+      // below rather than silently rendering nothing for it.
+      if (!requested.has(entry.name) || entry.kind === "structural") {
         continue;
       }
       requested.delete(entry.name);

@@ -57,9 +57,13 @@ function* packagedDocuments(pkgDir: URL): Operation<string[]> {
   // stay in step. Named by its exact path for the same reason the directory
   // above is enumerated rather than swept for: being listed here is what
   // declares an asset part of the product.
-  const documentation = new URL("src/components/components.md", pkgDir);
-  if (yield* exists(documentation)) {
-    shipped.push("src/components/components.md");
+  // One entry per registration boundary that documents its components. Named
+  // rather than swept for, because `src/` also holds test documents and
+  // scenario fixtures: being listed here is what declares an asset shipped.
+  for (const relative of ["src/components/components.md", "src/agent/components.md"]) {
+    if (yield* exists(new URL(relative, pkgDir))) {
+      shipped.push(relative);
+    }
   }
   const documents = new URL("src/documents/", pkgDir);
   if (!(yield* exists(documents))) {

@@ -45,6 +45,7 @@
  */
 
 import { isComponentName } from "./components/registration.ts";
+import { parseSource } from "./definition.ts";
 import type { ComponentOrigin } from "./types.ts";
 
 /** One package's documentation for the components it registers. */
@@ -121,18 +122,13 @@ export interface DocumentationIndex {
  * repository component's bytes were read to describe it, and a bundled or
  * declared one's were admitted before the run began.
  */
-export function markdownDocumentation(source: string): string | undefined {
-  const body = withoutFrontmatter(source).trim();
+export function markdownDocumentation(path: string, source: string): string | undefined {
+  // The canonical splitter, not a delimiter search of this module's own: a
+  // document whose body repeats `---` is ordinary, and a second implementation
+  // of the rule is one release from disagreeing with the one that decides what
+  // actually runs.
+  const body = parseSource(path, source).content.trim();
   return body.length === 0 ? undefined : body;
-}
-
-/** The document after its frontmatter, if it opened with any. */
-function withoutFrontmatter(source: string): string {
-  if (!source.startsWith("---")) {
-    return source;
-  }
-  const end = source.indexOf("\n---", 3);
-  return end === -1 ? source : source.slice(source.indexOf("\n", end + 1) + 1);
 }
 
 /** What a component with no authored documentation renders instead of prose. */
@@ -143,15 +139,17 @@ const HEADING = /^##\s+(.+?)\s*$/;
 /** Any ATX heading, so a deeper one can be told from a section boundary. */
 const ANY_HEADING = /^(#{1,6})\s+/;
 /**
- * A fence, with its marker captured whole.
+ * A fence line: its delimiter run, and whatever follows on the line.
  *
- * Both the character and the run length matter. A fence closes only on the same
- * character at *least* as long as the one that opened it, so an example written
- * in four backticks can contain a three-backtick block without the inner one
- * ending the outer. Comparing only the character would end the example early and
- * read everything after it as documentation.
+ * Three rules decide whether a line ends the block it is in, and getting any of
+ * them wrong reads an example as documentation. The closing run must be the same
+ * character, at *least* as long as the opener — so a four-backtick example may
+ * contain a three-backtick block — and it must carry nothing after it but
+ * whitespace. An *opening* fence may carry an info string (` ```mdx `); a
+ * closing one may not, so a same-length delimiter followed by text is still
+ * inside the example.
  */
-const FENCE = /^\s{0,3}(`{3,}|~{3,})/;
+const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
 /** One source, parsed into the bundle's own prose and a section per component. */
 interface ParsedSource {
@@ -176,13 +174,18 @@ export function parseDocumentationSource(source: DocumentationSource): ParsedSou
   let fence: string | undefined;
 
   for (const line of lines) {
-    const marker = FENCE.exec(line)?.[1];
-    if (marker !== undefined) {
+    const fenced = FENCE.exec(line);
+    if (fenced !== null) {
+      const marker = fenced[1] ?? "";
+      const trailing = fenced[2] ?? "";
       if (fence === undefined) {
+        // Opening: the info string is allowed and ignored.
         fence = marker;
-      } else if (marker[0] === fence[0] && marker.length >= fence.length) {
-        // Closes only on the same character, at least as long. A shorter run
-        // inside a longer fence is part of the example being shown.
+      } else if (
+        marker[0] === fence[0] &&
+        marker.length >= fence.length &&
+        trailing.trim().length === 0
+      ) {
         fence = undefined;
       }
       current.push(line);
@@ -270,6 +273,23 @@ export function buildDocumentationIndex(
     documentation.set(source.owner, held);
     if (parsed.bundle.length > 0) {
       bundles.set(source.owner, parsed.bundle);
+    }
+  }
+
+  // Exact coverage, not merely no surprises. A first-party package documents
+  // every public component it supplies: a member with no section is a component
+  // shipped without documentation, and letting it fall back to the sentence
+  // would make the product's own reference silently incomplete — the reader
+  // cannot tell "nobody has written this yet" from "this component has nothing
+  // to say". The fallback is for custom components, which no package governs.
+  for (const [owner, held] of documentation) {
+    const missing = [...known(owner)].filter((name) => !held.has(name)).sort();
+    if (missing.length > 0) {
+      throw new DocumentationIndexError(
+        `${owner} supplies ${missing.length === 1 ? "a component" : "components"} with no ` +
+          `documentation: ${missing.join(", ")}. Every public component a first-party ` +
+          "package supplies has exactly one documentation section.",
+      );
     }
   }
 

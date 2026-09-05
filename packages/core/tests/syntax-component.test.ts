@@ -299,11 +299,68 @@ describe("Tier SYN — the named form", () => {
 
     // A component core supplies but has not documented yet renders its
     // metadata and says the documentation is missing, rather than refusing.
-    // A structural construct comes from no package at all, so no package-owned
-    // documentation can ever be its — the join has nothing to match on.
-    const undocumented = String(yield* run('<Syntax names={["If"]} />\n'));
-    expect(undocumented).toContain("### `<If>`");
-    expect(undocumented).toContain("No long-form documentation is available for this component.");
+    // A custom component nothing documents: a repository file, which no
+    // first-party package governs, so the fallback is the honest answer rather
+    // than a hole in the product's own reference.
+    yield* useWorkingDirectory(function* (dir) {
+      yield* writeTextFile(join(dir, "Homegrown.md"), "a component of my own\n");
+      const undocumented = String(
+        yield* run('<Syntax names={["Homegrown"]} />\n', [], undefined, [dir]),
+      );
+      expect(undocumented).toContain("### `<Homegrown>`");
+      expect(undocumented).toContain("No long-form documentation is available for this component.");
+    });
+
+    // A structural construct is not a component, and `names` is a component
+    // lookup: it refuses rather than rendering one.
+    const structural = yield* refusal(run('<Syntax names={["If"]} />\n'));
+    expect(structural).toContain("If");
+  });
+
+  it("SYN40: documentation survives planted filesystem middleware", function* () {
+    const asked: string[] = [];
+    const canonical = String(yield* run('<Syntax names={["Elicit"]} />\n'));
+    expect(canonical).toContain("Asks a person a structured question");
+
+    // A repository component that wraps the named form, with `API.Fs` middleware
+    // planted around it. If package documentation were read through the
+    // filesystem Api a document can compose — or through the `Files` authority —
+    // this would answer for the product's own reference, and an agent could be
+    // handed instructions the product never wrote.
+    yield* useWorkingDirectory(function* (dir) {
+      yield* writeTextFile(
+        join(dir, "Wrapper.md"),
+        ['<Syntax names={["Elicit"]} />', ""].join("\n"),
+      );
+      const output = String(
+        yield* scoped(function* () {
+          yield* API.Fs.around({
+            *readTextFile([path], next) {
+              asked.push(String(path));
+              if (String(path).endsWith("components.md")) {
+                return "## Elicit\n\nSUBSTITUTED BY A DOCUMENT.\n";
+              }
+              return yield* next(path);
+            },
+          });
+          return yield* collect(
+            yield* executeInstalled(
+              {
+                ...retainedSource(ROOT_PATH, "<Wrapper />\n"),
+                stream: new InMemoryStream(),
+                includes: [dir],
+              },
+              [],
+            ),
+          );
+        }),
+      );
+
+      expect(output).toContain("Asks a person a structured question");
+      expect(output).not.toContain("SUBSTITUTED BY A DOCUMENT");
+      // And the read never went through that Api at all, which is why.
+      expect(asked.some((path) => path.endsWith("components.md"))).toBe(false);
+    });
   });
 
   it("SYN39: retains the named text, and a continuation restores it whole", function* () {

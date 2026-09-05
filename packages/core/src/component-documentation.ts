@@ -14,19 +14,54 @@
  * rather than quietly serving a product with no documentation.
  */
 
-import { fileURLToPath } from "node:url";
-import { readTextFile } from "@executablemd/runtime";
+import { readTextFile } from "@effectionx/fs";
 import type { Operation } from "effection";
 
 import { buildDocumentationIndex } from "./documentation-index.ts";
 import type { DocumentationIndex, DocumentationSource } from "./documentation-index.ts";
 import { CORE_ORIGIN, CORE_REGISTRY } from "./components/registry.ts";
 import { PROTECTED_COMPONENT_NAMES } from "./components/protected.ts";
+import { AGENT_REGISTRATIONS, agentIdentityComponents } from "./agent/components.ts";
 
 /** Where core's own documentation lives, as a URL beside this module. */
 export function componentDocumentationUrl(): URL {
   return new URL("./components/components.md", import.meta.url);
 }
+
+/**
+ * Where the Agent registrations' documentation lives.
+ *
+ * Beside `agent/components.ts`, which is the boundary that registers them. They
+ * carry core's origin, so they are core's components for the join; what makes
+ * them a separate file is that they are a separate registration boundary, and
+ * documentation belongs beside the code it documents.
+ */
+export function agentDocumentationUrl(): URL {
+  return new URL("./agent/components.md", import.meta.url);
+}
+
+/**
+ * The Agent registrations' contribution, for a host that installs them.
+ *
+ * Offered rather than assumed: a run that registers no Agent components has no
+ * Agent components to document, and demanding their documentation would refuse
+ * an index for a profile that is complete without them.
+ */
+export function* agentDocumentation(): Operation<DocumentationContribution> {
+  return {
+    source: yield* readPackagedDocumentation(agentDocumentationUrl(), {
+      owner: CORE_ORIGIN,
+      asset: "packages/core/src/agent/components.md",
+    }),
+    supplies: AGENT_COMPONENT_NAMES,
+  };
+}
+
+/** Every component the Agent registration boundary supplies, by name. */
+const AGENT_COMPONENT_NAMES: ReadonlySet<string> = new Set([
+  ...AGENT_REGISTRATIONS.map((registration) => registration.name),
+  ...agentIdentityComponents().map((component) => component.name),
+]);
 
 /** Core's documentation source, read from the package rather than the caller. */
 export function* readCoreDocumentation(): Operation<DocumentationSource> {
@@ -35,17 +70,35 @@ export function* readCoreDocumentation(): Operation<DocumentationSource> {
     return {
       owner: CORE_ORIGIN,
       asset: "packages/core/src/components/components.md",
-      // The host filesystem operation the root document's own read goes
-      // through, not the document-facing `Files` authority: this is the engine
-      // reading its own package, and what a running document installed must not
-      // decide what its documentation says. The path is derived from this
-      // module's URL, so it is package-relative whatever the working directory
-      // and search path are.
-      text: yield* readTextFile(fileURLToPath(url)),
+      // The direct Effection filesystem, not `API.Fs` and not the document
+      // facing `Files` authority. Both of those are middleware a running
+      // document can compose around: a repository component, an eval block or
+      // an installed handler could answer the read and decide what the product's
+      // own documentation says. This is the engine reading an immutable asset
+      // out of its own package, so it goes to the filesystem directly, at a URL
+      // derived from this module — package-relative whatever the working
+      // directory and search path are.
+      text: yield* readTextFile(url),
     };
   } catch (error) {
     throw new Error(
       `the packaged component documentation is missing from this build (looked in ${url.href})`,
+      { cause: error },
+    );
+  }
+}
+
+/** One packaged documentation asset, read the same guarded way. */
+export function* readPackagedDocumentation(
+  url: URL,
+  named: { owner: string; asset: string },
+): Operation<DocumentationSource> {
+  try {
+    return { ...named, text: yield* readTextFile(url) };
+  } catch (error) {
+    throw new Error(
+      `the packaged component documentation ${named.asset} is missing from this build ` +
+        `(looked in ${url.href})`,
       { cause: error },
     );
   }
@@ -80,7 +133,19 @@ export function* documentationIndexFor(
     supplies: CORE_COMPONENT_NAMES,
   };
   const all = [core, ...contributed];
-  const supplied = new Map(all.map((one) => [one.source.owner, one.supplies]));
+  // Merged per owner, not replaced. One package can have several registration
+  // boundaries — core registers its own components and its Agent components
+  // from two files — and keying by owner alone would let the second boundary's
+  // set hide the first's, so every component in the file that lost would look
+  // like documentation for something the package does not supply.
+  const supplied = new Map<string, Set<string>>();
+  for (const one of all) {
+    const held = supplied.get(one.source.owner) ?? new Set<string>();
+    for (const name of one.supplies) {
+      held.add(name);
+    }
+    supplied.set(one.source.owner, held);
+  }
   return buildDocumentationIndex(
     all.map((one) => one.source),
     (owner) => supplied.get(owner) ?? new Set<string>(),

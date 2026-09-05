@@ -2711,9 +2711,29 @@ order they were asked for in. `as` captures the same text in either form.
 Documentation joins to metadata by component name **and owning package**. Only a
 registration and a protected component come from a package; a repository file, a
 bundled blob and declared Markdown are this run's, so a repository `Elicit.md`
-receives none of the built-in `Elicit`'s prose. A selected entry with no authored
-documentation renders its metadata and the sentence *No long-form documentation
-is available for this component.* rather than refusing.
+receives none of the built-in `Elicit`'s prose. **A first-party package documents every component it supplies.** The index is
+built from one `components.md` per registration boundary, contributed at the
+trusted installation boundary, and a boundary that supplies a component with no
+section refuses the whole index — as does an unknown heading, a duplicate, and a
+component documented twice for one package. A partially documented first-party
+package is not a valid build: a reader cannot tell an undocumented component
+from one that has nothing to say, and the product's own reference would be
+silently incomplete.
+
+The sentence *No long-form documentation is available for this component.* is
+therefore for **custom** components only, which no package governs. A Markdown
+component — a repository file, a bundle member, a host's declared Markdown —
+takes its long-form documentation from its own document's body, read through the
+canonical frontmatter split; an empty body uses the sentence.
+
+Named lookup selects **component entries**. A structural construct is not a
+component, so `<Syntax names={["If"]} />` refuses as an unknown component while
+the bare form continues to list structural syntax alongside components.
+
+The documentation is read from the owning package through the direct filesystem,
+not through `API.Fs` or the document-facing `Files` authority. Both of those are
+middleware a running document can compose around, and a document that could
+answer the read would decide what the product says about itself.
 
 **Reference and availability are separate.** The observation carries two inputs.
 Bare `<Syntax />` reports what may **execute** at this site. The named form
@@ -10884,7 +10904,9 @@ component that observes one at an authored site.
 | SYN39 | Named retention | The occurrence retains its final rendered text, a continuation restores it without rereading documentation or rebuilding the catalog, and a corrupted record refuses |
 | SYN25c | The narrowing seam | A narrowed observation reports the narrowed vocabulary bare, documents the enclosing catalog by name, and marks each entry's availability truthfully in both directions |
 | SYN32–SYN34 | Parsing one file | Bundle prose, a section per level-two heading with deeper headings kept inside it, a fenced heading read as the example it is, and a refusal for a duplicate section or a heading that is not a component name |
-| SYN35–SYN38 | Building the index | A heading naming something the package does not supply refuses; one component documented twice refuses; documentation attaches by name and owning package, never to a repository replacement; a partly documented package builds |
+| SYN35–SYN37 | Building the index | A heading naming something the package does not supply refuses; one component documented twice refuses; documentation attaches by name and owning package, never to a repository replacement |
+| SYN38 | Exact coverage | A package supplying a component it does not document refuses the whole index — deleting any one built-in's section fails — with a fully covered package as the positive control |
+| SYN40 | The protection boundary | A repository component wrapping the named form with planted `API.Fs` middleware cannot change what the documentation says, and the read never reaches that Api |
 
 ### Tier SX — The `xmd syntax` command
 

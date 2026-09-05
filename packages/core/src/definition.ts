@@ -36,7 +36,7 @@ interface ParsedSource {
  * gray-matter normalization surprise into a loud error instead of silently
  * wrong source positions.
  */
-function parseSource(path: string, content: string): ParsedSource {
+export function parseSource(path: string, content: string): ParsedSource {
   const parsed = matter(content);
   const baseOffset = content.length - parsed.content.length;
   if (content.slice(baseOffset) !== parsed.content) {

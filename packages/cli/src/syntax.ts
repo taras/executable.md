@@ -20,6 +20,7 @@ import { scoped } from "effection";
 import type { Operation } from "effection";
 import {
   AGENT_REGISTRATIONS,
+  agentDocumentation,
   agentIdentityComponents,
   documentationIndexFor,
   inspectSyntax,
@@ -28,7 +29,7 @@ import {
   renderSyntaxMarkdown,
   selectDocumented,
 } from "@executablemd/core";
-import type { SyntaxCatalog } from "@executablemd/core";
+import type { DocumentationContribution, SyntaxCatalog } from "@executablemd/core";
 import { TESTING_REGISTRATIONS } from "@executablemd/testing";
 import { WEB_REGISTRATIONS } from "@executablemd/web";
 import { VERBOSE_REGISTRATION } from "./verbose-component.ts";
@@ -93,6 +94,23 @@ export function* useRunProfileRegistry(): Operation<void> {
 }
 
 /**
+ * The documentation the `run` profile's own packages contribute.
+ *
+ * Assembled beside `useRunProfileRegistry()` and from the same declarations, so
+ * a package whose components this profile registers is a package whose
+ * documentation this profile demands. Core's own is added by
+ * `documentationIndexFor()`; everything here is a boundary outside it.
+ *
+ * The list is deliberately not "whatever is installed": it is captured at the
+ * trusted boundary, before any document code exists, so nothing a running
+ * document reaches can add a source, remove one, or answer for what a component
+ * does.
+ */
+export function* runProfileDocumentation(): Operation<DocumentationContribution[]> {
+  return [yield* agentDocumentation()];
+}
+
+/**
  * The catalog as JSON: two-space indent, one trailing newline.
  *
  * Catalog construction owns member insertion order, category order and entry
@@ -117,6 +135,6 @@ export function* renderSyntaxDocumentation(
   catalog: SyntaxCatalog,
   names: readonly string[],
 ): Operation<string> {
-  const index = yield* documentationIndexFor();
+  const index = yield* documentationIndexFor(yield* runProfileDocumentation());
   return renderSelectedDocumentation(selectDocumented(catalog, catalog, names, index));
 }
