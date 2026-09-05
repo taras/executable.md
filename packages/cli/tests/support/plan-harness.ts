@@ -3,7 +3,7 @@
  *
  * Every phase the command owns is driven in process: the ACPX runtime is the
  * scriptable fake, the review provider is a scripted `Elicitation` handler, the
- * catalog and the execution are recorded, and the contextual working directory
+ * symbols and the execution are recorded, and the contextual working directory
  * is a temporary one. No live agent, browser, or network belongs in this
  * evidence.
  *
@@ -13,7 +13,7 @@
  */
 
 import { Elicitation } from "@executablemd/core";
-import type { DocumentValidation, ElicitationRequest, SyntaxCatalog } from "@executablemd/core";
+import type { DocumentValidation, ElicitationRequest, SyntaxSymbols } from "@executablemd/core";
 import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
 import { ensure, scoped, useScope } from "effection";
@@ -24,12 +24,12 @@ import { join } from "node:path";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
-import { syntaxCatalog } from "../../src/syntax.ts";
+import { syntaxSymbols } from "../../src/syntax.ts";
 import { planComponentDeclaration } from "../../src/plan-component.ts";
 import type { PlanSurface, StructuralValidation } from "../../src/plan-component.ts";
 import { planAgentContext } from "../../src/authorship-profile.ts";
 import type { AuthorshipStack } from "../../src/agent-stack.ts";
-import type { CatalogContribution, DeclaredMarkdownComponent } from "@executablemd/core/host";
+import type { SyntaxSymbolsProvider, DeclaredMarkdownComponent } from "@executablemd/core/host";
 import type { PlanDependencies } from "../../src/plan.ts";
 import { createFakeAcp, makeRegistry, makeStore } from "./fake-acp.ts";
 import type { FakeAcp, FakeStore } from "./fake-acp.ts";
@@ -70,8 +70,8 @@ export interface ScriptedReview {
 
 export interface PlanHarness {
   fake: FakeAcp;
-  /** Every catalog request, by the includes it was made with. */
-  catalogCalls: string[][];
+  /** Every symbols request, by the includes it was made with. */
+  symbolCalls: string[][];
   /** Every review request a provider was asked, in order. */
   reviews: ElicitationRequest[];
   /**
@@ -98,8 +98,8 @@ export function createPlanHarness(options: {
    * whose was whose.
    */
   authorshipRoot: string;
-  /** Replace the catalog entirely, for a case about catalog failure. */
-  catalog?: (includes: readonly string[]) => Operation<SyntaxCatalog>;
+  /** Replace the symbols entirely, for a case about their failure. */
+  symbols?: (includes: readonly string[]) => Operation<SyntaxSymbols>;
   /**
    * The ACPX session store this invocation reads and writes.
    *
@@ -122,7 +122,7 @@ export function createPlanHarness(options: {
   refuseProgress?: (chunk: string, index: number) => Operation<Error | undefined>;
 }): PlanHarness {
   const fake = createFakeAcp();
-  const catalogCalls: string[][] = [];
+  const symbolCalls: string[][] = [];
   const reviews: ElicitationRequest[] = [];
   const answers: ScriptedReview[] = [];
   const progress: string[] = [];
@@ -130,7 +130,7 @@ export function createPlanHarness(options: {
 
   const harness: PlanHarness = {
     fake,
-    catalogCalls,
+    symbolCalls,
     reviews,
     progress,
     script(review) {
@@ -158,9 +158,9 @@ export function createPlanHarness(options: {
         sessionStore: options.store ?? makeStore(),
         agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
       },
-      *catalog(includes) {
-        catalogCalls.push([...includes]);
-        return yield* (options.catalog ?? syntaxCatalog)(includes);
+      *symbols(includes) {
+        symbolCalls.push([...includes]);
+        return yield* (options.symbols ?? syntaxSymbols)(includes);
       },
       authorshipRoot: options.authorshipRoot,
       *installElicitation() {
@@ -292,15 +292,16 @@ export interface PlanDeclarationHarness {
   /** The declaration to attach to an execution. */
   declaration: DeclaredMarkdownComponent;
   /**
-   * The catalog this case's execution describes.
+   * The symbols this case's execution describes.
    *
    * Attached to the execution rather than to the declaration, because that is
-   * where the profile a document observes is now settled: `<Syntax />` is public,
-   * canonical core owns it, and what it answers with is the execution's own.
+   * where the profile a document is shown is now settled: `<Syntax />` is
+   * public, canonical core owns it, and what it answers with is the execution's
+   * own.
    */
-  catalog: CatalogContribution;
-  /** How many times that contribution was asked. */
-  catalogCalls: number;
+  symbols: SyntaxSymbolsProvider;
+  /** How many times that provider was asked. */
+  symbolCalls: number;
   /** Review answers, taken in order. Running out is a test defect, not a case. */
   script(review: ScriptedReview): void;
 }
@@ -319,13 +320,13 @@ export function* planDeclarationHarness(options: {
   authorshipRoot: string;
   includes?: readonly string[];
   /**
-   * The catalog this case's execution describes, in place of the default below.
+   * The symbols this case's execution describes, in place of the default below.
    *
-   * A case that needs to know *when* the catalog was observed supplies this,
-   * which is the only way to tell an authored phase that precedes the
-   * observation from one that follows it.
+   * A case that needs to know *when* they were read supplies this, which is the
+   * only way to tell an authored phase that precedes the read from one that
+   * follows it.
    */
-  catalog?: () => Operation<SyntaxCatalog>;
+  symbols?: () => Operation<SyntaxSymbols>;
   /**
    * How this case answers the one structural question the Component asks.
    *
@@ -409,11 +410,11 @@ export function* planDeclarationHarness(options: {
     checked,
     reviews,
     declaration,
-    catalogCalls: 0,
-    *catalog(): Operation<SyntaxCatalog> {
-      harness.catalogCalls += 1;
-      if (options.catalog !== undefined) {
-        return yield* options.catalog();
+    symbolCalls: 0,
+    *symbols(): Operation<SyntaxSymbols> {
+      harness.symbolCalls += 1;
+      if (options.symbols !== undefined) {
+        return yield* options.symbols();
       }
       return CASE_CATALOG;
     },
@@ -430,7 +431,7 @@ export function* planDeclarationHarness(options: {
  * One entry, so the rendered catalog carries a marker a prompt assertion can
  * look for without depending on the whole run profile being assembled.
  */
-export const CASE_CATALOG: SyntaxCatalog = {
+export const CASE_CATALOG: SyntaxSymbols = {
   version: 2,
   categories: [
     { kind: "structural", entries: [] },

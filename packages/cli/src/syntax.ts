@@ -2,15 +2,21 @@
  * `xmd syntax` — everything a document may write here, described without
  * running any of it.
  *
- * Two jobs, kept apart. The first is assembling the `run` host profile as
- * *declarations*: the same arrays the runtime installers register, with none of
+ * Two jobs, kept apart. The first is entering the `run` profile's *declarative*
+ * bootstraps: the same calls the runtime installers delegate to, with none of
  * the middleware, providers, launchers or activation those installers also
- * arrange. The second is rendering, and both renderers take the catalog as a
+ * arrange. The second is rendering, and both renderers take the symbols as a
  * value — neither performs discovery, and neither parses the other's output.
+ *
+ * Entering the bootstraps rather than splicing their registration arrays is
+ * what makes the documentation this command reads the profile's own: a package
+ * installs its registrations and its documentation in one call, so a command
+ * that has the components has the words that describe them. Splicing the arrays
+ * left the two halves to be kept in step by hand, and they were not.
  *
  * JSON is the canonical, lossless projection and belongs to this command.
  * Markdown belongs to core, because a document that writes `<Syntax />` is shown
- * the same catalog in the same words: two renderings that agreed only by hand
+ * the same symbols in the same words: two renderings that agreed only by hand
  * would be one release away from telling an operator and an agent different
  * things about one profile.
  */
@@ -19,114 +25,92 @@ import { planComponentDescription } from "./plan-component.ts";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import {
-  AGENT_REGISTRATIONS,
-  agentDocumentation,
   agentIdentityComponents,
+  capturedDocumentation,
   documentationIndexFor,
   inspectSyntax,
-  registerComponents,
   renderSelectedDocumentation,
   renderSyntaxMarkdown,
   selectDocumented,
+  useAgentComponents,
 } from "@executablemd/core";
-import type { DocumentationContribution, SyntaxCatalog } from "@executablemd/core";
-import { TESTING_REGISTRATIONS, testingDocumentation } from "@executablemd/testing";
-import { WEB_REGISTRATIONS, webDocumentation } from "@executablemd/web";
-import { cliDocumentation, VERBOSE_REGISTRATION } from "./verbose-component.ts";
-import { COMPOSITION_REGISTRATIONS, compositionDocumentation } from "@executablemd/workflow";
+import type { SyntaxSymbols } from "@executablemd/core";
+import { useTestingComponents } from "@executablemd/testing";
+import { useWebComponents } from "@executablemd/web";
+import { useVerboseComponent } from "./verbose-component.ts";
+import { useCompositionComponents } from "@executablemd/workflow";
 
 export { renderSyntaxMarkdown };
 
 /**
- * The catalog for the production `run` profile, in the contextual working
+ * The symbols for the production `run` profile, in the contextual working
  * directory.
  *
- * The registrations are the ones `installTestingComponents()`,
+ * The declarations are the ones `installTestingComponents()`,
  * `installWebComponents()`, `installAgentComponents()` and the
- * repository-composition installer register, read as values so this cannot
- * drift from what a run installs. What those installers
- * *also* do — testing activation and its execution middleware, the elicitation
- * provider, the agent provider, the permission mode, the foreground launcher —
- * is operational and belongs to a run, so none of it happens here.
+ * repository-composition installer each delegate to, entered here directly so
+ * this cannot drift from what a run installs. What those installers *also* do —
+ * testing activation and its execution middleware, the elicitation provider,
+ * the agent provider, the permission mode, the foreground launcher — is
+ * operational and belongs to a run, so none of it happens here.
  *
  * `<Session>` travels as a declaration for the same reason: its factory takes
  * an execution's claimant, and describing an environment mints no execution.
  *
  * The scope is bounded, and everything installed in it is declarative registry
- * state. Leaving it removes the layer, and there is no process, agent, service,
- * journal, file or authority left to clean up.
+ * state and documentation middleware. Leaving it removes the layer, and there
+ * is no process, agent, service, journal, file or authority left to clean up.
  */
-export function* syntaxCatalog(includes: readonly string[]): Operation<SyntaxCatalog> {
+export function* syntaxSymbols(includes: readonly string[]): Operation<SyntaxSymbols> {
   return yield* scoped(function* () {
     yield* useRunProfileRegistry();
-    return yield* inspectSyntax({
-      includes,
-      components: agentIdentityComponents(),
-      // `<Plan>` is part of the run profile, so a catalog that left it out would
-      // describe a vocabulary no run has. Described from the packaged bytes:
-      // inspection mints nothing, so it reports the Component's identity and
-      // contract without building the capabilities only a run can build.
-      declarations: [yield* planComponentDescription()],
-    });
+    return yield* profileSymbols(includes);
+  });
+}
+
+/** The profile's symbols, inside a scope that has already bootstrapped it. */
+function* profileSymbols(includes: readonly string[]): Operation<SyntaxSymbols> {
+  return yield* inspectSyntax({
+    includes,
+    components: agentIdentityComponents(),
+    // `<Plan>` is part of the run profile, so symbols that left it out would
+    // describe a vocabulary no run has. Described from the packaged bytes:
+    // inspection mints nothing, so it reports the Component's identity and
+    // contract without building the capabilities only a run can build.
+    declarations: [yield* planComponentDescription()],
   });
 }
 
 /**
- * The registrations the `run` profile installs, as registry state and nothing
- * else.
+ * The declarations the `run` profile installs, and nothing else.
  *
  * Shared with `xmd plan`, which both describes this vocabulary to a generator
- * and validates what comes back. Registering only here would make the catalog
+ * and validates what comes back. Bootstrapping only here would make the symbols
  * advertise `<Agent>` while validation reported it unresolved — a document told
  * to use a component nobody would accept.
+ *
+ * Each call is one package's declarative bootstrap: its registrations and the
+ * documentation that describes them. None of them installs a provider,
+ * discovers an ambient repository, acquires a lock, spawns Git or reads a
+ * credential.
  */
 export function* useRunProfileRegistry(): Operation<void> {
-  yield* registerComponents([
-    VERBOSE_REGISTRATION,
-    ...AGENT_REGISTRATIONS,
-    ...TESTING_REGISTRATIONS,
-    ...WEB_REGISTRATIONS,
-    // The repository-composition vocabulary. Registering it is all that happens
-    // here: catalog construction installs no provider, discovers no ambient
-    // repository, acquires no lock, spawns no Git and reads no credential.
-    ...COMPOSITION_REGISTRATIONS,
-  ]);
+  yield* useVerboseComponent();
+  yield* useAgentComponents();
+  yield* useTestingComponents();
+  yield* useWebComponents();
+  // The repository-composition vocabulary.
+  yield* useCompositionComponents();
 }
 
 /**
- * The documentation the `run` profile's own packages contribute.
+ * The symbols as JSON: two-space indent, one trailing newline.
  *
- * Assembled beside `useRunProfileRegistry()` and from the same declarations, so
- * a package whose components this profile registers is a package whose
- * documentation this profile demands. Core's own is added by
- * `documentationIndexFor()`; everything here is a boundary outside it.
- *
- * The list is deliberately not "whatever is installed": it is captured at the
- * trusted boundary, before any document code exists, so nothing a running
- * document reaches can add a source, remove one, or answer for what a component
- * does.
+ * Construction owns member insertion order, category order and entry order, so
+ * the bytes are the same for the same environment.
  */
-export function* runProfileDocumentation(): Operation<DocumentationContribution[]> {
-  // One entry per boundary `useRunProfileRegistry()` installs, in the same
-  // order and from the same declarations. Core's own is added by
-  // `documentationIndexFor()`; these are the boundaries outside it.
-  return [
-    yield* agentDocumentation(),
-    yield* cliDocumentation(),
-    yield* testingDocumentation(),
-    yield* webDocumentation(),
-    yield* compositionDocumentation(),
-  ];
-}
-
-/**
- * The catalog as JSON: two-space indent, one trailing newline.
- *
- * Catalog construction owns member insertion order, category order and entry
- * order, so the bytes are the same for the same environment.
- */
-export function renderSyntaxJson(catalog: SyntaxCatalog): string {
-  return `${JSON.stringify(catalog, null, 2)}\n`;
+export function renderSyntaxJson(symbols: SyntaxSymbols): string {
+  return `${JSON.stringify(symbols, null, 2)}\n`;
 }
 
 /**
@@ -137,13 +121,23 @@ export function renderSyntaxJson(catalog: SyntaxCatalog): string {
  * agent reading a document are answering the same question, and two renderings
  * that agreed only by hand would be one release away from disagreeing.
  *
- * Nothing here narrows execution, so every entry a catalog holds is available
+ * The symbols and the index come from *one* entry into the profile's
+ * bootstraps, inside this scope. Building them from two entries would let the
+ * command describe a component from one assembly and document it from another;
+ * building the index outside the scope would find no contribution at all, since
+ * a bootstrap's documentation belongs to the scope that entered it.
+ *
+ * Nothing here narrows execution, so every entry the symbols hold is available
  * and each says so.
  */
 export function* renderSyntaxDocumentation(
-  catalog: SyntaxCatalog,
+  includes: readonly string[],
   names: readonly string[],
 ): Operation<string> {
-  const index = yield* documentationIndexFor(yield* runProfileDocumentation());
-  return renderSelectedDocumentation(selectDocumented(catalog, catalog, names, index));
+  return yield* scoped(function* () {
+    yield* useRunProfileRegistry();
+    const catalog = yield* profileSymbols(includes);
+    const index = documentationIndexFor(yield* capturedDocumentation());
+    return renderSelectedDocumentation(selectDocumented(catalog, catalog, names, index));
+  });
 }

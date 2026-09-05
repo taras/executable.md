@@ -33,6 +33,7 @@ import { Err } from "effection";
 import type { Operation } from "effection";
 import {
   Component,
+  contributeDocumentation,
   documented,
   packageDocumentation,
   registerComponents,
@@ -44,6 +45,7 @@ import type {
   ComponentFailure,
   ComponentRegistration,
   DocumentationContribution,
+  DocumentationReader,
   DocumentExecution,
 } from "@executablemd/core";
 import { boundary, record, Test, testing, TestFailureError } from "./test-api.ts";
@@ -107,12 +109,28 @@ const TEST_TIMEOUT_MS = 20_000;
  * to that array demands a section for it rather than quietly shipping one
  * without.
  */
-export function* testingDocumentation(): Operation<DocumentationContribution> {
+export function* testingDocumentation(
+  read?: DocumentationReader,
+): Operation<DocumentationContribution> {
   return yield* packageDocumentation(
     new URL("./components.md", import.meta.url),
     { owner: TESTING_ORIGIN, asset: "packages/testing/src/components.md" },
     TESTING_REGISTRATIONS.map((registration) => registration.name),
+    read,
   );
+}
+
+/**
+ * This package's vocabulary, as declarations and nothing else.
+ *
+ * Registrations and the documentation that describes them, installed together
+ * so a scope that has one has the other. `xmd syntax` enters exactly this and
+ * stops: describing an environment installs no behavior chain, no activation
+ * guard and no execution middleware.
+ */
+export function* useTestingComponents(): Operation<void> {
+  yield* registerComponents(TESTING_REGISTRATIONS);
+  yield* contributeDocumentation(testingDocumentation);
 }
 
 export const TESTING_REGISTRATIONS: readonly ComponentRegistration[] = [
@@ -241,7 +259,7 @@ export function* installHandlers(
     },
   });
 
-  yield* registerComponents(TESTING_REGISTRATIONS);
+  yield* useTestingComponents();
   yield* Execution.around({
     *execute([request], next) {
       // Fresh boundary collection per execution: outcomes reported by

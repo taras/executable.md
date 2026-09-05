@@ -67,7 +67,6 @@ import {
   inspectDocument,
   agentIdentityComponents,
   installAgentComponents,
-  registerComponents,
   retainedSource,
   rootSourcePath,
   useNormalizedOutput,
@@ -99,7 +98,7 @@ import { timeout as runTimeout } from "@executablemd/runtime";
 import { installRunAgentStack, resolveAgentStack, resolveAuthorshipStack } from "./agent-stack.ts";
 import { planComponentDeclaration } from "./plan-component.ts";
 import { planAgentContext } from "./authorship-profile.ts";
-import { VERBOSE_REGISTRATION } from "./verbose-component.ts";
+import { useVerboseComponent } from "./verbose-component.ts";
 import type { AgentStack } from "./agent-stack.ts";
 import { reportFailure } from "./report.ts";
 import { TIMEOUT_FLAGS, resolvePlanTimeout, resolveRunTimeouts } from "./timeouts.ts";
@@ -132,8 +131,7 @@ import {
   renderSyntaxDocumentation,
   renderSyntaxJson,
   renderSyntaxMarkdown,
-  runProfileDocumentation,
-  syntaxCatalog,
+  syntaxSymbols,
 } from "./syntax.ts";
 import { deliverWhole } from "./stdout-delivery.ts";
 import { testingExecutionHost } from "./testing-host.ts";
@@ -155,7 +153,7 @@ import type { HostWorkflowInstaller, WorkflowHost, WorkflowStart } from "./workf
 import { runWorkflowManagement } from "./workflow-management.ts";
 import { establishDefinition } from "./workflow-definition.ts";
 import type { EstablishedDefinition } from "./workflow-definition.ts";
-import { COMPOSITION_REGISTRATIONS, useWorkflowServiceDenial } from "@executablemd/workflow";
+import { useCompositionComponents, useWorkflowServiceDenial } from "@executablemd/workflow";
 import denoJson from "../deno.json" with { type: "json" };
 
 const SECRET_DETECTION_OPTION = "--secret-detection";
@@ -922,12 +920,12 @@ export function* installDocumentComponents(mode: DocumentMode, verbose: boolean)
   // `<Verbose>` is registered at all.
   yield* Config.around({ verbose: () => verbose }, { at: "min" });
 
-  // The repository-composition vocabulary, as ordinary shadowable defaults.
-  // Registering it installs no provider, discovers no repository, acquires no
-  // lock and reaches no network: what a name *does* is decided by whichever
-  // provider the command installed, and a runtime that installs none still
-  // resolves every one of these.
-  yield* registerComponents(COMPOSITION_REGISTRATIONS);
+  // The repository-composition vocabulary, as ordinary shadowable defaults,
+  // with the documentation that describes it. Bootstrapping it installs no
+  // provider, discovers no repository, acquires no lock and reaches no network:
+  // what a name *does* is decided by whichever provider the command installed,
+  // and a runtime that installs none still resolves every one of these.
+  yield* useCompositionComponents();
 
   // Compose testing around the single core execution entrypoint: both
   // commands register the components (assertions work in regular documents,
@@ -940,7 +938,7 @@ export function* installDocumentComponents(mode: DocumentMode, verbose: boolean)
     yield* installTestAgentComponents();
     yield* installAgentComponents();
   } else {
-    yield* registerComponents([VERBOSE_REGISTRATION]);
+    yield* useVerboseComponent();
     yield* installTestingComponents({ verbose });
   }
 
@@ -1172,12 +1170,6 @@ function* runDocument(
         // and does not gain `<Plan>` at its root — but the production run child
         // it can launch is the run profile, and gets it below.
         ...(mode.testing ? {} : { declarations: [plan] }),
-        // The documentation the packages this profile registers ship, beside
-        // the registrations themselves. Without it a document's own
-        // `<Syntax names={…}>` would read a core-only index and answer with the
-        // fallback sentence for a component `xmd syntax NAME` documents fully —
-        // one product, two answers.
-        documentation: yield* runProfileDocumentation(),
       },
       // The declarations a nested execution may configure a child with, named
       // by the exact definitions this command installed. Recognizing one is
@@ -2524,7 +2516,7 @@ function* dispatch(
         },
         {
           ...(sessions === undefined ? {} : { sessions }),
-          catalog: syntaxCatalog,
+          symbols: syntaxSymbols,
           // The two facts about this process's own stderr that nothing further
           // in may go and read: whether it is a terminal, and whether it took
           // what it was handed. The approved Plan's sinks are stdout and
@@ -2648,21 +2640,22 @@ function* dispatch(
       // the catalog would read as complete.
       let rendered: string;
       try {
-        const catalog = yield* syntaxCatalog(command.config.include);
         const named = command.config.component;
-        rendered =
-          named === undefined
-            ? // The compact catalog, unchanged: routine discovery output and every
-              // default Plan prompt read it, and long documentation would make both
-              // unnecessarily large.
-              command.config.json
-              ? renderSyntaxJson(catalog)
-              : renderSyntaxMarkdown(catalog)
-            : // The same selection, index and renderer `<Syntax names={…}>` uses, so
-              // the command and the component cannot describe one component two
-              // ways. JSON stays the compact projection; it is the catalog's shape,
-              // and documentation is prose rather than a catalog member.
-              yield* renderSyntaxDocumentation(catalog, [named]);
+        if (named === undefined) {
+          // The compact list of symbols, unchanged: routine discovery output and
+          // every default Plan prompt read it, and long documentation would make
+          // both unnecessarily large.
+          const catalog = yield* syntaxSymbols(command.config.include);
+          rendered = command.config.json
+            ? renderSyntaxJson(catalog)
+            : renderSyntaxMarkdown(catalog);
+        } else {
+          // The same selection, index and renderer `<Syntax names={…}>` uses, so
+          // the command and the component cannot describe one component two
+          // ways. JSON stays the compact projection; it is the symbols' shape,
+          // and documentation is prose rather than a symbol member.
+          rendered = yield* renderSyntaxDocumentation(command.config.include, [named]);
+        }
       } catch (error) {
         console.error(describeError(error));
         yield* exit(1);

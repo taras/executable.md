@@ -7,33 +7,50 @@
  * the components it documents, and the first person to notice would be an
  * author whose `<Syntax names={…}>` refused at run time.
  *
- * So the check is the real assembly. It reads the same contributions the `run`
- * profile installs, through the same loader, and builds the same index — which
- * means a missing section, an unknown heading and a component documented twice
- * each fail the build for exactly the reason they would fail a run.
+ * So the check is the real assembly. It enters the same bootstraps the `run`
+ * profile enters, collects through the same Api, and builds the same index —
+ * which means a missing section, an unknown heading and a component documented
+ * twice each fail the build for exactly the reason they would fail a run.
  */
 
-import { main } from "effection";
+import { main, scoped } from "effection";
 import type { Operation } from "effection";
-import { documentationIndexFor } from "@executablemd/core";
-import { runProfileDocumentation } from "../packages/cli/src/syntax.ts";
+import { capturedDocumentation, documentationIndexFor } from "@executablemd/core";
+import type { ComponentOrigin, DocumentationIndex } from "@executablemd/core";
+import { useRunProfileRegistry } from "../packages/cli/src/syntax.ts";
 
 /** Assemble the complete index, throwing whatever it refuses with. */
 export function* validateDocumentation(): Operation<number> {
-  const index = yield* documentationIndexFor(yield* runProfileDocumentation());
-  // Read one entry back, so a build cannot pass by assembling an index that
-  // holds nothing: an empty set satisfies every rule above vacuously.
-  const sample = index.documentationFor("Syntax", {
-    kind: "protected",
-    origin: "@executablemd/core",
+  // Inside the bootstrap scope, because a contribution belongs to the scope
+  // that installed it: collecting outside would find core's terminal alone and
+  // pass every rule vacuously.
+  const index = yield* scoped(function* () {
+    yield* useRunProfileRegistry();
+    return documentationIndexFor(yield* capturedDocumentation());
   });
+  // Read two entries back, one from each side of the terminal, so a build
+  // cannot pass by assembling an index that holds nothing: an empty set
+  // satisfies every rule above vacuously, and an index holding core's
+  // contribution alone would satisfy them for a profile that bootstrapped no
+  // package at all.
+  read(index, "Syntax", { kind: "protected", origin: "@executablemd/core" });
+  read(index, "WebForm", {
+    kind: "registered",
+    origin: "@executablemd/web",
+    reserved: false,
+  });
+  return 1;
+}
+
+/** One entry the index must actually hold, read the way a document reads it. */
+function read(index: DocumentationIndex, name: string, origin: ComponentOrigin): void {
+  const sample = index.documentationFor(name, origin);
   if (sample === undefined || sample.length === 0) {
     throw new Error(
-      "the documentation index built without <Syntax>'s own documentation, so it is not the " +
+      `the documentation index built without <${name}>'s documentation, so it is not the ` +
         "index this product ships",
     );
   }
-  return 1;
 }
 
 if (import.meta.main) {

@@ -56,15 +56,24 @@ export function* agentDocumentation(
       { owner: CORE_ORIGIN, asset: "packages/core/src/agent/components.md" },
       read,
     ),
-    supplies: AGENT_COMPONENT_NAMES,
+    supplies: agentComponentNames(),
   };
 }
 
-/** Every component the Agent registration boundary supplies, by name. */
-const AGENT_COMPONENT_NAMES: ReadonlySet<string> = new Set([
-  ...AGENT_REGISTRATIONS.map((registration) => registration.name),
-  ...agentIdentityComponents().map((component) => component.name),
-]);
+/**
+ * Every component the Agent registration boundary supplies, by name.
+ *
+ * Built when asked rather than at module scope. The Agent bootstrap imports this
+ * module for its own contribution, so a module-scoped set built from
+ * `AGENT_REGISTRATIONS` would read that array before its own module finished
+ * evaluating, depending on which of the two was loaded first.
+ */
+function agentComponentNames(): ReadonlySet<string> {
+  return new Set([
+    ...AGENT_REGISTRATIONS.map((registration) => registration.name),
+    ...agentIdentityComponents().map((component) => component.name),
+  ]);
+}
 
 /** Core's documentation source, read from the package rather than the caller. */
 export function* readCoreDocumentation(
@@ -157,32 +166,20 @@ export function* readPackagedDocumentation(
  * component this build actually ships; which of them a given site can select is
  * a separate question the selection answers.
  */
-export function* documentationIndexFor(
+export function documentationIndexFor(
   /**
-   * What the packages installed in this execution supply, beside core's own.
+   * What the packages bootstrapped in this execution supply, core's own
+   * included.
    *
-   * Assembled by the trusted host, with the rest of the installation, before any
-   * document code exists — the Agent, CLI, testing, web and workflow bundles
-   * each contribute their own file and the set of components it must cover. Not
-   * a setter and not a context: a document that could add a source could
-   * describe components it does not have, and one that could remove a source
-   * could hide the documentation of a component it does.
+   * Collected through the `Documentation` Api at the trusted boundary, before
+   * any document code exists — core is the terminal, and the Agent, CLI,
+   * testing, web and workflow bootstraps each append their own file and the set
+   * of components it must cover. Nothing is added here: a second core entry
+   * appended by this function would be a source no bootstrap accounted for, and
+   * the collector's duplicate refusal would never see it.
    */
-  contributed: readonly DocumentationContribution[] = [],
-  /**
-   * How this execution reads core's own asset.
-   *
-   * By value, from whoever built the observation. Nothing module-scoped, so two
-   * executions in one process each read through their own and neither can
-   * change what the other is told.
-   */
-  read: DocumentationReader = packagedAssetReader,
-): Operation<DocumentationIndex> {
-  const core: DocumentationContribution = {
-    source: yield* readCoreDocumentation(read),
-    supplies: CORE_COMPONENT_NAMES,
-  };
-  const all = [core, ...contributed];
+  all: readonly DocumentationContribution[],
+): DocumentationIndex {
   // Merged per owner, not replaced. One package can have several registration
   // boundaries — core registers its own components and its Agent components
   // from two files — and keying by owner alone would let the second boundary's
@@ -221,8 +218,12 @@ export interface DocumentationContribution {
  * Its registrations and the protected tier together — the two ways core puts a
  * component into an execution — read from the same declarations execution reads,
  * so this cannot drift from what the package actually ships.
+ *
+ * Deliberately not `CORE_COMPONENT_NAMES`, which is the registrations alone.
+ * Documentation has to account for the protected tier as well, and two sets
+ * under one name would eventually be used for each other's question.
  */
-const CORE_COMPONENT_NAMES: ReadonlySet<string> = new Set([
+export const CORE_DOCUMENTED_NAMES: ReadonlySet<string> = new Set([
   ...CORE_REGISTRY.keys(),
   ...PROTECTED_COMPONENT_NAMES,
 ]);

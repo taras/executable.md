@@ -37,7 +37,7 @@ import type {
   DocumentValidation,
   ElicitationRequest,
   Json,
-  SyntaxCatalog,
+  SyntaxSymbols,
 } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -146,7 +146,7 @@ function* runDocument(options: RunOptions = {}): Operation<CommandRun> {
       // *when* the public `<Syntax />` occurrence observed it — which is what an
       // ordering case about the authored Preparing phase is asking.
       // deno-lint-ignore require-yield
-      *catalog(): Operation<SyntaxCatalog> {
+      *symbols(): Operation<SyntaxSymbols> {
         events.push("catalog");
         return CASE_CATALOG;
       },
@@ -187,7 +187,7 @@ function* runDocument(options: RunOptions = {}): Operation<CommandRun> {
           {
             components: agentIdentityComponents(),
             declarations: [harness.declaration],
-            catalog: harness.catalog,
+            symbols: harness.symbols,
           },
         ],
       );
@@ -504,7 +504,7 @@ describe("the packaged plan command document", () => {
             {
               components: agentIdentityComponents(),
               declarations: [installed],
-              catalog: harness.catalog,
+              symbols: harness.symbols,
             },
           ],
         );

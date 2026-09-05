@@ -30,7 +30,7 @@ import {
   retainedSource,
   useNormalizedOutput,
 } from "@executablemd/core";
-import type { Json, SyntaxCatalog } from "@executablemd/core";
+import type { Json, SyntaxSymbols } from "@executablemd/core";
 import { validateDocument } from "@executablemd/core";
 import { executeInstalled, sourceDigest } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -49,7 +49,7 @@ import {
   structuralValidation,
 } from "../src/plan-component.ts";
 import type { StructuralValidation } from "../src/plan-component.ts";
-import { syntaxCatalog } from "../src/syntax.ts";
+import { syntaxSymbols } from "../src/syntax.ts";
 import { PLAN_DOCUMENT, readPackagedDocument } from "../src/packaged-document.ts";
 
 const ROOT = "document.md";
@@ -157,7 +157,7 @@ function* runDocument(options: {
             // Where the profile a document observes is settled now: the
             // `<Syntax />` the packaged Plan writes is canonical core's public
             // component, and what it answers with is this execution's.
-            catalog: harness.catalog,
+            symbols: harness.symbols,
           },
         ],
       );
@@ -263,17 +263,17 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       const first = run.harness.fake.prompts[0] ?? "";
       expect(first).toContain("### `<File>`");
       expect(first.split("### `<File>`").length - 1).toBe(1);
-      expect(run.harness.catalogCalls).toBe(1);
+      expect(run.harness.symbolCalls).toBe(1);
     });
   });
 
-  it("PC1c: a catalog observation that fails reaches no session, turn, review or Plan", function* () {
+  it("PC1c: a catalog reference that fails reaches no session, turn, review or Plan", function* () {
     yield* useWorkingDirectory(function* (dir) {
       const harness = yield* planDeclarationHarness({
         surface: "component",
         authorshipRoot: `${dir}-profile`,
         // deno-lint-ignore require-yield
-        *catalog(): Operation<SyntaxCatalog> {
+        *symbols(): Operation<SyntaxSymbols> {
           throw new Error("the profile could not be described");
         },
       });
@@ -287,7 +287,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       });
 
       expect(run.failure).toContain("the profile could not be described");
-      // Nothing downstream of the observation happened: no turn was taken, no
+      // Nothing downstream of the reference happened: no turn was taken, no
       // review was asked, no draft was checked, and no Plan was bound.
       expect(run.harness.fake.prompts).toEqual([]);
       expect(run.harness.reviews).toEqual([]);
@@ -404,7 +404,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
 
   it("PC7: the catalog advertises <Plan> and none of its private names", function* () {
     yield* useWorkingDirectory(function* () {
-      const catalog = yield* syntaxCatalog([]);
+      const catalog = yield* syntaxSymbols([]);
       const builtIn = catalog.categories[1].entries;
       const plan = builtIn.find((entry) => entry.name === "Plan");
 
@@ -447,7 +447,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       // unresolved, and never runs.
       yield* writeTextFile(join(dir, "CheckDraft.md"), "the repository file ran.\n");
 
-      const catalog = yield* syntaxCatalog([dir]);
+      const catalog = yield* syntaxSymbols([dir]);
       for (const category of catalog.categories) {
         expect(category.entries.map((entry) => entry.name)).not.toContain("CheckDraft");
       }
@@ -524,7 +524,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         harness: yield* planDeclarationHarness({
           surface: "component",
           authorshipRoot: yield* authorshipRoot(),
-          *catalog() {
+          *symbols() {
             catalogs += 1;
             throw new Error("a restored syntax snapshot was rebuilt");
           },
@@ -1103,33 +1103,33 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     });
   });
 
-  it("PC27: the Plan's catalog observation is core's closed record, and a hostile one produces nothing", function* () {
+  it("PC27: the Plan's syntax record is core's closed record, and a hostile one produces nothing", function* () {
     yield* useWorkingDirectory(function* () {
       const approved = yield* approvedRun();
       // The record is canonical core's, not Plan's: the packaged Component
       // writes the same public `<Syntax />` any document writes, so what a
-      // continuation restores is a `syntax_catalog` observation rather than
+      // continuation restores is a `syntax_symbols` reference rather than
       // anything this host retained.
-      const observation = (yield* approved.readAll()).find(
-        (event) => event.type === "yield" && event.description.type === "syntax_catalog",
+      const reference = (yield* approved.readAll()).find(
+        (event) => event.type === "yield" && event.description.type === "syntax_symbols",
       );
-      expect(observation?.type).toBe("yield");
-      if (observation?.type !== "yield" || observation.result.status !== "ok") {
-        throw new Error("the approved run retained no catalog observation");
+      expect(reference?.type).toBe("yield");
+      if (reference?.type !== "yield" || reference.result.status !== "ok") {
+        throw new Error("the approved run retained no syntax record");
       }
-      const value = Object(observation.result.value);
-      expect(Object.keys(value)).toEqual(["catalog"]);
-      expect(typeof value.catalog).toBe("string");
+      const value = Object(reference.result.value);
+      expect(Object.keys(value)).toEqual(["symbols"]);
+      expect(typeof value.symbols).toBe("string");
 
       const cases: [string, (value: Json) => Json][] = [
         ["the member is missing", () => ({})],
         ["an unknown member was added", (record) => ({ ...Object(record), extra: true })],
-        ["the member has the wrong type", () => ({ catalog: 7 })],
+        ["the member has the wrong type", () => ({ symbols: 7 })],
       ];
 
       for (const [, replace] of cases) {
-        const run = yield* continued(yield* tampered(approved, "syntax_catalog:", replace));
-        expect(run.failure).toContain("retained <Syntax /> catalog is not a catalog");
+        const run = yield* continued(yield* tampered(approved, "syntax_symbols:", replace));
+        expect(run.failure).toContain("retained <Syntax /> text is not a record");
         expect(run.output).not.toContain("got:");
         expect(run.output).not.toContain("# Say hello");
         expect(run.harness.fake.prompts).toEqual([]);

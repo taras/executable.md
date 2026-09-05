@@ -210,7 +210,7 @@ export type {
   InspectSyntaxOptions,
   OriginOnlyComponentSyntaxEntry,
   StructuralSyntaxEntry,
-  SyntaxCatalog,
+  SyntaxSymbols,
 } from "./src/inspect.ts";
 export { ComponentIncludeError } from "./src/components/candidates.ts";
 /**
@@ -231,8 +231,26 @@ export {
   documentationIndexFor,
   packageDocumentation,
 } from "./src/component-documentation.ts";
-export type { DocumentationContribution } from "./src/component-documentation.ts";
-export { select as selectDocumented } from "./src/syntax-observation.ts";
+export type {
+  DocumentationContribution,
+  DocumentationReader,
+} from "./src/component-documentation.ts";
+/**
+ * How a package's bootstrap contributes the documentation for what it registers.
+ *
+ * Exported because the contract is additive and contextual: a package installs
+ * its registrations and its documentation in one call, and canonical execution
+ * collects whatever the host bootstrapped. A host-maintained list of every
+ * package's documentation would be a second list beside the registrations, and
+ * two lists drift.
+ */
+export {
+  capturedDocumentation,
+  contributeDocumentation,
+  Documentation,
+} from "./src/documentation-api.ts";
+export type { DocumentationApi } from "./src/documentation-api.ts";
+export { select as selectDocumented } from "./src/syntax-reference.ts";
 export { NO_DOCUMENTATION, UnknownComponentError } from "./src/documentation-index.ts";
 export type { DocumentationIndex } from "./src/documentation-index.ts";
 export { PROTECTED_COMPONENT_NAMES, ProtectedComponentError } from "./src/components/protected.ts";
@@ -298,6 +316,7 @@ export {
   AGENT_REGISTRATIONS,
   agentIdentityComponents,
   installAgentComponents,
+  useAgentComponents,
 } from "./src/agent/components.ts";
 export type { AgentComponentsOptions } from "./src/agent/components.ts";
 export { Agent } from "./src/agent/agent-api.ts";

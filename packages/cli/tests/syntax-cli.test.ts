@@ -21,8 +21,8 @@ import { platform, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { API } from "@executablemd/runtime";
 import { CORE_COMPONENT_NAMES } from "@executablemd/core";
-import type { PropsSchema, SyntaxCatalog } from "@executablemd/core";
-import { renderSyntaxJson, renderSyntaxMarkdown, syntaxCatalog } from "../src/syntax.ts";
+import type { PropsSchema, SyntaxSymbols } from "@executablemd/core";
+import { renderSyntaxJson, renderSyntaxMarkdown, syntaxSymbols } from "../src/syntax.ts";
 
 function* useWorkspace<T>(
   files: Record<string, string>,
@@ -59,7 +59,7 @@ const WORKSPACE: Record<string, string> = {
   "second/Only.md": "only in the second include\n",
 };
 
-function parseCatalog(text: string): SyntaxCatalog {
+function parseCatalog(text: string): SyntaxSymbols {
   const parsed: unknown = JSON.parse(text);
   if (typeof parsed !== "object" || parsed === null) {
     throw new Error("the catalog is not an object");
@@ -72,7 +72,7 @@ function parseCatalog(text: string): SyntaxCatalog {
   return { version, categories: readCategories(categories) };
 }
 
-function readCategories(categories: unknown[]): SyntaxCatalog["categories"] {
+function readCategories(categories: unknown[]): SyntaxSymbols["categories"] {
   const [structural, builtIn, userProvided] = categories.map(readCategory);
   if (
     structural?.kind !== "structural" ||
@@ -105,7 +105,7 @@ function names(entries: readonly { name: string }[]): string[] {
 }
 
 /** One built-in entry carrying `props`, for a renderer row that supplies its own. */
-function catalogWith(props: PropsSchema): SyntaxCatalog {
+function catalogWith(props: PropsSchema): SyntaxSymbols {
   return {
     version: 2,
     categories: [
@@ -151,7 +151,7 @@ const COMPOSITION_NAMES = [
 
 describe("Tier SX — the run profile the command describes", () => {
   it("SX1: names core, Agent, testing and web defaults, and <Session>", function* () {
-    const catalog = yield* syntaxCatalog([]);
+    const catalog = yield* syntaxSymbols([]);
     const builtIn = names(catalog.categories[1].entries);
 
     for (const name of CORE_COMPONENT_NAMES) {
@@ -176,7 +176,7 @@ describe("Tier SX — the run profile the command describes", () => {
   });
 
   it("SX1b: describes <Syntax> once, as the component canonical core owns", function* () {
-    const catalog = yield* syntaxCatalog([]);
+    const catalog = yield* syntaxSymbols([]);
     const everywhere = catalog.categories.flatMap((category) =>
       category.entries.filter((entry) => entry.name === "Syntax"),
     );
@@ -198,14 +198,14 @@ describe("Tier SX — the run profile the command describes", () => {
     expect(entry.captures).toEqual([]);
     expect(entry.returnMode).toBe("text");
     expect(entry.description).toBe(
-      "Inspect components and control-flow constructs. `<Syntax />` renders the current " +
-        'catalog; `<Syntax names={["Elicit"]} />` renders selected documentation.',
+      "Inspect available components and control-flow constructs. `<Syntax />` lists the " +
+        'symbols available here; `<Syntax names={["Elicit"]} />` renders selected documentation.',
     );
     expect(entry.as).toBe("Optional. Captures the rendered text instead of emitting it.");
   });
 
   it("ORC1: names all thirteen repository-composition components, with contracts", function* () {
-    const catalog = yield* syntaxCatalog([]);
+    const catalog = yield* syntaxSymbols([]);
     const entries = catalog.categories[1].entries;
     const builtIn = names(entries);
 
@@ -248,7 +248,7 @@ describe("Tier SX — the run profile the command describes", () => {
         ].join("\n"),
       },
       function* (dir) {
-        const catalog = yield* syntaxCatalog([dir]);
+        const catalog = yield* syntaxSymbols([dir]);
         const provided = catalog.categories[2].entries.find((entry) => entry.name === "Worktree");
         expect(provided).toBeDefined();
         expect(names(catalog.categories[1].entries)).not.toContain("Worktree");
@@ -257,7 +257,7 @@ describe("Tier SX — the run profile the command describes", () => {
   });
 
   it("SX2: documents every complete built-in in the profile", function* () {
-    const catalog = yield* syntaxCatalog([]);
+    const catalog = yield* syntaxSymbols([]);
     const undocumented = catalog.categories[1].entries.filter(
       (entry) => entry.description === undefined || entry.description.trim().length === 0,
     );
@@ -266,7 +266,7 @@ describe("Tier SX — the run profile the command describes", () => {
   });
 
   it("SX2b: reports the testing contracts as they actually are", function* () {
-    const catalog = yield* syntaxCatalog([]);
+    const catalog = yield* syntaxSymbols([]);
     const entries = catalog.categories[1].entries;
 
     const throws = entries.find((entry) => entry.name === "AssertThrows");
@@ -296,7 +296,7 @@ describe("Tier SX — the run profile the command describes", () => {
   });
 
   it("SX3: describes <Session> without minting an execution claimant", function* () {
-    const catalog = yield* syntaxCatalog([]);
+    const catalog = yield* syntaxSymbols([]);
     const session = catalog.categories[1].entries.find((entry) => entry.name === "Session");
 
     // A registered default, described from the declaration a host makes: had
@@ -313,7 +313,7 @@ describe("Tier SX — the run profile the command describes", () => {
 
 describe("Tier SX — the renderers take a value", () => {
   it("SX4: renders both formats without reaching the filesystem", function* () {
-    const catalog = yield* syntaxCatalog([]);
+    const catalog = yield* syntaxSymbols([]);
 
     const rendered = yield* scoped(function* () {
       yield* API.Fs.around({
@@ -369,14 +369,14 @@ describe("Tier SX — the renderers take a value", () => {
   });
 
   it("SX5: renders the same bytes twice from the same catalog", function* () {
-    const catalog = yield* syntaxCatalog([]);
+    const catalog = yield* syntaxSymbols([]);
 
     expect(renderSyntaxMarkdown(catalog)).toBe(renderSyntaxMarkdown(catalog));
     expect(renderSyntaxJson(catalog)).toBe(renderSyntaxJson(catalog));
   });
 
   it("SX6: renders the fixed category headings in order", function* () {
-    const markdown = renderSyntaxMarkdown(yield* syntaxCatalog([]));
+    const markdown = renderSyntaxMarkdown(yield* syntaxSymbols([]));
     const headings = [
       "## Built-in structural syntax",
       "## Built-in components",

@@ -87,7 +87,7 @@ fixed command preflight
   -> --journal: exclusively create the named path
   -> execute the exact packaged plan command document, which is an adapter
        -> <Plan>, the packaged Component, with the request as its Prompt
-            -> announce Preparing, then build the run-profile syntax catalog
+            -> announce Preparing, then build the run-profile syntax symbols
             -> the authorship frame, and one Session inside it
             -> generate, check, repair, review, revise, approve, explain or fail,
                announcing each phase on stderr before it happens
@@ -100,7 +100,7 @@ fixed command preflight
 ```
 
 Each phase hands the next one a value. No phase after the first failure begins,
-so a refused command line reaches no catalog, a failed turn reaches no review,
+so a refused command line reaches no symbols, a failed turn reaches no review,
 and a review that stopped reaches no stdout and no file.
 
 Writing a Plan is a conversation, and a conversation is not a run. The durable
@@ -143,7 +143,7 @@ result.
 
 | Option | What it configures |
 | --- | --- |
-| `--include <dir>…` | the ordered component search path the syntax catalog and the structural checks resolve through |
+| `--include <dir>…` | the ordered component search path the syntax symbols and the structural checks resolve through |
 | `--agent-provider <name>` | which provider writes the Plan |
 | `--default-agent <name>` | which agent that provider defaults to, overriding `DEFAULT_AGENT_NAME` |
 | `--session <name>` | the logical assistant session the planning conversation belongs to |
@@ -258,12 +258,12 @@ and the refusal says where an approved Plan goes now.
 `-e`/`--eval` stays exclusive to `xmd run`. A plan supplies a request, not a
 document. Supplying one anyway is refused in the command's own preflight, with
 `unrecognized option for xmd plan: --eval — inline documents are exclusive to
-xmd run`, before the catalog, the command document, the review or the file
+xmd run`, before the symbols, the command document, the review or the file
 exists.
 
 `--agent-provider` and `--default-agent` are resolved into one authorship
 configuration once per invocation, and an unknown provider fails there, before
-the catalog is built. No permission mode is settled: this command starts no
+the symbols are built. No permission mode is settled: this command starts no
 program, and the ceiling its authorship runs under is the host's rather than the
 command line's.
 
@@ -288,7 +288,7 @@ The message answers both readings, because the token is ambiguous by
 construction. Nothing else changes: only the exact first token is recognized, so
 `xmd run ./prompt`, `xmd run prompt` and `xmd ./prompt` still execute a document
 that is legitimately called that. The refusal exits nonzero and establishes
-nothing — no catalog, no Agent, no Session, no authorship directory and no
+nothing — no symbols, no Agent, no Session, no authorship directory and no
 output.
 
 ### `--session <name>`
@@ -300,7 +300,7 @@ never falls back to the generated one by accident.
 
 Ordinary provider session continuation applies when the configured provider
 already holds that name. The plan command document still supplies the current
-request and the current catalog in this invocation's initial turn. A continued
+request and the current symbols in this invocation's initial turn. A continued
 conversation still produces source and starts no program.
 
 ### Help
@@ -310,7 +310,7 @@ xmd plan --help
 ```
 
 Help needs no request. It describes the request, `--output`, `--session`,
-`--verbose`, `--journal`, the authorship and catalog options and the deadline;
+`--verbose`, `--journal`, the authorship and symbol options and the deadline;
 it states that the approved Plan is the only result, that stdout carries its
 exact bytes when `--output` is absent, and that planning never runs the approved
 program — and it writes out both explicit compositions. No removed option
@@ -322,7 +322,7 @@ It ends with what a journal costs, separated from everything above it:
 Secret detection checks journal entries before they are recorded, but it may not catch every sensitive detail. The journal can contain prompts, drafts, and review answers.
 ```
 
-Help reads no catalog, contacts no provider, places no session, asks nobody
+Help reads no symbols, contacts no provider, places no session, asks nobody
 anything, creates no file and runs nothing.
 
 ## The packaged plan command document
@@ -341,17 +341,17 @@ The host supplies two fixed internal inputs as that root's props:
 - `session` — the resolved logical assistant-session name.
 
 They are the adapter's own, and nothing a Plan declares is bound here: the
-properties a Plan's root declares are resolved by whoever runs it. The catalog
-is not among them either. The command states the vocabulary its profile
+properties a Plan's root declares are resolved by whoever runs it. The symbols
+are not among them either. The command states the vocabulary its profile
 describes at the execution boundary, captured before any installed code runs,
-and the packaged Component reaches it by writing the public `<Syntax />` any
+and the packaged Component reaches them by writing the public `<Syntax />` any
 document may write — so an authored phase can say that preparation is starting
-before the observation happens, and the catalog the Agent is shown is the one an
+before the read happens, and the symbols the Agent is shown are the ones an
 operator can print.
 
 The profile it states is the ordinary `run` one, in the caller's includes. A
 Plan is a program a later `xmd run` executes, and this authorship execution
-searches no repository and refuses almost every capability, so a catalog derived
+searches no repository and refuses almost every capability, so symbols derived
 from it would describe a vocabulary the approved program would not have.
 
 **The root is an adapter, not the workflow.** Its whole body is two elements: it
@@ -379,7 +379,7 @@ placements stay distinct even when their authored names match.
 
 The host owns the provider instruction layer and the Agent ceiling. The Markdown
 owns the text of each generation, repair and revision request: the initial prompt
-preserves the Prompt, includes the host's catalog, and asks for one complete
+preserves the Prompt, includes the host's symbols, and asks for one complete
 replacement root as source only — written as a Plan, with every requested outcome
 kept as reader-facing prose and each component placed immediately after the
 sentences describing the action it performs. That authorship rule is repeated in
@@ -409,15 +409,15 @@ bytes after that teardown and retains them as one Plan artifact — the invocati
 identity, the instruction identity, the approved source, its digest and that
 successful admission — before the Component renders them.
 
-**The catalog is not one of them.** What a document may write is a public
+**The symbols are not one of them.** What a document may write is a public
 question with a public answer, and canonical core owns both, so `Plan.md` writes
 the same `<Syntax as="syntax" />` any document writes and binds the vocabulary
 directly into every authorship prompt. Its retention is core's: one
-`syntax_catalog` observation per occurrence, retaining exactly
-`{ catalog: string }`, hostile-parsed on continuation so a resumed authorship is
+`syntax_symbols` read per occurrence, retaining exactly
+`{ symbols: string }`, hostile-parsed on continuation so a resumed authorship is
 shown the vocabulary the run actually showed it rather than one rebuilt from a
 tree that has moved. `<PlanInputs>` retains exactly `{ instruction }` beside it,
-so the catalog and the question are two records that can be read and reconciled
+so the symbols and the question are two records that can be read and reconciled
 independently, and a missing, additional or mistyped member in either refuses
 before authorship begins.
 
@@ -591,8 +591,8 @@ the complete versioned `DocumentValidation` core produced.
 The component performs no candidate execution. It asks the invocation's one
 structural check — `validateDocumentStructure()` under the ordinary run-profile
 registry, the `<plan>` identity, the caller's ordered includes and the run
-profile's declarations, which include `<Plan>` itself because the catalog the
-agent was shown says the profile has it. The admission that follows teardown and
+profile's declarations, which include `<Plan>` itself because the symbols the
+agent was shown say the profile has it. The admission that follows teardown and
 the command's own gate ask that same check, so the three cannot come to differ
 about what a program is for a reason nobody chose.
 
@@ -661,7 +661,7 @@ budget.
 **The explanation turn.** A tenth draft that still has problems after its
 repairs leaves nothing to approve and nothing left to revise into, so no review
 opens for it: there is no decision to offer. The workflow instead makes exactly
-one more `<Prompt>` in the same enclosing Session, automatically. The Session already holds the original Prompt, the catalog,
+one more `<Prompt>` in the same enclosing Session, automatically. The Session already holds the original Prompt, the symbols,
 every draft, every earlier diagnostic and every revision request, so nothing is
 resent: the turn carries only the final diagnostics, which were produced after
 the agent's last draft and have not appeared in the conversation. It asks for a
@@ -712,7 +712,7 @@ is happening rather than an account of what already finished. The phases are:
 
 | Phase | Announced before |
 | --- | --- |
-| Preparing the Plan | the syntax catalog is built and the session is set up |
+| Preparing the Plan | the syntax symbols are built and the session is set up |
 | Drafting the Plan | the first Agent turn, naming which of the ten attempts this is |
 | Checking the draft | every structural check, including the ones after a repair |
 | Repairing the draft | each repair turn, naming which of the three repairs this is |
@@ -850,7 +850,7 @@ Help
 says plainly that the gate may not catch every sensitive detail and that the
 journal can contain prompts, drafts and review answers.
 
-An existing path is refused before catalog preparation, session placement, Agent
+An existing path is refused before symbol preparation, session placement, Agent
 startup, review or artifact creation, and is left byte-identical:
 
 ```text
@@ -927,7 +927,7 @@ writes.
 
 ## Timeouts
 
-`--timeout` bounds the whole command: preflight, catalog construction, the
+`--timeout` bounds the whole command: preflight, symbol construction, the
 command document's execution, Elicitation, its teardown, the structural
 validation and the artifact. It covers no later program, because this command
 starts none. Expiry is Effection cancellation, so structured teardown completes
@@ -946,9 +946,9 @@ ending of this command does.
 | Failure | Reaches |
 | --- | --- |
 | a malformed command line, a removed option, an unknown option, or `--save` | nothing |
-| a `--journal` path that exists, or one this command cannot create | no catalog, session, turn, review, stdout or file |
+| a `--journal` path that exists, or one this command cannot create | no symbols, session, turn, review, stdout or file |
 | an unknown `--agent-provider` | nothing |
-| a catalog an include makes unreadable | no turn, review, stdout or file |
+| symbols an include makes unreadable | no turn, review, stdout or file |
 | a `--journal` entry the file will not take | no stdout or file; the committed prefix stays |
 | a progress destination that stops accepting bytes | no stdout or file; accepted bytes stay |
 | a host that supplies no Agent context, or a provider that cannot establish the authorship profile's ceiling | no session, no turn |
@@ -981,7 +981,7 @@ neither observation never interpreted what it wrote.
 | # | Criterion | Required observation |
 | --- | --- | --- |
 | PS1 | Fixed grammar | Every retained option is accepted before and after the request, one request is preserved byte for byte, and a second positional is refused with the approved sentence |
-| PS2 | The removed switch | Bare, valued, repeated, before-request, after-request and value-position `--run` forms all return the exact migration text, before any catalog, Agent, session, review, filesystem or document activity |
+| PS2 | The removed switch | Bare, valued, repeated, before-request, after-request and value-position `--run` forms all return the exact migration text, before any symbols, Agent, session, review, filesystem or document activity |
 | PS3 | The removed options | One representative of every other removed class, both short aliases, and the aggregate and generated property names return the exact generic refusal before authorship, ahead of the shared timeout and secret-detection grammar checks; a name that merely begins like a property option keeps the generic unknown-option refusal |
 | PS4 | Help | The complete `xmd plan --help` output and the program summary contain only the retained grammar and both explicit compositions; no removed option appears anywhere in either. Help beside every retained option is still help; help beside a removed one, in either order, is that option's refusal |
 | PS5 | Run is unchanged | `xmd run --help` still exposes its execution, prop, permission, timeout, presentation, journal and secret-detection options |
@@ -993,19 +993,19 @@ neither observation never interpreted what it wrote.
 | PS11 | Adapter and Component | The command document remains the exact thin adapter, and `<Plan>` remains a bare-or-captured exact text component |
 | PS12 | Product copy | Architecture, specifications, README and the homepage state that Plan produces source, Run executes source, and composition decides when it runs |
 | C2–C5, C8, C9, C13, C14 | Authorship | The packaged adapter and Component, one Session, the profile ceiling, the repair and review bounds, safe presentation, the authored endings, directory lifetime and narrative preservation are unchanged by this command producing source only, and keep their evidence |
-| PO1 | Progress precedes the work | Preparing arrives before the catalog is built, Drafting before the first turn, Checking before validation, Waiting before review and Finalizing before authorship teardown; an early phase reaches the operator while a turn is still blocked |
+| PO1 | Progress precedes the work | Preparing arrives before the symbols are built, Drafting before the first turn, Checking before validation, Waiting before review and Finalizing before authorship teardown; an early phase reaches the operator while a turn is still blocked |
 | PO2 | Counters come from the bounds | One invalid attempt uses repair ordinals 1st–3rd with a check before each result; a requested change announces the 2nd attempt; the counters reach the 10th and there is no 11th |
 | PO3 | Terminal phases | Stop announces itself before teardown and keeps its exact final diagnostic; a tenth-attempt exhaustion announces itself before the automatic explanation, opens no review and produces no Plan |
 | PO4 | The ordinary surface is silent | A bare `<Plan>` emits only exact approved source, a captured `<Plan as>` binds the same bytes and emits nothing, and neither expands a progress body whatever verbosity the declaration carries |
 | PO5 | Disclosure | Default progress excludes the request, the drafts, the diagnostics, the feedback and every Agent, provider and tool output; verbose adds every cleared draft and each invalid check's exact structured JSON, in phase order, and nothing else |
 | PO6 | Channels | A non-terminal stderr receives normalized Markdown, a stated terminal receives it rendered, and stdout and `--output` stay byte-identical exact source in both |
-| PO7 | The two options | `--verbose` and `--journal` are accepted on either side of the request, help contains them and the journal warning, and `-V`, `-j`, `--trace` and every removed spelling refuse before the catalog or a session exists; a retained option that reaches this command's grammar, written where the journal path goes, is that option rather than a filename and refuses before any catalog, session, provider, filesystem or artifact work — while `--help` and `-h` keep their ordinary precedence and answer with help, creating no journal and beginning no authorship |
-| PO8 | The journal file | With no `--journal` no file appears; with one, the path exists before the catalog and the first turn, a successful trace parses as the existing JSONL events in commit order and ends terminally, and it holds no program-execution event |
-| PO9 | Journal refusals | A pre-existing journal is byte-identical and refuses with the exact copy before any catalog, session, turn, review or artifact work; a path that cannot be created reports the other exact copy |
+| PO7 | The two options | `--verbose` and `--journal` are accepted on either side of the request, help contains them and the journal warning, and `-V`, `-j`, `--trace` and every removed spelling refuse before the symbols or a session exists; a retained option that reaches this command's grammar, written where the journal path goes, is that option rather than a filename and refuses before any symbols, session, provider, filesystem or artifact work — while `--help` and `-h` keep their ordinary precedence and answer with help, creating no journal and beginning no authorship |
+| PO8 | The journal file | With no `--journal` no file appears; with one, the path exists before the symbols and the first turn, a successful trace parses as the existing JSONL events in commit order and ends terminally, and it holds no program-execution event |
+| PO9 | Journal refusals | A pre-existing journal is byte-identical and refuses with the exact copy before any symbols, session, turn, review or artifact work; a path that cannot be created reports the other exact copy |
 | PO10 | A secret in a draft | It reaches neither the progress nor the journal, the earlier prefix stays readable, teardown completes, and no source or artifact is delivered — while the same draft without it is displayed and recorded |
 | PO11 | A secret in a diagnostic | The same, for a failed check's structured findings |
 | PO12 | A refused entry | An append failure after a committed entry reports the exact journal-write diagnostic, preserves the records committed before it, completes teardown and delivers no Plan |
 | PO16 | An ordinary failure | A journal-backed invocation that fails for its own reason — a failed turn, with neither a secret rejection nor a write failure — exits non-zero, delivers no source and no artifact, completes teardown, and leaves a file whose every entry parses and whose bytes are exactly those entries re-serialized: no append failed, so there is no partial or unterminated trailing record |
 | PO13 | A failed destination | A consumer that fails while a turn is live cancels that turn, waits for every owned teardown, attempts no artifact sink, keeps the bytes stderr accepted, and uses the exact progress-failure diagnostic |
 | PO14 | Ordering is unchanged | Cancellation, teardown failure, final validation refusal, the `--output` refusal and a successful delivery all keep their order, and no phase claims an artifact was delivered |
-| PO15 | The adapter and the catalog | The packaged adapter emits no prose of its own, and the catalog is observed exactly once, through public `<Syntax />`, after Preparing; continuation restores that observation without rebuilding it |
+| PO15 | The adapter and the symbols | The packaged adapter emits no prose of its own, and the symbols are observed exactly once, through public `<Syntax />`, after Preparing; continuation restores that observation without rebuilding it |

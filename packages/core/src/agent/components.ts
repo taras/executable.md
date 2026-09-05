@@ -25,6 +25,8 @@ import { Err, scoped, spawn, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { Execution } from "../execute.ts";
 import { registerComponents } from "../components/registration.ts";
+import { contributeDocumentation } from "../documentation-api.ts";
+import { agentDocumentation } from "../component-documentation.ts";
 import { CORE_ORIGIN } from "../components/registry.ts";
 import { createReplayStream } from "../replay-stream.ts";
 import { documented } from "../components/documentation.ts";
@@ -200,6 +202,19 @@ export const AGENT_REGISTRATIONS: readonly ComponentRegistration[] = [
   },
 ];
 
+/**
+ * The agent vocabulary, as declarations and nothing else.
+ *
+ * Registrations and the documentation that describes them, installed together
+ * so a scope that has one has the other. `xmd syntax` enters exactly this and
+ * stops: describing an environment installs no provider, no launcher and no
+ * completion policy.
+ */
+export function* useAgentComponents(): Operation<void> {
+  yield* registerComponents(AGENT_REGISTRATIONS);
+  yield* contributeDocumentation(agentDocumentation);
+}
+
 export function* installAgentComponents(options?: AgentComponentsOptions): Operation<void> {
   if (options?.defaultAgent !== undefined) {
     const defaultAgent = options.defaultAgent;
@@ -210,7 +225,7 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
     yield* AgentInternal.around({ permissionMode: () => permissionMode }, { at: "min" });
   }
 
-  yield* registerComponents(AGENT_REGISTRATIONS);
+  yield* useAgentComponents();
 
   const rootProvider = options?.rootProvider;
 

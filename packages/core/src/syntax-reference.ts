@@ -3,39 +3,39 @@
  *
  * `xmd syntax` answers that question for an environment nobody is running.
  * Canonical `<Syntax>` answers it for the site an element was actually written
- * at, and the two have to be the same answer — a catalog an agent is shown and
- * a catalog an operator prints describe one vocabulary or they describe none.
+ * at, and the two have to be the same answer — symbols an agent is shown and
+ * symbols an operator prints describe one vocabulary or they describe none.
  *
  * So there is one construction and one renderer, and this module is where an
- * execution keeps its own use of them. The observation is built from the
+ * execution keeps its own use of them. The reference is built from the
  * selection inputs the execution captured before any installation, middleware or
  * document code ran: the includes it resolves against, the registry it started
  * with, the identity components and exact Markdown its host declared, and the
  * component bundle it is closed over when it has one. Nothing is read from a
  * context, a registry answer, or anything a document can reach.
  *
- * A trusted host may state the catalog for its own profile instead. `xmd plan`
+ * A trusted host may state the symbols for its own profile instead. `xmd plan`
  * does: a Plan is written to be run by `xmd run`, so the vocabulary the agent
  * must be shown is the run profile's rather than the authorship execution's.
- * That contribution is captured with the rest of the installation, before any
+ * That provider is captured with the rest of the installation, before any
  * installed code exists, and one execution accepts one — two are refused rather
- * than ordered, because ordering them would make which profile a document
- * observes depend on installation order.
+ * than ordered, because ordering them would make which profile a document is
+ * shown depend on installation order.
  *
- * The observation carries no authority at all. It answers with text. Seeing a
- * component named in a catalog neither registers it, resolves it, nor authorizes
- * it: what a name means is still `selectComponent()`'s decision, and what may
- * run is still the execution's.
+ * The reference carries no authority at all. It answers with text. Seeing a
+ * component named in the symbols neither registers it, resolves it, nor
+ * authorizes it: what a name means is still `selectComponent()`'s decision, and
+ * what may run is still the execution's.
  */
 
 import type { Operation } from "effection";
 
 import { inspectSyntax } from "./inspect.ts";
-import type { SyntaxCatalog } from "./inspect.ts";
+import type { SyntaxSymbols } from "./inspect.ts";
 import { renderSelectedDocumentation, renderSyntaxMarkdown } from "./syntax-markdown.ts";
 import type { SelectedEntry } from "./syntax-markdown.ts";
-import { documentationIndexFor, packagedAssetReader } from "./component-documentation.ts";
-import type { DocumentationContribution, DocumentationReader } from "./component-documentation.ts";
+import { documentationIndexFor } from "./component-documentation.ts";
+import type { DocumentationContribution } from "./component-documentation.ts";
 import type { DocumentationIndex } from "./documentation-index.ts";
 import { UnknownComponentError } from "./documentation-index.ts";
 import type { WorkflowImportAuthority } from "./components/bundle.ts";
@@ -44,62 +44,62 @@ import type { IdentityComponent } from "./invocation-identity.ts";
 import type { ComponentOrigin, ComponentRegistry } from "./types.ts";
 
 /**
- * The catalog in scope for the segments being expanded.
+ * The symbols in scope for the segments being expanded.
  *
  * Held by the execution and handed to core's own expansion by value, beside the
  * import authority and the identity domains. It is not a Context: a context
  * resolves by name, and a name is not a secret, so a document could build one
  * and answer for the vocabulary it is shown.
  */
-export interface CatalogObservation {
-  /** The catalog this site describes, rendered as Markdown. */
-  observe(): Operation<string>;
+export interface SyntaxReference {
+  /** The symbols this site describes, rendered as Markdown. */
+  symbols(): Operation<string>;
   /**
    * The selected components' metadata and long-form documentation.
    *
-   * Two inputs, not one, and this is the reason the observation is an object
+   * Two inputs, not one, and this is the reason the reference is an object
    * rather than a string. *What may I write here* and *what may I read about*
    * are different questions, and a narrowing evaluation boundary answers them
    * differently on purpose: the vocabulary it admits is smaller than the
    * vocabulary an author is entitled to understand.
    *
-   * So selection reads the **enclosing authoring catalog**, which is why a
+   * So selection reads the **enclosing authoring symbols**, which is why a
    * nested Plan can be told how `<Elicit>` works even where it may not run one,
    * and each rendered entry states whether it is available in the current
    * evaluation. Collapsing the two would either hide reference material an
    * author needs or imply an authority they do not have.
    */
-  document(names: readonly string[]): Operation<string>;
+  documentation(names: readonly string[]): Operation<string>;
   /**
-   * The observation for a subtree that may execute less than this site.
+   * The reference for a subtree that may execute less than this site.
    *
    * The narrowing seam, and it belongs here rather than in the evaluator
    * because everything it needs is already here. A canonical evaluation
    * boundary that has admitted a vocabulary hands it over; what comes back
-   * reports that vocabulary from `observe()` and keeps *this* observation's
-   * authoring catalog and documentation index for `document()`.
+   * reports that vocabulary from `symbols()` and keeps *this* reference's
+   * authoring symbols and documentation index for `documentation()`.
    *
    * Deriving it any other way would mean the evaluator recovering the raw
    * contributions and rebuilding an index — which is both a hole (that list is
    * execution-private for a reason) and a way for the two indexes to drift.
    * Narrowing what may run is not narrowing what may be read about, and the
-   * observation is the thing that already knows both.
+   * reference is the thing that already knows both.
    */
-  narrow(executable: SyntaxCatalog): CatalogObservation;
+  available(symbols: SyntaxSymbols): SyntaxReference;
 }
 
 /**
- * A trusted host's statement of the catalog its profile describes.
+ * A trusted host's statement of the symbols its profile describes.
  *
  * Captured by value with the rest of the installation, before any installed
- * code, middleware or document code runs. It returns the catalog and core
- * renders it, so a host cannot make its profile print differently from the way
- * `xmd syntax` prints the same catalog.
+ * code, middleware or document code runs. It returns the symbols and core
+ * renders them, so a host cannot make its profile print differently from the
+ * way `xmd syntax` prints the same symbols.
  */
-export type CatalogContribution = () => Operation<SyntaxCatalog>;
+export type SyntaxSymbolsProvider = () => Operation<SyntaxSymbols>;
 
-/** The selection inputs an execution captured, as catalog construction reads them. */
-export interface CapturedCatalogInputs {
+/** The selection inputs an execution captured, as symbol construction reads them. */
+export interface CapturedSymbolInputs {
   readonly includes: readonly string[];
   /** The registrations this execution started with, captured before it ran. */
   readonly registry: ComponentRegistry;
@@ -110,20 +110,20 @@ export interface CapturedCatalogInputs {
 }
 
 /**
- * The observation one execution's root carries.
+ * The reference one execution's root carries.
  *
  * Nothing is built until an occurrence asks. An execution whose document never
  * writes `<Syntax>` enumerates no includes, parses no component and reads no
- * frontmatter, so carrying the observation costs a run that does not use it
+ * frontmatter, so carrying the reference costs a run that does not use it
  * nothing at all.
  *
- * Each ask builds afresh. Two authored occurrences are two observations, which
- * is what makes an occurrence's retained catalog its own rather than a copy of
+ * Each ask builds afresh. Two authored occurrences are two references, which
+ * is what makes an occurrence's retained symbols its own rather than a copy of
  * whichever one ran first.
  */
-export function rootCatalogObservation(
-  inputs: CapturedCatalogInputs,
-  contribution: CatalogContribution | undefined,
+export function rootSyntaxReference(
+  inputs: CapturedSymbolInputs,
+  provider: SyntaxSymbolsProvider | undefined,
   /**
    * The documentation the installed packages contribute.
    *
@@ -132,79 +132,68 @@ export function rootCatalogObservation(
    * component answer with documentation on the command line and with the
    * fallback sentence inside a document.
    */
-  documentation: readonly DocumentationContribution[] = [],
-  /**
-   * How this execution reads its packaged assets.
-   *
-   * Held by the observation, so it belongs to this execution and no other. It
-   * reaches here from where the execution was built and from nowhere else —
-   * there is no setter, no context and no installation field that names it, so
-   * a document, a component or an installed package cannot substitute one, and
-   * a second execution in the same process is unaffected by this one's.
-   */
-  read: DocumentationReader = packagedAssetReader,
-): CatalogObservation {
-  function* current(): Operation<SyntaxCatalog> {
-    return contribution === undefined ? yield* derived(inputs) : yield* contribution();
+  contributions: readonly DocumentationContribution[] = [],
+): SyntaxReference {
+  function* current(): Operation<SyntaxSymbols> {
+    return provider === undefined ? yield* derived(inputs) : yield* provider();
   }
-  // Snapshotted once, here, so the contributions an observation reads are the
-  // ones the installation boundary captured rather than whatever the caller's
+  // Snapshotted once, here, so the contributions a reference reads are the
+  // ones the collection boundary captured rather than whatever the caller's
   // objects hold by the time a document asks.
-  const captured = snapshotContributions(documentation);
+  const captured = snapshotContributions(contributions);
   // No admission at a root: nothing has narrowed what may execute, so the one
-  // catalog this resolves is both what a document may write and what it may
-  // read about.
-  return observing(current, undefined, captured, read);
+  // set of symbols this resolves is both what a document may write and what it
+  // may read about.
+  return referencing(current, undefined, captured);
 }
 
 /**
- * One observation over an authoring catalog and an executable one.
+ * One reference over authoring symbols and executable ones.
  *
- * `reference` is what named lookup reads and `executable` is what may run. At a
- * root they are the same operation; a narrowed observation keeps the reference
- * and replaces the executable, which is the whole of the seam.
+ * `authoring` is what named lookup reads and `admitted` is what may run. At a
+ * root they are the same operation; a narrowed reference keeps the authoring
+ * symbols and replaces the admitted ones, which is the whole of the seam.
  */
-function observing(
-  /** The authoring catalog: what may be read about here. */
-  reference: () => Operation<SyntaxCatalog>,
+function referencing(
+  /** The authoring symbols: what may be read about here. */
+  authoring: () => Operation<SyntaxSymbols>,
   /**
    * What may *execute* here, when a boundary has narrowed it.
    *
-   * Absent at a root, where the two are the same catalog — and must be the same
-   * *value*. Resolving twice would call the trusted catalog contribution twice
+   * Absent at a root, where the two are the same symbols — and must be the same
+   * *value*. Resolving twice would call the trusted symbols provider twice
    * for one occurrence, and the environment could move between the two calls:
-   * an entry's metadata would then come from a different catalog than the
+   * an entry's metadata would then come from different symbols than the
    * availability reported beside it.
    */
-  admitted: SyntaxCatalog | undefined,
-  documentation: readonly DocumentationContribution[],
-  read: DocumentationReader,
-): CatalogObservation {
+  admitted: SyntaxSymbols | undefined,
+  contributions: readonly DocumentationContribution[],
+): SyntaxReference {
   return {
-    *observe(): Operation<string> {
-      // A narrowed observation reports its admission and asks the enclosing
-      // catalog for nothing — the bare form is about what runs.
-      return renderSyntaxMarkdown(admitted ?? (yield* reference()));
+    *symbols(): Operation<string> {
+      // A narrowed reference reports its admission and asks the enclosing
+      // symbols for nothing — the bare form is about what runs.
+      return renderSyntaxMarkdown(admitted ?? (yield* authoring()));
     },
-    *document(names: readonly string[]): Operation<string> {
+    *documentation(names: readonly string[]): Operation<string> {
       // One resolution, both decisions.
-      const authoring = yield* reference();
-      const runnable = admitted ?? authoring;
-      const index = yield* documentationIndexFor(documentation, read);
-      return renderSelectedDocumentation(select(authoring, runnable, names, index));
+      const readable = yield* authoring();
+      const runnable = admitted ?? readable;
+      const index = documentationIndexFor(contributions);
+      return renderSelectedDocumentation(select(readable, runnable, names, index));
     },
-    narrow(next: SyntaxCatalog): CatalogObservation {
-      // The enclosing reference and the enclosing index, unchanged. Only what
-      // may execute is replaced, so a nested author keeps the documentation
-      // they had and every entry reports its availability against the
-      // admission.
-      return observing(reference, next, documentation, read);
+    available(next: SyntaxSymbols): SyntaxReference {
+      // The enclosing authoring symbols and the enclosing contributions,
+      // unchanged. Only what may execute is replaced, so a nested author keeps
+      // the documentation they had and every entry reports its availability
+      // against the admission.
+      return referencing(authoring, next, contributions);
     },
   };
 }
 
 /**
- * One catalog entry's identity: its name and its complete origin.
+ * One symbol entry's identity: its name and its complete origin.
  *
  * Every member of the origin participates, not just its kind — a workflow blob
  * differs from another by `sourceHash`, a declared component by `digest`, two
@@ -232,35 +221,35 @@ function identityOf(entry: { name: string; origin: ComponentOrigin }): string {
 }
 
 /**
- * The selected entries, in catalog order, with their documentation and
+ * The selected entries, in symbol order, with their documentation and
  * availability.
  *
- * `reference` is the catalog selection reads; `executable` is what the current
+ * `authoring` is what selection reads; `admitted` is what the current
  * evaluation may actually run. At a root they are the same object. Under a
  * narrowing boundary they are not, and the difference is what each entry's
  * availability reports.
  */
 export function select(
-  reference: SyntaxCatalog,
-  executable: SyntaxCatalog,
+  authoring: SyntaxSymbols,
+  admitted: SyntaxSymbols,
   names: readonly string[],
   index: DocumentationIndex,
 ): SelectedEntry[] {
   const requested = new Set(names);
   // Keyed by identity, not by name. A name is a spelling, and the whole point of
-  // the two inputs is that the enclosing catalog may hold a *different*
+  // the two inputs is that the enclosing symbols may hold a *different*
   // component under the same one: an authoring entry for the built-in `Elicit`
   // beside an admitted repository `Elicit.md` is two components. Reporting the
-  // reference entry as available because something called `Elicit` can run
+  // authoring entry as available because something called `Elicit` can run
   // would tell an author they may execute the thing they were just shown.
   const runnable = new Set(
-    executable.categories.flatMap((category) => category.entries.map(identityOf)),
+    admitted.categories.flatMap((category) => category.entries.map(identityOf)),
   );
   const selected: SelectedEntry[] = [];
-  // Walked in catalog order rather than request order, so two documents asking
+  // Walked in symbol order rather than request order, so two documents asking
   // for the same components in different orders render the same text — which is
   // what makes one occurrence's retained result comparable with another's.
-  for (const category of reference.categories) {
+  for (const category of authoring.categories) {
     for (const entry of category.entries) {
       // Components only. `names` is a component lookup under the current
       // contract, so a structural construct is not a thing this can select —
@@ -289,7 +278,7 @@ export function select(
   return selected;
 }
 
-function* derived(inputs: CapturedCatalogInputs): Operation<SyntaxCatalog> {
+function* derived(inputs: CapturedSymbolInputs): Operation<SyntaxSymbols> {
   return yield* inspectSyntax({
     includes: inputs.includes,
     registry: inputs.registry,
@@ -299,15 +288,6 @@ function* derived(inputs: CapturedCatalogInputs): Operation<SyntaxCatalog> {
   });
 }
 
-/**
- * An observation over a catalog a trusted boundary already decided.
- *
- * The narrowing seam. A canonical evaluation boundary that has already admitted
- * the exact vocabulary a subtree may write installs the corresponding catalog
- * for that subtree, and the enclosing observation is restored on leaving it. It
- * adds nothing: the catalog handed here is the admission's, so an entry that is
- * not in the admission cannot be in the observation.
- */
 /**
  * A defensive copy of what a caller handed the installation boundary.
  *
@@ -335,43 +315,49 @@ export function snapshotContributions(
   );
 }
 
-export function fixedCatalogObservation(
-  catalog: SyntaxCatalog,
+/**
+ * A reference over symbols a trusted boundary already decided.
+ *
+ * The narrowing seam. A canonical evaluation boundary that has already admitted
+ * the exact vocabulary a subtree may write installs the corresponding symbols
+ * for that subtree, and the enclosing reference is restored on leaving it. It
+ * adds nothing: the symbols handed here are the admission's, so an entry that is
+ * not in the admission cannot be in the reference.
+ */
+export function syntaxReference(
+  admitted: SyntaxSymbols,
   /**
-   * The authoring catalog this boundary is nested in.
+   * The authoring symbols this boundary is nested in.
    *
-   * Where the two inputs come apart. `catalog` is what may *execute* here, and
+   * Where the two inputs come apart. `admitted` is what may *execute* here, and
    * this is what may be *read about* — the vocabulary of the site the evaluation
    * was written at. Omitted, the two are the same, which is the ordinary case
    * for a boundary that narrows nothing.
    *
    * A narrowing boundary passes both, and named selection then explains a
    * component this evaluation cannot run while saying so on the entry. Dropping
-   * the enclosing catalog instead would leave a nested author unable to look up
+   * the enclosing symbols instead would leave a nested author unable to look up
    * the very components they are being asked to write about.
    */
-  reference: SyntaxCatalog = catalog,
+  authoring: SyntaxSymbols = admitted,
   /**
    * The enclosing execution's documentation contributions, carried across the
    * seam.
    *
    * Narrowing what may *execute* does not narrow what an author may read about:
    * the enclosing authoring documentation travels in with the enclosing
-   * catalog, so a nested author keeps the reference material they had. #713
-   * installs the executable catalog; this is the index that goes with it.
+   * symbols, so a nested author keeps the reference material they had. #713
+   * installs the executable symbols; this is the index that goes with it.
    */
-  documentation: readonly DocumentationContribution[] = [],
-  /** How this observation reads packaged assets — this execution's, by value. */
-  read: DocumentationReader = packagedAssetReader,
-): CatalogObservation {
-  const captured = snapshotContributions(documentation);
-  return observing(
+  contributions: readonly DocumentationContribution[] = [],
+): SyntaxReference {
+  const captured = snapshotContributions(contributions);
+  return referencing(
     // deno-lint-ignore require-yield
     function* () {
-      return reference;
+      return authoring;
     },
-    catalog,
+    admitted,
     captured,
-    read,
   );
 }

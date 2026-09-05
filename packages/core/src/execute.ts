@@ -140,10 +140,11 @@ import type { IdentityComponent } from "./invocation-identity.ts";
 import { ExecutionImports } from "./components/import-authority.ts";
 import type { ExpansionAuthority, ImportTier } from "./components/import-authority.ts";
 import { PROTECTED_COMPONENTS, ProtectedImports } from "./components/protected.ts";
-import { rootCatalogObservation, snapshotContributions } from "./syntax-observation.ts";
+import { rootSyntaxReference } from "./syntax-reference.ts";
+import { capturedDocumentation } from "./documentation-api.ts";
 import { packagedAssetReader } from "./component-documentation.ts";
 import type { DocumentationContribution, DocumentationReader } from "./component-documentation.ts";
-import type { CatalogContribution } from "./syntax-observation.ts";
+import type { SyntaxSymbolsProvider } from "./syntax-reference.ts";
 import type { WorkflowComponentBundle, WorkflowImportAuthority } from "./components/bundle.ts";
 import type { CodeBlockContext, CodeBlockResult, EvalEnv } from "./types.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
@@ -878,7 +879,7 @@ function readRootSelection(value: unknown): RootImportRecord {
     }
     // Same standard for a failure: the recorded selector must fail against the
     // recorded content in exactly the way the record claims. That verifies the
-    // catalog and the matches too, which no amount of shape checking could.
+    // symbols and the matches too, which no amount of shape checking could.
     const rederived = findTarget(outline, failure.selector);
     if (rederived.ok) {
       return MALFORMED;
@@ -2161,13 +2162,13 @@ function* executeDocument(
   bundles: readonly WorkflowComponentBundle[] = [],
   identityComponents: readonly IdentityComponent[] = [],
   declarations: readonly DeclaredMarkdownComponent[] = [],
-  catalogs: readonly CatalogContribution[] = [],
+  providers: readonly SyntaxSymbolsProvider[] = [],
   /**
-   * The documentation each installed package contributes.
+   * The documentation each bootstrapped package contributed.
    *
-   * Carried by value from the installation boundary, like the catalog beside
-   * it, so the index a document's own `<Syntax names={…}>` reads is the index
-   * the profile actually assembled.
+   * Carried by value from the collection boundary, like the symbols provider
+   * beside it, so the index a document's own `<Syntax names={…}>` reads is the
+   * index the profile actually assembled.
    */
   documentation: readonly DocumentationContribution[] = [],
   /** This execution's packaged-asset reader, carried by value from the caller. */
@@ -2347,9 +2348,9 @@ function* executeDocument(
         exact: createExactSource(),
         // Built from what this execution captured before any installation,
         // middleware or document code ran, and asked only when an occurrence
-        // observes: a run whose document never writes `<Syntax />` enumerates
+        // renders: a run whose document never writes `<Syntax />` enumerates
         // nothing.
-        catalog: rootCatalogObservation(
+        syntax: rootSyntaxReference(
           {
             includes,
             registry: startingRegistry,
@@ -2357,9 +2358,8 @@ function* executeDocument(
             declarations,
             ...(bundle === undefined ? {} : { workflow: bundle }),
           },
-          catalogs[0],
+          providers[0],
           documentation,
-          readAsset,
         ),
       };
 
@@ -2636,33 +2636,25 @@ export interface ExecutionInstallation {
    */
   readonly components?: readonly IdentityComponent[];
   /**
-   * The catalog this host's profile describes, when its profile is not the one
+   * The symbols this host's profile describes, when its profile is not the one
    * the execution itself would derive.
    *
    * Captured by value alongside the admissions, before any installation runs,
-   * for the reason the rest are: what a document observes is settled before
+   * for the reason the rest are: what a document is shown is settled before
    * anything can observe or replace it. Omitted is the ordinary case — canonical
-   * core derives the catalog from the selection inputs this execution captured,
-   * which is what makes an ordinary run's observation the run's own.
+   * core derives the symbols from the selection inputs this execution captured,
+   * which is what makes an ordinary run's reference the run's own.
    *
    * `xmd plan` states one, because the Plan being written is a program a later
    * `xmd run` executes: the vocabulary the agent must be shown is that profile's
    * rather than the authorship execution's. One execution accepts one.
-   */
-  readonly catalog?: CatalogContribution;
-  /**
-   * The long-form documentation this installation's packages ship.
    *
-   * One entry per registration boundary that documents its components, derived
-   * from the same declarations the installation registers. Captured by value
-   * before any document code runs: a document that could add a contribution
-   * could describe components it does not have, and one that could remove a
-   * contribution could hide the documentation of a component it does.
-   *
-   * Several are ordinary, unlike `catalog` — a profile installing four packages
-   * has four boundaries — so they are collected rather than refused.
+   * Documentation does not travel here. It is additive — a profile installing
+   * four packages has four boundaries — so each package's bootstrap contributes
+   * its own through the `Documentation` Api, and this execution collects them
+   * once at the same boundary.
    */
-  readonly documentation?: readonly DocumentationContribution[];
+  readonly symbols?: SyntaxSymbolsProvider;
   install?(): Operation<void>;
 }
 
@@ -2751,7 +2743,7 @@ function* runInvocation(
    * How this execution reads its packaged documentation assets.
    *
    * Defaulted to the real filesystem reader and carried by value from here into
-   * the observation, so it belongs to this execution alone.
+   * the syntax reference, so it belongs to this execution alone.
    */
   readAsset: DocumentationReader = packagedAssetReader,
   observed?: () => void,
@@ -3064,35 +3056,19 @@ function* invoke(
   );
 
   // Read once and frozen with the rest, and before any installation runs: which
-  // profile a document observes is settled before anything can observe it. Two
-  // are refused rather than ordered — a catalog chosen by installation order
+  // profile a document is shown is settled before anything can replace it. Two
+  // are refused rather than ordered — symbols chosen by installation order
   // would make what an agent is told to write depend on assembly order.
-  const catalogs = Object.freeze(
+  const providers = Object.freeze(
     installations.flatMap((installation) => {
-      const catalog = installation.catalog;
-      return catalog === undefined ? [] : [catalog];
+      const provider = installation.symbols;
+      return provider === undefined ? [] : [provider];
     }),
   );
-  // The documentation each installed package contributes, captured here with
-  // the rest of the installation and carried by value. Unlike the catalog
-  // above, several are ordinary: one registration boundary is one file, and a
-  // profile that installs four packages has four. Collecting them here is what
-  // makes `<Syntax names={…}>` and `xmd syntax NAME` read one index — the
-  // component reached a core-only index before this, so an Agent component had
-  // documentation on the command line and the fallback sentence in a document.
-  //
-  // Snapshotted here, field by field, and *before* any `install()` runs below.
-  // A shallow copy of the array would still hold the caller's source objects
-  // and name sets, so an installation could rewrite its own documentation from
-  // inside its `install()` — after the boundary that is supposed to have fixed
-  // it — and a document would be told whatever it changed them to.
-  const documentation = snapshotContributions(
-    installations.flatMap((installation) => [...(installation.documentation ?? [])]),
-  );
-  if (catalogs.length > 1) {
+  if (providers.length > 1) {
     throw new Error(
-      "two installations stated the catalog this execution describes. One execution describes " +
-        "one vocabulary, so which profile a document observes is never a question of order.",
+      "two installations stated the symbols this execution describes. One execution describes " +
+        "one vocabulary, so which profile a document is shown is never a question of order.",
     );
   }
 
@@ -3101,6 +3077,16 @@ function* invoke(
       yield* installation.install();
     }
   }
+
+  // The documentation this execution's packages contributed, collected once
+  // here and snapshotted by value.
+  //
+  // Asked *after* the trusted host's bootstrap, because that is where a package
+  // installs its registrations and its documentation together, and *before* the
+  // root import and every element below it, because what a document is told
+  // about a component must not be something the document arranged. Middleware
+  // installed later composes into a chain nothing reads again.
+  const documentation = yield* capturedDocumentation(readAsset);
 
   const issued = issueExecution(options);
 
@@ -3134,7 +3120,7 @@ function* invoke(
     bundles,
     identityComponents,
     declarations,
-    catalogs,
+    providers,
     documentation,
     readAsset,
   );
@@ -3203,7 +3189,7 @@ export function executeInstalled(
  * executions in one process are unaffected by each other.
  *
  * It exists because cancelling *inside documentation-index construction* is a
- * different claim from cancelling inside catalog discovery, and there is no
+ * different claim from cancelling inside symbol discovery, and there is no
  * other point in that operation a test can stand at.
  */
 export function executeReadingAssetsWith(

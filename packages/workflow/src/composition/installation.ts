@@ -22,12 +22,17 @@
 
 import type { Operation } from "effection";
 import {
+  contributeDocumentation,
   documented,
   formDispatcher,
   packageDocumentation,
   registerComponents,
 } from "@executablemd/core";
-import type { ComponentRegistration, DocumentationContribution } from "@executablemd/core";
+import type {
+  ComponentRegistration,
+  DocumentationContribution,
+  DocumentationReader,
+} from "@executablemd/core";
 import { COMPOSITION_ORIGIN, dirDefinition } from "./definitions.ts";
 import Repository, { props as repositoryProps } from "./components/Repository.ts";
 import Worktree, { props as worktreeProps } from "./components/Worktree.ts";
@@ -66,7 +71,9 @@ const dir = dirDefinition();
  * registered from a definition rather than spelled inline, and would be the
  * easiest one to leave undocumented if this list were maintained by hand.
  */
-export function* compositionDocumentation(): Operation<DocumentationContribution> {
+export function* compositionDocumentation(
+  read?: DocumentationReader,
+): Operation<DocumentationContribution> {
   return yield* packageDocumentation(
     new URL("./components.md", import.meta.url),
     {
@@ -74,6 +81,7 @@ export function* compositionDocumentation(): Operation<DocumentationContribution
       asset: "packages/workflow/src/composition/components.md",
     },
     COMPOSITION_REGISTRATIONS.map((registration) => registration.name),
+    read,
   );
 }
 
@@ -229,7 +237,16 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
   },
 ];
 
-/** Register the composition vocabulary as ordinary defaults for this scope. */
-export function useCompositionComponents(): Operation<void> {
-  return registerComponents(COMPOSITION_REGISTRATIONS);
+/**
+ * Register the composition vocabulary as ordinary defaults for this scope.
+ *
+ * The registrations and the documentation that describes them, installed
+ * together so a scope that has one has the other. Both are declarations: this
+ * installs no provider, discovers no ambient repository, acquires no lock,
+ * spawns no Git and reads no credential, which is what lets `xmd syntax` enter
+ * it to describe the profile.
+ */
+export function* useCompositionComponents(): Operation<void> {
+  yield* registerComponents(COMPOSITION_REGISTRATIONS);
+  yield* contributeDocumentation(compositionDocumentation);
 }

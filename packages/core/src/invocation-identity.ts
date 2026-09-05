@@ -52,7 +52,7 @@ import type { Operation, Scope } from "effection";
 import { printErrors, printsErrors } from "./component-failures.ts";
 import { documentationOf } from "./components/documentation.ts";
 import type { ComponentDocumentation } from "./components/documentation.ts";
-import type { CatalogObservation } from "./syntax-observation.ts";
+import type { SyntaxReference } from "./syntax-reference.ts";
 import type {
   FunctionComponent,
   FunctionComponentDefinition,
@@ -158,19 +158,19 @@ export interface IdentityDomain {
  * A protected component is selected by canonical core ahead of every host or
  * author tier, so its name is settled before anything a document, a package or
  * middleware can reach. What is *not* settled by the name is the lexical fact it
- * reads — the catalog observation in scope where the element was written — and
+ * reads — the syntax reference in scope where the element was written — and
  * that changes as expansion descends, so it cannot be closed over when the
  * implementation is built. It is delivered here instead, by the copy of core
  * performing the expansion, from the authority that copy is already holding.
  *
  * The observation is `undefined` where an expansion carries none. The body
- * refuses rather than inventing a catalog: a component that answered without one
+ * refuses rather than inventing symbols: a component that answered without one
  * would be describing an environment nothing established.
  */
 export type ProtectedBody = (
   props: Record<string, Json>,
   invocation: ComponentInvocation,
-  observation: CatalogObservation | undefined,
+  observation: SyntaxReference | undefined,
 ) => Operation<unknown>;
 
 /**
@@ -479,7 +479,7 @@ export function isFormDispatcher(fn: unknown): boolean {
  * The only ways a forms declaration may be written.
  *
  * A closed list rather than a set membership test, because the *order* is part
- * of the declaration: one canonical spelling per meaning means a catalog can be
+ * of the declaration: one canonical spelling per meaning means two entries can be
  * compared without normalizing, and a reader never has to wonder whether
  * `["paired", "self-closing"]` said something different.
  */

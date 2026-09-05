@@ -1,5 +1,5 @@
 /**
- * The catalog as Markdown a person reads.
+ * The symbols as Markdown a person reads.
  *
  * One renderer, in core, because two things print it: `xmd syntax`, which
  * describes an environment without running it, and canonical `<Syntax>`, which
@@ -8,7 +8,7 @@
  * owned could only be reached by the CLI, and a component in core would have
  * needed a second one.
  *
- * It takes the catalog as a value. It discovers nothing, reads no filesystem,
+ * It takes the symbols as a value. It discovers nothing, reads no filesystem,
  * resolves no name and parses no other projection's output, so what it prints is
  * exactly what construction decided.
  *
@@ -20,13 +20,13 @@ import type {
   CompleteComponentSyntaxEntry,
   OriginOnlyComponentSyntaxEntry,
   StructuralSyntaxEntry,
-  SyntaxCatalog,
+  SyntaxSymbols,
 } from "./inspect.ts";
 import { NO_DOCUMENTATION } from "./documentation-index.ts";
 import type { ComponentOrigin, Json, PropsSchema } from "./types.ts";
 
-/** The three category kinds, taken from the catalog rather than restated. */
-type CategoryKind = SyntaxCatalog["categories"][number]["kind"];
+/** The three category kinds, taken from the symbols rather than restated. */
+type CategoryKind = SyntaxSymbols["categories"][number]["kind"];
 
 const HEADINGS: Record<CategoryKind, string> = {
   structural: "## Built-in structural syntax",
@@ -40,8 +40,8 @@ const EMPTY: Record<CategoryKind, string> = {
   "user-provided": "No components were found in the configured includes.",
 };
 
-export function renderSyntaxMarkdown(catalog: SyntaxCatalog): string {
-  const sections = catalog.categories.map((category) => {
+export function renderSyntaxMarkdown(symbols: SyntaxSymbols): string {
+  const sections = symbols.categories.map((category) => {
     const blocks: string[] = [HEADINGS[category.kind]];
     if (category.entries.length === 0) {
       blocks.push(EMPTY[category.kind]);
@@ -55,7 +55,7 @@ export function renderSyntaxMarkdown(catalog: SyntaxCatalog): string {
   return `${sections.join("\n\n")}\n`;
 }
 
-/** One catalog entry, as the named form selects it. */
+/** One symbol entry, as the named form selects it. */
 export interface SelectedEntry {
   readonly entry:
     | StructuralSyntaxEntry
@@ -67,7 +67,7 @@ export interface SelectedEntry {
    * Whether the current evaluation can actually run this component.
    *
    * Stated rather than implied, because the named form reads from the enclosing
-   * authoring catalog: inside a narrowed evaluation it can explain a component
+   * authoring symbols: inside a narrowed evaluation it can explain a component
    * the evaluation may not execute, and a reader shown documentation with no
    * word about availability would reasonably assume they had both.
    */

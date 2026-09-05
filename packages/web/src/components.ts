@@ -11,8 +11,17 @@
  * act — `installWebElicitation()` — and nothing about it is component metadata.
  */
 
-import { documented, packageDocumentation, registerComponents } from "@executablemd/core";
-import type { ComponentRegistration, DocumentationContribution } from "@executablemd/core";
+import {
+  contributeDocumentation,
+  documented,
+  packageDocumentation,
+  registerComponents,
+} from "@executablemd/core";
+import type {
+  ComponentRegistration,
+  DocumentationContribution,
+  DocumentationReader,
+} from "@executablemd/core";
 import type { Operation } from "effection";
 
 import { WEB_FORM_PROPS, WEB_FORM_RETURNS, WebForm } from "./WebForm.ts";
@@ -20,11 +29,14 @@ import { WEB_FORM_PROPS, WEB_FORM_RETURNS, WebForm } from "./WebForm.ts";
 export const WEB_ORIGIN = "@executablemd/web";
 
 /** This package's long-form documentation, derived from its registrations. */
-export function* webDocumentation(): Operation<DocumentationContribution> {
+export function* webDocumentation(
+  read?: DocumentationReader,
+): Operation<DocumentationContribution> {
   return yield* packageDocumentation(
     new URL("./components.md", import.meta.url),
     { owner: WEB_ORIGIN, asset: "packages/web/src/components.md" },
     WEB_REGISTRATIONS.map((registration) => registration.name),
+    read,
   );
 }
 
@@ -47,6 +59,18 @@ export const WEB_REGISTRATIONS: readonly ComponentRegistration[] = [
   },
 ];
 
-export function* installWebComponents(): Operation<void> {
+/**
+ * This package's vocabulary, as declarations and nothing else.
+ *
+ * Registrations and the documentation that describes them, installed together
+ * so a scope that has one has the other. `xmd syntax` enters exactly this;
+ * installing the elicitation provider stays a separate, operational act.
+ */
+export function* useWebComponents(): Operation<void> {
   yield* registerComponents(WEB_REGISTRATIONS);
+  yield* contributeDocumentation(webDocumentation);
+}
+
+export function* installWebComponents(): Operation<void> {
+  yield* useWebComponents();
 }

@@ -39,7 +39,7 @@ import type {
   CompleteComponentSyntaxEntry,
   OriginOnlyComponentSyntaxEntry,
   StructuralSyntaxEntry,
-  SyntaxCatalog,
+  SyntaxSymbols,
 } from "../mod.ts";
 import type { IdentityComponent } from "../host.ts";
 import type { InvocationForm } from "../mod.ts";
@@ -188,23 +188,23 @@ function catalogFor(
   tree: Tree,
   includes: readonly string[],
   enumeration: Enumeration = {},
-): Operation<SyntaxCatalog> {
+): Operation<SyntaxSymbols> {
   return scoped(function* () {
     yield* useTree(tree, enumeration);
     return yield* inspectSyntax({ includes });
   });
 }
 
-function structural(catalog: SyntaxCatalog): readonly StructuralSyntaxEntry[] {
+function structural(catalog: SyntaxSymbols): readonly StructuralSyntaxEntry[] {
   return catalog.categories[0].entries;
 }
 
-function builtIn(catalog: SyntaxCatalog): readonly CompleteComponentSyntaxEntry[] {
+function builtIn(catalog: SyntaxSymbols): readonly CompleteComponentSyntaxEntry[] {
   return catalog.categories[1].entries;
 }
 
 function userProvided(
-  catalog: SyntaxCatalog,
+  catalog: SyntaxSymbols,
 ): readonly (CompleteComponentSyntaxEntry | OriginOnlyComponentSyntaxEntry)[] {
   return catalog.categories[2].entries;
 }
@@ -1153,7 +1153,7 @@ describe("Tier SY: inspection is observation, never authority", () => {
       },
     });
 
-    let catalog: SyntaxCatalog | undefined;
+    let catalog: SyntaxSymbols | undefined;
     const failure = yield* raised(
       scoped(function* () {
         yield* useTree({});

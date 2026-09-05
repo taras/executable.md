@@ -1,10 +1,10 @@
 Long-form documentation for the components canonical core owns.
 
 Each level-two heading below is the exact name of one component. The compact
-catalog — `xmd syntax`, or a bare `<Syntax />` — lists every component with its
-forms, props and one-line description. This file holds the part that does not
-belong in a list: when to reach for a component, what it does at run time, and
-what it will refuse.
+list of symbols — `xmd syntax`, or a bare `<Syntax />` — names every component
+with its forms, props and one-line description. This file holds the part that
+does not belong in a list: when to reach for a component, what it does at run
+time, and what it will refuse.
 
 Every component this package supplies has a section here. A build in which one
 does not refuses rather than serving a reference with a silent hole in it: a
@@ -14,15 +14,15 @@ no package governs.
 
 ## Syntax
 
-Renders the catalog of components and control-flow constructs available where
-the element is written.
+Inspects the components and control-flow constructs available where the element
+is written.
 
 ```mdx
 <Syntax />
 ```
 
-The bare form renders the compact catalog: every name a document may write at
-that site, with its forms, props and description. It is the same text
+The bare form lists the symbols available here: every name a document may write
+at that site, with its forms, props and description. It is the same text
 `xmd syntax` prints, built by the same code, so an operator reading a terminal
 and an agent reading a document are never told different things about one
 profile.
@@ -31,11 +31,11 @@ profile.
 <Syntax names={["Elicit", "File"]} />
 ```
 
-The named form renders the selected components' catalog metadata followed by the
+The named form renders the selected components' metadata followed by the
 long-form documentation on this page. Use it when something needs to know how to
 use a few specific components rather than what exists — a prompt that has to
 explain `<Elicit>` does not need the other seventy entries. Entries render once
-each, in catalog order, whatever order they were asked for in.
+each, in symbol order, whatever order they were asked for in.
 
 `as` captures the rendered text instead of emitting it, in either form:
 
@@ -43,9 +43,9 @@ each, in catalog order, whatever order they were asked for in.
 <Syntax names={["Elicit"]} as="reference" />
 ```
 
-### What the catalog describes
+### What the symbols describe
 
-The site, not the product. It reflects the host profile the execution is running
+The site, not the product. They reflect the host profile the execution is running
 under, its working directory and includes, the workflow bundle or declared
 components it is closed over, and any narrowing a trusted evaluation boundary
 applied. Two sites in one document can therefore answer differently, and that is
@@ -53,7 +53,7 @@ the point: the answer is what *this* element may write.
 
 Inside an evaluation that narrows what may execute, the bare form reports the
 narrowed vocabulary, while the named form still explains components from the
-enclosing authoring catalog and states for each whether it is available in the
+enclosing authoring symbols and states for each whether it is available in the
 current evaluation. Reference material and execution authority are different
 questions, and conflating them would either hide documentation an author needs
 or imply an authority they do not have.
@@ -61,13 +61,13 @@ or imply an authority they do not have.
 ### What it refuses
 
 An empty `names` list, a duplicate name, a member that is not a string, and a
-name no catalog entry matches are each refused before anything is observed, so a
-refusal produces no partial catalog and no retained result. A paired spelling
+name no symbol entry matches are each refused before anything is read, so a
+refusal produces no partial text and no retained result. A paired spelling
 and any prop other than `names` and `as` are refused the same way.
 
 ### What it does not do
 
-Seeing a component in a catalog is not permission to run it. The catalog and
+Seeing a component named here is not permission to run it. The symbols and
 this documentation are text; what a name means is still resolution's decision,
 and what may run is still the execution's.
 

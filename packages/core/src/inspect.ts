@@ -183,7 +183,7 @@ export type ComponentInfo =
 /**
  * What a fully describable component reports beyond its schemas.
  *
- * The same values the catalog carries, built by the same code, so describing
+ * The same values the symbols carry, built by the same code, so describing
  * one name and describing the whole environment cannot disagree. `returns`
  * above stays the *declared* schema — absent in text mode — while `returnMode`
  * is what tells the two apart.
@@ -277,7 +277,7 @@ export function* inspectComponent(options: InspectComponentOptions): Operation<C
   }
 }
 
-/** The catalog entry for a selection that is known to describe itself fully. */
+/** The symbol entry for a selection that is known to describe itself fully. */
 function* completeEntry(
   name: string,
   selected: ComponentSelection,
@@ -326,7 +326,7 @@ const BOTH_FORMS: readonly InvocationForm[] = ["self-closing", "paired"];
  * `ComponentOrigin`. Nothing else about the shape changed, so a reader that
  * switches exhaustively on `kind` needs two new arms and no other work.
  */
-export interface SyntaxCatalog {
+export interface SyntaxSymbols {
   readonly version: 2;
   readonly categories: readonly [
     {
@@ -372,7 +372,7 @@ export interface CompleteComponentSyntaxEntry {
    *
    * `protected` and `workflow-markdown` are version 2's additions. Both were
    * previously folded into a neighbour — `registered` and `markdown` — which
-   * made a catalog reader unable to tell core's own component from a host's
+   * made a symbols reader unable to tell core's own component from a host's
    * registration, or a pinned bundle member from a file on disk.
    */
   readonly sourceKind:
@@ -448,7 +448,7 @@ export interface InspectSyntaxOptions {
    * The exact Markdown a host would declare to an execution, with the same
    * meaning `ExecutionInstallation.declarations` gives it — admissibility
    * included. A private declaration contributes no entry: it is not a name a
-   * document can write, so a catalog that listed it would describe syntax that
+   * document can write, so symbols that listed it would describe syntax that
    * does not exist.
    */
   readonly declarations?: readonly DeclaredMarkdownComponent[];
@@ -469,7 +469,7 @@ export interface InspectSyntaxOptions {
  * is for execution. This adds the names to ask about and the shape of the
  * answer.
  */
-export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxCatalog> {
+export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxSymbols> {
   const includes = options.includes ?? DEFAULT_INCLUDES;
   const bundled = options.workflow;
   const declared = options.components ?? [];
@@ -499,7 +499,7 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxC
   for (const declaration of STRUCTURAL_DECLARATIONS) {
     names.add(declaration.name);
   }
-  // Core's own claim, so it is enumerated wherever a catalog is built rather
+  // Core's own claim, so it is enumerated wherever symbols are built rather
   // than only where a host remembered to mention it.
   for (const name of PROTECTED_COMPONENT_NAMES) {
     names.add(name);
@@ -532,7 +532,7 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxC
     }
     // A repository override therefore removes the name from `built-in` and adds
     // its one selected entry to `user-provided`: selection chose once, and the
-    // catalog reports what it chose rather than everything it could have.
+    // symbols report what it chose rather than everything it could have.
     //
     // A workflow-bundle member belongs here for the same reason a repository
     // file does — it is the run author's own Markdown, not something the engine
@@ -593,11 +593,11 @@ function structuralEntry(construct: string): StructuralSyntaxEntry {
 }
 
 /**
- * The catalog entry one selection produces, or `undefined` when the selection
+ * The symbol entry one selection produces, or `undefined` when the selection
  * describes nothing a document can write here.
  *
  * Shared with `inspectComponent()` below, so a single name and the whole
- * catalog cannot disagree about what a component's contract is.
+ * symbols cannot disagree about what a component's contract is.
  */
 function* componentEntry(
   name: string,
@@ -666,7 +666,7 @@ function* componentEntry(
   }
 
   if (selected.kind !== "repository") {
-    // An unresolved name is exactly the absence the catalog reports by leaving
+    // An unresolved name is exactly the absence the symbols report by leaving
     // it out.
     return undefined;
   }

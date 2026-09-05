@@ -26,7 +26,7 @@ import type {
 } from "../invocation-identity.ts";
 import type { DeclaredImports, PrivateClosure } from "./declared-markdown.ts";
 import type { ExactSource } from "../output/exact-source.ts";
-import type { CatalogObservation } from "../syntax-observation.ts";
+import type { SyntaxReference } from "../syntax-reference.ts";
 
 /** A definition an import may answer with. */
 export type ImportedDefinition = ComponentDefinition | FunctionComponentDefinition;
@@ -120,7 +120,7 @@ export interface ExpansionAuthority {
    * else changes it: an ordinary component's body, the content a caller
    * projected and an imported definition each carry what the site carried.
    */
-  readonly catalog?: CatalogObservation;
+  readonly syntax?: SyntaxReference;
   /**
    * The bodies this execution will enter for the components canonical core
    * protects.

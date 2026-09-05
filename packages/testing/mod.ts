@@ -64,6 +64,7 @@ export {
   installTestingComponents,
   TESTING_REGISTRATIONS,
   testingDocumentation,
+  useTestingComponents,
 } from "./src/components.ts";
 export { useTesting } from "./src/use-testing.ts";
 // The nested-execution harness. This package owns the authored components and

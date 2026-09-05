@@ -174,7 +174,7 @@ function complaints(stderr: string): string {
 /** Every phase after a refusal, at zero. */
 function untouched(harness: PlanHarness): Record<string, number | boolean> {
   return {
-    catalogs: harness.catalogCalls.length,
+    catalogs: harness.symbolCalls.length,
     runtimes: harness.fake.created.length,
     started: harness.fake.started,
     turns: harness.fake.prompts.length,
@@ -1699,8 +1699,8 @@ describe(
         // observes is that Preparing reached the operator before the catalog
         // was read rather than merely that both happened.
         const before: string[][] = [];
-        const catalog = harness.deps.catalog;
-        harness.deps.catalog = function* (includes) {
+        const catalog = harness.deps.symbols;
+        harness.deps.symbols = function* (includes) {
           before.push(phasesOf(harness.progress.join("")));
           return yield* catalog(includes);
         };
@@ -1708,7 +1708,7 @@ describe(
         const { value } = yield* delivered(() => runPlan(planning(dir), harness.deps));
 
         expect(value).toBe(0);
-        expect(harness.catalogCalls).toEqual([[dir]]);
+        expect(harness.symbolCalls).toEqual([[dir]]);
         expect(before).toEqual([["Preparing the Plan"]]);
       });
     });

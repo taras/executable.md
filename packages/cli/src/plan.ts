@@ -40,7 +40,7 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import process from "node:process";
 
-import type { SyntaxCatalog } from "@executablemd/core";
+import type { SyntaxSymbols } from "@executablemd/core";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableStream } from "@executablemd/durable-streams";
@@ -98,7 +98,7 @@ export interface PlanDependencies {
   /** What the profile's provider is built on, beyond the host's own assembly. */
   acp?: AcpxProviderDependencies;
   /** The run profile's complete structured vocabulary. */
-  catalog(includes: readonly string[]): Operation<SyntaxCatalog>;
+  symbols(includes: readonly string[]): Operation<SyntaxSymbols>;
   /** Who answers the review question. */
   installElicitation(): Operation<void>;
   /**
@@ -217,11 +217,11 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
       progress: deps.progress,
       // The vocabulary this authorship describes is the `run` profile's, not
       // this execution's: a Plan is a program a later `xmd run` executes, so the
-      // catalog the Agent must be shown is the one that run will have. Stated at
-      // the execution boundary and captured before any installed code — no prop
-      // on the thin adapter, and nothing the Component projects, could supply
-      // another.
-      catalog: () => deps.catalog(command.include),
+      // symbols the Agent must be shown are the ones that run will have. Stated
+      // at the execution boundary and captured before any installed code — no
+      // prop on the thin adapter, and nothing the Component projects, could
+      // supply another.
+      symbols: () => deps.symbols(command.include),
     });
   } catch (error) {
     console.error(describeError(error));

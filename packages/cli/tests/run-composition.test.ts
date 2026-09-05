@@ -27,7 +27,7 @@ import { exists, readdir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { join } from "node:path";
 import { COMPOSITION_REGISTRATIONS } from "@executablemd/workflow";
-import { syntaxCatalog, useRunProfileRegistry } from "../src/syntax.ts";
+import { syntaxSymbols, useRunProfileRegistry } from "../src/syntax.ts";
 import { DEFAULT_REPOSITORY_ROOT, unsupportedRepositories } from "../src/run-repositories.ts";
 
 /** Every element an author can write that needs a repository provider. */
@@ -142,7 +142,7 @@ describe("ORC1 — describing the vocabulary reaches nothing", () => {
         },
         { at: "min" },
       );
-      return yield* syntaxCatalog([]);
+      return yield* syntaxSymbols([]);
     });
 
     // The whole vocabulary is described.
@@ -183,7 +183,7 @@ describe("ORC2 — one language, described everywhere and operated somewhere", (
     );
 
     // And the catalog every runtime builds describes each of them completely.
-    const catalog = yield* scoped(() => syntaxCatalog([]));
+    const catalog = yield* scoped(() => syntaxSymbols([]));
     const builtIn = catalog.categories[1].entries;
     for (const name of COMPOSITION_NAMES) {
       const entry = builtIn.find((candidate) => candidate.name === name);

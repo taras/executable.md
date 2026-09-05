@@ -14,8 +14,19 @@
  * observed.
  */
 
-import { content, packageDocumentation, verbose } from "@executablemd/core";
-import type { ComponentRegistration, DocumentationContribution, Json } from "@executablemd/core";
+import {
+  content,
+  contributeDocumentation,
+  packageDocumentation,
+  registerComponents,
+  verbose,
+} from "@executablemd/core";
+import type {
+  ComponentRegistration,
+  DocumentationContribution,
+  DocumentationReader,
+  Json,
+} from "@executablemd/core";
 import type { Operation } from "effection";
 
 export const VERBOSE_ORIGIN = "@executablemd/cli";
@@ -34,12 +45,27 @@ function* Verbose(_props: Record<string, Json>): Operation<string> {
 }
 
 /** This command's long-form documentation, derived from what it registers. */
-export function* cliDocumentation(): Operation<DocumentationContribution> {
+export function* cliDocumentation(
+  read?: DocumentationReader,
+): Operation<DocumentationContribution> {
   return yield* packageDocumentation(
     new URL("./components.md", import.meta.url),
     { owner: VERBOSE_ORIGIN, asset: "packages/cli/src/components.md" },
     [VERBOSE_REGISTRATION.name],
+    read,
   );
+}
+
+/**
+ * This command's own vocabulary, as declarations and nothing else.
+ *
+ * One registration and the documentation that describes it, installed together
+ * so a scope that has one has the other — the same call `xmd syntax` enters to
+ * describe the run profile.
+ */
+export function* useVerboseComponent(): Operation<void> {
+  yield* registerComponents([VERBOSE_REGISTRATION]);
+  yield* contributeDocumentation(cliDocumentation);
 }
 
 /** The one declaration the run profile registers and `xmd syntax` describes. */
