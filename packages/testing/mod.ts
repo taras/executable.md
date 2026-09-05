@@ -60,7 +60,11 @@
 
 export { Test, testing, record, results, TestFailureError } from "./src/test-api.ts";
 export type { TestApi, TestResult, BoundaryOutcome } from "./src/test-api.ts";
-export { installTestingComponents, TESTING_REGISTRATIONS } from "./src/components.ts";
+export {
+  installTestingComponents,
+  TESTING_REGISTRATIONS,
+  testingDocumentation,
+} from "./src/components.ts";
 export { useTesting } from "./src/use-testing.ts";
 // The nested-execution harness. This package owns the authored components and
 // the request-only host-profile surface; the trusted answer is attached to the

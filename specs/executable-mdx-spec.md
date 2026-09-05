@@ -2657,22 +2657,148 @@ A component name is resolved in tiers, and the first tier that answers wins:
    repository file named after one never stands in for it. A structural name
    written where its construct gives it no meaning is a printed error, not a
    missing component.
-2. **a host claiming the name** — a reserved registration protecting a language
+2. **a component canonical core protects** — the engine's own claim rather than
+   a host's, so the name means the same thing in every execution. `<Syntax />`
+   (§5.3.1) is the one member. The table is the resolver's own and is consulted
+   unconditionally, so no option a caller passes puts anything in front of it.
+3. **a host claiming the name** — a reserved registration protecting a language
    or security invariant, or a *declared Markdown component*: exact first-party
    Markdown a trusted host handed this execution. Both claim the name rather
    than offering a default for it, so two claims on one name are refused where
    they are installed and this tier never chooses between them.
-3. **the workflow component bundle** this execution is closed over, when a
+4. **the workflow component bundle** this execution is closed over, when a
    trusted host installed one.
-4. **a repository-local file**, by the candidate order below.
-5. **a registered default**, including the components core supplies.
-6. **nothing**, which is the unresolved printed error.
+5. **a repository-local file**, by the candidate order below.
+6. **a registered default**, including the components core supplies.
+7. **nothing**, which is the unresolved printed error.
 
 So a repository component overrides any ordinary package default, core's
 included, and a reserved registration overrides the repository. Only genuine
 absence falls through to a default: a candidate that exists but cannot be read,
 imported, parsed, or compiled fails where it is loaded, so a broken local
 component is never quietly replaced.
+
+#### 5.3.1 `<Syntax />`, the protected catalog component
+
+`<Syntax />` outputs the components and control-flow constructs a document may
+write at the site it is written at, as the Markdown `xmd syntax` prints. One
+catalog construction and one Markdown renderer serve both, so an operator
+printing a profile and an agent being told what to write are never given
+different accounts of one environment.
+
+```mdx
+<Syntax />
+```
+
+renders the catalog where it is written. It is a **text component**: the ordinary
+engine-owned `as` captures the same text and emits nothing.
+
+```mdx
+<Syntax as="syntax" />
+```
+
+It is **self-closing only** and declares one optional prop, `names`: a non-empty
+array of unique component-name strings. A paired spelling, any other prop, an
+empty list, a duplicate, a non-string member and a name this site has no
+component for are each refused before a catalog is observed, so a refusal
+produces no partial text and no successful retained result.
+
+**The named form renders documentation.** `<Syntax names={["Elicit", "File"]} />`
+renders each selected component's catalog metadata followed by the long-form
+documentation its owning package ships, once each, **in catalog order** whatever
+order they were asked for in. `as` captures the same text in either form.
+
+Documentation joins to metadata by component name **and owning package**. Only a
+registration and a protected component come from a package; a repository file, a
+bundled blob and declared Markdown are this run's, so a repository `Elicit.md`
+receives none of the built-in `Elicit`'s prose. **A first-party package documents every component it supplies.** The index is
+built from one `components.md` per registration boundary — core's own, its Agent
+registrations, the CLI, testing, web and the repository-composition set — each
+contributed at the trusted installation boundary from the same declarations that
+boundary registers, so a component added to a package demands documentation
+without anyone maintaining a second list. Contributions travel by value on the
+execution installation, which is what makes `xmd syntax NAME` and a document's
+own `<Syntax names={…}>` read one index rather than two.
+
+A boundary that supplies a component with no section refuses the whole index — as does an unknown heading, a duplicate, and a
+component documented twice for one package. A partially documented first-party
+package is not a valid build: a reader cannot tell an undocumented component
+from one that has nothing to say, and the product's own reference would be
+silently incomplete.
+
+The sentence *No long-form documentation is available for this component.* is
+therefore for **custom** components only, which no package governs. A Markdown
+component — a repository file, a bundle member, a host's declared Markdown —
+takes its long-form documentation from its own document's body, read through the
+canonical frontmatter split; an empty body uses the sentence.
+
+Named lookup selects **component entries**. A structural construct is not a
+component, so `<Syntax names={["If"]} />` refuses as an unknown component while
+the bare form continues to list structural syntax alongside components.
+
+The documentation is read from the owning package through the direct filesystem,
+not through `API.Fs` or the document-facing `Files` authority. Both of those are
+middleware a running document can compose around, and a document that could
+answer the read would decide what the product says about itself.
+
+**Reference and availability are separate.** The observation carries two inputs.
+Bare `<Syntax />` reports what may **execute** at this site. The named form
+selects from the **enclosing authoring catalog** and states, per entry,
+`**Available in this evaluation:** yes` or `no`. At a root the two are one
+catalog and everything selected is available; a trusted evaluation boundary that
+narrows execution keeps the enclosing reference, so a nested author can be told
+how a component works where they may not run one — and is told which it is.
+Neither input carries definitions, import witnesses, invocation capabilities,
+providers, registrations or any other execution authority.
+
+`xmd syntax Elicit` is the same lookup — one selection, one index, one renderer —
+so the command and the component cannot describe one component two ways. The
+compact `xmd syntax` and its version-2 `--json` are unchanged: documentation is
+prose rather than a catalog member, and putting it in routine output would make
+every default Plan prompt unnecessarily large.
+
+**Canonical core owns the name.** A repository `Syntax.md`, `Syntax.ts` or
+directory candidate never wins selection; an ordinary or reserved registration
+under the name is refused atomically at registration; a workflow bundle member
+and a host's declared Markdown under the name are each refused at admission,
+before the root import; and `Component.importComponent` middleware may observe
+the import, delegate it and refuse it by throwing, but cannot answer it, replace
+what came back, mutate it, or hand back a definition kept from another import or
+built by another loaded copy.
+
+**The catalog is the execution's own.** Canonical core builds it at the root from
+the selection inputs that execution captured before any installation, middleware
+or document code ran — its includes, the registry it started with, the identity
+components and exact Markdown its host declared, and the component bundle it is
+closed over — and carries it lexically on canonical core's own expansion
+authority. A trusted host may state the catalog its profile describes instead,
+captured on the same terms; one execution accepts one, and two are refused rather
+than ordered. Nothing is built until an occurrence asks.
+
+Seeing a component in a catalog grants nothing. It neither registers, resolves
+nor authorizes that component: what a name means is still this section's
+decision, and what may run is still the execution's.
+
+**The catalog says where it came from.** A protected component is reported under
+the catalog origin kind `protected`, carrying the canonical core origin — never
+as a reserved registration, which is a *host's* claim under a name and can be
+absent, replaced or refused where this cannot. A workflow-bundle member is
+reported under the kind `workflow`, carrying its canonical repository-relative
+path **and** the blob's own object id, so it stays distinguishable from a
+repository candidate, which is whatever that path holds now. Both kinds are
+additions, so the catalog is **version 2**: a version-1 reader was promised a
+closed set of origins, and neither emitting an unknown kind nor reusing a
+neighbouring one would keep that promise. Nothing else about the shape changed.
+
+**Each occurrence observes once.** It claims the durable identity the execution
+minted for it, performs one `syntax_catalog` durable observation, and retains
+exactly `{ catalog: string }`. On continuation that record is parsed as a closed
+protocol and returned without consulting the filesystem, the registry, the
+bundle, the host or the lexical observation again; a missing, additional or
+mistyped member is stale input and refuses before output or binding. Two authored
+occurrences are two identities and two observations, repeated reads of one
+binding observe nothing again, and a failed or cancelled observation completes
+its teardown and commits no catalog.
 
 #### The run profile's repository declarations
 
@@ -2846,7 +2972,12 @@ expands no progress body at all. Its five private
 capabilities — `<PlanInputs>`, `<PlanAuthorship>`, `<PlanProgress>`,
 `<CheckDraft>` and
 `<AdmitPlan>` — are the closure those exact bytes carry, and are syntax no
-document may write. [The plan command](./plan-command-spec.md) is the contract.
+document may write. The vocabulary the Agent is shown is not among them: the
+packaged bytes write the public `<Syntax />` (§5.3.1), whose own
+`syntax_catalog` observation retains exactly `{ catalog }`, so a continuation
+restores the catalog the run actually showed rather than rebuilding it, and
+`<PlanInputs>` retains exactly `{ instruction }` beside it.
+[The plan command](./plan-command-spec.md) is the contract.
 
 **Which Agent a Plan is written with is the host's to say, not the Component's.**
 The declaration carries a trusted-host capability: the agent a Plan conversation
@@ -3511,6 +3642,26 @@ A component the workflow definition is closed over records its own shape:
     "sourceHash": "9fceb02d0ae598e95dc970b74767f19372d61af8",
     "content": "discovered.\n" } }
 ```
+
+A component canonical core claims the name of (§5.3.1) records the fact and
+nothing else:
+
+```json
+{ "type": "import_component", "name": "Syntax" }
+{ "status": "ok", "value": { "kind": "protected" } }
+```
+
+The record is closed on that single member because there is nothing else that
+would be true to write. A protected component has no path to record, no origin
+to look up, and no implementation to serialize: it is core's own declaration,
+present in every execution rather than supplied by anything this one installed.
+So the record says only *which tier answered*, and replay asks the running
+execution for the implementation it built for that name. An execution that built
+none refuses rather than resolving the name again — a replay that fell back to
+the ordinary tiers would run whatever a repository, a registry or a host is
+offering under that name today, which is the substitution the tier exists to
+prevent. A record carrying any member beside `kind`, or a `kind` this protocol
+does not define, is stale input.
 
 One journal entry per component, whatever it resolved to. A repository entry
 captures both *which file was found* (path) and *what was in it* (content); a
@@ -9703,6 +9854,7 @@ trusted-host events may have no authored source.
 | Resolve components (glob) | `glob` | `resolve:{dir}` | Only when `useDurableGlobResolver` middleware is installed |
 | Read over HTTP | `fetch` | `fetch:{expansion id}` | Normalized request in `description.input`; status, detached headers and text body in the result (§6.18) |
 | Admit generated XMD | `generated_xmd` | `generated:{fragment id}` | The canonical class selection, retained roots, selected root, every selected entry as a name, identity and admitted forms, and the exact request policy in `description.input`; the admitted source, that same policy, and the identity and form of each element the fragment named in the result (workflow-workspace-spec §8.4) |
+| Observe the catalog | `syntax_catalog` | `syntax_catalog:{expansion id}` | One per authored `<Syntax />` occurrence. The success payload is closed on exactly `{ catalog: string }` — the rendered Markdown the component returned — so a continuation restores the catalog the run actually showed without consulting the filesystem, registry, bundle, host or lexical observation again. A missing, additional or mistyped member is stale input and refuses before output or binding; a cancelled observation completes teardown and commits nothing (§5.3.1) |
 
 ### 10.2 Example journal for a multi-component document
 
@@ -10733,6 +10885,38 @@ and renders that file's marker; `xmd run -#Section` executes `Section` of that
 same file, rendering its marker and not its sibling section's; and `xmd test -`
 keeps the test command's own path behavior.
 
+### Tier SYN — The public `<Syntax />` component
+
+Named `SYN` rather than `SY` or `SL`, which already name the syntax catalog and
+own-scope context updates. The catalog *value* is Tier SY's; this tier is the
+component that observes one at an authored site.
+
+| # | Test | Verify |
+|---|------|--------|
+| SYN1–SYN4 | One occurrence | The bare form renders the catalog once and `as` binds the same text emitting nothing; a paired spelling and an authored prop refuse before any observation; two occurrences observe independently and a reused binding observes nothing again |
+| SYN5–SYN10 | The name canonical core owns | A repository `Syntax.md`, `Syntax.ts` and directory candidate never win selection, with an ordinary nearby component as the positive control that repository discovery is live; ordinary and reserved registrations are refused atomically; a workflow bundle member and a host's declared Markdown are each refused at admission before the root import |
+| SYN6 | The origin selection reports | Selection answers `{ kind: "protected", origin: "@executablemd/core" }` — its own kind, not a reserved registration |
+| SYN11–SYN15 | The import chain | Middleware that answers, substitutes, mutates, redirects, delegates twice or reuses another import's definition cannot run a replacement; ordinary delegation reaches canonical `<Syntax>`; a deliberate middleware refusal stays a refusal; document-authored context and a look-alike observation change nothing |
+| SYN16–SYN18 | The site described | An ordinary run reports its own includes and registry; a workflow root reports its bundle without importing or running a member; a declared Markdown component's body reports the site it inherited |
+| SYN20–SYN22 | The record kept | Continuation restores the retained catalog after the environment moves and rediscovers nothing; missing, additional and wrong-typed payloads refuse before output or binding; a cancelled observation completes teardown and commits nothing |
+| SYN23, SYN25b | Never authority | A catalog naming a component neither registers, resolves nor authorizes it; a fixed narrower observation answers with exactly the catalog it was handed and adds nothing — the seam `<Evaluate>` installs through |
+| SYN24 | One description | Inspection and validation describe the component identically, from one declaration |
+| SYN26 | Another loaded copy | A protected implementation built by a second loaded copy answers for nothing in the active execution |
+| SYN27 | Protected provenance | The catalog reports the component under the `protected` origin kind in both the structured entry and the rendered Markdown, and never as a reserved registration; `inspectComponent` agrees |
+| SYN28 | Pinned provenance | A workflow-bundle component is reported at its path *and* blob object id, under the `workflow` origin kind, and stays in the user-provided category |
+| SYN29 | The named form | Selected entries render their metadata and documentation once each in catalog order, not request order, with nothing else of the catalog; `as` binds identical text |
+| SYN30 | Availability and absence | Each entry states whether it is available in the current evaluation; a selected entry with no authored documentation renders its metadata and says so |
+| SYN31 | Atomic refusal | An unknown name, an empty list, a duplicate, a non-string member, a non-array value and an undeclared prop each refuse with no successful retained result |
+| SYN39 | Named retention | The occurrence retains its final rendered text, a continuation restores it without rereading documentation or rebuilding the catalog, and a corrupted record refuses |
+| SYN25c | The narrowing seam | A narrowed observation reports the narrowed vocabulary bare, documents the enclosing catalog by name, and marks each entry's availability truthfully in both directions |
+| SYN32–SYN34 | Parsing one file | Bundle prose, a section per level-two heading with deeper headings kept inside it, a fenced heading read as the example it is, and a refusal for a duplicate section or a heading that is not a component name |
+| SYN35–SYN37 | Building the index | A heading naming something the package does not supply refuses; one component documented twice refuses; documentation attaches by name and owning package, never to a repository replacement |
+| SYN38 | Exact coverage | A package supplying a component it does not document refuses the whole index — deleting any one built-in's section fails — with a fully covered package as the positive control |
+| SYN40 | The protection boundary | A repository component wrapping the named form with planted `API.Fs` middleware cannot change what the documentation says, and the read never reaches that Api |
+| SYN41–SYN45 | The build gate | `scripts/validate-documentation.ts` assembles the complete first-party index before any distribution is produced: the shipped set passes, and a deleted section, an unknown heading, a duplicated section, and drift in a package outside core each fail it |
+| SYN46 | Cancelling a named observation | Teardown completes and no successful `syntax_catalog` record is committed |
+| SX17 | One index, two surfaces | `xmd syntax NAME` and `<Syntax names={[NAME]} />` return the same text for a component outside core's own file |
+
 ### Tier SX — The `xmd syntax` command
 
 | # | Test | Verify |
@@ -10742,7 +10926,8 @@ keeps the test command's own path behavior.
 | SX4–SX6 | Renderers take a value | Both formats render from a supplied catalog with the filesystem refusing every call, twice with identical bytes, under the fixed category headings; every table cell is escaped, a prop name holding a pipe included |
 | SX7/SX8 | Includes | Repeated values select in caller order and replace the defaults; absent, the defaults apply |
 | SX9 | Failure | An unusable include exits 1, reports on stderr and prints no catalog |
-| SX10/SX11 | Formats | Markdown by default, version-1 JSON with `--json`; the catalog is inspection, and `xmd plan` is the command that writes with the same structured value |
+| SX10/SX11 | Formats | Markdown by default, version-2 JSON with `--json`; the catalog is inspection, and `xmd plan` is the command that writes with the same structured value |
+| SX16 | Named lookup | `xmd syntax Elicit` renders that component's metadata and long-form documentation through the same selection, index and renderer `<Syntax names={…}>` uses; the compact catalog is unchanged and an unknown name refuses whole |
 | SX12 | A package tree | Bare `xmd syntax` succeeds with the default includes in a repository whose `node_modules` holds directory links |
 | SX13–SX15 | Delivery | A real pipeline reading a catalog larger than one pipe buffer receives the bytes a regular-file redirect receives, in both forms; a consumer that closes early leaves the command reporting on stderr with exit 1 rather than an unhandled write failure |
 
@@ -10813,7 +10998,7 @@ rather than restating.
 | PO6/PO7 | Channels and grammar | A non-terminal stderr receives normalized Markdown and a stated terminal receives it rendered, while stdout and `--output` stay byte-identical; `--verbose` and `--journal` work on either side of the request, help carries them and the journal warning, and the short aliases, every removed spelling and a retained option that reaches this grammar written where the journal path goes all refuse before any work, while `--help` keeps its ordinary precedence |
 | PO8/PO9/PO16 | The journal file | No `--journal` writes no file; one creates the path before the catalog and the first turn, parses as the existing JSONL in commit order, ends terminally and holds no program execution; an existing path and an uncreatable one each report their exact refusal and reach nothing; and an ordinary failure — where no append failed — leaves a wholly parseable file with no partial trailing record |
 | PO10–PO12 | The secret and persistence boundaries | A secret in a draft or in a failed check's findings reaches neither the progress nor the file while the earlier prefix stays readable, and the same values without it are shown and recorded; a refused entry reports the exact journal-write diagnostic and preserves what committed |
-| PO13–PO15 | Failure and ordering | A progress destination that fails cancels the live turn, waits for every owned teardown and delivers nothing; every existing ending keeps its order and no phase claims delivery; the packaged adapter says nothing of its own and the catalog is built once, from `<PlanInputs>` |
+| PO13–PO15 | Failure and ordering | A progress destination that fails cancels the live turn, waits for every owned teardown and delivers nothing; every existing ending keeps its order and no phase claims delivery; the packaged adapter says nothing of its own and the catalog is observed once, through public `<Syntax />`, while continuation restores that observation without rebuilding it |
 
 ### Tier UG — The `xmd upgrade` command
 

@@ -803,8 +803,9 @@ describe(
             "No Plan was returned. Nothing was output.",
         );
         // Refused before the catalog, a directory, a provider, a turn or a
-        // review existed. The catalog is built by `<PlanInputs>` now, and this
-        // refusal happens before the command document starts at all.
+        // review existed. The catalog is observed by public `<Syntax />` inside
+        // the command document, and this refusal happens before that document
+        // starts at all.
         expect(untouched(harness)).toEqual({
           catalogs: 0,
           runtimes: 0,

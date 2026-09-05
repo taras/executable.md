@@ -29,7 +29,7 @@ import { planComponentDeclaration } from "../../src/plan-component.ts";
 import type { PlanSurface, StructuralValidation } from "../../src/plan-component.ts";
 import { planAgentContext } from "../../src/authorship-profile.ts";
 import type { AuthorshipStack } from "../../src/agent-stack.ts";
-import type { DeclaredMarkdownComponent } from "@executablemd/core/host";
+import type { CatalogContribution, DeclaredMarkdownComponent } from "@executablemd/core/host";
 import type { PlanDependencies } from "../../src/plan.ts";
 import { createFakeAcp, makeRegistry, makeStore } from "./fake-acp.ts";
 import type { FakeAcp, FakeStore } from "./fake-acp.ts";
@@ -291,6 +291,16 @@ export interface PlanDeclarationHarness {
   reviews: ElicitationRequest[];
   /** The declaration to attach to an execution. */
   declaration: DeclaredMarkdownComponent;
+  /**
+   * The catalog this case's execution describes.
+   *
+   * Attached to the execution rather than to the declaration, because that is
+   * where the profile a document observes is now settled: `<Syntax />` is public,
+   * canonical core owns it, and what it answers with is the execution's own.
+   */
+  catalog: CatalogContribution;
+  /** How many times that contribution was asked. */
+  catalogCalls: number;
   /** Review answers, taken in order. Running out is a test defect, not a case. */
   script(review: ScriptedReview): void;
 }
@@ -308,16 +318,14 @@ export function* planDeclarationHarness(options: {
   surface: PlanSurface;
   authorshipRoot: string;
   includes?: readonly string[];
-  /** The catalog the first turn is built from. */
-  syntax?: string;
   /**
-   * Build the catalog, in place of answering with {@link syntax}.
+   * The catalog this case's execution describes, in place of the default below.
    *
-   * A case that needs to know *when* the catalog was built supplies this, which
-   * is the only way to tell an authored phase that precedes the preparation from
-   * one that follows it.
+   * A case that needs to know *when* the catalog was observed supplies this,
+   * which is the only way to tell an authored phase that precedes the
+   * observation from one that follows it.
    */
-  catalog?: () => Operation<string>;
+  catalog?: () => Operation<SyntaxCatalog>;
   /**
    * How this case answers the one structural question the Component asks.
    *
@@ -386,12 +394,6 @@ export function* planDeclarationHarness(options: {
         { at: "min" },
       );
     },
-    *catalog() {
-      if (options.catalog !== undefined) {
-        return yield* options.catalog();
-      }
-      return options.syntax ?? "## Built-in components\n\n### `<File>`\n";
-    },
     // The deterministic seam standing where production's answer goes, recording
     // every candidate it was asked about — the draft check's and the
     // admission's alike, which is every time these bytes are decided on.
@@ -402,13 +404,53 @@ export function* planDeclarationHarness(options: {
     },
   });
 
-  return {
+  const harness: PlanDeclarationHarness = {
     fake,
     checked,
     reviews,
     declaration,
+    catalogCalls: 0,
+    *catalog(): Operation<SyntaxCatalog> {
+      harness.catalogCalls += 1;
+      if (options.catalog !== undefined) {
+        return yield* options.catalog();
+      }
+      return CASE_CATALOG;
+    },
     script(review) {
       answers.push(review);
     },
   };
+  return harness;
 }
+
+/**
+ * The vocabulary a case's execution describes, unless it states another.
+ *
+ * One entry, so the rendered catalog carries a marker a prompt assertion can
+ * look for without depending on the whole run profile being assembled.
+ */
+export const CASE_CATALOG: SyntaxCatalog = {
+  version: 2,
+  categories: [
+    { kind: "structural", entries: [] },
+    {
+      kind: "built-in",
+      entries: [
+        {
+          kind: "component",
+          name: "File",
+          origin: { kind: "registered", origin: "@executablemd/core", reserved: false },
+          sourceKind: "registered",
+          inspectability: "complete",
+          forms: ["self-closing", "paired"],
+          props: { type: "object", properties: {}, additionalProperties: false },
+          captures: [],
+          returnMode: "text",
+          returns: { type: "string" },
+        },
+      ],
+    },
+    { kind: "user-provided", entries: [] },
+  ],
+};

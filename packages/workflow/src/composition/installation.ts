@@ -21,8 +21,13 @@
  */
 
 import type { Operation } from "effection";
-import { documented, formDispatcher, registerComponents } from "@executablemd/core";
-import type { ComponentRegistration } from "@executablemd/core";
+import {
+  documented,
+  formDispatcher,
+  packageDocumentation,
+  registerComponents,
+} from "@executablemd/core";
+import type { ComponentRegistration, DocumentationContribution } from "@executablemd/core";
 import { COMPOSITION_ORIGIN, dirDefinition } from "./definitions.ts";
 import Repository, { props as repositoryProps } from "./components/Repository.ts";
 import Worktree, { props as worktreeProps } from "./components/Worktree.ts";
@@ -54,6 +59,24 @@ import IssueTracker, { props as issueTrackerProps } from "./components/IssueTrac
 const dir = dirDefinition();
 
 /** The one vocabulary every consumer of these components describes. */
+/**
+ * This boundary's long-form documentation, and the components it must cover.
+ *
+ * Derived from `COMPOSITION_REGISTRATIONS` below — including `<Dir>`, which is
+ * registered from a definition rather than spelled inline, and would be the
+ * easiest one to leave undocumented if this list were maintained by hand.
+ */
+export function* compositionDocumentation(): Operation<DocumentationContribution> {
+  return yield* packageDocumentation(
+    new URL("./components.md", import.meta.url),
+    {
+      owner: COMPOSITION_ORIGIN,
+      asset: "packages/workflow/src/composition/components.md",
+    },
+    COMPOSITION_REGISTRATIONS.map((registration) => registration.name),
+  );
+}
+
 export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
   {
     name: "Repository",

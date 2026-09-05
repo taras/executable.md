@@ -30,7 +30,7 @@ import {
   retainedSource,
   useNormalizedOutput,
 } from "@executablemd/core";
-import type { Json } from "@executablemd/core";
+import type { Json, SyntaxCatalog } from "@executablemd/core";
 import { validateDocument } from "@executablemd/core";
 import { executeInstalled, sourceDigest } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -50,6 +50,7 @@ import {
 } from "../src/plan-component.ts";
 import type { StructuralValidation } from "../src/plan-component.ts";
 import { syntaxCatalog } from "../src/syntax.ts";
+import { PLAN_DOCUMENT, readPackagedDocument } from "../src/packaged-document.ts";
 
 const ROOT = "document.md";
 
@@ -153,6 +154,10 @@ function* runDocument(options: {
           {
             components: agentIdentityComponents(),
             declarations: [harness.declaration],
+            // Where the profile a document observes is settled now: the
+            // `<Syntax />` the packaged Plan writes is canonical core's public
+            // component, and what it answers with is this execution's.
+            catalog: harness.catalog,
           },
         ],
       );
@@ -225,6 +230,70 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       expect(run.harness.fake.prompts[0]).toContain("Write a program. Notes: the project notes");
       // And the approved source came back byte for byte, under `as`.
       expect(run.output).toContain(`got: ${PLAN}`);
+    });
+  });
+
+  it("PC1b: the packaged Plan writes the public <Syntax />, and its catalog reaches the first turn once", function* () {
+    yield* useWorkingDirectory(function* () {
+      const source = yield* readPackagedDocument(PLAN_DOCUMENT);
+      // The public component, written the way any document writes it.
+      expect(source).toContain('<Syntax as="syntax" />');
+      // And nothing declares a second one: the private closure is the five
+      // phases, and `Syntax` is not among them.
+      const declaration = yield* planComponentDescription();
+      expect((declaration.privates ?? []).map((component) => component.name)).toEqual([
+        "PlanInputs",
+        "PlanAuthorship",
+        "PlanProgress",
+        "CheckDraft",
+        "AdmitPlan",
+      ]);
+
+      const run = yield* runDocument({
+        source: ['<Plan as="approved">Write a program.</Plan>', "", "got: {approved}", ""].join(
+          "\n",
+        ),
+        reply: PLAN,
+      });
+
+      expect(run.failure).toBe(undefined);
+      // The retained catalog is what the first turn was built from, and it is
+      // there exactly once — a second copy would mean the Component both bound
+      // it and emitted it.
+      const first = run.harness.fake.prompts[0] ?? "";
+      expect(first).toContain("### `<File>`");
+      expect(first.split("### `<File>`").length - 1).toBe(1);
+      expect(run.harness.catalogCalls).toBe(1);
+    });
+  });
+
+  it("PC1c: a catalog observation that fails reaches no session, turn, review or Plan", function* () {
+    yield* useWorkingDirectory(function* (dir) {
+      const harness = yield* planDeclarationHarness({
+        surface: "component",
+        authorshipRoot: `${dir}-profile`,
+        // deno-lint-ignore require-yield
+        *catalog(): Operation<SyntaxCatalog> {
+          throw new Error("the profile could not be described");
+        },
+      });
+      const run = yield* runDocument({
+        source: ['<Plan as="approved">Write a program.</Plan>', "", "got: {approved}", ""].join(
+          "\n",
+        ),
+        reply: PLAN,
+        reviews: [],
+        harness,
+      });
+
+      expect(run.failure).toContain("the profile could not be described");
+      // Nothing downstream of the observation happened: no turn was taken, no
+      // review was asked, no draft was checked, and no Plan was bound.
+      expect(run.harness.fake.prompts).toEqual([]);
+      expect(run.harness.reviews).toEqual([]);
+      expect(run.harness.checked).toEqual([]);
+      expect(run.output).not.toContain("# Say hello");
+      expect(run.emitted).not.toContain("# Say hello");
     });
   });
 
@@ -308,13 +377,28 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
 
   it("PC6: the private capabilities resolve nowhere a document can write", function* () {
     yield* useWorkingDirectory(function* () {
-      for (const name of ["PlanInputs", "PlanAuthorship", "CheckDraft", "AdmitPlan"]) {
+      for (const name of [
+        "PlanInputs",
+        "PlanAuthorship",
+        "PlanProgress",
+        "CheckDraft",
+        "AdmitPlan",
+      ]) {
         const run = yield* runDocument({
           source: [`<${name} as="x" />`, ""].join("\n"),
           reviews: [],
         });
         expect(run.failure).toContain(`Cannot resolve component: ${name}`);
       }
+      // The positive control for the same document shape: `<Syntax />` is not one
+      // of Plan's private names, it is the public component canonical core owns,
+      // so the identical invocation resolves and binds the catalog.
+      const open = yield* runDocument({
+        source: ['<Syntax as="x" />', "{x}", ""].join("\n"),
+        reviews: [],
+      });
+      expect(open.failure).toBeUndefined();
+      expect(open.output).toContain("### `<File>`");
     });
   });
 
@@ -338,10 +422,20 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
 
       for (const category of catalog.categories) {
         const names = category.entries.map((entry) => entry.name);
-        for (const priv of ["PlanInputs", "PlanAuthorship", "CheckDraft", "AdmitPlan"]) {
+        for (const priv of [
+          "PlanInputs",
+          "PlanAuthorship",
+          "PlanProgress",
+          "CheckDraft",
+          "AdmitPlan",
+        ]) {
           expect(names).not.toContain(priv);
         }
       }
+      // `<Syntax />` is not one of them any more. It is public, canonical core
+      // owns it, and the catalog an author reads says so — which is what stops
+      // the absence check above passing because the whole set went missing.
+      expect(builtIn.map((entry) => entry.name)).toContain("Syntax");
     });
   });
 
@@ -421,11 +515,20 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       // differently and a review nobody scripted. Neither is reached: the turn,
       // the check, the approval and the admission are all restored.
       const partial = yield* continuing(first);
+      let catalogs = 0;
       const two = yield* runDocument({
         source,
         reply: "# A different Plan\n\nnot this one.\n",
         reviews: [],
         stream: partial,
+        harness: yield* planDeclarationHarness({
+          surface: "component",
+          authorshipRoot: yield* authorshipRoot(),
+          *catalog() {
+            catalogs += 1;
+            throw new Error("a restored syntax snapshot was rebuilt");
+          },
+        }),
       });
 
       expect(two.failure).toBe(undefined);
@@ -433,6 +536,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       expect(two.harness.fake.prompts).toEqual([]);
       expect(two.harness.reviews).toEqual([]);
       expect(two.harness.checked).toEqual([]);
+      expect(catalogs).toBe(0);
     });
   });
 
@@ -978,7 +1082,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       // a member of the wrong type. Each is refused with the same fixed
       // sentence, and none of them produces source or a binding.
       const cases: [string, (value: Json) => Json][] = [
-        ["a member is missing", (value) => ({ syntax: Object(value).syntax })],
+        ["the member is missing", () => ({})],
         [
           "a member this version does not know was added",
           (value) => ({ ...Object(value), extra: "surprise" }),
@@ -995,6 +1099,41 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         expect(run.output).not.toContain("got:");
         expect(run.output).not.toContain("# Say hello");
         expect(run.emitted).not.toContain("# Say hello");
+      }
+    });
+  });
+
+  it("PC27: the Plan's catalog observation is core's closed record, and a hostile one produces nothing", function* () {
+    yield* useWorkingDirectory(function* () {
+      const approved = yield* approvedRun();
+      // The record is canonical core's, not Plan's: the packaged Component
+      // writes the same public `<Syntax />` any document writes, so what a
+      // continuation restores is a `syntax_catalog` observation rather than
+      // anything this host retained.
+      const observation = (yield* approved.readAll()).find(
+        (event) => event.type === "yield" && event.description.type === "syntax_catalog",
+      );
+      expect(observation?.type).toBe("yield");
+      if (observation?.type !== "yield" || observation.result.status !== "ok") {
+        throw new Error("the approved run retained no catalog observation");
+      }
+      const value = Object(observation.result.value);
+      expect(Object.keys(value)).toEqual(["catalog"]);
+      expect(typeof value.catalog).toBe("string");
+
+      const cases: [string, (value: Json) => Json][] = [
+        ["the member is missing", () => ({})],
+        ["an unknown member was added", (record) => ({ ...Object(record), extra: true })],
+        ["the member has the wrong type", () => ({ catalog: 7 })],
+      ];
+
+      for (const [, replace] of cases) {
+        const run = yield* continued(yield* tampered(approved, "syntax_catalog:", replace));
+        expect(run.failure).toContain("retained <Syntax /> catalog is not a catalog");
+        expect(run.output).not.toContain("got:");
+        expect(run.output).not.toContain("# Say hello");
+        expect(run.harness.fake.prompts).toEqual([]);
+        expect(run.harness.reviews).toEqual([]);
       }
     });
   });

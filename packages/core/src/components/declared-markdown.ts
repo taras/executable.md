@@ -46,6 +46,7 @@ import { parseMarkdownDefinition } from "../definition.ts";
 import { formsRefusal } from "../invocation-identity.ts";
 import type { IdentityComponent } from "../invocation-identity.ts";
 import { RESERVED_STRUCTURAL } from "../structural.ts";
+import { PROTECTED_COMPONENT_NAMES, protectedNameRefusal } from "./protected.ts";
 import { CanonicalImports, retain } from "./import-authority.ts";
 import type { ImportedDefinition, ImportRefusal, ImportTier } from "./import-authority.ts";
 import { admitDeclaration, isComponentName } from "./registration.ts";
@@ -177,6 +178,9 @@ export function* admitDeclaredMarkdown(
         `a declared Markdown component was named "${name}", which is structural syntax the ` +
           "engine owns rather than a component.",
       );
+    }
+    if (PROTECTED_COMPONENT_NAMES.has(name)) {
+      throw refuse(`a host ${protectedNameRefusal(name, "declare as Markdown")}.`);
     }
     if (origin.length === 0) {
       throw refuse(

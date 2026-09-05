@@ -68,6 +68,11 @@
  */
 export { executeInstalled } from "./src/execute.ts";
 export type { ExecutionInstallation, JournalAdmission } from "./src/execute.ts";
+/**
+ * The catalog a host's profile describes, when it is not the one the execution
+ * would derive from its own captured inputs — see `src/syntax-observation.ts`.
+ */
+export type { CatalogContribution } from "./src/syntax-observation.ts";
 export type { DurablePreparation } from "./src/document-request.ts";
 
 /**

@@ -139,6 +139,11 @@ import {
 import type { IdentityComponent } from "./invocation-identity.ts";
 import { ExecutionImports } from "./components/import-authority.ts";
 import type { ExpansionAuthority, ImportTier } from "./components/import-authority.ts";
+import { PROTECTED_COMPONENTS, ProtectedImports } from "./components/protected.ts";
+import { rootCatalogObservation, snapshotContributions } from "./syntax-observation.ts";
+import { packagedAssetReader } from "./component-documentation.ts";
+import type { DocumentationContribution, DocumentationReader } from "./component-documentation.ts";
+import type { CatalogContribution } from "./syntax-observation.ts";
 import type { WorkflowComponentBundle, WorkflowImportAuthority } from "./components/bundle.ts";
 import type { CodeBlockContext, CodeBlockResult, EvalEnv } from "./types.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
@@ -247,7 +252,16 @@ type DurableSelection =
    * the same way the live run did — by being inside the same declaration's body
    * when it asks.
    */
-  | { kind: "declared-private"; origin: string };
+  | { kind: "declared-private"; origin: string }
+  /**
+   * A component canonical core protects.
+   *
+   * Nothing but the kind is retained. The name is already the record's identity,
+   * and what the name resolves to is core's own table rather than anything a
+   * host, a registry or a checkout supplies — so a replay reconstructs it the
+   * way the live run did, by asking the copy of core that is running.
+   */
+  | { kind: "protected" };
 
 /**
  * What a recorded import decided, read as a closed protocol.
@@ -280,6 +294,13 @@ function readDurableSelection(value: unknown): DurableSelection | undefined {
       return undefined;
     }
     return { kind: "declared-private", origin };
+  }
+
+  if (kind === "protected") {
+    if (members !== 1) {
+      return undefined;
+    }
+    return { kind: "protected" };
   }
 
   if (kind === "declared-markdown") {
@@ -402,6 +423,7 @@ function* durableImportComponent(
   position: Readonly<SourcePosition> | undefined,
   bundle: WorkflowImportAuthority | undefined,
   declared: DeclaredImports | undefined,
+  guarded: ReadonlyMap<string, FunctionComponentDefinition>,
 ): Workflow<ComponentDefinition | FunctionComponentDefinition> {
   // Taken before the durable operation and outside it, because the offer is
   // canonical core's own and a replay has to reach this the same way the live
@@ -455,6 +477,12 @@ function* durableImportComponent(
       });
 
       switch (selected.kind) {
+        case "protected":
+          // Nothing about the answer is recorded: what this name means is
+          // core's own, so a replay asks the copy of core that is running
+          // rather than restoring an origin a registry would have to still
+          // hold.
+          return { kind: "protected" };
         case "repository":
           return {
             kind: "repository",
@@ -517,6 +545,21 @@ function* durableImportComponent(
       throw new Error(UNREADABLE_ROOT_RECORD);
     }
     throw documentTargetError(failure);
+  }
+
+  if (selection.kind === "protected") {
+    // The implementation this execution built from the claimant it minted for
+    // this component. Not a registry lookup and not a file: a protected name is
+    // canonical core's answer, and an execution that built none for it has no
+    // protected implementation to run.
+    const own = guarded.get(name);
+    if (own === undefined) {
+      throw new Error(
+        `Component ${name} was recorded as a component canonical core owns, and this execution ` +
+          "built no implementation for it.",
+      );
+    }
+    return own;
   }
 
   if (selection.kind === "registered") {
@@ -1857,7 +1900,15 @@ function* documentWorkflow(
     (function* (): Operation<ComponentDefinition | FunctionComponentDefinition> {
       const imported = yield* importComponent("__root__");
       const imports = authority.imports;
-      return imports === undefined ? imported : imports.authorize("__root__", imported);
+      // Asked only when a tier actually closes this name, exactly as an
+      // ordinary import is. The authority used to be absent altogether for a
+      // run with no bundle and no declarations, so this could authorize
+      // unconditionally; the protected tier is present in *every* execution, so
+      // an unguarded call now refuses the root of every ordinary run — nothing
+      // claims `__root__` unless a bundle closes the execution.
+      return imports?.closes("__root__") === true
+        ? imports.authorize("__root__", imported)
+        : imported;
     })(),
   );
 
@@ -2110,6 +2161,17 @@ function* executeDocument(
   bundles: readonly WorkflowComponentBundle[] = [],
   identityComponents: readonly IdentityComponent[] = [],
   declarations: readonly DeclaredMarkdownComponent[] = [],
+  catalogs: readonly CatalogContribution[] = [],
+  /**
+   * The documentation each installed package contributes.
+   *
+   * Carried by value from the installation boundary, like the catalog beside
+   * it, so the index a document's own `<Syntax names={…}>` reads is the index
+   * the profile actually assembled.
+   */
+  documentation: readonly DocumentationContribution[] = [],
+  /** This execution's packaged-asset reader, carried by value from the caller. */
+  readAsset: DocumentationReader = packagedAssetReader,
 ): Operation<DocumentExecution> {
   const {
     stream,
@@ -2226,6 +2288,10 @@ function* executeDocument(
       const identity = installIdentities(
         identityComponents,
         admittedDeclarations.flatMap((declaration) => [...declaration.privates]),
+        // Core's own, minted the same way and registered nowhere. Every
+        // execution has them, whatever its host declared, which is what makes a
+        // protected name mean one thing everywhere.
+        PROTECTED_COMPONENTS,
       );
       yield* registerComponents(identity.registrations);
       identity.activate();
@@ -2263,16 +2329,38 @@ function* executeDocument(
       if (declaredImports !== undefined) {
         tiers.push(declaredImports);
       }
-      const imports = tiers.length === 0 ? undefined : new ExecutionImports(tiers);
+      // Last, because a tier that claims a name answers for it and the earlier
+      // ones claim names of their own; a bundled execution still words every
+      // other refusal exactly as it always did. Present in every execution,
+      // because a protected name is closed in every execution.
+      tiers.push(new ProtectedImports());
+      const imports = new ExecutionImports(tiers);
       const authority: ExpansionAuthority = {
-        ...(imports === undefined ? {} : { imports }),
+        imports,
         ...(declaredImports === undefined ? {} : { declared: declaredImports }),
         identities: identity.identities,
+        protectedBodies: identity.protectedBodies,
         forms,
         // Created here, held here, and reclaimed with this execution. Nothing a
         // document, a component, middleware or a separately loaded copy can
         // name reaches this object.
         exact: createExactSource(),
+        // Built from what this execution captured before any installation,
+        // middleware or document code ran, and asked only when an occurrence
+        // observes: a run whose document never writes `<Syntax />` enumerates
+        // nothing.
+        catalog: rootCatalogObservation(
+          {
+            includes,
+            registry: startingRegistry,
+            components: identityComponents,
+            declarations,
+            ...(bundle === undefined ? {} : { workflow: bundle }),
+          },
+          catalogs[0],
+          documentation,
+          readAsset,
+        ),
       };
 
       // Install the document's runtime Component providers before durableRun
@@ -2292,6 +2380,7 @@ function* executeDocument(
               position,
               bundle,
               declaredImports,
+              identity.protected,
             );
             // Canonical selection, recorded where it is made. This is the only
             // thing that puts an invocation in one of this execution's identity
@@ -2546,6 +2635,34 @@ export interface ExecutionInstallation {
    * component that can name a durable operation after its invocation.
    */
   readonly components?: readonly IdentityComponent[];
+  /**
+   * The catalog this host's profile describes, when its profile is not the one
+   * the execution itself would derive.
+   *
+   * Captured by value alongside the admissions, before any installation runs,
+   * for the reason the rest are: what a document observes is settled before
+   * anything can observe or replace it. Omitted is the ordinary case — canonical
+   * core derives the catalog from the selection inputs this execution captured,
+   * which is what makes an ordinary run's observation the run's own.
+   *
+   * `xmd plan` states one, because the Plan being written is a program a later
+   * `xmd run` executes: the vocabulary the agent must be shown is that profile's
+   * rather than the authorship execution's. One execution accepts one.
+   */
+  readonly catalog?: CatalogContribution;
+  /**
+   * The long-form documentation this installation's packages ship.
+   *
+   * One entry per registration boundary that documents its components, derived
+   * from the same declarations the installation registers. Captured by value
+   * before any document code runs: a document that could add a contribution
+   * could describe components it does not have, and one that could remove a
+   * contribution could hide the documentation of a component it does.
+   *
+   * Several are ordinary, unlike `catalog` — a profile installing four packages
+   * has four boundaries — so they are collected rather than refused.
+   */
+  readonly documentation?: readonly DocumentationContribution[];
   install?(): Operation<void>;
 }
 
@@ -2630,6 +2747,13 @@ export const Execution: Api<ExecutionApi> = createApi<ExecutionApi>("Execution",
 function* runInvocation(
   options: ExecuteOptions,
   installations: readonly ExecutionInstallation[],
+  /**
+   * How this execution reads its packaged documentation assets.
+   *
+   * Defaulted to the real filesystem reader and carried by value from here into
+   * the observation, so it belongs to this execution alone.
+   */
+  readAsset: DocumentationReader = packagedAssetReader,
   observed?: () => void,
 ): Operation<DocumentExecution> {
   const ready = withResolvers<DocumentExecution>();
@@ -2662,7 +2786,7 @@ function* runInvocation(
     let published = false;
     try {
       yield* scoped(function* () {
-        const execution = yield* invoke(options, installations);
+        const execution = yield* invoke(options, installations, readAsset);
         published = true;
         ready.resolve(execution);
         state.document = yield* execution;
@@ -2848,6 +2972,8 @@ function detachedSchema<Schema extends PropsSchema | ReturnsSchema>(schema: Sche
 function* invoke(
   options: ExecuteOptions,
   installations: readonly ExecutionInstallation[],
+  /** This execution's packaged-asset reader, carried by value from its caller. */
+  readAsset: DocumentationReader = packagedAssetReader,
 ): Operation<DocumentExecution> {
   const admissions = Object.freeze(
     installations.flatMap((installation) => [...(installation.admissions ?? [])]),
@@ -2937,6 +3063,39 @@ function* invoke(
     ),
   );
 
+  // Read once and frozen with the rest, and before any installation runs: which
+  // profile a document observes is settled before anything can observe it. Two
+  // are refused rather than ordered — a catalog chosen by installation order
+  // would make what an agent is told to write depend on assembly order.
+  const catalogs = Object.freeze(
+    installations.flatMap((installation) => {
+      const catalog = installation.catalog;
+      return catalog === undefined ? [] : [catalog];
+    }),
+  );
+  // The documentation each installed package contributes, captured here with
+  // the rest of the installation and carried by value. Unlike the catalog
+  // above, several are ordinary: one registration boundary is one file, and a
+  // profile that installs four packages has four. Collecting them here is what
+  // makes `<Syntax names={…}>` and `xmd syntax NAME` read one index — the
+  // component reached a core-only index before this, so an Agent component had
+  // documentation on the command line and the fallback sentence in a document.
+  //
+  // Snapshotted here, field by field, and *before* any `install()` runs below.
+  // A shallow copy of the array would still hold the caller's source objects
+  // and name sets, so an installation could rewrite its own documentation from
+  // inside its `install()` — after the boundary that is supposed to have fixed
+  // it — and a document would be told whatever it changed them to.
+  const documentation = snapshotContributions(
+    installations.flatMap((installation) => [...(installation.documentation ?? [])]),
+  );
+  if (catalogs.length > 1) {
+    throw new Error(
+      "two installations stated the catalog this execution describes. One execution describes " +
+        "one vocabulary, so which profile a document observes is never a question of order.",
+    );
+  }
+
   for (const installation of installations) {
     if (installation.install) {
       yield* installation.install();
@@ -2975,6 +3134,9 @@ function* invoke(
     bundles,
     identityComponents,
     declarations,
+    catalogs,
+    documentation,
+    readAsset,
   );
 }
 
@@ -3012,7 +3174,7 @@ export function executeObserved(
 ): Operation<DocumentExecution> {
   // The callback is read here, once, and passed on as a value. What the caller
   // does to its own record afterwards is its own business.
-  return runInvocation(options, [...installations], observers.observed);
+  return runInvocation(options, [...installations], packagedAssetReader, observers.observed);
 }
 
 /**
@@ -3028,6 +3190,28 @@ export function executeInstalled(
   installations: readonly ExecutionInstallation[],
 ): Operation<DocumentExecution> {
   return runInvocation(options, [...installations]);
+}
+
+/**
+ * One execution whose packaged-asset reads go through `read`.
+ *
+ * Core's own evidence seam, exported from this module and from neither `mod.ts`
+ * nor `host.ts`, so it is not part of the package's surface. It *builds a new
+ * execution* around the reader rather than changing anything an existing one
+ * holds — so importing it from a repository component, an installed package or
+ * a document's own code cannot reach the current execution's reader, and two
+ * executions in one process are unaffected by each other.
+ *
+ * It exists because cancelling *inside documentation-index construction* is a
+ * different claim from cancelling inside catalog discovery, and there is no
+ * other point in that operation a test can stand at.
+ */
+export function executeReadingAssetsWith(
+  options: ExecuteOptions,
+  installations: readonly ExecutionInstallation[],
+  readAsset: DocumentationReader,
+): Operation<DocumentExecution> {
+  return runInvocation(options, [...installations], readAsset);
 }
 
 /**

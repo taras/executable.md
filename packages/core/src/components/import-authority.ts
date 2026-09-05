@@ -19,9 +19,14 @@
  */
 
 import type { ComponentDefinition, FunctionComponentDefinition } from "../types.ts";
-import type { FormSelections, InvocationIdentities } from "../invocation-identity.ts";
+import type {
+  FormSelections,
+  InvocationIdentities,
+  ProtectedBodies,
+} from "../invocation-identity.ts";
 import type { DeclaredImports, PrivateClosure } from "./declared-markdown.ts";
 import type { ExactSource } from "../output/exact-source.ts";
+import type { CatalogObservation } from "../syntax-observation.ts";
 
 /** A definition an import may answer with. */
 export type ImportedDefinition = ComponentDefinition | FunctionComponentDefinition;
@@ -101,6 +106,31 @@ export interface ExpansionAuthority {
    * a component or middleware can name reaches it.
    */
   readonly forms?: FormSelections;
+  /**
+   * What a document may write at the site being expanded.
+   *
+   * The execution builds one at its root from the selection inputs it captured,
+   * and hands it here by value like everything else on this object — not through
+   * a Context, because a context resolves by name and a name is not a secret, so
+   * a document could build one and answer for the vocabulary it is shown.
+   *
+   * It is lexical. A trusted canonical evaluation boundary that has already
+   * admitted the exact vocabulary a subtree may write replaces this member for
+   * that subtree, and leaving the subtree restores the enclosing one. Nothing
+   * else changes it: an ordinary component's body, the content a caller
+   * projected and an imported definition each carry what the site carried.
+   */
+  readonly catalog?: CatalogObservation;
+  /**
+   * The bodies this execution will enter for the components canonical core
+   * protects.
+   *
+   * Held by the execution and handed here by value, like the identity domains
+   * beside it. It is what makes a protected implementation reachable at all: an
+   * implementation another loaded copy built is in that copy's table, and one
+   * kept past this execution's teardown reaches a table that is gone.
+   */
+  readonly protectedBodies?: ProtectedBodies;
 }
 
 /** Why an answer is not the one canonical execution produced for this name. */

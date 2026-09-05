@@ -213,6 +213,7 @@ export type {
 export { admitPushEvidence } from "./src/composition/push-evidence.ts";
 export {
   COMPOSITION_REGISTRATIONS,
+  compositionDocumentation,
   useCompositionComponents,
 } from "./src/composition/installation.ts";
 

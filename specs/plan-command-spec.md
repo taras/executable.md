@@ -342,9 +342,17 @@ The host supplies two fixed internal inputs as that root's props:
 
 They are the adapter's own, and nothing a Plan declares is bound here: the
 properties a Plan's root declares are resolved by whoever runs it. The catalog
-is not among them: it is built inside `<PlanInputs>`, from a closure the host
-captured, so an authored phase can say that the preparation is starting before
-it happens.
+is not among them either. The command states the vocabulary its profile
+describes at the execution boundary, captured before any installed code runs,
+and the packaged Component reaches it by writing the public `<Syntax />` any
+document may write — so an authored phase can say that preparation is starting
+before the observation happens, and the catalog the Agent is shown is the one an
+operator can print.
+
+The profile it states is the ordinary `run` one, in the caller's includes. A
+Plan is a program a later `xmd run` executes, and this authorship execution
+searches no repository and refuses almost every capability, so a catalog derived
+from it would describe a vocabulary the approved program would not have.
 
 **The root is an adapter, not the workflow.** Its whole body is two elements: it
 projects `props.request` into `<Plan>` without adding whitespace, supplies
@@ -388,20 +396,30 @@ surfaces' endings, each written once. The command's wording is unchanged; the
 component's says that no Plan was returned rather than that nothing was output or
 run. TypeScript supplies neither the words nor the choice between them.
 
-**The five private capabilities.** The Component's phases are components only these
-exact bytes may write, declared by the host with the definition and revoked with
-the execution: `<PlanInputs>` builds and freezes the catalog, the instruction
-identity, the
-session placement, the surface and whether that placement outlives the
-invocation, and refuses a continuation whose instructions render differently —
-as stale input, before a directory, a provider, a turn or a review exists; paired
-`<PlanAuthorship>` installs the constrained frame and does not return until every
-part of it has torn down; paired `<PlanProgress>` says which phase is running;
-`<CheckDraft>` answers about one draft without
-executing it; and `<AdmitPlan>` structurally admits the approved bytes after that
-teardown and retains them as one Plan artifact — the invocation identity, the
-instruction identity, the approved source, its digest and that successful
-admission — before the Component renders them.
+**The five private capabilities.** They are components only these exact bytes may
+write, declared by the host with the definition and revoked with the execution.
+`<PlanInputs>` freezes the instruction identity, session placement, surface and
+whether that placement outlives the invocation, and refuses a continuation whose
+instructions render differently — as stale input, before a directory, a provider,
+a turn or a review exists. Paired `<PlanAuthorship>` installs the constrained
+frame and does not return until every part of it has torn down; paired
+`<PlanProgress>` says which phase is running; `<CheckDraft>` answers about one
+draft without executing it; and `<AdmitPlan>` structurally admits the approved
+bytes after that teardown and retains them as one Plan artifact — the invocation
+identity, the instruction identity, the approved source, its digest and that
+successful admission — before the Component renders them.
+
+**The catalog is not one of them.** What a document may write is a public
+question with a public answer, and canonical core owns both, so `Plan.md` writes
+the same `<Syntax as="syntax" />` any document writes and binds the vocabulary
+directly into every authorship prompt. Its retention is core's: one
+`syntax_catalog` observation per occurrence, retaining exactly
+`{ catalog: string }`, hostile-parsed on continuation so a resumed authorship is
+shown the vocabulary the run actually showed it rather than one rebuilt from a
+tree that has moved. `<PlanInputs>` retains exactly `{ instruction }` beside it,
+so the catalog and the question are two records that can be read and reconciled
+independently, and a missing, additional or mistyped member in either refuses
+before authorship begins.
 
 Whether the placement is durable is carried across that boundary rather than
 re-derived, because `<PlanInputs>` is the last thing that sees the public
@@ -990,4 +1008,4 @@ neither observation never interpreted what it wrote.
 | PO16 | An ordinary failure | A journal-backed invocation that fails for its own reason — a failed turn, with neither a secret rejection nor a write failure — exits non-zero, delivers no source and no artifact, completes teardown, and leaves a file whose every entry parses and whose bytes are exactly those entries re-serialized: no append failed, so there is no partial or unterminated trailing record |
 | PO13 | A failed destination | A consumer that fails while a turn is live cancels that turn, waits for every owned teardown, attempts no artifact sink, keeps the bytes stderr accepted, and uses the exact progress-failure diagnostic |
 | PO14 | Ordering is unchanged | Cancellation, teardown failure, final validation refusal, the `--output` refusal and a successful delivery all keep their order, and no phase claims an artifact was delivered |
-| PO15 | The adapter and the catalog | The packaged adapter emits no prose of its own, and the catalog is built exactly once, from `<PlanInputs>`, after Preparing |
+| PO15 | The adapter and the catalog | The packaged adapter emits no prose of its own, and the catalog is observed exactly once, through public `<Syntax />`, after Preparing; continuation restores that observation without rebuilding it |

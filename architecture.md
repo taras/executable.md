@@ -123,7 +123,8 @@ Existing documents and code get aligned to this section retroactively.
 | provider partition | one complete, independently owned agent-provider state — runtime, store, managed sessions, queues, coordinator, teardown — selected by the one installed factory at each dispatch. Production is the single-partition case of the same path; holding a partition grants work, never permission |
 | `JournalProvenance` | a non-operational, equality-only witness that a live publication stream descends from the exact journal backend a provider selected for one workflow run; it grants no append, read, execution, publication or reconciliation capability, and is meaningful only because the provider retains the witness it established and later requires exact equality |
 | result object | the value a component binds instead of failing: `{ok: true, value}` or `{ok: false, …}`, whose failure members the component declares |
-| syntax catalog | the complete, versioned description of what a document may write in one directory under one host profile: every structural construct the engine reserves, and the one implementation selection chooses for every other name. It is observation — describing an environment installs no operational state, runs nothing and journals nothing — and it is produced once per request and projected, never rediscovered per format |
+| syntax catalog | the complete, versioned description of what a document may write in one directory under one host profile: every structural construct the engine reserves, and the one implementation selection chooses for every other name. It is observation — describing an environment installs no operational state, runs nothing and journals nothing — and it is produced once per request and projected, never rediscovered per format. `xmd syntax` prints one for an environment nobody is running; canonical `<Syntax />` renders one for the site an element was written at, from the same construction and the same Markdown renderer |
+| catalog observation | the engine-owned lexical answer to "what may a document write here", carried by value on canonical core's expansion authority beside the import authority. The execution builds one at its root from the selection inputs it captured before any installation, middleware or document code ran, or from the one catalog a trusted host stated for its profile; a trusted canonical evaluation boundary replaces it for the subtree it evaluates. It answers with text and carries no authority: a component named in a catalog is not a component anything may run |
 | run profile declarations | the component registrations a first-party package makes, held as plain values apart from the middleware, providers, activation and launchers its installer also arranges. The installer registers exactly those values and inspection reads exactly those values, so what a run installs and what the catalog reports cannot drift |
 | origin-only | the inspectability of a component whose contract could only be learned by loading it: a repository TypeScript module, whose schemas live on its exports and whose top level would run. Such an entry carries name, category, origin and source kind, and no contract field at all — an absent contract is stated, never rendered as an empty one |
 | definition-owned return state | which value body a `<Return>` selects for: one ephemeral state per execution of one value root or Markdown value component. Structural directives keep the ambient one, a component invocation hides it from the invoked body, a nested value body installs its own, and caller-projected content restores the caller's. It travels down the expansion call stack as a local rather than through a context, and no exported function accepts another body's, so nothing a document can read, replace, or import acts on a live one. The first claim on it is atomic, so a second executed return fails the body rather than replacing its value, and it appends no durable event |
@@ -3557,11 +3558,14 @@ ships different bytes under a declared name therefore fails where it is
 installed rather than where a document happens to write the name.
 
 **The name is claimed, not offered.** Resolution places a declared component in
-the same protected tier as a reserved registration, above the workflow component
-bundle, repository files and every registered default. Two claims on one name
-are refused rather than ordered, so the tier never chooses. A repository
-`Policy.md`, a bundled `Policy`, an ordinary registration and another loaded
-copy of the host package can none of them answer for a declared `Policy`.
+the same host tier as a reserved registration, above the workflow component
+bundle, repository files and every registered default — and below the canonical
+protected tier, which is the engine's own claim rather than a host's. Two claims
+on one name are refused rather than ordered, so the tier never chooses. A
+repository `Policy.md`, a bundled `Policy`, an ordinary registration and another
+loaded copy of the host package can none of them answer for a declared `Policy`;
+and a host that declares a name canonical core owns is refused at admission,
+before the root import.
 
 **Invocation is canonical, for the declared names.** A declaring execution
 imports through the same retention a bundled one does: canonical core keeps its
@@ -3641,18 +3645,131 @@ and a name is not a secret, so a component could build one, reach the record and
 answer that everything is exact. It is reclaimed with its execution, reaches no
 public entrypoint, and marks nothing on the segments themselves.
 
+## The canonical protected tier
+
+Resolution already had a protected tier — a reserved registration, or exact
+Markdown a host declared. Both of those are *a host's* claim, made by whoever
+assembled the run. Above them sits the engine's own, and a name in it means the
+same thing in every execution: whichever host built it, whichever package
+registered what, and whatever the repository holds.
+
+One component is in it. `<Syntax />` describes the vocabulary of the site it is
+written at, and a description of a run's vocabulary that anything in the run
+could answer for is a description of nothing — the value of the answer is
+exactly that nobody but core produced it.
+
+**It is not a registration.** A registration is an answer a registry gives for a
+name, and a registry is something a nested scope layers over, a host installs
+into, and a handler can keep a record from and hand back somewhere else. So the
+tier is the resolver's own table, consulted after structural syntax and before
+every host or author tier, and consulted unconditionally: no option a caller
+passes — or leaves out — puts a repository file, a bundle member or a
+registration in front of it.
+
+Collision is refused where each claim is made, so the tier never has to choose:
+a registration under the name is refused atomically at registration, a host's
+declared Markdown and a workflow bundle member are each refused at admission
+before the root import, and a repository `Syntax.md`, `Syntax.ts` or directory
+candidate is never probed for because selection has already answered.
+
+**Invocation is canonical.** The execution mints one identity domain per
+protected component, calls its factory with that domain's claimant, and registers
+what comes back nowhere. Import is closed for exactly those names, on the terms a
+declaration's names are closed: `Component.importComponent` middleware may
+observe the import, delegate it and refuse it by throwing, and what it cannot do
+is answer one — a witness is issued where canonical execution produced its answer
+and verified where the component is invoked, and core's own copy is what runs.
+Every other name in the execution stays the ordinary open import it has always
+been.
+
+**Protection is about the answer, not about power.** A protected implementation
+is handed the lexical catalog observation for its site and nothing else: no
+component definitions, no import witness, no invocation capability, no policy
+table, no provider and no registration handle. The body itself is kept in a table
+private to the copy of core that built the implementation and reached only by
+canonical expansion, so an implementation another loaded copy created — which is
+an ordinary arrangement, because a component can be loaded from disk beside its
+own copy — has no body here and no answer to give.
+
+**The named form is a second question.** Bare `<Syntax />` answers *what may I
+write here*. `<Syntax names={["Elicit"]} />` answers *how do I use this one*, and
+the two read different inputs on purpose. The observation therefore carries a
+pair: what may **execute** at this site, which the bare form reports, and the
+**enclosing authoring catalog**, which named selection reads. At a root they are
+one catalog. Under a trusted evaluation boundary that narrows execution they are
+not, and each rendered entry states whether it is available in the current
+evaluation — so a nested author can be told how a component works where they may
+not run one, without being left to infer that documentation implies authority.
+#713 installs that boundary; this stack supplies and proves the seam.
+
+The documentation itself is the owning package's. Every registration boundary
+that contributes public components keeps a `components.md` beside itself — core,
+its Agent registrations, the CLI, testing, web and repository composition — with
+a contribution derived from the same declarations it registers, so adding a
+component demands documentation rather than relying on a hand-kept list. The
+assembled contributions travel by value on the execution installation, which is
+what makes the command and the component read one index. Assets are located from
+their own module's URL rather than the working directory or `--include`, and
+every distribution loads the same bytes; one shared entrypoint builds the
+complete index and refuses a missing, unknown or duplicated section before any
+distribution is produced. One validated index serves `<Syntax names={…}>`, `xmd syntax Elicit` and
+#678's release reference, so three surfaces cannot describe one component three
+ways. It joins by name *and* owning package: a repository `Elicit.md` has a
+repository origin, which names no package, so the built-in's prose is never
+attached to it. A first-party component with no
+section, a heading naming something the package does not supply, one appearing
+twice, and one that is not a component name each refuse the whole index rather
+than producing a partial one — a reference with a hole in it cannot be told from
+one whose components have nothing to say. The no-documentation sentence is for a
+**custom** component instead, which no package governs and which takes its prose
+from its own document's body when it has any.
+
+**It says so in the catalog.** A protected component reports its own origin
+kind, `protected`, rather than borrowing `registered` with `reserved: true`. The
+two answer a reader's actual question — *could I supply this name myself?* —
+oppositely: a reserved registration is a host installing something under a name
+it wants kept, so it can be absent from another run, replaced by a different
+host, or refused when two hosts claim it, and none of that is true here. A
+workflow bundle member gained its own kind for the same reason: reported as a
+`repository` path it read as a file the reader could edit, when it is the exact
+blob `sourceHash` names, fixed when the run was defined. Both are why the catalog
+is version 2 rather than an addition to version 1 — a version-1 reader was
+promised a closed set of origins, and the honest fix adds to that set.
+
+The durable record follows the ordinary rules. Selection itself records
+`{ kind: "protected" }` and nothing else: there is no path, no origin to look up
+and no implementation to serialize, so the record says only which tier answered
+and replay asks the running execution for the implementation it built. An
+execution that built none refuses rather than resolving the name again, because a
+replay that fell back to the ordinary tiers would run whatever is offered under
+that name today. Each occurrence then claims the identity this execution minted,
+performs one `syntax_catalog` observation, and retains exactly
+`{ catalog: string }`. A continuation hostile-parses that record
+and hands the same text back without consulting the filesystem, the registry, the
+bundle, the host or the lexical observation again; a missing, additional or
+mistyped member is stale input rather than a component failure, and refuses
+before output or binding. Two authored occurrences are two identities and two
+observations, and repeated reads of one binding observe nothing again.
+
 ## The syntax catalog boundary
 
 `xmd syntax` answers what a document may write here, and answering must cost
 nothing. The boundary that makes that true is one operation with no authority.
 
-**One catalog, two projections.** Core produces a `SyntaxCatalog` — version 1, a
-fixed three-category tuple, entries sorted by name — and the CLI's Markdown and
-JSON renderers each take that value. Neither renderer discovers anything, and
+**One catalog, two projections.** Core produces a `SyntaxCatalog` — version 2, a
+fixed three-category tuple, entries sorted by name — and the Markdown and JSON
+renderers each take that value. Neither renderer discovers anything, and
 neither parses the other's output, so the two formats cannot describe different
-environments. JSON is the canonical, lossless projection; Markdown is written
-for a person and labels a schema it cannot faithfully summarize rather than
-inventing a type for it.
+environments. JSON is the canonical, lossless projection and belongs to the CLI;
+Markdown is written for a person and labels a schema it cannot faithfully
+summarize rather than inventing a type for it.
+
+**The Markdown renderer is core's**, because two things print it: the command,
+which describes an environment nobody is running, and canonical `<Syntax />`,
+which hands the same text to a document that is running. One renderer is what
+makes those the same bytes for the same site; two that agreed by hand would be
+one release away from telling an operator and an agent different things about
+one profile.
 
 **A declaration set is admitted on execution's terms, or not at all.** The
 identity components a host would declare to an execution are read here without
@@ -3672,6 +3789,41 @@ under built-in, reporting `declared-markdown` as its source kind and the
 declared origin and digest as its origin. Its private closure contributes
 nothing: those names are not syntax a document may write, so a catalog that
 listed them would describe an environment that does not exist.
+
+**An execution carries one of its own, lexically.** The catalog a running
+document observes travels by value on canonical core's private expansion
+authority, beside the import authority and the identity domains — not through a
+Context, because a context resolves by name and a name is not a secret, so a
+document could build one and answer for the vocabulary it is shown.
+
+Canonical core builds it at the execution root from the selection inputs that
+execution captured before any installation, middleware or document code ran: the
+includes it resolves against, the registry it started with, the identity
+components and exact Markdown its host declared, and the component bundle it is
+closed over when it has one. A bundled name is described from the pinned bytes
+already in hand — nothing is imported, executed, or read from a file to describe
+one — and reported at the canonical repository-relative path that blob has in the
+commit, which is where a reader of a workflow run looks for it.
+
+A trusted host may state the catalog its profile describes instead, on the terms
+every other trusted-host value travels: captured by value with the rest of the
+installation, before any installed code exists. One execution accepts one, and
+two are refused rather than ordered, because ordering them would make which
+profile a document observes depend on assembly order. `xmd plan` states one — a
+Plan is a program a later `xmd run` executes, so the vocabulary the agent must be
+shown is that profile's rather than the authorship execution's, which searches no
+repository and refuses almost every capability. An ordinary run states none and
+observes itself.
+
+Nothing is built until an occurrence asks, so a run whose document never writes
+`<Syntax />` enumerates no includes, parses no component and reads no
+frontmatter. Each ask builds afresh, which is what makes an occurrence's retained
+catalog its own rather than a copy of whichever one ran first.
+
+A trusted canonical evaluation boundary may install a narrower observation for
+the subtree it evaluates, and leaving that subtree restores the enclosing one. It
+adds nothing: the catalog it installs is the one its own admission already
+selected, so an entry absent from that admission is absent from the observation.
 
 **Inspection is observation, never authority.** Producing a catalog installs
 only the declarative registration layer selection needs. It does not enter
@@ -3836,7 +3988,8 @@ Status is measured against main.
 
 | Construct | Does | Status |
 | --- | --- | --- |
-| `xmd syntax` | describes every structural construct and every selected component the production `run` profile would let a document write in the contextual working directory, as deterministic Markdown or as version-1 JSON, from one catalog. Inspection only: it registers the run profile's declarations in a bounded scope and reads the filesystem for which files exist and, for a selected Markdown component, that file's frontmatter. It runs no body, imports no repository TypeScript module, installs no provider, mints no authority and writes no journal. An include it cannot enumerate — a selection-relevant symbolic link to a directory beneath it included — fails the whole request rather than printing a healthy subset | built on the #632 stack |
+| `xmd syntax` | describes every structural construct and every selected component the production `run` profile would let a document write in the contextual working directory, as deterministic Markdown or as version-2 JSON, from one catalog. `xmd syntax Elicit` names one component instead and renders its catalog metadata followed by the long-form documentation the owning package ships, through the same selection, index and renderer `<Syntax names={…}>` uses. Inspection only: it registers the run profile's declarations in a bounded scope and reads the filesystem for which files exist and, for a selected Markdown component, that file's frontmatter. It runs no body, imports no repository TypeScript module, installs no provider, mints no authority and writes no journal. An include it cannot enumerate — a selection-relevant symbolic link to a directory beneath it included — fails the whole request rather than printing a healthy subset. The Markdown renderer is core's rather than this command's, because canonical `<Syntax />` prints the same catalog for a running document and the two must be the same bytes for the same site | built on the #632 stack, with the shared Markdown renderer added on this stack |
+| `<Syntax />` | outputs the components and control-flow constructs a document may write at the site it is written at, as the Markdown `xmd syntax` prints — one construction and one renderer, so an operator and an agent are never told different things about one profile. Self-closing only, no props, and a text component: the bare form emits the catalog and the ordinary `as` captures the same text and emits nothing, while a paired spelling or an authored prop refuses before any observation. It is the one member of the canonical protected tier, resolved after structural syntax and ahead of every host or author tier: a repository `Syntax.md`, a bundled `Syntax`, an ordinary or reserved registration, a host's declared Markdown and an implementation from a second loaded copy can none of them answer for it, and `Component.importComponent` middleware may observe, delegate or refuse the import without being able to answer one. What the catalog says is the execution's own — built from the selection inputs it captured before any installation, middleware or document code ran, or from the one catalog a trusted host stated for its profile — and it is carried lexically on canonical core's expansion authority rather than through any context. Each occurrence claims the identity the execution minted, performs one `syntax_catalog` observation, and retains exactly `{ catalog: string }`; a continuation hostile-parses that record and restores the catalog the run actually showed without rediscovering a moved environment, while a missing, additional or mistyped member is stale input that refuses before output or binding. A cancelled observation completes its teardown and commits nothing. It reports itself under its own catalog origin kind, `protected`, never as a reserved registration, and selection records `{ kind: "protected" }` alone — replay asks this execution for the implementation it built rather than resolving the name again. It carries no authority at all: a component named in a catalog is neither registered, resolved nor authorized by being named | built on this stack; the narrower observation a trusted evaluation boundary installs for its subtree is the seam #713 fills |
 | document validation | validates one supplied root projection and the recursive Markdown source closure normal component selection discovers, returning deterministic version-1 document diagnostics and `valid`, `invalid` or `not-statically-checkable` invocation outcomes without evaluating document code or installing operational host behavior | built on the #654 stack |
 | `xmd plan` | turns one Prompt into approved Plan source and delivers it, by executing exactly one root document and starting no program. That root is the packaged plan command document, under the internal `<plan-command>` identity — an adapter that projects the request into `<Plan>` and returns what comes back — and inside that, the packaged `<Plan>` Component under the authorship profile its own `<PlanAuthorship>` installs: one enclosing Session, a host ceiling of one host-owned directory dedicated to that logical session — under `~/.xmd/plan/sessions` by default, keyed by the digest of the name, never the name, created empty and required to be empty before the provider exists or a session is materialized, refused rather than cleaned when it is not, durable when the caller named the session and handed back non-recursively after teardown when it did not — with no additional directories, no MCP servers, no native tools and a private strict denial no permission flag widens, no Files, command, service or network capability for that document, no repository component search, and the Component's own private `<CheckDraft>`, whose closed assessment reports the structural defects the draft authored. The invocation settles one structural check — `validateDocumentStructure` under the ordinary run-profile registry, the `<plan>` identity, the caller's includes and the run profile's declarations — and `<CheckDraft>`, `<AdmitPlan>` and the command's own final gate all ask that one, so what they can disagree about is when it was asked rather than what was asked. There is no caller-source defect to tell them apart from: the grammar is fixed and complete before a draft exists, because no generated document adds an option to a command whose result *is* the document. Its instructions require every Plan to begin with one descriptive level-one title and to keep the Prompt's outcomes as readable steps with each component beside the step it performs, through repairs and revisions alike; that is an authorship and human-review requirement, and `<CheckDraft>` never enforces it. A tenth draft that still has problems may be stopped or explained: the explanation is one more ordinary turn in the same Session carrying only the final diagnostics, is inert text, reopens no draft limit, and ends the command. The host's instruction layer states only that an answer belongs to the message that asked for it, so which shape a turn wants stays in the document. Authorship reports itself as it happens: the command root's rendered transcript is progress on stderr — one Markdown phase announced before each piece of work, its attempt and repair ordinals derived from the two bounds `Plan.md` binds once, with `--verbose` adding every cleared draft and every failed check's structured findings — written through a private paired `<PlanProgress>` that renders its content, sends it through the current document-output operation and returns nothing, so a phase can never enter `<Plan as>`'s capture or the declaration's exact-source disposition. Which surface is asking and whether `--verbose` was written are sealed host facts, so the ordinary `<Plan>` surface announces nothing and expands no progress body. The host owns the stream and the terminal alike: whitespace normalization for every invocation, terminal formatting only when the entrypoint states its own stderr is one, the transcript drained inside the scope that owns the execution, and a destination that stops accepting bytes cancelling the producer and waiting for every owned teardown before it reports — with no stdout fallback. Authorship's own durable stream is the host's choice and is written rather than read: a fresh invocation-owned in-memory one, or the file `--journal` exclusively created, holding the ordinary `serializeDurableEvent()` JSONL in commit order under the same serialized pre-append secret gate, so a rejected event reaches neither the file nor the committed sequence and the prefix before it stays readable. Nothing opens either as input, replays it, or resumes from it. Then, only after every provider, Prompt task and Elicitation resource inside the authorship frame has torn down, the Component's own `<AdmitPlan>` structurally admits the exact approved bytes, and after that execution ends the host asks the same check once more — about a tree the whole teardown has had time to move, so a component the approved Plan names and something removed after that admission is refused here and nowhere else, and a Plan declaring properties a later run will supply is admitted rather than refused — and delivers it to exactly one sink: stdout byte for byte by default, or an exclusively created `--output` path. It starts no later root and retains no later execution, so the caller's own composition decides whether the program runs: `xmd plan … | xmd run -`, or an `--output` artifact a later `xmd run` names. Its grammar is what that leaves: one request, `--include`, `--agent-provider`, `--default-agent`, `--session`, `--timeout`, `--output`, `--verbose`, `--journal`, and ordinary help and version. The last two are spelled in full and observe this authorship alone — `-V` and `-j` are `xmd run`'s aliases for options about a program's run, and each is refused by naming the long spelling. Every option that configured the former execution — `--run`, the aggregate and generated root properties, `--raw`, the exec and fetch deadlines, the three permission flags and both secret-detection spellings — is refused by name in fixed preflight, before the general parser can drop or coerce a token and before `--help` can short-circuit the dispatch, in either order; `--run` reports the migration that names both compositions, and every other one reports that `xmd run` is where a program is configured. The same options are unchanged under `xmd run`. No permission mode is settled at all. The retired `prompt` spelling is not a command and is not absorbed by the default `run` grammar, which would read it as a document reference and execute a file of that name: an invocation whose exact first token is `prompt` is refused before any scan, selection or path lookup, establishing nothing, while `xmd run ./prompt` still executes a document legitimately called that | built on the #660 stack |
 | `<Plan>` | writes and reviews one Plan, from a Prompt an ordinary document wrote. `<Plan session="optional-name">…</Plan>` expands its paired body once with the capabilities the calling document already has — the complete untrimmed rendering is the Prompt, and it is never emitted separately — and produces the exact approved Plan source. It is a paired **exact text** component: the bare form emits that source into the calling document's own rendering, and the `as` form captures the same bytes instead. Neither form evaluates what it produced, and neither announces a phase: the progress `xmd plan` writes is a private side effect of the command surface, so an ordinary `<Plan>` expands no progress body at all. It is the public name of the packaged `<Plan>` Component: exact first-party Markdown declared to every ordinary run, so a repository `Plan.md`, a workflow bundle, a registration, `Component.importComponent` middleware and another loaded copy can none of them answer for it. Paired only, with one optional non-empty `session` prop and an optional `as`; a body that renders to nothing fails before any catalog, directory, Session, turn, review or check exists. The Agent writes under exactly the `xmd plan` fixed policy however broad the calling document's authority is, and a host that supplies no Agent context refuses before placement — including the `<Execution host="run">` child an `xmd test` document launches, which is the run profile and therefore resolves the same protected bytes rather than reporting a missing component, and which supplies one when it declares a canonical `<TestAgent>`. An authored `session` keeps the existing durable named-directory lifetime, so the same name at the same site reaches the same conversation next time, while an omitted one is site- and iteration-unique, replay-stable and handed back after teardown; sibling sites stay distinct even when they write one name, and the name never becomes a path. Every turn, answer, check, approval and admission belongs to the enclosing document's journal, so a continuation restores completed authorship instead of repeating it; there is no second journal. Complete authorship teardown precedes structural admission, which precedes the emission or the binding — and the admission is structure alone, so a Plan declaring properties a later run will supply is produced rather than refused. It creates no file and executes nothing it produced | built on the #660 stack; no delivery, custom root, policy prop or replacement selector exists (#536 owns constrained caller-authored policy) |
