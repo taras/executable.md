@@ -44,6 +44,7 @@
  * does not have.
  */
 
+import { isComponentName } from "./components/registration.ts";
 import type { ComponentOrigin } from "./types.ts";
 
 /** One package's documentation for the components it registers. */
@@ -107,6 +108,33 @@ export interface DocumentationIndex {
   bundleDocumentation(origin: ComponentOrigin): string | undefined;
 }
 
+/**
+ * A Markdown component's own documentation, taken from its own document.
+ *
+ * A repository component, a bundled one and a host's declared Markdown are all
+ * *this run's* rather than a package's, so no `components.md` documents them.
+ * Their long-form documentation, when they have any, is the prose in their own
+ * file — which is where an author writing one would put it, and the only place
+ * that stays correct when the file changes.
+ *
+ * Read from the source the selection already holds, so this loads nothing: a
+ * repository component's bytes were read to describe it, and a bundled or
+ * declared one's were admitted before the run began.
+ */
+export function markdownDocumentation(source: string): string | undefined {
+  const body = withoutFrontmatter(source).trim();
+  return body.length === 0 ? undefined : body;
+}
+
+/** The document after its frontmatter, if it opened with any. */
+function withoutFrontmatter(source: string): string {
+  if (!source.startsWith("---")) {
+    return source;
+  }
+  const end = source.indexOf("\n---", 3);
+  return end === -1 ? source : source.slice(source.indexOf("\n", end + 1) + 1);
+}
+
 /** What a component with no authored documentation renders instead of prose. */
 export const NO_DOCUMENTATION = "No long-form documentation is available for this component.";
 
@@ -114,10 +142,16 @@ export const NO_DOCUMENTATION = "No long-form documentation is available for thi
 const HEADING = /^##\s+(.+?)\s*$/;
 /** Any ATX heading, so a deeper one can be told from a section boundary. */
 const ANY_HEADING = /^(#{1,6})\s+/;
-/** A fence, so a heading inside a code block is code rather than a section. */
-const FENCE = /^\s*(```+|~~~+)/;
-/** What a public component name may be: the same shape an element may write. */
-const COMPONENT_NAME = /^[A-Z][A-Za-z0-9]*$/;
+/**
+ * A fence, with its marker captured whole.
+ *
+ * Both the character and the run length matter. A fence closes only on the same
+ * character at *least* as long as the one that opened it, so an example written
+ * in four backticks can contain a three-backtick block without the inner one
+ * ending the outer. Comparing only the character would end the example early and
+ * read everything after it as documentation.
+ */
+const FENCE = /^\s{0,3}(`{3,}|~{3,})/;
 
 /** One source, parsed into the bundle's own prose and a section per component. */
 interface ParsedSource {
@@ -138,15 +172,17 @@ export function parseDocumentationSource(source: DocumentationSource): ParsedSou
   const sections = new Map<string, string[]>();
   const bundle: string[] = [];
   let current: string[] = bundle;
+  /** The fence currently open, as the exact marker that opened it. */
   let fence: string | undefined;
 
   for (const line of lines) {
-    const fenced = FENCE.exec(line);
-    if (fenced !== undefined && fenced !== null) {
-      const marker = fenced[1] ?? "";
+    const marker = FENCE.exec(line)?.[1];
+    if (marker !== undefined) {
       if (fence === undefined) {
-        fence = marker[0];
-      } else if (marker.startsWith(fence)) {
+        fence = marker;
+      } else if (marker[0] === fence[0] && marker.length >= fence.length) {
+        // Closes only on the same character, at least as long. A shorter run
+        // inside a longer fence is part of the example being shown.
         fence = undefined;
       }
       current.push(line);
@@ -166,7 +202,11 @@ export function parseDocumentationSource(source: DocumentationSource): ParsedSou
       continue;
     }
     const name = heading[1] ?? "";
-    if (!COMPONENT_NAME.test(name)) {
+    // The canonical grammar rather than a second copy of it, so a dotted name
+    // like `File.Delete` or `PullRequest.Reviews` can be documented and looked
+    // up. A private regex here would have quietly excluded every namespaced
+    // component in the product.
+    if (!isComponentName(name)) {
       throw new DocumentationIndexError(
         `${source.asset} has the level-two heading "${name}", which is not a component name. ` +
           "Every level-two heading in a component documentation file names one component.",

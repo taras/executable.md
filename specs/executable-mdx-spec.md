@@ -10895,7 +10895,8 @@ component that observes one at an authored site.
 | SX4–SX6 | Renderers take a value | Both formats render from a supplied catalog with the filesystem refusing every call, twice with identical bytes, under the fixed category headings; every table cell is escaped, a prop name holding a pipe included |
 | SX7/SX8 | Includes | Repeated values select in caller order and replace the defaults; absent, the defaults apply |
 | SX9 | Failure | An unusable include exits 1, reports on stderr and prints no catalog |
-| SX10/SX11 | Formats | Markdown by default, version-1 JSON with `--json`; the catalog is inspection, and `xmd plan` is the command that writes with the same structured value |
+| SX10/SX11 | Formats | Markdown by default, version-2 JSON with `--json`; the catalog is inspection, and `xmd plan` is the command that writes with the same structured value |
+| SX16 | Named lookup | `xmd syntax Elicit` renders that component's metadata and long-form documentation through the same selection, index and renderer `<Syntax names={…}>` uses; the compact catalog is unchanged and an unknown name refuses whole |
 | SX12 | A package tree | Bare `xmd syntax` succeeds with the default includes in a repository whose `node_modules` holds directory links |
 | SX13–SX15 | Delivery | A real pipeline reading a catalog larger than one pipe buffer receives the bytes a regular-file redirect receives, in both forms; a consumer that closes early leaves the command reporting on stderr with exit 1 rather than an unhandled write failure |
 

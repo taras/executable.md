@@ -40,7 +40,7 @@ import { UnknownComponentError } from "./documentation-index.ts";
 import type { WorkflowImportAuthority } from "./components/bundle.ts";
 import type { DeclaredMarkdownComponent } from "./components/declared-markdown.ts";
 import type { IdentityComponent } from "./invocation-identity.ts";
-import type { ComponentRegistry } from "./types.ts";
+import type { ComponentOrigin, ComponentRegistry } from "./types.ts";
 
 /**
  * The catalog in scope for the segments being expanded.
@@ -127,6 +127,34 @@ export function rootCatalogObservation(
 }
 
 /**
+ * One catalog entry's identity: its name and its complete origin.
+ *
+ * Every member of the origin participates, not just its kind — a workflow blob
+ * differs from another by `sourceHash`, a declared component by `digest`, two
+ * registrations by their package and whether either is reserved. Comparing any
+ * less would let a component that merely resembles the admitted one report
+ * itself as admitted.
+ */
+function identityOf(entry: { name: string; origin: ComponentOrigin }): string {
+  const origin = entry.origin;
+  const parts: readonly string[] =
+    origin.kind === "structural"
+      ? [origin.construct]
+      : origin.kind === "repository"
+        ? [origin.path]
+        : origin.kind === "registered"
+          ? [origin.origin, String(origin.reserved)]
+          : origin.kind === "protected"
+            ? [origin.origin]
+            : origin.kind === "workflow"
+              ? [origin.path, origin.sourceHash]
+              : [origin.origin, origin.digest];
+  // Length-prefixed, so no member's content can spell a separator and make two
+  // different identities collide.
+  return [entry.name, origin.kind, ...parts].map((part) => `${part.length}:${part}`).join("");
+}
+
+/**
  * The selected entries, in catalog order, with their documentation and
  * availability.
  *
@@ -142,8 +170,14 @@ export function select(
   index: DocumentationIndex,
 ): SelectedEntry[] {
   const requested = new Set(names);
+  // Keyed by identity, not by name. A name is a spelling, and the whole point of
+  // the two inputs is that the enclosing catalog may hold a *different*
+  // component under the same one: an authoring entry for the built-in `Elicit`
+  // beside an admitted repository `Elicit.md` is two components. Reporting the
+  // reference entry as available because something called `Elicit` can run
+  // would tell an author they may execute the thing they were just shown.
   const runnable = new Set(
-    executable.categories.flatMap((category) => category.entries.map((entry) => entry.name)),
+    executable.categories.flatMap((category) => category.entries.map(identityOf)),
   );
   const selected: SelectedEntry[] = [];
   // Walked in catalog order rather than request order, so two documents asking
@@ -158,7 +192,7 @@ export function select(
       selected.push({
         entry,
         documentation: index.documentationFor(entry.name, entry.origin),
-        available: runnable.has(entry.name),
+        available: runnable.has(identityOf(entry)),
       });
     }
   }

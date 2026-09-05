@@ -84,6 +84,44 @@ describe("Tier SYN — parsing one documentation file", () => {
     expect(parsed.sections.get("Alpha")).toContain("## Beta");
   });
 
+  it("SYN33b: keeps a shorter fence inside a longer one as example text", function* () {
+    const parsed = parseDocumentationSource(
+      source(
+        [
+          "## Alpha",
+          "",
+          "How to write a fenced example:",
+          "",
+          "````md",
+          "```mdx",
+          "<Alpha />",
+          "```",
+          "",
+          "## Beta",
+          "````",
+          "",
+          "Still Alpha.",
+          "",
+        ].join("\n"),
+      ),
+    );
+
+    // The inner three-backtick run neither opens nor closes anything: the outer
+    // four-backtick fence is still open, so `## Beta` inside it is the example
+    // it is being shown as. Closing on the character alone would have ended the
+    // example early and read the rest as a second component.
+    expect([...parsed.sections.keys()]).toEqual(["Alpha"]);
+    expect(parsed.sections.get("Alpha")).toContain("## Beta");
+    expect(parsed.sections.get("Alpha")).toContain("Still Alpha.");
+  });
+
+  it("SYN33c: accepts a dotted component name as a heading", function* () {
+    const parsed = parseDocumentationSource(source("## File.Delete\n\nAbout File.Delete.\n"));
+    // The canonical grammar, so every namespaced component in the product can
+    // be documented and looked up.
+    expect(parsed.sections.get("File.Delete")).toBe("About File.Delete.");
+  });
+
   it("SYN34: refuses a duplicate section and a heading that is not a name", function* () {
     expect(() =>
       parseDocumentationSource(source(["## Alpha", "one", "", "## Alpha", "two", ""].join("\n"))),

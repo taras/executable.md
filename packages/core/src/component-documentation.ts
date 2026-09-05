@@ -14,8 +14,8 @@
  * rather than quietly serving a product with no documentation.
  */
 
-import { readFile } from "node:fs/promises";
-import { until } from "effection";
+import { fileURLToPath } from "node:url";
+import { readTextFile } from "@executablemd/runtime";
 import type { Operation } from "effection";
 
 import { buildDocumentationIndex } from "./documentation-index.ts";
@@ -35,7 +35,13 @@ export function* readCoreDocumentation(): Operation<DocumentationSource> {
     return {
       owner: CORE_ORIGIN,
       asset: "packages/core/src/components/components.md",
-      text: yield* until(readFile(url, "utf8")),
+      // The host filesystem operation the root document's own read goes
+      // through, not the document-facing `Files` authority: this is the engine
+      // reading its own package, and what a running document installed must not
+      // decide what its documentation says. The path is derived from this
+      // module's URL, so it is package-relative whatever the working directory
+      // and search path are.
+      text: yield* readTextFile(fileURLToPath(url)),
     };
   } catch (error) {
     throw new Error(
@@ -56,11 +62,42 @@ export function* readCoreDocumentation(): Operation<DocumentationSource> {
  * component this build actually ships; which of them a given site can select is
  * a separate question the selection answers.
  */
-export function* documentationIndexFor(): Operation<DocumentationIndex> {
-  const sources = [yield* readCoreDocumentation()];
-  return buildDocumentationIndex(sources, (owner) =>
-    owner === CORE_ORIGIN ? CORE_COMPONENT_NAMES : new Set<string>(),
+export function* documentationIndexFor(
+  /**
+   * What the packages installed in this execution supply, beside core's own.
+   *
+   * Assembled by the trusted host, with the rest of the installation, before any
+   * document code exists — the Agent, CLI, testing, web and workflow bundles
+   * each contribute their own file and the set of components it must cover. Not
+   * a setter and not a context: a document that could add a source could
+   * describe components it does not have, and one that could remove a source
+   * could hide the documentation of a component it does.
+   */
+  contributed: readonly DocumentationContribution[] = [],
+): Operation<DocumentationIndex> {
+  const core: DocumentationContribution = {
+    source: yield* readCoreDocumentation(),
+    supplies: CORE_COMPONENT_NAMES,
+  };
+  const all = [core, ...contributed];
+  const supplied = new Map(all.map((one) => [one.source.owner, one.supplies]));
+  return buildDocumentationIndex(
+    all.map((one) => one.source),
+    (owner) => supplied.get(owner) ?? new Set<string>(),
   );
+}
+
+/** One package's documentation, and the components it must account for. */
+export interface DocumentationContribution {
+  readonly source: DocumentationSource;
+  /**
+   * Every public component this package supplies.
+   *
+   * Both halves of the check: a heading outside this set is documentation for
+   * something the package does not have, and a member of it with no heading is
+   * a component shipped without documentation.
+   */
+  readonly supplies: ReadonlySet<string>;
 }
 
 /**

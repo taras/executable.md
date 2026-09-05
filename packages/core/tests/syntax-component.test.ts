@@ -52,7 +52,10 @@ import { renderSyntaxMarkdown } from "../src/syntax-markdown.ts";
 import { fixedCatalogObservation } from "../src/syntax-observation.ts";
 import { SYNTAX_COMPONENT } from "../src/components/Syntax.ts";
 import type { ImportedDefinition } from "../src/components/import-authority.ts";
-import type { FunctionComponent, SyntaxCatalog } from "../mod.ts";
+import type { ComponentOrigin, FunctionComponent, SyntaxCatalog } from "../mod.ts";
+
+/** An origin a catalog *component* entry can carry — everything but structural. */
+type NamedOrigin = Exclude<ComponentOrigin, { kind: "structural" }>;
 
 const ROOT_PATH = "documents/root.md";
 
@@ -1029,6 +1032,95 @@ describe("Tier SYN — observation is never authority", () => {
     // available — the ordinary case.
     const open = fixedCatalogObservation(enclosing);
     expect(yield* open.document(["Withheld"])).toContain("**Available in this evaluation:** yes");
+  });
+
+  it("SYN25d: availability compares the whole identity, not the spelling", function* () {
+    /** One catalog holding a single entry of exactly this identity. */
+    const holding = (origin: NamedOrigin): SyntaxCatalog => ({
+      version: 2,
+      categories: [
+        { kind: "structural", entries: [] },
+        {
+          kind: "built-in",
+          entries: [
+            {
+              kind: "component" as const,
+              name: "Elicit",
+              origin,
+              sourceKind: "registered" as const,
+              inspectability: "complete" as const,
+              forms: ["self-closing" as const],
+              props: { type: "object", properties: {}, additionalProperties: false },
+              captures: [],
+              returnMode: "text" as const,
+              returns: { type: "string" },
+            },
+          ],
+        },
+        { kind: "user-provided", entries: [] },
+      ],
+    });
+
+    const reference: NamedOrigin = {
+      kind: "registered",
+      origin: "@executablemd/core",
+      reserved: false,
+    };
+
+    // Each of these is a *different component* that happens to be spelled
+    // `Elicit`. Reporting the reference entry as available because something of
+    // that name can run would tell an author they may execute what they were
+    // just shown.
+    const impostors: Record<string, NamedOrigin> = {
+      "another registered origin": {
+        kind: "registered",
+        origin: "@someone/else",
+        reserved: false,
+      },
+      "a reserved registration of the same origin": {
+        kind: "registered",
+        origin: "@executablemd/core",
+        reserved: true,
+      },
+      "a repository file": { kind: "repository", path: "components/Elicit.md" },
+      "a bundled blob": {
+        kind: "workflow",
+        path: "components/Elicit.md",
+        sourceHash: "a".repeat(40),
+      },
+      "declared Markdown": {
+        kind: "declared-markdown",
+        origin: "@executablemd/core",
+        digest: "b".repeat(64),
+      },
+    };
+
+    for (const [what, origin] of Object.entries(impostors)) {
+      const observation = fixedCatalogObservation(holding(origin), holding(reference));
+      const rendered = yield* observation.document(["Elicit"]);
+      expect([what, rendered.includes("**Available in this evaluation:** no")]).toEqual([
+        what,
+        true,
+      ]);
+    }
+
+    // Two more of the same kind, differing only in the member that identifies
+    // them: a different blob under one path, and a different digest under one
+    // origin.
+    const bundled: NamedOrigin = {
+      kind: "workflow",
+      path: "components/Elicit.md",
+      sourceHash: "a".repeat(40),
+    };
+    const moved: NamedOrigin = { ...bundled, sourceHash: "c".repeat(40) };
+    expect(
+      yield* fixedCatalogObservation(holding(moved), holding(bundled)).document(["Elicit"]),
+    ).toContain("**Available in this evaluation:** no");
+
+    // The positive control: one exact identity, admitted.
+    expect(
+      yield* fixedCatalogObservation(holding(reference), holding(reference)).document(["Elicit"]),
+    ).toContain("**Available in this evaluation:** yes");
   });
 
   it("SYN25: an execution that carries no observation refuses rather than inventing one", function* () {
