@@ -70,6 +70,25 @@ function* graphOf(entrypoint: string): Operation<string[]> {
   return [...seen];
 }
 
+/**
+ * Trees that are an installer's rather than this repository's.
+ *
+ * `node_modules` has to go, and not only for speed: a workspace install links
+ * every dependency package under its dependents, so `packages/terminal-tmux/
+ * node_modules/@executablemd/terminal/src/...` is the *same file* reached
+ * through a link. Walking it would count one definition many times and would
+ * read a vendored copy's imports as if they were the importing package's own —
+ * so a package would appear to import whatever its dependencies import. Bun's
+ * layout creates those links and Deno's does not, which is why this was
+ * invisible until the Bun shard ran.
+ */
+const INSTALLED = new Set(["node_modules", "npm", "dist", "generated", "vendor"]);
+
+/** Whether any segment of `relative` names a tree this repository does not author. */
+function installed(relative: string): boolean {
+  return relative.split(path.sep).some((segment) => INSTALLED.has(segment));
+}
+
 /** Every production source of one workspace package, tests excluded. */
 function* productionSources(pkg: string): Operation<string[]> {
   const root = path.resolve("packages", pkg);
@@ -81,6 +100,9 @@ function* productionSources(pkg: string): Operation<string[]> {
     }
     const full = path.join(entry.parentPath ?? root, entry.name);
     const relative = path.relative(root, full);
+    if (installed(relative)) {
+      continue;
+    }
     // Tests prove the contract; they do not define the shipped graph. A row may
     // reach across packages to drive a fixture without that being a dependency
     // of the artifact.
@@ -124,9 +146,14 @@ function* everySource(): Operation<string[]> {
   const files: string[] = [];
   const entries = yield* until(readdir(root, { recursive: true, withFileTypes: true }));
   for (const entry of entries) {
-    if (entry.isFile() && entry.name.endsWith(".ts")) {
-      files.push(path.join(entry.parentPath ?? root, entry.name));
+    if (!entry.isFile() || !entry.name.endsWith(".ts")) {
+      continue;
     }
+    const full = path.join(entry.parentPath ?? root, entry.name);
+    if (installed(path.relative(root, full))) {
+      continue;
+    }
+    files.push(full);
   }
   return files;
 }
@@ -232,6 +259,25 @@ describe("Tier TG21 — the terminal package boundary", () => {
     const fixtures = yield* graphOf("testing.ts");
     expect(fixtures.some((module) => module.endsWith("/controlled-launcher.ts"))).toBe(true);
     expect(fixtures.some((module) => module.endsWith("/controlled-composite.ts"))).toBe(true);
+  });
+
+  it("TG21l: an installer's linked copies are not read as a package's own source", function* () {
+    // A workspace install links each dependency under its dependents, so the
+    // same file is reachable at `packages/<pkg>/node_modules/@executablemd/...`.
+    // Counting those would report one definition many times, and reading their
+    // imports would make a package appear to import whatever its dependencies
+    // import. Bun's layout creates the links, Deno's does not — so every row
+    // above was passing under one runtime for a reason that does not hold under
+    // the other.
+    for (const pkg of ["terminal", "terminal-tmux", "core", "cli"]) {
+      const strayed = (yield* productionSources(pkg)).filter((file) =>
+        file.includes(`${path.sep}node_modules${path.sep}`),
+      );
+      expect([pkg, strayed]).toEqual([pkg, []]);
+    }
+    expect(
+      (yield* everySource()).filter((file) => file.includes(`${path.sep}node_modules${path.sep}`)),
+    ).toEqual([]);
   });
 
   it("TG21d: a walked package with no sources would not pass vacuously", function* () {
