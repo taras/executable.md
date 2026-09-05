@@ -3716,10 +3716,13 @@ distribution is produced. One validated index serves `<Syntax names={…}>`, `xm
 #678's release reference, so three surfaces cannot describe one component three
 ways. It joins by name *and* owning package: a repository `Elicit.md` has a
 repository origin, which names no package, so the built-in's prose is never
-attached to it. A heading naming something the package does not supply, one
-appearing twice, and one that is not a component name each refuse the whole
-index rather than producing a partial one; a component with no section is
-ordinary and renders the sentence saying so.
+attached to it. A first-party component with no
+section, a heading naming something the package does not supply, one appearing
+twice, and one that is not a component name each refuse the whole index rather
+than producing a partial one — a reference with a hole in it cannot be told from
+one whose components have nothing to say. The no-documentation sentence is for a
+**custom** component instead, which no package governs and which takes its prose
+from its own document's body when it has any.
 
 **It says so in the catalog.** A protected component reports its own origin
 kind, `protected`, rather than borrowing `registered` with `reserved: true`. The

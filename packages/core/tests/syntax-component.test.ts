@@ -49,7 +49,9 @@ import { selectComponent } from "../src/components/select.ts";
 import { installedBundle } from "../src/components/bundle.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { renderSyntaxMarkdown } from "../src/syntax-markdown.ts";
-import { fixedCatalogObservation } from "../src/syntax-observation.ts";
+import { fixedCatalogObservation, rootCatalogObservation } from "../src/syntax-observation.ts";
+import type { CatalogObservation } from "../src/syntax-observation.ts";
+import type { DocumentationContribution } from "../src/component-documentation.ts";
 import { SYNTAX_COMPONENT } from "../src/components/Syntax.ts";
 import type { ImportedDefinition } from "../src/components/import-authority.ts";
 import type { ComponentOrigin, FunctionComponent, SyntaxCatalog } from "../mod.ts";
@@ -185,6 +187,48 @@ function* tampered(
     yield* partial.append(event);
   }
   return partial;
+}
+
+/** A catalog holding one component entry of exactly this identity. */
+function catalogNamed(name: string, origin: NamedOrigin): SyntaxCatalog {
+  return {
+    version: 2,
+    categories: [
+      { kind: "structural", entries: [] },
+      {
+        kind: "built-in",
+        entries: [
+          {
+            kind: "component" as const,
+            name,
+            origin,
+            sourceKind: "registered" as const,
+            inspectability: "complete" as const,
+            forms: ["self-closing" as const],
+            props: { type: "object", properties: {}, additionalProperties: false },
+            captures: [],
+            returnMode: "text" as const,
+            returns: { type: "string" },
+          },
+        ],
+      },
+      { kind: "user-provided", entries: [] },
+    ],
+  };
+}
+
+/**
+ * The observation an ordinary root carries.
+ *
+ * Built the way an execution builds it — from captured selection inputs, with
+ * no host contribution — so a case about narrowing is about the object the
+ * product actually hands to expansion.
+ */
+function rootObservation(): CatalogObservation {
+  return rootCatalogObservation(
+    { includes: [], registry: new Map(), components: [], declarations: [] },
+    undefined,
+  );
 }
 
 /** A working directory of this case's own, torn down on the way out. */
@@ -372,8 +416,13 @@ describe("Tier SYN — the named form", () => {
     // could be written in.
     const suspending: ExecutionInstallation = {
       *catalog(): Operation<SyntaxCatalog> {
+        // Entered *inside* the named documentation operation: the component has
+        // claimed its occurrence and opened its durable operation by the time
+        // this runs, so a cancellation that arrives now is one that landed in
+        // the work rather than before it.
+        torn.push("entered");
         yield* ensure(() => {
-          torn.push("observation");
+          torn.push("torn down");
         });
         yield* suspend();
         return catalogOf("Unreachable");
@@ -389,12 +438,16 @@ describe("Tier SYN — the named form", () => {
       yield* task.halt();
     });
 
-    // Teardown ran, so the observation's own cleanup completed rather than
-    // being abandoned mid-flight.
-    expect(torn).toEqual(["observation"]);
-    // And nothing successful was retained: a continuation has no catalog to
-    // restore, which is the honest state for work that never finished.
-    expect(retained(yield* stream.readAll())).toHaveLength(0);
+    const events = yield* stream.readAll();
+    // Reached the work, then tore it down — in that order. Cancelling before
+    // the observation was entered would leave `entered` absent, which is the
+    // vacuous pass this ordering rules out.
+    expect(torn).toEqual(["entered", "torn down"]);
+    // Nothing was committed at all: a durable operation records its event when
+    // it completes, and this one never did. So there is no record for a
+    // continuation to restore, successful or otherwise.
+    expect(observations(events)).toHaveLength(0);
+    expect(retained(events)).toHaveLength(0);
   });
 
   it("SYN39: retains the named text, and a continuation restores it whole", function* () {
@@ -1212,6 +1265,64 @@ describe("Tier SYN — observation is never authority", () => {
     expect(
       yield* fixedCatalogObservation(holding(reference), holding(reference)).document(["Elicit"]),
     ).toContain("**Available in this evaluation:** yes");
+  });
+
+  it("SYN25e: a narrowed observation is derived from the enclosing one", function* () {
+    // The seam as an evaluator actually meets it: it holds the enclosing
+    // observation and an admitted catalog, and nothing else. No raw
+    // contribution list, no second index — which is the point, because that
+    // list is execution-private and rebuilding an index from it is how two
+    // indexes drift apart.
+    const enclosing = rootObservation();
+    const admitted = catalogOf("Admitted");
+    const narrowed = enclosing.narrow(admitted);
+
+    // What may run is the admission.
+    const executable = yield* narrowed.observe();
+    expect(executable).toContain("### `<Admitted>`");
+    expect(executable).not.toContain("### `<Elicit>`");
+
+    // What may be read about is still the enclosing site's, with the enclosing
+    // index behind it — so a real component's real documentation survives.
+    const documented = yield* narrowed.document(["Elicit"]);
+    expect(documented).toContain("### `<Elicit>`");
+    expect(documented).toContain("Asks a person a structured question");
+    expect(documented).toContain("**Available in this evaluation:** no");
+
+    // And the enclosing observation is unchanged by having been narrowed.
+    expect(yield* enclosing.observe()).toContain("### `<Elicit>`");
+    expect(yield* enclosing.document(["Elicit"])).toContain(
+      "**Available in this evaluation:** yes",
+    );
+  });
+
+  it("SYN25f: contributions are captured, not held by reference", function* () {
+    const supplies = new Set(["Alpha"]);
+    const source = {
+      owner: "@executablemd/mutable",
+      asset: "packages/mutable/src/components.md",
+      text: "## Alpha\n\nThe captured documentation.\n",
+    };
+    const contribution = { source, supplies };
+    const observation = fixedCatalogObservation(
+      catalogNamed("Alpha", {
+        kind: "registered",
+        origin: "@executablemd/mutable",
+        reserved: false,
+      }),
+      undefined,
+      [contribution],
+    );
+
+    // Everything a caller still holds, changed after capture.
+    source.text = "## Alpha\n\nSUBSTITUTED AFTER CAPTURE.\n";
+    source.owner = "@executablemd/other";
+    supplies.add("Beta");
+    supplies.delete("Alpha");
+
+    const rendered = yield* observation.document(["Alpha"]);
+    expect(rendered).toContain("The captured documentation.");
+    expect(rendered).not.toContain("SUBSTITUTED AFTER CAPTURE");
   });
 
   it("SYN25: an execution that carries no observation refuses rather than inventing one", function* () {

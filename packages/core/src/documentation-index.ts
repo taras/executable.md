@@ -23,8 +23,12 @@
  * component whose section they are in, so a component's own documentation can
  * have structure without ending its section.
  *
- * Three things refuse the whole index rather than producing a partial one:
+ * Four things refuse the whole index rather than producing a partial one:
  *
+ * - a **missing** section — a component the package supplies and does not
+ *   document. A reader cannot tell "nobody has written this yet" from "this
+ *   component has nothing to say", so a first-party package with a hole in its
+ *   reference is not a valid build;
  * - a **duplicate** heading, in one file or across two, because then a component
  *   has two documentations and nothing says which is current;
  * - an **unknown** heading, because it is documentation for something this
@@ -32,9 +36,10 @@
  * - a heading that is **not a component name at all**, which is a file that has
  *   drifted from this format into ordinary prose.
  *
- * A component with *no* section is not a failure. It renders the sentence
- * `<Syntax>` states for one, and stays usable while its documentation is still
- * being written.
+ * The no-documentation sentence `<Syntax>` renders is therefore *not* for a
+ * first-party component. It is for a **custom** component — a repository file, a
+ * bundle member, a host's declared Markdown — which no package governs and which
+ * takes its documentation from its own document's body when it has any.
  *
  * ## The join is name *and* origin
  *

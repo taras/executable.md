@@ -70,6 +70,22 @@ export interface CatalogObservation {
    * author needs or imply an authority they do not have.
    */
   document(names: readonly string[]): Operation<string>;
+  /**
+   * The observation for a subtree that may execute less than this site.
+   *
+   * The narrowing seam, and it belongs here rather than in the evaluator
+   * because everything it needs is already here. A canonical evaluation
+   * boundary that has admitted a vocabulary hands it over; what comes back
+   * reports that vocabulary from `observe()` and keeps *this* observation's
+   * authoring catalog and documentation index for `document()`.
+   *
+   * Deriving it any other way would mean the evaluator recovering the raw
+   * contributions and rebuilding an index — which is both a hole (that list is
+   * execution-private for a reason) and a way for the two indexes to drift.
+   * Narrowing what may run is not narrowing what may be read about, and the
+   * observation is the thing that already knows both.
+   */
+  narrow(executable: SyntaxCatalog): CatalogObservation;
 }
 
 /**
@@ -121,17 +137,48 @@ export function rootCatalogObservation(
   function* current(): Operation<SyntaxCatalog> {
     return contribution === undefined ? yield* derived(inputs) : yield* contribution();
   }
+  // Snapshotted once, here, so the contributions an observation reads are the
+  // ones the installation boundary captured rather than whatever the caller's
+  // objects hold by the time a document asks.
+  const captured = snapshotContributions(documentation);
+  return observing(current, current, captured);
+}
+
+/**
+ * One observation over an authoring catalog and an executable one.
+ *
+ * `reference` is what named lookup reads and `executable` is what may run. At a
+ * root they are the same operation; a narrowed observation keeps the reference
+ * and replaces the executable, which is the whole of the seam.
+ */
+function observing(
+  reference: () => Operation<SyntaxCatalog>,
+  executable: () => Operation<SyntaxCatalog>,
+  documentation: readonly DocumentationContribution[],
+): CatalogObservation {
   return {
     *observe(): Operation<string> {
-      return renderSyntaxMarkdown(yield* current());
+      return renderSyntaxMarkdown(yield* executable());
     },
     *document(names: readonly string[]): Operation<string> {
-      // At the root the two inputs are one catalog: nothing has narrowed what
-      // may execute, so what an author may read about and what they may run are
-      // the same set, and every selected entry is available.
-      const catalog = yield* current();
+      const authoring = yield* reference();
+      const runnable = yield* executable();
       const index = yield* documentationIndexFor(documentation);
-      return renderSelectedDocumentation(select(catalog, catalog, names, index));
+      return renderSelectedDocumentation(select(authoring, runnable, names, index));
+    },
+    narrow(admitted: SyntaxCatalog): CatalogObservation {
+      // The enclosing reference and the enclosing index, unchanged. Only what
+      // may execute is replaced, so a nested author keeps the documentation
+      // they had and every entry reports its availability against the
+      // admission.
+      // deno-lint-ignore require-yield
+      return observing(
+        reference,
+        function* () {
+          return admitted;
+        },
+        documentation,
+      );
     },
   };
 }
@@ -241,6 +288,33 @@ function* derived(inputs: CapturedCatalogInputs): Operation<SyntaxCatalog> {
  * adds nothing: the catalog handed here is the admission's, so an entry that is
  * not in the admission cannot be in the observation.
  */
+/**
+ * A defensive copy of what a caller handed the installation boundary.
+ *
+ * Field by field, and the name set materialized into one this module owns. A
+ * contribution is a caller's object: the array can be reordered, the source
+ * replaced, the `Set` added to after capture, and an iterable can answer
+ * differently the second time it is walked. Retaining any of those would make
+ * what a document is told about the product depend on what its host did
+ * afterwards.
+ */
+export function snapshotContributions(
+  contributions: readonly DocumentationContribution[],
+): readonly DocumentationContribution[] {
+  return Object.freeze(
+    [...contributions].map((one) =>
+      Object.freeze({
+        source: Object.freeze({
+          owner: String(one.source.owner),
+          asset: String(one.source.asset),
+          text: String(one.source.text),
+        }),
+        supplies: new Set([...one.supplies].map((name) => String(name))),
+      }),
+    ),
+  );
+}
+
 export function fixedCatalogObservation(
   catalog: SyntaxCatalog,
   /**
@@ -268,15 +342,16 @@ export function fixedCatalogObservation(
    */
   documentation: readonly DocumentationContribution[] = [],
 ): CatalogObservation {
-  const rendered = renderSyntaxMarkdown(catalog);
-  return {
+  const captured = snapshotContributions(documentation);
+  return observing(
     // deno-lint-ignore require-yield
-    *observe(): Operation<string> {
-      return rendered;
+    function* () {
+      return reference;
     },
-    *document(names: readonly string[]): Operation<string> {
-      const index = yield* documentationIndexFor(documentation);
-      return renderSelectedDocumentation(select(reference, catalog, names, index));
+    // deno-lint-ignore require-yield
+    function* () {
+      return catalog;
     },
-  };
+    captured,
+  );
 }

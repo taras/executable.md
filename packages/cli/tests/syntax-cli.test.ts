@@ -500,17 +500,23 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
     // profile's contributions while a document's own named form fell back to a
     // core-only index, so one product answered the same question two ways.
     const command = yield* runCli(["syntax", "Prompt", "--include", "."], { cwd: "." }).expect();
-    expect(command.stdout).toContain("### `<Prompt>`");
-    expect(command.stdout).toContain("Sends a prompt and renders the reply");
-
     const document = yield* runCli(
       ["run", "-e", '<Syntax names={["Prompt"]} />', "--include", "."],
       { cwd: "." },
     ).expect();
-    expect(document.stdout).toContain("Sends a prompt and renders the reply");
-    expect(document.stdout).not.toContain(
-      "No long-form documentation is available for this component.",
-    );
+
+    // The whole rendered result, not a phrase from it. Both surfaces render the
+    // same text through the same renderer; they differ only in the trailing
+    // newline a rendered document ends with, which is the presentation boundary
+    // rather than the answer. Comparing substrings would pass just as happily
+    // if one surface silently dropped the documentation and kept the heading.
+    expect(document.stdout.trimEnd()).toBe(command.stdout.trimEnd());
+
+    // And it is a real answer rather than two matching empties.
+    expect(command.stdout).toContain("### `<Prompt>`");
+    expect(command.stdout).toContain("Sends a prompt and renders the reply");
+    expect(command.stdout).toContain("**Available in this evaluation:** yes");
+    expect(command.stdout.length).toBeGreaterThan(400);
   });
 
   it("SX10: writes markdown by default and version-2 JSON with --json", function* () {
