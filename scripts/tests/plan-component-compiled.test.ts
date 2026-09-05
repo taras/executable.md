@@ -91,7 +91,6 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
     // write.
     const names = entries.map((entry: { name?: string }) => entry?.name);
     for (const name of [
-      "Syntax",
       "PlanInputs",
       "PlanAuthorship",
       "PlanProgress",
@@ -100,6 +99,24 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
     ]) {
       expect(names).not.toContain(name);
     }
+
+    // `<Syntax />` is public, and the compiled binary describes it exactly once
+    // from the canonical origin. The protected tier ships inside the binary
+    // rather than being assembled by whoever installs the profile, so a build
+    // that lost it would describe no catalog component at all.
+    const syntax = entries.filter((entry: { name?: string }) => entry?.name === "Syntax");
+    expect(syntax).toHaveLength(1);
+    expect(syntax[0].origin).toEqual({
+      kind: "registered",
+      origin: "@executablemd/core",
+      reserved: true,
+    });
+    expect(syntax[0].forms).toEqual(["self-closing"]);
+    expect(syntax[0].returnMode).toBe("text");
+    expect(syntax[0].description).toBe(
+      "Output available components and control flow constructs. `<Syntax />` renders the " +
+        "current catalog.",
+    );
 
     // The command surface those bytes belong to is source-only in this build
     // too: help describes both explicit compositions and names no option that

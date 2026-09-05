@@ -5,13 +5,16 @@
  * disagree about which tier won:
  *
  * 1. structural syntax the engine owns;
- * 2. a host claiming the name — a reserved registration, or exact Markdown this
+ * 2. a component canonical core protects. The engine's own claim rather than a
+ *    host's, so a protected name means the same thing in every execution,
+ *    whichever host assembled it and whatever a repository holds;
+ * 3. a host claiming the name — a reserved registration, or exact Markdown this
  *    environment declares. Two claims on one name are refused where they are
  *    installed, so this tier never has to choose between them;
- * 3. the workflow component bundle this execution is closed over;
- * 4. a repository-local file;
- * 5. a registered default, including core's own components;
- * 6. nothing, which is the unresolved printed error.
+ * 4. the workflow component bundle this execution is closed over;
+ * 5. a repository-local file;
+ * 6. a registered default, including core's own components;
+ * 7. nothing, which is the unresolved printed error.
  *
  * The bundle tier exists only while a trusted host installed one, and a
  * workflow execution searches no repository directories at all — so what a
@@ -29,6 +32,7 @@ import type { Operation } from "effection";
 import type { WorkflowImportAuthority } from "./bundle.ts";
 import type { DeclaredMarkdownCatalog } from "./declared-markdown.ts";
 import { mergeRegistry } from "./registration.ts";
+import { protectedComponent, protectedOrigin } from "./protected.ts";
 import { CORE_REGISTRY } from "./registry.ts";
 import { RESERVED_STRUCTURAL } from "../structural.ts";
 import type { ComponentOrigin, ComponentRegistry, ComponentSelection } from "../types.ts";
@@ -127,6 +131,14 @@ export function* selectComponent(
 
   if (RESERVED_STRUCTURAL.has(name)) {
     return { kind: "structural", construct: name };
+  }
+
+  // Above every host and author tier, and unconditional: the table is core's
+  // own, so no option a caller passes — or leaves out — can put a repository
+  // file, a bundle member or a registration in front of it.
+  const owned = protectedComponent(name);
+  if (owned !== undefined) {
+    return { kind: "protected", component: owned, origin: protectedOrigin(owned) };
   }
 
   if (entry?.reserved) {

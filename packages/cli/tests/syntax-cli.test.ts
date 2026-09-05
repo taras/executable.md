@@ -175,6 +175,36 @@ describe("Tier SX — the run profile the command describes", () => {
     expect(catalog.categories[2].entries).toEqual([]);
   });
 
+  it("SX1b: describes <Syntax> once, as the component canonical core owns", function* () {
+    const catalog = yield* syntaxCatalog([]);
+    const everywhere = catalog.categories.flatMap((category) =>
+      category.entries.filter((entry) => entry.name === "Syntax"),
+    );
+    // Once, and in the built-in category: a name a document cannot take back is
+    // not user-provided, and two entries would mean two tiers answered.
+    expect(everywhere).toHaveLength(1);
+    expect(names(catalog.categories[1].entries)).toContain("Syntax");
+
+    const [entry] = everywhere;
+    if (entry === undefined || entry.kind !== "component" || entry.inspectability !== "complete") {
+      throw new Error("the catalog describes <Syntax> without a contract");
+    }
+    expect(entry.origin).toEqual({
+      kind: "registered",
+      origin: "@executablemd/core",
+      reserved: true,
+    });
+    expect(entry.forms).toEqual(["self-closing"]);
+    expect(entry.props).toEqual({ type: "object", properties: {}, additionalProperties: false });
+    expect(entry.captures).toEqual([]);
+    expect(entry.returnMode).toBe("text");
+    expect(entry.description).toBe(
+      "Output available components and control flow constructs. `<Syntax />` renders the " +
+        "current catalog.",
+    );
+    expect(entry.as).toBe("Optional. Captures the rendered catalog instead of emitting it.");
+  });
+
   it("ORC1: names all thirteen repository-composition components, with contracts", function* () {
     const catalog = yield* syntaxCatalog([]);
     const entries = catalog.categories[1].entries;
@@ -393,6 +423,39 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
 
       expect(names(catalog.categories[2].entries)).toContain("Default");
     });
+  });
+
+  it("SX8b: an ordinary run observes its own profile and includes, and agrees with the command", function* () {
+    yield* useWorkspace(
+      {
+        "components/Local.md": "---\ndescription: the first description.\n---\n\nlocal\n",
+        "catalog.md": "<Syntax />\n",
+      },
+      function* (cwd) {
+        // The same site, asked two ways: the command that describes an
+        // environment, and a document running in it. A run that derived its
+        // catalog from anything but its own captured inputs would disagree.
+        const described = yield* runCli(["syntax"], { cwd }).expect();
+        const observed = yield* runCli(["run", "catalog.md"], { cwd }).expect();
+        expect(observed.stdout.trim()).toBe(described.stdout.trim());
+        expect(observed.stdout).toContain("### `<Local>`");
+        expect(observed.stdout).toContain("the first description.");
+        // And the run really is describing the run profile it has, not a
+        // reduced one: `<Plan>` is declared to every ordinary run.
+        expect(observed.stdout).toContain("### `<Plan>`");
+
+        // A fresh occurrence sees a moved environment. Nothing is cached across
+        // executions, and the catalog is the working tree's rather than the
+        // build's.
+        yield* writeTextFile(
+          join(cwd, "components/Local.md"),
+          "---\ndescription: the second description.\n---\n\nlocal\n",
+        );
+        const again = yield* runCli(["run", "catalog.md"], { cwd }).expect();
+        expect(again.stdout).toContain("the second description.");
+        expect(again.stdout).not.toContain("the first description.");
+      },
+    );
   });
 
   it("SX9: reports an unusable include on stderr, exits 1, and prints no catalog", function* () {

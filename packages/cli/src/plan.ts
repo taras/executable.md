@@ -203,13 +203,6 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
       verbose: command.verbose,
       host,
       installElicitation: deps.installElicitation,
-      // Built when `<PlanInputs>` asks, which is what lets an authored phase
-      // announce the preparation before it happens. It is still sealed: the
-      // catalog the agent is shown is the one this command renders, and no prop
-      // on the thin adapter could supply another.
-      *catalog() {
-        return renderSyntaxMarkdown(yield* deps.catalog(command.include));
-      },
       validate,
     });
 
@@ -222,6 +215,13 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
       declaration,
       stream,
       progress: deps.progress,
+      // The vocabulary this authorship describes is the `run` profile's, not
+      // this execution's: a Plan is a program a later `xmd run` executes, so the
+      // catalog the Agent must be shown is the one that run will have. Stated at
+      // the execution boundary and captured before any installed code — no prop
+      // on the thin adapter, and nothing the Component projects, could supply
+      // another.
+      catalog: () => deps.catalog(command.include),
     });
   } catch (error) {
     console.error(describeError(error));

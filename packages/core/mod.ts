@@ -213,6 +213,13 @@ export type {
   SyntaxCatalog,
 } from "./src/inspect.ts";
 export { ComponentIncludeError } from "./src/components/candidates.ts";
+/**
+ * The catalog as Markdown, so `xmd syntax` and canonical `<Syntax />` print the
+ * same bytes for the same site rather than two renderings that agree by hand.
+ */
+export { renderSyntaxMarkdown } from "./src/syntax-markdown.ts";
+export { PROTECTED_COMPONENT_NAMES, ProtectedComponentError } from "./src/components/protected.ts";
+export { SYNTAX_COMPONENT } from "./src/components/Syntax.ts";
 // Document validation — one supplied document read as authored program
 // structure, with nothing in it executed.
 export {

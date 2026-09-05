@@ -322,6 +322,46 @@ describe("nested execution under the production run host", () => {
     expect(bare.stdout + bare.stderr).toContain("1 of 1 tests failed");
   });
 
+  /**
+   * A child is a root, so the vocabulary it observes is its own.
+   *
+   * `<Syntax />` describes the site it is written at, and a child's site is the
+   * child run profile with the child's includes — not the outer test's. The
+   * positive control is the same document run as the outer root: the name the
+   * child cannot see is one the outer include path really does supply, so the
+   * absence below is isolation rather than a component nobody has.
+   */
+  it("gives a nested run child its own catalog rather than the outer root's", function* () {
+    const project = yield* useProject({
+      "elsewhere/Greeting.md": doc("hello"),
+      "catalog.md": doc("<Syntax />"),
+      "README.md": doc(
+        '<Test name="nested catalog">',
+        '<Execution host="run" source={"<Syntax />\\n"} as="child">',
+        '<CollectOutput as="output" />',
+        "",
+        '<AssertStringIncludes actual={output} expected="### `<Syntax>`" />',
+        "<AssertNotMatch actual={output} expected={/### `<Greeting>`/} />",
+        "</Execution>",
+        "</Test>",
+      ),
+    });
+
+    // The child runs with no include of its own, so the outer command's
+    // `--include elsewhere` does not put `<Greeting>` in the child's catalog.
+    const nested = yield* runCli(["test", "README.md"], { cwd: project }).join();
+    expect(nested.code).toBe(0);
+
+    // The control: with that include configured, an ordinary root at the same
+    // site does observe the name, so the child's catalog above was narrower
+    // rather than empty.
+    const outer = yield* runCli(["run", "catalog.md", "--include", "elsewhere"], {
+      cwd: project,
+    }).join();
+    expect(outer.code).toBe(0);
+    expect(outer.stdout).toContain("### `<Greeting>`");
+  });
+
   it("refuses <Execution> outside a canonical <Test>", function* () {
     const project = yield* useProject({
       "child.md": doc("child"),
@@ -658,10 +698,6 @@ describe("deterministic dependencies declared for a nested run", () => {
             ? {}
             : { observeAuthorship: request.observeAuthorship }),
           installElicitation: request.installElicitation,
-          // deno-lint-ignore require-yield
-          *catalog(): Operation<string> {
-            return "";
-          },
         }),
       *observePlanAuthorship(observation): Operation<void> {
         observed.resolve(observation);

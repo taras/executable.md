@@ -1,5 +1,5 @@
 /**
- * `<Plan>` — how this host declares the component, and the six private
+ * `<Plan>` — how this host declares the component, and the five private
  * capabilities only its own bytes may write.
  *
  * The Component itself is `src/documents/Plan.md` rather than anything here:
@@ -27,15 +27,20 @@
  *
  * ## Why the capabilities are private
  *
- * `<Syntax>`, `<PlanInputs>`, `<PlanAuthorship>`, `<PlanProgress>`, `<CheckDraft>`
- * and `<AdmitPlan>` are operations of one invocation, not components anyone
- * composes with. Freezing the inputs, installing a constrained Agent frame, telling an
+ * `<PlanInputs>`, `<PlanAuthorship>`, `<PlanProgress>`, `<CheckDraft>` and
+ * `<AdmitPlan>` are the phases of one invocation, not components anyone composes
+ * with. Freezing the inputs, installing a constrained Agent frame, telling an
  * operator which phase is running, answering about a draft and admitting the
  * approved bytes are each meaningless outside the workflow that orders them —
  * and each carries authority the enclosing document does not have.
  * So they resolve only while canonical core is expanding these exact bytes:
  * not from the caller's root, not from the Prompt the caller projected, not from
  * a sibling `<Plan>`, and not from anything middleware can answer.
+ *
+ * `<Syntax />` is not among them. What a document may write here is a public
+ * question with a public answer, and canonical core owns both — so `Plan.md`
+ * writes the same component any other document writes, and the catalog the Agent
+ * is shown is the one an operator can print.
  */
 
 import { createHash } from "node:crypto";
@@ -206,8 +211,6 @@ export interface PlanComponentAssembly {
   observeAuthorship?(observation: PlanAuthorshipObservation): Operation<void>;
   /** Who answers the review question. */
   installElicitation(): Operation<void>;
-  /** The run profile's rendered vocabulary, as the first Agent turn receives it. */
-  catalog(): Operation<string>;
   /**
    * How this host decides whether one candidate is structurally a program.
    *
@@ -223,37 +226,30 @@ export interface PlanComponentAssembly {
 const INPUTS_RETURNS = {
   type: "object",
   properties: {
-    syntax: { type: "string" },
     session: { type: "string" },
     surface: { type: "string" },
     durable: { type: "boolean" },
     authoredSession: { type: "string" },
   },
-  required: ["syntax", "session", "surface", "durable"],
+  required: ["session", "surface", "durable"],
   additionalProperties: false,
 };
 
 /**
- * What the frozen inputs are given: the caller's optional session name, the
- * prompt this invocation is about, and the syntax `<Syntax>` already froze.
+ * What the frozen inputs are given: the caller's optional session name and the
+ * prompt this invocation is about.
  *
- * Only the prompt's digest is retained here. The syntax has its own durable
- * record, so each protocol can be read and reconciled independently.
+ * Only the prompt's digest is retained here. The vocabulary the Agent is shown
+ * is public `<Syntax />`'s, with a durable record of its own, so each protocol
+ * can be read and reconciled independently.
  */
 const INPUTS_PROPS = {
   type: "object",
   properties: {
     session: { type: "string", minLength: 1 },
     instruction: { type: "string" },
-    syntax: { type: "string" },
   },
-  required: ["instruction", "syntax"],
-  additionalProperties: false,
-};
-
-const NO_PROPS = {
-  type: "object",
-  properties: {},
+  required: ["instruction"],
   additionalProperties: false,
 };
 
@@ -354,7 +350,6 @@ export function* planComponentDeclaration(
     // formatting it as Markdown would publish bytes nobody approved.
     exact: true,
     privates: [
-      planSyntax(assembly),
       planInputs(assembly),
       planAuthorship(assembly),
       planProgress(assembly),
@@ -412,12 +407,6 @@ export function* planComponentDescription(): Operation<DeclaredMarkdownComponent
 function describedPrivates(): readonly IdentityComponent[] {
   const described: readonly Omit<IdentityComponent, "origin" | "factory">[] = [
     {
-      name: "Syntax",
-      props: NO_PROPS,
-      returns: { type: "string" },
-      forms: ["self-closing"],
-    },
-    {
       name: "PlanInputs",
       props: INPUTS_PROPS,
       returns: INPUTS_RETURNS,
@@ -443,53 +432,18 @@ function* uninvocable(): Operation<never> {
   );
 }
 
-/** Read the author-visible run vocabulary supplied by this Plan's host. */
-function planSyntax(assembly: PlanComponentAssembly): IdentityComponent {
-  return {
-    name: "Syntax",
-    origin: `${PLAN_ORIGIN}#Syntax`,
-    forms: ["self-closing"],
-    props: NO_PROPS,
-    returns: { type: "string" },
-    factory: (claim: IdentityClaimant) =>
-      function* Syntax(
-        _props: Record<string, Json>,
-        invocation: ComponentInvocation,
-      ): Operation<Json> {
-        const id = yield* claim(invocation);
-        const frozen = yield* durablePlanOperation<Json>(`plan:syntax:${id}`, function* () {
-          return { syntax: yield* assembly.catalog() };
-        });
-        const retained = readSyntax(frozen);
-        if (retained === undefined) {
-          throw new StaleInputError(UNREADABLE_SYNTAX);
-        }
-        return retained;
-      },
-  };
-}
-
-function readSyntax(value: Json): string | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return undefined;
-  }
-  const { syntax } = value;
-  if (Object.keys(value).length !== 1 || typeof syntax !== "string") {
-    return undefined;
-  }
-  return syntax;
-}
-
-const UNREADABLE_SYNTAX =
-  "the retained Plan syntax cannot be read as syntax, so no Plan source was produced.";
-
 /**
  * Freeze this invocation's authorship inputs, and retain them.
  *
- * The syntax is the retained observation `<Syntax>` supplied. The instruction
- * identity here makes a continuation answerable at all: comparing it refuses a
- * Plan asked under another prompt before a directory, a provider, a turn, a
- * review or an admission exists.
+ * The vocabulary the Agent is shown is not here. `<Syntax />` is a public
+ * component canonical core owns, it retains its own observation, and `Plan.md`
+ * binds it directly — so the catalog and the question are two records that can
+ * be read and reconciled independently rather than one that has to be read
+ * whole.
+ *
+ * The instruction identity here makes a continuation answerable at all:
+ * comparing it refuses a Plan asked under another prompt before a directory, a
+ * provider, a turn, a review or an admission exists.
  *
  * The session placement is derived here too, from the durable identity canonical
  * execution minted for this exact expansion — which is what makes two `<Plan>`
@@ -517,7 +471,6 @@ function planInputs(assembly: PlanComponentAssembly): IdentityComponent {
         const session = placementFor(assembly, id, authored);
 
         const instruction = sourceDigest(String(props.instruction));
-        const syntax = String(props.syntax);
 
         const frozen = yield* durablePlanOperation<Json>(`plan:inputs:${id}`, function* () {
           return { instruction };
@@ -533,7 +486,6 @@ function planInputs(assembly: PlanComponentAssembly): IdentityComponent {
         }
 
         return {
-          syntax,
           session,
           surface: assembly.surface,
           durable: durability(assembly, authored),

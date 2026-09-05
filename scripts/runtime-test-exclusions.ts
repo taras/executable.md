@@ -156,6 +156,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/365",
   },
   {
+    path: "packages/core/tests/syntax-loaded-copy.test.ts",
+    reason:
+      "builds the second copy of the protected-component module with `deno bundle`, which is Deno's; the witness comparison and the private body table it proves are runtime-neutral and are also covered by syntax-component.test.ts under all three",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "packages/core/tests/loaded-copy-files.test.ts",
     reason:
       "builds the second copy of the runtime's Files module with `deno bundle`, which is Deno's; the structural recognition it proves is runtime-neutral and is also covered by fatal-cause.test.ts under all three",

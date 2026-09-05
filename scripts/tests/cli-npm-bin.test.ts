@@ -221,7 +221,6 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     expect(plan.forms).toEqual(["paired"]);
     // And no private capability is syntax a document may write, in any build.
     for (const name of [
-      "Syntax",
       "PlanInputs",
       "PlanAuthorship",
       "PlanProgress",
@@ -230,6 +229,23 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     ]) {
       expect(entries.map((entry: { name?: string }) => entry?.name)).not.toContain(name);
     }
+
+    // `<Syntax />` is public in every build, and this one describes it exactly
+    // once, from the canonical origin, with the approved description. A package
+    // that lost the protected tier would either omit it or list it twice.
+    const syntax = entries.filter((entry: { name?: string }) => entry?.name === "Syntax");
+    expect(syntax).toHaveLength(1);
+    expect(syntax[0].origin).toEqual({
+      kind: "registered",
+      origin: "@executablemd/core",
+      reserved: true,
+    });
+    expect(syntax[0].forms).toEqual(["self-closing"]);
+    expect(syntax[0].returnMode).toBe("text");
+    expect(syntax[0].description).toBe(
+      "Output available components and control flow constructs. `<Syntax />` renders the " +
+        "current catalog.",
+    );
 
     // The command's public grammar travels with those bytes. `--run` is gone,
     // and this directory has no agent to reach and no `DEFAULT_AGENT_NAME` that

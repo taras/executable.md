@@ -45,7 +45,7 @@ import {
   useTerminalOutput,
 } from "@executablemd/core";
 import type { AgentProviderOptions, Json } from "@executablemd/core";
-import type { DeclaredMarkdownComponent } from "@executablemd/core/host";
+import type { CatalogContribution, DeclaredMarkdownComponent } from "@executablemd/core/host";
 import { executeInstalled, installInvocationAgentProvider } from "@executablemd/core/host";
 import { createAcpxProvider } from "@executablemd/acp";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
@@ -163,11 +163,21 @@ export interface AuthorshipProfile {
    * The `<Plan>` declaration this command runs under.
    *
    * Built by the command, from the packaged Component's bytes, before the adapter
-   * root is imported. It carries the sealed surface, the sealed verbosity, the
-   * catalog this invocation will build and the Agent context it settled — none of
-   * which is a prop the adapter could supply or a document could reach.
+   * root is imported. It carries the sealed surface, the sealed verbosity and the
+   * Agent context it settled — none of which is a prop the adapter could supply
+   * or a document could reach.
    */
   declaration: DeclaredMarkdownComponent;
+  /**
+   * The catalog this authorship describes.
+   *
+   * The `run` profile's, because a Plan is a program a later `xmd run` executes:
+   * deriving one from this execution — which searches no repository and refuses
+   * almost every capability — would describe a vocabulary the approved program
+   * would not have. Captured with the rest of the installation, before any
+   * installed code, middleware or document code runs.
+   */
+  catalog: CatalogContribution;
 }
 
 /** What building the constrained provider needs, and nothing more. */
@@ -456,6 +466,13 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
           {
             components: agentIdentityComponents(),
             declarations: [profile.declaration],
+            // What a Plan may write is the `run` profile's vocabulary, not this
+            // authorship execution's — the adapter searches no repository, the
+            // Component installs a ceiling that refuses almost everything, and a
+            // catalog derived from *that* would describe a program nobody can
+            // run. Captured before any installation runs, so no prop, binding,
+            // middleware answer or projected content reaches it.
+            catalog: profile.catalog,
           },
         ],
       );

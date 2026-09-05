@@ -3,6 +3,7 @@ import { readTextFile } from "@executablemd/runtime";
 
 import type {
   ComponentOrigin,
+  ComponentRegistry,
   ComponentSelection,
   InvocationForm,
   PropsSchema,
@@ -21,6 +22,8 @@ import { declaredRegistry } from "./components/declared-registry.ts";
 import { admitDeclaredMarkdown, declaredCatalog } from "./components/declared-markdown.ts";
 import type { DeclaredMarkdownComponent } from "./components/declared-markdown.ts";
 import { repositoryCandidateNames } from "./components/candidates.ts";
+import { PROTECTED_COMPONENT_NAMES } from "./components/protected.ts";
+import type { WorkflowImportAuthority } from "./components/bundle.ts";
 import { documentationOf } from "./components/documentation.ts";
 import type { ComponentDocumentation } from "./components/documentation.ts";
 import { STRUCTURAL_DECLARATIONS } from "./structural.ts";
@@ -205,6 +208,16 @@ export function* inspectComponent(options: InspectComponentOptions): Operation<C
         construct: selected.construct,
         origin: { kind: "structural", construct: selected.construct },
       };
+    case "protected":
+      return {
+        kind: "registered",
+        origin: selected.origin,
+        props: selected.component.props,
+        ...(selected.component.returns === undefined
+          ? {}
+          : { returns: selected.component.returns }),
+        ...describedContract(yield* completeEntry(name, selected)),
+      };
     case "registered":
       return {
         kind: "registered",
@@ -365,6 +378,28 @@ export interface InspectSyntaxOptions {
   /** Where to look, matching the search path execution uses. */
   readonly includes?: readonly string[];
   /**
+   * The registrations to describe, when the caller holds them.
+   *
+   * Omitted reads whatever the calling scope installed, which is what `xmd
+   * syntax` wants — it assembles the profile it is describing and then asks. An
+   * execution passes the registry it *captured* instead: what a document may
+   * write is decided by the registrations the execution started with, and a
+   * nested `registerComponents()` somewhere inside it does not change the
+   * environment the run was assembled as.
+   */
+  readonly registry?: ComponentRegistry;
+  /**
+   * The component bundle the execution being described is closed over.
+   *
+   * Omitted for an inspection: `xmd syntax` installs no bundle, so it describes
+   * a document rather than a run. An execution that has one passes it, because
+   * leaving it out would describe a workflow root as having none of the
+   * components its own pinned tree supplies. Nothing here imports or executes a
+   * bundle member: the pinned source is already in hand, and describing it
+   * parses the same bytes execution would.
+   */
+  readonly workflow?: WorkflowImportAuthority;
+  /**
    * Identity components the host would declare to an execution, with the same
    * meaning `ExecuteOptions.components` gives them — admissibility included.
    *
@@ -402,6 +437,7 @@ export interface InspectSyntaxOptions {
  */
 export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxCatalog> {
   const includes = options.includes ?? DEFAULT_INCLUDES;
+  const bundled = options.workflow;
   const declared = options.components ?? [];
   // The whole declaration set is admitted before anything is built from it, on
   // exactly the terms ordinary execution admits it on. A set an execution would
@@ -411,7 +447,10 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxC
   for (const component of declared) {
     yield* admitDeclaration(component);
   }
-  const registry = mergeRegistry(yield* Component.operations.registry, declaredRegistry(declared));
+  const registry = mergeRegistry(
+    options.registry ?? (yield* Component.operations.registry),
+    declaredRegistry(declared),
+  );
   // Admitted on exactly the terms an execution installs declarations on, and
   // for the same reason the identity components above are: a set a run would
   // refuse describes an environment no document could ever run in.
@@ -426,6 +465,14 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxC
   for (const declaration of STRUCTURAL_DECLARATIONS) {
     names.add(declaration.name);
   }
+  // Core's own claim, so it is enumerated wherever a catalog is built rather
+  // than only where a host remembered to mention it.
+  for (const name of PROTECTED_COMPONENT_NAMES) {
+    names.add(name);
+  }
+  for (const name of bundled?.names() ?? []) {
+    names.add(name);
+  }
   for (const registered of effectiveRegistry(registry).keys()) {
     names.add(registered);
   }
@@ -438,6 +485,7 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxC
     const selected = yield* selectComponent(name, {
       includes,
       registry,
+      ...(bundled === undefined ? {} : { workflow: bundled }),
       ...(declarations === undefined ? {} : { declared: declarations }),
     });
     if (selected.kind === "structural") {
@@ -515,6 +563,20 @@ function* componentEntry(
   name: string,
   selected: ComponentSelection,
 ): Operation<CompleteComponentSyntaxEntry | OriginOnlyComponentSyntaxEntry | undefined> {
+  if (selected.kind === "protected") {
+    const { component, origin } = selected;
+    // Described from the declaration alone. The factory is never called: it
+    // takes an execution's claimant, and describing an environment mints no
+    // execution and no claimant to give it.
+    return complete(name, origin, "registered", {
+      forms: component.forms ?? BOTH_FORMS,
+      props: component.props,
+      captures: component.captures ?? [],
+      returns: component.returns,
+      documentation: documentationOf(component),
+    });
+  }
+
   if (selected.kind === "registered") {
     const { definition, origin } = selected;
     if (origin.kind === "structural") {
@@ -540,10 +602,24 @@ function* componentEntry(
     });
   }
 
+  if (selected.kind === "workflow") {
+    // The pinned bytes, already in hand: the bundle was read from the
+    // definition's own commit before this execution existed, so describing one
+    // reads no file, imports no module and runs nothing. It is the run author's
+    // own Markdown, reported at the canonical path it holds inside that commit.
+    const definition = yield* parseMarkdownDefinition(name, selected.path, selected.content);
+    return complete(name, { kind: "repository", path: selected.path }, "markdown", {
+      forms: BOTH_FORMS,
+      props: definition.props,
+      captures: [],
+      returns: definition.returns,
+      documentation: documentationOf(definition.meta),
+    });
+  }
+
   if (selected.kind !== "repository") {
-    // A bundled or unresolved name describes no environment a document writes
-    // in: inspection installs no bundle, and a name nothing supplies is exactly
-    // the absence the catalog reports by leaving it out.
+    // An unresolved name is exactly the absence the catalog reports by leaving
+    // it out.
     return undefined;
   }
 

@@ -9,6 +9,7 @@ import type { Operation, Result } from "effection";
 import type { Json as DurableJson } from "@executablemd/durable-streams";
 import type { TestHarnessComponentDefinition } from "./test-harness.ts";
 import type { ComponentInvocation, InvocationForm } from "./invocation-identity.ts";
+import type { ProtectedComponent } from "./components/protected.ts";
 
 export type Json = DurableJson;
 
@@ -343,6 +344,17 @@ export type ComponentOrigin =
  */
 export type ComponentSelection =
   | { kind: "structural"; construct: string }
+  /**
+   * A component canonical core claims the name of, ahead of every host or author
+   * tier. The declaration is core's own; the implementation belongs to whichever
+   * execution is running, so selection reports the contract and the execution
+   * supplies what it built (`components/protected.ts`).
+   */
+  | {
+      kind: "protected";
+      component: ProtectedComponent;
+      origin: Extract<ComponentOrigin, { kind: "registered" }>;
+    }
   | { kind: "registered"; definition: FunctionComponentDefinition; origin: ComponentOrigin }
   | { kind: "repository"; path: string }
   /**

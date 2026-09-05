@@ -139,6 +139,9 @@ import {
 import type { IdentityComponent } from "./invocation-identity.ts";
 import { ExecutionImports } from "./components/import-authority.ts";
 import type { ExpansionAuthority, ImportTier } from "./components/import-authority.ts";
+import { PROTECTED_COMPONENTS, ProtectedImports } from "./components/protected.ts";
+import { rootCatalogObservation } from "./syntax-observation.ts";
+import type { CatalogContribution } from "./syntax-observation.ts";
 import type { WorkflowComponentBundle, WorkflowImportAuthority } from "./components/bundle.ts";
 import type { CodeBlockContext, CodeBlockResult, EvalEnv } from "./types.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
@@ -247,7 +250,16 @@ type DurableSelection =
    * the same way the live run did — by being inside the same declaration's body
    * when it asks.
    */
-  | { kind: "declared-private"; origin: string };
+  | { kind: "declared-private"; origin: string }
+  /**
+   * A component canonical core protects.
+   *
+   * Nothing but the kind is retained. The name is already the record's identity,
+   * and what the name resolves to is core's own table rather than anything a
+   * host, a registry or a checkout supplies — so a replay reconstructs it the
+   * way the live run did, by asking the copy of core that is running.
+   */
+  | { kind: "protected" };
 
 /**
  * What a recorded import decided, read as a closed protocol.
@@ -280,6 +292,13 @@ function readDurableSelection(value: unknown): DurableSelection | undefined {
       return undefined;
     }
     return { kind: "declared-private", origin };
+  }
+
+  if (kind === "protected") {
+    if (members !== 1) {
+      return undefined;
+    }
+    return { kind: "protected" };
   }
 
   if (kind === "declared-markdown") {
@@ -402,6 +421,7 @@ function* durableImportComponent(
   position: Readonly<SourcePosition> | undefined,
   bundle: WorkflowImportAuthority | undefined,
   declared: DeclaredImports | undefined,
+  guarded: ReadonlyMap<string, FunctionComponentDefinition>,
 ): Workflow<ComponentDefinition | FunctionComponentDefinition> {
   // Taken before the durable operation and outside it, because the offer is
   // canonical core's own and a replay has to reach this the same way the live
@@ -455,6 +475,12 @@ function* durableImportComponent(
       });
 
       switch (selected.kind) {
+        case "protected":
+          // Nothing about the answer is recorded: what this name means is
+          // core's own, so a replay asks the copy of core that is running
+          // rather than restoring an origin a registry would have to still
+          // hold.
+          return { kind: "protected" };
         case "repository":
           return {
             kind: "repository",
@@ -517,6 +543,21 @@ function* durableImportComponent(
       throw new Error(UNREADABLE_ROOT_RECORD);
     }
     throw documentTargetError(failure);
+  }
+
+  if (selection.kind === "protected") {
+    // The implementation this execution built from the claimant it minted for
+    // this component. Not a registry lookup and not a file: a protected name is
+    // canonical core's answer, and an execution that built none for it has no
+    // protected implementation to run.
+    const own = guarded.get(name);
+    if (own === undefined) {
+      throw new Error(
+        `Component ${name} was recorded as a component canonical core owns, and this execution ` +
+          "built no implementation for it.",
+      );
+    }
+    return own;
   }
 
   if (selection.kind === "registered") {
@@ -2110,6 +2151,7 @@ function* executeDocument(
   bundles: readonly WorkflowComponentBundle[] = [],
   identityComponents: readonly IdentityComponent[] = [],
   declarations: readonly DeclaredMarkdownComponent[] = [],
+  catalogs: readonly CatalogContribution[] = [],
 ): Operation<DocumentExecution> {
   const {
     stream,
@@ -2226,6 +2268,10 @@ function* executeDocument(
       const identity = installIdentities(
         identityComponents,
         admittedDeclarations.flatMap((declaration) => [...declaration.privates]),
+        // Core's own, minted the same way and registered nowhere. Every
+        // execution has them, whatever its host declared, which is what makes a
+        // protected name mean one thing everywhere.
+        PROTECTED_COMPONENTS,
       );
       yield* registerComponents(identity.registrations);
       identity.activate();
@@ -2263,16 +2309,36 @@ function* executeDocument(
       if (declaredImports !== undefined) {
         tiers.push(declaredImports);
       }
-      const imports = tiers.length === 0 ? undefined : new ExecutionImports(tiers);
+      // Last, because a tier that claims a name answers for it and the earlier
+      // ones claim names of their own; a bundled execution still words every
+      // other refusal exactly as it always did. Present in every execution,
+      // because a protected name is closed in every execution.
+      tiers.push(new ProtectedImports());
+      const imports = new ExecutionImports(tiers);
       const authority: ExpansionAuthority = {
-        ...(imports === undefined ? {} : { imports }),
+        imports,
         ...(declaredImports === undefined ? {} : { declared: declaredImports }),
         identities: identity.identities,
+        protectedBodies: identity.protectedBodies,
         forms,
         // Created here, held here, and reclaimed with this execution. Nothing a
         // document, a component, middleware or a separately loaded copy can
         // name reaches this object.
         exact: createExactSource(),
+        // Built from what this execution captured before any installation,
+        // middleware or document code ran, and asked only when an occurrence
+        // observes: a run whose document never writes `<Syntax />` enumerates
+        // nothing.
+        catalog: rootCatalogObservation(
+          {
+            includes,
+            registry: startingRegistry,
+            components: identityComponents,
+            declarations,
+            ...(bundle === undefined ? {} : { workflow: bundle }),
+          },
+          catalogs[0],
+        ),
       };
 
       // Install the document's runtime Component providers before durableRun
@@ -2292,6 +2358,7 @@ function* executeDocument(
               position,
               bundle,
               declaredImports,
+              identity.protected,
             );
             // Canonical selection, recorded where it is made. This is the only
             // thing that puts an invocation in one of this execution's identity
@@ -2546,6 +2613,21 @@ export interface ExecutionInstallation {
    * component that can name a durable operation after its invocation.
    */
   readonly components?: readonly IdentityComponent[];
+  /**
+   * The catalog this host's profile describes, when its profile is not the one
+   * the execution itself would derive.
+   *
+   * Captured by value alongside the admissions, before any installation runs,
+   * for the reason the rest are: what a document observes is settled before
+   * anything can observe or replace it. Omitted is the ordinary case — canonical
+   * core derives the catalog from the selection inputs this execution captured,
+   * which is what makes an ordinary run's observation the run's own.
+   *
+   * `xmd plan` states one, because the Plan being written is a program a later
+   * `xmd run` executes: the vocabulary the agent must be shown is that profile's
+   * rather than the authorship execution's. One execution accepts one.
+   */
+  readonly catalog?: CatalogContribution;
   install?(): Operation<void>;
 }
 
@@ -2937,6 +3019,23 @@ function* invoke(
     ),
   );
 
+  // Read once and frozen with the rest, and before any installation runs: which
+  // profile a document observes is settled before anything can observe it. Two
+  // are refused rather than ordered — a catalog chosen by installation order
+  // would make what an agent is told to write depend on assembly order.
+  const catalogs = Object.freeze(
+    installations.flatMap((installation) => {
+      const catalog = installation.catalog;
+      return catalog === undefined ? [] : [catalog];
+    }),
+  );
+  if (catalogs.length > 1) {
+    throw new Error(
+      "two installations stated the catalog this execution describes. One execution describes " +
+        "one vocabulary, so which profile a document observes is never a question of order.",
+    );
+  }
+
   for (const installation of installations) {
     if (installation.install) {
       yield* installation.install();
@@ -2975,6 +3074,7 @@ function* invoke(
     bundles,
     identityComponents,
     declarations,
+    catalogs,
   );
 }
 

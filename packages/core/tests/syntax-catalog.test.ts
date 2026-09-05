@@ -30,6 +30,7 @@ import {
   agentIdentityComponents,
   CORE_COMPONENT_NAMES,
   inspectSyntax,
+  PROTECTED_COMPONENT_NAMES,
   registerComponents,
   RESERVED_STRUCTURAL,
   STRUCTURAL_DECLARATIONS,
@@ -561,7 +562,12 @@ describe("Tier SY: selection decides", () => {
   it("SY10: falls back to a registration when no repository file supplies a name", function* () {
     const catalog = yield* catalogFor({ components: { kind: "directory" } }, ["components"]);
 
-    expect(names(builtIn(catalog)).sort()).toEqual([...CORE_COMPONENT_NAMES].sort());
+    // Core's overridable defaults, plus the names canonical core protects: both
+    // are built-in to a reader, and the set is pinned exactly so a name arriving
+    // in either list has to be written down here.
+    expect(names(builtIn(catalog)).sort()).toEqual(
+      [...CORE_COMPONENT_NAMES, ...PROTECTED_COMPONENT_NAMES].sort(),
+    );
     expect(userProvided(catalog)).toEqual([]);
   });
 

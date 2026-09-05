@@ -1026,11 +1026,6 @@ function* runDocument(
         ? {}
         : { observeAuthorship: request.observeAuthorship }),
       installElicitation: request.installElicitation,
-      // Rendered when a `<Plan>` first asks, not before: an ordinary run that
-      // writes none never builds a catalog it has no reader for.
-      *catalog() {
-        return renderSyntaxMarkdown(yield* syntaxCatalog(include));
-      },
     });
 
   const plan = yield* planDeclaration({

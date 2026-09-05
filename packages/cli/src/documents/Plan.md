@@ -72,7 +72,7 @@ Getting the available XMD components and constructs and setting up the planning 
 </PlanProgress>
 
 <Syntax as="syntax" />
-<PlanInputs session={props.session} instruction={prompt} syntax={syntax} as="inputs" />
+<PlanInputs session={props.session} instruction={prompt} as="inputs" />
 
 ## Say what this surface calls things
 
@@ -160,7 +160,7 @@ out.
 
 Everything you may use is described below. Use nothing that is not here.
 
-{inputs.syntax}
+{syntax}
 
 Reply with the Plan source and nothing else. No enclosing code fence, no
 explanation before or after it.

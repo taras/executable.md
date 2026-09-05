@@ -2657,22 +2657,80 @@ A component name is resolved in tiers, and the first tier that answers wins:
    repository file named after one never stands in for it. A structural name
    written where its construct gives it no meaning is a printed error, not a
    missing component.
-2. **a host claiming the name** — a reserved registration protecting a language
+2. **a component canonical core protects** — the engine's own claim rather than
+   a host's, so the name means the same thing in every execution. `<Syntax />`
+   (§5.3.1) is the one member. The table is the resolver's own and is consulted
+   unconditionally, so no option a caller passes puts anything in front of it.
+3. **a host claiming the name** — a reserved registration protecting a language
    or security invariant, or a *declared Markdown component*: exact first-party
    Markdown a trusted host handed this execution. Both claim the name rather
    than offering a default for it, so two claims on one name are refused where
    they are installed and this tier never chooses between them.
-3. **the workflow component bundle** this execution is closed over, when a
+4. **the workflow component bundle** this execution is closed over, when a
    trusted host installed one.
-4. **a repository-local file**, by the candidate order below.
-5. **a registered default**, including the components core supplies.
-6. **nothing**, which is the unresolved printed error.
+5. **a repository-local file**, by the candidate order below.
+6. **a registered default**, including the components core supplies.
+7. **nothing**, which is the unresolved printed error.
 
 So a repository component overrides any ordinary package default, core's
 included, and a reserved registration overrides the repository. Only genuine
 absence falls through to a default: a candidate that exists but cannot be read,
 imported, parsed, or compiled fails where it is loaded, so a broken local
 component is never quietly replaced.
+
+#### 5.3.1 `<Syntax />`, the protected catalog component
+
+`<Syntax />` outputs the components and control-flow constructs a document may
+write at the site it is written at, as the Markdown `xmd syntax` prints. One
+catalog construction and one Markdown renderer serve both, so an operator
+printing a profile and an agent being told what to write are never given
+different accounts of one environment.
+
+```mdx
+<Syntax />
+```
+
+renders the catalog where it is written. It is a **text component**: the ordinary
+engine-owned `as` captures the same text and emits nothing.
+
+```mdx
+<Syntax as="syntax" />
+```
+
+It is **self-closing only** and declares no props. A paired spelling and any
+authored prop are refused before a catalog is observed.
+
+**Canonical core owns the name.** A repository `Syntax.md`, `Syntax.ts` or
+directory candidate never wins selection; an ordinary or reserved registration
+under the name is refused atomically at registration; a workflow bundle member
+and a host's declared Markdown under the name are each refused at admission,
+before the root import; and `Component.importComponent` middleware may observe
+the import, delegate it and refuse it by throwing, but cannot answer it, replace
+what came back, mutate it, or hand back a definition kept from another import or
+built by another loaded copy.
+
+**The catalog is the execution's own.** Canonical core builds it at the root from
+the selection inputs that execution captured before any installation, middleware
+or document code ran — its includes, the registry it started with, the identity
+components and exact Markdown its host declared, and the component bundle it is
+closed over — and carries it lexically on canonical core's own expansion
+authority. A trusted host may state the catalog its profile describes instead,
+captured on the same terms; one execution accepts one, and two are refused rather
+than ordered. Nothing is built until an occurrence asks.
+
+Seeing a component in a catalog grants nothing. It neither registers, resolves
+nor authorizes that component: what a name means is still this section's
+decision, and what may run is still the execution's.
+
+**Each occurrence observes once.** It claims the durable identity the execution
+minted for it, performs one `syntax_catalog` durable observation, and retains
+exactly `{ catalog: string }`. On continuation that record is parsed as a closed
+protocol and returned without consulting the filesystem, the registry, the
+bundle, the host or the lexical observation again; a missing, additional or
+mistyped member is stale input and refuses before output or binding. Two authored
+occurrences are two identities and two observations, repeated reads of one
+binding observe nothing again, and a failed or cancelled observation completes
+its teardown and commits no catalog.
 
 #### The run profile's repository declarations
 
@@ -2842,14 +2900,15 @@ it emits that source where the component is written, and `as` is ordinary text
 capture: the same bytes are bound and nothing is emitted. Neither form
 evaluates the source, and neither announces a phase: the progress `xmd plan`
 writes is a private side effect of the command surface, and an ordinary `<Plan>`
-expands no progress body at all. Its six private capabilities — `<Syntax>`,
-`<PlanInputs>`, `<PlanAuthorship>`, `<PlanProgress>`, `<CheckDraft>` and
+expands no progress body at all. Its five private
+capabilities — `<PlanInputs>`, `<PlanAuthorship>`, `<PlanProgress>`,
+`<CheckDraft>` and
 `<AdmitPlan>` — are the closure those exact bytes carry, and are syntax no
-document may write. `<Syntax>` observes and durably freezes the host-supplied run
-vocabulary before `<PlanInputs>` records the instruction identity and session
-facts. Their retained records are separate closed protocols, exactly
-`{ syntax }` and `{ instruction }`; malformed members refuse before authorship,
-and continuation restores the catalog already shown rather than rebuilding it.
+document may write. The vocabulary the Agent is shown is not among them: the
+packaged bytes write the public `<Syntax />` (§5.3.1), whose own
+`syntax_catalog` observation retains exactly `{ catalog }`, so a continuation
+restores the catalog the run actually showed rather than rebuilding it, and
+`<PlanInputs>` retains exactly `{ instruction }` beside it.
 [The plan command](./plan-command-spec.md) is the contract.
 
 **Which Agent a Plan is written with is the host's to say, not the Component's.**
@@ -10817,7 +10876,7 @@ rather than restating.
 | PO6/PO7 | Channels and grammar | A non-terminal stderr receives normalized Markdown and a stated terminal receives it rendered, while stdout and `--output` stay byte-identical; `--verbose` and `--journal` work on either side of the request, help carries them and the journal warning, and the short aliases, every removed spelling and a retained option that reaches this grammar written where the journal path goes all refuse before any work, while `--help` keeps its ordinary precedence |
 | PO8/PO9/PO16 | The journal file | No `--journal` writes no file; one creates the path before the catalog and the first turn, parses as the existing JSONL in commit order, ends terminally and holds no program execution; an existing path and an uncreatable one each report their exact refusal and reach nothing; and an ordinary failure — where no append failed — leaves a wholly parseable file with no partial trailing record |
 | PO10–PO12 | The secret and persistence boundaries | A secret in a draft or in a failed check's findings reaches neither the progress nor the file while the earlier prefix stays readable, and the same values without it are shown and recorded; a refused entry reports the exact journal-write diagnostic and preserves what committed |
-| PO13–PO15 | Failure and ordering | A progress destination that fails cancels the live turn, waits for every owned teardown and delivers nothing; every existing ending keeps its order and no phase claims delivery; the packaged adapter says nothing of its own and the catalog is built once, from private `<Syntax>`, while continuation restores that snapshot without rebuilding it |
+| PO13–PO15 | Failure and ordering | A progress destination that fails cancels the live turn, waits for every owned teardown and delivers nothing; every existing ending keeps its order and no phase claims delivery; the packaged adapter says nothing of its own and the catalog is observed once, through public `<Syntax />`, while continuation restores that observation without rebuilding it |
 
 ### Tier UG — The `xmd upgrade` command
 
