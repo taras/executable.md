@@ -48,6 +48,7 @@ import { processReachable, TerminalProcesses } from "@executablemd/terminal/proc
 import type { SignalDelivery } from "@executablemd/terminal/processes";
 import { installDenoTerminalProcesses } from "@executablemd/terminal/posix";
 import { useTmuxGrid } from "../src/tmux-grid.ts";
+import { tmuxAt } from "../src/tmux.ts";
 import type { ControlEvent, TmuxGrid } from "../src/tmux-grid.ts";
 import { createFakeTmux } from "./fixtures/fake-tmux.ts";
 import type { FakeTmux } from "./fixtures/fake-tmux.ts";
@@ -847,6 +848,8 @@ const CLIENT_MARKER = "clientmarker7f3a";
 const TITLE_MARKER = "titlemarker7f3a";
 const ENV_MARKER = "envmarker7f3a";
 const STDERR_MARKER = "stderrmarker7f3a";
+const TMUX_STDOUT_MARKER = "tmuxstdoutmarker7f3a";
+const TMUX_STDERR_MARKER = "tmuxstderrmarker7f3a";
 
 describe("Tier TG — the tmux composite", () => {
   /** A host whose processes are all gone, so teardown proves itself. */
@@ -875,6 +878,68 @@ describe("Tier TG — the tmux composite", () => {
   }
 
   /** A composite over a fake server, with the pane workers stubbed out. */
+  /**
+   * A `tmux` on `PATH` that answers on both streams.
+   *
+   * `list-panes` succeeds and writes to stdout; anything else fails and writes
+   * to stderr, which is the shape `run()` and `tryRun()` branch on. Being a
+   * program rather than an injected seam is the point: the forwarding under
+   * test belongs to the process boundary, so the row needs a real child.
+   */
+  function useFakeTmuxProgram(): Operation<string> {
+    return resource<string>(function* (provide) {
+      const at = path.join(tmpdir(), `xmd-fake-tmux-${randomUUID()}`);
+      yield* ensureDir(at);
+      yield* ensure(function* () {
+        yield* rm(at, { recursive: true, force: true });
+      });
+      yield* writeTextFile(
+        path.join(at, "tmux"),
+        [
+          "#!/bin/sh",
+          'case "$*" in',
+          `  *list-panes*) echo "${TMUX_STDOUT_MARKER}"; exit 0;;`,
+          `  *) echo "${TMUX_STDERR_MARKER}" >&2; exit 1;;`,
+          "esac",
+          "",
+        ].join("\n"),
+      );
+      yield* until(chmod(path.join(at, "tmux"), 0o755));
+      yield* provide(at);
+    });
+  }
+
+  /**
+   * Watch what this process actually writes to its own terminal.
+   *
+   * The boundary being defended is the host's streams, so that is what is
+   * observed rather than a provider's intentions: the real writes are replaced
+   * for the length of the row, recorded, still written so a failing row stays
+   * readable, and restored on the way out.
+   */
+  function useHostStreams(): Operation<{ written: string[]; complained: string[] }> {
+    return resource<{ written: string[]; complained: string[] }>(function* (provide) {
+      const written: string[] = [];
+      const complained: string[] = [];
+      const realOut = process.stdout.write.bind(process.stdout);
+      const realErr = process.stderr.write.bind(process.stderr);
+      const record =
+        (into: string[], real: typeof realOut, stream: NodeJS.WriteStream) =>
+        (chunk: string | Uint8Array, ...rest: unknown[]): boolean => {
+          into.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
+          return Reflect.apply(real, stream, [chunk, ...rest]);
+        };
+      process.stdout.write = record(written, realOut, process.stdout);
+      process.stderr.write = record(complained, realErr, process.stderr);
+      try {
+        yield* provide({ written, complained });
+      } finally {
+        process.stdout.write = realOut;
+        process.stderr.write = realErr;
+      }
+    });
+  }
+
   function useComposite(options: {
     panes: number;
     columns: number;
@@ -1011,26 +1076,14 @@ describe("Tier TG — the tmux composite", () => {
   });
 
   it("TG14: the control protocol is consumed, never shown to the reader", function* () {
-    // `@effectionx/process` forwards a child's stdout to this process by
-    // default, and consuming `client.stdout` does not turn that off — the two
-    // are independent. So the hidden control client's own records
+    // `@effectionx/process` writes every child's stdout and stderr to this
+    // process by default, and consuming `client.stdout` does not turn that off
+    // — the two are independent. So the hidden control client's own records
     // (`%session-changed`, `%window-renamed`, `%window-pane-changed`, and every
     // other `%` line) were reaching the reader's terminal and any pane prompt
     // drawn over it. Nothing about the grid looked wrong; the terminal just had
     // protocol on it.
-    //
-    // The boundary is this process's stdout, so that is what is watched: the
-    // real write is replaced for the length of the row and restored after it.
-    const written: string[] = [];
-    const realWrite = process.stdout.write.bind(process.stdout);
-    yield* ensure(() => {
-      process.stdout.write = realWrite;
-    });
-    process.stdout.write = (chunk: string | Uint8Array, ...rest: unknown[]): boolean => {
-      written.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
-      // Still written, so a failing row is still readable.
-      return Reflect.apply(realWrite, process.stdout, [chunk, ...rest]);
-    };
+    const { written } = yield* useHostStreams();
 
     const { grid, tmux } = yield* useComposite({ panes: 1, columns: 1 });
     // Every record the composite classifies, and one it does not, so the claim
@@ -1056,29 +1109,144 @@ describe("Tier TG — the tmux composite", () => {
     expect(shown.includes("%client-detached")).toBe(false);
   });
 
-  it("TG15: a control client that complains is still heard", function* () {
-    // The other half of TG14, and the reason the repair suppresses one stream
-    // rather than both: stdout is the protocol and stderr is the client saying
-    // something went wrong. Silencing the protocol must not silence the
-    // complaint, or a grid that failed would fail quietly.
-    const complained: string[] = [];
-    const realWrite = process.stderr.write.bind(process.stderr);
-    yield* ensure(() => {
-      process.stderr.write = realWrite;
-    });
-    process.stderr.write = (chunk: string | Uint8Array, ...rest: unknown[]): boolean => {
-      complained.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
-      return Reflect.apply(realWrite, process.stderr, [chunk, ...rest]);
-    };
+  it("TG15: a control client that complains says nothing to the reader", function* () {
+    // The other half of TG14. tmux's own stderr names sockets, sessions and
+    // panes, so it is this invocation's private topology and never reaches the
+    // reader — a failing grid is heard through the provider's normalized
+    // refusal, not through the multiplexer's voice.
+    const { written, complained } = yield* useHostStreams();
 
     const { grid, tmux } = yield* useComposite({ panes: 1, columns: 1 });
-    yield* tmux.say("!stderr tmux: server exited unexpectedly");
+    yield* tmux.say("!stderr tmux: no server running on /private/tmp/xmd-grid-abc/s");
     // Ordered behind a record the composite classifies, so the row waits on the
     // client having read that far rather than on a duration.
     yield* tmux.say("%client-detached /dev/ttys999");
     yield* untilEvent(grid, "client-detached");
 
-    expect(complained.join("")).toContain("tmux: server exited unexpectedly");
+    const shown = written.join("") + complained.join("");
+    expect(shown.includes("no server running")).toBe(false);
+    // And the socket path it named is private: nothing on either stream.
+    expect(shown.includes("xmd-grid-abc")).toBe(false);
+  });
+
+  it("TG16: the very first control record does not reach the reader", function* () {
+    // The record tmux sends immediately on attach, which is the one with the
+    // least protection: it is waiting before the composite has read anything.
+    //
+    // What this row proves is that it is suppressed, not *where* the
+    // suppression was installed. That distinction was measured rather than
+    // assumed: with the handler installed on the handle after `exec()` returns
+    // this still passes, because the parent installs it synchronously before
+    // the child is ever scheduled — even with the shell client below, which
+    // writes within a millisecond instead of the ~100ms this suite's Deno
+    // fixture spends starting. So the pre-spawn placement in `quietly()` rests
+    // on the mechanism, not on this row; what this row discriminates is
+    // suppression being absent, which it catches.
+    const script = yield* useScript();
+    yield* writeTextFile(script, "%session-changed $0 xmd\n");
+    const { written } = yield* useHostStreams();
+
+    // A shell rather than this suite's usual client fixture: it writes its
+    // record within a millisecond of `exec` instead of after a ~100ms Deno
+    // start, which is the narrowest window this suite can put a record in.
+    const tmux = createFakeTmux({
+      script,
+      clientCommand: (mode) =>
+        mode === "control"
+          ? ["/bin/sh", "-c", "echo '%session-changed $0 xmd'; sleep 30"]
+          : ["/bin/sh", "-c", "sleep 30"],
+    });
+    yield* useDeadObserver();
+    const grid = yield* useTmuxGrid(tmux, {
+      session: SESSION_MARKER,
+      columns: 1,
+      panes: 1,
+      width: 80,
+      height: 24,
+      titles: ["Only"],
+      workerCommand: () => ["true"],
+      cwd: path.resolve("."),
+      env: { PATH: "/usr/bin:/bin" },
+    });
+    yield* untilEvent(grid, "other");
+
+    // Classified — so it really did arrive and really was read.
+    expect(grid.events.some((event) => event.kind !== "closed")).toBe(true);
+    expect(written.join("").includes("%session-changed")).toBe(false);
+  });
+
+  it("TG17: internal tmux commands show the reader neither output nor error", function* () {
+    // Every `tmuxAt()` command is internal. A successful one writes its answer
+    // to stdout, which the provider parses; a failing one writes tmux's own
+    // complaint to stderr, which the provider turns into `undefined` or into a
+    // step-named refusal. Neither is the reader's business, and the private
+    // socket path a real complaint carries is exactly what must not appear.
+    //
+    // The tmux here is a program on `PATH` rather than the machine's: what is
+    // being proved is what this provider forwards, and a row that needed real
+    // tmux would be a real-tmux gate, which this suite does not have.
+    const at = yield* useFakeTmuxProgram();
+    const { written, complained } = yield* useHostStreams();
+    const socket = path.join(tmpdir(), `xmd-quiet-${randomUUID()}`);
+    const client = tmuxAt(socket, { PATH: at });
+
+    // Success: the answer is parsed and returned, and stays off the terminal.
+    expect(yield* client.run(["list-panes"])).toBe(TMUX_STDOUT_MARKER);
+
+    // A soft failure reports nothing rather than throwing.
+    expect(yield* client.tryRun(["has-session", "-t", "nothing"])).toBe(undefined);
+
+    // A hard failure surfaces the step name and nothing else.
+    let refusal = "";
+    try {
+      yield* client.run(["has-session", "-t", "nothing"]);
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+    expect(refusal).toContain("has-session");
+    expect(refusal.includes(socket)).toBe(false);
+    expect(refusal.includes(TMUX_STDERR_MARKER)).toBe(false);
+
+    const shown = written.join("") + complained.join("");
+    expect(shown.includes(TMUX_STDOUT_MARKER)).toBe(false);
+    expect(shown.includes(TMUX_STDERR_MARKER)).toBe(false);
+    expect(shown.includes(socket)).toBe(false);
+  });
+
+  it("TG18: a whole grid's life leaves no control record on the terminal", function* () {
+    // Startup, pane switching, detach, server disappearance and teardown, in
+    // one run, watched at the host's streams. Each step is driven by a record
+    // the composite classifies, so the row advances on events rather than on a
+    // duration.
+    const { written, complained } = yield* useHostStreams();
+    const { grid, tmux } = yield* useComposite({ panes: 2, columns: 2 });
+
+    yield* grid.title(0, "renamed");
+    yield* tmux.say("%window-renamed @0 renamed");
+    yield* untilEvent(grid, "other");
+    yield* tmux.say("%window-pane-changed @0 %1");
+    yield* tmux.say("%client-detached /dev/ttys999");
+    yield* untilEvent(grid, "client-detached");
+    yield* tmux.say("%sessions-changed");
+    yield* untilEvent(grid, "sessions-changed");
+    const stopped = yield* grid.stop();
+
+    expect(stopped.gone).toBe(true);
+    const shown = written.join("") + complained.join("");
+    // No record, and no private metadata either: the session name and socket
+    // this invocation used are its own.
+    for (const leak of [
+      "%session-changed",
+      "%window-renamed",
+      "%window-pane-changed",
+      "%client-detached",
+      "%sessions-changed",
+      "%exit",
+      SESSION_MARKER,
+      tmux.socket,
+    ]) {
+      expect([leak, shown.includes(leak)]).toEqual([leak, false]);
+    }
   });
 
   it("TG6: reader detach, control loss and server stop are separate events", function* () {

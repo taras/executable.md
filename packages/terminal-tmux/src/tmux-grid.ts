@@ -35,7 +35,7 @@ import { layoutString, swapsInto } from "./layout.ts";
 import type { LayoutCell } from "./layout.ts";
 import { useAttachClient } from "./attach-client.ts";
 import type { AttachClient } from "./attach-client.ts";
-import { TerminalTeardownFailed } from "./tmux.ts";
+import { quietly, TerminalTeardownFailed } from "./tmux.ts";
 import type { Tmux } from "./tmux.ts";
 
 /** What one prepared pane is, from the composite's side. */
@@ -277,27 +277,24 @@ export function useTmuxGrid(tmux: Tmux, request: TmuxGridRequest): Operation<Tmu
         "-t",
         request.session,
       ]);
-      const client = yield* exec(program, { arguments: argv, env: request.env });
-      // This client's stdout is the control protocol, not output. `@effectionx/process`
-      // forwards a child's stdout to this process by default, and consuming the
-      // stream below does not turn that off — the two are independent — so
-      // `%session-changed`, `%window-renamed` and every other record was
-      // reaching the reader's terminal and drawing over pane prompts. A handler
-      // that never calls `next` is how that default is suppressed; stderr is
-      // deliberately left alone, because a control client that fails should
-      // still be able to say so.
-      yield* client.around({
-        // deno-lint-ignore require-yield
-        *stdout() {},
+      // This client's stdout *is* the control protocol, not output, and its
+      // stderr is tmux's own — both are internal. The suppression is installed
+      // here, before the child starts, rather than on the handle afterwards:
+      // tmux sends its first record immediately on attach, so a handler
+      // attached after `exec()` returns is attached after that record could
+      // already have been forwarded. Nothing about the parsing below changes —
+      // the stream is still read and classified exactly as before.
+      yield* quietly(function* () {
+        const client = yield* exec(program, { arguments: argv, env: request.env });
+        const reported = yield* lines()(client.stdout);
+        let next = yield* reported.next();
+        while (!next.done) {
+          const event = classify(next.value);
+          events.push(event);
+          reports.send(event);
+          next = yield* reported.next();
+        }
       });
-      const reported = yield* lines()(client.stdout);
-      let next = yield* reported.next();
-      while (!next.done) {
-        const event = classify(next.value);
-        events.push(event);
-        reports.send(event);
-        next = yield* reported.next();
-      }
       // EOF on the control channel is its own event, and is not a detach.
       events.push({ kind: "closed" });
       reports.send({ kind: "closed" });
