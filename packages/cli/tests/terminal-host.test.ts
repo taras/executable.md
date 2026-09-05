@@ -129,9 +129,16 @@ function useShellFixture(room: string): Operation<string> {
     const file = path.join(room, "shell");
     yield* writeTextFile(
       file,
-      ["#!/bin/sh", `echo $$ > "${room}/shell-pid"`, "while true; do sleep 0.05; done", ""].join(
-        "\n",
-      ),
+      [
+        "#!/bin/sh",
+        // Its own environment, before anything else. A plain script sources no
+        // startup file, so what this records is what the pane handed it rather
+        // than what a `.zshrc` added afterwards.
+        `env > "${room}/shell-env"`,
+        `echo $$ > "${room}/shell-pid"`,
+        "while true; do sleep 0.05; done",
+        "",
+      ].join("\n"),
     );
     yield* until(chmod(file, 0o755));
     yield* provide(file);
@@ -481,6 +488,100 @@ describe("Tier TH — host installation", () => {
     expect(yield* entrypointSource("cli.ts")).toContain(
       "installTerminalGrid: TerminalGridInstaller = unsupportedTerminalGrid",
     );
+  });
+
+  it("TH7: a pane's child is told the terminal's colour depth without a shell startup", function* () {
+    // The reported defect: an agent launched into a pane was colourless while
+    // the same program run by hand in the grid's Shell pane had colour. By
+    // hand it had colour because an interactive shell sources the reader's
+    // startup files, and theirs export `COLORTERM`. A pane's direct child
+    // sources nothing, so what it knows about the terminal is only what the
+    // host hands it — and `COLORTERM` was not in that list.
+    //
+    // Deliberately without an `env` override, so `paneEnvironment()` is what
+    // builds the environment. The shell here is a plain script: it records what
+    // it was given before doing anything, so nothing a startup file might add
+    // can be mistaken for what the pane provided.
+    const room = yield* useScratch();
+    const shell = yield* useShellFixture(room);
+    const script = yield* useScript();
+    const invocation = cliCommand([]);
+    const tmux = createFakeTmux({ script, clientCommand, spawnPanes: true });
+    yield* ensure(() => {
+      tmux.stopPanes();
+    });
+
+    const hadColor = process.env.COLORTERM;
+    const hadShell = process.env.SHELL;
+    process.env.COLORTERM = "truecolor";
+    process.env.SHELL = shell;
+    yield* ensure(() => {
+      if (hadColor === undefined) {
+        delete process.env.COLORTERM;
+      } else {
+        process.env.COLORTERM = hadColor;
+      }
+      if (hadShell === undefined) {
+        delete process.env.SHELL;
+      } else {
+        process.env.SHELL = hadShell;
+      }
+    });
+
+    yield* writeTextFile(
+      path.join(room, "doc.md"),
+      ["<Terminal.Grid columns={1}>", '<Terminal title="Only" />', "</Terminal.Grid>", ""].join(
+        "\n",
+      ),
+    );
+    yield* installControlledLauncher({ outcome: () => ({ exitCode: 0 }) });
+
+    yield* scoped(function* () {
+      yield* foregroundTerminalGrid({
+        isTerminal: () => true,
+        createTmux: () => tmux,
+        // deno-lint-ignore require-yield
+        *askVersion() {
+          return { code: 0, stdout: "tmux 3.6a" };
+        },
+        workerCommand: function* (ordinal, at) {
+          return [
+            invocation.command,
+            ...invocation.arguments,
+            PANE_WORKER_COMMAND,
+            String(ordinal),
+            at,
+          ];
+        },
+      })();
+
+      yield* spawn(function* () {
+        while (!(yield* exists(`${room}/shell-pid`))) {
+          yield* sleep(15);
+        }
+        while (tmux.clients.length === 0) {
+          yield* sleep(15);
+        }
+        yield* tmux.say(`%client-detached ${tmux.clients[0] ?? ""}`);
+      });
+
+      const execution = yield* execute({
+        path: path.join(room, "doc.md"),
+        stream: new InMemoryStream(),
+        includes: [room],
+      });
+      const subscription = yield* execution.output;
+      let next = yield* subscription.next();
+      while (!next.done) {
+        next = yield* subscription.next();
+      }
+      yield* execution;
+    });
+
+    const given = yield* readTextFile(`${room}/shell-env`);
+    // What the terminal is, and how much of it the child may use.
+    expect(given).toContain("TERM=");
+    expect(given).toContain("COLORTERM=truecolor");
   });
 
   it("TH3: a host that installs no provider still validates the grid", function* () {

@@ -37,7 +37,15 @@ import type { Settlement } from "./pane-protocol.ts";
 export interface PaneChildRequest {
   readonly argv: readonly string[];
   readonly cwd: string;
-  readonly env: Record<string, string>;
+  /**
+   * The child's environment, or absent to inherit this worker's.
+   *
+   * Absent is meaningful: tmux started this worker with the pane's
+   * environment, so inheriting it is how a launch that named none gets the
+   * terminal it is drawing on — `TERM`, and `COLORTERM` where the host has one.
+   * A supplied environment is used exactly, with nothing ambient added.
+   */
+  readonly env?: Record<string, string>;
 }
 
 export interface PaneChildOutcome {

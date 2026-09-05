@@ -406,7 +406,13 @@ export function* runInPane(
     id,
     argv: [...request.command],
     cwd: request.cwd,
-    env: request.env ?? {},
+    // Carried only when the caller named one. `?? {}` used to sit here, and it
+    // turned "inherit" into "empty": at the root an absent `env` means the
+    // child inherits this process's, so a pane collapsing it to `{}` started
+    // the program with no environment whatsoever — no `TERM`, so no colour, and
+    // no `PATH` or `HOME` either. An environment that *is* supplied crosses
+    // exactly, gaining nothing ambient.
+    ...(request.env === undefined ? {} : { env: request.env }),
   });
   while (true) {
     const frame = yield* link.next();

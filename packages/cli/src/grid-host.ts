@@ -116,7 +116,23 @@ export class TerminalLost extends Error {
  */
 function paneEnvironment(source: Record<string, string | undefined>): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const name of ["PATH", "HOME", "SHELL", "LANG", "TMPDIR", "USER", "LOGNAME"]) {
+  for (const name of [
+    "PATH",
+    "HOME",
+    "SHELL",
+    "LANG",
+    "TMPDIR",
+    "USER",
+    "LOGNAME",
+    // What a terminal program reads to decide it may use 24-bit colour.
+    // Passed through when this host has it, absent when it does not: naming a
+    // capability the reader's terminal lacks is worse than leaving a program
+    // on the 256 colours `TERM` already promises. It is named here because a
+    // pane's direct child reads none of the reader's shell startup — a
+    // variable their `.zshrc` exports reaches an interactive shell in a pane
+    // and nothing else, which is exactly the difference this closes.
+    "COLORTERM",
+  ]) {
     const value = source[name];
     if (value !== undefined && value !== "") {
       env[name] = value;

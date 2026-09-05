@@ -406,6 +406,44 @@ function closedWithin(socket: net.Socket, limitMs: number): Operation<boolean> {
   })();
 }
 
+/**
+ * Tier TP — what the wire format itself admits.
+ *
+ * Its own block rather than a row inside Tier TW: these are the schema's
+ * answers, needing no socket, worker or process, and a tier that spawns real
+ * children is both slower and a worse place to read them.
+ */
+describe("Tier TP — the pane protocol's launch frame", () => {
+  it("TP5: a launch may omit an environment, name one exactly, or be refused", function* () {
+    // Three distinct answers, because a launch's `env` carries three distinct
+    // meanings. Omitted is "the environment you already have"; a map is that
+    // exact map, empty included; anything else is not the protocol.
+    const base = { type: "launch", id: "x", argv: ["/bin/true"], cwd: "/tmp" };
+
+    const omitted = parseToWorker(base);
+    expect(omitted.type === "launch" && omitted.env).toBe(undefined);
+
+    const exact = parseToWorker({ ...base, env: { TERM: "xterm-256color" } });
+    expect(exact.type === "launch" && exact.env).toEqual({ TERM: "xterm-256color" });
+
+    // Empty is a real instruction — start this with nothing — and survives as
+    // itself rather than being read as "omitted".
+    const empty = parseToWorker({ ...base, env: {} });
+    expect(empty.type === "launch" && empty.env).toEqual({});
+
+    // Malformed rather than coerced: a number is not an environment value, and
+    // this channel is how one process is asked to start a program on a
+    // terminal.
+    let refused = "";
+    try {
+      parseToWorker({ ...base, env: { TERM: 256 } });
+    } catch (error) {
+      refused = error instanceof Error ? error.name : String(error);
+    }
+    expect(refused).not.toBe("");
+  });
+});
+
 describe("Tier TW — the pane worker and its private channel", () => {
   it("TW1: the private directory is 0700 and its tokens 0600", function* () {
     const channels: PaneChannels = yield* usePaneChannels(2);
@@ -1817,6 +1855,75 @@ describe("Tier TG20 — a pane launch reaches its own worker", () => {
     // Both were live at the same moment: the release only happened once both
     // had announced themselves, and neither could finish before it.
     expect(yield* exists(`${room}/go`)).toBe(true);
+  });
+
+  it("TG20f: a launch that names no environment inherits the pane's", function* () {
+    // The defect this row exists for: `runInPane` coerced an absent `env` to
+    // `{}`, which is not the same instruction. At the root an absent `env`
+    // means the child inherits, so the pane collapsing it to empty started the
+    // program with *no* environment — no `TERM`, hence no colour, and no `PATH`
+    // or `HOME` either. The only production caller of `nativeLaunch` names no
+    // environment, so this was every real `<Session.Launch>` into a pane.
+    //
+    // TG20a covers a launch that supplies one, and could never have caught it.
+    const marker = `tg20f-${randomUUID()}`;
+    process.env.XMD_TG20F = marker;
+    yield* ensure(() => {
+      delete process.env.XMD_TG20F;
+    });
+
+    // Set before the workers start, because what a pane worker inherits is what
+    // it hands a child that named no environment. Under the fake that is this
+    // runner's environment; in production it is the pane's, which tmux gave the
+    // worker from `paneEnvironment()`.
+    const { composite } = yield* useLiveComposite(1);
+    const evidence = path.join(tmpdir(), `xmd-tg20f-${randomUUID()}.txt`);
+    yield* ensure(function* () {
+      yield* rm(evidence, { force: true });
+    });
+
+    const outcome = yield* composite.launch(
+      0,
+      {
+        command: ["/bin/sh", "-c", `printf '%s' "$XMD_TG20F" > "${evidence}"`],
+        cwd: tmpdir(),
+      },
+      () => {},
+    );
+
+    expect(outcome.exitCode).toBe(0);
+    expect(yield* readTextFile(evidence)).toBe(marker);
+  });
+
+  it("TG20g: an environment that is supplied crosses exactly, gaining nothing", function* () {
+    // The other half. Inheriting when none was named must not become merging
+    // when one was: a caller that named an environment gets that environment,
+    // and no ambient variable of this process joins it.
+    const marker = `tg20g-${randomUUID()}`;
+    process.env.XMD_TG20G = marker;
+    yield* ensure(() => {
+      delete process.env.XMD_TG20G;
+    });
+
+    const { composite } = yield* useLiveComposite(1);
+    const evidence = path.join(tmpdir(), `xmd-tg20g-${randomUUID()}.txt`);
+    yield* ensure(function* () {
+      yield* rm(evidence, { force: true });
+    });
+
+    const outcome = yield* composite.launch(
+      0,
+      {
+        command: ["/bin/sh", "-c", `printf '%s' "[$XMD_TG20G][$XMD_TG20G_OWN]" > "${evidence}"`],
+        cwd: tmpdir(),
+        env: { PATH: "/usr/bin:/bin", XMD_TG20G_OWN: "named" },
+      },
+      () => {},
+    );
+
+    expect(outcome.exitCode).toBe(0);
+    // The named entry arrived; the ambient one did not follow it in.
+    expect(yield* readTextFile(evidence)).toBe("[][named]");
   });
 
   it("TG20e: a cancelled pane launch does not return while its child lives", function* () {
