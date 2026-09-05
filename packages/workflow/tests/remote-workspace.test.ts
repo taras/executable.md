@@ -38,6 +38,7 @@ import type { WorkspaceMetadata } from "../src/workspace/metadata.ts";
 import {
   createRemoteWorkspaceEffect,
   type RemoteRun,
+  type RemoteRunOptions,
   type RemoteWorkspaceMutation,
   useRemoteRun,
   type RemoteWorkspaceRuntime,
@@ -255,6 +256,40 @@ function* startingTree(): Operation<CapturedWorkspace> {
   );
 }
 
+/**
+ * The constructor takes one link and no separate read input.
+ *
+ * A type-level assertion rather than a runtime one, because that is where the
+ * property lives: adding a `reads` member back to `RemoteRunOptions` — the
+ * shape this correction removed — stops this file compiling.
+ */
+type NoSeparateReads = "reads" extends keyof RemoteRunOptions ? never : true;
+const ONE_LINK: NoSeparateReads = true;
+
+/**
+ * One scripted owner and a live connection to it, with nothing built on top.
+ *
+ * The harness below opens a binding; this stops short of that, so a test can
+ * hold two owners and ask what each one was actually sent.
+ */
+function* owner(captured: CapturedWorkspace) {
+  const scripted = ownerOf(captured, () => emptySnapshot(captured.root.rootId));
+  const requests: Record<string, unknown>[] = [];
+  const transport = wire((request) => {
+    requests.push(request);
+    return scripted.answer(request);
+  });
+  const connection = yield* useOwnerConnection(transport.socket);
+  let identifier = 0;
+  return {
+    connection,
+    requests,
+    next: () => `owner-${(identifier += 1)}`,
+    commits: scripted.commits,
+    journal: new InMemoryStream(),
+  };
+}
+
 interface Harness {
   readonly run: RemoteRun;
   readonly commits: Record<string, unknown>[];
@@ -281,12 +316,10 @@ function* harness(
   const connection = yield* useOwnerConnection(transport.socket);
   let identifier = 0;
   const next = () => `request-${(identifier += 1)}`;
-  const reads = cloudflareReadLink(connection, next, RUN_ID);
-  // The production constructor: the handle, the routed journal and the
-  // provenance are made together from this one link.
+  // The production constructor: one link, and the handle, the routed journal
+  // and the provenance made together from it.
   const run = yield* useRemoteRun({
-    link: cloudflareRunLink(connection, reads, next, RUN_ID),
-    reads,
+    link: cloudflareRunLink(connection, next, RUN_ID),
     files: runnerFiles(),
     trees: yield* useRunnerTrees(),
     createFilesystem: (at, authorize) => createRemoteWorkspaceFilesystem(at, authorize),
@@ -518,6 +551,62 @@ describe("the runner's Workspace coordinator", () => {
       expect([a.commits, b.commits]).toEqual([[], []]);
       expect(yielded(yield* a.run.journal.readAll())).toEqual([]);
       expect(yielded(yield* b.run.journal.readAll())).toEqual([]);
+    });
+  });
+
+  it("cannot be opened from one owner's reads and another owner's commits", function* () {
+    yield* scoped(function* () {
+      // The construction the correction closes. Two owners, deliberately begun
+      // from one captured tree, so their root, anchor and run record are equal
+      // and only the objects differ. Before this, `useRemoteRun` took the
+      // database/commit link and the Workspace read link separately, and this
+      // combination produced a legitimate binding: the invocation would be
+      // admitted from A's mappings and content and commit its result to B.
+      const tree = yield* startingTree();
+      const a = yield* owner(tree);
+      const b = yield* owner(tree);
+
+      // Each link is built from one connection and carries its own reads, so
+      // reading through one reaches that owner and no other.
+      const linkA = cloudflareRunLink(a.connection, a.next, RUN_ID);
+      const linkB = cloudflareRunLink(b.connection, b.next, RUN_ID);
+      yield* linkA.invocationSnapshot();
+      expect(a.requests.map((request) => request["command"])).toEqual(["mappings"]);
+      expect(b.requests).toEqual([]);
+
+      expect(ONE_LINK).toBe(true);
+      const options: RemoteRunOptions = {
+        link: linkB,
+        files: runnerFiles(),
+        trees: yield* useRunnerTrees(),
+        createFilesystem: (at, authorize) => createRemoteWorkspaceFilesystem(at, authorize),
+        journal: new InMemoryStream(),
+      };
+
+      let executed = 0;
+      const run = yield* useRemoteRun(options);
+      yield* useRemoteWorkspaceEffects(run);
+      const effect = createRemoteWorkspaceEffect(
+        run,
+        { type: "workspace", name: "one-owner" },
+        function* (filesystem): Operation<Json> {
+          executed += 1;
+          yield* filesystem.writeFile("/NOTES.md", "written by the effect\n", 0o644);
+          return "ran";
+        },
+      );
+      function* workflow(): Workflow<void> {
+        yield effect;
+      }
+      yield* withRemoteWorkspaceEffects(run, durableRun(workflow, { stream: run.journal }));
+
+      // Everything the invocation read and everything it committed went to B.
+      // A answered the one snapshot this test asked it for directly, and
+      // nothing else: no root, no content, no staging, no commit.
+      expect(executed).toBe(1);
+      expect(a.requests.map((request) => request["command"])).toEqual(["mappings"]);
+      expect(b.commits).toHaveLength(1);
+      expect(yielded(yield* a.journal.readAll())).toEqual([]);
     });
   });
 

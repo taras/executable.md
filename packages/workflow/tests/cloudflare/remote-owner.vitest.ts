@@ -358,12 +358,7 @@ describe("the remote owner protocol", () => {
     const outcome = await run(function* () {
       const connection = yield* useOwnerConnection(wire);
       const ids = () => `read-${(identifier += 1)}`;
-      const link = cloudflareRunLink(
-        connection,
-        cloudflareReadLink(connection, ids, RUN_ID),
-        ids,
-        RUN_ID,
-      );
+      const link = cloudflareRunLink(connection, ids, RUN_ID);
       const first = yield* link.readExecutions();
       return { first, second: yield* link.readExecutions() };
     });
@@ -430,12 +425,7 @@ describe("the remote owner protocol", () => {
     const outcome = await run(function* () {
       const connection = yield* useOwnerConnection(wire);
       const ids = () => `page-${(identifier += 1)}`;
-      return yield* cloudflareRunLink(
-        connection,
-        cloudflareReadLink(connection, ids, RUN_ID),
-        ids,
-        RUN_ID,
-      ).readExecutions();
+      return yield* cloudflareRunLink(connection, ids, RUN_ID).readExecutions();
     });
     if (!outcome.ok) {
       throw outcome.error;
@@ -459,12 +449,7 @@ describe("the remote owner protocol", () => {
     const refused = await run(function* () {
       const connection = yield* useOwnerConnection(ownerSocket(alone));
       const ids = () => `huge-${(count += 1)}`;
-      return yield* cloudflareRunLink(
-        connection,
-        cloudflareReadLink(connection, ids, RUN_ID),
-        ids,
-        RUN_ID,
-      ).readExecutions();
+      return yield* cloudflareRunLink(connection, ids, RUN_ID).readExecutions();
     });
     expect(refused.ok).toBe(false);
     // Provider-neutral, with no private refusal spelling in it.

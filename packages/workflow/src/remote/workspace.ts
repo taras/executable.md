@@ -66,7 +66,7 @@ import type { RemoteInvocationSnapshot } from "./records.ts";
 import { withRemoteJournalRoute } from "./journal-route.ts";
 import { resource } from "effection";
 import { establishJournalProvenance, type DurableStream } from "@executablemd/durable-streams";
-import { useRemoteRunDatabase, type RemoteRunLink } from "./database.ts";
+import { useRemoteRunDatabase, type RemoteWorkspaceLink } from "./database.ts";
 import { routeRemoteRunJournal } from "./journal-route.ts";
 
 import type { TemporaryTrees } from "./invocation.ts";
@@ -195,9 +195,13 @@ const bindings = (() => {
 
 /** What a host supplies to open one remote run. */
 export interface RemoteRunOptions {
-  /** The owner link this run's database, reads and commits all go through. */
-  readonly link: RemoteRunLink;
-  readonly reads: RemoteReadLink;
+  /**
+   * The one owner link this run's database, reads and commits go through.
+   *
+   * Deliberately one member. A separate read link could be another owner's,
+   * and an invocation admitted from one run would commit to the other.
+   */
+  readonly link: RemoteWorkspaceLink;
   readonly files: RunnerFiles;
   readonly trees: TemporaryTrees;
   createFilesystem(at: HostPath, authorize: () => void): WorkspaceFilesystem;
@@ -227,12 +231,25 @@ export function useRemoteRun(options: RemoteRunOptions): Operation<RemoteRun> {
         runtime: {
           files: options.files,
           trees: options.trees,
-          reads: options.reads,
+          // A view of the same object the database and the commits came from,
+          // not a second link: `frontier` names two different reads on the two
+          // contracts, and materialization wants the coherent one.
+          reads: readsOf(options.link),
           createFilesystem: options.createFilesystem,
         },
       }),
     );
   });
+}
+
+/** The read half of one owner link, presented the way materialization reads it. */
+function readsOf(link: RemoteWorkspaceLink): RemoteReadLink {
+  return {
+    frontier: () => link.frontierSnapshot(),
+    root: (workspaceRootId) => link.root(workspaceRootId),
+    content: (workspaceRootId, request) => link.content(workspaceRootId, request),
+    invocationSnapshot: () => link.invocationSnapshot(),
+  };
 }
 
 interface ProviderApi {

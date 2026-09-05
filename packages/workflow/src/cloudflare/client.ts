@@ -64,7 +64,7 @@ import {
   JOURNAL_PAGE_ENTRIES,
   MAX_CONTENT_BYTES,
 } from "./commands.ts";
-import type { RemoteRunLink } from "../remote/database.ts";
+import type { RemoteRunLink, RemoteWorkspaceLink } from "../remote/database.ts";
 import { isSchemaVersion, SCHEMA_VERSION } from "../sqlite/workflow-schema.ts";
 import { canonicalJson } from "../storage/record.ts";
 import {
@@ -631,14 +631,23 @@ export function* stageCloudflareContent(
  * it becomes a semantic value, and every failure crosses as a provider-neutral
  * storage error rather than as a private refusal.
  */
+/**
+ * One run's whole owner link, from one connection.
+ *
+ * The read link is made here rather than accepted, so the reads a Workspace
+ * invocation is admitted from and the commits it publishes cannot be two
+ * different owners. A caller holding this holds one authority.
+ */
 export function cloudflareRunLink(
   connection: OwnerConnection,
-  reads: RemoteReadLink,
   nextId: () => string,
   expectedRunId: string,
-): RemoteRunLink {
+): RemoteWorkspaceLink {
+  const reads = cloudflareReadLink(connection, nextId, expectedRunId);
   const publication = cloudflareOwnerLink(connection, reads, nextId);
   return {
+    ...reads,
+
     /**
      * Both halves of the publication link, translated.
      *

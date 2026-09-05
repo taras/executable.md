@@ -392,12 +392,7 @@ describe("semantic reads from a Cloudflare owner", () => {
     let outcome: unknown;
     yield* scoped(function* () {
       const connection = yield* useOwnerConnection(transport.socket);
-      const link = cloudflareRunLink(
-        connection,
-        cloudflareReadLink(connection, ids(), RUN_ID),
-        ids(),
-        RUN_ID,
-      );
+      const link = cloudflareRunLink(connection, ids(), RUN_ID);
       outcome = yield* link.replaceRetrieval(ROOT_ID, '{"locator":"what was asked"}');
     });
     expect((outcome as { ok: boolean }).ok).toBe(false);
@@ -433,12 +428,7 @@ describe("semantic reads from a Cloudflare owner", () => {
       // One generator for both halves: two would mint the same correlation id
       // and the connection would fail closed on the duplicate.
       const next = ids();
-      const link = cloudflareRunLink(
-        connection,
-        cloudflareReadLink(connection, next, RUN_ID),
-        next,
-        RUN_ID,
-      );
+      const link = cloudflareRunLink(connection, next, RUN_ID);
       const database = yield* useRemoteRunDatabase(link, yield* link.frontierSnapshot());
       refused = yield* database.replaceRetrievalMetadata({ locator: "what was asked" });
       held = database.retrieval;
@@ -490,12 +480,7 @@ describe("semantic reads from a Cloudflare owner", () => {
       // One generator for both halves: two would mint the same correlation id
       // and the connection would fail closed on the duplicate.
       const next = ids();
-      const link = cloudflareRunLink(
-        connection,
-        cloudflareReadLink(connection, next, RUN_ID),
-        next,
-        RUN_ID,
-      );
+      const link = cloudflareRunLink(connection, next, RUN_ID);
       const database = yield* useRemoteRunDatabase(link, yield* link.frontierSnapshot());
       refused = yield* database.replaceRetrievalMetadata({
         locator: "m".repeat(MAX_MESSAGE_BYTES - 64),
@@ -526,12 +511,7 @@ describe("semantic reads from a Cloudflare owner", () => {
       yield* scoped(function* () {
         const connection = yield* useOwnerConnection(transport.socket);
         const next = ids();
-        const link = cloudflareRunLink(
-          connection,
-          cloudflareReadLink(connection, next, RUN_ID),
-          next,
-          RUN_ID,
-        );
+        const link = cloudflareRunLink(connection, next, RUN_ID);
         outcome = yield* link.readExecutions();
       });
       const failed = outcome as { ok: boolean; error: Error };
@@ -559,12 +539,7 @@ describe("semantic reads from a Cloudflare owner", () => {
       yield* scoped(function* () {
         const connection = yield* useOwnerConnection(transport.socket);
         const next = ids();
-        const link = cloudflareRunLink(
-          connection,
-          cloudflareReadLink(connection, next, RUN_ID),
-          next,
-          RUN_ID,
-        );
+        const link = cloudflareRunLink(connection, next, RUN_ID);
         outcome = yield* link.readExecutions();
       });
       const failed = outcome as { ok: boolean; error: Error };
@@ -709,12 +684,7 @@ describe("semantic reads from a Cloudflare owner", () => {
       let outcome: unknown;
       yield* scoped(function* () {
         const connection = yield* useOwnerConnection(transport.socket);
-        const link = cloudflareRunLink(
-          connection,
-          cloudflareReadLink(connection, ids(), RUN_ID),
-          ids(),
-          RUN_ID,
-        );
+        const link = cloudflareRunLink(connection, ids(), RUN_ID);
         outcome = yield* link.readExecutions();
       });
       expect([description, (outcome as { ok: boolean }).ok]).toEqual([description, false]);
@@ -756,12 +726,7 @@ describe("semantic reads from a Cloudflare owner", () => {
     yield* scoped(function* () {
       const connection = yield* useOwnerConnection(transport.socket);
       const next = ids();
-      outcome = yield* cloudflareRunLink(
-        connection,
-        cloudflareReadLink(connection, next, RUN_ID),
-        next,
-        RUN_ID,
-      ).readExecutions();
+      outcome = yield* cloudflareRunLink(connection, next, RUN_ID).readExecutions();
     });
     const found = outcome as { ok: boolean; value: { executionId: string }[] };
     expect(found.ok).toBe(true);
@@ -798,12 +763,7 @@ describe("semantic reads from a Cloudflare owner", () => {
     );
     yield* scoped(function* () {
       const connection = yield* useOwnerConnection(transport.socket);
-      const link = cloudflareRunLink(
-        connection,
-        cloudflareReadLink(connection, ids(), RUN_ID),
-        ids(),
-        RUN_ID,
-      );
+      const link = cloudflareRunLink(connection, ids(), RUN_ID);
       const read = yield* link.readExecutions();
       expect(read.ok).toBe(true);
       if (read.ok) {
@@ -817,12 +777,7 @@ describe("semantic reads from a Cloudflare owner", () => {
     }));
     yield* scoped(function* () {
       const connection = yield* useOwnerConnection(empty.socket);
-      const link = cloudflareRunLink(
-        connection,
-        cloudflareReadLink(connection, ids(), RUN_ID),
-        ids(),
-        RUN_ID,
-      );
+      const link = cloudflareRunLink(connection, ids(), RUN_ID);
       const read = yield* link.readExecutions();
       expect(read.ok && read.value).toEqual([]);
     });

@@ -132,11 +132,9 @@ function* opened(socket: WebSocket): Operation<RemoteRun> {
   const connection = yield* useOwnerConnection(ownerSocket(socket));
   let identifier = 0;
   const next = () => `coordinated-${(identifier += 1)}`;
-  const reads = cloudflareReadLink(connection, next, RUN_ID);
   const host = createWorkerFiles();
   return yield* useRemoteRun({
-    link: cloudflareRunLink(connection, reads, next, RUN_ID),
-    reads,
+    link: cloudflareRunLink(connection, next, RUN_ID),
     files: host.files,
     trees: host.trees,
     createFilesystem: (at) => host.workspace(at("/")),

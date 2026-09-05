@@ -50,7 +50,9 @@ import type {
 } from "../storage/record.ts";
 import { createTransactionGate, type OwnerLink, transactRemotely } from "./collector.ts";
 import type { EnlistWorkspace, TransactionAnchor } from "./collector.ts";
-import type { RemoteFrontierSnapshot } from "./read.ts";
+import type { RemoteContent, RemoteContentRequest, RemoteFrontierSnapshot } from "./read.ts";
+import type { RemoteInvocationSnapshot } from "./records.ts";
+import type { WorkspaceRootManifest } from "../workspace/root-manifest.ts";
 
 /** What a remote handle needs to answer everything the interface asks. */
 export interface RemoteRunLink extends OwnerLink {
@@ -63,6 +65,23 @@ export interface RemoteRunLink extends OwnerLink {
   ): Operation<Result<DefinitionRetrieval | undefined>>;
   /** Every document execution, as one anchored snapshot. */
   readExecutions(): Operation<Result<DocumentExecutionRecord[]>>;
+}
+
+/**
+ * Everything one remote run is reached through, as one value.
+ *
+ * The Workspace reads and the commits are the same authority, so they are the
+ * same object. Carried as two — a link and a read link a caller supplies
+ * separately — they can be taken from two owners: an invocation would then
+ * execute against one run's retained mappings and content and commit the
+ * result to another, and if the two began at the same root and anchor nothing
+ * downstream could notice. There is no such pair to make.
+ */
+export interface RemoteWorkspaceLink extends RemoteRunLink {
+  /** The one coherent admitted state a Workspace invocation begins from. */
+  invocationSnapshot(): Operation<RemoteInvocationSnapshot>;
+  root(workspaceRootId: string): Operation<WorkspaceRootManifest>;
+  content(workspaceRootId: string, request: RemoteContentRequest): Operation<RemoteContent>;
 }
 
 /**
