@@ -140,7 +140,7 @@ import type { IdentityComponent } from "./invocation-identity.ts";
 import { ExecutionImports } from "./components/import-authority.ts";
 import type { ExpansionAuthority, ImportTier } from "./components/import-authority.ts";
 import { PROTECTED_COMPONENTS, ProtectedImports } from "./components/protected.ts";
-import { rootCatalogObservation } from "./syntax-observation.ts";
+import { rootCatalogObservation, snapshotContributions } from "./syntax-observation.ts";
 import type { DocumentationContribution } from "./component-documentation.ts";
 import type { CatalogContribution } from "./syntax-observation.ts";
 import type { WorkflowComponentBundle, WorkflowImportAuthority } from "./components/bundle.ts";
@@ -3059,7 +3059,13 @@ function* invoke(
   // makes `<Syntax names={…}>` and `xmd syntax NAME` read one index — the
   // component reached a core-only index before this, so an Agent component had
   // documentation on the command line and the fallback sentence in a document.
-  const documentation = Object.freeze(
+  //
+  // Snapshotted here, field by field, and *before* any `install()` runs below.
+  // A shallow copy of the array would still hold the caller's source objects
+  // and name sets, so an installation could rewrite its own documentation from
+  // inside its `install()` — after the boundary that is supposed to have fixed
+  // it — and a document would be told whatever it changed them to.
+  const documentation = snapshotContributions(
     installations.flatMap((installation) => [...(installation.documentation ?? [])]),
   );
   if (catalogs.length > 1) {

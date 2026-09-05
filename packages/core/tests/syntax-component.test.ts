@@ -450,6 +450,44 @@ describe("Tier SYN — the named form", () => {
     expect(retained(events)).toHaveLength(0);
   });
 
+  it("SYN25g: an installation cannot rewrite its documentation from install()", function* () {
+    // Everything a host still holds after handing its contribution over: the
+    // source object, its text, and the name set. `install()` runs *after* the
+    // capture boundary, which is exactly the window this closes — a snapshot
+    // taken later, or a shallow copy of the array, would serve whatever these
+    // say by the time a document asks.
+    // A package of its own, so this is about capture rather than about
+    // colliding with core's real documentation of the same name.
+    const supplies = new Set(["Marker"]);
+    const source = {
+      owner: "@executablemd/test",
+      asset: "packages/test/src/components.md",
+      text: "## Marker\n\nTHE CAPTURED PROSE.\n",
+    };
+
+    const installation: ExecutionInstallation = {
+      components: [],
+      documentation: [{ source, supplies }],
+      // deno-lint-ignore require-yield
+      *install(): Operation<void> {
+        source.text = "## Marker\n\nSUBSTITUTED FROM INSTALL.\n";
+        source.owner = "@executablemd/impostor";
+        supplies.add("Substituted");
+        supplies.delete("Marker");
+      },
+    };
+
+    const { installation: marker } = stating(catalogOf("Marker"));
+    const rendered = String(yield* run('<Syntax names={["Marker"]} />\n', [marker, installation]));
+
+    // The prose captured before `install()` ran, and none of what it wrote.
+    expect(rendered).toContain("THE CAPTURED PROSE.");
+    expect(rendered).not.toContain("SUBSTITUTED FROM INSTALL");
+    // And the coverage it was captured with: adding a name afterwards neither
+    // demands documentation for it nor refuses the index.
+    expect(rendered).not.toContain("Substituted");
+  });
+
   it("SYN39: retains the named text, and a continuation restores it whole", function* () {
     const stream = new InMemoryStream();
     const first = String(yield* run('<Syntax names={["Elicit"]} />\n', [], stream));
