@@ -16,9 +16,44 @@
  * worker, no socket, no token, and no change to the reader's terminal.
  */
 
-import { exec } from "@effectionx/process";
-import { Err, Ok } from "effection";
+import { exec, Stdio } from "@effectionx/process";
+import { Err, Ok, scoped } from "effection";
 import type { Operation, Result } from "effection";
+
+/**
+ * Run `body` with this package's internal child output kept off the host.
+ *
+ * `@effectionx/process` writes every child's stdout and stderr straight to the
+ * host process — that is `Stdio`'s documented default — so a tmux command's
+ * output and a control record would be drawn on the reader's terminal and over
+ * pane prompts. The streams and results themselves are untouched: this
+ * suppresses *forwarding*, and every caller still parses and classifies exactly
+ * what it did before.
+ *
+ * Installed in the scope that owns the child and *before* it starts, rather
+ * than on the handle afterwards. Both suppress the first record in practice —
+ * the parent installs a post-`exec()` handler before the child is ever
+ * scheduled, which was measured rather than assumed — but only this placement
+ * cannot lose that race by construction, and the record tmux sends immediately
+ * on attach is the one with the least margin.
+ *
+ * The scope is a child scope so the suppression reaches this package's own
+ * processes and nothing else: the visible attach client and every pane child
+ * inherit the terminal deliberately and are never wrapped in this.
+ */
+export function quietly<T>(body: () => Operation<T>): Operation<T> {
+  return scoped(function* (): Operation<T> {
+    yield* Stdio.around({
+      // Neither stream reaches the host. Raw tmux stderr is never forwarded —
+      // what a caller may see is the provider's own normalized refusal.
+      // deno-lint-ignore require-yield
+      *stdout() {},
+      // deno-lint-ignore require-yield
+      *stderr() {},
+    });
+    return yield* body();
+  });
+}
 
 /** One private tmux server, addressed by its socket. */
 export interface Tmux {
@@ -93,14 +128,21 @@ export function tmuxAt(socket: string, env: Record<string, string>): Tmux {
     socket,
     argv: (args) => ["tmux", ...base, ...args],
     *run(args) {
-      const result = yield* exec("tmux", { arguments: [...base, ...args], env }).join();
+      const result = yield* quietly(() =>
+        exec("tmux", { arguments: [...base, ...args], env }).join(),
+      );
       if (result.code !== 0) {
+        // The step name and nothing else. tmux's own stderr is not forwarded
+        // and does not travel in the refusal: it names sockets, sessions and
+        // panes, which are this invocation's private topology.
         throw new TmuxCommandFailed(args[0] ?? "");
       }
       return result.stdout.trim();
     },
     *tryRun(args) {
-      const result = yield* exec("tmux", { arguments: [...base, ...args], env }).join();
+      const result = yield* quietly(() =>
+        exec("tmux", { arguments: [...base, ...args], env }).join(),
+      );
       return result.code === 0 ? result.stdout.trim() : undefined;
     },
   };
@@ -127,7 +169,7 @@ export function* probeTmux(options: {
   }
   const result =
     options.askVersion === undefined
-      ? yield* exec("tmux", { arguments: ["-V"], env: options.env }).join()
+      ? yield* quietly(() => exec("tmux", { arguments: ["-V"], env: options.env }).join())
       : yield* options.askVersion();
   if (result.code !== 0) {
     return Err(new TmuxUnavailableError("tmux is not installed or would not run"));
