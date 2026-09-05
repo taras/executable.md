@@ -45,6 +45,21 @@ function write(text: string): Operation<void> {
   return written.operation;
 }
 
+function complain(text: string): Operation<void> {
+  const written = withResolvers<void>();
+  process.stderr.write(text, () => written.resolve());
+  return written.operation;
+}
+
+/**
+ * A script line that makes this client complain instead of report.
+ *
+ * The two streams mean different things here — stdout is the control protocol
+ * and stderr is the client saying something went wrong — so a suite needs to
+ * drive them separately to show that suppressing one leaves the other alone.
+ */
+const COMPLAIN = "!stderr ";
+
 /** Follow the script until it says this client is finished. */
 export function* followScript(mode: Mode, script: string): Operation<void> {
   let seen = 0;
@@ -52,6 +67,10 @@ export function* followScript(mode: Mode, script: string): Operation<void> {
     const lines = yield* said(script);
     for (const line of lines.slice(seen)) {
       if (mode === "control") {
+        if (line.startsWith(COMPLAIN)) {
+          yield* complain(`${line.slice(COMPLAIN.length)}\n`);
+          continue;
+        }
         yield* write(`${line}\n`);
         if (line.startsWith("%exit")) {
           return;

@@ -278,6 +278,18 @@ export function useTmuxGrid(tmux: Tmux, request: TmuxGridRequest): Operation<Tmu
         request.session,
       ]);
       const client = yield* exec(program, { arguments: argv, env: request.env });
+      // This client's stdout is the control protocol, not output. `@effectionx/process`
+      // forwards a child's stdout to this process by default, and consuming the
+      // stream below does not turn that off — the two are independent — so
+      // `%session-changed`, `%window-renamed` and every other record was
+      // reaching the reader's terminal and drawing over pane prompts. A handler
+      // that never calls `next` is how that default is suppressed; stderr is
+      // deliberately left alone, because a control client that fails should
+      // still be able to say so.
+      yield* client.around({
+        // deno-lint-ignore require-yield
+        *stdout() {},
+      });
       const reported = yield* lines()(client.stdout);
       let next = yield* reported.next();
       while (!next.done) {

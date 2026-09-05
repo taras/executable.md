@@ -1010,6 +1010,77 @@ describe("Tier TG — the tmux composite", () => {
     expect(tmux.issued.slice(0, asked).some((line) => line.startsWith("kill-server"))).toBe(false);
   });
 
+  it("TG14: the control protocol is consumed, never shown to the reader", function* () {
+    // `@effectionx/process` forwards a child's stdout to this process by
+    // default, and consuming `client.stdout` does not turn that off — the two
+    // are independent. So the hidden control client's own records
+    // (`%session-changed`, `%window-renamed`, `%window-pane-changed`, and every
+    // other `%` line) were reaching the reader's terminal and any pane prompt
+    // drawn over it. Nothing about the grid looked wrong; the terminal just had
+    // protocol on it.
+    //
+    // The boundary is this process's stdout, so that is what is watched: the
+    // real write is replaced for the length of the row and restored after it.
+    const written: string[] = [];
+    const realWrite = process.stdout.write.bind(process.stdout);
+    yield* ensure(() => {
+      process.stdout.write = realWrite;
+    });
+    process.stdout.write = (chunk: string | Uint8Array, ...rest: unknown[]): boolean => {
+      written.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
+      // Still written, so a failing row is still readable.
+      return Reflect.apply(realWrite, process.stdout, [chunk, ...rest]);
+    };
+
+    const { grid, tmux } = yield* useComposite({ panes: 1, columns: 1 });
+    // Every record the composite classifies, and one it does not, so the claim
+    // is not limited to the lines this suite happens to care about.
+    for (const record of [
+      "%session-changed $0 xmd",
+      "%window-renamed @0 pane",
+      "%window-pane-changed @0 %1",
+      "%client-detached /dev/ttys999",
+    ]) {
+      yield* tmux.say(record);
+    }
+    yield* untilEvent(grid, "client-detached");
+
+    // The records were consumed — the composite classified the one it needed.
+    expect(grid.events.some((event) => event.kind === "client-detached")).toBe(true);
+    // And none of them was shown. Asserted on `%` rather than on the four
+    // strings: what must not reach a terminal is the protocol, not these lines.
+    const shown = written.join("");
+    expect(shown.includes("%session-changed")).toBe(false);
+    expect(shown.includes("%window-renamed")).toBe(false);
+    expect(shown.includes("%window-pane-changed")).toBe(false);
+    expect(shown.includes("%client-detached")).toBe(false);
+  });
+
+  it("TG15: a control client that complains is still heard", function* () {
+    // The other half of TG14, and the reason the repair suppresses one stream
+    // rather than both: stdout is the protocol and stderr is the client saying
+    // something went wrong. Silencing the protocol must not silence the
+    // complaint, or a grid that failed would fail quietly.
+    const complained: string[] = [];
+    const realWrite = process.stderr.write.bind(process.stderr);
+    yield* ensure(() => {
+      process.stderr.write = realWrite;
+    });
+    process.stderr.write = (chunk: string | Uint8Array, ...rest: unknown[]): boolean => {
+      complained.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
+      return Reflect.apply(realWrite, process.stderr, [chunk, ...rest]);
+    };
+
+    const { grid, tmux } = yield* useComposite({ panes: 1, columns: 1 });
+    yield* tmux.say("!stderr tmux: server exited unexpectedly");
+    // Ordered behind a record the composite classifies, so the row waits on the
+    // client having read that far rather than on a duration.
+    yield* tmux.say("%client-detached /dev/ttys999");
+    yield* untilEvent(grid, "client-detached");
+
+    expect(complained.join("")).toContain("tmux: server exited unexpectedly");
+  });
+
   it("TG6: reader detach, control loss and server stop are separate events", function* () {
     const { grid, tmux } = yield* useComposite({ panes: 1, columns: 1 });
 
