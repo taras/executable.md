@@ -101,7 +101,24 @@ export type FromWorker =
 export type ToWorker =
   | { type: "welcome" }
   | { type: "display"; seq: number; text: string }
-  | { type: "launch"; id: string; argv: string[]; cwd: string; env: Record<string, string> }
+  /**
+   * Start a program on this pane's terminal.
+   *
+   * `env` omitted and `env` empty are different instructions, which is why it
+   * is optional rather than defaulted. Omitted means "the environment you
+   * already have" — the pane's, which tmux gave this worker — and is what a
+   * caller that named no environment meant. An empty map means "start this with
+   * nothing", which is a thing a caller may ask for and which no default should
+   * silently produce. Collapsing the first into the second is how a launched
+   * program came to run with no `TERM`, no `PATH` and no `HOME` at all.
+   */
+  | {
+      type: "launch";
+      id: string;
+      argv: string[];
+      cwd: string;
+      env?: Record<string, string>;
+    }
   | { type: "cancel"; id: string }
   | { type: "shutdown" };
 
@@ -174,7 +191,10 @@ const ToWorkerSchema = z.discriminatedUnion("type", [
     id: z.string(),
     argv: z.array(z.string()).min(1),
     cwd: z.string(),
-    env: z.record(z.string(), z.string()),
+    // Optional, not defaulted: an absent `env` and an empty one are different
+    // instructions. Still exact when present — a value that is not a string
+    // makes the frame malformed rather than being coerced.
+    env: z.record(z.string(), z.string()).optional(),
   }),
   z.object({ type: z.literal("cancel"), id: z.string() }),
   z.object({ type: z.literal("shutdown") }),
