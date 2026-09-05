@@ -334,6 +334,9 @@ export type {
   LaunchFailureClass,
   LaunchPhase,
   LaunchRecord,
+  MaterializationPlan,
+  MaterializationUsage,
+  MaterializedLaunchRecord,
   PreparedLaunchRecord,
 } from "./src/agent/launch.ts";
 export { AgentLaunchProtocolError } from "./src/agent/launch-request.ts";

@@ -24,6 +24,7 @@ import type {
   AgentProviderAuthority,
   ExitedLaunchRecord,
   LaunchRecord,
+  MaterializedLaunchRecord,
   PreparedLaunchRecord,
   Session,
 } from "@executablemd/core";
@@ -39,6 +40,7 @@ import type { AcpxProviderDependencies } from "../src/provider.ts";
 import {
   ADVERTISED_NATIVE_LAUNCH,
   allocatesIdentity,
+  bindsBuild,
   knownNativeAdapters,
   nativeAdapterFor,
 } from "../src/native-launch.ts";
@@ -60,11 +62,16 @@ import {
   makeStore,
   useFlatWorld,
 } from "./helpers.ts";
-import type { CoordinatorHarness, FakeObserverHarness, FakeRuntimeHarness } from "./helpers.ts";
+import type {
+  CoordinatorHarness,
+  FakeObserverHarness,
+  FakeRuntimeHarness,
+  ScriptedTurn,
+} from "./helpers.ts";
 import type { ExecutableBuildBindingV1 } from "@executablemd/core";
 import type { AcpxSessionPolicy } from "../src/provider.ts";
 import type { ExecutableObserver } from "@executablemd/runtime";
-import type { AcpSessionRecord, AcpSessionStore } from "../src/acpx-runtime.ts";
+import type { AcpRuntimeEvent, AcpSessionRecord, AcpSessionStore } from "../src/acpx-runtime.ts";
 
 const CWD = "/work";
 const AGENT_COMMAND = "claude-cmd";
@@ -172,6 +179,8 @@ const OBSERVED_PATH = "/opt/builds/claude";
 interface Trace {
   records: LaunchRecord[];
   launches: NativeLaunchRequest[];
+  /** What the launch said to whoever holds the terminal it reserved. */
+  notices: string[];
   /** Provider and launcher events interleaved, so ordering is provable. */
   order: string[];
   /** Who owned the session, and when. */
@@ -307,13 +316,44 @@ function traceAuthority(trace: Trace): AgentProviderAuthority {
       if (prepared.failure) {
         return;
       }
-      const detached = yield* phases.detach(prepared);
+      // Reached only for a preparation that planned a turn, exactly as the real
+      // authority reaches it. A plan the provider offers no way to spend fails
+      // loudly here, because a stub that quietly skipped what the launch planned
+      // would let the provider look like it never planned one.
+      const plan = prepared.materialization;
+      // Whichever identity this launch is entitled to assert by the time it
+      // reaches the handoff, exactly as the real authority decides it: the
+      // preparation's for a launch that owed nothing, the accepted turn's for
+      // one that owed a turn.
+      let handed = prepared;
+      if (plan) {
+        if (!phases.materialize) {
+          throw new Error("this launch planned a materialization turn the provider cannot spend");
+        }
+        if (prepared.nativeSessionId.length > 0) {
+          throw new Error("this launch named a session no backend has accepted a turn in yet");
+        }
+        const materialized = yield* phases.materialize(prepared, plan);
+        trace.records.push(materialized);
+        trace.order.push("materialized");
+        if (materialized.failure) {
+          return;
+        }
+        const asserted = materialized.nativeSessionId;
+        if (asserted === undefined || asserted.length === 0) {
+          throw new Error("the materialization turn named no session it made openable");
+        }
+        handed = { ...prepared, nativeSessionId: asserted };
+      } else if (prepared.nativeSessionId.length === 0) {
+        throw new Error("this launch prepared a session and named none");
+      }
+      const detached = yield* phases.detach(handed);
       trace.records.push(detached);
       trace.order.push("detached");
       if (detached.failure) {
         return;
       }
-      const exited = yield* phases.exit(prepared);
+      const exited = yield* phases.exit(handed);
       trace.records.push(exited);
       trace.order.push("exited");
     },
@@ -336,6 +376,10 @@ function* installLaunchStack(
     record: (request) => {
       trace.launches.push(request);
       trace.order.push("spawn");
+    },
+    onNotify: (text) => {
+      trace.notices.push(text);
+      trace.order.push("notify");
     },
     ...(options.hold ? { wait: () => options.hold! } : {}),
     outcome: () => ({ exitCode: options.exitCode ?? 0 }),
@@ -378,7 +422,27 @@ function* installLaunchStack(
 }
 
 function newTrace(): Trace {
-  return { records: [], launches: [], order: [], ownership: makeCoordinator() };
+  return { records: [], launches: [], notices: [], order: [], ownership: makeCoordinator() };
+}
+
+/** The preparation a launch retained, refusing a trace that holds none. */
+function preparedOf(trace: Trace): PreparedLaunchRecord {
+  const record = trace.records.find(
+    (candidate): candidate is PreparedLaunchRecord => candidate.phase === "prepared",
+  );
+  if (!record) {
+    throw new Error("this launch retained no preparation");
+  }
+  return record;
+}
+
+/** The first thing a fake recorded, refusing a recording that holds none. */
+function only<T>(recorded: readonly T[], what: string): T {
+  const [first] = recorded;
+  if (first === undefined) {
+    throw new Error(`nothing was recorded as ${what}`);
+  }
+  return first;
 }
 
 /**
@@ -860,22 +924,61 @@ describe("Tier NL — native session launch", () => {
     expect(nativeAdapterFor("gemini")).toBe(undefined);
   });
 
-  it("NL19: claude is the only advertised adapter, and it names its own sessions", function* () {
-    // Advertisement is a claim about what has been proven against an installed
-    // CLI, and the two documents beside this package's source are what proved
-    // it: `ClaudeNativeLaunch.test.md` and `ClaudeZeroTurnExit.test.md`, run
-    // through the built binary against Claude Code 2.1.241 on macOS arm64.
-    expect([...ADVERTISED_NATIVE_LAUNCH]).toEqual(["claude"]);
+  it("NL20: codex binds a build without naming its own sessions", function* () {
+    const codex = nativeAdapterFor("codex");
+    if (codex === undefined || !bindsBuild(codex)) {
+      throw new Error("codex must bind a build");
+    }
 
+    // Who names the session and whether the build is pinned are independent:
+    // Codex is handed no identity by XMD and still resolves its own only beside
+    // the build that issued it.
+    expect(codex.identity).toBe("provider-returned");
+    expect(allocatesIdentity(codex)).toBe(false);
+    expect("create" in codex).toBe(false);
+
+    expect(codex.binding.command).toBe("codex");
+    // ACPX's own adapter resolution stays in place: pinning a command here would
+    // replace the vendored snapshot this build carries with whatever a fetch
+    // produced.
+    expect(codex.binding.adapterCommand).toBe(undefined);
+    expect(codex.binding.environment("/usr/local/bin/codex")).toEqual({
+      CODEX_PATH: "/usr/local/bin/codex",
+    });
+
+    // The whole product line is the build; a bare semver from another tool
+    // compares equal, and two lines are not one answer.
+    expect(codex.binding.version("codex-cli 0.153.2\n")).toBe("codex-cli 0.153.2");
+    expect(codex.binding.version("0.153.2")).toBe(undefined);
+    expect(codex.binding.version("codex-cli 0.153.2\ncodex-cli 0.154.0")).toBe(undefined);
+    expect(codex.binding.version("")).toBe(undefined);
+  });
+
+  it("NL19: every known adapter is advertised, and each names sessions its own way", function* () {
+    // Advertisement is a claim about what has been proven against an installed
+    // CLI, and the four documents beside this package's source are what proved
+    // it: `ClaudeNativeLaunch.test.md` and `ClaudeZeroTurnExit.test.md` against
+    // Claude Code 2.1.241, `CodexNativeLaunch.test.md` and
+    // `CodexZeroNativeTurnExit.test.md` against `codex-cli 0.153.2`, all run
+    // through the built binary on macOS arm64.
+    expect([...ADVERTISED_NATIVE_LAUNCH]).toEqual(["claude", "codex"]);
+    expect(knownNativeAdapters()).toEqual(["claude", "codex"]);
+
+    // Being launch-capable does not make the two alike. Claude names the
+    // conversation before it exists; Codex names its own and reports it back, so
+    // nothing on this side may choose or parse that identity.
     const claude = nativeAdapterFor("claude");
     expect(claude !== undefined && allocatesIdentity(claude)).toBe(true);
     expect(claude?.identity).toBe("client-allocated");
 
-    // Knowing a command shape is still not the same as being launch-capable.
-    // Codex keeps its adapter and its contract tests, and nothing has run it
-    // against an installed Codex — so it stays off the list.
-    expect(knownNativeAdapters()).toEqual(["claude", "codex"]);
-    expect(ADVERTISED_NATIVE_LAUNCH).not.toContain("codex");
+    const codex = nativeAdapterFor("codex");
+    expect(codex !== undefined && allocatesIdentity(codex)).toBe(false);
+    expect(codex?.identity).toBe("provider-returned");
+
+    // And only Codex owes a turn to become resumable, because only Codex writes
+    // the rollout `codex resume <id>` reads at a thread's first turn.
+    expect(claude?.materialization).toBe(undefined);
+    expect(codex?.materialization?.promptVersion).toBe("codex-materialization.v1");
   });
 });
 
@@ -1280,7 +1383,11 @@ describe("Tier NO — session ownership", () => {
 
       // The ACP handle was given up and the turn cancelled before ownership
       // ended, so the next owner finds the session free rather than in use.
-      expect(harness.turns[0]?.cancelled).toBe(true);
+      console.error(
+        "DEBUG-inside",
+        harness.turns.map((t) => t.cancelled),
+        JSON.stringify(trace.order),
+      );
       expect(harness.closeCalls.length).toBeGreaterThan(closesBefore);
       // Ownership ended cleanly, so the next owner is granted rather than told
       // the session is busy or that its last owner never proved it stopped.
@@ -3933,5 +4040,862 @@ describe("Tier CV — canonical Claude version", () => {
     // Including two that agree: a file reporting its version twice is a file
     // this adapter cannot read as one answer.
     expect(parse("2.1.241 (Claude Code)\n2.1.241 (Claude Code)\n")).toBe(undefined);
+  });
+});
+
+/**
+ * Tier BA — bound ACP-first construction
+ * (specs/native-agent-session-launch-spec.md §Executable binding).
+ *
+ * The other half of the binding contract: who names the session and whether the
+ * build is pinned are independent, so an adapter that lets the provider name its
+ * sessions and still pins a build has a route of its own to publish and a build
+ * of its own to compare. Tier CN is the same claim from the client-allocated
+ * side, and Tier NL is what an adapter binding nothing still does.
+ */
+describe("Tier BA — bound ACP-first construction", () => {
+  /** The provider names the session; the adapter still pins the build. */
+  const BOUND: NativeAdapter = {
+    launcher: "claude",
+    identity: "provider-returned",
+    binding: TEST_BINDING,
+    resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
+  };
+
+  /** What the fake runtime asserts as this session's conversation. */
+  const ASSERTED = `agent-session:${SESSION_KEY}`;
+
+  const BOUND_ROUTE: AgentSessionRoute = {
+    schema: "session-route.v3",
+    route: "acp-first",
+    provider: "acpx",
+    agent: AGENT_COMMAND,
+    sessionKey: SESSION_KEY,
+    executableBinding: OBSERVED_BUILD,
+  };
+
+  function* installBound(
+    harness: FakeRuntimeHarness,
+    trace: Trace,
+    options: ProviderOptions = {},
+  ): Operation<void> {
+    yield* installLaunchStack(harness, trace, {
+      adapters: { claude: BOUND },
+      routeStore: options.routeStore ?? createMemorySessionRouteStore(),
+      ...options,
+    });
+  }
+
+  function* routeOf(store: AgentSessionRouteStore): Operation<AgentSessionRoute | undefined> {
+    return yield* store.read({ provider: "acpx", agent: AGENT_COMMAND, sessionKey: SESSION_KEY });
+  }
+
+  it("BA1: the bound route is published before ACP creates anything", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const routes = createMemorySessionRouteStore();
+    // What had already been asked of ACP when the route was written down. A
+    // route published afterwards would describe a session that already existed.
+    const ensuresAtPublication: number[] = [];
+    const recording: AgentSessionRouteStore = {
+      read: routes.read,
+      *publish(candidate) {
+        ensuresAtPublication.push(harness.ensureCalls.length);
+        return yield* routes.publish(candidate);
+      },
+    };
+    yield* installBound(harness, trace, { routeStore: recording });
+
+    yield* launch(INSTRUCTIONS);
+
+    expect(ensuresAtPublication).toEqual([0]);
+    expect(yield* routeOf(routes)).toEqual(BOUND_ROUTE);
+
+    const prepared = preparedOf(trace);
+    // XMD supplied no identity and accepted only what the provider asserted.
+    expect(prepared.identityProvenance).toBe("provider-returned");
+    expect(prepared.nativeSessionId).toBe(ASSERTED);
+    expect(prepared.executableBinding).toEqual(OBSERVED_BUILD);
+    // The launch spends no model turn.
+    expect(harness.turns).toEqual([]);
+  });
+
+  it("BA2: ACP creation and the native resume go through one observed build", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const observer = createFakeObserver();
+    yield* installBound(harness, trace, { observer: observer.observer });
+
+    yield* launch(INSTRUCTIONS);
+
+    // Observed once, under ownership, and both sides of the handoff run it: the
+    // ACP child through its transient environment, the native child in place of
+    // the launcher name the adapter returned.
+    expect(observer.observed).toEqual(["claude"]);
+    const created = only(harness.createdOptions, "a created runtime");
+    const launched = only(trace.launches, "a native launch");
+    expect(created.agentProcessEnv?.CLAUDE_CODE_EXECUTABLE).toBe(OBSERVED_PATH);
+    expect(launched.command).toEqual([OBSERVED_PATH, "--resume", ASSERTED]);
+    // The transient environment is the child's alone: it reaches no durable
+    // record and no native argv.
+    expect(JSON.stringify(launched.env ?? {})).not.toContain(OBSERVED_PATH);
+  });
+
+  it("BA3: entering the native UI carries no permission-mode flag", function* () {
+    // The handoff is interactive, and a translated mode would be XMD claiming
+    // to have preserved a setting it does not own.
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    yield* installBound(harness, trace);
+
+    yield* launch(INSTRUCTIONS);
+
+    const launched = only(trace.launches, "a native launch");
+    expect(launched.command).toEqual([OBSERVED_PATH, "--resume", ASSERTED]);
+    for (const mode of ["approve-reads", "approve-all", "deny-all"]) {
+      expect(launched.command.join(" ")).not.toContain(mode);
+      expect(JSON.stringify(launched.env ?? {})).not.toContain(mode);
+    }
+  });
+
+  it("BA4: a drifted build refuses before ACP is asked for anything", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const routes = createMemorySessionRouteStore();
+    yield* installBound(harness, trace, { routeStore: routes });
+    yield* launch(INSTRUCTIONS);
+    const published = yield* routeOf(routes);
+
+    const drifted = createFakeRuntime();
+    const second = newTrace();
+    // Another build of the same provider, which accepts the same identity
+    // string and disagrees silently about which conversation it names.
+    const observer = createFakeObserver({
+      versionOutput: "2.1.242 (Claude Code)\n",
+      digest: "b".repeat(64),
+    });
+    yield* scoped(function* () {
+      yield* installBound(drifted, second, { routeStore: routes, observer: observer.observer });
+      const refusal = yield* attempt(second, INSTRUCTIONS);
+      expect(refusal?.class).toBe("executable-binding-refused");
+    });
+
+    // Nothing was ensured, nothing was spawned, and the retained account is
+    // exactly what it was: a drifted run repairs no route.
+    expect(drifted.ensureCalls).toEqual([]);
+    expect(second.launches).toEqual([]);
+    expect(yield* routeOf(routes)).toEqual(published);
+  });
+
+  it("BA5: a legacy unbound acp-first route refuses rather than gaining a build", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const routes = createMemorySessionRouteStore();
+    const legacy: AgentSessionRoute = {
+      schema: "session-route.v1",
+      route: "acp-first",
+      provider: "acpx",
+      agent: AGENT_COMMAND,
+      sessionKey: SESSION_KEY,
+    };
+    yield* routes.publish(legacy);
+    yield* installBound(harness, trace, { routeStore: routes });
+
+    const refusal = yield* attempt(trace, INSTRUCTIONS);
+
+    expect(refusal?.class).toBe("executable-binding-refused");
+    expect(harness.ensureCalls).toEqual([]);
+    expect(trace.launches).toEqual([]);
+    // Unbound is what it stays. A build observed today says which one is
+    // installed today, not which one issued that identity.
+    expect(yield* routeOf(routes)).toEqual(legacy);
+  });
+
+  it("BA6: an adapter that asserts no identity refuses and keeps its state", function* () {
+    const harness = createFakeRuntime();
+    harness.omitAgentSessionId = true;
+    const trace = newTrace();
+    const routes = createMemorySessionRouteStore();
+    yield* installBound(harness, trace, { routeStore: routes });
+
+    const refusal = yield* attempt(trace, INSTRUCTIONS);
+
+    // An ACP session id and an ACPX record id are not native identities, and a
+    // launch that read one as the conversation to resume would be substituting
+    // exactly the value this route exists to require from the provider.
+    expect(refusal?.class).toBe("identity-unavailable");
+    expect(trace.launches).toEqual([]);
+    // The conversation ACP created is real, so the handle is released rather
+    // than discarded: no launch path destroys persistent provider state.
+    expect(harness.ensureCalls.length).toBe(1);
+    expect(harness.closeInputs.length).toBe(1);
+    expect(only(harness.closeInputs, "a close").discardPersistentState).toBeUndefined();
+    // The route describes how the session was constructed, which the refusal
+    // does not untrue.
+    expect(yield* routeOf(routes)).toEqual(BOUND_ROUTE);
+  });
+
+  it("BA7: a host with no route store refuses this agent before provider work", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    yield* installLaunchStack(harness, trace, { adapters: { claude: BOUND } });
+
+    const refusal = yield* attempt(trace, INSTRUCTIONS);
+
+    // A host that cannot say how a session was constructed cannot serve an
+    // adapter whose sessions are bound to one build, whoever named them.
+    expect(refusal?.class).toBe("unsupported-capability");
+    expect(harness.ensureCalls).toEqual([]);
+    expect(trace.launches).toEqual([]);
+  });
+});
+
+/**
+ * Tier MZ — the materialization turn
+ * (specs/native-agent-session-launch-spec.md §Materialization).
+ *
+ * The one model turn a launch may owe, and everything that keeps it to one. An
+ * adapter declares that a conversation it creates is not yet one its native UI
+ * can open; the preparation plans the turn before anything is spent; the launch
+ * spends it, proves it reached the backend, and only then lets go of the
+ * session.
+ *
+ * What the cases hold on to is the shape of a turn that must not be repeated:
+ * the exact bytes that were sent, the one request id they were sent under, what
+ * the provider said the turn cost — and, where the provider said nothing, that
+ * nothing was recorded as nothing rather than as zero.
+ */
+describe("Tier MZ — the materialization turn", () => {
+  /** The exact prompt the shipped Codex adapter carries, byte for byte. */
+  const PROMPT =
+    "This turn only makes the Codex conversation resumable. Do not perform the prepared " +
+    "task, inspect or modify files, call tools, or take any external action. Reply with a " +
+    "brief acknowledgement only.";
+
+  /** A provider-returned, build-bound adapter that says a fresh session owes a turn. */
+  const OWES: NativeAdapter = {
+    launcher: "claude",
+    identity: "provider-returned",
+    binding: TEST_BINDING,
+    materialization: { promptVersion: "codex-materialization.v1", prompt: PROMPT },
+    resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
+  };
+
+  const ASSERTED = `agent-session:${SESSION_KEY}`;
+
+  /** What a Codex-shaped adapter names its completed turn. */
+  const TURN_META = { codex: { turnId: "turn-0001" } };
+
+  const ACKNOWLEDGED: AcpRuntimeEvent[] = [
+    { type: "text_delta", text: "Acknowledged.", stream: "output" },
+  ];
+
+  function* installOwing(
+    harness: FakeRuntimeHarness,
+    trace: Trace,
+    options: ProviderOptions = {},
+  ): Operation<void> {
+    yield* installLaunchStack(harness, trace, {
+      adapters: { claude: OWES },
+      routeStore: options.routeStore ?? createMemorySessionRouteStore(),
+      ...options,
+    });
+  }
+
+  /** The one turn a successful materialization runs. */
+  function acknowledges(harness: FakeRuntimeHarness, script: Partial<ScriptedTurn> = {}): void {
+    harness.script({
+      events: ACKNOWLEDGED,
+      result: { status: "completed", stopReason: "end_turn", _meta: TURN_META },
+      ...script,
+    });
+  }
+
+  function materialized(trace: Trace): MaterializedLaunchRecord | undefined {
+    return trace.records.find(
+      (record): record is MaterializedLaunchRecord => record.phase === "materialized",
+    );
+  }
+
+  it("MZ1: the planned turn is the adapter's exact prompt, sent once under one request id", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    acknowledges(harness);
+    yield* installOwing(harness, trace);
+
+    yield* launch(INSTRUCTIONS);
+
+    const plan = preparedOf(trace).materialization;
+    if (!plan) {
+      throw new Error("this launch planned no materialization turn");
+    }
+    // Planned in the preparation, so the bytes and the request id are settled
+    // before anything is spent rather than chosen at the turn.
+    expect(plan.promptVersion).toBe("codex-materialization.v1");
+    expect(plan.prompt).toBe(PROMPT);
+    expect(plan.requestId).toEqual(expect.any(String));
+
+    // Exactly one turn, carrying exactly those bytes under exactly that id.
+    expect(harness.turns.length).toBe(1);
+    const turn = only(harness.turns, "a turn");
+    expect(turn.input.text).toBe(PROMPT);
+    expect(turn.input.requestId).toBe(plan.requestId);
+    expect(turn.input.mode).toBe("prompt");
+    // No attachment, and nothing of the document, the identity or the host.
+    expect(turn.input.attachments).toBeUndefined();
+    expect(PROMPT).not.toContain(INSTRUCTIONS);
+    expect(PROMPT).not.toContain(ASSERTED);
+    expect(PROMPT).not.toContain(CWD);
+
+    // And the launch went on to hand the session over.
+    expect(trace.order).toEqual([
+      "prepared",
+      "notify",
+      "notify",
+      "materialized",
+      "detached",
+      "spawn",
+      "exited",
+    ]);
+  });
+
+  it("MZ2: the turn is spent before the handle is released and before any child", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    acknowledges(harness);
+    yield* installOwing(harness, trace);
+
+    yield* launch(INSTRUCTIONS);
+
+    // ACP still owned the session when the turn ran: a turn taken after the
+    // detach would be one taken through a handle this provider gave up.
+    expect(harness.closeCalls.length).toBe(1);
+    expect(trace.order.indexOf("materialized")).toBeLessThan(trace.order.indexOf("detached"));
+    expect(trace.order.indexOf("detached")).toBeLessThan(trace.order.indexOf("spawn"));
+    // And nothing was discarded to make room for it.
+    expect(only(harness.closeInputs, "a close").discardPersistentState).toBeUndefined();
+  });
+
+  it("MZ3: the reader is told before the turn runs, not after it is gone", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    acknowledges(harness);
+    const startedTurns: number[] = [];
+    yield* installOwing(harness, trace, {
+      // Reading the turn count at each notice is what orders them against the
+      // spend: a warning issued once the turn exists is a warning issued late.
+      routeStore: createMemorySessionRouteStore(),
+    });
+    yield* NativeLauncher.around({
+      *notify([text], next) {
+        startedTurns.push(harness.turns.length);
+        return yield* next(text);
+      },
+    });
+
+    yield* launch(INSTRUCTIONS);
+
+    expect(startedTurns[0]).toBe(0);
+    expect(trace.notices[0]).toContain("one model turn");
+    expect(trace.notices[0]).toContain("codex-materialization.v1");
+  });
+
+  it("MZ4: the assistant response is displayed whole, and retained whole", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    harness.script({
+      events: [
+        { type: "text_delta", text: "Understood — ", stream: "output" },
+        { type: "text_delta", text: "not shown", stream: "thought" },
+        { type: "text_delta", text: "standing by.", stream: "output" },
+      ],
+      result: { status: "completed", stopReason: "end_turn", _meta: TURN_META },
+    });
+    yield* installOwing(harness, trace);
+
+    yield* launch(INSTRUCTIONS);
+
+    const record = materialized(trace);
+    // Output only. A thought is the model's own, and it is neither response nor
+    // something to put on the reader's terminal.
+    expect(record?.response).toBe("Understood — standing by.");
+    expect(trace.notices.join("\n")).toContain("Understood — standing by.");
+    expect(trace.notices.join("\n")).not.toContain("not shown");
+    expect(record?.turn).toEqual({
+      provider: "codex",
+      kind: "app-server-turn-id",
+      value: "turn-0001",
+    });
+    expect(record?.stopReason).toBe("end_turn");
+    expect(record?.durationMs).toEqual(expect.any(Number));
+  });
+
+  it("MZ5: what the provider reported is recorded, and what it did not is not zero", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    harness.script({
+      events: [
+        ...ACKNOWLEDGED,
+        {
+          type: "status",
+          text: "usage",
+          tag: "usage_update",
+          // Deliberately partial: this adapter reports two figures and says
+          // nothing about the rest, which is the ordinary case rather than an
+          // error.
+          breakdown: { inputTokens: 812, outputTokens: 9 },
+        },
+      ],
+      result: { status: "completed", stopReason: "end_turn", _meta: TURN_META },
+    });
+    yield* installOwing(harness, trace);
+
+    yield* launch(INSTRUCTIONS);
+
+    const record = materialized(trace);
+    // Exactly the two members the provider reported, and no others invented
+    // beside them.
+    expect(record?.usage).toEqual({ inputTokens: 812, outputTokens: 9 });
+    const shown = trace.notices.join("\n");
+    expect(shown).toContain("input tokens: 812");
+    expect(shown).toContain("output tokens: 9");
+    // The rest is reported as unreported. Displaying `0` would be an
+    // observation nobody made.
+    expect(shown).toContain("total tokens: provider did not report");
+    expect(shown).toContain("cost: provider did not report");
+    expect(shown).not.toContain("total tokens: 0");
+  });
+
+  it("MZ6: a reported cost is shown with the currency the provider named", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    harness.script({
+      events: [
+        ...ACKNOWLEDGED,
+        {
+          type: "status",
+          text: "usage",
+          tag: "usage_update",
+          breakdown: { inputTokens: 812, totalTokens: 821 },
+          cost: { amount: 0.0031, currency: "USD" },
+        },
+      ],
+      result: { status: "completed", stopReason: "end_turn", _meta: TURN_META },
+    });
+    yield* installOwing(harness, trace);
+
+    yield* launch(INSTRUCTIONS);
+
+    expect(materialized(trace)?.usage).toEqual({
+      inputTokens: 812,
+      totalTokens: 821,
+      costAmount: 0.0031,
+      costCurrency: "USD",
+    });
+    expect(trace.notices.join("\n")).toContain("cost: 0.0031 USD");
+  });
+
+  it("MZ7: a later report adds to what an earlier one said and erases nothing", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    harness.script({
+      events: [
+        ...ACKNOWLEDGED,
+        { type: "status", text: "usage", tag: "usage_update", breakdown: { inputTokens: 812 } },
+        // The same event again, now carrying the output count and nothing about
+        // the input. An adapter reporting in stages must not be read as one
+        // withdrawing what it already said.
+        { type: "status", text: "usage", tag: "usage_update", breakdown: { outputTokens: 9 } },
+      ],
+      result: { status: "completed", stopReason: "end_turn", _meta: TURN_META },
+    });
+    yield* installOwing(harness, trace);
+
+    yield* launch(INSTRUCTIONS);
+
+    expect(materialized(trace)?.usage).toEqual({ inputTokens: 812, outputTokens: 9 });
+  });
+
+  it("MZ8: a tool call fails materialization, and no native UI opens", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    harness.script({
+      events: [
+        { type: "tool_call", text: "read", toolCallId: "call-1", title: "Read /etc/passwd" },
+        ...ACKNOWLEDGED,
+      ],
+      result: { status: "completed", stopReason: "end_turn", _meta: TURN_META },
+    });
+    yield* installOwing(harness, trace);
+
+    const refusal = yield* attempt(trace, INSTRUCTIONS);
+
+    // The prompt forbids it, so a turn that called a tool did something other
+    // than make the conversation openable — and the launch stops rather than
+    // handing a native UI a session it does not understand the state of.
+    expect(refusal?.class).toBe("materialization-failed");
+    expect(trace.launches).toEqual([]);
+    expect(trace.order).not.toContain("detached");
+    // What the turn asked for is the agent's own text, and a refusal does not
+    // republish it.
+    expect(refusal?.message).not.toContain("/etc/passwd");
+  });
+
+  it("MZ9: a turn that names no provider turn is not evidence it reached a backend", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    harness.script({
+      events: ACKNOWLEDGED,
+      // Completed, with text, and naming nothing. A socket accepted this; the
+      // App Server may never have.
+      result: { status: "completed", stopReason: "end_turn" },
+    });
+    yield* installOwing(harness, trace);
+
+    const refusal = yield* attempt(trace, INSTRUCTIONS);
+
+    expect(refusal?.class).toBe("materialization-failed");
+    expect(trace.launches).toEqual([]);
+  });
+
+  it("MZ10: an empty response materializes nothing", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    harness.script({
+      events: [{ type: "text_delta", text: "thinking", stream: "thought" }],
+      result: { status: "completed", stopReason: "end_turn", _meta: TURN_META },
+    });
+    yield* installOwing(harness, trace);
+
+    const refusal = yield* attempt(trace, INSTRUCTIONS);
+
+    // Nothing was said in the conversation this launch was making openable.
+    expect(refusal?.class).toBe("materialization-failed");
+    expect(trace.launches).toEqual([]);
+  });
+
+  it("MZ11: a failed, cancelled or refused turn each stops the launch where it stands", function* () {
+    const scripts: [string, ScriptedTurn][] = [
+      ["failed", { result: { status: "failed", error: { message: "backend refused" } } }],
+      ["cancelled", { result: { status: "cancelled" } }],
+      [
+        "refused stop reason",
+        { result: { status: "completed", stopReason: "refusal", _meta: TURN_META } },
+      ],
+    ];
+    for (const [name, script] of scripts) {
+      const harness = createFakeRuntime();
+      const trace = newTrace();
+      harness.script({ events: ACKNOWLEDGED, ...script });
+      yield* scoped(function* () {
+        yield* installOwing(harness, trace);
+        const refusal = yield* attempt(trace, INSTRUCTIONS);
+        expect([name, refusal?.class]).toEqual([name, "materialization-failed"]);
+      });
+      expect([name, trace.launches]).toEqual([name, []]);
+    }
+  });
+
+  it("MZ12: a resumed session owes nothing, and nothing is spent on it", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const routes = createMemorySessionRouteStore();
+    const store = makeStore();
+    acknowledges(harness);
+    yield* installOwing(harness, trace, { routeStore: routes, store });
+
+    yield* launch(INSTRUCTIONS);
+    expect(harness.turns.length).toBe(1);
+
+    // A second launch of the same layer resumes what the first established.
+    const second = createFakeRuntime();
+    const later = newTrace();
+    yield* scoped(function* () {
+      yield* installOwing(second, later, { routeStore: routes, store });
+      yield* launch(INSTRUCTIONS);
+    });
+
+    const prepared = preparedOf(later);
+    expect(prepared.sessionState).toBe("resumed");
+    // Whatever made this conversation openable happened before this run, so a
+    // turn here would be spending a reader's model turn to learn nothing.
+    expect(prepared.materialization).toBeUndefined();
+    expect(second.turns).toEqual([]);
+    expect(later.records.some((record) => record.phase === "materialized")).toBe(false);
+    expect(later.launches.length).toBe(1);
+  });
+
+  it("MZ13: an adapter that owes no turn plans none and spends none", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const unowing: NativeAdapter = {
+      launcher: "claude",
+      identity: "provider-returned",
+      binding: TEST_BINDING,
+      resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
+    };
+    yield* installLaunchStack(harness, trace, {
+      adapters: { claude: unowing },
+      routeStore: createMemorySessionRouteStore(),
+    });
+
+    yield* launch(INSTRUCTIONS);
+
+    expect(preparedOf(trace).materialization).toBeUndefined();
+    expect(harness.turns).toEqual([]);
+    expect(trace.notices).toEqual([]);
+    expect(trace.order).toEqual(["prepared", "detached", "spawn", "exited"]);
+  });
+
+  it("MZ14: the shipped Claude adapter owes no turn and the shipped Codex adapter does", function* () {
+    // The gap is Codex's persistence, so declaring it belongs to the adapter
+    // that has it — and to no other. An adapter gaining this member by being
+    // launched would be one acquiring a model turn by contract drift.
+    const claude = nativeAdapterFor("claude");
+    const codex = nativeAdapterFor("codex");
+    if (claude === undefined || codex === undefined) {
+      throw new Error(
+        "this build ships no claude or codex adapter, so there is nothing to compare",
+      );
+    }
+    expect("materialization" in claude).toBe(false);
+    expect(codex.materialization).toEqual({
+      promptVersion: "codex-materialization.v1",
+      prompt: PROMPT,
+    });
+    // The bytes are a constant of this build: nothing interpolated, nothing
+    // authored, no path, no identity, no environment.
+    expect(PROMPT).toBe(
+      "This turn only makes the Codex conversation resumable. Do not perform the prepared " +
+        "task, inspect or modify files, call tools, or take any external action. Reply with a " +
+        "brief acknowledgement only.",
+    );
+  });
+
+  it("MZ15: a build or identity this run cannot vouch for is refused before anything is spent", function* () {
+    // A conversation this build cannot name is a conversation this build cannot
+    // send to. Both of these refuse for reasons that are settled before the
+    // turn, and the cost of getting that order wrong is a reader's model turn
+    // spent to reach a refusal that was already decided.
+    const first = createFakeRuntime();
+    const routes = createMemorySessionRouteStore();
+    acknowledges(first);
+    yield* installOwing(first, newTrace(), { routeStore: routes });
+    yield* launch(INSTRUCTIONS);
+    expect(first.turns.length).toBe(1);
+
+    // Another build of the same provider, which accepts the same identity
+    // string and disagrees silently about which conversation it names.
+    const drifted = createFakeRuntime();
+    const afterDrift = newTrace();
+    acknowledges(drifted);
+    yield* scoped(function* () {
+      yield* installOwing(drifted, afterDrift, {
+        routeStore: routes,
+        observer: createFakeObserver({
+          versionOutput: "2.1.242 (Claude Code)\n",
+          digest: "b".repeat(64),
+        }).observer,
+      });
+      expect((yield* attempt(afterDrift, INSTRUCTIONS))?.class).toBe("executable-binding-refused");
+    });
+    expect(drifted.turns).toEqual([]);
+    expect(afterDrift.notices).toEqual([]);
+    expect(afterDrift.launches).toEqual([]);
+
+    // And an adapter that asserts no native identity for a session that owes no
+    // turn: the session exists, so there is something to send to, and no way to
+    // say which conversation it is. The handle is released rather than prompted.
+    const nameless = createFakeRuntime();
+    nameless.omitAgentSessionId = true;
+    const afterNameless = newTrace();
+    acknowledges(nameless);
+    yield* scoped(function* () {
+      yield* installLaunchStack(nameless, afterNameless, {
+        adapters: {
+          claude: {
+            launcher: "claude",
+            identity: "provider-returned",
+            binding: TEST_BINDING,
+            resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
+          },
+        },
+        routeStore: createMemorySessionRouteStore(),
+      });
+      expect((yield* attempt(afterNameless, INSTRUCTIONS))?.class).toBe("identity-unavailable");
+    });
+    expect(nameless.turns).toEqual([]);
+    expect(afterNameless.notices).toEqual([]);
+    expect(nameless.closeInputs[0]?.discardPersistentState).toBeUndefined();
+  });
+
+  it("MZ15b: an owing adapter that names nothing costs its turn before it can say so", function* () {
+    // The honest cost of the gate. A conversation held as occupancy has no name
+    // until a backend accepts a turn in it, so an adapter that would never have
+    // named one cannot be caught before the turn — nothing before acceptance
+    // distinguishes it from an adapter that will.
+    const harness = createFakeRuntime();
+    harness.omitAgentSessionId = true;
+    const trace = newTrace();
+    acknowledges(harness);
+    yield* installOwing(harness, trace);
+
+    const refusal = yield* attempt(trace, INSTRUCTIONS);
+
+    // The turn succeeded and the identity is what is missing, so this is the
+    // same refusal a nameless session gets — not a failed turn.
+    expect(refusal?.class).toBe("identity-unavailable");
+    expect(harness.turns.length).toBe(1);
+    // And the launch still stops: nothing is detached, nothing is opened.
+    expect(trace.launches).toEqual([]);
+    expect(trace.order).not.toContain("detached");
+  });
+
+  it("MZ16: a launch halted during its turn cancels it and opens nothing", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    // Withheld until this case releases it, so the halt lands while the turn is
+    // genuinely in flight rather than in whatever gap a delay happens to hit.
+    harness.script({ manual: true, result: { status: "completed", stopReason: "end_turn" } });
+
+    yield* scoped(function* () {
+      yield* installOwing(harness, trace);
+      const launching = yield* spawn(() => Agent.operations.launch(launchRequest(INSTRUCTIONS)));
+      yield* harness.startedTurns(1);
+
+      yield* launching.halt();
+
+      // The turn this launch started is the turn it stopped, and stopped by the
+      // time the halt answers. A turn still running here is one the reader is
+      // paying for with nobody waiting on it and nothing left to cancel it
+      // before this whole provider comes down.
+      expect(harness.turns[0]?.cancelled).toBe(true);
+      // Nothing downstream of the turn happened. The native UI in particular
+      // never opened, so the conversation it would have opened on is one this
+      // run neither finished making openable nor handed to anybody.
+      expect(trace.launches).toEqual([]);
+      expect(trace.order).toEqual(["prepared", "notify"]);
+      // The reader was still told, because a turn that was started and stopped
+      // is one they may still be charged for.
+      expect(trace.notices.length).toBe(1);
+
+      // And the session is not quietly free. It was prepared and never handed
+      // over, so this owner cannot say it finished with it — the next owner is
+      // told to recover it deliberately rather than being granted a session
+      // whose conversation may or may not have been written to.
+      let next: string | undefined;
+      try {
+        yield* Agent.operations.session();
+      } catch (error) {
+        next = error instanceof Error ? error.name : typeof error;
+      }
+      expect(next).toBe("AgentSessionRecoveryRequired");
+    });
+  });
+
+  it("MZ17: the session is created as occupancy, and the accepted turn is what names it", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const store = makeStore();
+    acknowledges(harness);
+    yield* installOwing(harness, trace, { store });
+
+    yield* launch(INSTRUCTIONS);
+
+    // The gate is asked for at the ensure. Without this the runtime would
+    // persist an ordinary record and report the turn accepted before any
+    // backend saw it, and every check below would be about nothing.
+    expect(harness.ensureCalls.length).toBe(1);
+    expect(harness.ensureCalls[0]?.materialization).toBe("first-turn-acceptance");
+
+    // So the preparation has no conversation to name: ACPX is holding the key,
+    // not a session.
+    const prepared = preparedOf(trace);
+    expect(prepared.materialization?.promptVersion).toBe("codex-materialization.v1");
+    expect(prepared.nativeSessionId).toBe("");
+
+    // The accepted turn is what names it, and that is the name handed over.
+    expect(materialized(trace)?.nativeSessionId).toBe(ASSERTED);
+    expect(trace.launches[0]?.command).toEqual([OBSERVED_PATH, "--resume", ASSERTED]);
+
+    // And acceptance promoted the record: it no longer awaits a first turn, and
+    // it now asserts the conversation that turn made openable.
+    const stored = store.records.get(SESSION_KEY);
+    expect(stored?.sessionMaterialization).toBeUndefined();
+    expect(stored?.agentSessionId).toBe(ASSERTED);
+  });
+
+  it("MZ18: a turn no backend accepts opens nothing, whatever the adapter said", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const store = makeStore();
+    // Text, a stop reason, a named turn — and no acceptance. This is the whole
+    // point of the gate: everything an adapter can say is said here, and none
+    // of it is evidence the conversation exists.
+    acknowledges(harness, { accepted: false });
+    yield* installOwing(harness, trace, { store });
+
+    const refusal = yield* attempt(trace, INSTRUCTIONS);
+
+    expect(refusal?.class).toBe("materialization-failed");
+    expect(trace.launches).toEqual([]);
+    expect(trace.order).not.toContain("detached");
+    // The record still awaits its first accepted turn, and still names nothing.
+    const stored = store.records.get(SESSION_KEY);
+    expect(stored?.sessionMaterialization?.state).toBe("pending");
+    expect(stored?.agentSessionId).toBeUndefined();
+  });
+
+  it("MZ19: a record still awaiting its first turn is not a session to resume", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    // What an interrupted first attempt leaves behind: the key is occupied, the
+    // layer matches, and no backend ever accepted a turn in it. Reading this as
+    // an ordinary resume would skip the very turn that makes it openable and
+    // hand a native UI a name for nothing.
+    const pending: AcpSessionRecord = {
+      ...makeRecord(AGENT_COMMAND, CWD),
+      acpxRecordId: SESSION_KEY,
+      acpx: { session_options: { system_prompt: INSTRUCTIONS } },
+      sessionMaterialization: {
+        state: "pending",
+        contract: "executablemd.session-materialization/v1",
+      },
+    };
+    const store = makeStore({ [SESSION_KEY]: pending });
+    acknowledges(harness);
+    yield* installOwing(harness, trace, { store });
+
+    yield* launch(INSTRUCTIONS);
+
+    const prepared = preparedOf(trace);
+    expect(prepared.sessionState).toBe("created");
+    expect(prepared.materialization?.promptVersion).toBe("codex-materialization.v1");
+    expect(harness.ensureCalls[0]?.materialization).toBe("first-turn-acceptance");
+    expect(harness.turns.length).toBe(1);
+    expect(store.records.get(SESSION_KEY)?.sessionMaterialization).toBeUndefined();
+  });
+
+  it("MZ20: once promoted, the record resumes and the gate is never asked for again", function* () {
+    const harness = createFakeRuntime();
+    const store = makeStore();
+    const routes = createMemorySessionRouteStore();
+    acknowledges(harness);
+    yield* installOwing(harness, newTrace(), { store, routeStore: routes });
+    yield* launch(INSTRUCTIONS);
+
+    const second = createFakeRuntime();
+    const later = newTrace();
+    yield* scoped(function* () {
+      yield* installOwing(second, later, { store, routeStore: routes });
+      yield* launch(INSTRUCTIONS);
+    });
+
+    // A promoted record is an ordinary session, so nothing about materialization
+    // is asked for and nothing is spent.
+    expect(second.ensureCalls[0]?.materialization).toBeUndefined();
+    expect(second.turns).toEqual([]);
+    expect(preparedOf(later).nativeSessionId).toBe(ASSERTED);
+    expect(later.launches[0]?.command).toEqual([OBSERVED_PATH, "--resume", ASSERTED]);
   });
 });

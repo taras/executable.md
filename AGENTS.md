@@ -556,8 +556,8 @@ sees.
 
 Delivering an accepted plan as a focused, verified change. An Opus model acts
 in this role unless the task assigns another. Running this target prepares the
-session from the contract below and hands you Claude's own interactive UI for
-it.
+session from the contract below and hands you the selected agent's own
+interactive UI for it.
 
 <Agent>
   <Session.Launch session="implementer">

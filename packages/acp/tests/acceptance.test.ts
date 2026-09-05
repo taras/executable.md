@@ -19,7 +19,7 @@ import { createFakeRuntime, makeRegistry, makeStore, useFlatWorld } from "./help
 
 const CWD = "/work";
 const DOC = [
-  '<Agent name="codex">',
+  '<Agent name="gemini">',
   '<Session name="review">',
   '<Prompt text="hi" />',
   "</Session>",
@@ -44,9 +44,9 @@ describe("Tier XA — ACPX provider through the rootProvider seam", () => {
           factory: createAcpxProvider({
             createRuntime: harness.create,
             sessionStore: makeStore(),
-            agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+            agentRegistry: makeRegistry({ gemini: "gemini-cmd" }),
           }),
-          options: { defaultAgent: "codex", permissionMode: "deny-all" },
+          options: { defaultAgent: "gemini", permissionMode: "deny-all" },
         },
       });
 
@@ -102,7 +102,7 @@ describe("Tier WAP — same-named sibling Sessions", () => {
     yield* writeTextFile(
       docPath,
       [
-        '<Agent name="codex">',
+        '<Agent name="gemini">',
         '<Session name="review">',
         "<Prompt>first</Prompt>",
         "</Session>",
@@ -122,7 +122,7 @@ describe("Tier WAP — same-named sibling Sessions", () => {
           factory: createAcpxProvider({
             createRuntime: harness.create,
             sessionStore: makeStore(),
-            agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+            agentRegistry: makeRegistry({ gemini: "gemini-cmd" }),
             sessions: {
               // deno-lint-ignore require-yield
               *place(context) {
@@ -140,7 +140,7 @@ describe("Tier WAP — same-named sibling Sessions", () => {
               },
             },
           }),
-          options: { defaultAgent: "codex", permissionMode: "deny-all" },
+          options: { defaultAgent: "gemini", permissionMode: "deny-all" },
         },
       });
       // Middleware that rewrites the descriptive name on its way through, which
@@ -194,7 +194,7 @@ describe("Tier WAP — same-named sibling Sessions", () => {
     yield* writeTextFile(
       docPath,
       [
-        '<Agent name="codex">',
+        '<Agent name="gemini">',
         '<Session name="review">',
         "<Prompt>first</Prompt>",
         "</Session>",
@@ -214,7 +214,7 @@ describe("Tier WAP — same-named sibling Sessions", () => {
           factory: createAcpxProvider({
             createRuntime: harness.create,
             sessionStore: makeStore(),
-            agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+            agentRegistry: makeRegistry({ gemini: "gemini-cmd" }),
             sessions: {
               // deno-lint-ignore require-yield
               *place(context) {
@@ -227,7 +227,7 @@ describe("Tier WAP — same-named sibling Sessions", () => {
               },
             },
           }),
-          options: { defaultAgent: "codex", permissionMode: "deny-all" },
+          options: { defaultAgent: "gemini", permissionMode: "deny-all" },
         },
       });
 

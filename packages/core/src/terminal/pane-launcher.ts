@@ -50,6 +50,7 @@ export function* usePaneNativeLauncher(
   claim: TerminalPaneClaim,
   flush: () => Operation<void>,
   runInPane: RunInPane,
+  notify: (text: string) => Operation<void>,
 ): Operation<void> {
   yield* NativeLauncher.around({
     /**
@@ -73,6 +74,11 @@ export function* usePaneNativeLauncher(
     },
     *flush() {
       yield* flush();
+    },
+    // Into this pane's own text, for the same reason `flush` is: what a launch
+    // says is addressed to whoever is watching this pane.
+    *notify([text]) {
+      yield* notify(text);
     },
     *launch([request, spawned]) {
       // The end of the chain, and deliberately so. Middleware written nearer

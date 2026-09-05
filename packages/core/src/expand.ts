@@ -2252,8 +2252,11 @@ function paneWork(pane: TerminalPane, title: string, site: GridSite): PaneWork {
         // by being here: it reserves and flushes this pane instead of competing
         // for the run's one foreground lease, and the child it starts is what
         // makes this pane ready.
-        yield* usePaneNativeLauncher(claim, flushPane, (request, spawned) =>
-          composite.launch(pane.ordinal, request, spawned),
+        yield* usePaneNativeLauncher(
+          claim,
+          flushPane,
+          (request, spawned) => composite.launch(pane.ordinal, request, spawned),
+          (text) => composite.display(pane.ordinal, `${text}\n`),
         );
         const siteEnv = yield* env;
         // Starts from what the grid site can see and keeps its own writes: a

@@ -59,16 +59,19 @@ routes an opaque request and cannot manufacture that result.
   its `SessionLaunchResult`; the route is where public middleware sees the ask,
   and authority to perform it reaches the installed provider directly rather
   than travelling on this chain
-  (specs/native-agent-session-launch-spec.md). A launch performs no model turn,
-  and a provider that answers `prompt()` does not thereby answer it: native
-  session launch is its own capability, installed on its own.
-- Built-in **`claude` is advertised**, for two separate capabilities: native
-  launch, and attaching ACP to a session a native process constructed. Its
-  sessions are named by XMD and created by the native process
+  (specs/native-agent-session-launch-spec.md). A launch performs no model turn
+  except the one materialization turn an adapter may require to make a freshly
+  created conversation resumable at all, and a provider that answers `prompt()`
+  does not thereby answer it: native session launch is its own capability,
+  installed on its own.
+- Built-in **`claude` and `codex` are advertised** for native launch, and
+  `claude` additionally for attaching ACP to a session a native process
+  constructed. Claude's sessions are named by XMD and created by the native
+  process; Codex names its own and reports it back
   (specs/native-agent-session-launch-spec.md). So the ownership,
-  construction-route and executable-observation requirements below apply to it
+  construction-route and executable-observation requirements below apply to them
   on every host, and only the hosts that assemble all three — Deno and the
-  compiled binary — can serve it. `codex` remains unadvertised for both.
+  compiled binary — can serve them.
 - Every operation that can act on an **advertised** session — `session()`, a
   subscribed `prompt()` stream, a launch, and an incomplete launch replay —
   takes exclusive ownership of it first, through the session coordinator its
@@ -82,9 +85,12 @@ routes an opaque request and cannot manufacture that result.
   host, Codex included.
 - The host also passes in a **construction-route store** and an **executable
   observer**, directly and from the same trusted root as the coordinator. Both
-  are required only for an advertised agent whose adapter names its own
-  sessions: a provider that returns the identity constructs nothing a route
-  governs and binds no build, and keeps its behavior unchanged on a host that
+  are required only for an advertised agent whose adapter binds a build. Which
+  side chose the identity does not decide that: whoever named the session, the
+  name resolves to one conversation only beside the build that issued or
+  accepted it, so an adapter that pins a build needs a route to say how the
+  session was constructed and an observer to say which build that was. An
+  adapter that binds nothing keeps its behavior unchanged on a host that
   has neither. A host missing either refuses that agent before any provider
   effect, on the same terms as a missing coordinator. The observer is not a
   contextual Api for the same reason the coordinator is not: executable
@@ -96,9 +102,13 @@ routes an opaque request and cannot manufacture that result.
   launch by an adapter that names its own sessions publishes `client-native`
   under an identity that adapter allocated, unless existing durable ACPX state
   or an existing route says the session was constructed through ACP — in which
-  case it publishes or adopts `acp-first` and retains `identity-unavailable`.
-  Publication is create-once, so the loser of either order adopts the winner,
-  and no route converts.
+  case it publishes or adopts `acp-first` and retains `identity-unavailable`. A
+  launch by an adapter that binds a build and lets the provider name the session
+  publishes or adopts the **bound** `acp-first` form, carrying the build it just
+  observed, before ACP creates anything; an existing unbound `acp-first` record
+  refuses rather than gaining the current executable. Publication is
+  create-once, so the loser of either order adopts the winner, and no route
+  converts.
 - A `session()` or subscribed `prompt()` meeting a **bound** `client-native`
   route **attaches** to it. Under the same ownership it reobserves the build and
   compares the binding exactly, requires any retained ACP arrangement to assert

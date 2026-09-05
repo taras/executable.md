@@ -164,8 +164,11 @@ raw environment, or executable argument vector.
 `launchAgentSession()` is distinct from `prompt()`:
 
 - `prompt()` performs one model turn through ACP and returns the agent response;
-- `launchAgentSession()` performs no model turn, transfers the session to a
-  native UI, and returns only after that UI exits.
+- `launchAgentSession()` returns no agent response at all. It transfers the
+  session to a native UI and returns only after that UI exits. It performs no
+  model turn of its own except the one materialization turn described below,
+  which an adapter may require to make a freshly created conversation resumable
+  and which is never the launch's return value.
 
 The base `Agent.launch(request)` routing handler fails. A provider must install
 the route explicitly; availability of `agent()`, `session()`, and `prompt()`
@@ -224,7 +227,9 @@ An empty cached transcript is not proof that a retained or previously handed-off
 session has no conversation. Native UI turns are provider-owned and need not be
 mirrored into ACPX or XMD state. Relaunch therefore never silently keeps a stale
 layer, discards unobserved native history, substitutes a new provider session
-for retained continuity, or performs a bootstrap turn.
+for retained continuity, or performs a bootstrap turn. A materialization turn is
+not a bootstrap turn: it runs only for a conversation this launch just created,
+carries no authored content, and never runs against a retained one.
 
 The prepared text and filesystem authority are different capabilities:
 
@@ -291,10 +296,13 @@ provenance, because the two constructions make different claims.
 
 A **provider-returned** adapter proves all seven of the following:
 
-1. session creation materializes durable state the native UI can resume;
+1. by the time the launch hands over, durable state the native UI can resume
+   exists — either because creation alone materialized it, or because the
+   adapter's declared materialization turn did;
 2. its returned native ID names that exact state;
-3. prepared instructions are effective on the first native user turn without a
-   bootstrap model turn;
+3. prepared instructions are effective on the first native *user* turn without a
+   bootstrap model turn in front of them, and a materialization turn that
+   preceded that user turn neither supplied nor consumed them;
 4. cwd and permissions survive the handoff without being widened;
 5. the ACP owner can release the session before native attachment;
 6. the native process can exit without deleting the resumable session; and
@@ -426,9 +434,28 @@ the failure this contract asks for rather than a hopeful spawn.
 
 `claude` is advertised. Its client-allocated claims were proven through the
 production CLI against **Claude Code 2.1.241 on macOS arm64**, which is the
-compatibility point the advertisement stands on. `codex` is unadvertised: its
-command shape and adapter contract tests exist, and nothing has run its
-provider-returned claims against an installed Codex.
+compatibility point the advertisement stands on.
+
+`codex` is advertised for native launch, gated by the complete provider-returned
+proof through the production CLI against **`codex-cli 0.153.2` on macOS arm64**,
+with the vendored `@agentclientprotocol/codex-acp` 1.6.2 snapshot that asserts
+the App Server thread on the response `_meta` — that whole tuple is the
+compatibility point the advertisement stands on, and a launch outside it refuses
+before an identity exists. Complete means through to history: the gate closes
+only when XMD rejoins that same conversation over ACP afterwards and reads the
+native turn back out of it, because a conversation that cannot be rejoined is
+not the one this contract says was handed over.
+
+Reaching it costs one model turn, and only Codex owes it. The App Server writes
+a thread's rollout at that thread's first turn and `codex resume <id>` reads
+rollouts, so a conversation ACP created and nothing has spoken in is refused by
+name. `codex-materialization.v1` is the single XMD-owned turn that closes that
+gap for a freshly created conversation, and it is not the author-supplied
+bootstrap of #514: its bytes are fixed by the adapter, it carries no authored
+content, path, identity or environment, it refuses on any tool call, and an
+already-resumable conversation receives none. Reading the ACP session id as the
+native identity remains exactly the substitution the provider-returned route
+exists to refuse.
 
 ## Runtime sequence
 
@@ -867,24 +894,48 @@ interface AgentSessionRouteV2 {
 }
 ```
 
-There is no V2 `acp-first`: ACP-first construction gained no fact, and a second
-schema for it would be a version number with nothing behind it. New
-client-native construction publishes V2 and observes the build before it
-allocates an identity. Serialization preserves the schema it was given, so
-nothing here upgrades a route.
+ACP-first construction bound to a build is V3, and only V3:
 
-Every member of both schemas is exact. A path, adapter command, environment,
+```ts
+interface AgentSessionRouteV3 {
+  schema: "session-route.v3";
+  route: "acp-first";
+  provider: string;
+  agent: string;
+  sessionKey: string;
+  executableBinding: ExecutableBuildBindingV1;
+}
+```
+
+It carries the binding and nothing more. The other members of V2 describe an
+identity XMD chose and a layer it wrote a file for, and neither is a fact about
+a session the provider named — so an ACP-first route says how the session was
+constructed and which build constructed it, exactly as it always did, with the
+one fact that was missing.
+
+Each bound schema admits only its own construction: a V2 record is
+`client-native` and a V3 record is `acp-first`, and the two pairings do not
+cross. New client-native construction publishes V2 and observes the build before
+it allocates an identity; new bound ACP-first construction publishes V3 and
+observes the build before it creates a session. Serialization preserves the
+schema it was given, so nothing here upgrades a route.
+
+Every member of all three schemas is exact. A path, adapter command, environment,
 argv, instruction text, credential, transcript, process fact or temporary path
 is not a member, and a record carrying one is refused rather than read
 partially. A binding beside a V1 record is such a member, which is what keeps a
-V1 record from being read as a V2 one. So are missing, malformed,
+V1 record from being read as a bound one. So are missing, malformed,
 unknown-schema, moved and natural-key-mismatched records. Only a file that is
 not there means the session has not been constructed yet.
 
-A V1 `client-native` route is legacy-unbound. It remains valid for native resume
-under the contract that created it, authorizes no ACP attachment, and is never
-overwritten, supplemented or upgraded. A user who needs attachment creates a
-differently named logical session under the bound contract.
+A V1 route of either kind is legacy-unbound. A V1 `client-native` route remains
+valid for native resume under the contract that created it, authorizes no ACP
+attachment, and is never overwritten, supplemented or upgraded. A V1 `acp-first`
+route is the same story from the other side: it says the session was constructed
+before XMD recorded which build issued its identity, so an agent whose adapter
+binds a build refuses it rather than writing the current executable into it. A
+user who needs either bound behavior creates a differently named logical session
+under the bound contract.
 
 The route shares the coordinator's namespace, natural key and digest, so one
 session names one lease, one ownership record and one route. The route directory
@@ -1365,14 +1416,23 @@ model.
 The following capabilities remain outside V1 and fail closed rather than
 degrading:
 
-- **Only `claude` is advertised**, and separately for each capability. It is
-  client-allocated, and its proofs ran the applicable claims under
-  *Provider-native identity* against Claude Code 2.1.241 on macOS arm64. `codex`
-  has a command shape and contract tests and is not launch-capable, because
-  nothing has proven its provider-returned claims against an installed Codex. A
-  launch naming an unadvertised agent is refused with `unsupported-capability`
-  before anything of the session moves, and so is an attachment naming an agent
-  advertised only for native launch.
+- **Only `claude` and `codex` are advertised**, and separately for each
+  capability. `claude` is client-allocated and is advertised for both native
+  launch and client-native attachment; its proofs ran the applicable claims
+  under *Provider-native identity* against Claude Code 2.1.241 on macOS arm64.
+  `codex` is provider-returned and is advertised for native launch only, on the
+  frozen tuple named under *Provider-native identity*. Handing the session to a
+  native UI does not on its own satisfy that advertisement: the native-launch
+  gate for `codex` is the complete provider-returned proof, which requires that
+  XMD rejoins the same conversation through ACP afterwards and reads the native
+  turn back out of its history, so continuity is part of the claim being made
+  and not a separate one. Its absence
+  from client-native attachment says something else entirely: that capability is
+  joining a conversation a native client allocated, and `codex` never has one,
+  because its route is ACP-first and the identity is the adapter's own answer to
+  XMD. A launch naming an unadvertised agent is refused
+  with `unsupported-capability` before anything of the session moves, and so is
+  an attachment naming an agent advertised only for native launch.
 - **`Agent.AddDir` is unbuilt**, so a launch declares no additional roots. The
   retained request says so explicitly — an empty ordered list — rather than
   omitting the fact, and no adapter maps a root it was never given. The ACP
@@ -1406,7 +1466,9 @@ contract.
 Implementation review checks these frozen invariants:
 
 1. Only explicitly rendered `Session.Launch` content crosses as instructions.
-2. Launch performs no model turn.
+2. Launch performs no model turn beyond an adapter's declared materialization
+   turn, which runs at most once, only for a conversation the launch just
+   created, and only with that adapter's fixed prompt.
 3. Provider-native identity is asserted, never inferred.
 4. ACP and the native UI never concurrently own one session.
 5. XMD remains the supervising parent and the document stays suspended.

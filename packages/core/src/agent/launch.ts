@@ -2,11 +2,16 @@
  * The native session launch seam (specs/native-agent-session-launch-spec.md).
  *
  * A launch is one deterministic preparation followed by an ownership handoff,
- * and it moves through four phases:
+ * and it moves through these phases:
  *
  * ```text
- * prepared -> detached -> launched -> exited
+ * prepared -> materialization prompt -> materialized -> detached -> launched -> exited
  * ```
+ *
+ * `materialization prompt` and `materialized` are present only for a provider
+ * whose freshly created conversation is not yet one its native UI can open. The
+ * providers that need no such turn go straight from `prepared` to `detached`,
+ * and a launch on them still costs zero model turns.
  *
  * Each phase a provider completes is retained by the invocation that issued
  * the launch, through the authority core delivers to the selected provider.
@@ -27,8 +32,9 @@
  */
 
 import type { PermissionMode } from "./agent-api.ts";
+import type { AgentPromptCheckpoint } from "./checkpoint.ts";
 
-export type LaunchPhase = "prepared" | "detached" | "launched" | "exited";
+export type LaunchPhase = "prepared" | "materialized" | "detached" | "launched" | "exited";
 
 /**
  * What a launch did about the instruction layer, so the choice is observable
@@ -62,7 +68,8 @@ export type LaunchFailureClass =
   | "native-exit"
   | "session-busy"
   | "session-recovery-required"
-  | "executable-binding-refused";
+  | "executable-binding-refused"
+  | "materialization-failed";
 
 /**
  * `session-busy` is contention, not breakage: another XMD owner holds the
@@ -77,6 +84,12 @@ export type LaunchFailureClass =
  * executable-file validation, version parsing, digesting, schema recognition,
  * equality, and a session established before any build was recorded all end
  * here.
+ *
+ * `materialization-failed` is the one turn a launch may owe: the conversation
+ * ACP created is not yet one the native UI can open, the exchange that would
+ * make it openable did not complete, and the launch stops with ACP ownership
+ * still where it was rather than handing over a session the UI would refuse by
+ * name.
  */
 export interface LaunchFailure {
   class: LaunchFailureClass;
@@ -138,11 +151,102 @@ export function sameExecutableBuild(
 }
 
 /**
+ * The one model turn a launch may owe, named before it is spent.
+ *
+ * Some providers persist a conversation only once something has been said in
+ * it, so the session ACP just created is not yet one the native UI can open.
+ * Exactly one XMD-owned turn closes that gap, and it is planned in the
+ * preparation rather than decided later: the version says which exact prompt
+ * will be sent, and the request id is fixed here so a replay that finds the
+ * turn already retained is looking for the same turn rather than a new one.
+ *
+ * Present only for a provider that needs it, and only for a conversation this
+ * launch created. Nothing else acquires a turn by being launched.
+ */
+export interface MaterializationPlan {
+  /** Which exact prompt this is — `codex-materialization.v1`. */
+  readonly promptVersion: string;
+  /** The request id the turn runs under, immutable once `prepared` is kept. */
+  readonly requestId: string;
+  /**
+   * The exact text that will be sent, retained before it is sent.
+   *
+   * A version names a prompt; this is the prompt. Keeping the bytes with the
+   * plan is what lets a reader of the journal see what an XMD-owned turn said
+   * in someone's conversation without holding the build that composed it.
+   */
+  readonly prompt: string;
+}
+
+/**
+ * What the provider reported about what the materialization turn cost.
+ *
+ * Every field is optional and a missing one means the provider reported
+ * nothing, which is displayed and retained as exactly that. Nothing here reads
+ * absence as zero: a turn whose token count was never reported is not a free
+ * turn, and saying so would be inventing an observation.
+ */
+export interface MaterializationUsage {
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly cachedReadTokens?: number;
+  readonly cachedWriteTokens?: number;
+  readonly thoughtTokens?: number;
+  readonly totalTokens?: number;
+  readonly costAmount?: number;
+  readonly costCurrency?: string;
+}
+
+/**
+ * The turn that made a fresh conversation openable, and what it cost.
+ *
+ * Retained as its own phase because it sits between two facts that must not be
+ * confused: the session exists (`prepared`) and ACP has let go of it
+ * (`detached`). A launch interrupted after the turn must never spend a second
+ * one, and the only thing that can say the first was spent is a record of it.
+ *
+ * `turn` is the provider's own name for the completed turn, carried across
+ * unchanged. It is the evidence the exchange reached the backend rather than
+ * merely being written to a socket, and it is the same checkpoint the durable
+ * prompt retained — which is what lets this record be rebuilt from that prompt
+ * when a run stopped between the two.
+ */
+export interface MaterializedLaunchRecord {
+  phase: "materialized";
+  promptVersion: string;
+  requestId: string;
+  /**
+   * The provider-native identity this turn made real. Absent on a failure.
+   *
+   * A conversation a backend has not accepted a turn in is not one a native UI
+   * can open, so the identity of one is asserted here rather than in the
+   * preparation: the launch that plans a turn prepares no identity at all, and
+   * this is where the one it produced becomes the thing that gets handed over.
+   */
+  nativeSessionId?: string;
+  /** The provider's identity for the completed turn. Absent on a failure. */
+  turn?: AgentPromptCheckpoint;
+  /** How long the turn took, in milliseconds. Absent when no turn was run. */
+  durationMs?: number;
+  usage: MaterializationUsage;
+  /** The assistant's full response text, retained and displayed unabridged. */
+  response: string;
+  stopReason?: string;
+  failure?: LaunchFailure;
+}
+
+/**
  * What one provider retained about the session it prepared.
  *
  * `nativeSessionId` is asserted by the provider. An ACP session id, an ACPX
  * record id, and a provider-native session id are three different identities,
  * and only the third one crosses the handoff.
+ *
+ * It is empty exactly when `materialization` names a turn this launch still
+ * owes. Until that turn is accepted there is no conversation for an identity to
+ * name — the provider holds occupancy, not a session — so the preparation says
+ * so rather than asserting a name nothing would resume, and the accepted turn
+ * asserts the identity instead.
  *
  * `instructions` is the prepared text itself, and it is retained beside its
  * digest — the execution's secret gate runs before this record persists, so
@@ -165,15 +269,25 @@ export interface PreparedLaunchRecord {
    */
   identityProvenance: IdentityProvenance;
   /**
-   * Which build accepted the client-allocated identity, present exactly when
-   * this provider binds one. A provider that returns its own identity owns its
-   * own session lifetime and binds nothing, so it carries none.
+   * Which build the provider-native identity belongs to, present exactly when
+   * the adapter behind it binds one. Independent of who chose the identity: a
+   * build accepted the name XMD allocated, or issued the name XMD was handed,
+   * and neither name resolves to one conversation without it.
    *
-   * Optional because the client-allocated path was released before any build
-   * was observed. A record without it is legacy history: readable, resumable by
-   * the native-only contract that wrote it, and never an attachable session.
+   * Optional because both paths were released before any build was observed. A
+   * record without it is legacy history: readable, resumable by the native-only
+   * contract that wrote it, and never an attachable session.
    */
   executableBinding?: ExecutableBuildBindingV1;
+  /**
+   * The one turn this launch owes before the native UI can open, when it owes
+   * one. Absent means no turn is owed and none may be taken.
+   *
+   * Retained with the preparation so the plan is fixed before anything is
+   * spent: a replay reads which prompt and which request id the first attempt
+   * committed to, rather than choosing them again.
+   */
+  materialization?: MaterializationPlan;
   instructionsDigest: string;
   instructions: string;
   cwd: string;
@@ -199,7 +313,11 @@ export interface ExitedLaunchRecord {
   failure?: LaunchFailure;
 }
 
-export type LaunchRecord = PreparedLaunchRecord | DetachedLaunchRecord | ExitedLaunchRecord;
+export type LaunchRecord =
+  | PreparedLaunchRecord
+  | MaterializedLaunchRecord
+  | DetachedLaunchRecord
+  | ExitedLaunchRecord;
 
 /**
  * A launch that stopped at a phase, carrying the phase it reached and the
