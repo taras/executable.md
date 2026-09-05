@@ -48,6 +48,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "scripts/tests/jsr-consumer-documentation.test.ts",
+    reason:
+      "its subject is the JSR distribution: it runs `deno publish --dry-run` to learn what the publish filter selects, stages exactly those files, and runs a consumer under `deno run` against them. Every step is Deno's own packaging, so there is nothing here a Node or Bun run would be exercising",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "scripts/tests/adapter-distribution.test.ts",
     reason:
       "asks each distribution for its module graph through `<execPath> info`, a subcommand only the Deno CLI has — under Node and Bun the same argument vector names a file called `info`; that each distribution *carries* the snapshots is a claim about Deno's own build outputs, and launching from them is Tier EA, which does run under all three",

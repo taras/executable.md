@@ -78,7 +78,7 @@ export function* readCoreDocumentation(): Operation<DocumentationSource> {
       // out of its own package, so it goes to the filesystem directly, at a URL
       // derived from this module — package-relative whatever the working
       // directory and search path are.
-      text: yield* readTextFile(url),
+      text: yield* readAsset(url),
     };
   } catch (error) {
     throw new Error(
@@ -107,13 +107,44 @@ export function* packageDocumentation(
   };
 }
 
+/**
+ * What reads a packaged asset, so a test can suspend inside index construction.
+ *
+ * Module-private and deliberately not re-exported from `mod.ts`: it is not a
+ * provider, not a Context and not a package hook, so nothing a document, a
+ * component or an installed package can reach replaces it. What it exists for
+ * is evidence — cancelling *inside the documentation work* is a different claim
+ * from cancelling inside catalog discovery, and there is no other point in this
+ * operation a test can stand at.
+ */
+let readAsset: (url: URL) => Operation<string> = readTextFile;
+
+/**
+ * Substitute the asset reader for the duration of `body`, then restore it.
+ *
+ * Called by core's own tests through the source module, never through the
+ * package's public surface.
+ */
+export function* withAssetReader<T>(
+  reader: (url: URL) => Operation<string>,
+  body: () => Operation<T>,
+): Operation<T> {
+  const previous = readAsset;
+  readAsset = reader;
+  try {
+    return yield* body();
+  } finally {
+    readAsset = previous;
+  }
+}
+
 /** One packaged documentation asset, read the same guarded way. */
 export function* readPackagedDocumentation(
   url: URL,
   named: { owner: string; asset: string },
 ): Operation<DocumentationSource> {
   try {
-    return { ...named, text: yield* readTextFile(url) };
+    return { ...named, text: yield* readAsset(url) };
   } catch (error) {
     throw new Error(
       `the packaged component documentation ${named.asset} is missing from this build ` +

@@ -51,6 +51,7 @@ import { retainedSource } from "../src/root-source.ts";
 import { renderSyntaxMarkdown } from "../src/syntax-markdown.ts";
 import { fixedCatalogObservation, rootCatalogObservation } from "../src/syntax-observation.ts";
 import type { CatalogObservation } from "../src/syntax-observation.ts";
+import { withAssetReader } from "../src/component-documentation.ts";
 import type { DocumentationContribution } from "../src/component-documentation.ts";
 import { SYNTAX_COMPONENT } from "../src/components/Syntax.ts";
 import type { ImportedDefinition } from "../src/components/import-authority.ts";
@@ -411,32 +412,32 @@ describe("Tier SYN — the named form", () => {
     const torn: string[] = [];
     const stream = new InMemoryStream();
 
-    // A host whose catalog contribution suspends: the named form is inside the
-    // observation when the scope is cancelled, which is the window a record
-    // could be written in.
-    const suspending: ExecutionInstallation = {
-      *catalog(): Operation<SyntaxCatalog> {
-        // Entered *inside* the named documentation operation: the component has
-        // claimed its occurrence and opened its durable operation by the time
-        // this runs, so a cancellation that arrives now is one that landed in
-        // the work rather than before it.
+    // Suspended inside *documentation-index construction*, not inside catalog
+    // discovery. By the time this runs the catalog is built, the occurrence is
+    // claimed and the durable operation is open, and the named lookup is
+    // reading the packaged asset — which is the window a record could be
+    // written in, and is reachable only from inside the documentation work.
+    // A lookup that skipped index construction would never enter it at all.
+    yield* withAssetReader(
+      function* (): Operation<string> {
         torn.push("entered");
         yield* ensure(() => {
           torn.push("torn down");
         });
         yield* suspend();
-        return catalogOf("Unreachable");
+        return "## Elicit\n\nunreachable\n";
       },
-    };
-
-    yield* scoped(function* () {
-      const task = yield* spawn(function* () {
-        return yield* run('<Syntax names={["Elicit"]} />\n', [suspending], stream);
-      });
-      // Let the observation get inside its operation before cancelling it.
-      yield* sleep(20);
-      yield* task.halt();
-    });
+      function* () {
+        yield* scoped(function* () {
+          const task = yield* spawn(function* () {
+            return yield* run('<Syntax names={["Elicit"]} />\n', [], stream);
+          });
+          // Let the lookup get inside the index before cancelling it.
+          yield* sleep(20);
+          yield* task.halt();
+        });
+      },
+    );
 
     const events = yield* stream.readAll();
     // Reached the work, then tore it down — in that order. Cancelling before
