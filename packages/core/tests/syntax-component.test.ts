@@ -58,8 +58,8 @@ const ROOT_PATH = "documents/root.md";
 
 /** The approved description, spelled here so a change to it fails a test. */
 const DESCRIPTION =
-  "Output available components and control flow constructs. `<Syntax />` renders the " +
-  "current catalog.";
+  "Inspect components and control-flow constructs. `<Syntax />` renders the current " +
+  'catalog; `<Syntax names={["Elicit"]} />` renders selected documentation.';
 
 /** A catalog with one built-in entry per name, for a case that needs a marker. */
 function catalogOf(...names: readonly string[]): SyntaxCatalog {
@@ -130,6 +130,19 @@ function* refusal(operation: Operation<unknown>): Operation<string> {
 function observations(events: readonly DurableEvent[]): DurableEvent[] {
   return events.filter(
     (event) => event.type === "yield" && event.description.type === "syntax_catalog",
+  );
+}
+
+/**
+ * Only the observations that succeeded.
+ *
+ * A refusal still records the attempt and its failure, which is how a journal
+ * says what happened. What must not exist is a *successful* record: that is the
+ * thing a continuation would restore and hand back as a catalog.
+ */
+function retained(events: readonly DurableEvent[]): DurableEvent[] {
+  return observations(events).filter(
+    (event) => event.type === "yield" && event.result.status === "ok",
   );
 }
 
@@ -249,6 +262,68 @@ describe("Tier SYN — what one occurrence answers", () => {
     const stream = new InMemoryStream();
     yield* run("<Syntax />\n<Syntax />\n", [stating(catalogOf("Marker")).installation], stream);
     expect(observations(yield* stream.readAll()).length).toBe(2);
+  });
+});
+
+describe("Tier SYN — the named form", () => {
+  it("SYN29: renders the selected entries' metadata and documentation, and captures it", function* () {
+    const named = String(yield* run('<Syntax names={["File", "Elicit"]} />\n'));
+
+    // Both selected, each once, with metadata and long-form documentation.
+    expect(named).toContain("### `<Elicit>`");
+    expect(named).toContain("### `<File>`");
+    expect(named).toContain("Asks a person a structured question");
+    expect(named).toContain("Reads or writes a file");
+    // Catalog order, not request order: `Elicit` precedes `File` alphabetically
+    // and the request asked for them the other way round.
+    expect(named.indexOf("### `<Elicit>`")).toBeLessThan(named.indexOf("### `<File>`"));
+    // Nothing but the selection: the rest of the catalog is not here.
+    expect(named).not.toContain("### `<Syntax>`");
+
+    // `as` binds the same text and emits nothing of it.
+    const captured = String(
+      yield* run(['<Syntax names={["Elicit"]} as="reference" />', "{reference}", ""].join("\n")),
+    );
+    const bare = String(yield* run('<Syntax names={["Elicit"]} />\n'));
+    expect(captured.trim()).toBe(bare.trim());
+  });
+
+  it("SYN30: states availability, and says so when documentation is absent", function* () {
+    const named = String(yield* run('<Syntax names={["Elicit"]} />\n'));
+    // At a root nothing has narrowed execution, so a selected entry is
+    // available by construction.
+    expect(named).toContain("**Available in this evaluation:** yes");
+
+    // A component core supplies but has not documented yet renders its
+    // metadata and says the documentation is missing, rather than refusing.
+    // A structural construct comes from no package at all, so no package-owned
+    // documentation can ever be its — the join has nothing to match on.
+    const undocumented = String(yield* run('<Syntax names={["If"]} />\n'));
+    expect(undocumented).toContain("### `<If>`");
+    expect(undocumented).toContain("No long-form documentation is available for this component.");
+  });
+
+  it("SYN31: refuses an unusable list before observing anything", function* () {
+    const stream = new InMemoryStream();
+    const unknown = yield* refusal(run('<Syntax names={["Nonexistent"]} />\n', [], stream));
+    expect(unknown).toContain("Nonexistent");
+    // No successful record: the attempt and its failure are journaled, as any
+    // effect's are, but there is nothing for a continuation to restore and hand
+    // back as a catalog.
+    expect(retained(yield* stream.readAll())).toHaveLength(0);
+
+    for (const written of [
+      "<Syntax names={[]} />",
+      '<Syntax names={["Elicit", "Elicit"]} />',
+      "<Syntax names={[1]} />",
+      '<Syntax names="Elicit" />',
+      '<Syntax unknownProp="x" />',
+    ]) {
+      const each = new InMemoryStream();
+      const message = yield* refusal(run(`${written}\n`, [], each));
+      expect([written, message.length > 0]).toEqual([written, true]);
+      expect([written, retained(yield* each.readAll()).length]).toEqual([written, 0]);
+    }
   });
 });
 
@@ -829,7 +904,23 @@ describe("Tier SYN — observation is never authority", () => {
     expect(entry?.description).toBe(DESCRIPTION);
     expect(entry?.forms).toEqual(["self-closing"]);
     expect(entry?.returnMode).toBe("text");
-    expect(entry?.props).toEqual({ type: "object", properties: {}, additionalProperties: false });
+    // One optional prop, closed: `names` selects documentation, and anything
+    // else is refused before an observation.
+    expect(entry?.props).toEqual({
+      type: "object",
+      properties: {
+        names: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          uniqueItems: true,
+          description:
+            "Optional. Render these components' catalog metadata and long-form documentation " +
+            "instead of the compact catalog. Entries render once each, in catalog order.",
+        },
+      },
+      additionalProperties: false,
+    });
     expect(entry?.origin).toEqual({ kind: "protected", origin: "@executablemd/core" });
     // Exactly one entry, in exactly one category.
     const everywhere = catalog.categories.flatMap((category) =>

@@ -32,7 +32,11 @@ import type { Operation } from "effection";
 
 import { inspectSyntax } from "./inspect.ts";
 import type { SyntaxCatalog } from "./inspect.ts";
-import { renderSyntaxMarkdown } from "./syntax-markdown.ts";
+import { renderSelectedDocumentation, renderSyntaxMarkdown } from "./syntax-markdown.ts";
+import type { SelectedEntry } from "./syntax-markdown.ts";
+import { documentationIndexFor } from "./component-documentation.ts";
+import type { DocumentationIndex } from "./documentation-index.ts";
+import { UnknownComponentError } from "./documentation-index.ts";
 import type { WorkflowImportAuthority } from "./components/bundle.ts";
 import type { DeclaredMarkdownComponent } from "./components/declared-markdown.ts";
 import type { IdentityComponent } from "./invocation-identity.ts";
@@ -49,6 +53,22 @@ import type { ComponentRegistry } from "./types.ts";
 export interface CatalogObservation {
   /** The catalog this site describes, rendered as Markdown. */
   observe(): Operation<string>;
+  /**
+   * The selected components' metadata and long-form documentation.
+   *
+   * Two inputs, not one, and this is the reason the observation is an object
+   * rather than a string. *What may I write here* and *what may I read about*
+   * are different questions, and a narrowing evaluation boundary answers them
+   * differently on purpose: the vocabulary it admits is smaller than the
+   * vocabulary an author is entitled to understand.
+   *
+   * So selection reads the **enclosing authoring catalog**, which is why a
+   * nested Plan can be told how `<Elicit>` works even where it may not run one,
+   * and each rendered entry states whether it is available in the current
+   * evaluation. Collapsing the two would either hide reference material an
+   * author needs or imply an authority they do not have.
+   */
+  document(names: readonly string[]): Operation<string>;
 }
 
 /**
@@ -88,13 +108,70 @@ export function rootCatalogObservation(
   inputs: CapturedCatalogInputs,
   contribution: CatalogContribution | undefined,
 ): CatalogObservation {
+  function* current(): Operation<SyntaxCatalog> {
+    return contribution === undefined ? yield* derived(inputs) : yield* contribution();
+  }
   return {
     *observe(): Operation<string> {
-      return renderSyntaxMarkdown(
-        contribution === undefined ? yield* derived(inputs) : yield* contribution(),
-      );
+      return renderSyntaxMarkdown(yield* current());
+    },
+    *document(names: readonly string[]): Operation<string> {
+      // At the root the two inputs are one catalog: nothing has narrowed what
+      // may execute, so what an author may read about and what they may run are
+      // the same set, and every selected entry is available.
+      const catalog = yield* current();
+      const index = yield* documentationIndexFor(catalog);
+      return renderSelectedDocumentation(select(catalog, catalog, names, index));
     },
   };
+}
+
+/**
+ * The selected entries, in catalog order, with their documentation and
+ * availability.
+ *
+ * `reference` is the catalog selection reads; `executable` is what the current
+ * evaluation may actually run. At a root they are the same object. Under a
+ * narrowing boundary they are not, and the difference is what each entry's
+ * availability reports.
+ */
+export function select(
+  reference: SyntaxCatalog,
+  executable: SyntaxCatalog,
+  names: readonly string[],
+  index: DocumentationIndex,
+): SelectedEntry[] {
+  const requested = new Set(names);
+  const runnable = new Set(
+    executable.categories.flatMap((category) => category.entries.map((entry) => entry.name)),
+  );
+  const selected: SelectedEntry[] = [];
+  // Walked in catalog order rather than request order, so two documents asking
+  // for the same components in different orders render the same text — which is
+  // what makes one occurrence's retained result comparable with another's.
+  for (const category of reference.categories) {
+    for (const entry of category.entries) {
+      if (!requested.has(entry.name)) {
+        continue;
+      }
+      requested.delete(entry.name);
+      selected.push({
+        entry,
+        documentation: index.documentationFor(entry.name, entry.origin),
+        available: runnable.has(entry.name),
+      });
+    }
+  }
+  // Whatever is left named nothing this site has. Refused whole rather than
+  // rendered partially: a reader handed three of the four components they asked
+  // about has no way to tell which request went unanswered.
+  if (requested.size > 0) {
+    throw new UnknownComponentError(
+      `<Syntax> was asked to document ${[...requested].sort().join(", ")}, which ` +
+        `${requested.size === 1 ? "is not a component" : "are not components"} available here.`,
+    );
+  }
+  return selected;
 }
 
 function* derived(inputs: CapturedCatalogInputs): Operation<SyntaxCatalog> {
@@ -116,12 +193,32 @@ function* derived(inputs: CapturedCatalogInputs): Operation<SyntaxCatalog> {
  * adds nothing: the catalog handed here is the admission's, so an entry that is
  * not in the admission cannot be in the observation.
  */
-export function fixedCatalogObservation(catalog: SyntaxCatalog): CatalogObservation {
+export function fixedCatalogObservation(
+  catalog: SyntaxCatalog,
+  /**
+   * The authoring catalog this boundary is nested in.
+   *
+   * Where the two inputs come apart. `catalog` is what may *execute* here, and
+   * this is what may be *read about* — the vocabulary of the site the evaluation
+   * was written at. Omitted, the two are the same, which is the ordinary case
+   * for a boundary that narrows nothing.
+   *
+   * A narrowing boundary passes both, and named selection then explains a
+   * component this evaluation cannot run while saying so on the entry. Dropping
+   * the enclosing catalog instead would leave a nested author unable to look up
+   * the very components they are being asked to write about.
+   */
+  reference: SyntaxCatalog = catalog,
+): CatalogObservation {
   const rendered = renderSyntaxMarkdown(catalog);
   return {
     // deno-lint-ignore require-yield
     *observe(): Operation<string> {
       return rendered;
+    },
+    *document(names: readonly string[]): Operation<string> {
+      const index = yield* documentationIndexFor(reference);
+      return renderSelectedDocumentation(select(reference, catalog, names, index));
     },
   };
 }

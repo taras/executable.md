@@ -21,9 +21,12 @@ import type { Operation } from "effection";
 import {
   AGENT_REGISTRATIONS,
   agentIdentityComponents,
+  documentationIndexFor,
   inspectSyntax,
   registerComponents,
+  renderSelectedDocumentation,
   renderSyntaxMarkdown,
+  selectDocumented,
 } from "@executablemd/core";
 import type { SyntaxCatalog } from "@executablemd/core";
 import { TESTING_REGISTRATIONS } from "@executablemd/testing";
@@ -97,4 +100,23 @@ export function* useRunProfileRegistry(): Operation<void> {
  */
 export function renderSyntaxJson(catalog: SyntaxCatalog): string {
   return `${JSON.stringify(catalog, null, 2)}\n`;
+}
+
+/**
+ * The selected components' metadata and long-form documentation.
+ *
+ * `xmd syntax Elicit` and `<Syntax names={["Elicit"]} />` are the same lookup:
+ * one selection, one index, one renderer. An operator reading a terminal and an
+ * agent reading a document are answering the same question, and two renderings
+ * that agreed only by hand would be one release away from disagreeing.
+ *
+ * Nothing here narrows execution, so every entry a catalog holds is available
+ * and each says so.
+ */
+export function* renderSyntaxDocumentation(
+  catalog: SyntaxCatalog,
+  names: readonly string[],
+): Operation<string> {
+  const index = yield* documentationIndexFor(catalog);
+  return renderSelectedDocumentation(selectDocumented(catalog, catalog, names, index));
 }

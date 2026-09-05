@@ -22,6 +22,7 @@ import type {
   StructuralSyntaxEntry,
   SyntaxCatalog,
 } from "./inspect.ts";
+import { NO_DOCUMENTATION } from "./documentation-index.ts";
 import type { ComponentOrigin, Json, PropsSchema } from "./types.ts";
 
 /** The three category kinds, taken from the catalog rather than restated. */
@@ -49,6 +50,41 @@ export function renderSyntaxMarkdown(catalog: SyntaxCatalog): string {
     for (const entry of category.entries) {
       blocks.push(...renderEntry(entry));
     }
+    return blocks.join("\n\n");
+  });
+  return `${sections.join("\n\n")}\n`;
+}
+
+/** One catalog entry, as the named form selects it. */
+export interface SelectedEntry {
+  readonly entry:
+    | StructuralSyntaxEntry
+    | CompleteComponentSyntaxEntry
+    | OriginOnlyComponentSyntaxEntry;
+  /** The long-form documentation this entry has, if it has any. */
+  readonly documentation: string | undefined;
+  /**
+   * Whether the current evaluation can actually run this component.
+   *
+   * Stated rather than implied, because the named form reads from the enclosing
+   * authoring catalog: inside a narrowed evaluation it can explain a component
+   * the evaluation may not execute, and a reader shown documentation with no
+   * word about availability would reasonably assume they had both.
+   */
+  readonly available: boolean;
+}
+
+/**
+ * The selected entries, each with its metadata and its long-form documentation.
+ *
+ * What `<Syntax names={…}>` and `xmd syntax Elicit` both render — one renderer,
+ * so the component and the command cannot describe one component two ways.
+ */
+export function renderSelectedDocumentation(selected: readonly SelectedEntry[]): string {
+  const sections = selected.map((one) => {
+    const blocks = renderEntry(one.entry);
+    blocks.push(`**Available in this evaluation:** ${one.available ? "yes" : "no"}`);
+    blocks.push(one.documentation ?? NO_DOCUMENTATION);
     return blocks.join("\n\n");
   });
   return `${sections.join("\n\n")}\n`;

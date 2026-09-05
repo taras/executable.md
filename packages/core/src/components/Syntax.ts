@@ -65,12 +65,29 @@ const SYNTAX_CATALOG = "syntax_catalog";
  */
 export const props: PropsSchema = {
   type: "object",
-  properties: {},
+  properties: {
+    names: {
+      type: "array",
+      items: { type: "string" },
+      minItems: 1,
+      uniqueItems: true,
+      description:
+        "Optional. Render these components' catalog metadata and long-form documentation " +
+        "instead of the compact catalog. Entries render once each, in catalog order.",
+    },
+  },
   additionalProperties: false,
 };
 
 const PAIRED_REFUSAL =
   "<Syntax /> renders the current catalog and reads no content, so it is written self-closing.";
+
+const NAMES_REFUSAL =
+  "<Syntax names={…}> takes a non-empty list of component names, each a string.";
+
+const DUPLICATE_REFUSAL =
+  "<Syntax names={…}> takes each component name once: an entry renders once however " +
+  "many times it is asked for.";
 
 const UNISSUED_REFUSAL =
   "<Syntax /> is invoked by canonical core; this is not an invocation the engine issued.";
@@ -98,9 +115,9 @@ export const SYNTAX_PROTECTED: ProtectedComponent = {
   forms: ["self-closing"],
   ...documented({
     description:
-      "Output available components and control flow constructs. `<Syntax />` renders the " +
-      "current catalog.",
-    as: "Optional. Captures the rendered catalog instead of emitting it.",
+      "Inspect components and control-flow constructs. `<Syntax />` renders the current " +
+      'catalog; `<Syntax names={["Elicit"]} />` renders selected documentation.',
+    as: "Optional. Captures the rendered text instead of emitting it.",
     context: null,
   }),
   build: (claim: IdentityClaimant) => syntax(claim),
@@ -108,7 +125,7 @@ export const SYNTAX_PROTECTED: ProtectedComponent = {
 
 function syntax(claim: IdentityClaimant): ProtectedBody {
   return function* observeCatalog(
-    _props: Record<string, Json>,
+    props: Record<string, Json>,
     invocation: ComponentInvocation,
     observation: CatalogObservation | undefined,
   ): Operation<string> {
@@ -123,13 +140,51 @@ function syntax(claim: IdentityClaimant): ProtectedBody {
     if (form === "paired") {
       throw new ComponentInvocationError(PAIRED_REFUSAL);
     }
+    // Read before anything is claimed or observed, so a list this component
+    // cannot answer for refuses with no durable record and no partial text.
+    // The schema has already rejected an empty list, a duplicate and a
+    // non-string member; what is left is whether the value is the array shape
+    // this reads, because a protected body is handed props rather than trusting
+    // that somebody validated them.
+    const names = requestedNames(props.names);
     const id = yield* claim(invocation);
     if (observation === undefined) {
       throw new Error(NO_OBSERVATION_REFUSAL);
     }
     const expansion = yield* getExpansion();
-    return yield* persistCatalog(id, expansion.position, () => observation.observe());
+    return yield* persistCatalog(id, expansion.position, () =>
+      names === undefined ? observation.observe() : observation.document(names),
+    );
   };
+}
+
+/**
+ * The names this occurrence asked to document, or nothing for the bare form.
+ *
+ * The declared schema is the first gate and rejects an empty list, a duplicate
+ * and a non-string member before the body is entered. This is the second, and it
+ * exists because a body is handed a props object rather than a promise that one
+ * was checked: a value that is not the shape this reads is refused here rather
+ * than becoming an empty selection that renders the whole catalog.
+ */
+function requestedNames(value: Json | undefined): readonly string[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new ComponentInvocationError(NAMES_REFUSAL);
+  }
+  const names: string[] = [];
+  for (const member of value) {
+    if (typeof member !== "string" || member.length === 0) {
+      throw new ComponentInvocationError(NAMES_REFUSAL);
+    }
+    if (names.includes(member)) {
+      throw new ComponentInvocationError(DUPLICATE_REFUSAL);
+    }
+    names.push(member);
+  }
+  return names;
 }
 
 function* persistCatalog(

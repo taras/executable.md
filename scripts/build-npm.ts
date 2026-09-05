@@ -50,12 +50,23 @@ import { z } from "npm:zod@^4";
  * a document part of the product.
  */
 function* packagedDocuments(pkgDir: URL): Operation<string[]> {
+  const shipped: string[] = [];
+  // Component documentation lives beside the registration boundary it
+  // documents rather than in `src/documents/`, because that is where the
+  // components are and moving it would separate the two things that have to
+  // stay in step. Named by its exact path for the same reason the directory
+  // above is enumerated rather than swept for: being listed here is what
+  // declares an asset part of the product.
+  const documentation = new URL("src/components/components.md", pkgDir);
+  if (yield* exists(documentation)) {
+    shipped.push("src/components/components.md");
+  }
   const documents = new URL("src/documents/", pkgDir);
   if (!(yield* exists(documents))) {
-    return [];
+    return shipped;
   }
   const names = yield* until(readdir(fromFileUrl(documents), { recursive: true }));
-  return names.map((name) => `src/documents/${name.split(sep).join("/")}`);
+  return [...shipped, ...names.map((name) => `src/documents/${name.split(sep).join("/")}`)];
 }
 
 const ExportsSchema = z.union([z.string(), z.record(z.string(), z.string())]);

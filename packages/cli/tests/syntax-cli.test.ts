@@ -192,14 +192,16 @@ describe("Tier SX — the run profile the command describes", () => {
     expect(entry.origin).toEqual({ kind: "protected", origin: "@executablemd/core" });
     expect(entry.sourceKind).toBe("protected");
     expect(entry.forms).toEqual(["self-closing"]);
-    expect(entry.props).toEqual({ type: "object", properties: {}, additionalProperties: false });
+    // One optional prop, closed: `names` selects documentation.
+    expect(Object.keys((entry.props.properties ?? {}) as object)).toEqual(["names"]);
+    expect(entry.props.additionalProperties).toBe(false);
     expect(entry.captures).toEqual([]);
     expect(entry.returnMode).toBe("text");
     expect(entry.description).toBe(
-      "Output available components and control flow constructs. `<Syntax />` renders the " +
-        "current catalog.",
+      "Inspect components and control-flow constructs. `<Syntax />` renders the current " +
+        'catalog; `<Syntax names={["Elicit"]} />` renders selected documentation.',
     );
-    expect(entry.as).toBe("Optional. Captures the rendered catalog instead of emitting it.");
+    expect(entry.as).toBe("Optional. Captures the rendered text instead of emitting it.");
   });
 
   it("ORC1: names all thirteen repository-composition components, with contracts", function* () {
@@ -466,6 +468,30 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
       expect(stderr).toContain("components");
       expect(stderr).toContain("not a directory");
     });
+  });
+
+  it("SX16: `xmd syntax Elicit` renders the same text the named component does", function* () {
+    const named = yield* runCli(["syntax", "Elicit", "--include", "."], { cwd: "." }).expect();
+
+    // Metadata, then documentation, then availability — the detailed renderer,
+    // not the compact catalog.
+    expect(named.stdout).toContain("### `<Elicit>`");
+    expect(named.stdout).toContain("Asks a person a structured question");
+    expect(named.stdout).toContain("**Available in this evaluation:** yes");
+    // Only the one asked for: the compact catalog's other entries are absent.
+    expect(named.stdout).not.toContain("### `<File>`");
+
+    // The compact form is untouched by the addition.
+    const compact = yield* runCli(["syntax", "--include", "."], { cwd: "." }).expect();
+    expect(compact.stdout).toContain("## Built-in components");
+    expect(compact.stdout).not.toContain("Asks a person a structured question");
+
+    // An unknown name refuses whole rather than printing a partial answer.
+    const unknown = yield* runCli(["syntax", "Nonexistent", "--include", "."], {
+      cwd: ".",
+    }).join();
+    expect(unknown.code).not.toBe(0);
+    expect(unknown.stdout).toBe("");
   });
 
   it("SX10: writes markdown by default and version-2 JSON with --json", function* () {

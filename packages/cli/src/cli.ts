@@ -128,7 +128,12 @@ import { runPlan } from "./plan.ts";
 import { runUpgrade } from "./upgrade.ts";
 import type { UpgradeAssembly } from "./upgrade.ts";
 import { componentSearchPath, resolveTestTarget } from "./test-target.ts";
-import { renderSyntaxJson, renderSyntaxMarkdown, syntaxCatalog } from "./syntax.ts";
+import {
+  renderSyntaxDocumentation,
+  renderSyntaxJson,
+  renderSyntaxMarkdown,
+  syntaxCatalog,
+} from "./syntax.ts";
 import { deliverWhole } from "./stdout-delivery.ts";
 import { testingExecutionHost } from "./testing-host.ts";
 import type { ChildPlanDeclaration } from "./testing-host.ts";
@@ -356,12 +361,18 @@ const testConfig = object({
  * `run` and `test` declare, and explicit values replace the defaults.
  */
 const syntaxConfig = object({
+  component: {
+    description:
+      "component to describe in full — `xmd syntax Elicit` renders its catalog metadata " +
+      "and long-form documentation instead of the compact catalog",
+    ...field(z.string().optional(), cli.argument()),
+  },
   include: {
     description: "component search directory",
     ...field(z.array(z.string()), field.default(["components", "."]), field.array()),
   },
   json: {
-    description: "write the catalog as version-1 JSON instead of markdown",
+    description: "write the catalog as version-2 JSON instead of markdown",
     ...field(z.boolean(), field.default(false)),
   },
 });
@@ -2631,7 +2642,20 @@ function* dispatch(
       let rendered: string;
       try {
         const catalog = yield* syntaxCatalog(command.config.include);
-        rendered = command.config.json ? renderSyntaxJson(catalog) : renderSyntaxMarkdown(catalog);
+        const named = command.config.component;
+        rendered =
+          named === undefined
+            ? // The compact catalog, unchanged: routine discovery output and every
+              // default Plan prompt read it, and long documentation would make both
+              // unnecessarily large.
+              command.config.json
+              ? renderSyntaxJson(catalog)
+              : renderSyntaxMarkdown(catalog)
+            : // The same selection, index and renderer `<Syntax names={…}>` uses, so
+              // the command and the component cannot describe one component two
+              // ways. JSON stays the compact projection; it is the catalog's shape,
+              // and documentation is prose rather than a catalog member.
+              yield* renderSyntaxDocumentation(catalog, [named]);
       } catch (error) {
         console.error(describeError(error));
         yield* exit(1);

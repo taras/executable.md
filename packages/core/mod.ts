@@ -217,7 +217,19 @@ export { ComponentIncludeError } from "./src/components/candidates.ts";
  * The catalog as Markdown, so `xmd syntax` and canonical `<Syntax />` print the
  * same bytes for the same site rather than two renderings that agree by hand.
  */
-export { renderSyntaxMarkdown } from "./src/syntax-markdown.ts";
+export { renderSelectedDocumentation, renderSyntaxMarkdown } from "./src/syntax-markdown.ts";
+export type { SelectedEntry } from "./src/syntax-markdown.ts";
+/**
+ * The documentation index and the selection that reads it (#678).
+ *
+ * Exported because `xmd syntax Elicit` and `<Syntax names={…}>` must be the same
+ * lookup rather than two that agree by hand: the command reaches the index and
+ * the selection core's own component reaches.
+ */
+export { documentationIndexFor } from "./src/component-documentation.ts";
+export { select as selectDocumented } from "./src/syntax-observation.ts";
+export { NO_DOCUMENTATION, UnknownComponentError } from "./src/documentation-index.ts";
+export type { DocumentationIndex } from "./src/documentation-index.ts";
 export { PROTECTED_COMPONENT_NAMES, ProtectedComponentError } from "./src/components/protected.ts";
 export { SYNTAX_COMPONENT } from "./src/components/Syntax.ts";
 // Document validation — one supplied document read as authored program
