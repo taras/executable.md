@@ -68,9 +68,6 @@ export type AgentSessionRouteV1 =
  * attachment know it is talking to the same build the native UI is in, so it
  * is required rather than optional here.
  *
- * There is no V2 `acp-first`. ACP-first construction gained no fact, so a
- * second schema for it would be a version number with nothing behind it.
- *
  * V1 `client-native` is not upgraded into this. A build observed later says
  * which build is installed now, not which one established the session, and
  * writing it into an old record would claim knowledge XMD never had.
@@ -88,8 +85,34 @@ export interface AgentSessionRouteV2 {
   executableBinding: ExecutableBuildBindingV1;
 }
 
+/**
+ * The exact V3 record, which exists only for `acp-first`.
+ *
+ * It carries the same fact V2 added, for the other construction. An ACP-first
+ * session is named by the provider, and a name the provider issued is resumable
+ * only by the build that issued it: the native UI resuming that conversation
+ * has to be the same build ACP created it through, and nothing in the identity
+ * itself says which one that was.
+ *
+ * It still says nothing about the conversation. There remains no provider
+ * identity, instruction layer or process fact here — an ACP-first route names
+ * the construction and the build, and a session ACP created has nothing else to
+ * report at this boundary.
+ *
+ * A V1 `acp-first` route is not upgraded into this, for the same reason a V1
+ * `client-native` one is not upgraded into V2.
+ */
+export interface AgentSessionRouteV3 {
+  schema: "session-route.v3";
+  route: "acp-first";
+  provider: string;
+  agent: string;
+  sessionKey: string;
+  executableBinding: ExecutableBuildBindingV1;
+}
+
 /** Every route form this build accepts. */
-export type AgentSessionRoute = AgentSessionRouteV1 | AgentSessionRouteV2;
+export type AgentSessionRoute = AgentSessionRouteV1 | AgentSessionRouteV2 | AgentSessionRouteV3;
 
 /** Why a route could not be used. Never carries a path or provider-private state. */
 export class AgentSessionRouteError extends Error {
@@ -104,6 +127,7 @@ const CLIENT_NATIVE_MEMBERS = [
   "instructionsDigest",
   "launcher",
 ];
+const BOUND_ACP_FIRST_MEMBERS = [...ACP_FIRST_MEMBERS, "executableBinding"];
 const BOUND_CLIENT_NATIVE_MEMBERS = [...CLIENT_NATIVE_MEMBERS, "executableBinding"];
 const BINDING_MEMBERS = ["schema", "reportedVersion", "executableDigest"];
 const DIGEST_MEMBERS = ["algorithm", "value"];
@@ -163,11 +187,14 @@ export function parseAgentSessionRoute(value: unknown): AgentSessionRoute | unde
   if (!isRecord(value)) {
     return undefined;
   }
-  const bound = value.schema === "session-route.v2";
-  if (!bound && value.schema !== "session-route.v1") {
+  const { schema, provider, agent, sessionKey } = value;
+  if (
+    schema !== "session-route.v1" &&
+    schema !== "session-route.v2" &&
+    schema !== "session-route.v3"
+  ) {
     return undefined;
   }
-  const { provider, agent, sessionKey } = value;
   if (typeof provider !== "string" || provider.length === 0) {
     return undefined;
   }
@@ -177,13 +204,40 @@ export function parseAgentSessionRoute(value: unknown): AgentSessionRoute | unde
   if (typeof sessionKey !== "string" || sessionKey.length === 0) {
     return undefined;
   }
+  // Each schema admits exactly the constructions it was minted for. V2 is
+  // client-native and V3 is ACP-first, so a record pairing one with the other
+  // is state this build cannot account for rather than a route with a spare
+  // member — which is also what keeps a V1 record from being read as a bound
+  // one, and a bound one from being read past its binding.
   if (value.route === "acp-first") {
-    // There is no bound ACP-first form, so a V2 record claiming one is state
-    // this build cannot account for rather than a route with a spare member.
-    return !bound && exactly(value, ACP_FIRST_MEMBERS)
-      ? { schema: "session-route.v1", route: "acp-first", provider, agent, sessionKey }
-      : undefined;
+    if (schema === "session-route.v2") {
+      return undefined;
+    }
+    if (schema === "session-route.v1") {
+      return exactly(value, ACP_FIRST_MEMBERS)
+        ? { schema: "session-route.v1", route: "acp-first", provider, agent, sessionKey }
+        : undefined;
+    }
+    if (!exactly(value, BOUND_ACP_FIRST_MEMBERS)) {
+      return undefined;
+    }
+    const executableBinding = parseExecutableBinding(value.executableBinding);
+    if (!executableBinding) {
+      return undefined;
+    }
+    return {
+      schema: "session-route.v3",
+      route: "acp-first",
+      provider,
+      agent,
+      sessionKey,
+      executableBinding,
+    };
   }
+  if (schema === "session-route.v3") {
+    return undefined;
+  }
+  const bound = schema === "session-route.v2";
   const members = bound ? BOUND_CLIENT_NATIVE_MEMBERS : CLIENT_NATIVE_MEMBERS;
   if (value.route !== "client-native" || !exactly(value, members)) {
     return undefined;
@@ -247,7 +301,7 @@ export function serializeAgentSessionRoute(route: AgentSessionRoute): string {
     payload.instructionsDigest = route.instructionsDigest;
     payload.launcher = route.launcher;
   }
-  if (route.schema === "session-route.v2") {
+  if (route.schema === "session-route.v2" || route.schema === "session-route.v3") {
     payload.executableBinding = {
       schema: route.executableBinding.schema,
       reportedVersion: route.executableBinding.reportedVersion,

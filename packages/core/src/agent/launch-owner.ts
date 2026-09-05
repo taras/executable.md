@@ -37,7 +37,12 @@ import type {
 import { AgentLaunchProtocolError, issueLaunch } from "./launch-request.ts";
 import type { AgentLaunchRequest } from "./launch-request.ts";
 import type { LiveLaunch } from "./launch-authority.ts";
-import { persistDetach, persistExit, persistPreparation } from "./launch-journal.ts";
+import {
+  persistDetach,
+  persistExit,
+  persistMaterialization,
+  persistPreparation,
+} from "./launch-journal.ts";
 import type { LaunchIdentity } from "./launch-journal.ts";
 import { getExpansion } from "../expansion.ts";
 
@@ -120,6 +125,7 @@ function parseFailureClass(value: string): AgentLaunchError["failureClass"] {
     case "session-busy":
     case "session-recovery-required":
     case "executable-binding-refused":
+    case "materialization-failed":
       return value;
     default:
       return "unsupported-capability";
@@ -193,6 +199,10 @@ export function launchSession(
       generation,
     );
 
+    // Whether this run is the one that prepared the session, rather than a
+    // resume reading a preparation an earlier run retained. Only the launch that
+    // did the preparing may send the turn that follows it.
+    let preparedThisRun = false;
     const launch: LiveLaunch = {
       issued,
       retention: {
@@ -207,8 +217,13 @@ export function launchSession(
               additionalDirectories: site.additionalDirectories,
               permissionMode: site.permissionMode,
             },
-            live,
+            function* () {
+              preparedThisRun = true;
+              return yield* live();
+            },
           ),
+        materialized: (prepared, plan, live) =>
+          persistMaterialization(site.identity, prepared, plan, live, preparedThisRun),
         detached: (live) => persistDetach(site.identity, live),
         exited: (live) => persistExit(site.identity, live),
       },
@@ -255,6 +270,9 @@ export function launchSession(
 
     if (launch.preparation?.failure) {
       raiseRetained("prepared", launch.preparation.failure);
+    }
+    if (launch.materialization?.failure) {
+      raiseRetained("materialized", launch.materialization.failure);
     }
     if (launch.detachment?.failure) {
       raiseRetained("detached", launch.detachment.failure);

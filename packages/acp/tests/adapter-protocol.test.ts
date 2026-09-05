@@ -330,4 +330,72 @@ describe("Tier EA — the embedded adapters' prompt-response metadata", () => {
     expect(metaOf(first, "codex")).toEqual({ turnId: `turn:${sessionId}:1` });
     expect(metaOf(second, "codex")).toEqual({ turnId: `turn:${sessionId}:2` });
   });
+
+  it("EA9: interleaved Codex sessions each report the thread they opened", function* () {
+    const adapter = yield* useAdapter("codex", CODEX_ENV);
+    yield* initialize(adapter);
+
+    const alpha = yield* effectionSpawn(() =>
+      adapter.request("session/new", { cwd: process.cwd(), mcpServers: [] }),
+    );
+    const beta = yield* effectionSpawn(() =>
+      adapter.request("session/new", { cwd: process.cwd(), mcpServers: [] }),
+    );
+    const [one, two] = yield* all([alpha, beta]);
+
+    // The App Server named each thread, so this is the identity that surface
+    // emitted compared with what the adapter reported on `_meta`. A top-level
+    // session id cannot stand in: a client reading that cannot tell an identity
+    // the provider allocated from one it invented itself.
+    expect(metaOf(one, "agentSessionId")).toBe(one["sessionId"]);
+    expect(metaOf(two, "agentSessionId")).toBe(two["sessionId"]);
+    // Two at once, so an adapter reporting anything session-global — the last
+    // thread it opened, say — hands at least one of them the other's answer.
+    expect(metaOf(one, "agentSessionId")).not.toBe(metaOf(two, "agentSessionId"));
+  });
+
+  it("EA10: reopening a Codex session reports the thread the App Server reopened", function* () {
+    const adapter = yield* useAdapter("codex", CODEX_ENV);
+    yield* initialize(adapter);
+    // A thread opened first, so the reopened answers below are distinguishable
+    // from the most recent thread this adapter process created.
+    const opened = yield* openSession(adapter);
+
+    const resumed = yield* adapter.request("session/resume", {
+      sessionId: "thread-resumed",
+      cwd: process.cwd(),
+      mcpServers: [],
+    });
+    const loaded = yield* adapter.request("session/load", {
+      sessionId: "thread-loaded",
+      cwd: process.cwd(),
+      mcpServers: [],
+    });
+
+    // Continuing a conversation needs its identity as much as starting one
+    // does, and reopening is the route a run takes on every turn after the
+    // first.
+    expect(metaOf(resumed, "agentSessionId")).toBe("thread-resumed");
+    expect(metaOf(loaded, "agentSessionId")).toBe("thread-loaded");
+    expect(metaOf(resumed, "agentSessionId")).not.toBe(opened);
+    expect(metaOf(loaded, "agentSessionId")).not.toBe(opened);
+  });
+
+  it("EA11: the Claude adapter reports no native session identity", function* () {
+    const adapter = yield* useAdapter("claude", CLAUDE_ENV);
+    yield* initialize(adapter);
+
+    const session = yield* adapter.request("session/new", {
+      cwd: process.cwd(),
+      mcpServers: [],
+    });
+
+    // Claude is handed the identity it uses rather than allocating one, so
+    // there is nothing for its adapter to report back. This is the absence the
+    // client-allocated route depends on: were a value to appear here, a client
+    // choosing a route by whether the provider named the session would start
+    // taking the wrong one.
+    expect(typeof session["sessionId"]).toBe("string");
+    expect(metaOf(session, "agentSessionId")).toBeUndefined();
+  });
 });

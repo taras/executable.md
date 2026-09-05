@@ -26,10 +26,12 @@ import type {
   ExecutableBuildBindingV1,
   ExitedLaunchRecord,
   IdentityProvenance,
+  MaterializationPlan,
+  MaterializedLaunchRecord,
   PreparedLaunchRecord,
 } from "../src/agent/launch.ts";
 import { sameExecutableBuild } from "../src/agent/launch.ts";
-import { parsePrepared } from "../src/agent/launch-journal.ts";
+import { parseMaterialized, parsePrepared } from "../src/agent/launch-journal.ts";
 import type { AgentLaunchRequest } from "../src/agent/launch-request.ts";
 import { installAgentComponents } from "../src/agent/components.ts";
 import type { AgentProviderFactory } from "../src/agent/provider-api.ts";
@@ -38,6 +40,7 @@ import {
   installControlledLauncher,
   NATIVE_LAUNCHER_UNAVAILABLE,
   nativeLaunch,
+  notifyTerminal,
   prepareControlledComposite,
   reserveTerminal,
   TerminalGrids,
@@ -75,6 +78,18 @@ interface LaunchStub {
   identityProvenance?: IdentityProvenance;
   /** The build the prepared record says accepted that identity. */
   executableBinding?: ExecutableBuildBindingV1;
+  /** The turn a freshly prepared session owes before a native UI can open it. */
+  materialization?: MaterializationPlan;
+  /** The request id of every turn this provider *actually* spent, in order. */
+  turns: string[];
+  /** Refuse the turn rather than completing it. */
+  turnRefused?: boolean;
+  /** Plan a turn and then offer the authority no way to spend one. */
+  withholdMaterialize?: boolean;
+  /** Complete the turn without asserting the session it made openable. */
+  withholdMaterializedIdentity?: boolean;
+  /** Assert an identity in a preparation that also plans a turn. */
+  assertIdentityBeforeTurn?: boolean;
 }
 
 function digest(text: string): string {
@@ -89,6 +104,7 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
     exits: 0,
     factoryActivations: 0,
     nativeSessionId: "native-abc",
+    turns: [],
     ...overrides,
     // The authority is the second argument because it is delivered, never
     // published: this stub is only able to author a phase because core installed
@@ -130,7 +146,13 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
                   agent,
                   sessionKey,
                   provider: "stub",
-                  nativeSessionId: stub.nativeSessionId,
+                  // A launch that owes a turn has no conversation to name yet:
+                  // the turn asserts the identity, and the preparation says so
+                  // by asserting none.
+                  nativeSessionId:
+                    stub.materialization === undefined || stub.assertIdentityBeforeTurn
+                      ? stub.nativeSessionId
+                      : "",
                   sessionState: "created",
                   instructionChannel: "stub.systemPrompt",
                   instructionReconciliation: "installed",
@@ -145,8 +167,59 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
                 if (stub.executableBinding !== undefined) {
                   prepared.executableBinding = stub.executableBinding;
                 }
+                if (stub.materialization !== undefined) {
+                  prepared.materialization = stub.materialization;
+                }
                 return prepared;
               },
+              // Offered only when this stub can spend a turn, exactly as a
+              // provider whose sessions are openable on creation offers none.
+              ...(stub.materialization === undefined || stub.withholdMaterialize
+                ? {}
+                : {
+                    *materialize(accepted, plan): Operation<MaterializedLaunchRecord> {
+                      stub.turns.push(plan.requestId);
+                      // A real provider says this before it spends the turn, and
+                      // says it to whoever holds the terminal this launch
+                      // reserved. Modelled here so the destination is provable.
+                      yield* notifyTerminal(
+                        `stub: spending one model turn in "${accepted.sessionKey}"`,
+                      );
+                      const base: Pick<
+                        MaterializedLaunchRecord,
+                        "phase" | "promptVersion" | "requestId" | "durationMs"
+                      > = {
+                        phase: "materialized",
+                        promptVersion: plan.promptVersion,
+                        requestId: plan.requestId,
+                        durationMs: 7,
+                      };
+                      if (stub.turnRefused) {
+                        return {
+                          ...base,
+                          usage: {},
+                          response: "",
+                          failure: {
+                            class: "materialization-failed",
+                            message: "the stub provider refused the turn",
+                          },
+                        };
+                      }
+                      return {
+                        ...base,
+                        // What the turn made openable. Withholding it is a
+                        // provider claiming a completed turn produced no
+                        // conversation, which is not a launch to hand over.
+                        ...(stub.withholdMaterializedIdentity
+                          ? {}
+                          : { nativeSessionId: stub.nativeSessionId }),
+                        turn: { provider: "stub", kind: "stub-turn-id", value: "turn-0001" },
+                        usage: { inputTokens: 11, totalTokens: 13 },
+                        response: "Acknowledged.",
+                        stopReason: "end_turn",
+                      };
+                    },
+                  }),
               // deno-lint-ignore require-yield
               *detach() {
                 stub.detaches++;
@@ -190,6 +263,8 @@ interface LauncherLog {
   reserved: number;
   flushed: number;
   requests: NativeLaunchRequest[];
+  /** What a launch told this terminal's reader, in order. */
+  notices: string[];
   /** Every launcher event in order, so `flush` before `launch` is provable. */
   order: string[];
 }
@@ -247,11 +322,13 @@ interface Run {
   events: DurableEvent[];
   /** Everything the controlled composite did, in order. */
   composite: string[];
+  /** What each pane showed its own reader, by ordinal. */
+  shown: Map<number, string>;
 }
 
 function* runDoc(doc: string, options: RunOptions = {}): Operation<Run> {
   const stub = options.stub ?? createLaunchStub();
-  const launcher: LauncherLog = { reserved: 0, flushed: 0, requests: [], order: [] };
+  const launcher: LauncherLog = { reserved: 0, flushed: 0, requests: [], notices: [], order: [] };
   const stream = options.stream ?? new InMemoryStream();
   const owned = options.dir === undefined;
   const dir = options.dir ?? path.join(os.tmpdir(), `xmd-sl-${randomUUID()}`);
@@ -286,6 +363,10 @@ function* runDoc(doc: string, options: RunOptions = {}): Operation<Run> {
         onFlush: () => {
           launcher.flushed++;
           launcher.order.push("flush");
+        },
+        onNotify: (text) => {
+          launcher.notices.push(text);
+          launcher.order.push("notify");
         },
         record: (request) => {
           launcher.requests.push(request);
@@ -399,6 +480,7 @@ function* runDoc(doc: string, options: RunOptions = {}): Operation<Run> {
       launcher,
       events: yield* stream.readAll(),
       composite: providerLog.events,
+      shown: providerLog.shown,
     };
   });
 }
@@ -412,7 +494,7 @@ function* runInterrupted(
 ): Operation<LauncherLog> {
   const arrived = withResolvers<void>();
   const hold = withResolvers<void>();
-  const launcher: LauncherLog = { reserved: 0, flushed: 0, requests: [], order: [] };
+  const launcher: LauncherLog = { reserved: 0, flushed: 0, requests: [], notices: [], order: [] };
   yield* ensureDir(dir);
   yield* scoped(function* () {
     const docPath = path.join(dir, "doc.md");
@@ -495,7 +577,7 @@ const LAUNCH = "<Session.Launch>\nYou are the implementor.\n</Session.Launch>\n"
 
 describe("Tier SL — native session launch", () => {
   it("SL1: without a provider the launch fails, and nothing is reserved or spawned", function* () {
-    const launcher: LauncherLog = { reserved: 0, flushed: 0, requests: [], order: [] };
+    const launcher: LauncherLog = { reserved: 0, flushed: 0, requests: [], notices: [], order: [] };
     const dir = path.join(os.tmpdir(), `xmd-sl-${randomUUID()}`);
     yield* ensureDir(dir);
     const result = yield* scoped(function* () {
@@ -1033,6 +1115,7 @@ describe("Tier SP — a launch inside a terminal pane", () => {
           yield* childMayExit.operation;
           return { exitCode: 0 };
         },
+        function* () {},
       );
 
       const first = yield* spawn(function* () {
@@ -1067,6 +1150,28 @@ describe("Tier SP — a launch inside a terminal pane", () => {
     expect(asked[2]).toBe("admitted");
     // The child that started is what made the pane ready, and it did.
     expect(claims.readiness[0]?.acknowledged).toBe(true);
+  });
+
+  it("SP6: a launch that owes a turn tells its own pane's reader, not the run's", function* () {
+    const run = yield* runDoc(PANES, {
+      grid: true,
+      stub: createLaunchStub({ materialization: OWED }),
+    });
+
+    expect(run.result.ok ? "" : run.result.error.message).toBe("");
+    // Both panes spent their one turn, and each said so where the person who
+    // can see that pane is looking.
+    expect(run.stub.turns).toEqual([OWED.requestId, OWED.requestId]);
+    expect(run.shown.get(0)).toContain(`spending one model turn in "stub:left"`);
+    expect(run.shown.get(1)).toContain(`spending one model turn in "stub:right"`);
+    // Neither pane's notice reached the other's reader, which is the half a
+    // launcher that merely printed somewhere would still pass.
+    expect(run.shown.get(0)).not.toContain("stub:right");
+    expect(run.shown.get(1)).not.toContain("stub:left");
+    // And none of it reached the host: the root launcher is the one the grid
+    // holds, and a pane launch never delegates to it.
+    expect(run.launcher.notices).toEqual([]);
+    expect(run.output).not.toContain("spending one model turn");
   });
 });
 
@@ -1376,16 +1481,28 @@ describe("Tier PV — identity provenance", () => {
     }
   });
 
-  it("PV4: a provider-returned record carries no build binding", function* () {
-    // A provider that names its own session owns its own session lifetime and
-    // binds no build, so a binding beside one describes a check nothing
-    // performed.
-    expect(
-      parsePrepared(record({ identityProvenance: "provider-returned", executableBinding: BOUND })),
-    ).toBe(undefined);
-    // Absent provenance reads as provider-returned, so the same pairing refuses
-    // through the compatibility inference too.
-    expect(parsePrepared(record({ executableBinding: BOUND }))).toBe(undefined);
+  it("PV4: a build binding is valid beside either provenance", function* () {
+    // Who chose the identity and which build it belongs to are separate facts:
+    // a build accepted the name XMD allocated, or issued the name XMD was
+    // handed, and neither name resolves to one conversation without it. Which
+    // agents require one is the provider's decision — core observes no
+    // executables and knows no adapters — so refusing a pairing here would be
+    // this parser deciding it.
+    for (const provenance of ["provider-returned", "client-allocated"]) {
+      const parsed = parsePrepared(
+        record({ identityProvenance: provenance, executableBinding: BOUND }),
+      );
+      expect([provenance, parsed?.identityProvenance, parsed?.executableBinding]).toEqual([
+        provenance,
+        provenance,
+        BOUND,
+      ]);
+    }
+    // Absent provenance reads as provider-returned, and carries its binding
+    // through that same compatibility inference.
+    const inferred = parsePrepared(record({ executableBinding: BOUND }));
+    expect(inferred?.identityProvenance).toBe("provider-returned");
+    expect(inferred?.executableBinding).toEqual(BOUND);
   });
 
   it("PV5: the settled failure classes round-trip", function* () {
@@ -1407,8 +1524,8 @@ describe("Tier PV — identity provenance", () => {
  * Tier EB — the executable build binding, read and compared strictly
  * (specs/native-agent-session-launch-spec.md §Provider-native identity).
  *
- * A client-allocated identity means one thing only while the build that
- * accepted it can be recognized later, so the binding is exact on the way in
+ * A provider-native identity means one thing only while the build that issued
+ * or accepted it can be recognized later, so the binding is exact on the way in
  * and exact on the way out. Core observes no executables: it reads what was
  * retained and says whether two of them name the same build.
  */
@@ -1495,5 +1612,391 @@ describe("Tier EB — executable build binding", () => {
 
   it("EB6: completed replay stays provider-cold for a legacy unbound preparation", function* () {
     yield* replayIsCold({ identityProvenance: "client-allocated" });
+  });
+
+  it("EB7: a bound provider-returned preparation round-trips unchanged", function* () {
+    const parsed = parsePrepared(
+      prepared({ identityProvenance: "provider-returned", executableBinding: BOUND }),
+    );
+    expect(parsed?.identityProvenance).toBe("provider-returned");
+    expect(parsed?.executableBinding).toEqual(BOUND);
+  });
+
+  it("EB8: completed replay stays cold for a bound provider-returned preparation", function* () {
+    // The one property a legacy record and a bound one share. Whichever side
+    // named the session, a launch the journal already completed asks nothing:
+    // no build is observed, no route is read, and no child is started.
+    yield* replayIsCold({ identityProvenance: "provider-returned", executableBinding: BINDING });
+  });
+});
+
+/** One durable yield, as the journal holds it. */
+interface Retained {
+  type: string;
+  name: string;
+  /** The description's `input`, which is what the effect was asked to do. */
+  input: Json | undefined;
+  value: Json | undefined;
+}
+
+function retained(events: DurableEvent[]): Retained[] {
+  return events.flatMap((event) =>
+    event.type === "yield" && event.result.status === "ok"
+      ? [
+          {
+            type: event.description.type,
+            name: event.description.name,
+            input: event.description.input,
+            value: event.result.value,
+          },
+        ]
+      : [],
+  );
+}
+
+function one(events: DurableEvent[], suffix: string): Record<string, Json> {
+  const found = retained(events).filter((entry) => entry.name.endsWith(suffix));
+  if (found.length !== 1) {
+    throw new Error(`expected exactly one retained "${suffix}", found ${found.length}`);
+  }
+  const value = found[0]?.value;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`retained "${suffix}" is not a record`);
+  }
+  return value;
+}
+
+/** One member of a retained record that is itself a record. */
+function nested(record: Record<string, Json>, member: string): Record<string, Json> {
+  const value = record[member];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`retained member "${member}" is not a record`);
+  }
+  return value;
+}
+
+/**
+ * The journal as it would stand had the run stopped right after `suffix`.
+ *
+ * A stop between two adjacent appends is exactly what these boundaries are
+ * about, and holding the native child cannot produce it: every append the turn
+ * makes happens before anything is spawned. So the journal is cut where the
+ * interruption would have cut it.
+ */
+function* cutAfter(stream: InMemoryStream, suffix: string): Operation<InMemoryStream> {
+  const events = yield* stream.readAll();
+  const index = events.findIndex(
+    (event) => event.type === "yield" && event.description.name.endsWith(suffix),
+  );
+  if (index < 0) {
+    throw new Error(`no durable yield ending in "${suffix}" to cut after`);
+  }
+  return new InMemoryStream(events.slice(0, index + 1));
+}
+
+/**
+ * The turn a stub session owes. Fixed rather than minted, so a case can name the
+ * request id the retained plan committed to.
+ */
+const OWED: MaterializationPlan = {
+  promptVersion: "stub-materialization.v1",
+  requestId: "req-0001",
+  prompt: "Reply with a brief acknowledgement only.",
+};
+
+describe("Tier MR — retaining and replaying the materialization turn", () => {
+  function owing(overrides: Partial<LaunchStub> = {}): LaunchStub {
+    return createLaunchStub({ materialization: OWED, ...overrides });
+  }
+
+  it("MR1: the owed turn is spent once and retained as both a prompt and a phase", function* () {
+    const stub = owing();
+    const run = yield* runDoc(LAUNCH, { stub });
+    expect(run.result.ok ? "" : run.result.error.message).toBe("");
+    expect(stub.turns).toEqual([OWED.requestId]);
+    expect(retainedPhases(run.events)).toEqual(["prepared", "materialized", "detached", "exited"]);
+
+    // The plan is retained with the preparation, before anything is spent.
+    expect(one(run.events, "/prepared").materialization).toEqual({
+      promptVersion: OWED.promptVersion,
+      requestId: OWED.requestId,
+      prompt: OWED.prompt,
+    });
+    // The prompt says the turn was spent, and says which turn it was.
+    const prompt = retained(run.events).find((entry) => entry.name.endsWith("/materialization"));
+    expect(prompt?.type).toBe("agent_prompt");
+    expect(prompt?.input).toBe(OWED.prompt);
+    expect(one(run.events, "/materialization").status).toBe("completed");
+    expect(one(run.events, "/materialization").checkpoint).toEqual({
+      provider: "stub",
+      kind: "stub-turn-id",
+      value: "turn-0001",
+    });
+    // The phase says the launch may go on, and what the turn cost.
+    expect(one(run.events, "/materialized").usage).toEqual({ inputTokens: 11, totalTokens: 13 });
+    expect(one(run.events, "/materialized").response).toBe("Acknowledged.");
+    // Only then is the session handed over.
+    expect(run.launcher.requests.length).toBe(1);
+    // Spending someone's turn is not silent, and at the root the terminal that
+    // hears about it is the run's own — reserved before the turn, so the reader
+    // is told inside the lease the launch already holds.
+    expect(run.launcher.notices).toEqual([`stub: spending one model turn in "stub:default"`]);
+    expect(run.launcher.order).toEqual(["reserve", "flush", "notify", "launch"]);
+  });
+
+  it("MR2: a completed launch replays without spending a second turn", function* () {
+    const stream = new InMemoryStream();
+    const stub = owing();
+    const first = yield* runDoc(LAUNCH, { stream, stub });
+    expect(first.result.ok ? "" : first.result.error.message).toBe("");
+    expect(stub.turns.length).toBe(1);
+
+    const second = yield* runDoc(LAUNCH, { stream, stub });
+    expect(second.result.ok).toBe(true);
+    expect(second.output).toBe(first.output);
+    expect(stub.turns.length).toBe(1);
+    expect(stub.factoryActivations).toBe(1);
+    expect(second.launcher.requests.length).toBe(0);
+  });
+
+  it("MR3: a retained prompt with no phase rebuilds the phase and spends nothing", function* () {
+    const stub = owing();
+    const dir = path.join(os.tmpdir(), `xmd-mr-${randomUUID()}`);
+    yield* ensure(() => rm(dir, { recursive: true, force: true }));
+    const stream = new InMemoryStream();
+    const first = yield* runDoc(LAUNCH, { stream, stub, dir });
+    expect(first.result.ok ? "" : first.result.error.message).toBe("");
+
+    // Stopped between the two appends the turn makes.
+    const cut = yield* cutAfter(stream, "/materialization");
+    const resumed = yield* runDoc(LAUNCH, { stream: cut, stub, dir });
+    expect(resumed.result.ok ? "" : resumed.result.error.message).toBe("");
+    // The turn was spent once, by the run that spent it.
+    expect(stub.turns).toEqual([OWED.requestId]);
+    expect(stub.preparations.length).toBe(1);
+
+    // Rebuilt from the prompt alone: the provider's name for the turn survives,
+    // and what the turn cost does not — it was observed once and is reported as
+    // unreported rather than as nothing.
+    const rebuilt = one(resumed.events, "/materialized");
+    expect(rebuilt.turn).toEqual({
+      provider: "stub",
+      kind: "stub-turn-id",
+      value: "turn-0001",
+    });
+    expect(rebuilt.response).toBe("Acknowledged.");
+    expect(rebuilt.usage).toEqual({});
+    expect(rebuilt.failure).toBe(undefined);
+    // And the launch goes on to hand the retained identity over.
+    expect(resumed.launcher.requests[0]?.command).toEqual(["stub-ui", "--resume", "native-abc"]);
+  });
+
+  it("MR4: a preparation with no prompt outcome refuses rather than sending again", function* () {
+    const stub = owing();
+    const dir = path.join(os.tmpdir(), `xmd-mr-${randomUUID()}`);
+    yield* ensure(() => rm(dir, { recursive: true, force: true }));
+    const stream = new InMemoryStream();
+    const first = yield* runDoc(LAUNCH, { stream, stub, dir });
+    expect(first.result.ok ? "" : first.result.error.message).toBe("");
+
+    // Stopped after the session was prepared and before anything said what its
+    // turn did — the one state that cannot be told from a turn already charged.
+    const cut = yield* cutAfter(stream, "/prepared");
+    const resumed = yield* runDoc(LAUNCH, { stream: cut, stub, dir });
+
+    expect(resumed.result.ok).toBe(false);
+    expect(resumed.result.ok ? "" : resumed.result.error.message).toContain("not knowable");
+    // No second turn, and no native UI over a session nothing can vouch for.
+    expect(stub.turns).toEqual([OWED.requestId]);
+    expect(resumed.launcher.requests.length).toBe(0);
+    const refusal = nested(one(resumed.events, "/materialized"), "failure");
+    expect(refusal.class).toBe("session-recovery-required");
+    expect(refusal.message).toContain("not knowable");
+    expect(retainedPhases(resumed.events)).toEqual(["prepared", "materialized"]);
+  });
+
+  it("MR5: a retained refusal replays as itself and never opens a native UI", function* () {
+    const stream = new InMemoryStream();
+    const stub = owing({ turnRefused: true });
+    const first = yield* runDoc(LAUNCH, { stream, stub });
+    expect(first.result.ok).toBe(false);
+    expect(first.result.ok ? "" : first.result.error.message).toContain("refused the turn");
+    expect(first.stub.detaches).toBe(0);
+    expect(first.launcher.requests.length).toBe(0);
+
+    const second = yield* runDoc(LAUNCH, { stream, stub });
+    expect(second.result.ok).toBe(false);
+    expect(second.result.ok ? "" : second.result.error.message).toContain("refused the turn");
+    // Replayed, not retried, and still not handed over.
+    expect(stub.turns.length).toBe(1);
+    expect(stub.detaches).toBe(0);
+    expect(second.launcher.requests.length).toBe(0);
+  });
+
+  it("MR6: a session that is openable already owes nothing and is charged nothing", function* () {
+    const stub = createLaunchStub();
+    const run = yield* runDoc(LAUNCH, { stub });
+    expect(run.result.ok ? "" : run.result.error.message).toBe("");
+    expect(stub.turns).toEqual([]);
+    expect(one(run.events, "/prepared").materialization).toBe(undefined);
+    expect(retainedPhases(run.events)).toEqual(["prepared", "detached", "exited"]);
+    expect(retained(run.events).some((entry) => entry.type === "agent_prompt")).toBe(false);
+  });
+
+  it("MR7: a planned turn the provider cannot spend stops the launch", function* () {
+    const stub = owing({ withholdMaterialize: true });
+    const run = yield* runDoc(LAUNCH, { stub });
+    expect(run.result.ok).toBe(false);
+    expect(run.result.ok ? "" : run.result.error.message).toContain("offers no way to spend one");
+    expect(stub.turns).toEqual([]);
+    expect(stub.detaches).toBe(0);
+    expect(run.launcher.requests.length).toBe(0);
+  });
+
+  it("MR8: a preparation cannot name a session its own planned turn would create", function* () {
+    const stub = owing({ assertIdentityBeforeTurn: true });
+    const run = yield* runDoc(LAUNCH, { stub });
+    expect(run.result.ok).toBe(false);
+    expect(run.result.ok ? "" : run.result.error.message).toContain(
+      "no backend has accepted a turn in yet",
+    );
+    // Refused before the turn, so a provider that names a conversation it has
+    // not had never gets to spend one either.
+    expect(stub.turns).toEqual([]);
+    expect(stub.detaches).toBe(0);
+    expect(run.launcher.requests.length).toBe(0);
+  });
+
+  it("MR9: a completed turn that names no session stops before the handoff", function* () {
+    const stub = owing({ withholdMaterializedIdentity: true });
+    const run = yield* runDoc(LAUNCH, { stub });
+    expect(run.result.ok).toBe(false);
+    expect(run.result.ok ? "" : run.result.error.message).toContain(
+      "without asserting the provider-native identity",
+    );
+    // The turn was spent and is retained as spent — what is missing is the
+    // session, and there is nothing for a native UI to be handed.
+    expect(stub.turns).toEqual([OWED.requestId]);
+    expect(retainedPhases(run.events)).toEqual(["prepared", "materialized"]);
+    expect(stub.detaches).toBe(0);
+    expect(run.launcher.requests.length).toBe(0);
+  });
+
+  it("MR10: the identity handed over is the one the accepted turn asserted", function* () {
+    const stub = owing({ nativeSessionId: "native-from-turn" });
+    const run = yield* runDoc(LAUNCH, { stub });
+    expect(run.result.ok ? "" : run.result.error.message).toBe("");
+    // The preparation asserted none, the turn asserted this one, and this one
+    // is what the native UI was told to resume.
+    expect(one(run.events, "/prepared").nativeSessionId).toBe("");
+    expect(one(run.events, "/materialized").nativeSessionId).toBe("native-from-turn");
+    expect(run.launcher.requests[0]?.command).toEqual(["stub-ui", "--resume", "native-from-turn"]);
+  });
+});
+
+/**
+ * Tier MJ — the materialization phase read strictly.
+ *
+ * This is the one phase whose record decides whether a model turn was already
+ * paid for. A malformed one read past would either charge a second turn or hand
+ * a native UI a session nothing named, so every member is parsed rather than
+ * trusted and anything unrecognized refuses the whole record.
+ */
+describe("Tier MJ — reading the materialization phase back", () => {
+  function materialized(overrides: Record<string, Json> = {}): Record<string, Json> {
+    return {
+      phase: "materialized",
+      promptVersion: "codex-materialization.v1",
+      requestId: "11111111-2222-3333-4444-555555555555",
+      nativeSessionId: "01998f2e-0000-7000-8000-000000000000",
+      turn: { provider: "acpx", kind: "codex-thread-id", value: "turn-1" },
+      durationMs: 812,
+      usage: { inputTokens: 11, totalTokens: 13, costAmount: 0, costCurrency: "USD" },
+      response: "Acknowledged.",
+      stopReason: "end_turn",
+      ...overrides,
+    };
+  }
+
+  it("MJ1: a complete record round-trips every member unchanged", function* () {
+    const parsed = parseMaterialized(materialized());
+    expect(parsed?.promptVersion).toBe("codex-materialization.v1");
+    expect(parsed?.requestId).toBe("11111111-2222-3333-4444-555555555555");
+    expect(parsed?.nativeSessionId).toBe("01998f2e-0000-7000-8000-000000000000");
+    expect(parsed?.turn).toEqual({ provider: "acpx", kind: "codex-thread-id", value: "turn-1" });
+    expect(parsed?.durationMs).toBe(812);
+    expect(parsed?.usage).toEqual({
+      inputTokens: 11,
+      totalTokens: 13,
+      costAmount: 0,
+      costCurrency: "USD",
+    });
+    expect(parsed?.response).toBe("Acknowledged.");
+    expect(parsed?.stopReason).toBe("end_turn");
+  });
+
+  it("MJ2: a record that identifies its plan as nothing identifies no turn", function* () {
+    for (const value of ["", 1, null, {}]) {
+      expect(parseMaterialized(materialized({ promptVersion: value }))).toBe(undefined);
+      expect(parseMaterialized(materialized({ requestId: value }))).toBe(undefined);
+    }
+  });
+
+  it("MJ3: an identity that names nothing is refused rather than handed over", function* () {
+    for (const value of ["", 1, null, []]) {
+      expect(parseMaterialized(materialized({ nativeSessionId: value }))).toBe(undefined);
+    }
+    // Absent is a different claim from empty: a turn that failed made nothing
+    // openable, and says so by naming nothing at all.
+    const absent = materialized();
+    delete absent.nativeSessionId;
+    expect(parseMaterialized(absent)?.nativeSessionId).toBe(undefined);
+  });
+
+  it("MJ4: a duration that is not an elapsed time is refused", function* () {
+    for (const value of [-1, "812", null, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(parseMaterialized(materialized({ durationMs: value }))).toBe(undefined);
+    }
+    expect(parseMaterialized(materialized({ durationMs: 0 }))?.durationMs).toBe(0);
+  });
+
+  it("MJ5: a usage report is refused whole rather than read part-way", function* () {
+    // A member no build of this reader knows is a report it cannot claim to
+    // have understood, so absence never stands in for an unrecognized figure.
+    expect(parseMaterialized(materialized({ usage: { reasoningTokens: 4 } }))).toBe(undefined);
+    for (const value of [-1, "11", null, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(parseMaterialized(materialized({ usage: { inputTokens: value } }))).toBe(undefined);
+    }
+    for (const value of ["", 3, null]) {
+      expect(parseMaterialized(materialized({ usage: { costCurrency: value } }))).toBe(undefined);
+    }
+    for (const value of ["", 3, null, []]) {
+      expect(parseMaterialized(materialized({ usage: value }))).toBe(undefined);
+    }
+    // Reported nothing is a report, and it is retained as exactly that.
+    expect(parseMaterialized(materialized({ usage: {} }))?.usage).toEqual({});
+  });
+
+  it("MJ6: a turn or a failure the reader cannot name refuses the record", function* () {
+    const turns: Json[] = [{ provider: "acpx", kind: "codex-thread-id" }, { provider: "" }, 1, []];
+    for (const value of turns) {
+      expect(parseMaterialized(materialized({ turn: value }))).toBe(undefined);
+    }
+    const failures: Json[] = [{ class: "invented", message: "x" }, { class: "native-exit" }, 1];
+    for (const value of failures) {
+      expect(parseMaterialized(materialized({ failure: value }))).toBe(undefined);
+    }
+    const failed = parseMaterialized(
+      materialized({ failure: { class: "materialization-failed", message: "no" } }),
+    );
+    expect(failed?.failure).toEqual({ class: "materialization-failed", message: "no" });
+  });
+
+  it("MJ7: a record of another phase is not a materialization", function* () {
+    expect(parseMaterialized(materialized({ phase: "detached" }))).toBe(undefined);
+    expect(parseMaterialized(materialized({ response: 1 }))).toBe(undefined);
+    for (const value of [undefined, null, "materialized", []]) {
+      expect(parseMaterialized(value)).toBe(undefined);
+    }
   });
 });

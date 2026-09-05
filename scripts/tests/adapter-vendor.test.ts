@@ -29,7 +29,7 @@ const VENDOR = "packages/acp/vendor/adapters";
 const REVIEWED = {
   codex: {
     upstreamBase: "50f69e57ca761ccafd2ca29de7fb591068277516",
-    patchedCommit: "fadc0a690e96c276629be8a34be980d35e821637",
+    patchedCommit: "e1a15637c13e85cca05cd8ba398c5cef92dcaf33",
   },
   claude: {
     upstreamBase: "8710ce1cbccf562cb04b4bcc30e053e960aee05f",
@@ -83,6 +83,7 @@ interface ManifestSnapshot {
   buildCommand: string;
   contract: string;
   materializationContract: string;
+  identityContract?: string;
 }
 
 function* manifest(): Operation<ManifestSnapshot[]> {
@@ -193,6 +194,21 @@ describe("Tier AD — embedded ACP adapter snapshots", () => {
       // completed and whether a backend accepted one are different claims, and
       // an adapter can carry either without the other.
       expect(snapshot.materializationContract).toContain("executablemd.session-materialization/v1");
+    }
+
+    // A third claim, declared only where the provider allocates the identity.
+    // Codex names its own App Server thread and a client cannot know it
+    // otherwise; Claude is handed the identity it uses, so a snapshot declaring
+    // one there would be claiming the adapter reports something it never does.
+    expect(
+      Object.fromEntries(
+        declared.map((snapshot) => [snapshot.provider, snapshot.identityContract]),
+      ),
+    ).toEqual({ codex: "_meta.agentSessionId", claude: undefined });
+    for (const snapshot of declared) {
+      if (snapshot.identityContract !== undefined) {
+        expect(snapshot.identityContract).toMatch(/^_meta\./);
+      }
     }
   });
 });

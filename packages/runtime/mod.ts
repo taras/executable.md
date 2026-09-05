@@ -18,7 +18,7 @@
  *   (`cwd`, `env`, `platform`, `command`, `compile`)
  * - `API.Service` — scoped attached service startup (`startService`)
  * - `NativeLauncher` — handing one native agent UI the foreground terminal
- *   (`reserveTerminal`, `flushOutput`, `nativeLaunch`)
+ *   (`reserveTerminal`, `flushOutput`, `notifyTerminal`, `nativeLaunch`)
  * - `Config` — shared execution config (`timeout`, `timeoutExec`, `timeoutFetch`,
  *   `verbose`)
  *
@@ -138,6 +138,7 @@ export {
   NativeLauncherUnavailableError,
   nativeLaunch,
   NO_TERMINAL,
+  notifyTerminal,
   reserveTerminal,
 } from "./launcher.ts";
 export type {

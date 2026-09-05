@@ -22,12 +22,15 @@
  * client-allocated one allocates an identity or writes a private file. That is
  * the failure the contract asks for rather than a hopeful spawn.
  *
- * Adapters differ in one structural way, and it is discriminated rather than
- * inferred: who chooses the provider-native session identity. A
- * `provider-returned` adapter can only resume a session something else created
- * and named. A `client-allocated` adapter names the session first and hands
- * that name to the native process, which is what lets a launch construct a
- * conversation instead of merely reattaching to one.
+ * Adapters differ along two structural axes, and both are discriminated rather
+ * than inferred. The first is who chooses the provider-native session identity:
+ * a `provider-returned` adapter can only resume a session something else
+ * created and named, while a `client-allocated` adapter names the session first
+ * and hands that name to the native process, which is what lets a launch
+ * construct a conversation instead of merely reattaching to one. The second is
+ * whether the adapter pins the build behind its executable, and it is
+ * independent of the first: a name means one conversation only beside the build
+ * that issued or accepted it, whichever side chose the name.
  */
 
 import { randomUUID } from "node:crypto";
@@ -36,9 +39,10 @@ import type { IdentityProvenance } from "@executablemd/core";
 /**
  * What an adapter knows about the build behind its executable.
  *
- * A session whose identity XMD chose only means something while the build that
- * accepted it can be recognized later: two builds of one provider accept the
- * same identity and disagree silently about what it names. Everything here is
+ * A provider-native identity only means something while the build behind it can
+ * be recognized later: two builds of one provider accept the same identity and
+ * disagree silently about what it names, whether XMD chose that identity or the
+ * provider issued it. Everything here is
  * that adapter's private dialect — which command to observe, what its version
  * output looks like, and what the ACP adapter child needs in order to run the
  * same build. None of it reaches a document.
@@ -104,6 +108,41 @@ function claudeVersion(output: string): string | undefined {
   return canonical.length === 1 ? canonical[0] : undefined;
 }
 
+/**
+ * Codex reports `codex-cli 0.153.2`.
+ *
+ * The product word is retained with the number for the same reason Claude's
+ * whole line is: a bare semver from another tool compares equal. The one-line
+ * rule is the same as well, and so is the silence about what did not match.
+ */
+function codexVersion(output: string): string | undefined {
+  const canonical = output
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^codex-cli \d+\.\d+\.\d+$/.test(line));
+  return canonical.length === 1 ? canonical[0] : undefined;
+}
+
+/**
+ * The one XMD-owned model turn a freshly created conversation needs before the
+ * native UI can open it.
+ *
+ * Declared by the adapter that needs it and by no other, because needing one is
+ * a fact about a provider's persistence rather than about launching. An adapter
+ * without this member owes no turn, and a launch on it may not take one.
+ *
+ * The prompt is a constant of this build. It interpolates nothing, carries no
+ * authored content, no path, no identity and no environment, and it is the same
+ * bytes every time so a reader of a journal can recognize an XMD-owned turn in
+ * their own conversation.
+ */
+export interface MaterializationContract {
+  /** Which exact prompt this is — versioned, because the bytes are the contract. */
+  readonly promptVersion: string;
+  /** The prompt itself, sent as one text block. */
+  readonly prompt: string;
+}
+
 interface AdapterCommands {
   /** Stable adapter identity — `claude`, `codex`. Never an executable path. */
   launcher: string;
@@ -111,6 +150,8 @@ interface AdapterCommands {
   identity: IdentityProvenance;
   /** The argv that resumes this exact provider-native session. */
   resume(nativeSessionId: string): string[];
+  /** The turn a session this adapter newly creates owes, when it owes one. */
+  materialization?: MaterializationContract;
 }
 
 /**
@@ -146,11 +187,46 @@ export interface ProviderReturnedAdapter extends AdapterCommands {
   identity: "provider-returned";
 }
 
-export type NativeAdapter = ProviderReturnedAdapter | ClientAllocatedAdapter;
+/**
+ * A provider-returned adapter whose sessions are pinned to one observed build.
+ *
+ * The provider still names the session, so nothing here chooses an identity.
+ * What the binding adds is the other half of what makes that name mean
+ * something: an identity a provider issued is only resumable by the build that
+ * issued it, and two builds of one provider accept the same string while
+ * disagreeing about which conversation it is.
+ *
+ * It is a separate type rather than an optional member on the one above,
+ * because an adapter a host supplies for a provider that does not pin builds
+ * must not be able to reach a binding at all. Narrowing is the only way in.
+ */
+export interface BoundProviderReturnedAdapter extends ProviderReturnedAdapter {
+  binding: NativeBinding;
+}
+
+export type NativeAdapter =
+  | ProviderReturnedAdapter
+  | BoundProviderReturnedAdapter
+  | ClientAllocatedAdapter;
+
+/** An adapter whose sessions are bound to the build that accepted them. */
+export type BuildBoundAdapter = BoundProviderReturnedAdapter | ClientAllocatedAdapter;
 
 /** Whether this adapter names its own sessions. */
 export function allocatesIdentity(adapter: NativeAdapter): adapter is ClientAllocatedAdapter {
   return adapter.identity === "client-allocated";
+}
+
+/**
+ * Whether this adapter's sessions are bound to one observed executable build.
+ *
+ * Independent of who names the session: `claude` allocates its identities and
+ * `codex` is handed them, and both are meaningless beside a build this run
+ * cannot recognize. An adapter without a binding keeps the released
+ * native-only behavior — it observes nothing and gains nothing.
+ */
+export function bindsBuild(adapter: NativeAdapter): adapter is BuildBoundAdapter {
+  return "binding" in adapter;
 }
 
 const ADAPTERS: Readonly<Record<string, NativeAdapter>> = {
@@ -183,7 +259,33 @@ const ADAPTERS: Readonly<Record<string, NativeAdapter>> = {
   },
   codex: {
     launcher: "codex",
+    // Codex creates the conversation through ACP and reports what it is called.
+    // XMD supplies nothing here and accepts only that assertion.
     identity: "provider-returned",
+    binding: {
+      command: "codex",
+      version: codexVersion,
+      // No `adapterCommand`: the host registry already resolves `codex` to the
+      // vendored patched adapter this build carries, and a command pinned here
+      // would replace that exact snapshot with whatever a fetch produced.
+      //
+      // The first thing the Codex ACP adapter consults when deciding which
+      // Codex to run, so the build that creates the session through ACP is the
+      // build the native UI then resumes it with.
+      environment: (livePath) => ({ CODEX_PATH: livePath }),
+    },
+    // The App Server writes a thread's rollout at its first turn, and `codex
+    // resume <id>` reads rollouts — so a thread ACP created and nothing has
+    // spoken in is refused by name. One turn closes exactly that gap and
+    // nothing else, which is why the prompt asks for an acknowledgement and
+    // forbids the work the session was prepared for.
+    materialization: {
+      promptVersion: "codex-materialization.v1",
+      prompt:
+        "This turn only makes the Codex conversation resumable. Do not perform the prepared " +
+        "task, inspect or modify files, call tools, or take any external action. Reply with a " +
+        "brief acknowledgement only.",
+    },
     resume: (nativeSessionId) => ["codex", "resume", nativeSessionId],
   },
 };
@@ -201,12 +303,26 @@ const ADAPTERS: Readonly<Record<string, NativeAdapter>> = {
  * independent invocation resumed the same identity — including a session left
  * without a word said in it.
  *
- * `codex` is absent. Its command shape is known and its adapter contract tests
- * pass, and neither is the proof: nothing has run it against an installed
- * Codex. A host may still advertise an adapter itself by passing its name
- * through `AcpxProviderDependencies.advertiseNativeLaunch`.
+ * `codex` is here because `packages/acp/src/CodexNativeLaunch.test.md` and
+ * `packages/acp/src/CodexZeroNativeTurnExit.test.md` ran the production command
+ * through the built binary against `codex-cli 0.153.2` on macOS arm64 and showed
+ * the same contract, reached differently: Codex allocates the identity and
+ * reports it on the response `_meta`, the layer governs the first native user
+ * turn, and a second independent invocation reaches that same conversation.
+ *
+ * Codex costs one model turn to get there. The App Server writes a thread's
+ * rollout at its first turn and `codex resume <id>` reads rollouts, so a thread
+ * ACP created and nothing has spoken in is refused by name: `session/resume`
+ * answers "no rollout found for thread id <id>", and the native UI answers "No
+ * saved session found with ID <id>". `codex-materialization.v1` is the one
+ * XMD-owned turn that closes exactly that gap, and it runs only for a freshly
+ * created conversation. It is not a bootstrap turn: it carries no authored
+ * content, and providers that need no materialization keep spending none.
+ *
+ * A host may still advertise an adapter itself by passing its name through
+ * `AcpxProviderDependencies.advertiseNativeLaunch`.
  */
-export const ADVERTISED_NATIVE_LAUNCH: readonly string[] = ["claude"];
+export const ADVERTISED_NATIVE_LAUNCH: readonly string[] = ["claude", "codex"];
 
 /**
  * The adapters whose client-native ACP attachment has been proven against the

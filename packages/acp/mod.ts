@@ -43,8 +43,10 @@ export {
   knownNativeAdapters,
   nativeAdapterFor,
 } from "./src/native-launch.ts";
-export { allocatesIdentity } from "./src/native-launch.ts";
+export { allocatesIdentity, bindsBuild } from "./src/native-launch.ts";
 export type {
+  BoundProviderReturnedAdapter,
+  BuildBoundAdapter,
   ClientAllocatedAdapter,
   NativeAdapter,
   NativeBinding,
@@ -109,4 +111,5 @@ export type {
   AgentSessionRouteStore,
   AgentSessionRouteV1,
   AgentSessionRouteV2,
+  AgentSessionRouteV3,
 } from "./src/session-route.ts";

@@ -40,6 +40,8 @@ import type {
   Workflow,
 } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
+import { readCheckpoint } from "./checkpoint.ts";
+import type { AgentPromptCheckpoint } from "./checkpoint.ts";
 import { AgentPromptError, parsePromptFailure } from "./errors.ts";
 import type { SerializedPromptFailure } from "./errors.ts";
 import { AgentInternal } from "./internal.ts";
@@ -67,6 +69,18 @@ export interface PromptRecord {
    * test). Missing in older records — parsed as absent, never inferred.
    */
   raised?: boolean;
+  /**
+   * The provider's own name for this completed turn, when the retaining caller
+   * asked for it to be kept.
+   *
+   * Ordinarily a checkpoint is not journalled at all: it is associated with one
+   * terminal event and published through a host's own transaction, because what
+   * a host keeps beside a Prompt is that host's business. A launch is the one
+   * caller that has to keep it here — the turn it owes is retained so a replay
+   * never spends a second one, and the record of the turn is only evidence that
+   * it happened if it names which turn it was.
+   */
+  checkpoint?: AgentPromptCheckpoint;
 }
 
 export function* persistPrompt(
@@ -245,6 +259,13 @@ function serializePromptRecord(record: PromptRecord): Json {
   if (record.raised === true) {
     payload.raised = true;
   }
+  if (record.checkpoint !== undefined) {
+    payload.checkpoint = {
+      provider: record.checkpoint.provider,
+      kind: record.checkpoint.kind,
+      value: record.checkpoint.value,
+    };
+  }
   return payload;
 }
 
@@ -264,8 +285,18 @@ export function parsePromptRecord(value: unknown): PromptRecord | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
-  const { sequence, agent, sessionKey, agentSessionId, status, stopReason, text, error, raised } =
-    value;
+  const {
+    sequence,
+    agent,
+    sessionKey,
+    agentSessionId,
+    status,
+    stopReason,
+    text,
+    error,
+    raised,
+    checkpoint,
+  } = value;
   if (typeof sequence !== "number" || typeof agent !== "string") {
     return undefined;
   }
@@ -291,6 +322,15 @@ export function parsePromptRecord(value: unknown): PromptRecord | undefined {
   }
   if (raised === true && record.status !== "completed") {
     record.raised = true;
+  }
+  if (checkpoint !== undefined) {
+    // A checkpoint names a turn something can be continued from, so a record
+    // carrying one for a turn that did not complete contradicts itself.
+    const parsed = readCheckpoint(checkpoint);
+    if (!parsed || record.status !== "completed") {
+      return undefined;
+    }
+    record.checkpoint = parsed;
   }
   return record;
 }

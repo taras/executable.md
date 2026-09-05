@@ -49,9 +49,9 @@ function* installProvider(harness: FakeRuntimeHarness): Operation<void> {
   const factory = createAcpxProvider({
     createRuntime: harness.create,
     sessionStore: makeStore(),
-    agentRegistry: makeRegistry({ codex: "codex-cmd", other: "other-cmd" }),
+    agentRegistry: makeRegistry({ scribe: "scribe-cmd", other: "other-cmd" }),
   });
-  yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+  yield* factory({ defaultAgent: "scribe", permissionMode: "deny-all" }, stubAuthority());
 }
 
 function* collectPrompt(
@@ -78,10 +78,10 @@ describe("Tier AP — ACPX provider", () => {
       yield* installProvider(harness);
       const { events, close } = yield* collectPrompt("describe this repo");
 
-      expect(events[0]).toMatchObject({ type: "started", agent: "codex" });
+      expect(events[0]).toMatchObject({ type: "started", agent: "scribe" });
       const started = events[0]!;
       if (started.type === "started") {
-        expect(started.session.sessionKey).toBe(deriveSessionKey("codex-cmd", CWD));
+        expect(started.session.sessionKey).toBe(deriveSessionKey("scribe-cmd", CWD));
         expect(started.session.cwd).toBe(CWD);
       }
       const deltas = events.filter((event) => event.type === "text_delta");
@@ -93,8 +93,8 @@ describe("Tier AP — ACPX provider", () => {
       expect(close).toBe("hello world");
 
       expect(harness.ensureCalls[0]).toMatchObject({
-        sessionKey: deriveSessionKey("codex-cmd", CWD),
-        agent: "codex",
+        sessionKey: deriveSessionKey("scribe-cmd", CWD),
+        agent: "scribe",
         mode: "persistent",
         cwd: CWD,
       });
@@ -176,14 +176,14 @@ describe("Tier AP — ACPX provider", () => {
       const factory = createAcpxProvider({
         createRuntime: harness.create,
         sessionStore: store,
-        agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+        agentRegistry: makeRegistry({ scribe: "scribe-cmd" }),
       });
-      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+      yield* factory({ defaultAgent: "scribe", permissionMode: "deny-all" }, stubAuthority());
 
       // Simulate a prior turn's reconnect: the persisted record now
       // carries a replaced ACP session id that the handle predates.
-      const sessionKey = deriveSessionKey("codex-cmd", CWD);
-      const record = makeRecord("codex-cmd", CWD);
+      const sessionKey = deriveSessionKey("scribe-cmd", CWD);
+      const record = makeRecord("scribe-cmd", CWD);
       record.acpxRecordId = `record:${sessionKey}`;
       record.acpSessionId = "replaced-id";
       store.records.set(record.acpxRecordId, record);
@@ -236,14 +236,14 @@ describe("Tier AP — ACPX provider", () => {
       const factory = createAcpxProvider({
         createRuntime: harness.create,
         sessionStore: store,
-        agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+        agentRegistry: makeRegistry({ scribe: "scribe-cmd" }),
       });
-      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+      yield* factory({ defaultAgent: "scribe", permissionMode: "deny-all" }, stubAuthority());
 
       // The persisted record carries the authoritative ids after a
       // prior reconnect replaced both.
-      const sessionKey = deriveSessionKey("codex-cmd", CWD);
-      const record = makeRecord("codex-cmd", CWD);
+      const sessionKey = deriveSessionKey("scribe-cmd", CWD);
+      const record = makeRecord("scribe-cmd", CWD);
       record.acpxRecordId = `record:${sessionKey}`;
       record.acpSessionId = "sid-2";
       record.agentSessionId = "agent-2";
@@ -252,7 +252,7 @@ describe("Tier AP — ACPX provider", () => {
       // resolves to. Without it this prompt would be constructing the session
       // rather than reconnecting to one, and there would be no earlier
       // conversation whose ids a reconnect could have replaced.
-      const placed = makeRecord("codex-cmd", CWD);
+      const placed = makeRecord("scribe-cmd", CWD);
       placed.acpxRecordId = sessionKey;
       placed.acpSessionId = "sid-2";
       placed.agentSessionId = "agent-2";
@@ -319,12 +319,12 @@ describe("Tier AP — ACPX provider", () => {
       const factory = createAcpxProvider({
         createRuntime: harness.create,
         sessionStore: store,
-        agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+        agentRegistry: makeRegistry({ scribe: "scribe-cmd" }),
       });
-      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+      yield* factory({ defaultAgent: "scribe", permissionMode: "deny-all" }, stubAuthority());
 
-      const sessionKey = deriveSessionKey("codex-cmd", CWD);
-      const record = makeRecord("codex-cmd", CWD);
+      const sessionKey = deriveSessionKey("scribe-cmd", CWD);
+      const record = makeRecord("scribe-cmd", CWD);
       record.acpxRecordId = `record:${sessionKey}`;
       record.acpSessionId = "id-A";
       record.agentSessionId = "agent-A";
@@ -398,13 +398,13 @@ describe("Tier AP — ACPX provider", () => {
       const factory = createAcpxProvider({
         createRuntime: harness.create,
         sessionStore: store,
-        agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+        agentRegistry: makeRegistry({ scribe: "scribe-cmd" }),
       });
-      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+      yield* factory({ defaultAgent: "scribe", permissionMode: "deny-all" }, stubAuthority());
 
       // Pre-seed the repo-root session so the walk from a subdir reuses it.
-      const rootKey = deriveSessionKey("codex-cmd", "/repo");
-      const rootRecord = makeRecord("codex-cmd", "/repo");
+      const rootKey = deriveSessionKey("scribe-cmd", "/repo");
+      const rootRecord = makeRecord("scribe-cmd", "/repo");
       rootRecord.acpxRecordId = `record:${rootKey}`;
       store.records.set(rootKey, rootRecord);
 
@@ -448,10 +448,10 @@ describe("Tier AP — ACPX provider", () => {
       const factory = createAcpxProvider({
         createRuntime: harness.create,
         sessionStore: makeStore(),
-        agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+        agentRegistry: makeRegistry({ scribe: "scribe-cmd" }),
         withSessionRoute: (_context, op) => routeQueue.withSlot("route", op),
       });
-      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+      yield* factory({ defaultAgent: "scribe", permissionMode: "deny-all" }, stubAuthority());
 
       const a1 = yield* spawn(() => collectPrompt("a1"));
       yield* sleep(10);
@@ -598,26 +598,26 @@ describe("Tier AP — ACPX provider", () => {
     harness.doctorReports.push({
       ok: false,
       code: "ACP_BACKEND_UNAVAILABLE",
-      message: "codex not installed",
-      details: ["agent=codex"],
+      message: "scribe not installed",
+      details: ["agent=scribe"],
     });
     yield* scoped(function* () {
       yield* installProvider(harness);
       let thrown: unknown;
       try {
-        yield* Agent.operations.agent("codex");
+        yield* Agent.operations.agent("scribe");
       } catch (error) {
         thrown = error;
       }
       expect(thrown).toBeInstanceOf(Error);
       if (thrown instanceof Error) {
         expect(thrown.message).toContain("ACP_BACKEND_UNAVAILABLE");
-        expect(thrown.message).toContain("codex not installed");
+        expect(thrown.message).toContain("scribe not installed");
       }
 
       // The failed probe is not cached; the next probe succeeds and is.
-      expect(yield* Agent.operations.agent("codex")).toBe("codex");
-      expect(yield* Agent.operations.agent("codex")).toBe("codex");
+      expect(yield* Agent.operations.agent("scribe")).toBe("scribe");
+      expect(yield* Agent.operations.agent("scribe")).toBe("scribe");
       expect(harness.doctorCalls).toBe(2);
     });
   });
@@ -629,11 +629,11 @@ describe("Tier AP — ACPX provider", () => {
 
     function* installState(harness: FakeRuntimeHarness): Operation<AcpxProvider> {
       const state = yield* useAcpxProvider(
-        { defaultAgent: "codex", permissionMode: "deny-all" },
+        { defaultAgent: "scribe", permissionMode: "deny-all" },
         {
           createRuntime: harness.create,
           sessionStore: makeStore(),
-          agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+          agentRegistry: makeRegistry({ scribe: "scribe-cmd" }),
         },
       );
       yield* Agent.around(
@@ -712,11 +712,11 @@ interface Partition {
 
 function* usePartition(harness: FakeRuntimeHarness): Operation<Partition> {
   const handle = yield* useAcpxProvider(
-    { defaultAgent: "codex", permissionMode: "deny-all" },
+    { defaultAgent: "scribe", permissionMode: "deny-all" },
     {
       createRuntime: harness.create,
       sessionStore: makeStore(),
-      agentRegistry: makeRegistry({ codex: "codex-cmd", other: "other-cmd" }),
+      agentRegistry: makeRegistry({ scribe: "scribe-cmd", other: "other-cmd" }),
     },
   );
   return { handle, absent: () => undefined };
@@ -766,7 +766,7 @@ function stubAuthority(): AuthorityLog {
 function fakeRequest(): AgentLaunchRequest {
   const request = {
     instructions: "You are the implementor.",
-    agent: "codex",
+    agent: "scribe",
     cwd: CWD,
     additionalDirectories: [],
     permissionMode: "deny-all",
@@ -793,7 +793,7 @@ function* installPartitioned(
     return options.select ? options.select() : owned!.handle;
   });
   const authority = stubAuthority();
-  yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, authority);
+  yield* factory({ defaultAgent: "scribe", permissionMode: "deny-all" }, authority);
   return { authority, selections: () => selections };
 }
 
@@ -833,13 +833,13 @@ describe("Tier SM — session placement and materialization", () => {
       const factory = createAcpxProvider({
         createRuntime: harness.create,
         sessionStore: store,
-        agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+        agentRegistry: makeRegistry({ scribe: "scribe-cmd" }),
       });
-      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+      yield* factory({ defaultAgent: "scribe", permissionMode: "deny-all" }, stubAuthority());
 
       const session = yield* Agent.operations.session();
 
-      expect(session.sessionKey).toBe(deriveSessionKey("codex-cmd", CWD));
+      expect(session.sessionKey).toBe(deriveSessionKey("scribe-cmd", CWD));
       expect(session.cwd).toBe(CWD);
       // Placement, and nothing else: no session was ensured, no handle exists,
       // no record was written, no turn was started, and nothing is asserted
@@ -1091,7 +1091,7 @@ describe("Tier PT — partitioned provider installation", () => {
         return grown;
       };
 
-      yield* Agent.operations.agent("codex");
+      yield* Agent.operations.agent("scribe");
       grew.push(since());
       yield* Agent.operations.session("one");
       grew.push(since());
@@ -1296,7 +1296,7 @@ const HOST_DIR = "/runs/sessions/host";
 /** One logical session's directory, as the host places it. */
 const SESSION_DIR = "/runs/sessions/cwd/8f2a";
 
-const WORKFLOW_SESSION_KEY = "xmd:workflow:v1:run:acpx:codex-cmd:default";
+const WORKFLOW_SESSION_KEY = "xmd:workflow:v1:run:acpx:scribe-cmd:default";
 
 const INSTRUCTIONS = "You have no native tool authority here.";
 
@@ -1344,7 +1344,7 @@ function* installStrictProvider(
   const factory = createAcpxProvider({
     createRuntime: harness.create,
     sessionStore: store,
-    agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+    agentRegistry: makeRegistry({ scribe: "scribe-cmd" }),
     // deno-lint-ignore require-yield
     agentCwd: function* () {
       return HOST_DIR;
@@ -1354,7 +1354,7 @@ function* installStrictProvider(
     permissions: "strict",
     sessions,
   });
-  yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+  yield* factory({ defaultAgent: "scribe", permissionMode: "deny-all" }, stubAuthority());
   // An authored approve-all scope, installed the way `<ApproveAll>` installs
   // one. Under this profile it must reach no decision at all.
   yield* Agent.around({
@@ -1378,7 +1378,7 @@ function* installStrictProvider(
  * checkpoints one before running a prompt.
  */
 function seedRoutedRecord(store: ReturnType<typeof makeStore>, sessionKey: string, cwd: string) {
-  const record = makeRecord("codex-cmd", cwd);
+  const record = makeRecord("scribe-cmd", cwd);
   record.acpxRecordId = `record:${sessionKey}`;
   record.acpSessionId = ACP_SESSION_ID;
   store.records.set(record.acpxRecordId, record);
@@ -1420,7 +1420,7 @@ describe("Tier WAP — strict workflow Agent profile", () => {
       expect(harness.ensureCalls).toHaveLength(1);
       expect(harness.ensureCalls[0]).toMatchObject({
         sessionKey: WORKFLOW_SESSION_KEY,
-        agent: "codex",
+        agent: "scribe",
         mode: "persistent",
         cwd: SESSION_DIR,
       });
@@ -1430,7 +1430,7 @@ describe("Tier WAP — strict workflow Agent profile", () => {
 
       // The host placed the session; nothing walked the contextual directory.
       expect(log.places).toEqual([
-        { agentName: "codex", agentCommand: "codex-cmd", session: undefined },
+        { agentName: "scribe", agentCommand: "scribe-cmd", session: undefined },
       ]);
       expect(log.established).toEqual([
         {
@@ -1527,9 +1527,9 @@ describe("Tier WAP — strict workflow Agent profile", () => {
       const factory = createAcpxProvider({
         createRuntime: harness.create,
         sessionStore: store,
-        agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+        agentRegistry: makeRegistry({ scribe: "scribe-cmd" }),
       });
-      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+      yield* factory({ defaultAgent: "scribe", permissionMode: "deny-all" }, stubAuthority());
       yield* Agent.around({
         // deno-lint-ignore require-yield
         *requestPermission([request]) {
@@ -1540,7 +1540,7 @@ describe("Tier WAP — strict workflow Agent profile", () => {
             : { outcome: "selected", optionId: allow.optionId };
         },
       });
-      const sessionKey = deriveSessionKey("codex-cmd", CWD);
+      const sessionKey = deriveSessionKey("scribe-cmd", CWD);
       seedRoutedRecord(store, sessionKey, CWD);
       const prompt = yield* spawn(() => collectPrompt("ordinary run"));
       yield* sleep(20);
@@ -1646,25 +1646,25 @@ describe("Tier APR — preparing an agent before it is probed", () => {
         return harness.create(options);
       },
       sessionStore: makeStore(),
-      agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+      agentRegistry: makeRegistry({ scribe: "scribe-cmd" }),
       *prepareAgent(agentName: string) {
         order.push(`prepare:${agentName}`);
       },
     });
-    yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+    yield* factory({ defaultAgent: "scribe", permissionMode: "deny-all" }, stubAuthority());
 
     // Nothing yet: installing a provider resolves no agent.
     expect(order).toEqual([]);
 
-    yield* Agent.operations.agent("codex");
+    yield* Agent.operations.agent("scribe");
 
     // Preparation first. The probe spawns the agent's command, so a host that
     // has to put that command on disk must have done so by now — otherwise the
     // probe reports the agent unavailable for a reason that names the wrong
     // cause, and no amount of later preparation is reached.
-    expect(order[0]).toBe("prepare:codex");
+    expect(order[0]).toBe("prepare:scribe");
     expect(order).toContain("probe");
-    expect(order.indexOf("prepare:codex")).toBeLessThan(order.indexOf("probe"));
+    expect(order.indexOf("prepare:scribe")).toBeLessThan(order.indexOf("probe"));
   });
 });
 
@@ -1679,9 +1679,9 @@ describe("Tier APC — Prompt checkpoint metadata", () => {
     const factory = createAcpxProvider({
       createRuntime: harness.create,
       sessionStore: makeStore(),
-      agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+      agentRegistry: makeRegistry({ scribe: "scribe-cmd" }),
     });
-    yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, authority);
+    yield* factory({ defaultAgent: "scribe", permissionMode: "deny-all" }, authority);
     const { events } = yield* collectPrompt("hello");
     return { checkpoints: authority.checkpoints, events };
   }
