@@ -101,10 +101,12 @@ export type IdentityProvenance = "provider-returned" | "client-allocated";
 /**
  * Which build of a provider executable a session was established against.
  *
- * A client-allocated session is only meaningful while the build that created
- * it can be reproduced. Two builds of the same provider accept the same
- * identity and disagree silently about what it names, so a session whose build
- * cannot be reproduced is refused rather than resumed.
+ * Written once, when the identity is first published, and never rewritten. It
+ * is audit evidence about a past observation and a cross-check between the two
+ * durable accounts of that one observation — never a gate on the build
+ * installed now. Whether a session may be continued is decided by admitting the
+ * live executable on its own terms; which build accepted the identity first is
+ * history, and history is not a capability.
  *
  * What is retained is deliberately not a path: a path says where a build was,
  * which stops being true, while a digest says which build it was, which does

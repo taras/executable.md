@@ -3409,10 +3409,12 @@ describe("Tier CA — client-native attachment", () => {
  * Tier RT — one runtime per agent command and build
  * (specs/acp-client-spec.md §ACPX provider).
  *
- * A child running the wrong build accepts the session identity and disagrees
- * silently about what it names, so sessions bound to different builds never
- * share one. A partition holds a live executable path for the work it owns, and
- * when the last handle it made closes it is gone rather than kept for nobody.
+ * A partition holds a live executable path and the child running it, so what may
+ * share one is decided by the observation serving the work now — never by what a
+ * route retained. Sessions whose routes record different builds share a child
+ * when one installed release serves them both, and two live releases never do.
+ * When the last handle a partition made closes it is gone rather than kept for
+ * nobody.
  */
 describe("Tier RT — bound runtime partitions", () => {
   const FIRST = "aaaaaaaa-1111-2222-3333-444444444444";
@@ -5457,8 +5459,11 @@ describe("Tier NP — proved native capability admissions", () => {
  *
  * What that must not cost is the fail-closed boundary. A release changing is not
  * a protocol changing, so the last cases here take the same 2.1.263 build to a
- * host that proved something else, and to a journal that disagrees with its
- * route about the build history it retained.
+ * host that proved something else, to a journal that disagrees with its route
+ * about the build history it retained, and to an adapter registered under this
+ * launcher speaking a protocol the route never named — that last one with the
+ * host's policy admitting exactly what the newcomer declares, so the only thing
+ * left refusing is the contract the route itself fixes.
  */
 describe("Tier XR — one session across two releases", () => {
   const ALLOCATED = "5eed0000-1111-2222-3333-444444444444";
@@ -5494,11 +5499,27 @@ describe("Tier XR — one session across two releases", () => {
     return { allocations: 0, creates: 0, resumes: 0, published: [] };
   }
 
-  /** The adapter, with every identity-bearing act it can perform counted. */
-  function countedAdapter(counts: Seen): NativeAdapter {
+  /**
+   * A protocol no route contract in this build fixes, and a launcher no adapter
+   * here shares with the route below.
+   */
+  const FOREIGN_PROTOCOL = "claude-fork-native.v1";
+  const FOREIGN_LAUNCHER = "codex";
+
+  /**
+   * The adapter, with every identity-bearing act it can perform counted.
+   *
+   * `contract` is what a host registered under this agent name declares about
+   * itself. Varying it is how a case asks whether a live declaration is allowed
+   * to answer what a published route already settled.
+   */
+  function countedAdapter(
+    counts: Seen,
+    contract: { launcher?: string; protocol?: string } = {},
+  ): NativeAdapter {
     return {
-      launcher: "claude",
-      protocol: CLAUDE_PROTOCOL,
+      launcher: contract.launcher ?? "claude",
+      protocol: contract.protocol ?? CLAUDE_PROTOCOL,
       identity: "client-allocated",
       binding: TEST_BINDING,
       allocate: () => {
@@ -5585,6 +5606,7 @@ describe("Tier XR — one session across two releases", () => {
       observation?: FakeObservation;
       routes?: AgentSessionRouteStore;
       nativeCapabilityPolicy?: NativeCapabilityPolicy | false;
+      adapter?: { launcher?: string; protocol?: string };
     } = {},
   ): Operation<Continued> {
     const counts = seen();
@@ -5594,7 +5616,7 @@ describe("Tier XR — one session across two releases", () => {
     const observer = createFakeObserver(options.observation ?? live());
     yield* routes.publish(options.published ?? route());
     yield* installLaunchStack(harness, trace, {
-      adapters: { claude: countedAdapter(counts) },
+      adapters: { claude: countedAdapter(counts, options.adapter) },
       routeStore: routes,
       observer: observer.observer,
       ...(options.nativeCapabilityPolicy === undefined
@@ -5816,5 +5838,111 @@ describe("Tier XR — one session across two releases", () => {
         });
       }
     }
+  });
+
+  it("XR9: an adapter speaking another protocol continues nothing, however well proved", function* () {
+    // The route fixes the protocol its identity was published under, and no
+    // amount of live evidence reopens that. Here the host has proved this
+    // adapter's own protocol, for both capabilities, in the shape the installed
+    // executable declares, on the machine actually running — everything an
+    // admission asks for, all of it about the wrong protocol. So the policy is
+    // saying yes and the refusal is the pin, which is what makes this case
+    // discriminate the production contract rather than a mismatched host.
+    const foreign = {
+      adapter: { protocol: FOREIGN_PROTOCOL },
+      nativeCapabilityPolicy: admitting(FOREIGN_PROTOCOL),
+    } as const;
+
+    yield* scoped(function* () {
+      const space = yield* continuing(foreign);
+
+      const failure = yield* attempt(space.trace, INSTRUCTIONS);
+
+      expect(failure?.class).toBe("unsupported-capability");
+      expect(space.trace.launches).toEqual([]);
+      expect([space.counts.resumes, space.counts.creates]).toEqual([0, 0]);
+      // Ahead of the observation, not after it. Which conversation this is was
+      // never a question about the build, so the build is never asked.
+      expect(space.observer.observed).toEqual([]);
+      yield* unchanged(space);
+    });
+
+    yield* scoped(function* () {
+      const space = yield* continuing(foreign);
+
+      let raised: Error | undefined;
+      try {
+        yield* Agent.operations.session();
+      } catch (error) {
+        raised = error as Error;
+      }
+
+      expect(raised === undefined).toBe(false);
+      expect(space.harness.ensureCalls).toEqual([]);
+      expect(space.harness.createdOptions).toEqual([]);
+      expect(space.observer.observed).toEqual([]);
+      yield* unchanged(space);
+    });
+
+    for (const suffix of ["prepared", "prepared+detached"] as const) {
+      yield* scoped(function* () {
+        const space = yield* continuing(foreign);
+        space.trace.replay = { prepared: prepared(), suffix };
+
+        yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
+
+        const failed = space.trace.records.findLast((record) => record.failure);
+        expect([suffix, failed?.failure?.class]).toEqual([suffix, "unsupported-capability"]);
+        expect([suffix, space.trace.launches]).toEqual([suffix, []]);
+        expect([suffix, [space.counts.resumes, space.counts.creates]]).toEqual([suffix, [0, 0]]);
+        expect([suffix, space.observer.observed]).toEqual([suffix, []]);
+        yield* unchanged(space);
+      });
+    }
+
+    yield* scoped(function* () {
+      // Adoption, where the route arrives after the read that found none. The
+      // winner is the account that governs, so it is the account this adapter
+      // has to have been constructed under — and it was not.
+      const inner = createMemorySessionRouteStore();
+      const routes: AgentSessionRouteStore = {
+        // deno-lint-ignore require-yield
+        *read() {
+          return undefined;
+        },
+        publish: (candidate) => inner.publish(candidate),
+      };
+      const space = yield* continuing({ ...foreign, routes, published: route() });
+
+      const failure = yield* attempt(space.trace, INSTRUCTIONS);
+
+      expect(failure?.class).toBe("unsupported-capability");
+      expect(space.trace.launches).toEqual([]);
+      expect([space.counts.resumes, space.counts.creates]).toEqual([0, 0]);
+      expect(JSON.stringify(space.trace.records)).not.toContain(CANDIDATE);
+      // The winner kept its identity and the evidence it was written with.
+      expect(yield* inner.read(KEY)).toEqual(route());
+    });
+  });
+
+  it("XR10: an attachment refuses a route another launcher constructed", function* () {
+    // Attachment acts on the conversation a native process was handed, so the
+    // route's launcher is as much a part of what it may join as its identity is.
+    // The protocol this adapter declares is the pinned one, so nothing but the
+    // launcher is refusing.
+    const space = yield* continuing({ adapter: { launcher: FOREIGN_LAUNCHER } });
+
+    let raised: Error | undefined;
+    try {
+      yield* Agent.operations.session();
+    } catch (error) {
+      raised = error as Error;
+    }
+
+    expect(raised === undefined).toBe(false);
+    expect(space.harness.ensureCalls).toEqual([]);
+    expect(space.harness.createdOptions).toEqual([]);
+    expect(space.observer.observed).toEqual([]);
+    yield* unchanged(space);
   });
 });

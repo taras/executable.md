@@ -60,7 +60,11 @@ import type {
 import { allocatesIdentity } from "./native-launch.ts";
 import type { ClientAllocatedAdapter, NativeBinding } from "./native-launch.ts";
 import { AgentSessionRouteError } from "./session-route.ts";
-import type { AgentSessionRoute, AgentSessionRouteStore } from "./session-route.ts";
+import type {
+  AgentSessionRoute,
+  AgentSessionRouteStore,
+  AgentSessionRouteV2,
+} from "./session-route.ts";
 import { createAcpRuntime, createAgentRegistry, createRuntimeStore } from "./acpx-runtime.ts";
 import type {
   AcpAgentRegistry,
@@ -102,6 +106,7 @@ import {
   ADVERTISED_NATIVE_LAUNCH,
   knownNativeAdapters,
   nativeAdapterFor,
+  pinnedRouteProtocol,
 } from "./native-launch.ts";
 import type { NativeAdapter } from "./native-launch.ts";
 import { admitsNativeCapability } from "./native-capability.ts";
@@ -1812,6 +1817,54 @@ function* useAcpxProviderState(
   }
 
   /**
+   * Whether the adapter this run would use is the one a published V2 route
+   * names.
+   *
+   * Asked before the executable is observed at all, because it is not a question
+   * about a build. A route fixes the protocol its identity was published under
+   * through its provider, agent and launcher contract, and that fixing is not
+   * open to reinterpretation: what is installed under the launcher tomorrow does
+   * not get to say what yesterday's conversation was. So the retained launcher
+   * has to be this adapter's, and the protocol this adapter speaks has to be the
+   * one that contract fixes.
+   *
+   * Deliberately not read off the adapter. An adapter is registered, and a
+   * registration is a live fact — accepting whatever protocol it declares would
+   * let anything filed under this launcher adopt the session, and a host policy
+   * that had proved that newcomer's own protocol would then call it admitted.
+   * The pin is compiled in, so the admission below answers "can this build do
+   * the thing" for the protocol the session already has rather than for whatever
+   * protocol happens to be asking.
+   *
+   * A refusal here reads nothing further and writes nothing at all: the route
+   * and the journal keep the identity and the build evidence they were published
+   * with, and no identity, private file, child, ensure or turn follows.
+   */
+  function admitRouteContract(
+    sessionKey: string,
+    route: AgentSessionRouteV2,
+    adapter: NativeAdapter,
+  ): LaunchFailure | undefined {
+    const pinned =
+      route.provider === ACPX_PROVIDER ? pinnedRouteProtocol(route.launcher) : undefined;
+    if (
+      pinned !== undefined &&
+      adapter.launcher === route.launcher &&
+      adapter.protocol === pinned
+    ) {
+      return undefined;
+    }
+    return {
+      class: "unsupported-capability",
+      message:
+        `session "${sessionKey}" was constructed under a native protocol this run's adapter ` +
+        `does not speak, and a construction route is never reinterpreted by whatever is ` +
+        `installed under its launcher later. Continue it with the adapter it was constructed ` +
+        `under, or name a different <Session>.`,
+    };
+  }
+
+  /**
    * What a client-native route's provider arrangement already asserts.
    *
    * An ACPX record is arrangement, not identity, so its absence is not a reason
@@ -1893,6 +1946,15 @@ function* useAcpxProviderState(
       });
     }
     const attaching = adapterFor(agentName) as ClientAllocatedAdapter;
+    // Which conversation this is, before anything about which build is
+    // installed. Joining through ACP acts on the session a native process was
+    // handed, so the adapter doing the joining has to be the one that contract
+    // names — a different launcher, or a different protocol behind the same
+    // launcher, is a different conversation whatever this host has proved.
+    const foreign = admitRouteContract(prepared.sessionKey, route, attaching);
+    if (foreign) {
+      throw new AttachmentRefused(foreign);
+    }
     const build = yield* observeBuild(
       agentName,
       agentCommand,
@@ -2410,6 +2472,17 @@ function* useAcpxProviderState(
       return retained(agentName, adapter, route, instructions, sessionCwd, "resumed");
     }
 
+    // A published route settles which protocol this session is, and it settles
+    // it before any question about builds is asked. Refused here, nothing has
+    // been observed, allocated or written, and the route still says exactly what
+    // its first publication said.
+    if (route?.route === "client-native" && route.schema === "session-route.v2") {
+      const foreign = admitRouteContract(sessionKey, route, adapter);
+      if (foreign) {
+        return refusal(foreign.class, foreign.message, known);
+      }
+    }
+
     // Observed before an identity exists, so a build this run cannot name stops
     // the launch before anything durable is written.
     let build: BoundBuild;
@@ -2486,6 +2559,16 @@ function* useAcpxProviderState(
     if (winner.schema === "session-route.v1") {
       invocation.fresh.set(sessionKey, false);
       return retained(agentName, adapter, winner, instructions, sessionCwd, "resumed");
+    }
+
+    // The winner is the account that governs, so it is the account whose
+    // protocol this adapter has to speak. A concurrent publication that reached
+    // the namespace first describes a session this launch did not construct, and
+    // adopting it is acting on it: the same contract check the read above makes,
+    // asked again of the record that actually won.
+    const foreign = admitRouteContract(sessionKey, winner, adapter);
+    if (foreign) {
+      return refusal(foreign.class, foreign.message, known);
     }
 
     // The record is built from the winner rather than from the candidate — its
@@ -3064,6 +3147,15 @@ function* useAcpxProviderState(
           `session "${prepared.sessionKey}" names a launcher this build has no way to observe, ` +
           `so the conversation it prepared cannot be confirmed`,
       };
+    }
+    // Still ahead of the observation, and ahead of every phase a replay could
+    // act with. A replay resumes a conversation someone else's process may
+    // already be in, so what it must establish first is that this adapter is
+    // what that conversation was constructed under — not that some adapter under
+    // this launcher is admitted for something.
+    const foreign = admitRouteContract(prepared.sessionKey, route, adapter);
+    if (foreign) {
+      return foreign;
     }
     let build: BoundBuild;
     try {
