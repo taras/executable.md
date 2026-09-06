@@ -24,7 +24,7 @@
  * what is invoked.
  *
  * Protection is not authority to do anything. A protected implementation is
- * handed the lexical observation for its site and nothing else: no component
+ * handed the lexical syntax reference for its site and nothing else: no component
  * definitions, no import witness, no invocation capability, no policy table, no
  * provider and no registration handle.
  *

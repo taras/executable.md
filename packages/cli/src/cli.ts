@@ -371,7 +371,7 @@ const syntaxConfig = object({
     ...field(z.array(z.string()), field.default(["components", "."]), field.array()),
   },
   json: {
-    description: "write the catalog as version-2 JSON instead of markdown",
+    description: "write the symbols as version-2 JSON instead of markdown",
     ...field(z.boolean(), field.default(false)),
   },
 });
@@ -2637,7 +2637,7 @@ function* dispatch(
     case "syntax": {
       // One inspection per invocation, then one complete document. A failure
       // writes nothing to stdout: a healthy subset printed as though it were
-      // the catalog would read as complete.
+      // the whole set of symbols would read as complete.
       let rendered: string;
       try {
         const named = command.config.component;
@@ -2661,13 +2661,13 @@ function* dispatch(
         yield* exit(1);
         break;
       }
-      // Only the catalog goes through delivery today, because it is the one
-      // output this command writes in a single call and the only one already
+      // Only this command's rendering goes through delivery today, because it
+      // is the one output written in a single call and the only one already
       // past a pipe buffer.
       const written = yield* deliverWhole(rendered, process.stdout);
       if (!written.ok) {
         console.error(
-          `xmd syntax: stdout did not accept the whole catalog: ${describeError(written.error)}`,
+          `xmd syntax: stdout did not accept the whole output: ${describeError(written.error)}`,
         );
         yield* exit(1);
       }
@@ -2850,7 +2850,7 @@ export function* runXmd(
   const provisional = xmd.parse({ args: helpRequest.args });
   const selected = provisional.ok ? provisional.value.config : undefined;
   // The two commands a `--timeout` bounds. `xmd plan`'s deadline encloses
-  // something different from a run's — the catalog, the assistant session,
+  // something different from a run's — the symbols, the assistant session,
   // every repair, the human review, provider teardown, final validation and the
   // artifact — and covers no later program, because it starts none.
   const planning = selected !== undefined && !selected.help && selected.name === "plan";

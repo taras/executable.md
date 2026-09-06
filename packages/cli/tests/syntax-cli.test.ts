@@ -626,7 +626,7 @@ describe(
 
         expect(stdout.length).toBe(100);
         expect(stderr).toContain("xmd-exit=1");
-        expect(stderr).toContain("stdout did not accept the whole catalog");
+        expect(stderr).toContain("stdout did not accept the whole output");
         // The broken pipe is reported, not raised: an unhandled write failure
         // ends the process with one of these instead.
         expect(stderr).not.toContain("Unhandled 'error' event");

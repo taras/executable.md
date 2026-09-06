@@ -58,7 +58,7 @@ import { SYNTAX_COMPONENT } from "../src/components/Syntax.ts";
 import type { ImportedDefinition } from "../src/components/import-authority.ts";
 import type { ComponentOrigin, FunctionComponent, SyntaxSymbols } from "../mod.ts";
 
-/** An origin a catalog *component* entry can carry — everything but structural. */
+/** An origin a *component* symbol entry can carry — everything but structural. */
 type NamedOrigin = Exclude<ComponentOrigin, { kind: "structural" }>;
 
 const ROOT_PATH = "documents/root.md";
@@ -68,8 +68,8 @@ const DESCRIPTION =
   "Inspect available components and control-flow constructs. `<Syntax />` lists the " +
   'symbols available here; `<Syntax names={["Elicit"]} />` renders selected documentation.';
 
-/** A catalog with one built-in entry per name, for a case that needs a marker. */
-function catalogOf(...names: readonly string[]): SyntaxSymbols {
+/** Symbols with one built-in entry per name, for a case that needs a marker. */
+function symbolsOf(...names: readonly string[]): SyntaxSymbols {
   return {
     version: 2,
     categories: [
@@ -94,13 +94,13 @@ function catalogOf(...names: readonly string[]): SyntaxSymbols {
   };
 }
 
-/** A host that states the catalog its profile describes, and counts the asks. */
-function stating(catalog: SyntaxSymbols, calls: { count: number } = { count: 0 }) {
+/** A host that states the symbols its profile describes, and counts the asks. */
+function stating(symbols: SyntaxSymbols, calls: { count: number } = { count: 0 }) {
   const installation: ExecutionInstallation = {
     // deno-lint-ignore require-yield
     *symbols(): Operation<SyntaxSymbols> {
       calls.count += 1;
-      return catalog;
+      return symbols;
     },
   };
   return { installation, calls };
@@ -153,22 +153,22 @@ function* refusal(operation: Operation<unknown>): Operation<string> {
   throw new Error("expected the operation to be refused");
 }
 
-/** Every retained catalog reference, in order. */
-function observations(events: readonly DurableEvent[]): DurableEvent[] {
+/** Every retained syntax record, in order. */
+function syntaxReads(events: readonly DurableEvent[]): DurableEvent[] {
   return events.filter(
     (event) => event.type === "yield" && event.description.type === "syntax_symbols",
   );
 }
 
 /**
- * Only the observations that succeeded.
+ * Only the syntaxReads that succeeded.
  *
  * A refusal still records the attempt and its failure, which is how a journal
  * says what happened. What must not exist is a *successful* record: that is the
- * thing a continuation would restore and hand back as a catalog.
+ * thing a continuation would restore and hand back as the symbols.
  */
 function retained(events: readonly DurableEvent[]): DurableEvent[] {
-  return observations(events).filter(
+  return syntaxReads(events).filter(
     (event) => event.type === "yield" && event.result.status === "ok",
   );
 }
@@ -211,8 +211,8 @@ function* tampered(
   return partial;
 }
 
-/** A catalog holding one component entry of exactly this identity. */
-function catalogNamed(name: string, origin: NamedOrigin): SyntaxSymbols {
+/** Symbols holding one component entry of exactly this identity. */
+function symbolsNamed(name: string, origin: NamedOrigin): SyntaxSymbols {
   return {
     version: 2,
     categories: [
@@ -276,14 +276,14 @@ function useWorkingDirectory<T>(body: (dir: string) => Operation<T>): Operation<
 }
 
 describe("Tier SYN — what one occurrence answers", () => {
-  it("SYN1: the bare form renders the catalog once, and `as` binds the same text", function* () {
-    const { installation } = stating(catalogOf("Marker"));
+  it("SYN1: the bare form renders the symbols once, and `as` binds the same text", function* () {
+    const { installation } = stating(symbolsOf("Marker"));
     const bare = yield* run("<Syntax />\n", [installation]);
     expect(String(bare)).toContain("### `<Marker>`");
     // Once, not twice: one occurrence is one rendering.
     expect(String(bare).split("### `<Marker>`").length - 1).toBe(1);
 
-    const captured = yield* run('<Syntax as="catalog" />\nbound:{catalog}\n', [installation]);
+    const captured = yield* run('<Syntax as="symbols" />\nbound:{symbols}\n', [installation]);
     // The same text, and the occurrence itself emitted nothing — what is in the
     // document is the binding this case interpolated, not a second copy.
     expect(String(captured)).toContain("bound:");
@@ -295,47 +295,47 @@ describe("Tier SYN — what one occurrence answers", () => {
   });
 
   it("SYN2: it renders exactly what the shared Markdown renderer produces", function* () {
-    const catalog = catalogOf("Marker", "Other");
-    const { installation } = stating(catalog);
-    const bare = yield* run('<Syntax as="catalog" />{catalog}', [installation]);
+    const symbols = symbolsOf("Marker", "Other");
+    const { installation } = stating(symbols);
+    const bare = yield* run('<Syntax as="symbols" />{symbols}', [installation]);
     // The same function `xmd syntax` renders with, not a second one that agrees
     // today: an invocation and the command cannot describe one profile in two
     // sets of words.
-    expect(String(bare)).toBe(renderSyntaxMarkdown(catalog));
+    expect(String(bare)).toBe(renderSyntaxMarkdown(symbols));
   });
 
   it("SYN3: a paired spelling and an authored prop refuse before any reference", function* () {
-    const paired = stating(catalogOf("Marker"));
+    const paired = stating(symbolsOf("Marker"));
     expect(yield* refusal(run("<Syntax>content</Syntax>\n", [paired.installation]))).toContain(
       "written self-closing",
     );
     expect(paired.calls.count).toBe(0);
 
-    const propped = stating(catalogOf("Marker"));
+    const propped = stating(symbolsOf("Marker"));
     expect(yield* refusal(run('<Syntax mode="short" />\n', [propped.installation]))).toContain(
       "mode",
     );
     expect(propped.calls.count).toBe(0);
 
-    // The positive control for the same host: the accepted spelling observes.
-    const accepted = stating(catalogOf("Marker"));
+    // The positive control for the same host: the accepted spelling reads.
+    const accepted = stating(symbolsOf("Marker"));
     expect(String(yield* run("<Syntax />\n", [accepted.installation]))).toContain("Marker");
     expect(accepted.calls.count).toBe(1);
   });
 
-  it("SYN4: one occurrence observes once, two observe independently, a binding observes neither again", function* () {
-    const one = stating(catalogOf("Marker"));
-    yield* run('<Syntax as="catalog" />{catalog}{catalog}{catalog}', [one.installation]);
+  it("SYN4: one occurrence reads once, two read independently, a binding reads neither again", function* () {
+    const one = stating(symbolsOf("Marker"));
+    yield* run('<Syntax as="symbols" />{symbols}{symbols}{symbols}', [one.installation]);
     expect(one.calls.count).toBe(1);
 
-    const two = stating(catalogOf("Marker"));
+    const two = stating(symbolsOf("Marker"));
     yield* run("<Syntax />\n<Syntax />\n", [two.installation]);
     expect(two.calls.count).toBe(2);
 
     // Two identities, so two records rather than one record read twice.
     const stream = new InMemoryStream();
-    yield* run("<Syntax />\n<Syntax />\n", [stating(catalogOf("Marker")).installation], stream);
-    expect(observations(yield* stream.readAll()).length).toBe(2);
+    yield* run("<Syntax />\n<Syntax />\n", [stating(symbolsOf("Marker")).installation], stream);
+    expect(syntaxReads(yield* stream.readAll()).length).toBe(2);
   });
 });
 
@@ -348,10 +348,10 @@ describe("Tier SYN — the named form", () => {
     expect(named).toContain("### `<File>`");
     expect(named).toContain("Asks a person a structured question");
     expect(named).toContain("Reads or writes a file");
-    // Catalog order, not request order: `Elicit` precedes `File` alphabetically
+    // Symbol order, not request order: `Elicit` precedes `File` alphabetically
     // and the request asked for them the other way round.
     expect(named.indexOf("### `<Elicit>`")).toBeLessThan(named.indexOf("### `<File>`"));
-    // Nothing but the selection: the rest of the catalog is not here.
+    // Nothing but the selection: the rest of the symbols are not here.
     expect(named).not.toContain("### `<Syntax>`");
 
     // `as` binds the same text and emits nothing of it.
@@ -484,7 +484,7 @@ describe("Tier SYN — the named form", () => {
     // And nothing was committed at all. The document never expanded, so no
     // occurrence claimed an identity and no durable operation opened: there is
     // no record for a continuation to restore, successful or otherwise.
-    expect(observations(events)).toHaveLength(0);
+    expect(syntaxReads(events)).toHaveLength(0);
     expect(retained(events)).toHaveLength(0);
   });
 
@@ -530,8 +530,8 @@ describe("Tier SYN — the named form", () => {
     // And the snapshot renders that way through the reference an execution
     // builds from it, rather than only reading that way as a value.
     const rendered = yield* syntaxReference(
-      catalogOf("Marker"),
-      catalogOf("Marker"),
+      symbolsOf("Marker"),
+      symbolsOf("Marker"),
       captured,
     ).documentation(["Marker"]);
     expect(rendered).toContain("THE CAPTURED PROSE.");
@@ -543,7 +543,7 @@ describe("Tier SYN — the named form", () => {
     // together or not at all. Two lists is what let a nested run register
     // `<WebForm>` and then report it undocumented — a component it can run,
     // described as undocumented.
-    const { installation: marker } = stating(catalogOf("Marker"));
+    const { installation: marker } = stating(symbolsOf("Marker"));
     const without = String(yield* scoped(() => run('<Syntax names={["Marker"]} />\n', [marker])));
     // The component is there — the profile states it — and the prose is not.
     expect(without).toContain("### `<Marker>`");
@@ -559,12 +559,12 @@ describe("Tier SYN — the named form", () => {
     // `<Marker>`: the index joins on name *and* origin, so an `Elicit` entry
     // carrying this suite's origin would find no core documentation whether the
     // terminal survived the chain or not.
-    const elicit = catalogNamed("Elicit", {
+    const elicit = symbolsNamed("Elicit", {
       kind: "registered",
       origin: "@executablemd/core",
       reserved: false,
     });
-    const marked = catalogOf("Marker");
+    const marked = symbolsOf("Marker");
     const pair: SyntaxSymbols = {
       version: 2,
       categories: [
@@ -595,7 +595,7 @@ describe("Tier SYN — the named form", () => {
     // composes around the Api while the document is running composes into a
     // chain nothing reads again. Otherwise a document could describe a
     // component to the next agent however it liked.
-    const { installation: marker } = stating(catalogOf("Marker"));
+    const { installation: marker } = stating(symbolsOf("Marker"));
     const planted: ExecutionInstallation = {
       *install(): Operation<void> {
         yield* registerComponents([
@@ -647,7 +647,7 @@ describe("Tier SYN — the named form", () => {
     // Order decides how the list reads and nothing else. A later contribution
     // silently winning would make what a document is told about a component
     // depend on the order its host happened to bootstrap packages in.
-    const { installation: marker } = stating(catalogOf("Marker"));
+    const { installation: marker } = stating(symbolsOf("Marker"));
     const orders: string[] = [];
     for (const [first, second] of [
       ["packages/one/components.md", "packages/two/components.md"],
@@ -672,11 +672,52 @@ describe("Tier SYN — the named form", () => {
     expect(orders[0]).not.toBe(orders[1]);
   });
 
+  it("SYN25l: bootstrapping one package twice refuses at collection", function* () {
+    // The exact repetition, which is what a profile that called one bootstrap
+    // twice produces: same owner, same component, same asset. Admitting it
+    // would say that assembly is valid, and this boundary cannot know what else
+    // the second call installed — a provider, a launcher, an execution policy.
+    //
+    // It has to refuse at *collection*, not in the named form's index. A
+    // document that writes bare `<Syntax />` never builds an index, and one
+    // that writes no `<Syntax>` at all never builds a reference either, so
+    // deferring would let both run to completion on an assembly nobody checked.
+    const { installation: marker } = stating(symbolsOf("Marker"));
+    const twice = (source: string): Operation<Json> =>
+      scoped(function* () {
+        yield* useMarkerDocumentation();
+        yield* useMarkerDocumentation();
+        return yield* run(source, [marker]);
+      });
+
+    // Named, bare, and a document that writes no `<Syntax>` at all: the same
+    // refusal reaches all three, because collection happens for the execution
+    // rather than for an occurrence.
+    for (const source of ['<Syntax names={["Marker"]} />\n', "<Syntax />\n", "nothing here\n"]) {
+      const refused = yield* refusal(twice(source));
+      expect([source, refused.includes("contributes documentation for Marker twice")]).toEqual([
+        source,
+        true,
+      ]);
+      expect(refused).toContain("packages/test/src/components.md");
+    }
+
+    // The positive control: one bootstrap of the same package is fine, and the
+    // no-`<Syntax>` document is not refused for some unrelated reason.
+    const once = String(
+      yield* scoped(function* () {
+        yield* useMarkerDocumentation();
+        return yield* run('<Syntax names={["Marker"]} />\n', [marker]);
+      }),
+    );
+    expect(once).toContain("MARKER PROSE.");
+  });
+
   it("SYN25j: two scopes each read their own contributions", function* () {
     // A contribution belongs to the scope that installed it, because that is
     // what an Api answer belongs to. Two executions assembled in sibling scopes
     // must not read through each other's.
-    const { installation: marker } = stating(catalogOf("Marker"));
+    const { installation: marker } = stating(symbolsOf("Marker"));
     const inside = String(
       yield* scoped(function* () {
         yield* useMarkerDocumentation();
@@ -747,7 +788,7 @@ describe("Tier SYN — the named form", () => {
       // deno-lint-ignore require-yield
       *symbols(): Operation<SyntaxSymbols> {
         calls.count += 1;
-        return catalogOf(`Marker${calls.count}`);
+        return symbolsOf(`Marker${calls.count}`);
       },
     };
 
@@ -844,7 +885,7 @@ describe("Tier SYN — the name canonical core owns", () => {
     yield* useWorkingDirectory(function* (dir) {
       yield* writeTextFile(join(dir, "Syntax.md"), "a repository catalog\n");
       yield* writeTextFile(join(dir, "Nearby.md"), "a nearby repository component\n");
-      const { installation } = stating(catalogOf("Marker"));
+      const { installation } = stating(symbolsOf("Marker"));
 
       const output = String(
         yield* run("<Syntax />\n<Nearby />\n", [installation], undefined, [dir]),
@@ -1043,7 +1084,7 @@ describe("Tier SYN — what the chain may and may not do", () => {
         );
       },
     };
-    const { installation } = stating(catalogOf("Marker"));
+    const { installation } = stating(symbolsOf("Marker"));
     expect(String(yield* run("<Syntax />\n", [installation, observing]))).toContain("Marker");
     // The handler observed the import it could not answer.
     expect(seen).toContain(SYNTAX_COMPONENT);
@@ -1077,7 +1118,7 @@ describe("Tier SYN — what the chain may and may not do", () => {
     ];
 
     for (const [, answer] of cases) {
-      const { installation, calls } = stating(catalogOf("Marker"));
+      const { installation, calls } = stating(symbolsOf("Marker"));
       const refused = yield* refusal(run("<Syntax />\n", [installation, answering(answer)]));
       expect(refused).toContain("canonical core owns");
       // Refused before the body: no catalog was observed for the replacement.
@@ -1102,7 +1143,7 @@ describe("Tier SYN — what the chain may and may not do", () => {
       },
     };
     expect(
-      yield* refusal(run("<Syntax />\n", [stating(catalogOf("Marker")).installation, redirecting])),
+      yield* refusal(run("<Syntax />\n", [stating(symbolsOf("Marker")).installation, redirecting])),
     ).toBeTruthy();
 
     const twice: ExecutionInstallation = {
@@ -1124,7 +1165,7 @@ describe("Tier SYN — what the chain may and may not do", () => {
     // Two canonical selections in one frame yield no domain, so the occurrence
     // can name no durable operation and the invocation refuses.
     expect(
-      yield* refusal(run("<Syntax />\n", [stating(catalogOf("Marker")).installation, twice])),
+      yield* refusal(run("<Syntax />\n", [stating(symbolsOf("Marker")).installation, twice])),
     ).toBeTruthy();
   });
 
@@ -1144,7 +1185,7 @@ describe("Tier SYN — what the chain may and may not do", () => {
         );
       },
     };
-    const { installation, calls } = stating(catalogOf("Marker"));
+    const { installation, calls } = stating(symbolsOf("Marker"));
     expect(yield* refusal(run("<Syntax />\n", [installation, refusing]))).toContain(
       "this host refuses the catalog",
     );
@@ -1155,16 +1196,16 @@ describe("Tier SYN — what the chain may and may not do", () => {
     // Nothing a document writes reaches the reference: it is not addressed by
     // name. The strongest thing an authored document can do is register and
     // bind, and the catalog is unchanged by both.
-    const { installation } = stating(catalogOf("Marker"));
+    const { installation } = stating(symbolsOf("Marker"));
     const source = [
-      '<Let as="catalog" value="a planted catalog" />',
+      '<Let as="symbols" value="planted symbols" />',
       '<Syntax as="observed" />',
       "{observed}",
       "",
     ].join("\n");
     const output = String(yield* run(source, [installation]));
     expect(output).toContain("### `<Marker>`");
-    expect(output).not.toContain("a planted catalog");
+    expect(output).not.toContain("planted symbols");
   });
 });
 
@@ -1188,8 +1229,8 @@ describe("Tier SYN — the site the catalog describes", () => {
   });
 
   it("SYN27: the catalog reports a protected component as protected, not registered", function* () {
-    const { installation } = stating(catalogOf("Marker"));
-    const catalog = yield* scoped(function* () {
+    const { installation } = stating(symbolsOf("Marker"));
+    const symbols = yield* scoped(function* () {
       yield* executeInstalled(
         {
           ...retainedSource(ROOT_PATH, "<Syntax />\n"),
@@ -1200,10 +1241,10 @@ describe("Tier SYN — the site the catalog describes", () => {
       );
       return yield* inspectSyntax({ includes: [] });
     });
-    expect(catalog.version).toBe(2);
+    expect(symbols.version).toBe(2);
 
     // Built-in: the second category, where a reader indexes for it.
-    const entry = catalog.categories[1].entries.find((candidate) => candidate.name === "Syntax");
+    const entry = symbols.categories[1].entries.find((candidate) => candidate.name === "Syntax");
     if (entry === undefined) {
       throw new Error("expected the catalog to describe <Syntax>");
     }
@@ -1240,7 +1281,7 @@ describe("Tier SYN — the site the catalog describes", () => {
     // what says this is the exact source the run was defined against.
     expect(output).toContain("`components/Bundled.md` (workflow bundle, `111111111111`)");
 
-    const catalog = yield* scoped(function* () {
+    const symbols = yield* scoped(function* () {
       const registry = yield* Component.operations.registry;
       const workflow = installedBundle([bundle], registry);
       if (workflow === undefined) {
@@ -1249,7 +1290,7 @@ describe("Tier SYN — the site the catalog describes", () => {
       return yield* inspectSyntax({ includes: [], workflow });
     });
     // User-provided: the third category.
-    const entry = catalog.categories[2].entries.find((candidate) => candidate.name === "Bundled");
+    const entry = symbols.categories[2].entries.find((candidate) => candidate.name === "Bundled");
     if (entry === undefined || entry.inspectability !== "complete") {
       throw new Error("expected the catalog to describe <Bundled> completely");
     }
@@ -1287,14 +1328,14 @@ describe("Tier SYN — the site the catalog describes", () => {
   });
 
   it("SYN18: a declared Markdown component's own body observes the site it inherited", function* () {
-    const source = ['<Syntax as="catalog" />', "policy sees {catalog}", ""].join("\n");
+    const source = ['<Syntax as="symbols" />', "policy sees {symbols}", ""].join("\n");
     const declaration: DeclaredMarkdownComponent = {
       name: "Policy",
       origin: "@executablemd/test/Policy.md",
       source,
       digest: sourceDigest(source),
     };
-    const { installation } = stating(catalogOf("Marker"));
+    const { installation } = stating(symbolsOf("Marker"));
     const output = String(
       yield* run("<Policy />\n", [installation, { declarations: [declaration] }]),
     );
@@ -1306,8 +1347,8 @@ describe("Tier SYN — the site the catalog describes", () => {
 describe("Tier SYN — the record one occurrence keeps", () => {
   it("SYN19: the retained payload is closed on exactly { symbols }", function* () {
     const stream = new InMemoryStream();
-    yield* run("<Syntax />\n", [stating(catalogOf("Marker")).installation], stream);
-    const [reference] = observations(yield* stream.readAll());
+    yield* run("<Syntax />\n", [stating(symbolsOf("Marker")).installation], stream);
+    const [reference] = syntaxReads(yield* stream.readAll());
     if (reference?.type !== "yield" || reference.result.status !== "ok") {
       throw new Error("the run retained no syntax record");
     }
@@ -1319,7 +1360,7 @@ describe("Tier SYN — the record one occurrence keeps", () => {
   it("SYN20: a continuation restores the catalog after the environment moves, and asks nothing", function* () {
     const first = new InMemoryStream();
     const before = String(
-      yield* run("<Syntax />\n", [stating(catalogOf("Before")).installation], first),
+      yield* run("<Syntax />\n", [stating(symbolsOf("Before")).installation], first),
     );
     expect(before).toContain("### `<Before>`");
 
@@ -1338,7 +1379,7 @@ describe("Tier SYN — the record one occurrence keeps", () => {
     // A fresh execution sees the moved environment, which is what shows the
     // restoration above was retention rather than the reference being inert.
     expect(
-      String(yield* run("<Syntax />\n", [stating(catalogOf("After")).installation])),
+      String(yield* run("<Syntax />\n", [stating(symbolsOf("After")).installation])),
     ).toContain("### `<After>`");
   });
 
@@ -1350,12 +1391,12 @@ describe("Tier SYN — the record one occurrence keeps", () => {
     ];
     for (const [, replace] of cases) {
       const first = new InMemoryStream();
-      yield* run("<Syntax />\n", [stating(catalogOf("Marker")).installation], first);
+      yield* run("<Syntax />\n", [stating(symbolsOf("Marker")).installation], first);
       const hostile = yield* tampered(first, replace);
       const refused = yield* refusal(
         run(
-          '<Syntax as="catalog" />bound:{catalog}',
-          [stating(catalogOf("Marker")).installation],
+          '<Syntax as="symbols" />bound:{symbols}',
+          [stating(symbolsOf("Marker")).installation],
           hostile,
         ),
       );
@@ -1387,7 +1428,7 @@ describe("Tier SYN — the record one occurrence keeps", () => {
 
     // The structured teardown ran, and nothing successful was committed.
     expect(teardown).toEqual(["released"]);
-    const committed = observations(yield* stream.readAll()).filter(
+    const committed = syntaxReads(yield* stream.readAll()).filter(
       (event) => event.type === "yield" && event.result.status === "ok",
     );
     expect(committed).toEqual([]);
@@ -1398,7 +1439,7 @@ describe("Tier SYN — reference is never authority", () => {
   it("SYN23: a catalog naming a component neither registers nor resolves it", function* () {
     // The strongest form: the trusted host itself states a catalog naming a
     // component nothing supplies.
-    const { installation } = stating(catalogOf("Phantom"));
+    const { installation } = stating(symbolsOf("Phantom"));
     const output = String(yield* run("<Syntax />\n", [installation]));
     expect(output).toContain("### `<Phantom>`");
 
@@ -1410,8 +1451,8 @@ describe("Tier SYN — reference is never authority", () => {
   });
 
   it("SYN24: the component is described identically by inspection and by validation", function* () {
-    const catalog = yield* inspectSyntax({ includes: [] });
-    const entry = catalog.categories[1].entries.find((candidate) => candidate.name === "Syntax");
+    const symbols = yield* inspectSyntax({ includes: [] });
+    const entry = symbols.categories[1].entries.find((candidate) => candidate.name === "Syntax");
     expect(entry).toBeDefined();
     expect(entry?.description).toBe(DESCRIPTION);
     expect(entry?.forms).toEqual(["self-closing"]);
@@ -1435,7 +1476,7 @@ describe("Tier SYN — reference is never authority", () => {
     });
     expect(entry?.origin).toEqual({ kind: "protected", origin: "@executablemd/core" });
     // Exactly one entry, in exactly one category.
-    const everywhere = catalog.categories.flatMap((category) =>
+    const everywhere = symbols.categories.flatMap((category) =>
       category.entries.filter((candidate) => candidate.name === "Syntax"),
     );
     expect(everywhere.length).toBe(1);
@@ -1468,7 +1509,7 @@ describe("Tier SYN — reference is never authority", () => {
    * the catalog and nothing more is this.
    */
   it("SYN25b: a narrowed reference answers with exactly the catalog it was given", function* () {
-    const narrowed = catalogOf("Admitted");
+    const narrowed = symbolsOf("Admitted");
     const reference = syntaxReference(narrowed);
     expect(yield* reference.symbols()).toBe(renderSyntaxMarkdown(narrowed));
     // Nothing of the enclosing site leaks into it: a name the wider profile has
@@ -1484,8 +1525,8 @@ describe("Tier SYN — reference is never authority", () => {
    * Everything below is about them being genuinely two.
    */
   it("SYN25c: a narrowed reference documents the enclosing site and marks availability", function* () {
-    const enclosing = catalogOf("Admitted", "Withheld");
-    const narrowed = catalogOf("Admitted");
+    const enclosing = symbolsOf("Admitted", "Withheld");
+    const narrowed = symbolsOf("Admitted");
     const reference = syntaxReference(narrowed, enclosing);
 
     // What may execute here is the narrowed catalog, and the bare form reports
@@ -1610,7 +1651,7 @@ describe("Tier SYN — reference is never authority", () => {
     // list is execution-private and rebuilding an index from it is how two
     // indexes drift apart.
     const enclosing = yield* rootObservation();
-    const admitted = catalogOf("Admitted");
+    const admitted = symbolsOf("Admitted");
     const narrowed = enclosing.available(admitted);
 
     // What may run is the admission.
@@ -1641,7 +1682,7 @@ describe("Tier SYN — reference is never authority", () => {
     };
     const contribution = { source, supplies };
     const reference = syntaxReference(
-      catalogNamed("Alpha", {
+      symbolsNamed("Alpha", {
         kind: "registered",
         origin: "@executablemd/mutable",
         reserved: false,

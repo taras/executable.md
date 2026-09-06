@@ -123,6 +123,16 @@ export function* contributeDocumentation(
  * they sat in the chain. A later one silently winning would make what a
  * document is told about a component depend on the order its host happened to
  * bootstrap packages in.
+ *
+ * **Including an exact repetition.** Two bootstraps of one package name the
+ * same component from the same asset, and admitting that would say a profile
+ * which bootstrapped a package twice is a valid profile. It is not: whether the
+ * second call also installed a provider, a launcher or an execution policy is
+ * not a question this boundary can answer, and the assembly is wrong either
+ * way. Collection is where that is caught, because it is the only boundary
+ * every execution passes through — deferring it to the named form's index
+ * would let a document that writes bare `<Syntax />`, or no `<Syntax>` at all,
+ * run to completion on an assembly nobody validated.
  */
 export function* capturedDocumentation(
   read: DocumentationReader = packagedAssetReader,
@@ -134,11 +144,15 @@ export function* capturedDocumentation(
       const owner = one.source.owner;
       const key = `${owner} ${name}`;
       const first = seen.get(key);
-      if (first !== undefined && first !== one.source.asset) {
+      if (first !== undefined) {
         throw new DocumentationIndexError(
-          `${owner} contributes documentation for ${name} from both ${first} and ` +
-            `${one.source.asset}. One component of one package has one documentation source, ` +
-            "whichever order the packages bootstrapped in.",
+          first === one.source.asset
+            ? `${owner} contributes documentation for ${name} twice, both times from ` +
+                `${one.source.asset}. A package is bootstrapped once per execution: a second ` +
+                "contribution means the assembly installed it twice."
+            : `${owner} contributes documentation for ${name} from both ${first} and ` +
+                `${one.source.asset}. One component of one package has one documentation ` +
+                "source, whichever order the packages bootstrapped in.",
         );
       }
       seen.set(key, one.source.asset);

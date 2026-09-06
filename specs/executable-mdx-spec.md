@@ -2809,7 +2809,7 @@ neighbouring one would keep that promise. Nothing else about the shape changed.
 minted for it, performs one `syntax_symbols` durable read, and retains
 exactly `{ symbols: string }`. On continuation that record is parsed as a closed
 protocol and returned without consulting the filesystem, the registry, the
-bundle, the host or the lexical observation again; a missing, additional or
+bundle, the host or the lexical reference again; a missing, additional or
 mistyped member is stale input and refuses before output or binding. Two authored
 occurrences are two identities and two reads, repeated reads of one
 binding read nothing again, and a failed or cancelled read completes
@@ -9869,7 +9869,7 @@ trusted-host events may have no authored source.
 | Resolve components (glob) | `glob` | `resolve:{dir}` | Only when `useDurableGlobResolver` middleware is installed |
 | Read over HTTP | `fetch` | `fetch:{expansion id}` | Normalized request in `description.input`; status, detached headers and text body in the result (§6.18) |
 | Admit generated XMD | `generated_xmd` | `generated:{fragment id}` | The canonical class selection, retained roots, selected root, every selected entry as a name, identity and admitted forms, and the exact request policy in `description.input`; the admitted source, that same policy, and the identity and form of each element the fragment named in the result (workflow-workspace-spec §8.4) |
-| Read the symbols | `syntax_symbols` | `syntax_symbols:{expansion id}` | One per authored `<Syntax />` occurrence. The success payload is closed on exactly `{ symbols: string }` — the rendered Markdown the component returned — so a continuation restores the symbols the run actually showed without consulting the filesystem, registry, bundle, host or lexical observation again. A missing, additional or mistyped member is stale input and refuses before output or binding; a cancelled read completes teardown and commits nothing (§5.3.1) |
+| Read the symbols | `syntax_symbols` | `syntax_symbols:{expansion id}` | One per authored `<Syntax />` occurrence. The success payload is closed on exactly `{ symbols: string }` — the rendered Markdown the component returned — so a continuation restores the symbols the run actually showed without consulting the filesystem, registry, bundle, host or lexical reference again. A missing, additional or mistyped member is stale input and refuses before output or binding; a cancelled read completes teardown and commits nothing (§5.3.1) |
 
 ### 10.2 Example journal for a multi-component document
 
