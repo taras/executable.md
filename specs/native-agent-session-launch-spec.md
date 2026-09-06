@@ -345,10 +345,9 @@ codex resume <native-session-id>
 
 ### Executable build binding
 
-A client-allocated identity means one thing only while the build that accepted
-it can be recognized later. Two builds of one provider accept the same identity
-and disagree silently about what it names, so a new client-allocated session
-retains which build accepted it:
+A new client-allocated session records the executable observed before its
+identity was published. This is immutable audit evidence and a durable
+cross-check, not a release lock:
 
 ```ts
 interface ExecutableBuildBindingV1 {
@@ -359,21 +358,28 @@ interface ExecutableBuildBindingV1 {
 ```
 
 The digest is always present and exact: it is the lowercase SHA-256 of the
-canonical executable target. A matching digest reached at another path is the
-same build; a changed build at the same path is not. `reportedVersion` is the
-adapter's optional canonical parse of what that exact target reports. One
-canonical line is retained as supplemental continuity evidence and may appear
-in a diagnostic; raw output is never retained or repeated. A failed version
-query, no output, changed wording or several candidate lines leaves the member
-absent and does not make an otherwise observable executable or capability
-unsupported.
+canonical executable target. `reportedVersion` is the adapter's optional
+canonical parse of what that exact target reports. One canonical line is
+retained when available; raw output is never retained or repeated. A failed
+version query, no output, changed wording or several candidate lines leaves the
+member absent and does not make an otherwise observable executable or
+capability unsupported. A path is never a member: it says where a build was,
+which stops being true, and it names host layout besides.
 
-Continuity always requires digest equality. When the retained binding carries a
-version, a later observation must reproduce that same canonical value; a
-different or absent value refuses conservatively. A binding created without a
-version compares by digest alone, and a later version observation does not
-rewrite it. A path is never a member: it says where a build was, which stops
-being true, and it names host layout besides.
+The V2 construction route and every prepared journal record derived from it
+carry the same original binding exactly. They never replace it with a later
+observation. Exact agreement between those durable accounts detects a partial,
+foreign or inconsistent preparation; digest or version equality with the live
+executable is not required. A compatible later release continues the retained
+native identity after it independently passes the same live capability gate.
+The retained digest and version may be inspected as audit evidence, but neither
+by itself authorizes or denies continuation.
+
+For the current V2 route, the exact provider, agent and launcher contract pins
+the stable `claude-client-native.v1` protocol under which its identity was
+published. A future incompatible protocol cannot reinterpret that route; it
+requires a route contract which names the new protocol. Executable releases may
+therefore change without allowing the session to cross protocol boundaries.
 
 The host supplies an executable observer directly to the provider, alongside the
 coordinator and the route store. It resolves the launcher command through the
@@ -391,7 +397,7 @@ parse a provider's output or detect the active runtime.
 One observation yields two kinds of value:
 
 ```text
-durable: the executable build binding, with a version only when reported canonically
+durable on first publication: the executable build binding, with a version only when reported canonically
 live:    the canonical executable path and provider-private metadata observations
 ```
 
@@ -411,13 +417,14 @@ is installed now, not which one established the conversation.
 ### Compatibility admission
 
 An installed-CLI proof establishes a **capability admission profile**, not an
-adapter name or version allow-list. A live admission consists of a stable
-adapter protocol, one independently requested capability, an observed CLI shape
-that satisfies that protocol, and the host operating system and architecture on
-which the applicable real-CLI proof passed. Native launch and client-native
-attachment have independent admissions because their proofs ask different
-questions. The executable digest remains the exact continuity binding for one
-retained session; it is not a global allow-list for one operator's installation.
+adapter name, version allow-list or executable-digest allow-list. Every live
+admission consists of the route's stable adapter protocol, one independently
+requested capability, an observed positive CLI shape that satisfies that
+protocol, and the host operating system and architecture on which the
+applicable real-CLI proof passed. Native launch and client-native attachment
+have independent admissions because their proofs ask different questions. A
+predecessor's admission and retained build evidence authorize nothing in the
+current run.
 
 ```ts
 interface NativeCapabilityAdmission {
@@ -472,27 +479,26 @@ provider runs the read-only probe against that exact path and requires the
 requested capability in its result. This precedes identity allocation, route
 publication, private-file creation and native child start. Existing bound
 routes are checked again before native resume, client-native attachment or
-incomplete replay can contact the provider. A canonical version line is
-evidence about the observed build, not capability admission.
+incomplete replay can contact the provider. A canonical version line and digest
+are evidence about the observed build, not capability admission or a
+cross-release refusal.
 
 A protocol, shape, capability or host mismatch is `unsupported-capability`.
 The diagnostic may identify the agent, capability, adapter protocol and
 canonical reported version when one exists; it carries no raw help or version
 output, executable path, digest, environment or host message. Platform and
-probe facts remain live admission inputs. The route's build binding continues
-to answer whether this is the exact executable that accepted the retained
-identity, with optional `reportedVersion` as specified above.
+probe facts remain live admission inputs. A live digest or version different
+from the route's retained audit evidence is not a mismatch.
 
 The version query is optional and independent of the help probe. A future
 Claude build with the same admitted protocol shape on macOS arm64 remains
 usable when its version changes, its version wording changes, or it omits
-version output. A build that omits a canonical version creates a binding with
-only its digest. An upgraded executable may establish new sessions, while a
-route bound to an earlier digest remains bound to that build and refuses rather
-than migrating its identity implicitly. The observed zero-turn behavior of a
-newer Claude that retains no conversation is not by itself a regression: claim
-5 explicitly permits the provider to refuse that exact identity, provided XMD
-fails closed without substitution.
+version output. It may establish a new session or continue an existing V2
+session. Continuation adopts only the route's exact native identity and leaves
+the route, journal and provider history unchanged. The observed zero-turn
+behavior of a newer Claude that retains no conversation is not by itself a
+regression: claim 5 explicitly permits the provider to refuse that exact
+identity, provided XMD fails closed without substitution.
 
 Compatibility admission adds no materialization turn. Launch still performs no
 model turn, and bootstrap turns remain outside this contract. The metadata
@@ -515,8 +521,12 @@ afterwards.
 Its attachment claim was proven by
 `packages/acp/src/ClaudeNativeToAcp.test.md`: one native turn planted a random
 marker, a checked-in marker-free ACP `<Prompt>` recovered it under the same
-identity and the same observed build, and an independent route naming an absent
-identity refused before a turn without creating history in its place.
+identity, and an independent route naming an absent identity refused before a
+turn without creating history in its place. That real proof used one observed
+build. The cross-release contract relies on each later executable independently
+passing the same proved profile and keeps the proof's exact-identity and
+no-substitution checks at the live boundary; the controlled evidence below
+changes only the executable release between construction and continuation.
 
 Those command shapes are adapter implementation details, not authored document
 values. A custom ACP agent without a declared native launcher fails with an
@@ -581,13 +591,13 @@ owner to release — what has to be settled first is which conversation this is:
     resolved adapter protocol, requested capability, observed protocol shape
     and trusted host operating system and architecture must match one admitted
     profile; a mismatch ends with `unsupported-capability`, still before an
-    identity or session-state mutation. Reported version does not participate
-    in that decision. The launch retains the refusal at `prepared` without an
-    identity, as it does every other preparation refusal. A route that already
-    names a different exact digest, or cannot reproduce a version its binding
-    retained, ends with `executable-binding-refused`. A legacy unbound route is
-    the exception: it observes nothing, resumes under the launcher name, and
-    gains no binding.
+    identity or session-state mutation. Reported version and digest do not
+    participate in that decision. The launch retains the refusal at `prepared`
+    without an identity, as it does every other preparation refusal. An existing
+    V2 route may carry different build evidence: after live admission the launch
+    adopts its exact identity and leaves that evidence unchanged. A legacy
+    unbound route is the exception: it observes nothing, resumes under the
+    launcher name, and gains no binding.
     Whether an identity is needed at all is decided next. An existing
     compatible `client-native` route already names this conversation, so its
     retained identity is adopted and **nothing is allocated** — a second
@@ -608,9 +618,12 @@ owner to release — what has to be settled first is which conversation this is:
       launcher won — neither account repairs the other, so the launch refuses
       the same way.
     A `created` or `resumed` record is built from the compatible winning route
-    rather than from this launch's candidate, so the two accounts agree by
-    construction rather than by comparison. A refusal is not: it prepared no
-    identity, so it retains the failure the authoritative winner produced
+    rather than from this launch's candidate, including that route's original
+    build evidence, so the two durable accounts agree by construction. A
+    concurrently adopted route may have been published after a different
+    compatible executable observation; its digest and version do not defeat the
+    winner after this launch's own live capability admission. A refusal prepared
+    no identity, so it retains the failure the authoritative winner produced
     without mirroring that route's identity or provenance — no session id, and
     the weaker provenance claim, because nobody chose one. It is retained at
     `prepared` and reaches no private file, no detach and no spawn.
@@ -664,22 +677,30 @@ this sequence, and every step happens while the coordinator holds the session:
 4. A legacy unbound `client-native` route refuses with
    `executable-binding-refused`, and an agent this host has not advertised for
    attachment refuses with `unsupported-capability`.
-5. Reobserve the executable and compare the binding exactly.
+5. Reobserve the executable and independently admit
+   `client-native-attachment` for the route's stable protocol, the live positive
+   CLI shape and the proved host envelope. A changed digest or version is audit
+   evidence, not a refusal.
 6. Inspect any retained ACP arrangement without creating one: absence may enter
    exact resume, because exact resume is the operation being attempted; a
    record must assert this route's identity and nothing else.
-7. Select the live runtime for `(resolved agent command, binding)` and give the
-   observed path only to that runtime's child environment.
+7. Select the live runtime for `(resolved agent command, live executable
+   observation)` and give the observed path only to that runtime's child
+   environment.
 8. Ensure with `resumeSessionId` equal to the route's identity.
 9. Require the provider's canonical assertion to equal it. Absence or
    disagreement closes the handle and refuses before a turn.
 10. Only then return a `Session`, or start the subscribed turn.
 
-Runtime partitions are scope-owned. Different bindings never share an ACP child,
-a managed handle remembers the partition that created it, and every turn, close,
-detach, cancellation and stale-handle release goes through that same partition.
-When a bound partition's last handle closes it is removed and torn down; a later
-attachment reobserves and builds another.
+Runtime partitions are scope-owned and follow the executable serving live work,
+not the historical binding in a route. Different live builds never share an ACP
+child. Sessions carrying different historical bindings may share when the same
+resolved agent command, current executable and protocol serve them. A managed
+handle remembers the partition that created it, and every turn, close, detach,
+cancellation and stale-handle release goes through that same partition. An
+upgrade never rekeys or migrates a live partition. When its last handle closes
+and its claimed work settles it is removed and torn down; a later attachment
+reobserves and may build a partition for the upgraded executable.
 
 A partition is kept exactly as long as something is standing on it, and two
 different things can be: a handle nobody has closed, and work that has claimed
@@ -704,11 +725,12 @@ are met rather than a further invariant beside them:
 
 - **Claimed work that produced no handle releases its claim.** The runtime is
   built before the ensure that would use it, so a rejection would otherwise
-  strand a partition holding a live path for work that never happened — and a
-  binding compares a version and a digest, so the same build found somewhere
-  else is the same partition key and a different file to run. Success transfers
-  the claim into ownership of the handle instead, in one step: a moment where
-  neither count is held is a moment another operation could evict.
+  strand a partition holding a live path for work that never happened. The live
+  observation, not the route's historical evidence, supplies the partition key;
+  the same current build found somewhere else is the same partition and a
+  different live path to run. Success transfers the claim into ownership of the
+  handle instead, in one step: a moment where neither count is held is a moment
+  another operation could evict.
 - **Cancellation observes the ensure it started, and settles it before
   quiescence.** Starting an ensure is not the same as owning it: the call runs
   whether or not anybody is still waiting, so a cancellation is not the end of
@@ -1102,15 +1124,24 @@ provider-returned preparation carries none, and a refusal that prepared no
 identity invents none.
 
 Every incomplete replay requires exact agreement between its journal and its
-route on identity, provenance, instruction digest, launcher and build binding
-before its first live effect, and then requires the live capability point to be
-admitted and the live build to equal that binding. Neither account repairs or
-republishes the other: a replay that found a disagreement has discovered that
-the session it was going to continue is not the session it prepared, and
-retains `identity-unavailable` without starting a child. Equal instructions may
-resume the retained identity; different instructions retain
+route on identity, provenance, instruction digest, launcher and the original
+build binding before its first live effect. It then observes the executable it
+will use and independently requires the native-launch capability for the same
+stable adapter protocol, positive CLI shape and proved host envelope. The live
+digest and version need not equal the retained evidence. Neither durable account
+repairs, republishes or rewrites the other: a replay that found a disagreement
+has discovered that the session it was going to continue is not the session it
+prepared, and retains `identity-unavailable` without starting a child. Equal
+instructions may continue the retained identity; different instructions retain
 `instructions-refused` and replace neither the layer, the route, the identity,
 nor any provider state.
+
+A `prepared`-only replay still creates under the exact retained identity because
+its handoff never began. A `detached` replay still resumes that identity and
+never falls back to creation because a predecessor may have started. Both use
+the current admitted executable path, allocate nothing and leave the historical
+binding unchanged. A completed replay still observes no executable and performs
+no live work.
 
 An incomplete replay of a legacy unbound client-allocated launch retains
 `executable-binding-refused` before any live work: nothing available to it can
@@ -1213,14 +1244,15 @@ different layer, exactly as a session a native UI has been in is. A `<Session>`
 that only placed one has established nothing, so a launch inside it constructs
 the session it named rather than meeting one.
 
-A build this run cannot show is the build behind the session fails with
-`executable-binding-refused`. Resolution, canonicalization, executable-file
-validation, digesting, schema recognition, digest equality, failure to reproduce
-a retained canonical version, and a session established before any build was
-recorded all end there. The diagnostic names the stable class and launcher and
-may name canonical versions which were actually observed; it carries no
-executable path, raw metadata output, host error, argv, environment, credential,
-instruction text or provider payload.
+An executable this run cannot resolve, canonicalize, validate, hash or observe
+fails with `executable-binding-refused`, as does a session established before
+any build was recorded on the paths which require a bound route. A different
+live digest or canonical version does not. The diagnostic names the stable class
+and launcher and may name canonical versions which were actually observed; it
+carries no executable path, raw metadata output, host error, argv, environment,
+credential, instruction text or provider payload. A malformed build binding or
+a route and journal carrying different bindings is a durable-account mismatch
+and refuses before live work; it is never repaired from the current executable.
 
 An observed executable whose adapter protocol, requested capability, required
 CLI shape, operating system or architecture has no admitted profile fails with
@@ -1413,22 +1445,26 @@ Focused tests prove:
     natural key, contention refuses instead of queueing, a crashed owner leaves
     a recovery tombstone, and a host with no coordinator refuses before
     contacting an agent;
-18. a build binding is read and compared conservatively — a moved matching
-    digest is accepted, a changed digest is not, a retained version must be
-    reproduced, a binding created without one compares by digest, and an
-    inexact record refuses rather than being read past;
+18. a build binding remains immutable audit evidence shared exactly by the V2
+    route and its prepared journal record; a changed live digest, changed or
+    absent version and moved executable are accepted after fresh capability
+    admission, while malformed evidence or disagreement between the two durable
+    accounts refuses rather than being read past or repaired;
 19. new client-native construction observes the build before it allocates,
     publishes a bound V2 route, and retains a preparation that agrees with it,
     while a legacy V1 route resumes natively under the launcher name and gains
     nothing;
 20. a `<Session>` or `<Prompt>` on a bound route supplies the route identity as
-    the exact resume identity, delivers the observed path only to the matching
-    child's transient environment, and refuses before ensure on a missing
-    attachment gate, a missing observer, build drift, a disagreeing retained
-    arrangement or a returned identity that is not the route's; and
-21. ACP runtimes are partitioned by resolved agent command and binding, a handle
-    is closed by the partition that created it, the last close evicts a bound
-    partition, and provider teardown settles what remains;
+    the exact resume identity, delivers the current admitted executable path
+    only to the matching child's transient environment, continues across a
+    compatible release, and refuses before a turn on a missing attachment gate,
+    a missing observer, a disagreeing retained arrangement or a returned
+    identity that is not the route's; and
+21. ACP runtimes are partitioned by resolved agent command and live executable
+    observation rather than historical route evidence, a handle is closed by
+    the partition that created it, an upgrade never migrates a live partition,
+    the last close and claim release evict it, and provider teardown settles
+    what remains;
 22. claimed runtime work that produced no handle releases its claim, a partition
     is evicted only with no handles and no work in flight, a handle that came
     back survives every later refusal bound to its creator whichever path
@@ -1447,7 +1483,8 @@ Focused tests prove:
     requested capability, required read-only CLI shape, operating system and
     architecture; neither an Agent name nor version string admits it. A newer
     canonical version, omitted version and additive unrelated help are accepted
-    when that shape and host envelope match, while a missing or ambiguous
+    when that shape and host envelope match, including for an existing V2 route
+    carrying a different digest or version, while a missing or ambiguous
     required member, another adapter protocol, or an unproved host is refused;
 26. the metadata probe runs against the exact resolved executable and carries
     no terminal, stdin, session identity, instructions, credential or provider
@@ -1460,7 +1497,17 @@ Focused tests prove:
     cannot launch, and a bound route whose exact identity is absent remains
     authoritative and is never substituted. A settled exact-resume refusal
     acknowledges quiescence after cleanup, while a planted unproved teardown
-    leaves the recovery tombstone active.
+    leaves the recovery tombstone active; and
+28. a V2 route and journal created with Claude Code 2.1.261 continue through an
+    independently admitted 2.1.263 executable for both native resume and ACP
+    attachment: no identity is allocated, the exact retained native identity is
+    passed and asserted, the historical binding is not rewritten, and the live
+    partition uses 2.1.263. The same fixtures refuse before live provider work
+    when protocol, requested capability, positive shape or host differs, and
+    close without a turn or substitution when the provider reports an absent or
+    different identity. Prepared-only and detached incomplete replays prove
+    create-versus-resume remains phase-driven across the same upgrade, while
+    completed replay probes nothing.
 
 The authored half of this is one executable Markdown document,
 `packages/test-agent/src/NativeSessionLaunch.test.md`, run whole. It authors the
@@ -1536,11 +1583,12 @@ provider-native identity that is either asserted by the provider or allocated by
 the adapter before the provider exists, retained explicitly and never inferred;
 a strict create-once construction route beside the coordinator's own records,
 in a released unbound form and a bound one; the host-owned executable observer
-and the build binding it produces; proof-scoped capability admission over the
-adapter protocol, independently requested capability, observed CLI shape and
-live host platform; ACP
-attachment to a bound client-native session under its exact retained identity,
-through runtime partitions keyed by agent command and build;
+and the immutable audit binding it produces on first publication; proof-scoped
+capability admission over the stable adapter protocol, independently requested
+capability, live observed CLI shape and live host platform on every
+continuation; compatible cross-release native resume and ACP attachment to a
+bound client-native session under its exact retained identity, through runtime
+partitions keyed by agent command and the live executable observation;
 an inherited root- or pane-terminal interactive child with cancellation and
 bounded reaping; composition with the terminal grid's independent pane leases
 without changing session ownership or durable launch identity;
@@ -1569,10 +1617,11 @@ degrading:
   and `Session.Launch` expose no model prop or launch option. A provider may
   report the current model as observational evidence, but native launch neither
   selects nor changes it.
-- **Executable upgrade migration is unbuilt.** A V2 route freezes one build for
-  that logical session, and a later build refuses with
-  `executable-binding-refused` rather than modifying the route or the provider's
-  history. Rebinding old provider history to a new build is a separate design.
+- **Protocol migration is unbuilt.** A V2 route fixes the stable
+  `claude-client-native.v1` protocol through its provider, agent and launcher
+  contract. A compatible executable release may continue it, but another
+  protocol cannot reinterpret, rewrite or adopt it. Supporting that transition
+  requires a route contract which names the new protocol.
 - **A legacy unbound client-native session never attaches.** It was constructed
   before XMD recorded which build accepted its identity, so nothing available
   now can show this run is talking to that build. It keeps native resume and
@@ -1624,9 +1673,11 @@ Implementation review checks these frozen invariants:
     reaches neither argv nor environment.
 17. Private setup and child-creation failures are normalized before they cross a
     public or durable boundary.
-18. A new client-native session is bound to one observed executable build, and
-    every later create, resume, attachment and incomplete replay reobserves and
-    compares before a process, an ensure or a turn.
+18. A new client-native session retains immutable evidence for the executable
+    observed before its identity is published. The V2 route and prepared journal
+    agree on that evidence and never rewrite it, while every later create,
+    resume, attachment and incomplete replay independently admits the live
+    executable without requiring its digest or version to equal the evidence.
 19. The canonical executable path is live only: it enters no route, journal,
     retained provider state, public result, diagnostic or global environment,
     and no partition that outlives its last handle.
@@ -1677,10 +1728,11 @@ Implementation review checks these frozen invariants:
     client-allocated profile mismatch is refused after read-only observation but
     before allocation or any provider or session-state mutation; its
     identity-free launch refusal is retained. The profile is checked again
-    before bound resume, attachment and incomplete replay. An exact absent
-    identity remains authoritative and unavailable; neither that refusal nor an
-    unproved profile creates a replacement conversation or a materialization
-    turn.
+    before bound resume, attachment and incomplete replay, and a compatible live
+    release continues the exact retained identity without allocating,
+    republishing or rewriting durable evidence. An exact absent identity remains
+    authoritative and unavailable; neither that refusal nor an unproved profile
+    creates a replacement conversation or a materialization turn.
 
 Item 12 is the 2026-08-20 architecture amendment. ACPX fixes `systemPrompt` at
 session creation, while native turns are not authoritative in its cached
