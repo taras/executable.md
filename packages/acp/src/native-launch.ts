@@ -67,10 +67,12 @@ export type NativeCapabilityProbe = (metadata: ExecutableMetadata) => ProbedNati
 /**
  * What an adapter knows about the build behind its executable.
  *
- * A session whose identity XMD chose only means something while the build that
- * accepted it can be recognized later: two builds of one provider accept the
- * same identity and disagree silently about what it names. Everything here is
- * that adapter's private dialect — which command to observe, which read-only
+ * One observation answers two separate questions: what this run may do with the
+ * executable it is about to spawn, and what to write down once about the build
+ * that first accepted an identity. The first is the whole authorization — a
+ * capability is a claim about a build, asked fresh every time — and the second
+ * is audit evidence that is never asked again. Everything here is that
+ * adapter's private dialect — which command to observe, which read-only
  * questions to ask it, how to read the answers, and what the ACP adapter child
  * needs in order to run the same build. None of it reaches a document.
  */
@@ -506,12 +508,13 @@ export interface ClientAllocatedAdapter extends AdapterCommands {
   /** The argv that creates a session under `id` with that instruction layer. */
   create(nativeSessionId: string, instructionFile: string): string[];
   /**
-   * Which build of this adapter's executable a session is bound to.
+   * How this adapter's executable is observed, admitted and recorded.
    *
-   * Required, because an identity XMD chose is only meaningful beside the build
-   * that accepted it. The argv `create` and `resume` return still begins with
-   * the stable launcher name, which is what durable records carry; a run
-   * replaces that first member with the exact path it observed.
+   * Required, because an adapter that names its own sessions may not act on one
+   * until the build it would run has been admitted for what it is about to do.
+   * The argv `create` and `resume` return still begins with the stable launcher
+   * name, which is what durable records carry; a run replaces that first member
+   * with the exact path it observed.
    */
   binding: NativeBinding;
 }
@@ -597,6 +600,36 @@ const ADAPTERS: Readonly<Record<string, NativeAdapter>> = {
     resume: (nativeSessionId) => ["codex", "resume", nativeSessionId],
   },
 };
+
+/**
+ * The stable protocol each published client-native route contract fixes.
+ *
+ * Written here, compiled in, and reachable through no dependency a host can
+ * supply — because it is the one thing about a route that a later installation
+ * may not answer. Everything else on the live side is discovered: which adapter
+ * is registered, which executable is found, what it declares. If the protocol
+ * were discovered too, then registering an adapter under the same launcher name
+ * would be enough to adopt a conversation constructed by something else, and a
+ * host policy that admitted the newcomer's own protocol would call that proved.
+ *
+ * Keyed by the launcher because that is the durable member of the contract that
+ * names an implementation. A route's provider says which provider published it
+ * and its agent is the command it is filed under; those are matched by the
+ * caller that read the record, and this answers the remaining question of what
+ * the thing behind that launcher was speaking at the time.
+ *
+ * An absent entry is a refusal, not a default. There is no protocol migration:
+ * a different protocol needs a route contract that names it, so a launcher this
+ * build has fixed no protocol for is one whose sessions it cannot continue.
+ */
+const ROUTE_PROTOCOLS: Readonly<Record<string, string>> = {
+  claude: "claude-client-native.v1",
+};
+
+/** The protocol a client-native route naming `launcher` was published under. */
+export function pinnedRouteProtocol(launcher: string): string | undefined {
+  return Object.hasOwn(ROUTE_PROTOCOLS, launcher) ? ROUTE_PROTOCOLS[launcher] : undefined;
+}
 
 /**
  * The adapters this host will consider for native launch at all.

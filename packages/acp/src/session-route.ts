@@ -64,9 +64,20 @@ export type AgentSessionRouteV1 =
  * The exact V2 record, which exists only for `client-native`.
  *
  * V2 adds the one fact V1 never had: which build of the provider executable
- * accepted the identity XMD chose. That fact is what lets a later ACP
- * attachment know it is talking to the same build the native UI is in, so it
- * is required rather than optional here.
+ * accepted the identity XMD chose. Required rather than optional, because it is
+ * what makes this record a complete account of that publication — audit
+ * evidence, and the thing a prepared journal derived from it must still agree
+ * with exactly. It is never compared with a build observed later: a release
+ * that changed under the same launcher continues this session once it is
+ * admitted on its own, and one that no longer implements the operation is
+ * refused even if it is byte-for-byte the build that opened it.
+ *
+ * What this record does fix is the protocol. The exact provider, agent and
+ * launcher contract it carries names the stable native protocol its identity
+ * was published under, and no member here can be reinterpreted by whatever is
+ * installed under that launcher afterwards. A different protocol needs a route
+ * contract that names it; there is no migration, and this record is never
+ * rewritten into one.
  *
  * There is no V2 `acp-first`. ACP-first construction gained no fact, so a
  * second schema for it would be a version number with nothing behind it.
