@@ -816,3 +816,85 @@ publication, generated dependency ordering, package discovery, runtime test
 discovery, and release verification. Moving tests changes the measured corpus,
 so its weights are remeasured by the repository workflow rather than edited by
 hand.
+
+## DEC-017: Native capability advertisement is proof-point scoped
+
+**Status:** Decided
+
+**Date:** 2026-09-06
+
+### Context
+
+Claude's client-allocated launch proof ran against Claude Code 2.1.241 on
+macOS arm64, but the built-in advertisement named only `claude` and the version
+parser accepted every canonical semver-shaped Claude Code line. That turns one
+installed-CLI observation into a claim about builds and platforms the proof did
+not exercise.
+
+Executable build binding answers a different question. Its canonical version
+and executable digest let a later operation recognize the exact executable that
+accepted one retained identity. They do not prove that native launch or
+client-native ACP attachment works on that executable in the first place.
+
+The client-allocated contract deliberately accepts two zero-turn outcomes: the
+same identity resumes, or the provider refuses that exact absent identity and
+XMD fails closed. A provider which persists no conversation until its first user
+turn therefore does not, by that fact alone, violate the contract. Adding a
+hidden materialization turn would instead violate the accepted rule that native
+launch performs no model turn.
+
+### Decision
+
+One real-CLI proof admits one native capability compatibility point:
+
+```text
+adapter + capability + canonical reported version + host OS + host architecture
+```
+
+Native launch and client-native attachment retain separate admission because
+their proofs establish different behavior. The trusted host supplies OS and
+architecture directly beside the coordinator, route store and executable
+observer; shared provider code does not detect a runtime and document code
+cannot replace these facts. The executable digest remains the route's exact
+per-session continuity binding rather than a global allow-list for one
+operator's installation.
+
+For a new client-allocated session the provider observes the executable and
+checks the applicable point before identity allocation, route publication,
+private-file creation or process start. A bound route is checked again before
+native resume, attachment ensure and incomplete replay. A point the host has not
+admitted refuses with `unsupported-capability`; a live build which differs from
+the route still refuses with `executable-binding-refused`. Completed replay and
+legacy V1 native-only resume keep their existing behavior.
+
+Claude is admitted for native launch and, independently, attachment only at the
+applicable Claude Code 2.1.241/macOS/arm64 points already proved. Another
+version or platform remains unsupported until the full applicable real-CLI
+proof passes and its exact point is added. A semver-shaped version line alone
+never widens admission.
+
+An already-published route whose exact provider identity is absent remains the
+authoritative account. Native resume or ACP attachment fails closed without
+allocating, creating, converting, deleting, rewriting or substituting a
+conversation. An exact-resume refusal is an ordinary child outcome: settled
+child teardown, cleanup and handle release acknowledge quiescence even when the
+child exited unsuccessfully; any unproved teardown keeps the recovery tombstone
+active.
+
+No XMD-owned materialization turn is added. A provider-native creation protocol
+which retains the exact identity without a turn may replace the current command
+only after its own real-CLI proof. Allowing a fixed bootstrap/model turn is a
+separate product decision and specification change.
+
+### Consequences
+
+The provider's static adapter-name sets are only a coarse selection and cannot
+authorize client-allocated work by themselves. The host/provider assembly gains
+live platform facts and a controlled compatibility-admission seam, so tests can
+state exact points without reading the active runtime. Route, journal, request,
+provider identity, authored syntax and build-binding schemas do not change.
+
+This is a repair to the unmerged terminal/native-session stack and lands
+directly atop its delivery head. It is not a separate Story: the terminal grid
+made the native-launch path observable but did not create this capability
+boundary.
