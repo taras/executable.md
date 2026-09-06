@@ -144,6 +144,7 @@ import { rootSyntaxReference } from "./syntax-reference.ts";
 import { capturedDocumentation } from "./documentation-api.ts";
 import { captureEvaluationProfile, TWO_PROFILES } from "./evaluation-profile.ts";
 import type { CapturedProfile, FragmentEvaluationInput } from "./evaluation-profile.ts";
+import type { ComponentAnswerInstallation } from "./component-answers.ts";
 import { packagedAssetReader } from "./component-documentation.ts";
 import type { DocumentationContribution, DocumentationReader } from "./component-documentation.ts";
 import type { SyntaxSymbolsProvider } from "./syntax-reference.ts";
@@ -2687,6 +2688,15 @@ export interface ExecutionInstallation {
    * rather than ordered.
    */
   readonly evaluation?: FragmentEvaluationInput;
+  /**
+   * The providers behind this installation's `component-answer` entries.
+   *
+   * Run during profile capture, before this installation's ordinary
+   * `install()`, and handed a claimant fixed to each installer's own origin.
+   * Captured by value with the rest: what a provider may identify is settled
+   * before any document code exists.
+   */
+  readonly componentAnswers?: readonly ComponentAnswerInstallation[];
   install?(): Operation<void>;
 }
 

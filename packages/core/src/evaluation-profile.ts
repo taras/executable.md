@@ -80,11 +80,22 @@ export interface FragmentIdentity {
 /**
  * One component a generated fragment may name, as the host states it.
  *
- * The live implementation travels beside the structural identity rather than
- * being derived from it: what is journaled is the identity, the forms and the
- * limits, and what runs is the implementation the host handed over.
+ * A closed union of the two ways a host can say what is behind a name, and it
+ * is closed on purpose: a third shape would be a third answer to "where does
+ * this implementation come from", which is exactly the question an admission
+ * has to settle once.
+ *
+ * Neither arm carries a function. A capability names an operation canonical
+ * core supplies the body for; a component answer names something the ordinary
+ * import chain resolves, which canonical capture does once — before any
+ * document code — and then holds by value. What is journaled is the structural
+ * identity, the forms and the limits.
  */
-export interface FragmentEntry {
+export type FragmentEntry = CapabilityEntry | ComponentAnswerEntry;
+
+/** An entry core supplies the body for, bound to the host's own operations. */
+export interface CapabilityEntry {
+  readonly kind: "capability";
   /** The name a fragment writes. */
   readonly name: string;
   readonly identity: FragmentIdentity;
@@ -126,6 +137,36 @@ export interface FragmentEntry {
    * flattening them would let one entry's limit admit another's request.
    */
   readonly requests?: readonly GeneratedRequest[];
+}
+
+/**
+ * An entry whose implementation the ordinary import chain answers for.
+ *
+ * The host states *what it expects* — the name, the structural identity a
+ * provider must claim, and the forms — and states no implementation at all.
+ * There is no definition, function, resolver, provider operation or context
+ * handle on this arm to hold one.
+ *
+ * Canonical capture resolves the name once, before the root import and before
+ * any document code, through the complete ordinary `Component.importComponent`
+ * chain; reads the identity the provider claimed on that exact final answer;
+ * compares it with what this entry expects; retains the answer defensively; and
+ * seals the result. Props and the callable definition are derived from that
+ * answer rather than restated here, so a host cannot describe a contract the
+ * implementation does not have.
+ *
+ * Resolution happens at capture and never again. A fragment invokes the sealed
+ * snapshot, and a continuation resolves once more in its own capture and
+ * reconciles before any effect. Calling a retained resolver later would see
+ * document-time middleware, which is the whole thing this avoids.
+ */
+export interface ComponentAnswerEntry {
+  readonly kind: "component-answer";
+  readonly name: string;
+  /** What a provider must have claimed for this name, exactly. */
+  readonly identity: FragmentIdentity;
+  readonly forms: readonly FragmentForm[];
+  readonly description?: string;
 }
 
 /**
@@ -221,12 +262,12 @@ const CORE_REVISION = "2";
  * so the read still crosses the run's own transaction; what it no longer does
  * is resolve a provider through the contextual API at the moment it runs.
  */
-export function fileReadEntry(): FragmentEntry {
+export function fileReadEntry(): CapabilityEntry {
   return coreEntry("File", "File:read", "file:read");
 }
 
 /** Core's `<File>…</File>`, admitted to write and not to read. */
-export function fileWriteEntry(): FragmentEntry {
+export function fileWriteEntry(): CapabilityEntry {
   return coreEntry("File", "File:write", "file:write");
 }
 
@@ -238,7 +279,7 @@ export function fileWriteEntry(): FragmentEntry {
  * puts the decision in preflight, before the fragment's first effect — a paired
  * spelling costs an earlier admitted element nothing.
  */
-export function fileDeleteEntry(): FragmentEntry {
+export function fileDeleteEntry(): CapabilityEntry {
   return coreEntry("File.Delete", "File.Delete", "file:delete");
 }
 
@@ -250,8 +291,9 @@ export function fileDeleteEntry(): FragmentEntry {
  * operation — `ensureDirectory`, from the profile — so the body a fragment
  * reaches is not the ordinary registration and cannot be composed around.
  */
-export function directoryEntry(identity: FragmentIdentity, name: string): FragmentEntry {
+export function directoryEntry(identity: FragmentIdentity, name: string): CapabilityEntry {
   return {
+    kind: "capability",
     name,
     identity,
     forms: [...CAPABILITY_FORMS["directory:ensure"]],
@@ -269,7 +311,7 @@ export function directoryEntry(identity: FragmentIdentity, name: string): Fragme
  * that states no request admits `<Fetch>` not at all rather than admitting it
  * and refusing everything it asks for.
  */
-export function fetchEntry(requests: readonly GeneratedRequest[]): FragmentEntry {
+export function fetchEntry(requests: readonly GeneratedRequest[]): CapabilityEntry {
   return { ...coreEntry("Fetch", "Fetch", "fetch"), requests };
 }
 
@@ -283,8 +325,9 @@ const CORE_DESCRIPTIONS: Readonly<Record<FragmentCapability, string>> = Object.f
   fetch: "Perform one admitted HTTP read. Written self-closing.",
 });
 
-function coreEntry(name: string, key: string, capability: FragmentCapability): FragmentEntry {
+function coreEntry(name: string, key: string, capability: FragmentCapability): CapabilityEntry {
   return {
+    kind: "capability",
     name,
     identity: { origin: CORE_ORIGIN, key, revision: CORE_REVISION },
     forms: [...CAPABILITY_FORMS[capability]],
@@ -294,16 +337,49 @@ function coreEntry(name: string, key: string, capability: FragmentCapability): F
   };
 }
 
-/** One captured entry: frozen structural data beside one bound implementation. */
+/**
+ * One provider-backed name, already resolved and reconciled.
+ *
+ * Produced by canonical execution's capture step before this module is asked to
+ * seal anything: the chain has answered, the provider's claim has been read off
+ * that exact final object, it has been compared with what the host entry
+ * expects, and the answer has been retained defensively. What arrives here is
+ * the settled result, so nothing in this module resolves, looks up, or holds a
+ * resolver it could call later.
+ */
+export interface ResolvedAnswer {
+  /** Core's own retained copy, which is what a fragment invokes. */
+  readonly definition: FunctionComponentDefinition;
+}
+
+/** Every provider-backed name this capture resolved, by name. */
+export type ResolvedAnswers = ReadonlyMap<string, ResolvedAnswer>;
+
+/**
+ * One captured entry: frozen structural data beside one sealed implementation.
+ *
+ * `kind` survives capture because the retained record keeps it: a continuation
+ * comparing identities has to know whether the thing behind a name was core's
+ * own operation or a provider's answer, and the two are different grants.
+ */
 export interface CapturedEntry {
   readonly name: string;
   readonly identity: FragmentIdentity;
   readonly forms: readonly FragmentForm[];
   readonly props: PropsSchema;
-  readonly capability: FragmentCapability;
+  readonly kind: "capability" | "component-answer";
+  /** Which operation this runs, for a capability entry. */
+  readonly capability?: FragmentCapability;
   /** What the admitted vocabulary says this entry does, when the host said. */
   readonly description?: string;
-  /** Core's own body, closed over the operations this capture bound. */
+  /**
+   * What a fragment invokes.
+   *
+   * For a capability, core's own body closed over the operations this capture
+   * bound. For a component answer, core's retained copy of the exact final
+   * answer the import chain gave — never the object the chain was holding, and
+   * never something re-resolved later.
+   */
   readonly definition: FunctionComponentDefinition;
   /** This entry's own ceiling, normalized once and canonically ordered. */
   readonly requests?: readonly FetchRequest[];
@@ -370,6 +446,15 @@ export class EvaluationProfileError extends Error {
  */
 export function* captureEvaluationProfile(
   input: FragmentEvaluationInput,
+  /**
+   * The provider-backed names this execution already resolved and reconciled.
+   *
+   * Empty for a capability-only profile, which performs no component-chain
+   * lookup at all. Passed in rather than resolved here, because resolving needs
+   * the execution's own import terminal and this module holds no resolver it
+   * could be tempted to call again later.
+   */
+  answers: ResolvedAnswers = new Map(),
 ): Operation<CapturedProfile> {
   // Every live operation is read off the host's objects here, once, before a
   // single installation has run. What comes back is bound and revocable, and
@@ -384,8 +469,8 @@ export function* captureEvaluationProfile(
   // so they arrive as one definition whose dispatch separates the two
   // spellings, exactly as the ordinary `<File>` does.
   const built = buildDefinitions(input, capabilities);
-  const read = yield* captureEntries(input.read ?? [], input.fetchTimeout, built);
-  const write = yield* captureEntries(input.write ?? [], input.fetchTimeout, built);
+  const read = yield* captureEntries(input.read ?? [], input.fetchTimeout, built, answers);
+  const write = yield* captureEntries(input.write ?? [], input.fetchTimeout, built, answers);
   if (read.length === 0 && write.length === 0) {
     throw new EvaluationProfileError(
       "an evaluation profile states no component at all. A host offering evaluation states what " +
@@ -450,6 +535,12 @@ function buildDefinitions(
   >();
   const ceilings = new Map<string, readonly GeneratedRequest[]>();
   for (const entry of [...(input.read ?? []), ...(input.write ?? [])]) {
+    // A component answer has no capability behind it: canonical capture
+    // resolves its implementation through the ordinary import chain and derives
+    // the definition from that answer, so there is nothing for this to build.
+    if (entry.kind !== "capability") {
+      continue;
+    }
     const held = admitted.get(entry.name) ?? {};
     for (const form of CAPABILITY_FORMS[entry.capability]) {
       held[form] = entry.capability;
@@ -491,10 +582,11 @@ function* captureEntries(
   entries: readonly FragmentEntry[],
   fetchTimeout: number | undefined,
   built: Map<string, FunctionComponentDefinition>,
+  answers: ResolvedAnswers,
 ): Operation<readonly CapturedEntry[]> {
   const captured: CapturedEntry[] = [];
   for (const entry of entries) {
-    captured.push(yield* captureEntry(entry, fetchTimeout, built));
+    captured.push(yield* captureEntry(entry, fetchTimeout, built, answers));
   }
   return Object.freeze(captured);
 }
@@ -503,6 +595,7 @@ function* captureEntry(
   entry: FragmentEntry,
   fetchTimeout: number | undefined,
   built: Map<string, FunctionComponentDefinition>,
+  answers: ResolvedAnswers,
 ): Operation<CapturedEntry> {
   const forms = canonicalForms(entry.forms);
   if (forms.length === 0) {
@@ -511,6 +604,34 @@ function* captureEntry(
     );
   }
   const identity = captureIdentity(entry.identity, entry.name);
+  const described =
+    typeof entry.description === "string" && entry.description.length > 0
+      ? { description: entry.description }
+      : {};
+
+  if (entry.kind === "component-answer") {
+    // Resolved once, before any document code, through the complete ordinary
+    // import chain — and already reconciled against what this entry expects.
+    // Props and the callable definition come from that answer rather than from
+    // the host, so a host cannot describe a contract the implementation lacks.
+    const resolved = answers.get(entry.name);
+    if (resolved === undefined) {
+      throw new EvaluationProfileError(
+        `an evaluation profile admitted "${entry.name}" as a component answer, and this ` +
+          "execution resolved none for it.",
+      );
+    }
+    return Object.freeze({
+      name: entry.name,
+      identity,
+      forms,
+      props: detach(resolved.definition.props),
+      kind: "component-answer" as const,
+      ...described,
+      definition: resolved.definition,
+    });
+  }
+
   const requests =
     entry.requests === undefined
       ? undefined
@@ -531,10 +652,9 @@ function* captureEntry(
     identity,
     forms,
     props,
+    kind: "capability" as const,
     capability: entry.capability,
-    ...(typeof entry.description === "string" && entry.description.length > 0
-      ? { description: entry.description }
-      : {}),
+    ...described,
     definition,
     ...(requests === undefined ? {} : { requests }),
   });

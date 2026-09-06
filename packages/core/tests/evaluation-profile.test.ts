@@ -17,13 +17,14 @@ import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
 
 import { captureEvaluationProfile } from "../src/evaluation-profile.ts";
-import type { FragmentEntry, FragmentEvaluationInput } from "../src/evaluation-profile.ts";
+import type { CapabilityEntry, FragmentEvaluationInput } from "../src/evaluation-profile.ts";
 import type { Json } from "../src/types.ts";
 import { recordedFiles } from "./support/fragment-files.ts";
 
-function entry(overrides: Partial<FragmentEntry> = {}): FragmentEntry {
+function entry(overrides: Partial<CapabilityEntry> = {}): CapabilityEntry {
   const name = overrides.name ?? "File";
   return {
+    kind: "capability",
     name,
     identity: { origin: "test://host", key: "File:read", revision: "1" },
     forms: ["self-closing"],
@@ -64,7 +65,7 @@ function* emptyBasis(): Operation<{ roots: readonly string[]; current: string }>
 
 describe("Tier EP — a captured profile stops reading the host's objects", () => {
   it("EP1: a table the host mutates after capture does not change the profile", function* () {
-    const read: FragmentEntry[] = [entry()];
+    const read: CapabilityEntry[] = [entry()];
     const captured = yield* capture({ read });
 
     read.push(entry({ name: "Added", identity: { origin: "t", key: "Added", revision: "1" } }));
@@ -251,7 +252,7 @@ describe("Tier EP — a captured profile stops reading the host's objects", () =
 
 describe("Tier EP — a profile a host cannot state", () => {
   it("EP12: an entry with no complete identity refuses", function* () {
-    const attempts: Partial<FragmentEntry>[] = [
+    const attempts: Partial<CapabilityEntry>[] = [
       { identity: { origin: "", key: "Probe", revision: "1" } },
       { identity: { origin: "test://host", key: "", revision: "1" } },
       { identity: { origin: "test://host", key: "Probe", revision: "" } },

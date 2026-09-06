@@ -78,12 +78,25 @@ export type { ExecutionInstallation, JournalAdmission } from "./src/execute.ts";
  * a provider.
  */
 export type {
+  CapabilityEntry,
+  ComponentAnswerEntry,
   FragmentEntry,
   FragmentEvaluationInput,
   FragmentForm,
   FragmentIdentity,
   FragmentWorkspaceAccess,
 } from "./src/evaluation-profile.ts";
+/**
+ * How a trusted host supplies the implementation behind a `component-answer`
+ * entry.
+ *
+ * An installer, not a definition: canonical execution runs it during profile
+ * capture and hands it a claimant fixed to this installation's origin. The
+ * provider states what it is returning; canonical execution decides whether
+ * that is what the profile admitted, and resolves the name itself through the
+ * ordinary import chain.
+ */
+export type { ComponentAnswerClaim, ComponentAnswerInstallation } from "./src/component-answers.ts";
 /**
  * The private operations an admitted fragment performs, and the only ones it
  * can reach.
