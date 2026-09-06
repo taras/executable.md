@@ -80,10 +80,25 @@ export type { ExecutionInstallation, JournalAdmission } from "./src/execute.ts";
 export type {
   FragmentEntry,
   FragmentEvaluationInput,
+  FragmentForm,
   FragmentIdentity,
   FragmentWorkspaceAccess,
 } from "./src/evaluation-profile.ts";
-export { EvaluationProfileError } from "./src/evaluation-profile.ts";
+/**
+ * Core's own entries, for the hosts that admit them.
+ *
+ * Constructors rather than a table a host assembles from `CORE_REGISTRY`,
+ * because each of them states a constraint the registry does not hold: which
+ * spelling of `<File>` is being admitted, and that admitting `<Fetch>` requires
+ * the exact requests it may perform.
+ */
+export {
+  EvaluationProfileError,
+  fetchEntry,
+  fileDeleteEntry,
+  fileReadEntry,
+  fileWriteEntry,
+} from "./src/evaluation-profile.ts";
 /**
  * The symbols a host's profile describes, when they are not the ones the
  * execution would derive from its own captured inputs — see

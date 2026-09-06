@@ -5,8 +5,8 @@ props:
     session: { type: string, minLength: 1 }
   additionalProperties: false
 description: >-
-  Create an XMD program from a prompt. `<Plan>Ask for the user's age.</Plan>`
-  emits the approved program source.
+  Generate program text from a prompt. `<Plan>Ask for the user's age.</Plan>`
+  emits the approved program text; `<Evaluate>` runs it.
 as: Binds the exact approved program source and emits nothing. Omitted, that source is emitted where the component is written.
 context: The complete prompt, expanded once before authorship.
 ---

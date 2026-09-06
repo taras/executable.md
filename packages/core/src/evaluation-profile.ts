@@ -38,6 +38,7 @@
 
 import type { Operation } from "effection";
 
+import { CORE_ORIGIN, CORE_REGISTRY } from "./components/registry.ts";
 import type { FetchRequest } from "./fetch-request.ts";
 import { normalizeFetchRequest, requestRecord } from "./fetch-request.ts";
 import type { GeneratedRequest } from "./generated-xmd.ts";
@@ -148,6 +149,99 @@ export interface FragmentEvaluationInput {
    * that spelling.
    */
   readonly deprecatedSourceAlias?: boolean;
+}
+
+/**
+ * The revision core's own entries state.
+ *
+ * One number for all of them, bumped whenever what any of these entries
+ * authorizes changes. A continuation admitted under an earlier revision is
+ * refused rather than silently granted the newer authority.
+ */
+const CORE_REVISION = "1";
+
+/** The definition core's registry holds for this name, or the reason it has none. */
+function coreDefinition(name: string): FunctionComponentDefinition {
+  const definition = CORE_REGISTRY.get(name)?.default?.definition;
+  if (definition === undefined || definition.kind !== "function") {
+    throw new EvaluationProfileError(`core supplies no ${name} component to admit.`);
+  }
+  return definition;
+}
+
+/**
+ * Core's `<File />`, admitted to observe and not to write.
+ *
+ * `<File>` reads when it has no content and writes when it has some, so
+ * admitting the unconstrained definition would admit a write. The form travels
+ * with the identity and preflight decides between the two — before the first
+ * effect, rather than inside the component after earlier elements already ran.
+ *
+ * An admitted read invokes the ordinary component and therefore the installed
+ * Files provider, which under a workflow run is the transaction-bound one.
+ * There is no second filesystem path here.
+ */
+export function fileReadEntry(): FragmentEntry {
+  const definition = coreDefinition("File");
+  return {
+    name: "File",
+    identity: { origin: CORE_ORIGIN, key: "File:read", revision: CORE_REVISION },
+    forms: ["self-closing"],
+    props: definition.props,
+    definition,
+  };
+}
+
+/** Core's `<File>…</File>`, admitted to write and not to read. */
+export function fileWriteEntry(): FragmentEntry {
+  const definition = coreDefinition("File");
+  return {
+    name: "File",
+    identity: { origin: CORE_ORIGIN, key: "File:write", revision: CORE_REVISION },
+    forms: ["paired"],
+    props: definition.props,
+    definition,
+  };
+}
+
+/**
+ * Core's `<File.Delete />`, in the one form it has.
+ *
+ * One name, one identity: unlike `<File>`, whose two spellings do different
+ * things, this component answers the self-closing form and refuses the paired
+ * one. Stating the form anyway is what puts the decision in preflight, before
+ * the fragment's first effect — a paired spelling costs an earlier admitted
+ * element nothing.
+ */
+export function fileDeleteEntry(): FragmentEntry {
+  const definition = coreDefinition("File.Delete");
+  return {
+    name: "File.Delete",
+    identity: { origin: CORE_ORIGIN, key: "File.Delete", revision: CORE_REVISION },
+    forms: ["self-closing"],
+    props: definition.props,
+    definition,
+  };
+}
+
+/**
+ * Core's `<Fetch />`, bounded to exactly these requests.
+ *
+ * The ceiling is not optional and this constructor does not decide it: an
+ * unbounded network read is a different grant from an admitted one, and a host
+ * that states no request admits `<Fetch>` not at all rather than admitting it
+ * and refusing everything it asks for.
+ */
+export function fetchEntry(requests: readonly GeneratedRequest[]): FragmentEntry {
+  const definition = coreDefinition("Fetch");
+  return {
+    name: "Fetch",
+    identity: { origin: CORE_ORIGIN, key: "Fetch", revision: CORE_REVISION },
+    forms: ["self-closing"],
+    props: definition.props,
+    definition,
+    requests,
+  };
 }
 
 /** One captured entry: frozen structural data beside one bound implementation. */

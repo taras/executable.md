@@ -53,6 +53,7 @@ import { printErrors, printsErrors } from "./component-failures.ts";
 import { documentationOf } from "./components/documentation.ts";
 import type { ComponentDocumentation } from "./components/documentation.ts";
 import type { SyntaxReference } from "./syntax-reference.ts";
+import type { CapturedProfile } from "./evaluation-profile.ts";
 import type {
   FunctionComponent,
   FunctionComponentDefinition,
@@ -170,8 +171,56 @@ export interface IdentityDomain {
 export type ProtectedBody = (
   props: Record<string, Json>,
   invocation: ComponentInvocation,
-  observation: SyntaxReference | undefined,
+  site: ProtectedSite,
 ) => Operation<unknown>;
+
+/**
+ * Render this element's own paired content under a syntax reference of the
+ * body's choosing.
+ *
+ * The one facility canonical protected dispatch offers that ordinary expansion
+ * does not, and it exists for one reason: a boundary that narrows what a
+ * subtree may write has to narrow it *while the subtree renders*, and the
+ * projection handle is built before the body runs. So the body is handed a way
+ * to project its own region again under a different reference.
+ *
+ * It projects exactly the paired region, returns exactly what that region
+ * rendered under ordinary content-failure semantics, and reuses the invocation's
+ * own projection machinery and content scope — it is not a second expansion.
+ * Nothing public reaches it: it is not on `Component`, not on the invocation,
+ * not on the reference, not in a context, and not exported. It is one-shot and
+ * bound to this invocation, so a body that kept it cannot project a second time
+ * or act after the body closed.
+ */
+export type ProjectProtectedContent = (syntax: SyntaxReference) => Operation<string>;
+
+/**
+ * The lexical facts one protected body is handed, beside its props.
+ *
+ * All three change as expansion descends or belong to this invocation alone, so
+ * none of them can be closed over when the implementation is built. They are
+ * delivered here instead, by the copy of core performing the expansion, from
+ * the private authority it is already holding.
+ */
+export interface ProtectedSite {
+  /**
+   * The syntax reference in scope where the element was written.
+   *
+   * `undefined` where an expansion carries none. A body refuses rather than
+   * inventing symbols: a component that answered without one would be
+   * describing an environment nothing established.
+   */
+  readonly syntax: SyntaxReference | undefined;
+  /**
+   * The maximum authority a generated fragment may be evaluated under here.
+   *
+   * `undefined` where the host offers no evaluation, which is not an
+   * unrestricted one.
+   */
+  readonly evaluation: CapturedProfile | undefined;
+  /** How this body renders its own paired content, when it has any. */
+  readonly projectContent: ProjectProtectedContent | undefined;
+}
 
 /**
  * The bodies one execution will enter, keyed by the exact function it built.

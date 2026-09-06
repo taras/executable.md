@@ -7,10 +7,13 @@
  * them: a protected name means the same thing in every execution, whichever host
  * built it, whichever package registered what, and whatever a repository holds.
  *
- * There is one component in it. `<Syntax />` describes the vocabulary of the
+ * There are two components in it. `<Syntax />` describes the vocabulary of the
  * site it is written at, and a description of a run's vocabulary that anything
  * in the run could answer for is a description of nothing — the value of the
- * answer is exactly that nobody but core produced it.
+ * answer is exactly that nobody but core produced it. `<Evaluate>` runs program
+ * text the document did not author, under a ceiling a trusted host stated
+ * before any document existed; a component in the run answering for that name
+ * would decide what an unaudited fragment is allowed to do.
  *
  * ## What protection is, and is not
  *
@@ -24,9 +27,13 @@
  * what is invoked.
  *
  * Protection is not authority to do anything. A protected implementation is
- * handed the lexical syntax reference for its site and nothing else: no component
- * definitions, no import witness, no invocation capability, no policy table, no
- * provider and no registration handle.
+ * handed the site canonical execution built for it and nothing else: the
+ * lexical syntax reference, the evaluation profile a trusted host stated at the
+ * installation boundary, and a one-shot projection of its own content. No
+ * component definitions, no import witness, no invocation capability, no
+ * provider and no registration handle — and no way to widen what the profile
+ * already says, because the profile is a captured value rather than a handle to
+ * the host's own objects.
  *
  * ## Why it is not a registration
  *
@@ -38,6 +45,7 @@
  * built it.
  */
 
+import { EVALUATE_PROTECTED } from "./Evaluate.ts";
 import { SYNTAX_PROTECTED } from "./Syntax.ts";
 import type { ImportRefusal, ImportTier } from "./import-authority.ts";
 import type { ComponentDocumentation } from "./documentation.ts";
@@ -57,6 +65,7 @@ export interface ProtectedComponent extends ProtectedDeclaration, ComponentDocum
 
 /** Every name the engine itself claims. */
 export const PROTECTED_COMPONENTS: readonly ProtectedComponent[] = Object.freeze([
+  EVALUATE_PROTECTED,
   SYNTAX_PROTECTED,
 ]);
 

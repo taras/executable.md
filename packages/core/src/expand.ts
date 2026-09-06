@@ -105,6 +105,8 @@ import { elementFrame, elementSite, extendPath, publishExpansion, snapshot } fro
 import type { ExpansionFrame } from "./expansion.ts";
 import { isPrivateImplementation, issueInvocation } from "./invocation-identity.ts";
 import type { IdentityDomain } from "./invocation-identity.ts";
+import { ComponentInvocationError } from "./invocation-identity.ts";
+import type { SyntaxReference } from "./syntax-reference.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
 import { ActiveProjection } from "./projection.ts";
@@ -3091,7 +3093,7 @@ function* expandFunctionComponent(
           !selfClosing,
           dispatcher,
         );
-        const handle = createProjectionHandle({
+        const projectionState: ProjectionState = {
           invocation,
           projecting: issued.projecting,
           enclosing,
@@ -3114,7 +3116,13 @@ function* expandFunctionComponent(
           ownPath: path,
           checkedFailures,
           authority,
-        });
+        };
+        // Only the ordinary handle is published. The richer projection a
+        // protected body may reach stays a closure at the dispatch below, so
+        // nothing that can read `ActiveProjection` — another loaded copy, a
+        // repository component, a registration, a declaration, middleware, a
+        // context — obtains or influences it.
+        const handle = createProjectionHandle(projectionState);
         invocation.evalScope.scope.set(ActiveProjection, handle);
 
         yield* ActiveLoop.set(undefined);
@@ -3228,9 +3236,51 @@ function* expandFunctionComponent(
           // the expansion, from the authority it is already holding.
           const guarded = authority?.protectedBodies?.body(definition.fn);
           if (guarded !== undefined) {
+            // One-shot, and closed with the body. A projector the body kept
+            // reaches a spent flag rather than the projection machinery.
+            let projected = false;
+            let open = true;
+            const projectContent = selfClosing
+              ? undefined
+              : function* (syntax: SyntaxReference): Operation<string> {
+                  if (!open || projected) {
+                    throw new ComponentInvocationError(
+                      `<${name} /> may render its own content once, while its body is running.`,
+                    );
+                  }
+                  projected = true;
+                  // The same state the ordinary handle was built from, with only
+                  // the reference replaced: the producer keeps its own imports,
+                  // declarations, closure, identities, bindings, providers,
+                  // directory, forms, exact-source tracking and error mode, and
+                  // sees a narrower vocabulary. This is a second handle over one
+                  // content scope, not a second expansion.
+                  const narrowed = createProjectionHandle({
+                    ...projectionState,
+                    authority: { ...authority, syntax },
+                  });
+                  const outcome = yield* narrowed.tryProject({
+                    kind: "slot",
+                    name: undefined,
+                    mode: siteErrorMode,
+                  });
+                  if (outcome.failure !== undefined) {
+                    throw outcome.failure;
+                  }
+                  const errors = errorSegments(outcome.segments);
+                  if (errors.length > 0) {
+                    throw new ContentExpansionFailure(errors, undefined, outcome.segments);
+                  }
+                  return renderSegments(outcome.segments);
+                };
             try {
-              return yield* guarded(validatedProps, issued.invocation, authority?.syntax);
+              return yield* guarded(validatedProps, issued.invocation, {
+                syntax: authority?.syntax,
+                evaluation: authority?.evaluation,
+                projectContent,
+              });
             } finally {
+              open = false;
               issued.close();
             }
           }
