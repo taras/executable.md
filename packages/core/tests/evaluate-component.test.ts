@@ -774,6 +774,28 @@ describe("Tier FE — one occurrence, one durable decision", () => {
     expect(second.performed).toEqual([]);
   });
 
+  it("FE11: a completed evaluation replays without performing anything again", function* () {
+    const first = recordedFiles({ "notes.md": NOTE });
+    const stream = new InMemoryStream();
+    const source = `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`;
+    const original = yield* run(source, [reading(first)], stream);
+    expect(first.performed).toEqual(["read notes.md"]);
+
+    // The whole history, terminal close included. A second run over it restores
+    // the admission *and* the observation it authorized.
+    const complete = yield* stream.readAll();
+    const second = recordedFiles({ "notes.md": "a note this run must not read\n" });
+    const replayed = yield* run(source, [reading(second)], new InMemoryStream(complete));
+
+    // Nothing was performed again — the recorder's log is empty, and the file
+    // it holds now says something else, so a re-read would be visible in the
+    // output rather than merely in the count.
+    expect(second.performed).toEqual([]);
+    expect(String(replayed)).toContain("the retained note");
+    expect(String(replayed)).not.toContain("must not read");
+    expect(String(replayed)).toBe(String(original));
+  });
+
   it("FE12: a retained record this version cannot read fails closed", function* () {
     const files = recordedFiles({ "notes.md": NOTE });
     const stream = new InMemoryStream();

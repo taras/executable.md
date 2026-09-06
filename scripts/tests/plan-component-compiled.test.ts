@@ -116,6 +116,28 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
         'symbols available here; `<Syntax names={["Elicit"]} />` renders selected documentation.',
     );
 
+    // FE28, at the compiled boundary. `<Evaluate>` is the tier's second member
+    // and ships inside the binary for the same reason: a build that carried the
+    // protected tier without it would let a document write the name with no
+    // implementation able to answer it, at a person's first `<Evaluate>` rather
+    // than here. This boundary is asserted explicitly because `--changed`
+    // cannot see it — nothing in `dist/xmd` shares a path with the core sources
+    // the name is defined in, and no test shard builds the binary at all.
+    const evaluate = entries.filter((entry: { name?: string }) => entry?.name === "Evaluate");
+    expect(evaluate).toHaveLength(1);
+    expect(evaluate[0].origin).toEqual({ kind: "protected", origin: "@executablemd/core" });
+    expect(evaluate[0].sourceKind).toBe("protected");
+    // Both spellings, because the two input forms are two ways of stating one
+    // argument.
+    expect(evaluate[0].forms).toEqual(["self-closing", "paired"]);
+    expect(evaluate[0].description).toBe(
+      'Evaluate program text. `<Evaluate text={program} allow={["read"]} />` runs it.',
+    );
+    // And the closed schema travels with it: a build that shipped a widened one
+    // would let a fragment-bearing prop nobody validated reach the body.
+    expect(evaluate[0].props.additionalProperties).toBe(false);
+    expect(Object.keys(evaluate[0].props.properties)).toEqual(["text", "source", "allow"]);
+
     // The documentation asset travels with the binary, not with a checkout. A
     // build that forgot `--include` would still list the component and still
     // print its metadata, and would silently have no prose to attach — so the
