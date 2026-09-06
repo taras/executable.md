@@ -268,10 +268,12 @@ owned by a coordinator of its own.
 
 The observer is the whole seam, replaced whole. It answers one stable canonical
 version and one stable digest for the life of a partition, and a harness that
-wants to watch a build drift changes what it answers rather than reaching for a
-control the production path also has. There is no author-facing binding or path
-prop: an authored document sees attachment and refusal, and nothing about which
-file was observed.
+wants to exercise a compatible release change supplies a later independently
+admitted observation rather than reaching for a control the production path
+also has. The original route and journal evidence stays unchanged while the live
+runtime partition follows that later observation. There is no author-facing
+binding or path prop: an authored document sees attachment or refusal, and
+nothing about which file was observed.
 
 `<TestAgent>` also installs a controlled native launcher for its body. The test
 agent's native UI is fictional in the way its agent is — the worker asserts a

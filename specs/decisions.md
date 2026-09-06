@@ -823,6 +823,8 @@ hand.
 
 **Date:** 2026-09-06
 
+**Amended:** 2026-09-06 — compatible cross-release continuation
+
 ### Context
 
 Claude's client-allocated launch proof ran against Claude Code 2.1.241 on
@@ -831,11 +833,17 @@ fails closed, but it makes a routine Claude Code upgrade disable every new
 native session even when the executable still advertises the protocol surface
 the adapter uses.
 
-Executable build binding answers a different question. Its executable digest
-and optional canonical reported version let a later operation recognize the
-exact executable that accepted one retained identity. They do not globally
-authorize native launch or client-native ACP attachment, and a version string
-does not describe a capability.
+The first shape-based repair still used the executable digest and optional
+canonical reported version as a per-session continuity gate. In practice that
+let Claude Code 2.1.261 establish a session and made 2.1.263 refuse it before
+resume, even though both releases independently advertised the same admitted
+protocol. That preserves bytes rather than the provider-native identity the
+route exists to preserve.
+
+The retained build binding remains useful as immutable audit evidence and as a
+cross-check between the route and the prepared journal. It does not establish
+whether another release implements the same operation. That question belongs
+to the live capability profile.
 
 The client-allocated contract deliberately accepts two zero-turn outcomes: the
 same identity resumes, or the provider refuses that exact absent identity and
@@ -877,23 +885,38 @@ For a new client-allocated session the provider resolves and hashes the
 executable, runs the adapter's read-only metadata query against that exact path,
 and checks the requested capability before identity allocation, route
 publication, private-file creation or native child start. A bound route is
-checked again before native resume, attachment ensure and incomplete replay. A
-profile or shape the host has not admitted refuses with
-`unsupported-capability`; a live build which differs from the route still
-refuses with `executable-binding-refused`. Completed replay and legacy V1
-native-only resume keep their existing behavior.
+checked again before native resume, attachment ensure and incomplete replay.
+The live executable may differ in digest or reported version from the build the
+route records; it acts only when its stable adapter protocol, independently
+requested capability, positive observed CLI shape and proved host envelope all
+match. A mismatch refuses with `unsupported-capability`. Completed replay and
+legacy V1 native-only resume keep their existing behavior.
 
 Claude Code's version query is optional metadata. One canonical version line is
 retained when available; changed wording, noncanonical output, a failed version
 query or no version output does not deny an otherwise recognized capability
 shape. New sessions created by such a build retain its exact digest and omit
-the version. A retained binding still protects one published identity: digest
-equality is mandatory, two present versions must agree, and a retained version
-which the same observation can no longer reproduce refuses conservatively. An
-upgrade may therefore create new named sessions immediately when its shape and
-host envelope are admitted, while a session bound to the previous executable
-does not cross the changed digest. Crossing builds for one existing identity
-requires a separate migration contract.
+the version. The V2 route and each agreeing prepared record keep the binding
+they were first written with and never rewrite it after an upgrade. Their exact
+agreement proves that the two durable accounts describe one preparation; it
+does not require the live executable to reproduce either value. A compatible
+upgrade may therefore create a new session or continue an existing one under
+the route's exact retained native identity.
+
+`session-route.v2` fixes the client-native adapter protocol through its exact
+provider, agent and launcher contract. The only admitted Claude interpretation
+is `claude-client-native.v1`; changing that protocol requires a route contract
+which names the new protocol rather than silently reinterpreting V2 history.
+This lets an existing V2 route cross executable releases without letting it
+cross protocols.
+
+Incomplete replay keeps the durable boundary. The route and journal must still
+agree exactly on provider, native identity, provenance, instruction digest,
+launcher and their original build binding. A `prepared`-only replay may create
+under that same identity and a `detached` replay may only resume it, but each
+uses the newly observed executable only after that executable independently
+passes native-launch admission. Neither replay allocates, republishes or
+rewrites. Completed replay observes nothing and performs no live work.
 
 An already-published route whose exact provider identity is absent remains the
 authoritative account. Native resume or ACP attachment fails closed without
@@ -913,11 +936,18 @@ separate product decision and specification change.
 The provider's static adapter-name sets are only a coarse selection and cannot
 authorize client-allocated work by themselves. Admission requires the resolved
 adapter's stable protocol identifier, its observed capability shape and the
-host envelope. The host/provider assembly keeps live platform facts and a
-controlled admission seam, so tests can state profiles and observations without
-reading the active runtime. The unmerged executable binding makes
-`reportedVersion` optional; route and journal identity, request, provider
-identity and authored syntax otherwise do not change.
+host envelope on every live continuation. The host/provider assembly keeps live
+platform facts and a controlled admission seam, so tests can state profiles and
+observations without reading the active runtime. Route and journal schemas,
+identity, request, provider identity and authored syntax do not change.
+
+ACP runtime partitions follow the resolved agent command and the live build
+that actually serves them, not the historical binding in a route. A compatible
+upgrade creates a new live partition after any old partition becomes idle; an
+existing partition is never rekeyed or migrated, and every handle still closes
+through its creator. Sessions with different historical bindings may share one
+current partition only when they are being served by the same live build and
+protocol. Different live builds never share a child.
 
 The metadata probe is deliberately less than a semantic trial. No
 side-effect-free query can prove that an implementation has no hidden
