@@ -2832,12 +2832,14 @@ function* useAcpxProviderState(
             // reached; written as this scope's cleanup, it is reached on every
             // path there is.
             const [running, stop] = createScope(yield* useScope());
+            const performed = withResolvers<void>();
             let stopped = false;
 
             yield* ensure(function* () {
               // Registered after the scope exists, so it runs before the scope
-              // is destroyed on its own: the launch comes down here, and
-              // `destroy()` carries the outcome of its teardown. A child that
+              // would be destroyed alongside its parent: the launch comes down
+              // here, and `destroy()` carries the outcome of its teardown. A
+              // child that
               // could not be proven stopped, or a cleanup that failed, throws
               // out of it — and is not quiescence, and is still a failure.
               try {
@@ -2845,21 +2847,28 @@ function* useAcpxProviderState(
                 stopped = true;
               } finally {
                 // Everything this owner started has to be finished with the
-                // session, and that is two facts rather than one: the native
-                // child and its cleanup settled, and this provider holds no
-                // handle for the session — a detach that failed, or a session
-                // prepared and never handed over, leaves one. Either one
-                // missing leaves the session owned rather than looking
-                // finished, which is what the next owner is told to recover
-                // deliberately.
+                // session, and that is three facts rather than one: the native
+                // child settled, every finalizer belonging to that invocation
+                // completed, and this provider holds no handle for the session
+                // — a detach that failed, or a session prepared and never
+                // handed over, leaves one. Any of them missing leaves the
+                // session owned rather than looking finished, which is what the
+                // next owner is told to recover deliberately.
                 if (stopped && !holding(placement.sessionKey)) {
                   ownership.quiesced();
                 }
               }
             });
 
-            yield* running.run(() =>
-              authority.perform(request, {
+            // Held open after the native child settles so that the invocation
+            // is never torn down except by the `stop()` above. A launch left to
+            // unwind on its own runs its finalizers where nothing can be told
+            // how that went — the failure reaches this owner as a crash, after
+            // the scope has already settled, and stopping a settled scope
+            // proves only that it is settled now. Suspending puts the one
+            // teardown there is under the one call that reports it.
+            running.run(function* (): Operation<void> {
+              yield* authority.perform(request, {
                 prepare: () =>
                   withSessionRoute(context, () =>
                     prepareLaunch(
@@ -2873,8 +2882,12 @@ function* useAcpxProviderState(
                 detach: (prepared) =>
                   detachSession(invocation, prepared, agentCommandOf(placement)),
                 exit: (prepared) => runNativeUi(invocation, prepared, agentCommandOf(placement)),
-              }),
-            );
+              });
+              performed.resolve();
+              yield* suspend();
+            });
+
+            yield* performed.operation;
           },
         );
       } catch (error) {
