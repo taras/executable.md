@@ -807,7 +807,7 @@ discovery, and release verification. Moving tests changes the measured corpus,
 so its weights are remeasured by the repository workflow rather than edited by
 hand.
 
-## DEC-017: Native capability advertisement is proof-point scoped
+## DEC-017: Native capability admission follows a proved protocol shape
 
 **Status:** Decided
 
@@ -816,15 +816,16 @@ hand.
 ### Context
 
 Claude's client-allocated launch proof ran against Claude Code 2.1.241 on
-macOS arm64, but the built-in advertisement named only `claude` and the version
-parser accepted every canonical semver-shaped Claude Code line. That turns one
-installed-CLI observation into a claim about builds and platforms the proof did
-not exercise.
+macOS arm64. The first repair admitted only that exact reported version. That
+fails closed, but it makes a routine Claude Code upgrade disable every new
+native session even when the executable still advertises the protocol surface
+the adapter uses.
 
-Executable build binding answers a different question. Its canonical version
-and executable digest let a later operation recognize the exact executable that
-accepted one retained identity. They do not prove that native launch or
-client-native ACP attachment works on that executable in the first place.
+Executable build binding answers a different question. Its executable digest
+and optional canonical reported version let a later operation recognize the
+exact executable that accepted one retained identity. They do not globally
+authorize native launch or client-native ACP attachment, and a version string
+does not describe a capability.
 
 The client-allocated contract deliberately accepts two zero-turn outcomes: the
 same identity resumes, or the provider refuses that exact absent identity and
@@ -835,33 +836,54 @@ launch performs no model turn.
 
 ### Decision
 
-One real-CLI proof admits one native capability compatibility point:
+One real-CLI proof establishes an adapter protocol profile. A live executable
+is admitted only when all of these facts agree:
 
 ```text
-adapter + capability + canonical reported version + host OS + host architecture
+adapter protocol + independently requested capability + observed protocol shape
++ host OS + host architecture
 ```
 
-Native launch and client-native attachment retain separate admission because
-their proofs establish different behavior. The trusted host supplies OS and
-architecture directly beside the coordinator, route store and executable
-observer; shared provider code does not detect a runtime and document code
-cannot replace these facts. The executable digest remains the route's exact
-per-session continuity binding rather than a global allow-list for one
-operator's installation.
+The adapter protocol is a stable implementation identifier, not the Agent name
+or executable command. Its adapter-owned probe asks the exact observed
+executable for side-effect-free help metadata, with no terminal, session
+identity, instruction text, credentials or provider state. The Claude profile
+recognizes the product and the required option shapes without matching the
+whole help text: native launch requires client allocation, private-file
+instructions and exact resume; client-native attachment independently requires
+exact resume plus the pinned ACP bridge's `resumeSessionId` contract. Additive
+options, line wrapping and an unrelated version change do not invalidate that
+shape. A missing, ambiguous or changed required shape admits nothing.
 
-For a new client-allocated session the provider observes the executable and
-checks the applicable point before identity allocation, route publication,
-private-file creation or process start. A bound route is checked again before
-native resume, attachment ensure and incomplete replay. A point the host has not
-admitted refuses with `unsupported-capability`; a live build which differs from
-the route still refuses with `executable-binding-refused`. Completed replay and
-legacy V1 native-only resume keep their existing behavior.
+Native launch and client-native attachment remain separate admission decisions
+because their proofs establish different behavior. The trusted host supplies
+OS and architecture directly beside the coordinator, route store and
+executable observer; shared provider code does not detect a runtime and
+document code cannot replace these facts. The currently proved host envelope
+remains macOS arm64. A different operating system or architecture requires its
+own applicable real-CLI evidence even when the help shape is identical.
 
-Claude is admitted for native launch and, independently, attachment only at the
-applicable Claude Code 2.1.241/macOS/arm64 points already proved. Another
-version or platform remains unsupported until the full applicable real-CLI
-proof passes and its exact point is added. A semver-shaped version line alone
-never widens admission.
+For a new client-allocated session the provider resolves and hashes the
+executable, runs the adapter's read-only metadata query against that exact path,
+and checks the requested capability before identity allocation, route
+publication, private-file creation or native child start. A bound route is
+checked again before native resume, attachment ensure and incomplete replay. A
+profile or shape the host has not admitted refuses with
+`unsupported-capability`; a live build which differs from the route still
+refuses with `executable-binding-refused`. Completed replay and legacy V1
+native-only resume keep their existing behavior.
+
+Claude Code's version query is optional metadata. One canonical version line is
+retained when available; changed wording, noncanonical output, a failed version
+query or no version output does not deny an otherwise recognized capability
+shape. New sessions created by such a build retain its exact digest and omit
+the version. A retained binding still protects one published identity: digest
+equality is mandatory, two present versions must agree, and a retained version
+which the same observation can no longer reproduce refuses conservatively. An
+upgrade may therefore create new named sessions immediately when its shape and
+host envelope are admitted, while a session bound to the previous executable
+does not cross the changed digest. Crossing builds for one existing identity
+requires a separate migration contract.
 
 An already-published route whose exact provider identity is absent remains the
 authoritative account. Native resume or ACP attachment fails closed without
@@ -879,10 +901,22 @@ separate product decision and specification change.
 ### Consequences
 
 The provider's static adapter-name sets are only a coarse selection and cannot
-authorize client-allocated work by themselves. The host/provider assembly gains
-live platform facts and a controlled compatibility-admission seam, so tests can
-state exact points without reading the active runtime. Route, journal, request,
-provider identity, authored syntax and build-binding schemas do not change.
+authorize client-allocated work by themselves. Admission requires the resolved
+adapter's stable protocol identifier, its observed capability shape and the
+host envelope. The host/provider assembly keeps live platform facts and a
+controlled admission seam, so tests can state profiles and observations without
+reading the active runtime. The unmerged executable binding makes
+`reportedVersion` optional; route and journal identity, request, provider
+identity and authored syntax otherwise do not change.
+
+The metadata probe is deliberately less than a semantic trial. No
+side-effect-free query can prove that an implementation has no hidden
+regression; proving that by creating a disposable conversation would violate
+the product contract. XMD relies on the CLI's advertised protocol inside the
+real-proof envelope, then keeps every existing exact-identity, no-substitution,
+settlement and recovery check at the live boundary. A provider which needs
+stronger attestation must expose it without a model turn before its profile can
+use it.
 
 This is a repair to the unmerged terminal/native-session stack and lands
 directly atop its delivery head. It is not a separate Story: the terminal grid
