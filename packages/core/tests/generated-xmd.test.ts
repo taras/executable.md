@@ -69,7 +69,7 @@ import type {
   GeneratedObservationValue,
   GeneratedXmdRequest,
 } from "../host.ts";
-import type { FunctionComponentDefinition, Json } from "../src/types.ts";
+import type { FunctionComponentDefinition, Json, JsonObject } from "../src/types.ts";
 
 const ROOT_PATH = "workflows/agent.md";
 const ROOT_SOURCE = "The host ran a generated fragment.\n";
@@ -304,9 +304,11 @@ describe("Tier GX — the trusted-host seam", () => {
       throw new Error("the run recorded no generated-XMD admission");
     }
     expect(admission.description.name).toBe("generated:turn-1");
+    // The version-2 shape: tagged, and carrying the Workspace basis as one
+    // member rather than two top-level ones, because a host may have none.
     expect(admission.description.input).toMatchObject({
-      roots: ROOTS,
-      selectedRoot: ROOTS[0],
+      version: 2,
+      workspace: { roots: ROOTS, selectedRoot: ROOTS[0] },
       allowed: [{ name: "Probe", identity: "test://probe" }],
     });
     expect(admission.result).toMatchObject({
@@ -318,8 +320,8 @@ describe("Tier GX — the trusted-host seam", () => {
         // Retained in the result as well as the input, because durable replay
         // matches an effect by type and name and never compares a description.
         policy: {
-          roots: ROOTS,
-          selectedRoot: ROOTS[0],
+          version: 2,
+          workspace: { roots: ROOTS, selectedRoot: ROOTS[0] },
           allowed: [{ name: "Probe", identity: "test://probe" }],
           requests: [],
         },
@@ -1027,6 +1029,67 @@ describe("Tier GX — a malformed generated request reports its class, not itsel
     });
   }
 
+  /** Every incoherent Workspace basis a host can state, and what is wrong. */
+  const INCOHERENT: readonly (readonly [string, Partial<GeneratedXmdRequest>])[] = [
+    ["roots without a selected root", { workspaceRoots: ROOTS, selectedRoot: undefined }],
+    ["a selected root without roots", { workspaceRoots: undefined, selectedRoot: ROOTS[0] }],
+    ["no retained root at all", { workspaceRoots: [], selectedRoot: "" }],
+    ["an empty retained root", { workspaceRoots: [""], selectedRoot: "" }],
+    ["one retained root twice", { workspaceRoots: [ROOTS[0], ROOTS[0]], selectedRoot: ROOTS[0] }],
+    [
+      "a selected root it does not retain",
+      {
+        workspaceRoots: ROOTS,
+        selectedRoot: "workspace://never-retained",
+      },
+    ],
+  ];
+
+  /** The probe under its admitted identity, counting live invocations. */
+  function countingProbe(performed: string[]): GeneratedObservation {
+    return pinnedComponent("Probe", "test://probe", {
+      kind: "function",
+      name: "Probe",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      // deno-lint-ignore require-yield
+      *fn(): Operation<Json> {
+        performed.push("probed");
+        return "probed";
+      },
+    });
+  }
+
+  for (const [what, basis] of INCOHERENT) {
+    it(`GX26b: a host stating ${what} fails before anything is appended`, function* () {
+      const performed: string[] = [];
+      const attempt = yield* evaluate({
+        ...request("<Probe />\n", [countingProbe(performed)]),
+        ...basis,
+      });
+
+      // The host's own values, so this is the host's own error — and it happens
+      // before the candidate is read, so nothing of it is retained.
+      expect([what, attempt.failure !== undefined]).toEqual([what, true]);
+      expect([what, admissions(attempt.events).length]).toEqual([what, 0]);
+      expect([what, performed]).toEqual([what, []]);
+    });
+  }
+
+  it("GX26c: a host stating no Workspace basis at all evaluates", function* () {
+    // The positive control the six above need, and the ordinary-run shape: a
+    // host with no Workspace is not a host with a broken one.
+    const {
+      workspaceRoots: _roots,
+      selectedRoot: _selected,
+      ...withoutBasis
+    } = request("<Probe />\n", [probe()]);
+
+    const attempt = yield* evaluate(withoutBasis);
+
+    expect(attempt.failure).toBe(undefined);
+    expect(attempt.output).toContain("probed");
+  });
+
   it("GX26: a malformed host ceiling fails as the host's own error, before anything is appended", function* () {
     const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
 
@@ -1135,6 +1198,281 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
       yield* running.halt();
     });
     return yield* blocked.readAll();
+  }
+
+  /**
+   * The untagged #369 policy, written out rather than derived.
+   *
+   * A run suspended before this build wrote exactly this: no version member,
+   * and the Workspace basis as two mandatory top-level ones. Deriving it by
+   * rewriting a record this build produced would prove only that the rewrite
+   * and the reader agree; a literal is what an older journal actually holds.
+   */
+  const V1_POLICY: JsonObject = Object.freeze({
+    allow: ["read"],
+    roots: [...ROOTS],
+    selectedRoot: ROOTS[0],
+    allowed: [{ name: "Probe", identity: "test://probe", forms: ["self-closing", "paired"] }],
+    requests: [],
+  });
+
+  /** One frozen version-1 admission, as an older build committed it. */
+  function versionOneAdmission(source: string): DurableEvent {
+    return {
+      type: "yield",
+      coroutineId: "root",
+      description: { type: "generated_xmd", name: "generated:turn-1", input: V1_POLICY },
+      result: {
+        status: "ok",
+        value: {
+          decision: "admitted",
+          source,
+          named: [{ name: "Probe", identity: "test://probe", form: "self-closing" }],
+          policy: V1_POLICY,
+        },
+      },
+    };
+  }
+
+  /** One frozen version-1 refusal, in the shape that build wrote refusals. */
+  function versionOneRefusal(): DurableEvent {
+    return {
+      type: "yield",
+      coroutineId: "root",
+      description: { type: "generated_xmd", name: "generated:turn-1", input: V1_POLICY },
+      result: { status: "ok", value: { decision: "refused", construct: "block" } },
+    };
+  }
+
+  /**
+   * A history whose admission is that literal version-1 record.
+   *
+   * The events around it are a real run's, because what is under test is the
+   * record rather than the journal's framing.
+   */
+  function withVersionOne(
+    events: readonly DurableEvent[],
+    admission: DurableEvent,
+  ): DurableEvent[] {
+    return events.map((event) =>
+      event.type === "yield" && event.description.type === "generated_xmd" ? admission : event,
+    );
+  }
+
+  it("GX21z: an untagged version-1 admission still resumes under its own ceilings", function* () {
+    const first = yield* evaluate(request("<Probe />\n", [probe()]));
+    expect(first.output).toContain("probed");
+
+    // The same run, resumed against the record the previous version wrote.
+    const again = yield* evaluate(request("<Probe />\n", [probe()]), {
+      stream: new InMemoryStream(
+        withVersionOne(yield* partial(first.events).readAll(), versionOneAdmission("<Probe />\n")),
+      ),
+    });
+    expect(again.failure).toBe(undefined);
+    expect(again.output).toContain("probed");
+    // The admission is restored rather than decided a second time: one record,
+    // carried over from the run that wrote it in the older shape.
+    expect(admissions(again.events)).toHaveLength(1);
+
+    // And the old record is still held to its own ceilings rather than waved
+    // through for being old: the same substitution GX21 refuses is refused here.
+    const substituted = yield* evaluate(
+      request("<Probe />\n", [pinnedComponent("Probe", "test://other", OTHER)]),
+      {
+        stream: new InMemoryStream(
+          withVersionOne(
+            yield* duringPreparation(first.events).readAll(),
+            versionOneAdmission("<Probe />\n"),
+          ),
+        ),
+      },
+    );
+    expect(substituted.failure).toContain("admitted under");
+    expect(String(substituted.output ?? "")).not.toContain("the other implementation ran");
+  });
+
+  it("GX21x: a literal version-1 refusal replays as the refusal it recorded", function* () {
+    const first = yield* evaluate(request("<Probe />\n", [probe()]));
+
+    const performed: string[] = [];
+    const again = yield* evaluate(request("<Probe />\n", [countedProbe(performed)]), {
+      stream: new InMemoryStream(
+        withVersionOne(yield* duringPreparation(first.events).readAll(), versionOneRefusal()),
+      ),
+    });
+
+    // The refusal shape had no version member either, and restoring it means
+    // refusing again rather than re-deciding a fragment an older build declined.
+    expect(again.failure).toContain("executable code block");
+    expect(performed).toEqual([]);
+  });
+
+  /**
+   * One admission whose policy and result carry whatever members a case wants.
+   *
+   * Built as a literal rather than by rewriting a real record, so a case states
+   * the exact shape it is claiming this build must refuse.
+   */
+  function forgedAdmission(policy: JsonObject, extra: JsonObject = {}): DurableEvent {
+    return {
+      type: "yield",
+      coroutineId: "root",
+      description: { type: "generated_xmd", name: "generated:turn-1", input: policy },
+      result: {
+        status: "ok",
+        value: {
+          decision: "admitted",
+          source: "<Probe />\n",
+          named: [{ name: "Probe", identity: "test://probe", form: "self-closing" }],
+          policy,
+          ...extra,
+        },
+      },
+    };
+  }
+
+  /** Every retained shape this build refuses, and what is wrong with each. */
+  const HOSTILE: readonly (readonly [string, DurableEvent])[] = [
+    ["a version this build does not have", forgedAdmission({ ...V1_POLICY, version: 99 })],
+    [
+      "a version-1 policy carrying a version-2 workspace",
+      forgedAdmission({
+        ...V1_POLICY,
+        workspace: { roots: [...ROOTS], selectedRoot: ROOTS[0] },
+      }),
+    ],
+    [
+      "a version-2 policy still carrying legacy roots",
+      forgedAdmission({
+        version: 2,
+        allow: ["read"],
+        roots: [...ROOTS],
+        selectedRoot: ROOTS[0],
+        allowed: V1_POLICY.allowed,
+        requests: [],
+      }),
+    ],
+    [
+      "a policy carrying a member this build does not know",
+      forgedAdmission({
+        ...V1_POLICY,
+        widened: true,
+      }),
+    ],
+    ["an empty class selection", forgedAdmission({ ...V1_POLICY, allow: [] })],
+    ["one class selected twice", forgedAdmission({ ...V1_POLICY, allow: ["read", "read"] })],
+    ["classes out of canonical order", forgedAdmission({ ...V1_POLICY, allow: ["write", "read"] })],
+    [
+      "an allowed entry carrying an extra member",
+      forgedAdmission({
+        ...V1_POLICY,
+        allowed: [
+          {
+            name: "Probe",
+            identity: "test://probe",
+            forms: ["self-closing"],
+            widened: true,
+          },
+        ],
+      }),
+    ],
+    [
+      "an allowed entry with no forms",
+      forgedAdmission({
+        ...V1_POLICY,
+        allowed: [{ name: "Probe", identity: "test://probe", forms: [] }],
+      }),
+    ],
+    ["a repeated retained root", forgedAdmission({ ...V1_POLICY, roots: [ROOTS[0], ROOTS[0]] })],
+    ["no retained roots at all", forgedAdmission({ ...V1_POLICY, roots: [], selectedRoot: "" })],
+    [
+      "a selected root the basis does not hold",
+      forgedAdmission({
+        ...V1_POLICY,
+        selectedRoot: "workspace://never-retained",
+      }),
+    ],
+    [
+      "a request carrying a member this build does not know",
+      forgedAdmission({
+        ...V1_POLICY,
+        requests: [{ url: URL_ONE, method: "GET", headers: {}, widened: true }],
+      }),
+    ],
+    [
+      "a request whose timeout is not a number",
+      forgedAdmission({
+        ...V1_POLICY,
+        requests: [{ url: URL_ONE, method: "GET", headers: {}, timeout: "soon" }],
+      }),
+    ],
+    [
+      "a result carrying a member this build does not know",
+      forgedAdmission(V1_POLICY, {
+        widened: true,
+      }),
+    ],
+    [
+      "a tagged result holding an untagged policy",
+      {
+        type: "yield",
+        coroutineId: "root",
+        description: { type: "generated_xmd", name: "generated:turn-1", input: V1_POLICY },
+        result: {
+          status: "ok",
+          value: {
+            version: 2,
+            decision: "admitted",
+            source: "<Probe />\n",
+            named: [{ name: "Probe", identity: "test://probe", form: "self-closing" }],
+            policy: V1_POLICY,
+          },
+        },
+      },
+    ],
+    [
+      "a named invocation carrying an extra member",
+      {
+        type: "yield",
+        coroutineId: "root",
+        description: { type: "generated_xmd", name: "generated:turn-1", input: V1_POLICY },
+        result: {
+          status: "ok",
+          value: {
+            decision: "admitted",
+            source: "<Probe />\n",
+            named: [
+              {
+                name: "Probe",
+                identity: "test://probe",
+                form: "self-closing",
+                widened: true,
+              },
+            ],
+            policy: V1_POLICY,
+          },
+        },
+      },
+    ],
+  ];
+
+  for (const [what, admission] of HOSTILE) {
+    it(`GX21y: a retained record with ${what} refuses before any effect`, function* () {
+      const first = yield* evaluate(request("<Probe />\n", [probe()]));
+
+      const performed: string[] = [];
+      const again = yield* evaluate(request("<Probe />\n", [countedProbe(performed)]), {
+        stream: new InMemoryStream(
+          withVersionOne(yield* duringPreparation(first.events).readAll(), admission),
+        ),
+      });
+
+      // A record this build cannot read whole is not a grant. Reading the
+      // members it recognizes would admit one on terms it never saw.
+      expect([what, again.failure !== undefined]).toEqual([what, true]);
+      expect([what, performed]).toEqual([what, []]);
+    });
   }
 
   it("GX21: a changed identity behind the same name refuses before invoking it", function* () {
@@ -1301,29 +1639,56 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
     expect(observations(again.events)).toHaveLength(1);
   });
 
-  it("GX24: a changed current source does not change what replay expands", function* () {
+  it("GX24: a changed current source refuses before it expands anything", function* () {
     const first = yield* evaluate(request("<Probe />\n", [probe()]));
 
+    const performed: string[] = [];
     const again = yield* evaluate(
-      request("<Probe />\n\nan extra sentence the first run never had.\n", [probe()]),
-      { stream: partial(first.events) },
+      request("<Probe />\n\nan extra sentence the first run never had.\n", [
+        countedProbe(performed),
+      ]),
+      { stream: duringPreparation(first.events) },
     );
 
-    expect(again.failure).toBe(undefined);
-    expect(again.output).toBe(first.output);
-    expect(again.output).not.toContain("an extra sentence");
+    // An admission is a decision about one exact fragment. A caller now holding
+    // a different one is asking for a decision nobody made.
+    expect(again.failure).toContain("no longer offers");
+    // Naming neither fragment: both are generated text.
+    expect(again.failure).not.toContain("an extra sentence");
+    expect(performed).toEqual([]);
+    expect(String(again.output ?? "")).not.toContain("an extra sentence");
   });
 
-  it("GX24b: an unsafe current source does not stop replay of the retained one", function* () {
+  it("GX24b: an unsafe current source refuses rather than replaying the retained one", function* () {
     const first = yield* evaluate(request("<Probe />\n", [probe()]));
 
+    const performed: string[] = [];
     const again = yield* evaluate(
-      request("<Probe />\n\n```bash exec\nprintf ran\n```\n", [probe()]),
-      { stream: partial(first.events) },
+      request("<Probe />\n\n```bash exec\nprintf unsafe-block-executed\n```\n", [
+        countedProbe(performed),
+      ]),
+      { stream: duringPreparation(first.events) },
     );
+
+    expect(again.failure).toContain("no longer offers");
+    expect(performed).toEqual([]);
+    // Neither the block nor its text reaches the journal: the refusal happens
+    // before the fragment is walked, so the candidate is never retained.
+    expect(persisted(again.events)).not.toContain("unsafe-block-executed");
+  });
+
+  it("GX24c: the unchanged text resumes from the retained copy", function* () {
+    const first = yield* evaluate(request("<Probe />\n", [probe()]));
+
+    // The positive control the two refusals above need: identical text still
+    // resumes, so what refuses them is the change rather than the comparison.
+    const again = yield* evaluate(request("<Probe />\n", [probe()]), {
+      stream: partial(first.events),
+    });
 
     expect(again.failure).toBe(undefined);
     expect(again.output).toBe(first.output);
+    expect(admissions(again.events)).toHaveLength(1);
   });
 });
 

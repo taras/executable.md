@@ -180,9 +180,11 @@ describe("Tier WGX — the roots a run selects", () => {
     if (admission?.type !== "yield") {
       throw new Error("the run recorded no generated-XMD admission");
     }
+    // The version-2 shape: a workflow host states a Workspace basis, and it
+    // travels as one member because an ordinary host states none at all.
     expect(admission.description.input).toMatchObject({
-      roots: [PRIMARY, SECONDARY],
-      selectedRoot: PRIMARY,
+      version: 2,
+      workspace: { roots: [PRIMARY, SECONDARY], selectedRoot: PRIMARY },
     });
   });
 

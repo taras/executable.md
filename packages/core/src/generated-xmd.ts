@@ -111,7 +111,7 @@ import { isComponentName } from "./components/registration.ts";
 import { CORE_ORIGIN, CORE_REGISTRY } from "./components/registry.ts";
 import { createBlockCounter, expandSegmentsWithin } from "./expand.ts";
 import { extendPath } from "./expansion.ts";
-import { parseRequestRecord, prepareFetchRequest, requestRecord } from "./fetch-request.ts";
+import { prepareFetchRequest, requestRecord } from "./fetch-request.ts";
 import { timeoutFetch } from "@executablemd/runtime";
 import type { FetchRequest } from "./fetch-request.ts";
 import { isJsonObject, parseJson } from "./json.ts";
@@ -183,6 +183,20 @@ const CEILING =
   "forms and requests it was admitted with.";
 
 const UNREADABLE = "the retained generated-XMD admission record cannot be read as one.";
+
+/**
+ * What a resumed run is refused with when the text it now offers is not the
+ * text that was admitted.
+ *
+ * The admission is a decision about one exact fragment. Expanding the retained
+ * copy while the caller holds a different one would run something nobody
+ * admitted *this* run for — the earlier behavior, which silently preferred the
+ * retained text and let a changed candidate pass unnoticed. Naming neither
+ * fragment, because both are generated text.
+ */
+const STALE_TEXT =
+  "a generated fragment was admitted for text this run no longer offers. A retained admission " +
+  "resumes only for the exact text it was made about.";
 
 /**
  * What an admitted invocation is refused with when its form is not the one its
@@ -495,10 +509,18 @@ export interface GeneratedXmdRequest {
   readonly id: string;
   /** The candidate source, exactly as it was generated. */
   readonly source: string;
-  /** The retained Workspace roots the host is willing to expose. */
-  readonly workspaceRoots: readonly string[];
-  /** The one root admitted effects address. */
-  readonly selectedRoot: string;
+  /**
+   * The retained Workspace roots the host is willing to expose.
+   *
+   * Absent for a host that evaluates against no Workspace. An ordinary run is
+   * one: its admitted effects address the Files provider its own execution
+   * installed, and there is no immutable root history for a continuation to be
+   * held to. A workflow run states both, and a continuation is then held to
+   * that basis by membership.
+   */
+  readonly workspaceRoots?: readonly string[];
+  /** The one root admitted effects address, for a host that has one. */
+  readonly selectedRoot?: string;
   /** The pinned observation identities the `read` class resolves to. */
   readonly observations: readonly GeneratedObservation[];
   /** The pinned mutation identities the `write` class resolves to. */
@@ -557,8 +579,15 @@ interface RetainedInvocation {
  */
 interface Policy {
   readonly allow: readonly GeneratedEffectClass[];
-  readonly roots: readonly string[];
-  readonly selectedRoot: string;
+  /**
+   * The Workspace basis, or nothing for a host that evaluates against none.
+   *
+   * The distinction is itself a ceiling. A run admitted with no Workspace and
+   * one admitted against a Workspace were granted different things, so a
+   * continuation that acquired or lost one is asking for a different grant
+   * rather than restating the same one.
+   */
+  readonly workspace?: { readonly roots: readonly string[]; readonly selectedRoot: string };
   readonly allowed: readonly RetainedEntry[];
   readonly requests: readonly FetchRequest[];
 }
@@ -932,21 +961,76 @@ function currentPolicy(
     allowed.push({ name: entry.name, identity: entry.identity, forms: entry.forms });
     requests.push(...(ceilings.get(entry.identity) ?? []));
   }
+  const workspace = workspaceBasis(request);
   return {
     allow: [...allow],
-    roots: [...request.workspaceRoots],
-    selectedRoot: request.selectedRoot,
+    ...(workspace === undefined ? {} : { workspace }),
     allowed,
     requests,
   };
 }
 
-/** The policy as journal data. */
+/**
+ * The Workspace basis this request states, or nothing.
+ *
+ * Both terms or neither: a host stating roots without the root its effects
+ * address, or the reverse, has stated half a basis, and half a ceiling is not
+ * one to admit a fragment under.
+ */
+function workspaceBasis(
+  request: GeneratedXmdRequest,
+): { roots: readonly string[]; selectedRoot: string } | undefined {
+  const { workspaceRoots, selectedRoot } = request;
+  if (workspaceRoots === undefined && selectedRoot === undefined) {
+    return undefined;
+  }
+  if (workspaceRoots === undefined || selectedRoot === undefined) {
+    throw new GeneratedXmdError(
+      "a generated-XMD host stated half a Workspace basis. A host evaluates against a Workspace " +
+        "or against none, and the roots and the selected root are one statement.",
+    );
+  }
+  // Validated here, as the host's own error, rather than compared later against
+  // a live basis and appearing to hold: a basis with no roots, a repeated root,
+  // or a selected root nothing retains is not a stricter grant than a coherent
+  // one — there is nothing for a continuation to be held to at all.
+  const roots = [...workspaceRoots];
+  if (roots.length === 0 || roots.some((root) => root.length === 0)) {
+    throw new GeneratedXmdError("a generated-XMD host stated a Workspace basis retaining no root.");
+  }
+  if (new Set(roots).size !== roots.length) {
+    throw new GeneratedXmdError("a generated-XMD host stated one retained Workspace root twice.");
+  }
+  if (!roots.includes(selectedRoot)) {
+    throw new GeneratedXmdError(
+      "a generated-XMD host selected a Workspace root it does not retain.",
+    );
+  }
+  return { roots, selectedRoot };
+}
+
+/**
+ * The policy as journal data, in the closed version-2 shape.
+ *
+ * Version 1 is the untagged #369 record, whose `roots` and `selectedRoot` sat
+ * at the top level and were mandatory. Version 2 tags itself and carries the
+ * Workspace basis as one optional member, because an ordinary host has none —
+ * and telling the two apart matters: a reader that treated a missing basis as
+ * an empty one would compare a Workspace-less admission equal to a Workspace
+ * admission that had lost every root.
+ */
 function policyRecord(policy: Policy): JsonObject {
   return {
+    version: RECORD_VERSION,
     allow: [...policy.allow],
-    roots: [...policy.roots],
-    selectedRoot: policy.selectedRoot,
+    ...(policy.workspace === undefined
+      ? {}
+      : {
+          workspace: {
+            roots: [...policy.workspace.roots],
+            selectedRoot: policy.workspace.selectedRoot,
+          },
+        }),
     allowed: policy.allowed.map((entry) => ({
       name: entry.name,
       identity: entry.identity,
@@ -963,89 +1047,219 @@ function policyRecord(policy: Policy): JsonObject {
  * because it happens to have the right keys, and a policy this version cannot
  * read is refused rather than treated as matching.
  */
+/**
+ * Whether an object carries exactly these members and nothing else.
+ *
+ * Every retained shape below is closed, which is a stronger claim than "the
+ * members it needs are present and well-typed". A record carrying an extra
+ * member was written by something this build does not know the rules of, and
+ * reading the members it recognizes would be admitting a grant on terms it
+ * never saw. Destructuring alone cannot say that, because a destructure is
+ * blind to what it did not name.
+ */
+function exactly(
+  value: JsonObject,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): boolean {
+  if (!required.every((member) => Object.hasOwn(value, member))) {
+    return false;
+  }
+  const known = new Set([...required, ...optional]);
+  return Object.keys(value).every((member) => known.has(member));
+}
+
+/**
+ * The policy a record holds, in whichever closed shape its version defines.
+ *
+ * The two versions are exact and disjoint. Version 1 is the untagged #369
+ * record: no version member, the Workspace basis as two mandatory top-level
+ * ones. Version 2 tags itself, carries the basis as one optional member, and
+ * has no legacy root fields at all — so a record mixing the two, or tagging
+ * itself with a version this build does not have, is refused rather than read
+ * as whichever it most resembles.
+ */
 function readPolicy(value: Json): Policy | undefined {
   if (!isJsonObject(value)) {
     return undefined;
   }
-  const { allow, roots, selectedRoot, allowed, requests } = value;
-  if (!Array.isArray(roots) || typeof selectedRoot !== "string") {
-    return undefined;
-  }
-  if (!Array.isArray(allow) || !Array.isArray(allowed) || !Array.isArray(requests)) {
-    return undefined;
-  }
-  const classes = readClasses(allow);
-  if (classes === undefined) {
-    return undefined;
-  }
-  const retainedRoots: string[] = [];
-  for (const root of roots) {
-    if (typeof root !== "string") {
+  const tagged = Object.hasOwn(value, "version");
+  if (tagged) {
+    if (value.version !== RECORD_VERSION) {
       return undefined;
     }
-    retainedRoots.push(root);
-  }
-  const identities = readAllowed(allowed);
-  if (identities === undefined) {
-    return undefined;
-  }
-  const retainedRequests: FetchRequest[] = [];
-  for (const request of requests) {
-    const parsed = readRequest(request);
-    if (parsed === undefined) {
+    if (!exactly(value, ["version", "allow", "allowed", "requests"], ["workspace"])) {
       return undefined;
     }
-    retainedRequests.push(parsed);
+    const workspace = Object.hasOwn(value, "workspace")
+      ? readWorkspace(value.workspace)
+      : undefined;
+    if (workspace === MALFORMED) {
+      return undefined;
+    }
+    return readPolicyTerms(value, workspace);
+  }
+  if (!exactly(value, ["allow", "roots", "selectedRoot", "allowed", "requests"])) {
+    return undefined;
+  }
+  // A version-1 record always evaluated against a Workspace, so its basis is
+  // mandatory and reads through the same validation a version-2 basis does.
+  const workspace = readWorkspace({ roots: value.roots, selectedRoot: value.selectedRoot });
+  if (workspace === MALFORMED || workspace === undefined) {
+    return undefined;
+  }
+  return readPolicyTerms(value, workspace);
+}
+
+/** The terms both versions share, read closed. */
+function readPolicyTerms(
+  value: JsonObject,
+  workspace: { roots: readonly string[]; selectedRoot: string } | undefined,
+): Policy | undefined {
+  const classes = readClasses(value.allow);
+  const identities = readAllowed(value.allowed);
+  const requests = readRequests(value.requests);
+  if (classes === undefined || identities === undefined || requests === undefined) {
+    return undefined;
   }
   return {
     allow: classes,
-    roots: retainedRoots,
-    selectedRoot,
+    ...(workspace === undefined ? {} : { workspace }),
     allowed: identities,
-    requests: retainedRequests,
+    requests,
   };
 }
 
-/** One retained request, or nothing when this version cannot read it. */
-function readRequest(value: Json): FetchRequest | undefined {
-  try {
-    return parseRequestRecord(value);
-  } catch {
-    return undefined;
+/** A record this version cannot read, told apart from one that holds nothing. */
+const MALFORMED = Symbol("malformed");
+
+/**
+ * One Workspace basis, validated rather than merely well-typed.
+ *
+ * A basis with no roots, a repeated root, or a selected root the run does not
+ * retain is not a stricter grant than one without those faults — it is not a
+ * grant at all, because there is nothing coherent for a continuation to be held
+ * to. So it is refused here, before the admission, rather than compared later
+ * against a live basis and appearing to hold.
+ */
+function readWorkspace(
+  value: Json | undefined,
+): { roots: readonly string[]; selectedRoot: string } | undefined | typeof MALFORMED {
+  if (!isJsonObject(value) || !exactly(value, ["roots", "selectedRoot"])) {
+    return MALFORMED;
   }
+  const roots = readRoots(value.roots);
+  const { selectedRoot } = value;
+  if (roots === undefined || typeof selectedRoot !== "string") {
+    return MALFORMED;
+  }
+  return roots.includes(selectedRoot) ? { roots, selectedRoot } : MALFORMED;
 }
 
-function readClasses(value: readonly Json[]): GeneratedEffectClass[] | undefined {
+/** The retained roots, which are a non-empty set rather than a list. */
+function readRoots(value: Json | undefined): readonly string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  const roots: string[] = [];
+  for (const root of value) {
+    if (typeof root !== "string" || root.length === 0 || roots.includes(root)) {
+      return undefined;
+    }
+    roots.push(root);
+  }
+  return roots;
+}
+
+/**
+ * The retained requests, read closed.
+ *
+ * `parseRequestRecord()` is the wrong reader here: it ignores members it does
+ * not know and treats a malformed `timeout` as an absent one, so a retained
+ * ceiling could compare equal to a live one it does not describe.
+ */
+function readRequests(value: Json): FetchRequest[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const requests: FetchRequest[] = [];
+  for (const entry of value) {
+    if (!isJsonObject(entry) || !exactly(entry, ["url", "method", "headers"], ["timeout"])) {
+      return undefined;
+    }
+    const { url, method, headers, timeout } = entry;
+    if (typeof url !== "string" || typeof method !== "string" || !isJsonObject(headers)) {
+      return undefined;
+    }
+    if (Object.hasOwn(entry, "timeout") && typeof timeout !== "number") {
+      return undefined;
+    }
+    const named: Record<string, string> = {};
+    for (const [header, value] of Object.entries(headers)) {
+      if (typeof value !== "string") {
+        return undefined;
+      }
+      named[header] = value;
+    }
+    requests.push({
+      url,
+      method,
+      headers: named,
+      ...(typeof timeout === "number" ? { timeout } : {}),
+    });
+  }
+  return requests;
+}
+
+/** The selected classes, which are a non-empty set in canonical order. */
+function readClasses(value: Json): GeneratedEffectClass[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
   const classes: GeneratedEffectClass[] = [];
   for (const effect of value) {
     const parsed = EFFECT_CLASSES.find((known) => known === effect);
-    if (parsed === undefined) {
+    if (parsed === undefined || classes.includes(parsed)) {
       return undefined;
     }
     classes.push(parsed);
   }
-  return classes;
+  return sameStrings(
+    classes,
+    EFFECT_CLASSES.filter((known) => classes.includes(known)),
+  )
+    ? classes
+    : undefined;
 }
 
+/** The forms one entry is admitted for: a non-empty set, canonically ordered. */
 function readForms(value: Json): AuthoredForm[] | undefined {
-  if (!Array.isArray(value)) {
+  if (!Array.isArray(value) || value.length === 0) {
     return undefined;
   }
   const forms: AuthoredForm[] = [];
   for (const form of value) {
     const parsed = AUTHORED_FORMS.find((known) => known === form);
-    if (parsed === undefined) {
+    if (parsed === undefined || forms.includes(parsed)) {
       return undefined;
     }
     forms.push(parsed);
   }
-  return forms;
+  return sameStrings(
+    forms,
+    AUTHORED_FORMS.filter((known) => forms.includes(known)),
+  )
+    ? forms
+    : undefined;
 }
 
-function readAllowed(value: readonly Json[]): RetainedEntry[] | undefined {
+function readAllowed(value: Json): RetainedEntry[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
   const identities: RetainedEntry[] = [];
   for (const entry of value) {
-    if (!isJsonObject(entry)) {
+    if (!isJsonObject(entry) || !exactly(entry, ["name", "identity", "forms"])) {
       return undefined;
     }
     const { name, identity } = entry;
@@ -1058,10 +1272,13 @@ function readAllowed(value: readonly Json[]): RetainedEntry[] | undefined {
   return identities;
 }
 
-function readNamed(value: readonly Json[]): RetainedInvocation[] | undefined {
+function readNamed(value: Json): RetainedInvocation[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
   const named: RetainedInvocation[] = [];
   for (const entry of value) {
-    if (!isJsonObject(entry)) {
+    if (!isJsonObject(entry) || !exactly(entry, ["name", "identity", "form"])) {
       return undefined;
     }
     const { name, identity } = entry;
@@ -1098,11 +1315,7 @@ function readNamed(value: readonly Json[]): RetainedInvocation[] | undefined {
  * the *current* policy would wave through.
  */
 function policyHolds(retained: Policy, current: Policy): boolean {
-  const held = new Set(current.roots);
-  if (!retained.roots.every((root) => held.has(root))) {
-    return false;
-  }
-  if (!held.has(retained.selectedRoot) || !held.has(current.selectedRoot)) {
+  if (!workspaceHolds(retained.workspace, current.workspace)) {
     return false;
   }
   if (!sameStrings(retained.allow, current.allow)) {
@@ -1130,6 +1343,32 @@ function policyHolds(retained: Policy, current: Policy): boolean {
     const here = current.requests[index];
     return here !== undefined && sameRequest(request, here);
   });
+}
+
+/**
+ * Whether a resumed run still holds the Workspace basis it was admitted over.
+ *
+ * Absent on both sides is a host that evaluates against no Workspace, and two
+ * of those hold each other. Present on one side only is a run that acquired or
+ * lost a Workspace between the admission and the resume, which is a different
+ * grant rather than the same one restated.
+ *
+ * Present on both compares by membership, because the set legitimately grows:
+ * every committed mutation retains another immutable root and advances the
+ * authoritative current one. So each admission root and the admission's
+ * selected root must still be retained, and the root the run now stands on must
+ * be a retained one — while additional roots change nothing this admission was
+ * granted under.
+ */
+function workspaceHolds(retained: Policy["workspace"], current: Policy["workspace"]): boolean {
+  if (retained === undefined || current === undefined) {
+    return retained === current;
+  }
+  const held = new Set(current.roots);
+  if (!retained.roots.every((root) => held.has(root))) {
+    return false;
+  }
+  return held.has(retained.selectedRoot) && held.has(current.selectedRoot);
 }
 
 /** One element the fragment named, and the entry preflight selected for it. */
@@ -1244,6 +1483,17 @@ function* walk(
 const GENERATED_XMD = "generated_xmd";
 
 /**
+ * The record shape new executions write.
+ *
+ * Version 1 is the untagged #369 record and stays readable: a run suspended
+ * before this build resumes under exactly the ceilings it was admitted with.
+ * Version 2 tags itself, which is what lets an untagged record be recognized as
+ * the older shape rather than guessed at, and carries the Workspace basis as
+ * one optional member because an ordinary host has none.
+ */
+const RECORD_VERSION = 2;
+
+/**
  * What the durable admission records for this source.
  *
  * A refusal is a value rather than a failure. Throwing out of a durable
@@ -1260,6 +1510,7 @@ function* admitSource(
   try {
     const { named } = yield* preflight(source, table, ceilings);
     return parseJson({
+      version: RECORD_VERSION,
       decision: "admitted",
       source,
       named: named.map((entry) => ({
@@ -1271,7 +1522,11 @@ function* admitSource(
     });
   } catch (error) {
     if (error instanceof Refusal) {
-      return parseJson({ decision: "refused", construct: error.construct });
+      return parseJson({
+        version: RECORD_VERSION,
+        decision: "refused",
+        construct: error.construct,
+      });
     }
     throw error;
   }
@@ -1314,8 +1569,19 @@ function readAdmission(value: Json): RetainedAdmission | undefined {
   if (!isJsonObject(value)) {
     return undefined;
   }
+  // Tagged at the result level as well as inside the policy, and the two must
+  // agree: a record whose result claims one version and whose policy claims
+  // another describes no shape this build has.
+  const tagged = Object.hasOwn(value, "version");
+  if (tagged && value.version !== RECORD_VERSION) {
+    return undefined;
+  }
+  const version = tagged ? ["version"] : [];
   const { decision } = value;
   if (decision === "refused") {
+    if (!exactly(value, [...version, "decision", "construct"])) {
+      return undefined;
+    }
     const { construct } = value;
     return typeof construct === "string" && isConstruct(construct)
       ? { decision, construct }
@@ -1324,13 +1590,22 @@ function readAdmission(value: Json): RetainedAdmission | undefined {
   if (decision !== "admitted") {
     return undefined;
   }
-  const { source, named, policy } = value;
-  if (typeof source !== "string" || !Array.isArray(named) || policy === undefined) {
+  if (!exactly(value, [...version, "decision", "source", "named", "policy"])) {
     return undefined;
   }
-  const invocations = readNamed(named);
-  const retained = readPolicy(policy);
+  const { source } = value;
+  if (typeof source !== "string") {
+    return undefined;
+  }
+  const invocations = readNamed(value.named);
+  const retained = readPolicy(value.policy);
   if (invocations === undefined || retained === undefined) {
+    return undefined;
+  }
+  // The policy's own version has to be the one the result claimed. A tagged
+  // result holding an untagged policy, or the reverse, is two shapes at once.
+  const policyTagged = isJsonObject(value.policy) && Object.hasOwn(value.policy, "version");
+  if (policyTagged !== tagged) {
     return undefined;
   }
   return { decision, source, named: invocations, policy: retained };
@@ -1439,9 +1714,16 @@ export function* evaluateGeneratedXmd(
   if (!policyHolds(decided.policy, policy)) {
     throw new GeneratedXmdError(CEILING);
   }
+  // And for the exact text, on the same terms as the ceilings. An admission is
+  // a decision about one fragment; a caller now holding a different one is
+  // asking for a decision that was never made, so it refuses here rather than
+  // quietly expanding the retained copy in its place.
+  if (decided.source !== request.source) {
+    throw new GeneratedXmdError(STALE_TEXT);
+  }
 
-  // The retained source is what expands, so a continuation runs the fragment
-  // this run admitted rather than whatever a later caller happens to hold.
+  // The retained source is what expands, so a continuation runs exactly the
+  // bytes this run admitted rather than a caller's copy of them.
   const restored = yield* preflight(decided.source, table, ceilings);
   return yield* expand(request.id, restored.segments, restored.named);
 }

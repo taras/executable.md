@@ -142,6 +142,8 @@ import type { ExpansionAuthority, ImportTier } from "./components/import-authori
 import { PROTECTED_COMPONENTS, ProtectedImports } from "./components/protected.ts";
 import { rootSyntaxReference } from "./syntax-reference.ts";
 import { capturedDocumentation } from "./documentation-api.ts";
+import { TWO_PROFILES } from "./evaluation-profile.ts";
+import type { FragmentEvaluationProfile } from "./evaluation-profile.ts";
 import { packagedAssetReader } from "./component-documentation.ts";
 import type { DocumentationContribution, DocumentationReader } from "./component-documentation.ts";
 import type { SyntaxSymbolsProvider } from "./syntax-reference.ts";
@@ -2173,6 +2175,15 @@ function* executeDocument(
   documentation: readonly DocumentationContribution[] = [],
   /** This execution's packaged-asset reader, carried by value from the caller. */
   readAsset: DocumentationReader = packagedAssetReader,
+  /**
+   * The one evaluation profile this host stated, when it stated one.
+   *
+   * Carried by value like the symbols provider beside it, and handed to core's
+   * own expansion on the private authority rather than through any context: it
+   * is the ceiling `<Evaluate>` narrows from, and a document that could reach it
+   * could raise it.
+   */
+  evaluation?: FragmentEvaluationProfile,
 ): Operation<DocumentExecution> {
   const {
     stream,
@@ -2361,6 +2372,10 @@ function* executeDocument(
           providers[0],
           documentation,
         ),
+        // The ceiling a generated fragment is evaluated under, when this host
+        // offers evaluation at all. Absent is a host that offers none, and
+        // `<Evaluate>` refuses on that rather than inventing one.
+        ...(evaluation === undefined ? {} : { evaluation }),
       };
 
       // Install the document's runtime Component providers before durableRun
@@ -2655,6 +2670,23 @@ export interface ExecutionInstallation {
    * once at the same boundary.
    */
   readonly symbols?: SyntaxSymbolsProvider;
+  /**
+   * The maximum authority a generated fragment may be evaluated under here.
+   *
+   * Captured by value alongside the rest, before any installation runs, for a
+   * reason the others share and this one sharpens: `<Evaluate>` is a public
+   * component, so any author may write it, and what stops that from being a
+   * capability is that the ceiling was stated by the host before a document
+   * existed. Nothing a running document reaches names this — not a context,
+   * whose name is not a secret; not a registry, which a nested scope layers
+   * over; not a prop, which an author writes.
+   *
+   * Omitted is the ordinary case for a host that offers no evaluation at all:
+   * `<Evaluate>` then refuses before the producer runs, rather than evaluating
+   * under a ceiling nobody stated. One execution accepts one; two are refused
+   * rather than ordered.
+   */
+  readonly evaluation?: FragmentEvaluationProfile;
   install?(): Operation<void>;
 }
 
@@ -3072,6 +3104,22 @@ function* invoke(
     );
   }
 
+  // The maximum authority a generated fragment may be evaluated under here,
+  // read on the same terms and for a stronger reason: two profiles would be two
+  // answers to what a fragment may *do*, and choosing between them by
+  // installation order would make authority depend on assembly. A host that
+  // stated none offers no evaluation at all, which `<Evaluate>` refuses with
+  // rather than inventing a ceiling for.
+  const profiles = Object.freeze(
+    installations.flatMap((installation) => {
+      const profile = installation.evaluation;
+      return profile === undefined ? [] : [profile];
+    }),
+  );
+  if (profiles.length > 1) {
+    throw new Error(TWO_PROFILES);
+  }
+
   for (const installation of installations) {
     if (installation.install) {
       yield* installation.install();
@@ -3123,6 +3171,7 @@ function* invoke(
     providers,
     documentation,
     readAsset,
+    profiles[0],
   );
 }
 

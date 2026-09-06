@@ -27,6 +27,7 @@ import type {
 import type { DeclaredImports, PrivateClosure } from "./declared-markdown.ts";
 import type { ExactSource } from "../output/exact-source.ts";
 import type { SyntaxReference } from "../syntax-reference.ts";
+import type { FragmentEvaluationProfile } from "../evaluation-profile.ts";
 
 /** A definition an import may answer with. */
 export type ImportedDefinition = ComponentDefinition | FunctionComponentDefinition;
@@ -121,6 +122,21 @@ export interface ExpansionAuthority {
    * projected and an imported definition each carry what the site carried.
    */
   readonly syntax?: SyntaxReference;
+  /**
+   * The maximum authority a generated fragment may be evaluated under.
+   *
+   * Stated by the trusted host at the installation boundary, before the root
+   * import and before any document, component or middleware code exists, and
+   * handed here by value like everything else on this object. It is on the
+   * private authority rather than in a context for the reason the rest are, and
+   * one more: `<Evaluate>` is a *public* component, so any author may write it,
+   * and what keeps that from being a capability is that the ceiling it narrows
+   * from was settled by somebody the document cannot reach.
+   *
+   * Absent for a host that offers no evaluation. That is not an unrestricted
+   * evaluation — it is no evaluation, and `<Evaluate>` refuses.
+   */
+  readonly evaluation?: FragmentEvaluationProfile;
   /**
    * The bodies this execution will enter for the components canonical core
    * protects.

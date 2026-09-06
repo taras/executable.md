@@ -217,6 +217,20 @@ function policyOf(event: DurableEvent): Record<string, Json> | undefined {
 }
 
 /**
+ * The Workspace basis one admission was recorded under.
+ *
+ * A version-2 policy carries it as one member, because a host that evaluates
+ * against no Workspace states none at all.
+ */
+function basisOf(event: DurableEvent): Record<string, Json> | undefined {
+  const workspace = policyOf(event)?.workspace;
+  if (typeof workspace !== "object" || workspace === null || Array.isArray(workspace)) {
+    return undefined;
+  }
+  return workspace;
+}
+
+/**
  * What the run reported, whether it rendered it or failed with it.
  *
  * A refused observation is not printed — `<Evaluate>` is deliberately not
@@ -401,8 +415,8 @@ describe("Tier WGAC — the registered Evaluate component", () => {
 
       const recorded = admissions(attempt.events);
       expect(recorded).toHaveLength(2);
-      const first = policyOf(recorded[0]!);
-      const second = policyOf(recorded[1]!);
+      const first = basisOf(recorded[0]!);
+      const second = basisOf(recorded[1]!);
 
       // The run moved between them, and the stated ceiling moved with it.
       expect(typeof first?.selectedRoot).toBe("string");
