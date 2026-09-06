@@ -1259,7 +1259,7 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
     );
   }
 
-  it("GX21z: an untagged version-1 admission still resumes under its own ceilings", function* () {
+  it("FE18/GX21z: an untagged version-1 admission still resumes under its own ceilings", function* () {
     const first = yield* evaluate(request("<Probe />\n", [probe()]));
     expect(first.output).toContain("probed");
 
@@ -1292,7 +1292,7 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
     expect(String(substituted.output ?? "")).not.toContain("the other implementation ran");
   });
 
-  it("GX21x: a literal version-1 refusal replays as the refusal it recorded", function* () {
+  it("FE18/GX21x: a literal version-1 refusal replays as the refusal it recorded", function* () {
     const first = yield* evaluate(request("<Probe />\n", [probe()]));
 
     const performed: string[] = [];
@@ -1458,7 +1458,7 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
   ];
 
   for (const [what, admission] of HOSTILE) {
-    it(`GX21y: a retained record with ${what} refuses before any effect`, function* () {
+    it(`FE18/GX21y: a retained record with ${what} refuses before any effect`, function* () {
       const first = yield* evaluate(request("<Probe />\n", [probe()]));
 
       const performed: string[] = [];

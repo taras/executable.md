@@ -362,6 +362,51 @@ describe("Tier FE — the paired form produces its own program", () => {
     expect(files.performed).toEqual([]);
   });
 
+  it("FE17: cancelling after fragment work starts records no terminal result", function* () {
+    // The other half of FE17. That row cancels while the *producer* is running,
+    // so it proves the projector side and nothing about the evaluation. This one
+    // cancels after the admission committed and an admitted operation is
+    // actually in flight, which is the only state where a fragment effect is
+    // interrupted rather than never started.
+    const stream = new InMemoryStream();
+    const reached = withResolvers<void>();
+    const files = recordedFiles(
+      { "notes.md": NOTE, "second.md": "the second note\n" },
+      {
+        *hold(path) {
+          if (path === "notes.md") {
+            reached.resolve();
+            yield* suspend();
+          }
+        },
+      },
+    );
+
+    yield* scoped(function* () {
+      const running = yield* spawn(() =>
+        run(
+          `<Evaluate text={'<File path="notes.md" />\\n\\n<File path="second.md" />\\n'} />\n`,
+          [reading(files)],
+          stream,
+        ),
+      );
+      yield* reached.operation;
+      yield* running.halt();
+    });
+
+    const events = yield* stream.readAll();
+    // The admission committed — it is the decision, and it precedes the effects
+    // it authorized.
+    expect(admissions(events)).toHaveLength(1);
+    // The first admitted read entered and never answered; the second never
+    // started. A run that recorded a terminal result here would resume
+    // believing the fragment finished.
+    expect(files.performed).toEqual(["read notes.md"]);
+    expect(events.some((event) => event.type === "close" && event.coroutineId === "root")).toBe(
+      false,
+    );
+  });
+
   it("FE17: cancellation before the producer enters is the negative control", function* () {
     const stream = new InMemoryStream();
     const files = recordedFiles({ "notes.md": NOTE });

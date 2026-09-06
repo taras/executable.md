@@ -27,7 +27,10 @@ export interface RecordedFiles extends FragmentFileAccess {
  * recorded path is asserting on what the fragment asked for rather than on
  * wherever the test happened to run.
  */
-export function recordedFiles(seed: Record<string, string> = {}): RecordedFiles {
+export function recordedFiles(
+  seed: Record<string, string> = {},
+  options: { readonly hold?: (path: string) => Operation<void> } = {},
+): RecordedFiles {
   const entries = new Map(Object.entries(seed));
   const performed: string[] = [];
   return {
@@ -38,9 +41,14 @@ export function recordedFiles(seed: Record<string, string> = {}): RecordedFiles 
       performed.push(`check ${input.path}`);
       return input.path.startsWith("..") ? Err(new Error("outside")) : Ok(undefined);
     },
-    // deno-lint-ignore require-yield
     *readTextFile(input: FragmentPath): Operation<Result<string>> {
       performed.push(`read ${input.path}`);
+      // A row about cancelling work already inside the fragment holds here:
+      // the operation has begun and has not answered, which is the only state
+      // where an admitted effect is in flight.
+      if (options.hold !== undefined) {
+        yield* options.hold(input.path);
+      }
       const held = entries.get(input.path);
       return held === undefined ? Err(new Error("absent")) : Ok(held);
     },

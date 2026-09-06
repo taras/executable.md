@@ -11081,6 +11081,7 @@ through the captured capability because there is no other way to reach it.
 | FE13 | Captured, not ambient | A Files provider installed nearer than the host's is never consulted; a fragment cannot name an operation the profile withheld; operations do not outlive the execution |
 | FE16 | One occurrence, one record | Two occurrences take two durable names and neither consumes the other's |
 | FE19 | The spellings | `source` and `text` behave identically under the workflow profile with no warning; the ordinary profile refuses `source`; no profile accepts `program` |
+| FE18 | The durable protocol is closed | An untagged version-1 admission and a version-1 refusal each replay under their own recorded ceilings from literal records an older run actually wrote; a tagged result holding an untagged policy, a mixed or unknown version, an extra or missing member, a duplicate or empty class or form list, and a malformed request field each refuse before any effect. Frozen as `FE18/GX21z`, `FE18/GX21x` and the `FE18/GX21y` table in `generated-xmd.test.ts` |
 | FE20 | Request ceilings | A request outside the stated ceiling refuses, and a profile stating none admits `<Fetch>` not at all |
 | FE21 | One evaluator, two hosts | The ordinary run reads the caller's files and the workflow run reads the run's Workspace, through the same component and the same evaluator |
 | FE23 | Symbols authorize nothing | A name in the enclosing vocabulary is still not admitted in a fragment |

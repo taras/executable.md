@@ -1,5 +1,7 @@
 /**
- * Tier PC — the lifetime of a protected body's one content projection.
+ * Tier PCL — the lifetime of a protected body's one content projection.
+ *
+ * `PCL` rather than `PC`, which is the Plan component suite's.
  *
  * These guards are unreachable from a document. Only canonical `<Evaluate>`
  * consumes a projector and it consumes one once, so a black-box test cannot
@@ -24,8 +26,27 @@ import { ComponentInvocationError } from "../src/invocation-identity.ts";
 import { protectedContentLease } from "../src/protected-content.ts";
 import type { SyntaxReference } from "../src/syntax-reference.ts";
 
-/** The reference argument is opaque to the lease, so a marker stands in. */
-const REFERENCE = { marker: "syntax" } as unknown as SyntaxReference;
+/**
+ * A structurally complete reference that answers nothing interesting.
+ *
+ * The lease never reads it — it forwards whatever it was handed — so what
+ * matters is that this *is* a `SyntaxReference` rather than an object asserted
+ * into the position of one. A cast here would let the lease's parameter type
+ * drift without any row noticing.
+ */
+const REFERENCE: SyntaxReference = {
+  // deno-lint-ignore require-yield
+  *symbols(): Operation<string> {
+    return "";
+  },
+  // deno-lint-ignore require-yield
+  *documentation(): Operation<string> {
+    return "";
+  },
+  available(): SyntaxReference {
+    return REFERENCE;
+  },
+};
 
 const PROJECTED = "the exact projected bytes";
 
@@ -57,8 +78,8 @@ function* refusalOf(operation: Operation<unknown>): Operation<unknown> {
   }
 }
 
-describe("Tier PC — one projection, then nothing", () => {
-  it("PC1: the first call projects exactly, the second refuses, and one ran", function* () {
+describe("Tier PCL — one projection, then nothing", () => {
+  it("PCL1: the first call projects exactly, the second refuses, and one ran", function* () {
     const underlying = counted();
     const lease = protectedContentLease("Evaluate", underlying.perform);
 
@@ -70,7 +91,7 @@ describe("Tier PC — one projection, then nothing", () => {
     expect(underlying.calls).toHaveLength(1);
   });
 
-  it("PC2: a closed lease refuses, and the operation is never constructed", function* () {
+  it("PCL2: a closed lease refuses, and the operation is never constructed", function* () {
     const underlying = counted();
     const lease = protectedContentLease("Evaluate", underlying.perform);
 
@@ -85,7 +106,7 @@ describe("Tier PC — one projection, then nothing", () => {
     expect(underlying.calls).toHaveLength(0);
   });
 
-  it("PC3: a retained callback called after close refuses", function* () {
+  it("PCL3: a retained callback called after close refuses", function* () {
     const underlying = counted();
     const lease = protectedContentLease("Evaluate", underlying.perform);
     // Exactly what a body keeping the callback in a closure, on a returned
@@ -99,7 +120,7 @@ describe("Tier PC — one projection, then nothing", () => {
     expect(underlying.calls).toHaveLength(0);
   });
 
-  it("PC4: a second call while the first is suspended refuses", function* () {
+  it("PCL4: a second call while the first is suspended refuses", function* () {
     const reached = withResolvers<void>();
     const release = withResolvers<void>();
     const underlying = counted({
@@ -125,7 +146,7 @@ describe("Tier PC — one projection, then nothing", () => {
     expect(underlying.calls).toHaveLength(1);
   });
 
-  it("PC5: a failed first call leaves the lease spent", function* () {
+  it("PCL5: a failed first call leaves the lease spent", function* () {
     const underlying = counted({ fail: "the producer refused" });
     const lease = protectedContentLease("Evaluate", underlying.perform);
 
@@ -141,7 +162,7 @@ describe("Tier PC — one projection, then nothing", () => {
     expect(underlying.calls).toHaveLength(1);
   });
 
-  it("PC6: a cancelled first call leaves the lease spent", function* () {
+  it("PCL6: a cancelled first call leaves the lease spent", function* () {
     const reached = withResolvers<void>();
     const underlying = counted({
       *hold() {
@@ -160,7 +181,7 @@ describe("Tier PC — one projection, then nothing", () => {
     expect(underlying.calls).toHaveLength(1);
   });
 
-  it("PC7: two leases are independent", function* () {
+  it("PCL7: two leases are independent", function* () {
     const one = counted();
     const other = counted();
     const first = protectedContentLease("Evaluate", one.perform);
@@ -177,7 +198,7 @@ describe("Tier PC — one projection, then nothing", () => {
     expect(other.calls).toHaveLength(1);
   });
 
-  it("PC8: closing twice, and closing after spending, stay refusals", function* () {
+  it("PCL8: closing twice, and closing after spending, stay refusals", function* () {
     const underlying = counted();
     const lease = protectedContentLease("Evaluate", underlying.perform);
 

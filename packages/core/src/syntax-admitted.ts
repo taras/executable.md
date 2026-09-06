@@ -62,7 +62,11 @@ function describe(entry: CapturedEntry): CompleteComponentSyntaxEntry {
     captures: definition.captures === undefined ? [] : [...definition.captures],
     returnMode: definition.returns === undefined ? "text" : "value",
     returns: definition.returns ?? UNDECLARED,
-    ...(definition.description === undefined ? {} : { description: definition.description }),
+    // The host's own prose about the admitted entry, not the capability body's.
+    // Core supplies the operation; only the host knows what admitting it under
+    // this name means here, and a catalog that named a component and said
+    // nothing about it would tell an agent a name and no more.
+    ...(entry.description === undefined ? {} : { description: entry.description }),
     // `as` and `context` are deliberately absent whatever the implementation
     // declares: a fragment may bind nothing, and the evaluator refuses an `as`
     // before the first effect. Describing them would document a spelling that

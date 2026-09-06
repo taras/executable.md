@@ -99,6 +99,15 @@ export interface FragmentEntry {
   /** The contract this entry's props are validated against. */
   readonly props: PropsSchema;
   /**
+   * What this entry does, for the agent being told it may write the name.
+   *
+   * The host's, because the entry is: canonical core supplies the operation
+   * behind a capability, and only the host knows what admitting it under this
+   * name means here. A narrowed catalog without it would name a component and
+   * say nothing about it, which is the one thing the catalog exists to avoid.
+   */
+  readonly description?: string;
+  /**
    * Which captured operation this entry runs.
    *
    * Not a definition, because a definition is where a provider lookup would go.
@@ -248,6 +257,7 @@ export function directoryEntry(identity: FragmentIdentity, name: string): Fragme
     forms: [...CAPABILITY_FORMS["directory:ensure"]],
     capability: "directory:ensure",
     props: capabilityProps("directory:ensure"),
+    description: CORE_DESCRIPTIONS["directory:ensure"],
   };
 }
 
@@ -263,6 +273,16 @@ export function fetchEntry(requests: readonly GeneratedRequest[]): FragmentEntry
   return { ...coreEntry("Fetch", "Fetch", "fetch"), requests };
 }
 
+/** What core's own entries tell an agent they do. */
+const CORE_DESCRIPTIONS: Readonly<Record<FragmentCapability, string>> = Object.freeze({
+  "file:read": "Read one file and render its text. Written self-closing.",
+  "file:write": "Write what it renders to one file. Written with content.",
+  "file:delete": "Remove one file. Written self-closing.",
+  "directory:ensure":
+    "Make one directory exist, and resolve the paths inside it against it. Written with content.",
+  fetch: "Perform one admitted HTTP read. Written self-closing.",
+});
+
 function coreEntry(name: string, key: string, capability: FragmentCapability): FragmentEntry {
   return {
     name,
@@ -270,6 +290,7 @@ function coreEntry(name: string, key: string, capability: FragmentCapability): F
     forms: [...CAPABILITY_FORMS[capability]],
     capability,
     props: capabilityProps(capability),
+    description: CORE_DESCRIPTIONS[capability],
   };
 }
 
@@ -280,6 +301,8 @@ export interface CapturedEntry {
   readonly forms: readonly FragmentForm[];
   readonly props: PropsSchema;
   readonly capability: FragmentCapability;
+  /** What the admitted vocabulary says this entry does, when the host said. */
+  readonly description?: string;
   /** Core's own body, closed over the operations this capture bound. */
   readonly definition: FunctionComponentDefinition;
   /** This entry's own ceiling, normalized once and canonically ordered. */
@@ -510,6 +533,9 @@ function* captureEntry(
     forms,
     props,
     capability: entry.capability,
+    ...(typeof entry.description === "string" && entry.description.length > 0
+      ? { description: entry.description }
+      : {}),
     definition,
     ...(requests === undefined ? {} : { requests }),
   });
