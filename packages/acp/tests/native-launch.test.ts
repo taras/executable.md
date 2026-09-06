@@ -4207,7 +4207,10 @@ describe("Tier CP — the Claude capability probe", () => {
     // Each row takes a release that does declare the shape and changes exactly
     // what the argument is. The flag survives; the contract does not — and a
     // launch that read the flag alone would hand a UUID to an option that
-    // takes a name, or ask for a conversation from one that takes a URL.
+    // takes a name, or ask for a conversation from one that takes a URL. The
+    // later rows say the same thing in prose that names the contract only to
+    // withdraw it, which is a build declining the operation in the clearest
+    // words it has rather than a build offering it.
     const ATTACH_ONLY: readonly NativeCapability[] = ["client-native-attachment"];
     for (const [name, help, remaining] of [
       // Identity. Launch needs it; attachment never did, so it stays.
@@ -4249,12 +4252,44 @@ describe("Tier CP — the Claude capability probe", () => {
         ),
         [],
       ],
+      [
+        "a generic resume naming a URL, whose prose mentions session ID to deny it",
+        RELEASE_2_1_241.replace(
+          "  -r, --resume [sessionId]        Resume a conversation",
+          "  -r, --resume [value]            Resume a conversation by URL;" +
+            " session ID is not supported",
+        ),
+        [],
+      ],
       // Private instructions. Launch only.
       [
         "a private-instruction option that takes text rather than a file",
         RELEASE_2_1_241.replace(
           "  --system-prompt-file <file>     Load the system prompt from a file",
           "  --system-prompt-file <text>     Use this as the system prompt",
+        ),
+        ATTACH_ONLY,
+      ],
+      [
+        "a private-instruction option taking text, whose prose mentions paths to deny them",
+        RELEASE_2_1_241.replace(
+          "  --system-prompt-file <file>     Load the system prompt from a file",
+          "  --system-prompt-file <text>     Inline text; file paths are not supported",
+        ),
+        ATTACH_ONLY,
+      ],
+      [
+        "the family spelling named by the entry that says it is unavailable",
+        RELEASE_2_1_263.replace(
+          [
+            "                                        sync. Explicitly provide context",
+            "                                        via: --system-prompt[-file],",
+            "                                        --append-system-prompt[-file], --add-dir",
+          ].join("\n"),
+          [
+            "                                        sync. Context is inline only;",
+            "                                        --system-prompt[-file] is not supported",
+          ].join("\n"),
         ),
         ATTACH_ONLY,
       ],
@@ -4276,7 +4311,9 @@ describe("Tier CP — the Claude capability probe", () => {
     // and every wrapped continuation is indented, so a product or a usage
     // example quoted inside a description says what someone wrote about this
     // build rather than what the build is — and nothing is recognized without
-    // the product, so both capabilities go.
+    // the product, so both capabilities go. A dedicated line is not enough on
+    // its own either: a description line names its subject and then describes
+    // it, so words that run on into a longer name have named something else.
     for (const [name, help] of [
       [
         "a product line that only claims compatibility",
@@ -4284,6 +4321,10 @@ describe("Tier CP — the Claude capability probe", () => {
           "Claude Code - starts",
           "A wrapper compatible with Claude Code - starts",
         ),
+      ],
+      [
+        "a product line that begins with the name but is the name of something else",
+        RELEASE_2_1_241.replace(/^Claude Code.*$/m, "Claude Code compatibility wrapper"),
       ],
       [
         "the product named inside an option's description",
