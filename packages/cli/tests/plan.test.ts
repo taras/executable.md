@@ -280,7 +280,7 @@ describe(
         expect(code).toBe(0);
 
         // Exactly one catalog, built with the invocation's own includes.
-        expect(harness.catalogCalls).toEqual([[dir]]);
+        expect(harness.symbolCalls).toEqual([[dir]]);
 
         // The turn is the shipped Markdown's, word for word: the sentences below
         // exist nowhere in TypeScript, so a host that wrote its own workflow could

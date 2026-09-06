@@ -48,6 +48,18 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "scripts/tests/documentation-validation.test.ts",
+    reason:
+      "runs the repository's build gate as a subprocess — `deno run scripts/validate-documentation.ts` — and the Node and Bun shards have no `deno` on PATH, so every case fails with `Executable not found in $PATH`. The subject is the gate, which is a Deno entrypoint; a local Bun run passes only because a developer machine happens to have Deno installed",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "scripts/tests/jsr-consumer-documentation.test.ts",
+    reason:
+      "its subject is the JSR distribution: it runs `deno publish --dry-run` to learn what the publish filter selects, stages exactly those files, and runs a consumer under `deno run` against them. Every step is Deno's own packaging, so there is nothing here a Node or Bun run would be exercising",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "scripts/tests/adapter-distribution.test.ts",
     reason:
       "asks each distribution for its module graph through `<execPath> info`, a subcommand only the Deno CLI has — under Node and Bun the same argument vector names a file called `info`; that each distribution *carries* the snapshots is a claim about Deno's own build outputs, and launching from them is Tier EA, which does run under all three",
@@ -154,6 +166,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     reason:
       "exercises Deno-private node:sqlite transaction identities and real SQLite savepoint failure behavior; node:sqlite remains behind --experimental-sqlite on Node 22",
     issue: "https://github.com/taras/executable.md/issues/365",
+  },
+  {
+    path: "packages/core/tests/syntax-loaded-copy.test.ts",
+    reason:
+      "builds the second copy of the protected-component module with `deno bundle`, which is Deno's; the witness comparison and the private body table it proves are runtime-neutral and are also covered by syntax-component.test.ts under all three",
+    issue: DERIVED_SCOPE,
   },
   {
     path: "packages/core/tests/loaded-copy-files.test.ts",

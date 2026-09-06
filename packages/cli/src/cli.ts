@@ -67,7 +67,6 @@ import {
   inspectDocument,
   agentIdentityComponents,
   installAgentComponents,
-  registerComponents,
   retainedSource,
   rootSourcePath,
   useNormalizedOutput,
@@ -99,7 +98,7 @@ import { timeout as runTimeout } from "@executablemd/runtime";
 import { installRunAgentStack, resolveAgentStack, resolveAuthorshipStack } from "./agent-stack.ts";
 import { planComponentDeclaration } from "./plan-component.ts";
 import { planAgentContext } from "./authorship-profile.ts";
-import { VERBOSE_REGISTRATION } from "./verbose-component.ts";
+import { useVerboseComponent } from "./verbose-component.ts";
 import type { AgentStack } from "./agent-stack.ts";
 import { reportFailure } from "./report.ts";
 import { TIMEOUT_FLAGS, resolvePlanTimeout, resolveRunTimeouts } from "./timeouts.ts";
@@ -128,7 +127,12 @@ import { runPlan } from "./plan.ts";
 import { runUpgrade } from "./upgrade.ts";
 import type { UpgradeAssembly } from "./upgrade.ts";
 import { componentSearchPath, resolveTestTarget } from "./test-target.ts";
-import { renderSyntaxJson, renderSyntaxMarkdown, syntaxCatalog } from "./syntax.ts";
+import {
+  renderSyntaxDocumentation,
+  renderSyntaxJson,
+  renderSyntaxMarkdown,
+  syntaxSymbols,
+} from "./syntax.ts";
 import { deliverWhole } from "./stdout-delivery.ts";
 import { testingExecutionHost } from "./testing-host.ts";
 import type { ChildPlanDeclaration } from "./testing-host.ts";
@@ -149,7 +153,7 @@ import type { HostWorkflowInstaller, WorkflowHost, WorkflowStart } from "./workf
 import { runWorkflowManagement } from "./workflow-management.ts";
 import { establishDefinition } from "./workflow-definition.ts";
 import type { EstablishedDefinition } from "./workflow-definition.ts";
-import { COMPOSITION_REGISTRATIONS, useWorkflowServiceDenial } from "@executablemd/workflow";
+import { useCompositionComponents, useWorkflowServiceDenial } from "@executablemd/workflow";
 import denoJson from "../deno.json" with { type: "json" };
 
 const SECRET_DETECTION_OPTION = "--secret-detection";
@@ -356,12 +360,18 @@ const testConfig = object({
  * `run` and `test` declare, and explicit values replace the defaults.
  */
 const syntaxConfig = object({
+  component: {
+    description:
+      "component to describe in full — `xmd syntax Elicit` renders its catalog metadata " +
+      "and long-form documentation instead of the compact catalog",
+    ...field(z.string().optional(), cli.argument()),
+  },
   include: {
     description: "component search directory",
     ...field(z.array(z.string()), field.default(["components", "."]), field.array()),
   },
   json: {
-    description: "write the catalog as version-1 JSON instead of markdown",
+    description: "write the catalog as version-2 JSON instead of markdown",
     ...field(z.boolean(), field.default(false)),
   },
 });
@@ -910,12 +920,12 @@ export function* installDocumentComponents(mode: DocumentMode, verbose: boolean)
   // `<Verbose>` is registered at all.
   yield* Config.around({ verbose: () => verbose }, { at: "min" });
 
-  // The repository-composition vocabulary, as ordinary shadowable defaults.
-  // Registering it installs no provider, discovers no repository, acquires no
-  // lock and reaches no network: what a name *does* is decided by whichever
-  // provider the command installed, and a runtime that installs none still
-  // resolves every one of these.
-  yield* registerComponents(COMPOSITION_REGISTRATIONS);
+  // The repository-composition vocabulary, as ordinary shadowable defaults,
+  // with the documentation that describes it. Bootstrapping it installs no
+  // provider, discovers no repository, acquires no lock and reaches no network:
+  // what a name *does* is decided by whichever provider the command installed,
+  // and a runtime that installs none still resolves every one of these.
+  yield* useCompositionComponents();
 
   // Compose testing around the single core execution entrypoint: both
   // commands register the components (assertions work in regular documents,
@@ -928,7 +938,7 @@ export function* installDocumentComponents(mode: DocumentMode, verbose: boolean)
     yield* installTestAgentComponents();
     yield* installAgentComponents();
   } else {
-    yield* registerComponents([VERBOSE_REGISTRATION]);
+    yield* useVerboseComponent();
     yield* installTestingComponents({ verbose });
   }
 
@@ -1026,11 +1036,6 @@ function* runDocument(
         ? {}
         : { observeAuthorship: request.observeAuthorship }),
       installElicitation: request.installElicitation,
-      // Rendered when a `<Plan>` first asks, not before: an ordinary run that
-      // writes none never builds a catalog it has no reader for.
-      *catalog() {
-        return renderSyntaxMarkdown(yield* syntaxCatalog(include));
-      },
     });
 
   const plan = yield* planDeclaration({
@@ -2511,7 +2516,7 @@ function* dispatch(
         },
         {
           ...(sessions === undefined ? {} : { sessions }),
-          catalog: syntaxCatalog,
+          symbols: syntaxSymbols,
           // The two facts about this process's own stderr that nothing further
           // in may go and read: whether it is a terminal, and whether it took
           // what it was handed. The approved Plan's sinks are stdout and
@@ -2635,8 +2640,22 @@ function* dispatch(
       // the catalog would read as complete.
       let rendered: string;
       try {
-        const catalog = yield* syntaxCatalog(command.config.include);
-        rendered = command.config.json ? renderSyntaxJson(catalog) : renderSyntaxMarkdown(catalog);
+        const named = command.config.component;
+        if (named === undefined) {
+          // The compact list of symbols, unchanged: routine discovery output and
+          // every default Plan prompt read it, and long documentation would make
+          // both unnecessarily large.
+          const catalog = yield* syntaxSymbols(command.config.include);
+          rendered = command.config.json
+            ? renderSyntaxJson(catalog)
+            : renderSyntaxMarkdown(catalog);
+        } else {
+          // The same selection, index and renderer `<Syntax names={…}>` uses, so
+          // the command and the component cannot describe one component two
+          // ways. JSON stays the compact projection; it is the symbols' shape,
+          // and documentation is prose rather than a symbol member.
+          rendered = yield* renderSyntaxDocumentation(command.config.include, [named]);
+        }
       } catch (error) {
         console.error(describeError(error));
         yield* exit(1);

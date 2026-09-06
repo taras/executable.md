@@ -879,6 +879,25 @@ class ValidationState {
       return;
     }
 
+    if (selected.kind === "protected") {
+      // Checked from the declaration alone: what the name means is core's, and
+      // validation neither runs an execution nor calls a factory to learn it.
+      draft.origin = selected.origin;
+      yield* this.#checkContract(
+        segment,
+        context,
+        draft,
+        {
+          props: selected.component.props,
+          captures: selected.component.captures ?? [],
+          forms: selected.component.forms ?? BOTH_FORMS,
+          hasReturns: selected.component.returns !== undefined,
+        },
+        capture,
+      );
+      return;
+    }
+
     if (selected.kind === "registered") {
       draft.origin = selected.origin;
       yield* this.#checkContract(

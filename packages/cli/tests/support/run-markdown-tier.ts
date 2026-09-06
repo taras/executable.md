@@ -31,7 +31,6 @@ import { testHarnessInstallation, useTesting } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
 import { cliBase, cliCommand, cliRuntime } from "@executablemd/test-support/launch";
 import { planComponentDeclaration } from "../../src/plan-component.ts";
-import { renderSyntaxMarkdown, syntaxCatalog } from "../../src/syntax.ts";
 import { testingExecutionHost } from "../../src/testing-host.ts";
 import { useBunService } from "../../src/bun-service.ts";
 import { useDenoService } from "../../src/deno-service.ts";
@@ -105,9 +104,6 @@ export function runMarkdownTier(document: string): Operation<MarkdownTierRun> {
             ? {}
             : { observeAuthorship: request.observeAuthorship }),
           installElicitation: request.installElicitation,
-          *catalog(): Operation<string> {
-            return renderSyntaxMarkdown(yield* syntaxCatalog(["components", "."]));
-          },
         }),
       // This harness runs Markdown tiers, not repository work: a child that
       // asked for a checkout is told there is no provider.

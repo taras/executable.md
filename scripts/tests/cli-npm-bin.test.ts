@@ -230,6 +230,39 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
       expect(entries.map((entry: { name?: string }) => entry?.name)).not.toContain(name);
     }
 
+    // `<Syntax />` is public in every build, and this one describes it exactly
+    // once, from the canonical origin, with the approved description. A package
+    // that lost the protected tier would either omit it or list it twice.
+    const syntax = entries.filter((entry: { name?: string }) => entry?.name === "Syntax");
+    expect(syntax).toHaveLength(1);
+    expect(syntax[0].origin).toEqual({ kind: "protected", origin: "@executablemd/core" });
+    expect(syntax[0].sourceKind).toBe("protected");
+    expect(syntax[0].forms).toEqual(["self-closing"]);
+    expect(syntax[0].returnMode).toBe("text");
+    expect(syntax[0].description).toBe(
+      "Inspect available components and control-flow constructs. `<Syntax />` lists the " +
+        'symbols available here; `<Syntax names={["Elicit"]} />` renders selected documentation.',
+    );
+
+    // The documentation assets travel with the package, and the emitted binary
+    // resolves them from its own tree rather than from a checkout. `Prompt`
+    // lives in core's *agent* boundary rather than in its own `components.md`,
+    // so this exercises a second copied asset path: a build that copied only
+    // the first would still answer for core's own components and fail here.
+    const documented = yield* runEmittedBinIn(elsewhere, ["syntax", "Prompt"]);
+    expect(documented.code).toBe(0);
+    expect(documented.stdout).toContain("### `<Prompt>`");
+    expect(documented.stdout).toContain("Sends a prompt and renders the reply");
+    expect(documented.stdout).toContain("**Available in this evaluation:** yes");
+
+    // And it is the same answer the source tree gives, whole.
+    const fromSource = yield* exec(Deno.execPath(), {
+      arguments: ["run", "-A", path.join(ROOT, "packages/cli/src/deno.ts"), "syntax", "Prompt"],
+      cwd: elsewhere,
+      env: Deno.env.toObject(),
+    }).join();
+    expect(documented.stdout).toBe(fromSource.stdout);
+
     // The command's public grammar travels with those bytes. `--run` is gone,
     // and this directory has no agent to reach and no `DEFAULT_AGENT_NAME` that
     // resolves here — so a build that still accepted the switch would fail on

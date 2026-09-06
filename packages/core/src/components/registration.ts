@@ -17,6 +17,7 @@ import type { Context, Operation } from "effection";
 import { Component } from "../component-api.ts";
 import { updateOwn } from "../scope-local.ts";
 import { RESERVED_STRUCTURAL } from "../structural.ts";
+import { PROTECTED_COMPONENT_NAMES, protectedNameRefusal } from "./protected.ts";
 import { formsRefusal } from "../invocation-identity.ts";
 import { documentationOf } from "./documentation.ts";
 import type { ComponentDocumentation } from "./documentation.ts";
@@ -134,6 +135,9 @@ function assertUsableName(name: string): void {
     throw new ComponentRegistrationError(
       `cannot register "${name}": it is structural syntax the engine owns, not a component`,
     );
+  }
+  if (PROTECTED_COMPONENT_NAMES.has(name)) {
+    throw new ComponentRegistrationError(protectedNameRefusal(name, "register"));
   }
   if (!isComponentName(name)) {
     throw new ComponentRegistrationError(

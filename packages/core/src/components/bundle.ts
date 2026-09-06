@@ -37,6 +37,7 @@
  */
 
 import type { ImportRefusal, ImportTier } from "./import-authority.ts";
+import { PROTECTED_COMPONENT_NAMES, protectedNameRefusal } from "./protected.ts";
 import { CORE_COMPONENT_NAMES } from "./registry.ts";
 import { isComponentName } from "./registration.ts";
 import { RESERVED_STRUCTURAL } from "../structural.ts";
@@ -114,6 +115,11 @@ export class WorkflowImportAuthority implements ImportTier {
     return this.#components.get(name);
   }
 
+  /** Every name this bundle supplies, for a catalog describing the run. */
+  names(): Iterable<string> {
+    return this.#components.keys();
+  }
+
   claims(name: string): boolean {
     return this.#components.has(name);
   }
@@ -173,6 +179,11 @@ export function installedBundle(
       throw new WorkflowBundleError(
         `a workflow component bundle declared "${name}", which is structural syntax the engine ` +
           "owns rather than a component.",
+      );
+    }
+    if (PROTECTED_COMPONENT_NAMES.has(name)) {
+      throw new WorkflowBundleError(
+        `a workflow component bundle ${protectedNameRefusal(name, "declare")}.`,
       );
     }
     if (CORE_COMPONENT_NAMES.has(name)) {

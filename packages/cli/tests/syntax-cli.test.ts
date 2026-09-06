@@ -21,8 +21,8 @@ import { platform, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { API } from "@executablemd/runtime";
 import { CORE_COMPONENT_NAMES } from "@executablemd/core";
-import type { PropsSchema, SyntaxCatalog } from "@executablemd/core";
-import { renderSyntaxJson, renderSyntaxMarkdown, syntaxCatalog } from "../src/syntax.ts";
+import type { PropsSchema, SyntaxSymbols } from "@executablemd/core";
+import { renderSyntaxJson, renderSyntaxMarkdown, syntaxSymbols } from "../src/syntax.ts";
 
 function* useWorkspace<T>(
   files: Record<string, string>,
@@ -59,20 +59,20 @@ const WORKSPACE: Record<string, string> = {
   "second/Only.md": "only in the second include\n",
 };
 
-function parseCatalog(text: string): SyntaxCatalog {
+function parseCatalog(text: string): SyntaxSymbols {
   const parsed: unknown = JSON.parse(text);
   if (typeof parsed !== "object" || parsed === null) {
     throw new Error("the catalog is not an object");
   }
   const version = Reflect.get(parsed, "version");
   const categories = Reflect.get(parsed, "categories");
-  if (version !== 1 || !Array.isArray(categories) || categories.length !== 3) {
-    throw new Error("the catalog is not the version-1 shape");
+  if (version !== 2 || !Array.isArray(categories) || categories.length !== 3) {
+    throw new Error("the catalog is not the version-2 shape");
   }
   return { version, categories: readCategories(categories) };
 }
 
-function readCategories(categories: unknown[]): SyntaxCatalog["categories"] {
+function readCategories(categories: unknown[]): SyntaxSymbols["categories"] {
   const [structural, builtIn, userProvided] = categories.map(readCategory);
   if (
     structural?.kind !== "structural" ||
@@ -105,9 +105,9 @@ function names(entries: readonly { name: string }[]): string[] {
 }
 
 /** One built-in entry carrying `props`, for a renderer row that supplies its own. */
-function catalogWith(props: PropsSchema): SyntaxCatalog {
+function catalogWith(props: PropsSchema): SyntaxSymbols {
   return {
-    version: 1,
+    version: 2,
     categories: [
       { kind: "structural", entries: [] },
       {
@@ -151,7 +151,7 @@ const COMPOSITION_NAMES = [
 
 describe("Tier SX — the run profile the command describes", () => {
   it("SX1: names core, Agent, testing and web defaults, and <Session>", function* () {
-    const catalog = yield* syntaxCatalog([]);
+    const catalog = yield* syntaxSymbols([]);
     const builtIn = names(catalog.categories[1].entries);
 
     for (const name of CORE_COMPONENT_NAMES) {
@@ -175,8 +175,37 @@ describe("Tier SX — the run profile the command describes", () => {
     expect(catalog.categories[2].entries).toEqual([]);
   });
 
+  it("SX1b: describes <Syntax> once, as the component canonical core owns", function* () {
+    const catalog = yield* syntaxSymbols([]);
+    const everywhere = catalog.categories.flatMap((category) =>
+      category.entries.filter((entry) => entry.name === "Syntax"),
+    );
+    // Once, and in the built-in category: a name a document cannot take back is
+    // not user-provided, and two entries would mean two tiers answered.
+    expect(everywhere).toHaveLength(1);
+    expect(names(catalog.categories[1].entries)).toContain("Syntax");
+
+    const [entry] = everywhere;
+    if (entry === undefined || entry.kind !== "component" || entry.inspectability !== "complete") {
+      throw new Error("the catalog describes <Syntax> without a contract");
+    }
+    expect(entry.origin).toEqual({ kind: "protected", origin: "@executablemd/core" });
+    expect(entry.sourceKind).toBe("protected");
+    expect(entry.forms).toEqual(["self-closing"]);
+    // One optional prop, closed: `names` selects documentation.
+    expect(Object.keys((entry.props.properties ?? {}) as object)).toEqual(["names"]);
+    expect(entry.props.additionalProperties).toBe(false);
+    expect(entry.captures).toEqual([]);
+    expect(entry.returnMode).toBe("text");
+    expect(entry.description).toBe(
+      "Inspect available components and control-flow constructs. `<Syntax />` lists the " +
+        'symbols available here; `<Syntax names={["Elicit"]} />` renders selected documentation.',
+    );
+    expect(entry.as).toBe("Optional. Captures the rendered text instead of emitting it.");
+  });
+
   it("ORC1: names all thirteen repository-composition components, with contracts", function* () {
-    const catalog = yield* syntaxCatalog([]);
+    const catalog = yield* syntaxSymbols([]);
     const entries = catalog.categories[1].entries;
     const builtIn = names(entries);
 
@@ -219,7 +248,7 @@ describe("Tier SX — the run profile the command describes", () => {
         ].join("\n"),
       },
       function* (dir) {
-        const catalog = yield* syntaxCatalog([dir]);
+        const catalog = yield* syntaxSymbols([dir]);
         const provided = catalog.categories[2].entries.find((entry) => entry.name === "Worktree");
         expect(provided).toBeDefined();
         expect(names(catalog.categories[1].entries)).not.toContain("Worktree");
@@ -228,7 +257,7 @@ describe("Tier SX — the run profile the command describes", () => {
   });
 
   it("SX2: documents every complete built-in in the profile", function* () {
-    const catalog = yield* syntaxCatalog([]);
+    const catalog = yield* syntaxSymbols([]);
     const undocumented = catalog.categories[1].entries.filter(
       (entry) => entry.description === undefined || entry.description.trim().length === 0,
     );
@@ -237,7 +266,7 @@ describe("Tier SX — the run profile the command describes", () => {
   });
 
   it("SX2b: reports the testing contracts as they actually are", function* () {
-    const catalog = yield* syntaxCatalog([]);
+    const catalog = yield* syntaxSymbols([]);
     const entries = catalog.categories[1].entries;
 
     const throws = entries.find((entry) => entry.name === "AssertThrows");
@@ -267,7 +296,7 @@ describe("Tier SX — the run profile the command describes", () => {
   });
 
   it("SX3: describes <Session> without minting an execution claimant", function* () {
-    const catalog = yield* syntaxCatalog([]);
+    const catalog = yield* syntaxSymbols([]);
     const session = catalog.categories[1].entries.find((entry) => entry.name === "Session");
 
     // A registered default, described from the declaration a host makes: had
@@ -284,7 +313,7 @@ describe("Tier SX — the run profile the command describes", () => {
 
 describe("Tier SX — the renderers take a value", () => {
   it("SX4: renders both formats without reaching the filesystem", function* () {
-    const catalog = yield* syntaxCatalog([]);
+    const catalog = yield* syntaxSymbols([]);
 
     const rendered = yield* scoped(function* () {
       yield* API.Fs.around({
@@ -340,14 +369,14 @@ describe("Tier SX — the renderers take a value", () => {
   });
 
   it("SX5: renders the same bytes twice from the same catalog", function* () {
-    const catalog = yield* syntaxCatalog([]);
+    const catalog = yield* syntaxSymbols([]);
 
     expect(renderSyntaxMarkdown(catalog)).toBe(renderSyntaxMarkdown(catalog));
     expect(renderSyntaxJson(catalog)).toBe(renderSyntaxJson(catalog));
   });
 
   it("SX6: renders the fixed category headings in order", function* () {
-    const markdown = renderSyntaxMarkdown(yield* syntaxCatalog([]));
+    const markdown = renderSyntaxMarkdown(yield* syntaxSymbols([]));
     const headings = [
       "## Built-in structural syntax",
       "## Built-in components",
@@ -395,6 +424,39 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
     });
   });
 
+  it("SX8b: an ordinary run observes its own profile and includes, and agrees with the command", function* () {
+    yield* useWorkspace(
+      {
+        "components/Local.md": "---\ndescription: the first description.\n---\n\nlocal\n",
+        "catalog.md": "<Syntax />\n",
+      },
+      function* (cwd) {
+        // The same site, asked two ways: the command that describes an
+        // environment, and a document running in it. A run that derived its
+        // catalog from anything but its own captured inputs would disagree.
+        const described = yield* runCli(["syntax"], { cwd }).expect();
+        const observed = yield* runCli(["run", "catalog.md"], { cwd }).expect();
+        expect(observed.stdout.trim()).toBe(described.stdout.trim());
+        expect(observed.stdout).toContain("### `<Local>`");
+        expect(observed.stdout).toContain("the first description.");
+        // And the run really is describing the run profile it has, not a
+        // reduced one: `<Plan>` is declared to every ordinary run.
+        expect(observed.stdout).toContain("### `<Plan>`");
+
+        // A fresh occurrence sees a moved environment. Nothing is cached across
+        // executions, and the catalog is the working tree's rather than the
+        // build's.
+        yield* writeTextFile(
+          join(cwd, "components/Local.md"),
+          "---\ndescription: the second description.\n---\n\nlocal\n",
+        );
+        const again = yield* runCli(["run", "catalog.md"], { cwd }).expect();
+        expect(again.stdout).toContain("the second description.");
+        expect(again.stdout).not.toContain("the first description.");
+      },
+    );
+  });
+
   it("SX9: reports an unusable include on stderr, exits 1, and prints no catalog", function* () {
     yield* useWorkspace({ components: "not a directory\n" }, function* (cwd) {
       const { code, stdout, stderr } = yield* runCli(["syntax", "--include", "components"], {
@@ -408,7 +470,56 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
     });
   });
 
-  it("SX10: writes markdown by default and version-1 JSON with --json", function* () {
+  it("SX16: `xmd syntax Elicit` renders the same text the named component does", function* () {
+    const named = yield* runCli(["syntax", "Elicit", "--include", "."], { cwd: "." }).expect();
+
+    // Metadata, then documentation, then availability — the detailed renderer,
+    // not the compact catalog.
+    expect(named.stdout).toContain("### `<Elicit>`");
+    expect(named.stdout).toContain("Asks a person a structured question");
+    expect(named.stdout).toContain("**Available in this evaluation:** yes");
+    // Only the one asked for: the compact catalog's other entries are absent.
+    expect(named.stdout).not.toContain("### `<File>`");
+
+    // The compact form is untouched by the addition.
+    const compact = yield* runCli(["syntax", "--include", "."], { cwd: "." }).expect();
+    expect(compact.stdout).toContain("## Built-in components");
+    expect(compact.stdout).not.toContain("Asks a person a structured question");
+
+    // An unknown name refuses whole rather than printing a partial answer.
+    const unknown = yield* runCli(["syntax", "Nonexistent", "--include", "."], {
+      cwd: ".",
+    }).join();
+    expect(unknown.code).not.toBe(0);
+    expect(unknown.stdout).toBe("");
+  });
+
+  it("SX17: the command and the component read one index, for every package", function* () {
+    // `Prompt` is an Agent component: a different registration boundary from
+    // core's own file, and the one that exposed this. The command assembled the
+    // profile's contributions while a document's own named form fell back to a
+    // core-only index, so one product answered the same question two ways.
+    const command = yield* runCli(["syntax", "Prompt", "--include", "."], { cwd: "." }).expect();
+    const document = yield* runCli(
+      ["run", "-e", '<Syntax names={["Prompt"]} />', "--include", "."],
+      { cwd: "." },
+    ).expect();
+
+    // The whole rendered result, not a phrase from it. Both surfaces render the
+    // same text through the same renderer; they differ only in the trailing
+    // newline a rendered document ends with, which is the presentation boundary
+    // rather than the answer. Comparing substrings would pass just as happily
+    // if one surface silently dropped the documentation and kept the heading.
+    expect(document.stdout.trimEnd()).toBe(command.stdout.trimEnd());
+
+    // And it is a real answer rather than two matching empties.
+    expect(command.stdout).toContain("### `<Prompt>`");
+    expect(command.stdout).toContain("Sends a prompt and renders the reply");
+    expect(command.stdout).toContain("**Available in this evaluation:** yes");
+    expect(command.stdout.length).toBeGreaterThan(400);
+  });
+
+  it("SX10: writes markdown by default and version-2 JSON with --json", function* () {
     yield* useWorkspace(WORKSPACE, function* (cwd) {
       const markdown = yield* runCli(["syntax", "--include", "first"], { cwd }).expect();
       expect(markdown.stdout).toContain("## Built-in structural syntax");
@@ -417,7 +528,7 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
 
       const json = yield* runCli(["syntax", "--json", "--include", "first"], { cwd }).expect();
       const catalog = parseCatalog(json.stdout);
-      expect(catalog.version).toBe(1);
+      expect(catalog.version).toBe(2);
       expect(names(catalog.categories[2].entries)).toEqual(["Shared"]);
     });
   });
@@ -498,7 +609,7 @@ describe(
 
         expect(piped).toBe(redirected);
         const catalog = parseCatalog(piped);
-        expect(catalog.version).toBe(1);
+        expect(catalog.version).toBe(2);
         expect(names(catalog.categories[2].entries)).toContain("ZBeyondTheBuffer");
         expect(piped.lastIndexOf(`"ZBeyondTheBuffer"`)).toBeGreaterThan(PIPE_BUFFER);
       });

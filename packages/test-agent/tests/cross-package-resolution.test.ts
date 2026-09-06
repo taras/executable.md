@@ -200,8 +200,12 @@ function describeOrigin(info: ComponentInfo): string {
       return `structural:${info.origin.construct}`;
     case "registered":
       return `registered:${info.origin.origin}${info.origin.reserved ? " (reserved)" : ""}`;
+    case "protected":
+      return `protected:${info.origin.origin}`;
     case "repository":
       return `repository:${info.origin.path}`;
+    case "workflow":
+      return `workflow:${info.origin.path}@${info.origin.sourceHash}`;
     case "declared-markdown":
       return `declared-markdown:${info.origin.origin}`;
   }

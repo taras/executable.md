@@ -68,6 +68,12 @@
  */
 export { executeInstalled } from "./src/execute.ts";
 export type { ExecutionInstallation, JournalAdmission } from "./src/execute.ts";
+/**
+ * The symbols a host's profile describes, when they are not the ones the
+ * execution would derive from its own captured inputs — see
+ * `src/syntax-reference.ts`.
+ */
+export type { SyntaxSymbolsProvider } from "./src/syntax-reference.ts";
 export type { DurablePreparation } from "./src/document-request.ts";
 
 /**

@@ -2657,22 +2657,163 @@ A component name is resolved in tiers, and the first tier that answers wins:
    repository file named after one never stands in for it. A structural name
    written where its construct gives it no meaning is a printed error, not a
    missing component.
-2. **a host claiming the name** — a reserved registration protecting a language
+2. **a component canonical core protects** — the engine's own claim rather than
+   a host's, so the name means the same thing in every execution. `<Syntax />`
+   (§5.3.1) is the one member. The table is the resolver's own and is consulted
+   unconditionally, so no option a caller passes puts anything in front of it.
+3. **a host claiming the name** — a reserved registration protecting a language
    or security invariant, or a *declared Markdown component*: exact first-party
    Markdown a trusted host handed this execution. Both claim the name rather
    than offering a default for it, so two claims on one name are refused where
    they are installed and this tier never chooses between them.
-3. **the workflow component bundle** this execution is closed over, when a
+4. **the workflow component bundle** this execution is closed over, when a
    trusted host installed one.
-4. **a repository-local file**, by the candidate order below.
-5. **a registered default**, including the components core supplies.
-6. **nothing**, which is the unresolved printed error.
+5. **a repository-local file**, by the candidate order below.
+6. **a registered default**, including the components core supplies.
+7. **nothing**, which is the unresolved printed error.
 
 So a repository component overrides any ordinary package default, core's
 included, and a reserved registration overrides the repository. Only genuine
 absence falls through to a default: a candidate that exists but cannot be read,
 imported, parsed, or compiled fails where it is loaded, so a broken local
 component is never quietly replaced.
+
+#### 5.3.1 `<Syntax />`, the protected symbols component
+
+`<Syntax />` outputs the components and control-flow constructs a document may
+write at the site it is written at, as the Markdown `xmd syntax` prints. One
+symbol construction and one Markdown renderer serve both, so an operator
+printing a profile and an agent being told what to write are never given
+different accounts of one environment.
+
+```mdx
+<Syntax />
+```
+
+renders the symbols available where it is written. It is a **text component**: the ordinary
+engine-owned `as` captures the same text and emits nothing.
+
+```mdx
+<Syntax as="syntax" />
+```
+
+It is **self-closing only** and declares one optional prop, `names`: a non-empty
+array of unique component-name strings. A paired spelling, any other prop, an
+empty list, a duplicate, a non-string member and a name this site has no
+component for are each refused before the symbols are read, so a refusal
+produces no partial text and no successful retained result.
+
+**The named form renders documentation.** `<Syntax names={["Elicit", "File"]} />`
+renders each selected component's symbol metadata followed by the long-form
+documentation its owning package ships, once each, **in symbol order** whatever
+order they were asked for in. `as` captures the same text in either form.
+
+Documentation joins to metadata by component name **and owning package**. Only a
+registration and a protected component come from a package; a repository file, a
+bundled blob and declared Markdown are this run's, so a repository `Elicit.md`
+receives none of the built-in `Elicit`'s prose. **A first-party package documents every component it supplies.** The index is
+built from one `components.md` per registration boundary — core's own, its Agent
+registrations, the CLI, testing, web and the repository-composition set — each
+contributed at the trusted installation boundary from the same declarations that
+boundary registers, so a component added to a package demands documentation
+without anyone maintaining a second list. Contributions travel by value on the
+execution installation, which is what makes `xmd syntax NAME` and a document's
+own `<Syntax names={…}>` read one index rather than two.
+
+A boundary that supplies a component with no section refuses the whole index — as does an unknown heading, a duplicate, and a
+component documented twice for one package. A partially documented first-party
+package is not a valid build: a reader cannot tell an undocumented component
+from one that has nothing to say, and the product's own reference would be
+silently incomplete.
+
+The sentence *No long-form documentation is available for this component.* is
+therefore for **custom** components only, which no package governs. A Markdown
+component — a repository file, a bundle member, a host's declared Markdown —
+takes its long-form documentation from its own document's body, read through the
+canonical frontmatter split; an empty body uses the sentence.
+
+Named lookup selects **component entries**. A structural construct is not a
+component, so `<Syntax names={["If"]} />` refuses as an unknown component while
+the bare form continues to list structural syntax alongside components.
+
+The documentation is read from the owning package through the direct filesystem,
+not through `API.Fs` or the document-facing `Files` authority. Both of those are
+middleware a running document can compose around, and a document that could
+answer the read would decide what the product says about itself.
+
+**Documentation composes with the components it describes.** A package
+contributes the documentation for what it registers through one stable,
+namespaced contextual Api, in the same bootstrap call that registers it, so a
+host that bootstraps a package gets both. Canonical core is the terminal, and
+every wrapper delegates before appending its own, so composition order decides
+how the list reads and nothing else: two contributions naming one component of
+one package refuse wherever they sat in the chain rather than the later one
+winning. Canonical execution collects **once**, after the trusted host's
+bootstrap and before the root import or any document code, and snapshots the
+answer field by field — so middleware a running document or component installs
+afterwards composes into a chain nothing reads, and two executions assembled in
+separate scopes each read their own. A host-maintained list of every package's
+documentation, kept beside a host-maintained list of every package's
+registrations, is two lists that drift; this is one.
+
+**Reference and availability are separate.** The reference carries two inputs.
+Bare `<Syntax />` reports what may **execute** at this site. The named form
+selects from the **enclosing authoring symbols** and states, per entry,
+`**Available in this evaluation:** yes` or `no`. At a root the two are one set
+of symbols and everything selected is available; a trusted evaluation boundary that
+narrows execution keeps the enclosing reference, so a nested author can be told
+how a component works where they may not run one — and is told which it is.
+Neither input carries definitions, import witnesses, invocation capabilities,
+providers, registrations or any other execution authority.
+
+`xmd syntax Elicit` is the same lookup — one selection, one index, one renderer —
+so the command and the component cannot describe one component two ways. The
+compact `xmd syntax` and its version-2 `--json` are unchanged: documentation is
+prose rather than a symbol entry, and putting it in routine output would make
+every default Plan prompt unnecessarily large.
+
+**Canonical core owns the name.** A repository `Syntax.md`, `Syntax.ts` or
+directory candidate never wins selection; an ordinary or reserved registration
+under the name is refused atomically at registration; a workflow bundle member
+and a host's declared Markdown under the name are each refused at admission,
+before the root import; and `Component.importComponent` middleware may observe
+the import, delegate it and refuse it by throwing, but cannot answer it, replace
+what came back, mutate it, or hand back a definition kept from another import or
+built by another loaded copy.
+
+**The symbols are the execution's own.** Canonical core builds them at the root from
+the selection inputs that execution captured before any installation, middleware
+or document code ran — its includes, the registry it started with, the identity
+components and exact Markdown its host declared, and the component bundle it is
+closed over — and carries them lexically on canonical core's own expansion
+authority. A trusted host may state the symbols its profile describes instead,
+captured on the same terms; one execution accepts one, and two are refused rather
+than ordered. Nothing is built until an occurrence asks.
+
+Seeing a component in the symbols grants nothing. It neither registers, resolves
+nor authorizes that component: what a name means is still this section's
+decision, and what may run is still the execution's.
+
+**The symbols say where a component came from.** A protected component is reported under
+the symbol origin kind `protected`, carrying the canonical core origin — never
+as a reserved registration, which is a *host's* claim under a name and can be
+absent, replaced or refused where this cannot. A workflow-bundle member is
+reported under the kind `workflow`, carrying its canonical repository-relative
+path **and** the blob's own object id, so it stays distinguishable from a
+repository candidate, which is whatever that path holds now. Both kinds are
+additions, so the symbols are **version 2**: a version-1 reader was promised a
+closed set of origins, and neither emitting an unknown kind nor reusing a
+neighbouring one would keep that promise. Nothing else about the shape changed.
+
+**Each occurrence observes once.** It claims the durable identity the execution
+minted for it, performs one `syntax_symbols` durable read, and retains
+exactly `{ symbols: string }`. On continuation that record is parsed as a closed
+protocol and returned without consulting the filesystem, the registry, the
+bundle, the host or the lexical observation again; a missing, additional or
+mistyped member is stale input and refuses before output or binding. Two authored
+occurrences are two identities and two reads, repeated reads of one
+binding read nothing again, and a failed or cancelled read completes
+its teardown and commits no record.
 
 #### The run profile's repository declarations
 
@@ -2846,7 +2987,12 @@ expands no progress body at all. Its five private
 capabilities — `<PlanInputs>`, `<PlanAuthorship>`, `<PlanProgress>`,
 `<CheckDraft>` and
 `<AdmitPlan>` — are the closure those exact bytes carry, and are syntax no
-document may write. [The plan command](./plan-command-spec.md) is the contract.
+document may write. The vocabulary the Agent is shown is not among them: the
+packaged bytes write the public `<Syntax />` (§5.3.1), whose own
+`syntax_symbols` read retains exactly `{ symbols }`, so a continuation
+restores the symbols the run actually showed rather than rebuilding them, and
+`<PlanInputs>` retains exactly `{ instruction }` beside it.
+[The plan command](./plan-command-spec.md) is the contract.
 
 **Which Agent a Plan is written with is the host's to say, not the Component's.**
 The declaration carries a trusted-host capability: the agent a Plan conversation
@@ -2929,7 +3075,7 @@ Its spelling is canonical and is checked where the declaration is made. Omitting
 it means both forms — what every registration meant before it existed — and the
 only arrays accepted are `["self-closing"]`, `["paired"]` and
 `["self-closing", "paired"]`. An empty array, a reversed pair, a repeated member
-and a form no invocation has are each refused there, so a catalog can be
+and a form no invocation has are each refused there, so two entries can be
 compared without being normalized first and a reader never has to wonder whether
 a different order meant something else. The identity components a host declares
 to an execution (§5.6) are held to the same rule, whether they are registered by
@@ -3053,7 +3199,7 @@ directory — every structural construct, and the one implementation selection
 chooses for every other name — and returns it as a versioned value:
 
 ```typescript
-interface SyntaxCatalog {
+interface SyntaxSymbols {
   readonly version: 1;
   readonly categories: readonly [
     { readonly kind: "structural"; readonly entries: readonly StructuralSyntaxEntry[] },
@@ -3131,7 +3277,7 @@ skipped without being read. The default includes are `["components", "."]`, and
 what this decides is whether describing a repository reads its `node_modules`,
 its `.git` and its build output before discarding every path in them.
 
-**A partial catalog is never presented as a complete one.** A missing include
+**A partial set of symbols is never presented as a complete one.** A missing include
 contributes nothing, exactly as it does during execution. An include that exists
 but cannot be enumerated fails the whole request: one that is not a directory,
 one that cannot be read, and one that is itself a symbolic link. A directory
@@ -3170,7 +3316,7 @@ digest as its origin. Its private closure contributes nothing: those names are
 not syntax a document may write, so listing them would describe an environment
 that does not exist.
 
-**Inspection is observation, never authority.** Building a catalog installs only
+**Inspection is observation, never authority.** Building symbols installs only
 the declarative registration layer selection needs. It enters no execution,
 constructs no durable stream, installs no Files, Service, Agent or elicitation
 provider, starts no testing session, reserves no terminal, mints no invocation
@@ -3180,15 +3326,15 @@ from that plain declaration, and its authority-bearing factory is reached only
 by a real execution.
 
 **`xmd syntax` is the command.** It writes deterministic Markdown by default and
-the catalog above as JSON with `--json`, both from one inspection. Its only
+the same symbols as JSON with `--json`, both from one inspection. Its only
 options are the ordered, repeatable `--include`, which defaults to
 `["components", "."]` and is replaced rather than extended by explicit values,
 and `--json`. It takes no document and no run option, because it runs nothing.
 An inspection failure is reported on stderr with exit status 1 and no partial
-catalog on stdout.
+output on stdout.
 
-**The command has not succeeded until stdout has taken the whole catalog.** A
-pipe holds far less than a catalog, so backpressure changes how long the command
+**The command has not succeeded until stdout has taken every byte.** A
+pipe holds far less than the whole rendering, so backpressure changes how long the command
 takes and never which bytes arrive: a reader that consumes slowly receives
 exactly what a regular-file redirect receives, in both forms. A sink that closes
 or refuses the write is reported on stderr with exit status 1, rather than
@@ -3512,6 +3658,26 @@ A component the workflow definition is closed over records its own shape:
     "content": "discovered.\n" } }
 ```
 
+A component canonical core claims the name of (§5.3.1) records the fact and
+nothing else:
+
+```json
+{ "type": "import_component", "name": "Syntax" }
+{ "status": "ok", "value": { "kind": "protected" } }
+```
+
+The record is closed on that single member because there is nothing else that
+would be true to write. A protected component has no path to record, no origin
+to look up, and no implementation to serialize: it is core's own declaration,
+present in every execution rather than supplied by anything this one installed.
+So the record says only *which tier answered*, and replay asks the running
+execution for the implementation it built for that name. An execution that built
+none refuses rather than resolving the name again — a replay that fell back to
+the ordinary tiers would run whatever a repository, a registry or a host is
+offering under that name today, which is the substitution the tier exists to
+prevent. A record carrying any member beside `kind`, or a `kind` this protocol
+does not define, is stale input.
+
 One journal entry per component, whatever it resolved to. A repository entry
 captures both *which file was found* (path) and *what was in it* (content); a
 registration entry captures the origin that named it, because a function cannot
@@ -3819,7 +3985,7 @@ of the first chunk and the end of the last are trimmed. Matching compares
 Unicode code points and completes in time bounded by the product of the pattern
 and label sizes.
 
-A selector must resolve to exactly one catalog entry. Zero matches and several
+A selector must resolve to exactly one symbol entry. Zero matches and several
 matches both fail. Diagnostics report canonical encoded references, so a
 duplicate canonical path is reported as an ambiguity rather than resolved.
 
@@ -4102,7 +4268,7 @@ Because the record carries the content it was taken from, the selection is
 verified against it rather than merely parsed: a recorded exact target must
 still resolve to itself in the recorded content, and a recorded failure must be
 exactly the failure the recorded selector produces against that content. A
-catalog, a match list, or a kind that the recorded document contradicts is
+a catalog, a match list, or a kind that the recorded document contradicts is
 therefore malformed too.
 
 Reading a record is **total**, and identification is separate from reading. An
@@ -4356,7 +4522,7 @@ Matched targets:
 
 `multiple-matches` lists the matches; an invalid selector and a no-match list
 the whole catalog under `Available targets:`, or say `The document has no
-targets.` when the catalog is empty. Every other failure keeps the printed-error
+targets.` when the catalog are empty. Every other failure keeps the printed-error
 behavior it already had.
 
 A filename containing `#` is written `%23`, and every literal `%` is written
@@ -8506,7 +8672,7 @@ escaping rule or a trailing newline.
 
 The component is **self-closing only**, and that is declared to canonical
 dispatch rather than decided in its body (§5.6), so what runs, what the syntax
-catalog advertises and what a refusal says all come from one value. Any paired
+the symbols advertise and what a refusal says all come from one value. Any paired
 spelling — including one whose content is empty — is refused as a printed
 component failure naming the `<CodeBlock value={…} />` spelling, and the content
 written between the tags never expands.
@@ -8865,7 +9031,7 @@ and what every refusal says are Markdown; the four phases it may reach —
 `<Upgrade.Releases>`, `<Upgrade.Download>`, `<Upgrade.Verify>` and
 `<Upgrade.Replace>` — are declared to canonical execution by an eligible
 compiled macOS or Linux host, appear in no `xmd run` profile, repository lookup
-or public catalog, and carry no contextual authority. An installation that
+or public syntax symbols, and carry no contextual authority. An installation that
 cannot replace itself therefore has no component to reach rather than a check it
 could forget. The command's complete contract is
 [`xmd upgrade`](./upgrade-command-spec.md).
@@ -9703,6 +9869,7 @@ trusted-host events may have no authored source.
 | Resolve components (glob) | `glob` | `resolve:{dir}` | Only when `useDurableGlobResolver` middleware is installed |
 | Read over HTTP | `fetch` | `fetch:{expansion id}` | Normalized request in `description.input`; status, detached headers and text body in the result (§6.18) |
 | Admit generated XMD | `generated_xmd` | `generated:{fragment id}` | The canonical class selection, retained roots, selected root, every selected entry as a name, identity and admitted forms, and the exact request policy in `description.input`; the admitted source, that same policy, and the identity and form of each element the fragment named in the result (workflow-workspace-spec §8.4) |
+| Read the symbols | `syntax_symbols` | `syntax_symbols:{expansion id}` | One per authored `<Syntax />` occurrence. The success payload is closed on exactly `{ symbols: string }` — the rendered Markdown the component returned — so a continuation restores the symbols the run actually showed without consulting the filesystem, registry, bundle, host or lexical observation again. A missing, additional or mistyped member is stale input and refuses before output or binding; a cancelled read completes teardown and commits nothing (§5.3.1) |
 
 ### 10.2 Example journal for a multi-component document
 
@@ -10547,7 +10714,7 @@ platform's.
 Driven through `execute()` against real files, ordinary core selection and real
 expansion. A sibling that must not run records its own mark, so a stopped
 document is proved by what did not happen rather than by absent output. The
-recovery boundaries themselves are Tier OM's and Tier RF's, the catalog row is
+recovery boundaries themselves are Tier OM's and Tier RF's, the symbols row is
 Tier SY's, the loop's own bound is Tier LOOP's, and missing-`<Return>`
 settlement is Tier RV's; these rows cross-reference them rather than restating
 them.
@@ -10650,7 +10817,7 @@ Each row names the derivation it kills.
 | CR32 | Registration replay | A reserved registration records its origin and replays |
 | CR33/CR34 | Origin mismatch | A recorded origin that is missing or replaced fails explicitly rather than invoking another component |
 
-### Tier SY — The syntax catalog
+### Tier SY — The syntax symbols
 
 Provider-neutral: the filesystem is stubbed at the contextual `API.Fs` boundary,
 so the include-boundary rows are the same on every host. Defined in §5.3.
@@ -10664,10 +10831,10 @@ so the include-boundary rows are the same on every host. Defined in §5.3.
 | SY7c | Pruning | A lower-case, hidden or dotted directory is never read — at the top level or deeper — while the direct, nested and index candidates beside it stay discoverable; every skipped directory throws if it is read, and the recorded reads name only the ones a name reaches |
 | SY8–SY11 | Selection decides | Include order, `.md` before `.ts`, direct before index, registered fallback, and a repository override appearing once as user-provided |
 | SY12–SY18c | Include boundaries | An absent include contributes nothing; a non-directory root, a symbolic-link root, and a selection-relevant link to a directory or to nothing each fail the whole request; a relevant link to a file is selected; a link behind a lower-case, dotted or hidden prefix is ignored even beside one that is refused; and the diagnostic names the configured include and the logical entry rather than the resolved target |
-| SY13b | An unreadable reachable directory | An include root that refuses, and a valid-name directory beneath it that refuses, each fail the whole request rather than shortening the catalog |
+| SY13b | An unreadable reachable directory | An include root that refuses, and a valid-name directory beneath it that refuses, each fail the whole request rather than shortening the symbols |
 | SY13c | Include spellings | `.`, `./` and `.//` read the same directories and `./Ns` and `.//Ns` read the same directories, none of them absolute, and each spelling still selects exactly what it selects today |
 | SY13d | An absolute root | An include with two leading separators reads only beneath that exact prefix; the directory one separator away throws if it is read |
-| SY19–SY22 | Markdown documentation | String `description`/`as`/`context` reach the catalog; a non-string value documents nothing; an undocumented component stays complete; a declared `returns` reports `value` mode with its schema |
+| SY19–SY22 | Markdown documentation | String `description`/`as`/`context` reach the symbols; a non-string value documents nothing; an undocumented component stays complete; a declared `returns` reports `value` mode with its schema |
 | SY23 | Opaque TypeScript | A repository `.ts` entry is origin-only and carries no contract field |
 | SY24/SY25 | Complete contracts | `<File>`'s two forms, `<File.Delete>`'s one, `<Json>`'s one and its capture, and text and value return modes; declaration order of captures and forms survives, each canonical forms spelling is accepted, and every other one is refused |
 | SY26–SY27 | Declared components | One is described without its factory being called and a repository file still overrides it; two declarations of one name are refused before either factory; and a declaration inspection refuses is refused identically by registration |
@@ -10733,18 +10900,56 @@ and renders that file's marker; `xmd run -#Section` executes `Section` of that
 same file, rendering its marker and not its sibling section's; and `xmd test -`
 keeps the test command's own path behavior.
 
+### Tier SYN — The public `<Syntax />` component
+
+Named `SYN` rather than `SY` or `SL`, which already name the syntax symbols and
+own-scope context updates. The symbols *value* is Tier SY's; this tier is the
+component that observes one at an authored site.
+
+| # | Test | Verify |
+|---|------|--------|
+| SYN1–SYN4 | One occurrence | The bare form renders the symbols once and `as` binds the same text emitting nothing; a paired spelling and an unknown prop refuse before any read; two occurrences read independently and a reused binding reads nothing again |
+| SYN5–SYN10 | The name canonical core owns | A repository `Syntax.md`, `Syntax.ts` and directory candidate never win selection, with an ordinary nearby component as the positive control that repository discovery is live; ordinary and reserved registrations are refused atomically; a workflow bundle member and a host's declared Markdown are each refused at admission before the root import |
+| SYN6 | The origin selection reports | Selection answers `{ kind: "protected", origin: "@executablemd/core" }` — its own kind, not a reserved registration |
+| SYN11–SYN15 | The import chain | Middleware that answers, substitutes, mutates, redirects, delegates twice or reuses another import's definition cannot run a replacement; ordinary delegation reaches canonical `<Syntax>`; a deliberate middleware refusal stays a refusal; document-authored context and a look-alike observation change nothing |
+| SYN16–SYN18 | The site described | An ordinary run reports its own includes and registry; a workflow root reports its bundle without importing or running a member; a declared Markdown component's body reports the site it inherited |
+| SYN20–SYN22 | The record kept | Continuation restores the retained symbols after the environment moves and rediscovers nothing; missing, additional and wrong-typed payloads refuse before output or binding; a cancelled read completes teardown and commits nothing |
+| SYN23, SYN25b | Never authority | Symbols naming a component neither register, resolve nor authorize it; a fixed narrower reference answers with exactly the symbols it was handed and adds nothing — the seam `<Evaluate>` installs through |
+| SYN24 | One description | Inspection and validation describe the component identically, from one declaration |
+| SYN26 | Another loaded copy | A protected implementation built by a second loaded copy answers for nothing in the active execution |
+| SYN27 | Protected provenance | The symbols report the component under the `protected` origin kind in both the structured entry and the rendered Markdown, and never as a reserved registration; `inspectComponent` agrees |
+| SYN28 | Pinned provenance | A workflow-bundle component is reported at its path *and* blob object id, under the `workflow` origin kind, and stays in the user-provided category |
+| SYN29 | The named form | Selected entries render their metadata and documentation once each in symbol order, not request order, with nothing else of the symbols; `as` binds identical text |
+| SYN30 | Availability and absence | Each entry states whether it is available in the current evaluation; a selected entry with no authored documentation renders its metadata and says so |
+| SYN31 | Atomic refusal | An unknown name, an empty list, a duplicate, a non-string member, a non-array value and an undeclared prop each refuse with no successful retained result |
+| SYN39 | Named retention | The occurrence retains its final rendered text, a continuation restores it without rereading documentation or rebuilding the symbols, and a corrupted record refuses |
+| SYN25c | The narrowing seam | A narrowed observation reports the narrowed vocabulary bare, documents the enclosing symbols by name, and marks each entry's availability truthfully in both directions |
+| SYN32–SYN34 | Parsing one file | Bundle prose, a section per level-two heading with deeper headings kept inside it, a fenced heading read as the example it is, and a refusal for a duplicate section or a heading that is not a component name |
+| SYN35–SYN37 | Building the index | A heading naming something the package does not supply refuses; one component documented twice refuses; documentation attaches by name and owning package, never to a repository replacement |
+| SYN38 | Exact coverage | A package supplying a component it does not document refuses the whole index — deleting any one built-in's section fails — with a fully covered package as the positive control |
+| SYN40 | The protection boundary | A repository component wrapping the named form with planted `API.Fs` middleware cannot change what the documentation says, and the read never reaches that Api |
+| SYN41–SYN45 | The build gate | `scripts/validate-documentation.ts` assembles the complete first-party index before any distribution is produced: the shipped set passes, and a deleted section, an unknown heading, a duplicated section, and drift in a package outside core each fail it |
+| SYN46 | Cancelling a named read | Teardown completes and no successful `syntax_symbols` record is committed |
+| SYN25g | Collection captures by value | Rewriting a contribution's source object, its text, its owner and its name set after the collector returned changes neither the snapshot nor what a reference built from it renders |
+| SYN25h | One call, both halves | A profile whose package bootstrap was not entered describes the component and says it is undocumented; entering the bootstrap supplies the prose *and* keeps canonical core's own, so a wrapper that replaced rather than appended fails here |
+| SYN25i | Duplicates refuse either way | Two contributions naming one component of one package refuse whichever order they were bootstrapped in, and each refusal names the pair it actually saw |
+| SYN25j | Scopes are isolated | A sibling scope that bootstrapped nothing reads none of the first scope's contributions, and the first scope's contribution does not outlive it |
+| SYN25k | Document-time middleware reaches nothing | A component that composes around the `Documentation` Api and renders `<Syntax names={…}>` inside its own scope is shown what the host bootstrapped, not what it installed |
+| SX17 | One index, two surfaces | `xmd syntax NAME` and `<Syntax names={[NAME]} />` return the same text for a component outside core's own file |
+
 ### Tier SX — The `xmd syntax` command
 
 | # | Test | Verify |
 |---|------|--------|
 | SX1–SX3 | The run profile | Core, Agent, testing and web defaults and `<Session>` are described from the declarations the runtime installers register, with no execution claimant minted |
 | SX2 | Documentation completeness | Every complete built-in in the profile states a description, and the testing contracts read as they are: `<AssertThrows>` requires `message` and binds the caught error segment, an ordinary assertion binds its diagnostic report, and an assertion that refuses expected children reports one form |
-| SX4–SX6 | Renderers take a value | Both formats render from a supplied catalog with the filesystem refusing every call, twice with identical bytes, under the fixed category headings; every table cell is escaped, a prop name holding a pipe included |
+| SX4–SX6 | Renderers take a value | Both formats render from a supplied symbols with the filesystem refusing every call, twice with identical bytes, under the fixed category headings; every table cell is escaped, a prop name holding a pipe included |
 | SX7/SX8 | Includes | Repeated values select in caller order and replace the defaults; absent, the defaults apply |
-| SX9 | Failure | An unusable include exits 1, reports on stderr and prints no catalog |
-| SX10/SX11 | Formats | Markdown by default, version-1 JSON with `--json`; the catalog is inspection, and `xmd plan` is the command that writes with the same structured value |
+| SX9 | Failure | An unusable include exits 1, reports on stderr and prints no symbols |
+| SX10/SX11 | Formats | Markdown by default, version-2 JSON with `--json`; the symbols are inspection, and `xmd plan` is the command that writes with the same structured value |
+| SX16 | Named lookup | `xmd syntax Elicit` renders that component's metadata and long-form documentation through the same selection, index and renderer `<Syntax names={…}>` uses; the compact symbols are unchanged and an unknown name refuses whole |
 | SX12 | A package tree | Bare `xmd syntax` succeeds with the default includes in a repository whose `node_modules` holds directory links |
-| SX13–SX15 | Delivery | A real pipeline reading a catalog larger than one pipe buffer receives the bytes a regular-file redirect receives, in both forms; a consumer that closes early leaves the command reporting on stderr with exit 1 rather than an unhandled write failure |
+| SX13–SX15 | Delivery | A real pipeline reading symbols larger than one pipe buffer receives the bytes a regular-file redirect receives, in both forms; a consumer that closes early leaves the command reporting on stderr with exit 1 rather than an unhandled write failure |
 
 ### Tier SDL — Delivering a rendered result
 
@@ -10787,7 +10992,7 @@ every refusal is proven by the phase tripwires that stayed at zero.
 
 | # | Test | Verify |
 |---|------|--------|
-| PS1–PS3 | Fixed grammar | One request preserved byte for byte and a second positional refused; every retained option accepted before and after it; every `--run` spelling answered with the migration, and every other removed option — both short aliases and the aggregate and generated property names included — answered with the one refusal that names `xmd run`, before any catalog, Agent, session, review or filesystem activity, and before `--help` can short-circuit the dispatch in either order; a name that merely begins like a property option keeps the generic unknown-option refusal; a first token of `prompt` refused in preflight rather than read as a document path, with `xmd run ./prompt` still executing a document of that name |
+| PS1–PS3 | Fixed grammar | One request preserved byte for byte and a second positional refused; every retained option accepted before and after it; every `--run` spelling answered with the migration, and every other removed option — both short aliases and the aggregate and generated property names included — answered with the one refusal that names `xmd run`, before any symbols, Agent, session, review or filesystem activity, and before `--help` can short-circuit the dispatch in either order; a name that merely begins like a property option keeps the generic unknown-option refusal; a first token of `prompt` refused in preflight rather than read as a document path, with `xmd run ./prompt` still executing a document of that name |
 | PS4/PS5 | Help | The complete `xmd plan --help` output and the program summary carry only the retained grammar, both explicit compositions and the journal warning, and no removed option appears in either; `xmd run --help` still exposes every option it configures |
 | C2–C3 | The packaged adapter and Component | The command executes the checked-in Markdown value root under `<plan-command>`, which invokes the packaged `<Plan>` Component, and the turn text is that Component's own words; generation, repair, review, revision, approval, stopping, exhaustion and the final explanation are Markdown under visible headings, every Plan-producing turn states the complete Plan requirements for itself, `<Prompt>` stays one turn, and what a person reads says each thing once however many rounds it took |
 | C4–C6 | Session and ceiling | One enclosing Session carries every turn, defaults differ per invocation and `--session` supplies the exact override; the authorship profile gives the assistant an empty host-owned directory, no MCP servers, no native tools and a private strict denial no command line reaches; a draft is data throughout, and no draft effect ever happens |
@@ -10811,9 +11016,9 @@ rather than restating.
 | PO1–PO3 | Phases and counters | Each phase precedes the work it names, and one reaches the operator while a turn is still blocked; the repair and attempt ordinals come from the loop bounds and stop at them; Stop and exhaustion announce themselves and keep their exact endings |
 | PO4/PO5 | Surface and disclosure | Neither ordinary `<Plan>` form announces anything or expands a progress body; default progress holds no request, draft, diagnostic, feedback or approved source, and verbose adds exactly the two blocks, in phase order |
 | PO6/PO7 | Channels and grammar | A non-terminal stderr receives normalized Markdown and a stated terminal receives it rendered, while stdout and `--output` stay byte-identical; `--verbose` and `--journal` work on either side of the request, help carries them and the journal warning, and the short aliases, every removed spelling and a retained option that reaches this grammar written where the journal path goes all refuse before any work, while `--help` keeps its ordinary precedence |
-| PO8/PO9/PO16 | The journal file | No `--journal` writes no file; one creates the path before the catalog and the first turn, parses as the existing JSONL in commit order, ends terminally and holds no program execution; an existing path and an uncreatable one each report their exact refusal and reach nothing; and an ordinary failure — where no append failed — leaves a wholly parseable file with no partial trailing record |
+| PO8/PO9/PO16 | The journal file | No `--journal` writes no file; one creates the path before the symbols and the first turn, parses as the existing JSONL in commit order, ends terminally and holds no program execution; an existing path and an uncreatable one each report their exact refusal and reach nothing; and an ordinary failure — where no append failed — leaves a wholly parseable file with no partial trailing record |
 | PO10–PO12 | The secret and persistence boundaries | A secret in a draft or in a failed check's findings reaches neither the progress nor the file while the earlier prefix stays readable, and the same values without it are shown and recorded; a refused entry reports the exact journal-write diagnostic and preserves what committed |
-| PO13–PO15 | Failure and ordering | A progress destination that fails cancels the live turn, waits for every owned teardown and delivers nothing; every existing ending keeps its order and no phase claims delivery; the packaged adapter says nothing of its own and the catalog is built once, from `<PlanInputs>` |
+| PO13–PO15 | Failure and ordering | A progress destination that fails cancels the live turn, waits for every owned teardown and delivers nothing; every existing ending keeps its order and no phase claims delivery; the packaged adapter says nothing of its own and the symbols are observed once, through public `<Syntax />`, while continuation restores that observation without rebuilding it |
 
 ### Tier UG — The `xmd upgrade` command
 
@@ -11100,11 +11305,11 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | WRR10/WRR10b | Outer rollback cache coherence | Failure and cancellation after an uncommitted removal and negative lookup roll back and invalidate both authoritative DOFS caches |
 | WRR11 | Historical file size | Every historical file entry's declared size agrees with its retained DOFS manifest during read-only recognition |
 
-### Tier DT — Document target catalog, selectors, and projection
+### Tier DT — Document target symbols, selectors, and projection
 
 | # | Test | Verify |
 |---|------|--------|
-| DT1–DT5 | Outline | ATX and Setext headings catalog in source order; a skipped depth still nests; the outermost depth is the smallest present; a sole outermost heading is the title and several are path levels |
+| DT1–DT5 | Outline | ATX and Setext headings symbols in source order; a skipped depth still nests; the outermost depth is the smallest present; a sole outermost heading is the title and several are path levels |
 | DT6 | Case | Matching is case-sensitive |
 | DT7–DT9 | Labels | Formatting, link destinations, inline code, image alt text and passive HTML tags reduce to statically rendered text; a heading rendering no text is unaddressable |
 | DT8 | Normalization | NFC-equivalent spellings are one label and Unicode whitespace collapses |
@@ -11113,9 +11318,9 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | DT12 | Nested flow | Headings in block quotes, lists, fences, exec fences and raw HTML are not targets |
 | DT13 | Component children | A component child holding blank lines and `#` lines contributes no target — the regression that kills raw Remark discovery |
 | DT14–DT17 | Addressability | A heading overlapping component syntax or carrying an interpolation is unaddressable and blocks its subtree; escaped interpolation stays static; a computed sole title still leaves its sections addressable |
-| DT18/DT19 | Empty catalog | A document with no heading addresses nothing, and a sole title is no target |
+| DT18/DT19 | Empty symbols | A document with no heading addresses nothing, and a sole title is no target |
 | DT20–DT22 | Matching | Literal levels, embedded `*`, and `**` across zero or more levels |
-| DT23 | Exactly one | Zero matches and several matches both fail, reporting matches and the catalog |
+| DT23 | Exactly one | Zero matches and several matches both fail, reporting matches and the symbols |
 | DT24–DT26 | Selector syntax | Empty, leading/trailing slash, empty level, malformed escape, NUL and non-UTF-8 are refused; `+` is a plus |
 | DT27 | Termination | A wildcard-dense selector against a long label completes without exponential search |
 | DT28 | Wildcard whitespace | Whitespace beside a wildcard is matched; only the level's outer edges trim |
@@ -11125,15 +11330,15 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | DT50/DT51 | Formatter totality | A path that cannot encode losslessly — NUL, an unpaired surrogate — is refused, and every formatted reference parses back to what it named |
 | DT34–DT39 | Projection | Preamble, ancestor direct content and the selected subtree are retained; siblings are absent; a non-leaf keeps its descendants; a sole title stays |
 | DT40–DT43 | Positions | A retained element keeps its authored offset and line, CRLF included; frontmatter, props and return mode survive; the untargeted parse still scans the whole body |
-| DT44–DT47 | Inspection | The catalog is reported without selecting; a glob resolves to the exact target; an unresolvable target fails inspection; the failure's data is frozen and rebuilt |
+| DT44–DT47 | Inspection | The symbols report without selecting; a glob resolves to the exact target; an unresolvable target fails inspection; the failure's data is frozen and rebuilt |
 | DT67–DT78 | Descriptions | The first direct static paragraph describes its section, past blank lines and comment-only HTML, kept whole with formatting reduced and whitespace collapsed; a fence, component, list, quote or child heading first leaves no description and later prose is not reached; an interpolation or an inline component omits the paragraph whole rather than as a static prefix |
-| DT79/DT80 | Structured catalog | `targetInfo` carries the same targets, order and duplicates as `targets`, each with its own description, on the unselected path and beside an unchanged exact `target` on the selected one |
+| DT79/DT80 | Structured symbols | `targetInfo` carries the same targets, order and duplicates as `targets`, each with its own description, on the unselected path and beside an unchanged exact `target` on the selected one |
 | DT52/DT53 | Recognition | A failure from a separately loaded copy, and one built here, are read on the same terms |
 | DT54–DT56 | Reconstruction | The result is a fresh local error, never the candidate; a mutable nested list is copied and later mutation changes nothing; a revoked Proxy cannot reach through a result already built |
 | DT57 | Closed data | Enumerable, non-enumerable and symbol-keyed extras are refused |
 | DT58 | Canonical lists | Raw spaces, tabs, no-break spaces, edge whitespace, lowercase escapes, NUL, non-string entries and sparse lists are refused — asserted against the data parser, so the derived message cannot mask the check |
 | DT59 | Dotted heading paths | `.` and `..` are legal heading labels, so `../../etc/passwd` and `Alpha/../Beta` are canonical heading paths, never filesystem authority; structural parsing accepts them when the rest of the failure is consistent |
-| DT60 | Semantic outcome | Fields no selection could have produced — a `no-match` whose selector matches, a single-match ambiguity, a match outside the catalog, an `invalid-selector` that parses — are refused |
+| DT60 | Semantic outcome | Fields no selection could have produced — a `no-match` whose selector matches, a single-match ambiguity, a match outside the symbols, an `invalid-selector` that parses — are refused |
 | DT61/DT62 | Closed shell | A cause, an enumerable payload, and a message that does not derive from its data are refused; no planted payload survives stringification, spreading, symbol enumeration, or a journal round trip |
 
 ### Tier TX — Targeted execution and replay
@@ -11152,7 +11357,7 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | TX22/TX23 | Recorded content | An untargeted journal replays untargeted; replay projects the recorded content, not the file on disk |
 | TX24 | Failed selection | A journal from a selector that matched nothing never answers a later valid one |
 | TX25–TX27 | Failed replay | The same failing selector replays its own recorded failure with no authored effect; a different failure kind or a different selector is stale; live and replayed failures are the same structural error |
-| TX28–TX32 | Malformed records | Starting from a valid failed-selection journal and corrupting only the record: a missing or non-array catalog, an unknown kind, extra record or failure data, a catalog or target the recorded document does not derive, and inconsistent kind/matches data are each refused before completed-Close reuse, resumed with the failing selector and with a valid one, expanding nothing and appending nothing |
+| TX28–TX32 | Malformed records | Starting from a valid failed-selection journal and corrupting only the record: a missing or non-array symbols, an unknown kind, extra record or failure data, symbols or target the recorded document does not derive, and inconsistent kind/matches data are each refused before completed-Close reuse, resumed with the failing selector and with a valid one, expanding nothing and appending nothing |
 | TX33 | Not vacuous | An uncorrupted record still replays its recorded failure |
 | TX34–TX37 | Totality, inside the value | Recorded markdown whose frontmatter no parser accepts, an unreadable member, a record refusing key enumeration, and a value that is not a record at all each become the one fixed diagnostic — cause-free, carrying no planted value, expanding nothing and appending nothing |
 | DT63–DT66 | Preamble boundary | A section before the title is addressable and is not preamble; selecting a later section neither renders nor executes it; it stays independently addressable; real preamble text before the first heading is still retained |
@@ -11780,8 +11985,8 @@ Identifiers match `packages/core/tests/switch.test.ts` one to one.
 | SW58 | Partial replay | From a journal prefix without the root Close, the selected effect restores, selection is rebuilt, the run continues at the next live effect and the output is reproduced |
 | SW59 | Completed replay | The retained result is returned with no selector, matcher, import or block |
 
-The shared entrypoints carry the rest: `syntax-catalog.test.ts` SY4b and SY5b
-freeze both catalog entries and prove no repository file or registration can
+The shared entrypoints carry the rest: `syntax-symbols.test.ts` SY4b and SY5b
+freeze both symbol entries and prove no repository file or registration can
 supply either name; `document-validation.test.ts` Tier DV `<Switch>` covers
 static and dynamic operands, a definite failure beside a dynamic one, the
 diagnostic a case shares with its switch, nested ownership, a stray case and the
@@ -12122,7 +12327,7 @@ timed.
 
 The behavioral rows run the real `xmd run` command against a document on disk,
 so what they observe is what a reader of that command sees. VB5 is a TypeScript
-row: it inspects the catalog without running anything.
+row: it inspects the symbols without running anything.
 
 | Criterion | Evidence |
 | --- | --- |
@@ -12165,8 +12370,8 @@ user's own `~/.xmd/repositories`.
 
 | # | Test | Verify |
 |---|------|--------|
-| ORC1 | One declaration surface | All thirteen names appear in the catalog with complete contracts; a repository file of one of those names shadows the default; catalog construction performs no ambient discovery, lock, Git, credential or network operation |
-| ORC2 | Runtime declaration parity | The same catalog assertion holds under Deno, Node and Bun; on a runtime that installs no operational repository provider, representative Repository, Worktree, Git, Issue and PullRequest forms each report an absent provider with zero mutation, while `<Dir>` remains operational through that runtime's host `API.Files` provider |
+| ORC1 | One declaration surface | All thirteen names appear in the symbols with complete contracts; a repository file of one of those names shadows the default; symbol construction performs no ambient discovery, lock, Git, credential or network operation |
+| ORC2 | Runtime declaration parity | The same symbols assertion holds under Deno, Node and Bun; on a runtime that installs no operational repository provider, representative Repository, Worktree, Git, Issue and PullRequest forms each report an absent provider with zero mutation, while `<Dir>` remains operational through that runtime's host `API.Files` provider |
 | ORC3 | Ambient primary checkout | From a normal repository, root Switch/Add/Commit select the ambient Repository and the contextual checkout; outside Git, a root Worktree, Git operation or PullRequest refusal names how to run inside one |
 | ORC4 | Ambient linked worktree | Invoked from a linked worktree, Repository identity follows the canonical common directory, Git acts on that worktree's root, and the primary checkout is untouched |
 | ORC5 | Origin is not local authority | A repository with no `origin` creates a Worktree and performs local Git; Push and PullRequest refuse before a credential, session or transport exists |

@@ -26,6 +26,7 @@ import { exec } from "@effectionx/process";
 import { timebox } from "@effectionx/timebox";
 import type { ProcessResult } from "@effectionx/process";
 import { createHash } from "node:crypto";
+import { fileURLToPath as fromFileUrl } from "node:url";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -99,6 +100,76 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
     ]) {
       expect(names).not.toContain(name);
     }
+
+    // `<Syntax />` is public, and the compiled binary describes it exactly once
+    // from the canonical origin. The protected tier ships inside the binary
+    // rather than being assembled by whoever installs the profile, so a build
+    // that lost it would describe no catalog component at all.
+    const syntax = entries.filter((entry: { name?: string }) => entry?.name === "Syntax");
+    expect(syntax).toHaveLength(1);
+    expect(syntax[0].origin).toEqual({ kind: "protected", origin: "@executablemd/core" });
+    expect(syntax[0].sourceKind).toBe("protected");
+    expect(syntax[0].forms).toEqual(["self-closing"]);
+    expect(syntax[0].returnMode).toBe("text");
+    expect(syntax[0].description).toBe(
+      "Inspect available components and control-flow constructs. `<Syntax />` lists the " +
+        'symbols available here; `<Syntax names={["Elicit"]} />` renders selected documentation.',
+    );
+
+    // The documentation asset travels with the binary, not with a checkout. A
+    // build that forgot `--include` would still list the component and still
+    // print its metadata, and would silently have no prose to attach — so the
+    // probe is the documentation itself, asked for from a directory that is not
+    // the checkout.
+    const lookup = yield* timebox<ProcessResult>(TIMEOUT, function* () {
+      return yield* exec(BINARY, {
+        arguments: ["syntax", "Elicit", "--include", elsewhere],
+        cwd: elsewhere,
+      }).join();
+    });
+    if (lookup.timeout) {
+      throw new Error("the compiled binary timed out documenting one component");
+    }
+    expect(lookup.value.code).toBe(0);
+    expect(lookup.value.stdout).toContain("### `<Elicit>`");
+    expect(lookup.value.stdout).toContain("Asks a person a structured question");
+    expect(lookup.value.stdout).toContain("**Available in this evaluation:** yes");
+
+    // A component from a boundary *outside* core's own documentation file, so
+    // the probe exercises a second copied asset path rather than proving only
+    // that the first one shipped.
+    const outside = yield* timebox<ProcessResult>(TIMEOUT, function* () {
+      return yield* exec(BINARY, {
+        arguments: ["syntax", "Git.Commit", "--include", elsewhere],
+        cwd: elsewhere,
+      }).join();
+    });
+    if (outside.timeout) {
+      throw new Error("the compiled binary timed out documenting a composition component");
+    }
+    expect(outside.value.code).toBe(0);
+    expect(outside.value.stdout).toContain("### `<Git.Commit>`");
+    expect(outside.value.stdout).toContain("Commits what is staged");
+
+    // And the compiled answer is the source answer, byte for byte.
+    const fromSource = yield* timebox<ProcessResult>(TIMEOUT, function* () {
+      return yield* exec("deno", {
+        arguments: [
+          "run",
+          "--allow-all",
+          fromFileUrl(new URL("../../packages/cli/src/deno.ts", import.meta.url)),
+          "syntax",
+          "Git.Commit",
+          "--include",
+          elsewhere,
+        ],
+        cwd: elsewhere,
+      }).join();
+    });
+    if (fromSource.timeout) {
+      throw new Error("the source CLI timed out documenting a composition component");
+    }
+    expect(fromSource.value.stdout).toBe(outside.value.stdout);
 
     // The command surface those bytes belong to is source-only in this build
     // too: help describes both explicit compositions and names no option that

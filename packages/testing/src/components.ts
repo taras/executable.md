@@ -33,7 +33,9 @@ import { Err } from "effection";
 import type { Operation } from "effection";
 import {
   Component,
+  contributeDocumentation,
   documented,
+  packageDocumentation,
   registerComponents,
   Execution,
   TestActivation,
@@ -42,6 +44,8 @@ import {
 import type {
   ComponentFailure,
   ComponentRegistration,
+  DocumentationContribution,
+  DocumentationReader,
   DocumentExecution,
 } from "@executablemd/core";
 import { boundary, record, Test, testing, TestFailureError } from "./test-api.ts";
@@ -98,6 +102,37 @@ const TEST_TIMEOUT_MS = 20_000;
  * `<Test>` is deliberately absent: that construct is core's, and what this
  * package installs is what a test *does* (#441).
  */
+/**
+ * This package's long-form documentation, and the components it must cover.
+ *
+ * The set is derived from `TESTING_REGISTRATIONS` below, so adding a component
+ * to that array demands a section for it rather than quietly shipping one
+ * without.
+ */
+export function* testingDocumentation(
+  read?: DocumentationReader,
+): Operation<DocumentationContribution> {
+  return yield* packageDocumentation(
+    new URL("./components.md", import.meta.url),
+    { owner: TESTING_ORIGIN, asset: "packages/testing/src/components.md" },
+    TESTING_REGISTRATIONS.map((registration) => registration.name),
+    read,
+  );
+}
+
+/**
+ * This package's vocabulary, as declarations and nothing else.
+ *
+ * Registrations and the documentation that describes them, installed together
+ * so a scope that has one has the other. `xmd syntax` enters exactly this and
+ * stops: describing an environment installs no behavior chain, no activation
+ * guard and no execution middleware.
+ */
+export function* useTestingComponents(): Operation<void> {
+  yield* registerComponents(TESTING_REGISTRATIONS);
+  yield* contributeDocumentation(testingDocumentation);
+}
+
 export const TESTING_REGISTRATIONS: readonly ComponentRegistration[] = [
   // Non-reserved defaults: a repository component of any of these names is
   // chosen ahead of them, as it would be ahead of any other package's.
@@ -224,7 +259,7 @@ export function* installHandlers(
     },
   });
 
-  yield* registerComponents(TESTING_REGISTRATIONS);
+  yield* useTestingComponents();
   yield* Execution.around({
     *execute([request], next) {
       // Fresh boundary collection per execution: outcomes reported by

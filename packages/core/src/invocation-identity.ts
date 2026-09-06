@@ -52,6 +52,7 @@ import type { Operation, Scope } from "effection";
 import { printErrors, printsErrors } from "./component-failures.ts";
 import { documentationOf } from "./components/documentation.ts";
 import type { ComponentDocumentation } from "./components/documentation.ts";
+import type { SyntaxReference } from "./syntax-reference.ts";
 import type {
   FunctionComponent,
   FunctionComponentDefinition,
@@ -149,6 +150,96 @@ export interface IdentityComponent extends ComponentDocumentation {
 /** One execution's domain for one component name. Reachable from nowhere. */
 export interface IdentityDomain {
   readonly component: string;
+}
+
+/**
+ * What the body of a component canonical core protects receives.
+ *
+ * A protected component is selected by canonical core ahead of every host or
+ * author tier, so its name is settled before anything a document, a package or
+ * middleware can reach. What is *not* settled by the name is the lexical fact it
+ * reads — the syntax reference in scope where the element was written — and
+ * that changes as expansion descends, so it cannot be closed over when the
+ * implementation is built. It is delivered here instead, by the copy of core
+ * performing the expansion, from the authority that copy is already holding.
+ *
+ * The observation is `undefined` where an expansion carries none. The body
+ * refuses rather than inventing symbols: a component that answered without one
+ * would be describing an environment nothing established.
+ */
+export type ProtectedBody = (
+  props: Record<string, Json>,
+  invocation: ComponentInvocation,
+  observation: SyntaxReference | undefined,
+) => Operation<unknown>;
+
+/**
+ * The bodies one execution will enter, keyed by the exact function it built.
+ *
+ * Execution-owned and reclaimed with the execution, like the domains beside it,
+ * and handed to core's own expansion by value. Two things follow. An
+ * implementation another loaded copy built — which is ordinary, because a
+ * component can be loaded from disk beside its own copy — is in that copy's
+ * table rather than this one, so it has no body here. And an implementation kept
+ * past this execution's teardown reaches nothing, because the table went with
+ * the execution.
+ */
+export interface ProtectedBodies {
+  /** The body canonical expansion may enter for this exact implementation. */
+  body(fn: unknown): ProtectedBody | undefined;
+}
+
+interface ProtectedInstallation extends ProtectedBodies {
+  /**
+   * Build one implementation and keep its real body here.
+   *
+   * What comes back is inert: it is what registration-shaped machinery compares
+   * by identity and what a form selection records, and calling it through any
+   * route but canonical expansion refuses rather than observing anything.
+   */
+  implementation(
+    name: string,
+    build: (claim: IdentityClaimant) => ProtectedBody,
+    claim: IdentityClaimant,
+  ): FunctionComponent;
+}
+
+function createProtectedBodies(): ProtectedInstallation {
+  const bodies = new WeakMap<object, ProtectedBody>();
+  return {
+    implementation(name, build, claim): FunctionComponent {
+      // deno-lint-ignore require-yield
+      function* unreachable(): Operation<never> {
+        throw new ComponentInvocationError(
+          `<${name} /> is invoked by canonical core, so an implementation reached any other way ` +
+            "observes nothing",
+        );
+      }
+      bodies.set(unreachable, build(claim));
+      return unreachable;
+    },
+    body(fn): ProtectedBody | undefined {
+      return typeof fn === "function" ? bodies.get(fn) : undefined;
+    },
+  };
+}
+
+/**
+ * A component canonical core claims the name of, as this module builds one.
+ *
+ * The same declaration a host's identity component makes, except that the
+ * factory hands over a body rather than an implementation: what a protected
+ * component may be invoked through is the execution's to decide, not the
+ * declaration's.
+ */
+export interface ProtectedDeclaration {
+  readonly name: string;
+  readonly props: PropsSchema;
+  readonly returns?: ReturnsSchema;
+  readonly captures?: readonly string[];
+  readonly forms?: readonly InvocationForm[];
+  readonly origin: string;
+  build(claim: IdentityClaimant): ProtectedBody;
 }
 
 /**
@@ -388,7 +479,7 @@ export function isFormDispatcher(fn: unknown): boolean {
  * The only ways a forms declaration may be written.
  *
  * A closed list rather than a set membership test, because the *order* is part
- * of the declaration: one canonical spelling per meaning means a catalog can be
+ * of the declaration: one canonical spelling per meaning means two entries can be
  * compared without normalizing, and a reader never has to wonder whether
  * `["paired", "self-closing"]` said something different.
  */
@@ -706,7 +797,9 @@ function mintDomain(component: string): Minted {
  * this one function so the two cannot come to disagree about what a host may
  * declare.
  */
-export function assertDistinctIdentityNames(components: readonly IdentityComponent[]): void {
+export function assertDistinctIdentityNames(
+  components: readonly { readonly name: string }[],
+): void {
   const seen = new Set<string>();
   for (const component of components) {
     if (seen.has(component.name)) {
@@ -798,6 +891,17 @@ export interface IdentityInstallation {
    * the declaration that carries it.
    */
   readonly privates: ReadonlyMap<string, FunctionComponentDefinition>;
+  /**
+   * The implementations canonical core's own protected tier resolves, by name.
+   *
+   * Minted exactly like the rest — one domain, one claimant, revoked with the
+   * execution — and then registered nowhere, because a registry is precisely
+   * what must not decide a protected name. Canonical resolution answers for
+   * these from its own table (`components/protected.ts`).
+   */
+  readonly protected: ReadonlyMap<string, FunctionComponentDefinition>;
+  /** The bodies canonical expansion may enter for those implementations. */
+  readonly protectedBodies: ProtectedBodies;
   /** Called once the registrations have been validated and committed. */
   activate(): void;
 }
@@ -814,17 +918,45 @@ export interface IdentityInstallation {
 export function installIdentities(
   components: readonly IdentityComponent[],
   privateComponents: readonly IdentityComponent[] = [],
+  protectedComponents: readonly ProtectedDeclaration[] = [],
 ): IdentityInstallation {
   // Before any factory: a set nobody can register is a set nobody may build
   // implementations from either, and a duplicate that reached a factory would
-  // have minted a claimant for a domain that is about to be discarded. The two
+  // have minted a claimant for a domain that is about to be discarded. The three
   // sets are checked together because they mint into one table of domains, so a
-  // private name that shadowed a registered one would take its domain.
-  assertDistinctIdentityNames([...components, ...privateComponents]);
+  // private name that shadowed a registered one would take its domain — and a
+  // host that declared a protected name reaches this only after admission has
+  // already refused it, so a duplicate here is core's own mistake.
+  assertDistinctIdentityNames([...components, ...privateComponents, ...protectedComponents]);
 
   const minted = new Map<string, Minted>();
   const registrations: IdentityRegistration[] = [];
   const privates = new Map<string, FunctionComponentDefinition>();
+  const guarded = new Map<string, FunctionComponentDefinition>();
+  const protectedBodies = createProtectedBodies();
+  for (const component of protectedComponents) {
+    const domain = mintDomain(component.name);
+    minted.set(component.name, domain);
+    const implementation = protectedBodies.implementation(
+      component.name,
+      component.build,
+      domain.claim,
+    );
+    domain.implementation = implementation;
+    // Not marked private: a protected implementation is resolved by canonical
+    // core's own tier under its public name, so refusing it wherever an answer
+    // becomes something the engine invokes would refuse the component itself.
+    guarded.set(component.name, {
+      kind: "function",
+      name: component.name,
+      props: component.props,
+      ...(component.returns === undefined ? {} : { returns: component.returns }),
+      ...(component.captures === undefined ? {} : { captures: component.captures }),
+      ...(component.forms === undefined ? {} : { forms: component.forms }),
+      ...documentationOf(component),
+      fn: implementation,
+    });
+  }
   for (const component of privateComponents) {
     const domain = mintDomain(component.name);
     minted.set(component.name, domain);
@@ -915,6 +1047,8 @@ export function installIdentities(
     },
     registrations,
     privates,
+    protected: guarded,
+    protectedBodies,
     activate: () => {
       for (const domain of minted.values()) {
         domain.activate();

@@ -14,7 +14,12 @@
  * printed first and the form keeps waiting either way.
  */
 
-export { installWebComponents, WEB_REGISTRATIONS } from "./src/components.ts";
+export {
+  installWebComponents,
+  useWebComponents,
+  WEB_REGISTRATIONS,
+  webDocumentation,
+} from "./src/components.ts";
 export { installWebElicitation } from "./src/elicitation.ts";
 export { liveForm } from "./src/live-form.ts";
 export type { LiveFormInput } from "./src/live-form.ts";

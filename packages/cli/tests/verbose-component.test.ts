@@ -1,12 +1,12 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { syntaxCatalog } from "../src/syntax.ts";
+import { syntaxSymbols } from "../src/syntax.ts";
 
 describe("Tier VB — <Verbose>", () => {
   // Inspection reads the declaration's metadata. It invokes nothing, so no
   // verbosity — the command line's or a component's — takes part in it.
   it("VB5: the run syntax catalog describes it", function* () {
-    const catalog = yield* syntaxCatalog([]);
+    const catalog = yield* syntaxSymbols([]);
     const verbose = catalog.categories[1].entries.find((entry) => entry.name === "Verbose");
 
     expect(verbose?.origin).toEqual({

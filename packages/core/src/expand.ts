@@ -3221,6 +3221,19 @@ function* expandFunctionComponent(
           if (TestHarnessComponentDefinition.own(definition.fn)) {
             return yield* definition.fn.invoke(validatedProps, binding);
           }
+          // A component canonical core protects reads one lexical fact — the
+          // syntax reference for this site — and the fact changes as expansion
+          // descends, so it cannot be closed over when the implementation is
+          // built. It is delivered here instead, by the copy of core performing
+          // the expansion, from the authority it is already holding.
+          const guarded = authority?.protectedBodies?.body(definition.fn);
+          if (guarded !== undefined) {
+            try {
+              return yield* guarded(validatedProps, issued.invocation, authority?.syntax);
+            } finally {
+              issued.close();
+            }
+          }
           // Ended in the same breath the body is: an issuance a wrapper kept
           // from a finished element authorizes nothing when it is routed here.
           try {

@@ -36,6 +36,11 @@
  * So they resolve only while canonical core is expanding these exact bytes:
  * not from the caller's root, not from the Prompt the caller projected, not from
  * a sibling `<Plan>`, and not from anything middleware can answer.
+ *
+ * `<Syntax />` is not among them. What a document may write here is a public
+ * question with a public answer, and canonical core owns both — so `Plan.md`
+ * writes the same component any other document writes, and the catalog the Agent
+ * is shown is the one an operator can print.
  */
 
 import { createHash } from "node:crypto";
@@ -206,8 +211,6 @@ export interface PlanComponentAssembly {
   observeAuthorship?(observation: PlanAuthorshipObservation): Operation<void>;
   /** Who answers the review question. */
   installElicitation(): Operation<void>;
-  /** The run profile's rendered vocabulary, as the first Agent turn receives it. */
-  catalog(): Operation<string>;
   /**
    * How this host decides whether one candidate is structurally a program.
    *
@@ -223,22 +226,22 @@ export interface PlanComponentAssembly {
 const INPUTS_RETURNS = {
   type: "object",
   properties: {
-    syntax: { type: "string" },
     session: { type: "string" },
     surface: { type: "string" },
     durable: { type: "boolean" },
     authoredSession: { type: "string" },
   },
-  required: ["syntax", "session", "surface", "durable"],
+  required: ["session", "surface", "durable"],
   additionalProperties: false,
 };
 
 /**
- * What the frozen inputs are given: the caller's optional session name, and the
+ * What the frozen inputs are given: the caller's optional session name and the
  * prompt this invocation is about.
  *
- * The prompt is here so that the first durable record of the invocation is
- * about a question as well as a catalog. Only its digest is kept.
+ * Only the prompt's digest is retained here. The vocabulary the Agent is shown
+ * is public `<Syntax />`'s, with a durable record of its own, so each protocol
+ * can be read and reconciled independently.
  */
 const INPUTS_PROPS = {
   type: "object",
@@ -432,14 +435,15 @@ function* uninvocable(): Operation<never> {
 /**
  * Freeze this invocation's authorship inputs, and retain them.
  *
- * The catalog is an observation the first Agent turn is built from, so it is
- * journaled: a continuation restores what the run actually showed the agent
- * rather than rebuilding one from a working tree that has moved. The instruction
- * identity beside it is what makes a continuation answerable at all: this is the
- * first durable record of the invocation, so comparing it here refuses a Plan
- * asked for different instructions before a directory, a provider, a turn, a
- * review or an admission exists — the only place that can refuse without having
- * already done some of the work it would be refusing.
+ * The vocabulary the Agent is shown is not here. `<Syntax />` is a public
+ * component canonical core owns, it retains its own observation, and `Plan.md`
+ * binds it directly — so the catalog and the question are two records that can
+ * be read and reconciled independently rather than one that has to be read
+ * whole.
+ *
+ * The instruction identity here makes a continuation answerable at all:
+ * comparing it refuses a Plan asked under another prompt before a directory, a
+ * provider, a turn, a review or an admission exists.
  *
  * The session placement is derived here too, from the durable identity canonical
  * execution minted for this exact expansion — which is what makes two `<Plan>`
@@ -469,7 +473,7 @@ function planInputs(assembly: PlanComponentAssembly): IdentityComponent {
         const instruction = sourceDigest(String(props.instruction));
 
         const frozen = yield* durablePlanOperation<Json>(`plan:inputs:${id}`, function* () {
-          return { syntax: yield* assembly.catalog(), instruction };
+          return { instruction };
         });
 
         // A history is input, so it is parsed rather than trusted.
@@ -482,7 +486,6 @@ function planInputs(assembly: PlanComponentAssembly): IdentityComponent {
         }
 
         return {
-          syntax: retained.syntax,
           session,
           surface: assembly.surface,
           durable: durability(assembly, authored),
@@ -692,14 +695,13 @@ function checkDraft(validate: StructuralValidation): IdentityComponent {
 
 /** What the frozen inputs retained, or nothing when the record is not one. */
 interface RetainedInputs {
-  readonly syntax: string;
   readonly instruction: string;
 }
 
 /**
  * The frozen inputs a record holds, read as a closed protocol.
  *
- * Exactly two members, both strings. A record missing one, carrying a member
+ * Exactly one string member. A record missing it, carrying a member
  * this version does not know, or holding one of the wrong type is a record this
  * version cannot read — not one to fill in a default for, because every default
  * here is a guess about what an earlier run actually asked.
@@ -708,14 +710,14 @@ function readInputs(value: Json): RetainedInputs | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }
-  const { syntax, instruction } = value;
-  if (Object.keys(value).length !== 2) {
+  const { instruction } = value;
+  if (Object.keys(value).length !== 1) {
     return undefined;
   }
-  if (typeof syntax !== "string" || typeof instruction !== "string") {
+  if (typeof instruction !== "string") {
     return undefined;
   }
-  return { syntax, instruction };
+  return { instruction };
 }
 
 /**

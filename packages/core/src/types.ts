@@ -9,6 +9,7 @@ import type { Operation, Result } from "effection";
 import type { Json as DurableJson } from "@executablemd/durable-streams";
 import type { TestHarnessComponentDefinition } from "./test-harness.ts";
 import type { ComponentInvocation, InvocationForm } from "./invocation-identity.ts";
+import type { ProtectedComponent } from "./components/protected.ts";
 
 export type Json = DurableJson;
 
@@ -328,6 +329,29 @@ export type ComponentOrigin =
   | { kind: "repository"; path: string }
   | { kind: "registered"; origin: string; reserved: boolean }
   /**
+   * A component canonical core claims the name of, ahead of every host and
+   * author tier (`components/protected.ts`).
+   *
+   * Its own kind rather than a reserved registration, because it is not one: a
+   * reserved registration is a host installing something under a name this
+   * execution happens to protect, and it can be absent, replaced or refused at
+   * registration. This is core's own declaration, present in every execution,
+   * and no registry supplies it. Reporting it as a registration told a reader
+   * the name could be re-registered, which is exactly what it cannot be.
+   */
+  | { kind: "protected"; origin: string }
+  /**
+   * A component a workflow definition is closed over, at the canonical
+   * repository-relative path the blob holds inside the pinned commit.
+   *
+   * Distinct from `repository` because the two answer differently to the only
+   * question a reader has about them: a repository candidate is whatever that
+   * path holds now, and a bundle member is the exact blob `sourceHash` names,
+   * fixed when the run was defined. Reporting a bundled component as a
+   * repository one said a mutable path decided it.
+   */
+  | { kind: "workflow"; path: string; sourceHash: string }
+  /**
    * Exact Markdown a trusted host declared to this environment. It names the
    * first-party asset the bytes came from, never a path a repository could
    * supply and never the root that invoked it.
@@ -343,6 +367,17 @@ export type ComponentOrigin =
  */
 export type ComponentSelection =
   | { kind: "structural"; construct: string }
+  /**
+   * A component canonical core claims the name of, ahead of every host or author
+   * tier. The declaration is core's own; the implementation belongs to whichever
+   * execution is running, so selection reports the contract and the execution
+   * supplies what it built (`components/protected.ts`).
+   */
+  | {
+      kind: "protected";
+      component: ProtectedComponent;
+      origin: Extract<ComponentOrigin, { kind: "protected" }>;
+    }
   | { kind: "registered"; definition: FunctionComponentDefinition; origin: ComponentOrigin }
   | { kind: "repository"; path: string }
   /**

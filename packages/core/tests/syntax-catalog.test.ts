@@ -30,6 +30,7 @@ import {
   agentIdentityComponents,
   CORE_COMPONENT_NAMES,
   inspectSyntax,
+  PROTECTED_COMPONENT_NAMES,
   registerComponents,
   RESERVED_STRUCTURAL,
   STRUCTURAL_DECLARATIONS,
@@ -38,7 +39,7 @@ import type {
   CompleteComponentSyntaxEntry,
   OriginOnlyComponentSyntaxEntry,
   StructuralSyntaxEntry,
-  SyntaxCatalog,
+  SyntaxSymbols,
 } from "../mod.ts";
 import type { IdentityComponent } from "../host.ts";
 import type { InvocationForm } from "../mod.ts";
@@ -187,23 +188,23 @@ function catalogFor(
   tree: Tree,
   includes: readonly string[],
   enumeration: Enumeration = {},
-): Operation<SyntaxCatalog> {
+): Operation<SyntaxSymbols> {
   return scoped(function* () {
     yield* useTree(tree, enumeration);
     return yield* inspectSyntax({ includes });
   });
 }
 
-function structural(catalog: SyntaxCatalog): readonly StructuralSyntaxEntry[] {
+function structural(catalog: SyntaxSymbols): readonly StructuralSyntaxEntry[] {
   return catalog.categories[0].entries;
 }
 
-function builtIn(catalog: SyntaxCatalog): readonly CompleteComponentSyntaxEntry[] {
+function builtIn(catalog: SyntaxSymbols): readonly CompleteComponentSyntaxEntry[] {
   return catalog.categories[1].entries;
 }
 
 function userProvided(
-  catalog: SyntaxCatalog,
+  catalog: SyntaxSymbols,
 ): readonly (CompleteComponentSyntaxEntry | OriginOnlyComponentSyntaxEntry)[] {
   return catalog.categories[2].entries;
 }
@@ -236,10 +237,10 @@ const DOCUMENTED = [
 ].join("\n");
 
 describe("Tier SY: the versioned shape", () => {
-  it("SY1: reports version 1 and the three categories in a fixed order", function* () {
+  it("SY1: reports version 2 and the three categories in a fixed order", function* () {
     const catalog = yield* catalogFor({ components: { kind: "directory" } }, ["components"]);
 
-    expect(catalog.version).toBe(1);
+    expect(catalog.version).toBe(2);
     expect(catalog.categories.map((category) => category.kind)).toEqual([
       "structural",
       "built-in",
@@ -320,7 +321,7 @@ describe("Tier SY: structural vocabulary", () => {
     const catalog = yield* catalogFor({}, []);
     const entries = structural(catalog);
 
-    expect(catalog.version).toBe(1);
+    expect(catalog.version).toBe(2);
     expect(find(entries, "Switch")).toEqual({
       kind: "structural",
       name: "Switch",
@@ -561,7 +562,12 @@ describe("Tier SY: selection decides", () => {
   it("SY10: falls back to a registration when no repository file supplies a name", function* () {
     const catalog = yield* catalogFor({ components: { kind: "directory" } }, ["components"]);
 
-    expect(names(builtIn(catalog)).sort()).toEqual([...CORE_COMPONENT_NAMES].sort());
+    // Core's overridable defaults, plus the names canonical core protects: both
+    // are built-in to a reader, and the set is pinned exactly so a name arriving
+    // in either list has to be written down here.
+    expect(names(builtIn(catalog)).sort()).toEqual(
+      [...CORE_COMPONENT_NAMES, ...PROTECTED_COMPONENT_NAMES].sort(),
+    );
     expect(userProvided(catalog)).toEqual([]);
   });
 
@@ -1147,7 +1153,7 @@ describe("Tier SY: inspection is observation, never authority", () => {
       },
     });
 
-    let catalog: SyntaxCatalog | undefined;
+    let catalog: SyntaxSymbols | undefined;
     const failure = yield* raised(
       scoped(function* () {
         yield* useTree({});

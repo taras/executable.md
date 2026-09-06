@@ -33,13 +33,23 @@ import {
   retainedSource,
   useNormalizedOutput,
 } from "@executablemd/core";
-import type { DocumentValidation, ElicitationRequest, Json } from "@executablemd/core";
+import type {
+  DocumentValidation,
+  ElicitationRequest,
+  Json,
+  SyntaxSymbols,
+} from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { PLAN_COMMAND_DOCUMENT, readPackagedDocument } from "../src/packaged-document.ts";
 import { PLAN_COMMAND_IDENTITY } from "../src/authorship-profile.ts";
 import type { PlanSurface } from "../src/plan-component.ts";
-import { AGENT, planDeclarationHarness, useWorkingDirectory } from "./support/plan-harness.ts";
+import {
+  AGENT,
+  CASE_CATALOG,
+  planDeclarationHarness,
+  useWorkingDirectory,
+} from "./support/plan-harness.ts";
 import type { ScriptedReview } from "./support/plan-harness.ts";
 import type { ScriptedTurn } from "./support/fake-acp.ts";
 
@@ -132,10 +142,13 @@ function* runDocument(options: RunOptions = {}): Operation<CommandRun> {
       session: SESSION,
       explicitSession: true,
       ...(options.verbose === undefined ? {} : { verbose: options.verbose }),
+      // The catalog is stated at the execution boundary now, so this records
+      // *when* the public `<Syntax />` occurrence observed it — which is what an
+      // ordering case about the authored Preparing phase is asking.
       // deno-lint-ignore require-yield
-      *catalog() {
+      *symbols(): Operation<SyntaxSymbols> {
         events.push("catalog");
-        return "## Built-in components\n\n### `<File>`\n";
+        return CASE_CATALOG;
       },
       *validate(): Operation<DocumentValidation> {
         const answer = validations.length > 1 ? validations.shift() : validations[0];
@@ -174,6 +187,7 @@ function* runDocument(options: RunOptions = {}): Operation<CommandRun> {
           {
             components: agentIdentityComponents(),
             declarations: [harness.declaration],
+            symbols: harness.symbols,
           },
         ],
       );
@@ -486,7 +500,13 @@ describe("the packaged plan command document", () => {
             secretDetection: true,
             props: { request: REQUEST, session: SESSION },
           },
-          [{ components: agentIdentityComponents(), declarations: [installed] }],
+          [
+            {
+              components: agentIdentityComponents(),
+              declarations: [installed],
+              symbols: harness.symbols,
+            },
+          ],
         );
         // deno-lint-ignore require-yield
         yield* forEach(function* (chunk: string) {

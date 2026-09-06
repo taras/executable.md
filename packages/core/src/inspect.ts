@@ -3,6 +3,7 @@ import { readTextFile } from "@executablemd/runtime";
 
 import type {
   ComponentOrigin,
+  ComponentRegistry,
   ComponentSelection,
   InvocationForm,
   PropsSchema,
@@ -21,6 +22,8 @@ import { declaredRegistry } from "./components/declared-registry.ts";
 import { admitDeclaredMarkdown, declaredCatalog } from "./components/declared-markdown.ts";
 import type { DeclaredMarkdownComponent } from "./components/declared-markdown.ts";
 import { repositoryCandidateNames } from "./components/candidates.ts";
+import { PROTECTED_COMPONENT_NAMES } from "./components/protected.ts";
+import type { WorkflowImportAuthority } from "./components/bundle.ts";
 import { documentationOf } from "./components/documentation.ts";
 import type { ComponentDocumentation } from "./components/documentation.ts";
 import { STRUCTURAL_DECLARATIONS } from "./structural.ts";
@@ -155,6 +158,19 @@ export type ComponentInfo =
       props: PropsSchema;
       returns?: ReturnsSchema;
     } & DescribedContract)
+  /**
+   * A component canonical core claims the name of.
+   *
+   * Its own `kind` for the same reason its origin has one: a caller asking what
+   * `Syntax` is needs to learn that no registry supplies it and none can, which
+   * `registered` said the opposite of.
+   */
+  | ({
+      kind: "protected";
+      origin: ComponentOrigin;
+      props: PropsSchema;
+      returns?: ReturnsSchema;
+    } & DescribedContract)
   | ({
       kind: "markdown";
       origin: ComponentOrigin;
@@ -167,7 +183,7 @@ export type ComponentInfo =
 /**
  * What a fully describable component reports beyond its schemas.
  *
- * The same values the catalog carries, built by the same code, so describing
+ * The same values the symbols carry, built by the same code, so describing
  * one name and describing the whole environment cannot disagree. `returns`
  * above stays the *declared* schema — absent in text mode — while `returnMode`
  * is what tells the two apart.
@@ -204,6 +220,16 @@ export function* inspectComponent(options: InspectComponentOptions): Operation<C
         kind: "structural",
         construct: selected.construct,
         origin: { kind: "structural", construct: selected.construct },
+      };
+    case "protected":
+      return {
+        kind: "protected",
+        origin: selected.origin,
+        props: selected.component.props,
+        ...(selected.component.returns === undefined
+          ? {}
+          : { returns: selected.component.returns }),
+        ...describedContract(yield* completeEntry(name, selected)),
       };
     case "registered":
       return {
@@ -251,7 +277,7 @@ export function* inspectComponent(options: InspectComponentOptions): Operation<C
   }
 }
 
-/** The catalog entry for a selection that is known to describe itself fully. */
+/** The symbol entry for a selection that is known to describe itself fully. */
 function* completeEntry(
   name: string,
   selected: ComponentSelection,
@@ -287,13 +313,21 @@ const BOTH_FORMS: readonly InvocationForm[] = ["self-closing", "paired"];
 /**
  * Everything a document may write here, as one value.
  *
- * Version 1, and the version is part of the contract rather than a note about
- * it: a consumer reads `version` before anything else and never has to guess
- * which shape it received. The three categories are a fixed tuple in a fixed
- * order, so a reader indexes them and a renderer walks them without sorting.
+ * The version is part of the contract rather than a note about it: a consumer
+ * reads `version` before anything else and never has to guess which shape it
+ * received. The three categories are a fixed tuple in a fixed order, so a reader
+ * indexes them and a renderer walks them without sorting.
+ *
+ * **Version 2** adds two origin kinds, `protected` and `workflow`, and that is
+ * why it is a new version rather than an addition to version 1. A version-1
+ * reader was promised a closed set of origins; quietly emitting a kind it has
+ * never seen would break it, and quietly *reusing* an existing kind — which is
+ * what version 1 did for both of these — told it something untrue. See
+ * `ComponentOrigin`. Nothing else about the shape changed, so a reader that
+ * switches exhaustively on `kind` needs two new arms and no other work.
  */
-export interface SyntaxCatalog {
-  readonly version: 1;
+export interface SyntaxSymbols {
+  readonly version: 2;
   readonly categories: readonly [
     {
       readonly kind: "structural";
@@ -333,7 +367,20 @@ export interface CompleteComponentSyntaxEntry {
   readonly kind: "component";
   readonly name: string;
   readonly origin: Exclude<ComponentOrigin, { kind: "structural" }>;
-  readonly sourceKind: "registered" | "markdown" | "declared-markdown";
+  /**
+   * What kind of thing supplied the contract above.
+   *
+   * `protected` and `workflow-markdown` are version 2's additions. Both were
+   * previously folded into a neighbour — `registered` and `markdown` — which
+   * made a symbols reader unable to tell core's own component from a host's
+   * registration, or a pinned bundle member from a file on disk.
+   */
+  readonly sourceKind:
+    | "registered"
+    | "protected"
+    | "markdown"
+    | "workflow-markdown"
+    | "declared-markdown";
   readonly inspectability: "complete";
   readonly forms: readonly ("self-closing" | "paired")[];
   readonly props: PropsSchema;
@@ -365,6 +412,28 @@ export interface InspectSyntaxOptions {
   /** Where to look, matching the search path execution uses. */
   readonly includes?: readonly string[];
   /**
+   * The registrations to describe, when the caller holds them.
+   *
+   * Omitted reads whatever the calling scope installed, which is what `xmd
+   * syntax` wants — it assembles the profile it is describing and then asks. An
+   * execution passes the registry it *captured* instead: what a document may
+   * write is decided by the registrations the execution started with, and a
+   * nested `registerComponents()` somewhere inside it does not change the
+   * environment the run was assembled as.
+   */
+  readonly registry?: ComponentRegistry;
+  /**
+   * The component bundle the execution being described is closed over.
+   *
+   * Omitted for an inspection: `xmd syntax` installs no bundle, so it describes
+   * a document rather than a run. An execution that has one passes it, because
+   * leaving it out would describe a workflow root as having none of the
+   * components its own pinned tree supplies. Nothing here imports or executes a
+   * bundle member: the pinned source is already in hand, and describing it
+   * parses the same bytes execution would.
+   */
+  readonly workflow?: WorkflowImportAuthority;
+  /**
    * Identity components the host would declare to an execution, with the same
    * meaning `ExecuteOptions.components` gives them — admissibility included.
    *
@@ -379,7 +448,7 @@ export interface InspectSyntaxOptions {
    * The exact Markdown a host would declare to an execution, with the same
    * meaning `ExecutionInstallation.declarations` gives it — admissibility
    * included. A private declaration contributes no entry: it is not a name a
-   * document can write, so a catalog that listed it would describe syntax that
+   * document can write, so symbols that listed it would describe syntax that
    * does not exist.
    */
   readonly declarations?: readonly DeclaredMarkdownComponent[];
@@ -400,8 +469,9 @@ export interface InspectSyntaxOptions {
  * is for execution. This adds the names to ask about and the shape of the
  * answer.
  */
-export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxCatalog> {
+export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxSymbols> {
   const includes = options.includes ?? DEFAULT_INCLUDES;
+  const bundled = options.workflow;
   const declared = options.components ?? [];
   // The whole declaration set is admitted before anything is built from it, on
   // exactly the terms ordinary execution admits it on. A set an execution would
@@ -411,7 +481,10 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxC
   for (const component of declared) {
     yield* admitDeclaration(component);
   }
-  const registry = mergeRegistry(yield* Component.operations.registry, declaredRegistry(declared));
+  const registry = mergeRegistry(
+    options.registry ?? (yield* Component.operations.registry),
+    declaredRegistry(declared),
+  );
   // Admitted on exactly the terms an execution installs declarations on, and
   // for the same reason the identity components above are: a set a run would
   // refuse describes an environment no document could ever run in.
@@ -426,6 +499,14 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxC
   for (const declaration of STRUCTURAL_DECLARATIONS) {
     names.add(declaration.name);
   }
+  // Core's own claim, so it is enumerated wherever symbols are built rather
+  // than only where a host remembered to mention it.
+  for (const name of PROTECTED_COMPONENT_NAMES) {
+    names.add(name);
+  }
+  for (const name of bundled?.names() ?? []) {
+    names.add(name);
+  }
   for (const registered of effectiveRegistry(registry).keys()) {
     names.add(registered);
   }
@@ -438,6 +519,7 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxC
     const selected = yield* selectComponent(name, {
       includes,
       registry,
+      ...(bundled === undefined ? {} : { workflow: bundled }),
       ...(declarations === undefined ? {} : { declared: declarations }),
     });
     if (selected.kind === "structural") {
@@ -450,8 +532,14 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxC
     }
     // A repository override therefore removes the name from `built-in` and adds
     // its one selected entry to `user-provided`: selection chose once, and the
-    // catalog reports what it chose rather than everything it could have.
-    if (entry.inspectability === "origin-only" || entry.origin.kind === "repository") {
+    // symbols report what it chose rather than everything it could have.
+    //
+    // A workflow-bundle member belongs here for the same reason a repository
+    // file does — it is the run author's own Markdown, not something the engine
+    // or the host supplies — and it is named separately because its origin kind
+    // is no longer `repository`.
+    const authored = entry.origin.kind === "repository" || entry.origin.kind === "workflow";
+    if (entry.inspectability === "origin-only" || authored) {
       userProvided.push(entry);
     } else {
       builtIn.push(entry);
@@ -459,7 +547,7 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxC
   }
 
   return {
-    version: 1,
+    version: 2,
     categories: [
       { kind: "structural", entries: structural },
       { kind: "built-in", entries: builtIn },
@@ -505,16 +593,30 @@ function structuralEntry(construct: string): StructuralSyntaxEntry {
 }
 
 /**
- * The catalog entry one selection produces, or `undefined` when the selection
+ * The symbol entry one selection produces, or `undefined` when the selection
  * describes nothing a document can write here.
  *
  * Shared with `inspectComponent()` below, so a single name and the whole
- * catalog cannot disagree about what a component's contract is.
+ * symbols cannot disagree about what a component's contract is.
  */
 function* componentEntry(
   name: string,
   selected: ComponentSelection,
 ): Operation<CompleteComponentSyntaxEntry | OriginOnlyComponentSyntaxEntry | undefined> {
+  if (selected.kind === "protected") {
+    const { component, origin } = selected;
+    // Described from the declaration alone. The factory is never called: it
+    // takes an execution's claimant, and describing an environment mints no
+    // execution and no claimant to give it.
+    return complete(name, origin, "protected", {
+      forms: component.forms ?? BOTH_FORMS,
+      props: component.props,
+      captures: component.captures ?? [],
+      returns: component.returns,
+      documentation: documentationOf(component),
+    });
+  }
+
   if (selected.kind === "registered") {
     const { definition, origin } = selected;
     if (origin.kind === "structural") {
@@ -540,10 +642,32 @@ function* componentEntry(
     });
   }
 
+  if (selected.kind === "workflow") {
+    // The pinned bytes, already in hand: the bundle was read from the
+    // definition's own commit before this execution existed, so describing one
+    // reads no file, imports no module and runs nothing. Reported at the
+    // canonical path it holds inside that commit *and* by the blob's own object
+    // id, because the path alone would read as a repository candidate — a
+    // mutable file that happens to sit there now — and this is the exact blob
+    // the run was defined against.
+    const definition = yield* parseMarkdownDefinition(name, selected.path, selected.content);
+    return complete(
+      name,
+      { kind: "workflow", path: selected.path, sourceHash: selected.sourceHash },
+      "workflow-markdown",
+      {
+        forms: BOTH_FORMS,
+        props: definition.props,
+        captures: [],
+        returns: definition.returns,
+        documentation: documentationOf(definition.meta),
+      },
+    );
+  }
+
   if (selected.kind !== "repository") {
-    // A bundled or unresolved name describes no environment a document writes
-    // in: inspection installs no bundle, and a name nothing supplies is exactly
-    // the absence the catalog reports by leaving it out.
+    // An unresolved name is exactly the absence the symbols report by leaving
+    // it out.
     return undefined;
   }
 
@@ -586,7 +710,7 @@ interface CompleteContract {
 function complete(
   name: string,
   origin: Exclude<ComponentOrigin, { kind: "structural" }>,
-  sourceKind: "registered" | "markdown" | "declared-markdown",
+  sourceKind: CompleteComponentSyntaxEntry["sourceKind"],
   contract: CompleteContract,
 ): CompleteComponentSyntaxEntry {
   return {
