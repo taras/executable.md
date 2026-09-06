@@ -42,6 +42,7 @@ export {
   ADVERTISED_NATIVE_LAUNCH,
   knownNativeAdapters,
   nativeAdapterFor,
+  nativeCapabilityCompatibility,
 } from "./src/native-launch.ts";
 export { allocatesIdentity } from "./src/native-launch.ts";
 export type {
@@ -50,6 +51,23 @@ export type {
   NativeBinding,
   ProviderReturnedAdapter,
 } from "./src/native-launch.ts";
+
+/**
+ * Which exact builds and machines a native capability is admitted on.
+ *
+ * Public because the host is what states them: it supplies its own OS and
+ * architecture beside the coordinator and the observer, and shared provider
+ * code must not detect either for itself.
+ */
+export { admitsNativeCapability } from "./src/native-capability.ts";
+export type {
+  NativeCapability,
+  NativeCapabilityCompatibility,
+  NativeCapabilityCompatibilityPoint,
+  NativeCapabilityHost,
+  ObservedNativeCapability,
+  ProvedNativeCapability,
+} from "./src/native-capability.ts";
 
 /**
  * ACPX's own runtime types.

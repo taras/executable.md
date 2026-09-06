@@ -32,6 +32,11 @@
 
 import { randomUUID } from "node:crypto";
 import type { IdentityProvenance } from "@executablemd/core";
+import type {
+  NativeCapabilityCompatibility,
+  NativeCapabilityHost,
+  ProvedNativeCapability,
+} from "./native-capability.ts";
 
 /**
  * What an adapter knows about the build behind its executable.
@@ -111,6 +116,15 @@ interface AdapterCommands {
   identity: IdentityProvenance;
   /** The argv that resumes this exact provider-native session. */
   resume(nativeSessionId: string): string[];
+  /**
+   * The exact builds and machines a real-CLI proof of this adapter ran on.
+   *
+   * The adapter's, because the proof is about this adapter's own contract
+   * against its own installed CLI. Absent is the honest default: knowing a
+   * command shape establishes nothing, and an adapter that has proved nothing
+   * contributes no point for a host to admit.
+   */
+  proved?: readonly ProvedNativeCapability[];
 }
 
 /**
@@ -153,6 +167,21 @@ export function allocatesIdentity(adapter: NativeAdapter): adapter is ClientAllo
   return adapter.identity === "client-allocated";
 }
 
+/**
+ * The one build and machine Claude's proofs ran on.
+ *
+ * Written once and shared by both points below so they cannot drift apart into
+ * two claims about two builds. Raising either is a new proof rather than an
+ * edit here: what makes this admissible is that a real CLI was driven through
+ * the whole applicable contract on exactly this, and nothing about that
+ * generalizes to the next release or the next machine.
+ */
+const CLAUDE_PROVED_BUILD = {
+  reportedVersion: "2.1.241 (Claude Code)",
+  platform: "darwin",
+  architecture: "arm64",
+} as const;
+
 const ADAPTERS: Readonly<Record<string, NativeAdapter>> = {
   claude: {
     launcher: "claude",
@@ -161,6 +190,14 @@ const ADAPTERS: Readonly<Record<string, NativeAdapter>> = {
     identity: "client-allocated",
     // Claude takes a UUID it has never seen and makes it the session's name.
     allocate: () => randomUUID(),
+    // Two points rather than one: `ClaudeNativeLaunch.test.md` and
+    // `ClaudeZeroTurnExit.test.md` showed the launch contract, and
+    // `ClaudeNativeToAcp.test.md` showed attachment. Either could have failed
+    // while the other held, so neither is written down as the other's evidence.
+    proved: [
+      { capability: "native-launch", ...CLAUDE_PROVED_BUILD },
+      { capability: "client-native-attachment", ...CLAUDE_PROVED_BUILD },
+    ],
     binding: {
       command: "claude",
       version: claudeVersion,
@@ -189,41 +226,49 @@ const ADAPTERS: Readonly<Record<string, NativeAdapter>> = {
 };
 
 /**
- * The adapters whose native creation, instruction and resume contracts have
- * been proven against the installed CLI.
+ * The adapters this host will consider for native launch at all.
  *
- * `claude` is here because `packages/acp/src/ClaudeNativeLaunch.test.md` and
- * `packages/acp/src/ClaudeZeroTurnExit.test.md` ran the production command
- * through the built binary against Claude Code 2.1.241 on macOS arm64 and
- * showed the whole applicable contract: the adapter allocated the identity, the
- * native process created that exact conversation from a private mode-0600 file,
- * the layer governed the first user turn with no bootstrap, and a second
- * independent invocation resumed the same identity — including a session left
- * without a word said in it.
+ * A coarse selection and nothing more. For an adapter that names its own
+ * sessions the name authorizes no work by itself: what admits one is the
+ * compatibility point below, matched against the build actually found and the
+ * machine actually running. A name reaches the question; it does not answer it.
  *
  * `codex` is absent. Its command shape is known and its adapter contract tests
  * pass, and neither is the proof: nothing has run it against an installed
- * Codex. A host may still advertise an adapter itself by passing its name
- * through `AcpxProviderDependencies.advertiseNativeLaunch`.
+ * Codex. A host may still name an adapter itself by passing it through
+ * `AcpxProviderDependencies.advertiseNativeLaunch`.
  */
 export const ADVERTISED_NATIVE_LAUNCH: readonly string[] = ["claude"];
 
 /**
- * The adapters whose client-native ACP attachment has been proven against the
- * installed CLI.
+ * The adapters this host will consider for client-native ACP attachment.
  *
  * A separate list from the one above, because they are separate capabilities:
  * handing a session to a native UI and later joining that same conversation
  * through ACP prove different things. An adapter may have the first without the
- * second.
- *
- * `claude` is here because `packages/acp/src/ClaudeNativeToAcp.test.md` ran the
- * production command through the built binary: a native turn carrying a random
- * marker, then a marker-free ACP Prompt that recovered it under the same
- * provider-native identity and the same observed build, and an independent
- * absent identity that refused without taking a turn.
+ * second. Like that list, this one selects rather than authorizes.
  */
 export const ADVERTISED_CLIENT_NATIVE_ATTACHMENT: readonly string[] = ["claude"];
+
+/**
+ * What this build's adapters have proved, on the machine a host says it is.
+ *
+ * The two halves come from where each is known. Which builds were driven
+ * through a real CLI is the adapters' own evidence and is compiled in beside
+ * them; which OS and architecture are underneath right now is the host's, and
+ * arrives here rather than being detected. Neither half admits anything alone —
+ * a point is only admitted where a proof and the machine it ran on meet.
+ */
+export function nativeCapabilityCompatibility(
+  host: NativeCapabilityHost,
+): NativeCapabilityCompatibility {
+  return {
+    host,
+    points: Object.entries(ADAPTERS).flatMap(([agent, adapter]) =>
+      (adapter.proved ?? []).map((proved) => ({ agent, ...proved })),
+    ),
+  };
+}
 
 export function nativeAdapterFor(agentName: string): NativeAdapter | undefined {
   return Object.hasOwn(ADAPTERS, agentName) ? ADAPTERS[agentName] : undefined;

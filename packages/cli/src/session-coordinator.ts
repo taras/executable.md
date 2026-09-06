@@ -23,8 +23,13 @@ import {
   ADVERTISED_CLIENT_NATIVE_ATTACHMENT,
   ADVERTISED_NATIVE_LAUNCH,
   createDenoSessionRouteStore,
+  nativeCapabilityCompatibility,
 } from "@executablemd/acp";
-import type { AgentSessionRouteStore } from "@executablemd/acp";
+import type {
+  AgentSessionRouteStore,
+  NativeCapabilityCompatibility,
+  NativeCapabilityHost,
+} from "@executablemd/acp";
 
 export function sessionCoordinatorRoot(): string {
   return join(homedir(), ".acpx", "xmd-native-sessions", "v1");
@@ -46,6 +51,15 @@ export interface MachineSessionAssembly {
   executableObserver?: ExecutableObserver;
   advertiseNativeLaunch: readonly string[];
   advertiseClientNativeAttachment: readonly string[];
+  /**
+   * Which exact builds this host admits each capability on, and the machine it
+   * admits them for.
+   *
+   * Beside the observer rather than derived from the names above, because the
+   * names are a coarse selection: an adapter reaches the question through them
+   * and is answered here. Absent admits nothing.
+   */
+  compatibility?: NativeCapabilityCompatibility;
 }
 
 /** This host's session coordinator, or nothing when it cannot provide one. */
@@ -74,10 +88,16 @@ export function useExecutableObserver(): ExecutableObserver | undefined {
 }
 
 /**
- * The ordinary `xmd run` profile: this machine's sessions, and the adapters
- * proven against the installed CLI.
+ * The ordinary `xmd run` profile: this machine's sessions, and what its
+ * adapters have been proved to do on it.
+ *
+ * `host` is passed in rather than read here, and read at the entrypoint rather
+ * than anywhere below it. Which OS and architecture are underneath is exactly
+ * the fact a capability point is matched against, so a module that went and
+ * found it for itself would be supplying the answer as well as the question —
+ * and a case stating an exact point could never contradict it.
  */
-export function useMachineSessions(): MachineSessionAssembly {
+export function useMachineSessions(host: NativeCapabilityHost): MachineSessionAssembly {
   return {
     ...(useSessionCoordinator() === undefined ? {} : { coordinator: useSessionCoordinator() }),
     ...(useSessionRouteStore() === undefined ? {} : { routeStore: useSessionRouteStore() }),
@@ -86,17 +106,18 @@ export function useMachineSessions(): MachineSessionAssembly {
       : { executableObserver: useExecutableObserver() }),
     advertiseNativeLaunch: ADVERTISED_NATIVE_LAUNCH,
     advertiseClientNativeAttachment: ADVERTISED_CLIENT_NATIVE_ATTACHMENT,
+    compatibility: nativeCapabilityCompatibility(host),
   };
 }
 
 /**
  * The same advertised names on a host that assembles none of the answers.
  *
- * Node and Bun run the same commands and offer the same agents, and neither can
- * take a kernel-released advisory lock, keep durable routes, or observe a
- * build. Keeping the names is what makes the refusal say so: every advertised
- * operation stops before provider work rather than acting while a native UI may
- * be in the conversation.
+ * Node and Bun run the same commands and offer the same agents, and none of
+ * them can take a kernel-released advisory lock, keep durable routes, observe a
+ * build, or say which builds this machine has proved. Keeping the names is what
+ * makes the refusal say so: every advertised operation stops before provider
+ * work rather than acting while a native UI may be in the conversation.
  */
 export function unassembledMachineSessions(): MachineSessionAssembly {
   return {

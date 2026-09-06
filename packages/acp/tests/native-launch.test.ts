@@ -22,6 +22,7 @@ import { Agent } from "@executablemd/core";
 import type {
   AgentLaunchRequest,
   AgentProviderAuthority,
+  DetachedLaunchRecord,
   ExitedLaunchRecord,
   LaunchRecord,
   PreparedLaunchRecord,
@@ -38,7 +39,13 @@ import {
   allocatesIdentity,
   knownNativeAdapters,
   nativeAdapterFor,
+  nativeCapabilityCompatibility,
 } from "../src/native-launch.ts";
+import type {
+  NativeCapability,
+  NativeCapabilityCompatibility,
+  NativeCapabilityHost,
+} from "../src/native-capability.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -165,6 +172,39 @@ const OBSERVED_BUILD: ExecutableBuildBindingV1 = {
 /** The canonical path that same observation reports. */
 const OBSERVED_PATH = "/opt/builds/claude";
 
+/**
+ * The machine these cases describe.
+ *
+ * Stated, never read from the runner. A capability point names an exact OS and
+ * architecture, so a suite that asked the machine underneath it what it was
+ * would be admitting whatever it happened to run on — and the shipped Claude
+ * evidence, which is a Mac with Apple silicon, would be exercised on one CI
+ * shard and skipped everywhere else.
+ */
+const PROVED_HOST: NativeCapabilityHost = { platform: "darwin", architecture: "arm64" };
+
+/**
+ * A host that has proved the named builds of `claude`, both capabilities each.
+ *
+ * For the cases that need two admitted builds at once. Everything else takes
+ * the package's own evidence, so what most of this file runs against is the
+ * shipped table rather than a convenient stand-in.
+ */
+function admitting(...reportedVersions: readonly string[]): NativeCapabilityCompatibility {
+  const capabilities: readonly NativeCapability[] = ["native-launch", "client-native-attachment"];
+  return {
+    host: PROVED_HOST,
+    points: reportedVersions.flatMap((reportedVersion) =>
+      capabilities.map((capability) => ({
+        agent: "claude",
+        capability,
+        reportedVersion,
+        ...PROVED_HOST,
+      })),
+    ),
+  };
+}
+
 /** Everything the launch touched, in the order it touched it. */
 interface Trace {
   records: LaunchRecord[];
@@ -181,6 +221,19 @@ interface Trace {
    * which is the only way to show that neither answers the other.
    */
   replay?: Replay;
+  /**
+   * A journal with every phase already in it.
+   *
+   * Separate from `replay` because there is no phase left to invoke: the
+   * authority hands all three records back and the provider is never entered.
+   * That is the whole claim a case makes with one, so a suffix that happened to
+   * call nothing would not be the same thing.
+   */
+  completed?: {
+    prepared: PreparedLaunchRecord;
+    detached: DetachedLaunchRecord;
+    exited: ExitedLaunchRecord;
+  };
 }
 
 interface ProviderOptions {
@@ -189,6 +242,14 @@ interface ProviderOptions {
   attach?: readonly string[];
   /** `false` gives this host no way to observe a build at all. */
   observer?: ExecutableObserver | false;
+  /**
+   * Which exact points this host has proved.
+   *
+   * Defaults to the package's own evidence for the machine above, so a case
+   * says nothing unless it is describing a host that proved something else.
+   * `false` is a host that has proved nothing and admits nothing.
+   */
+  compatibility?: NativeCapabilityCompatibility | false;
   store?: AcpSessionStore;
   adapters?: Record<string, NativeAdapter>;
   /**
@@ -274,6 +335,16 @@ function traceAuthority(trace: Trace): AgentProviderAuthority {
       throw new Error("this stub authority names no provider turn");
     },
     *perform(_request, phases) {
+      // A journal that already reached `exited` is replayed whole: no phase is
+      // invoked, so the provider is not entered at all.
+      const completed = trace.completed;
+      if (completed) {
+        for (const record of [completed.prepared, completed.detached, completed.exited]) {
+          trace.records.push(record);
+          trace.order.push(record.phase);
+        }
+        return;
+      }
       // A replay hands back what the journal retained rather than calling the
       // provider's live preparation, exactly as the real authority does when
       // the phase is already recorded.
@@ -361,6 +432,9 @@ function* installLaunchStack(
     ...(options.observer === false
       ? {}
       : { executableObserver: options.observer ?? createFakeObserver().observer }),
+    ...(options.compatibility === false
+      ? {}
+      : { compatibility: options.compatibility ?? nativeCapabilityCompatibility(PROVED_HOST) }),
     coordinator: options.coordinator ?? trace.ownership.coordinator,
     ...(options.routeStore ? { routeStore: options.routeStore } : {}),
     ...(options.withSessionRoute ? { withSessionRoute: options.withSessionRoute } : {}),
@@ -3364,6 +3438,8 @@ describe("Tier RT — bound runtime partitions", () => {
       adapters: { claude: adapter() },
       routeStore: routes,
       observer: observer.observer,
+      // Two builds is the whole case, so this host has proved both of them.
+      compatibility: admitting("2.1.241 (Claude Code)", "2.1.242 (Claude Code)"),
     });
 
     yield* Agent.operations.session();
@@ -3930,5 +4006,609 @@ describe("Tier CV — canonical Claude version", () => {
     // Including two that agree: a file reporting its version twice is a file
     // this adapter cannot read as one answer.
     expect(parse("2.1.241 (Claude Code)\n2.1.241 (Claude Code)\n")).toBe(undefined);
+  });
+});
+
+/**
+ * Tier NP — the proved capability points a host admits
+ * (specs/decisions.md §DEC-017).
+ *
+ * An advertised adapter name selects a command shape. What admits work on a
+ * session is a point: one agent, one capability, one canonical reported
+ * version, one OS and one architecture, matched whole. These cases run the four
+ * paths that check one — fresh client-native construction, bound native resume,
+ * bound ACP attachment and incomplete replay — and each refusal is read at the
+ * boundary it is supposed to stop in front of, rather than by its message
+ * alone: nothing may be allocated, published, written, spawned, ensured or
+ * retained behind it.
+ */
+describe("Tier NP — proved native capability points", () => {
+  const ALLOCATED = "cafe0000-1111-2222-3333-444444444444";
+
+  /** The build the shipped Claude evidence names, and the one that follows it. */
+  const PROVED_VERSION = "2.1.241 (Claude Code)";
+  const LATER_VERSION = "2.1.263 (Claude Code)";
+
+  /** Every boundary a refused point must stop in front of. */
+  interface Boundaries {
+    allocations: number;
+    creates: number;
+    resumes: number;
+    published: AgentSessionRoute[];
+  }
+
+  function boundaries(): Boundaries {
+    return { allocations: 0, creates: 0, resumes: 0, published: [] };
+  }
+
+  /**
+   * The client-allocated adapter, with each thing it can do counted.
+   *
+   * Counting the adapter rather than watching for a side effect is what makes
+   * "nothing was allocated" a reading instead of an inference: allocation is
+   * the adapter's own act, and a call to it is visible whether or not anything
+   * downstream kept the answer.
+   */
+  function countedAdapter(seen: Boundaries, allocate: () => string = () => ALLOCATED) {
+    return {
+      launcher: "claude",
+      identity: "client-allocated",
+      binding: TEST_BINDING,
+      allocate: () => {
+        seen.allocations += 1;
+        return allocate();
+      },
+      create: (nativeSessionId: string, instructionFile: string) => {
+        seen.creates += 1;
+        return ["claude", "--session-id", nativeSessionId, "--system-prompt-file", instructionFile];
+      },
+      resume: (nativeSessionId: string) => {
+        seen.resumes += 1;
+        return ["claude", "--resume", nativeSessionId];
+      },
+    } satisfies NativeAdapter;
+  }
+
+  /** The same store, with every publication that reached it retained. */
+  function countedRoutes(seen: Boundaries): AgentSessionRouteStore {
+    const inner = createMemorySessionRouteStore();
+    return {
+      read: (key) => inner.read(key),
+      *publish(candidate) {
+        seen.published.push(candidate);
+        return yield* inner.publish(candidate);
+      },
+    };
+  }
+
+  const KEY = { provider: "acpx", agent: AGENT_COMMAND, sessionKey: SESSION_KEY };
+
+  /** The bound route a completed client-native launch leaves behind. */
+  function bound(binding: ExecutableBuildBindingV1 = OBSERVED_BUILD): AgentSessionRoute {
+    return {
+      schema: "session-route.v2",
+      route: "client-native",
+      provider: "acpx",
+      agent: AGENT_COMMAND,
+      sessionKey: SESSION_KEY,
+      nativeSessionId: ALLOCATED,
+      identityProvenance: "client-allocated",
+      instructionsDigest: createHash("sha256").update(INSTRUCTIONS).digest("hex"),
+      launcher: "claude",
+      executableBinding: binding,
+    };
+  }
+
+  /** The same session as the released unbound contract published it. */
+  function legacyRoute(): AgentSessionRoute {
+    return {
+      schema: "session-route.v1",
+      route: "client-native",
+      provider: "acpx",
+      agent: AGENT_COMMAND,
+      sessionKey: SESSION_KEY,
+      nativeSessionId: ALLOCATED,
+      identityProvenance: "client-allocated",
+      instructionsDigest: createHash("sha256").update(INSTRUCTIONS).digest("hex"),
+      launcher: "claude",
+    };
+  }
+
+  /** A retained preparation, as an interrupted launch would have left one. */
+  function preparedRecord(): PreparedLaunchRecord {
+    return {
+      phase: "prepared",
+      agent: "claude",
+      sessionKey: SESSION_KEY,
+      provider: "acpx",
+      nativeSessionId: ALLOCATED,
+      sessionState: "created",
+      instructionChannel: "claude.systemPromptFile",
+      instructionReconciliation: "installed",
+      identityProvenance: "client-allocated",
+      executableBinding: OBSERVED_BUILD,
+      instructionsDigest: createHash("sha256").update(INSTRUCTIONS).digest("hex"),
+      instructions: INSTRUCTIONS,
+      cwd: CWD,
+      additionalDirectories: [],
+      permissionMode: "approve-reads",
+      launcher: "claude",
+    };
+  }
+
+  /**
+   * Run `body` with the private root pointed at somewhere unusable.
+   *
+   * Reading an empty directory afterwards would prove nothing: a launch that
+   * did write a private file removes it, so success and refusal leave the same
+   * empty directory behind. A root that cannot hold one at all is a reading
+   * instead — creating the private directory under it fails in the host's own
+   * words, and that surfaces as `process-creation-failed`. A run that refuses
+   * for a capability under this fault has provably not reached the write, and
+   * the row below takes the same planted fault to the failure it does cause.
+   */
+  function* withUnusablePrivateRoot(body: () => Operation<void>): Operation<void> {
+    const occupied = join(tmpdir(), `xmd-np-${randomUUID()}`);
+    yield* until(writeFile(occupied, "not a directory"));
+    yield* ensure(function* () {
+      yield* until(rm(occupied, { force: true }).catch(() => undefined));
+    });
+    const previous = process.env.TMPDIR;
+    process.env.TMPDIR = occupied;
+    try {
+      yield* body();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.TMPDIR;
+      } else {
+        process.env.TMPDIR = previous;
+      }
+    }
+  }
+
+  it("NP1: the exact proved launch point constructs, on the machine it names", function* () {
+    // The package's own evidence, unmodified, against the build it was proved
+    // against. Nothing here supplies a point: what admits this launch is the
+    // shipped Claude adapter's, read for darwin/arm64.
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const seen = boundaries();
+    const routes = countedRoutes(seen);
+    yield* installLaunchStack(harness, trace, {
+      adapters: { claude: countedAdapter(seen) },
+      routeStore: routes,
+    });
+
+    yield* launch(INSTRUCTIONS);
+
+    const prepared = trace.records[0] as PreparedLaunchRecord;
+    expect(prepared.failure).toBe(undefined);
+    expect(prepared.nativeSessionId).toBe(ALLOCATED);
+    expect(prepared.executableBinding?.reportedVersion).toBe(PROVED_VERSION);
+    expect(seen.allocations).toBe(1);
+    expect(seen.published).toHaveLength(1);
+    expect(trace.launches).toHaveLength(1);
+    // And the point that admitted it is the shipped one, for both capabilities.
+    expect(nativeCapabilityCompatibility(PROVED_HOST).points).toEqual([
+      {
+        agent: "claude",
+        capability: "native-launch",
+        reportedVersion: PROVED_VERSION,
+        ...PROVED_HOST,
+      },
+      {
+        agent: "claude",
+        capability: "client-native-attachment",
+        reportedVersion: PROVED_VERSION,
+        ...PROVED_HOST,
+      },
+    ]);
+  });
+
+  it("NP2: an unproved point refuses a construction before it does anything", function* () {
+    // Four ways to be outside the proof, one refusal each. A later build, the
+    // same build on another OS, the same build on another architecture, and a
+    // host that has proved nothing at all: none of them is a near miss that
+    // some other reading could let through.
+    for (const [name, options] of [
+      ["a later build of the proved agent", { versionOutput: `${LATER_VERSION}\n` }],
+      ["another operating system", { host: { platform: "linux", architecture: "arm64" } }],
+      ["another architecture", { host: { platform: "darwin", architecture: "x64" } }],
+      ["a host that has proved nothing", { none: true }],
+    ] as const) {
+      yield* scoped(function* () {
+        const harness = createFakeRuntime();
+        const trace = newTrace();
+        const seen = boundaries();
+        const store = makeStore();
+        const observer = createFakeObserver(
+          "versionOutput" in options ? { versionOutput: options.versionOutput } : {},
+        );
+
+        yield* withUnusablePrivateRoot(function* () {
+          yield* installLaunchStack(harness, trace, {
+            adapters: { claude: countedAdapter(seen) },
+            routeStore: countedRoutes(seen),
+            store,
+            observer: observer.observer,
+            compatibility:
+              "none" in options
+                ? false
+                : "host" in options
+                  ? nativeCapabilityCompatibility(options.host)
+                  : undefined,
+          });
+          const failure = yield* attempt(trace, INSTRUCTIONS);
+          // Not `process-creation-failed`: the private root is unusable for the
+          // whole of this launch, so a run that reached the instruction write
+          // would have failed there instead.
+          expect([name, failure?.class]).toEqual([name, "unsupported-capability"]);
+        });
+
+        // The build was observed — that is how the point became a question at
+        // all — and then everything the answer gates stopped. Each of these is
+        // something NP1 sees happen on the admitted path.
+        expect([name, observer.observed]).toEqual([name, ["claude"]]);
+        expect([name, seen.allocations]).toEqual([name, 0]);
+        expect([name, seen.creates + seen.resumes]).toEqual([name, 0]);
+        expect([name, seen.published]).toEqual([name, []]);
+        expect([name, trace.launches]).toEqual([name, []]);
+        // Nothing durable, and no provider conversation, under any of them.
+        expect([name, [...store.records.keys()]]).toEqual([name, []]);
+        expect([name, harness.ensureCalls]).toEqual([name, []]);
+      });
+    }
+
+    // The same planted fault, on the point this host has proved: the launch
+    // gets past admission and fails where the private file is written. Without
+    // this the row above would be reading a fault that never fires.
+    yield* scoped(function* () {
+      const harness = createFakeRuntime();
+      const trace = newTrace();
+      const seen = boundaries();
+
+      yield* withUnusablePrivateRoot(function* () {
+        yield* installLaunchStack(harness, trace, {
+          adapters: { claude: countedAdapter(seen) },
+          routeStore: countedRoutes(seen),
+        });
+        yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
+      });
+
+      const exited = trace.records.findLast(
+        (record) => record.phase === "exited",
+      ) as ExitedLaunchRecord;
+      expect(exited.failure?.class).toBe("process-creation-failed");
+      expect(seen.allocations).toBe(1);
+      expect(trace.launches).toEqual([]);
+    });
+  });
+
+  it("NP3: handing a session over and joining it later are admitted separately", function* () {
+    // Two capabilities, two proofs. A host that has proved one of them does
+    // that one thing and refuses the other, in both directions — so neither is
+    // ever inferred from the other having been proved.
+    const launchOnly: NativeCapabilityCompatibility = {
+      host: PROVED_HOST,
+      points: [
+        {
+          agent: "claude",
+          capability: "native-launch",
+          reportedVersion: PROVED_VERSION,
+          ...PROVED_HOST,
+        },
+      ],
+    };
+    const attachOnly: NativeCapabilityCompatibility = {
+      host: PROVED_HOST,
+      points: [
+        {
+          agent: "claude",
+          capability: "client-native-attachment",
+          reportedVersion: PROVED_VERSION,
+          ...PROVED_HOST,
+        },
+      ],
+    };
+
+    // Proved for launch only: the launch runs, and attaching to what it left
+    // behind refuses.
+    yield* scoped(function* () {
+      const harness = createFakeRuntime();
+      const trace = newTrace();
+      const seen = boundaries();
+      yield* installLaunchStack(harness, trace, {
+        adapters: { claude: countedAdapter(seen) },
+        routeStore: countedRoutes(seen),
+        compatibility: launchOnly,
+      });
+
+      yield* launch(INSTRUCTIONS);
+      expect((trace.records[0] as PreparedLaunchRecord).failure).toBe(undefined);
+
+      let raised: Error | undefined;
+      try {
+        yield* Agent.operations.session();
+      } catch (error) {
+        raised = error as Error;
+      }
+      expect(raised?.message).toContain("client-native-attachment");
+      expect(harness.ensureCalls).toEqual([]);
+    });
+
+    // Proved for attachment only: the same session attaches, and launching
+    // refuses.
+    yield* scoped(function* () {
+      const harness = createFakeRuntime();
+      const trace = newTrace();
+      const seen = boundaries();
+      const routes = countedRoutes(seen);
+      yield* routes.publish(bound());
+      yield* installLaunchStack(harness, trace, {
+        adapters: { claude: countedAdapter(seen) },
+        routeStore: routes,
+        compatibility: attachOnly,
+      });
+
+      const session = yield* Agent.operations.session();
+      expect(session.agentSessionId).toBe(ALLOCATED);
+
+      const failure = yield* attempt(trace, INSTRUCTIONS);
+      expect(failure?.class).toBe("unsupported-capability");
+      expect(failure?.message).toContain("native-launch");
+      expect(trace.launches).toEqual([]);
+    });
+  });
+
+  it("NP4: a bound route is refused before resume and before ensure, and stays as it was", function* () {
+    // The route was published by a run this host did admit. The build under the
+    // command has not changed; what changed is that this host no longer proves
+    // it. Both paths refuse, and neither rewrites, republishes or removes the
+    // account of a session a native UI may still be holding.
+    for (const [name, act] of [
+      ["a native resume", (trace: Trace) => attempt(trace, INSTRUCTIONS)],
+      [
+        "an ACP attachment",
+        function* (): Operation<undefined> {
+          try {
+            yield* Agent.operations.session();
+          } catch {
+            return undefined;
+          }
+          throw new Error("the attachment was not refused");
+        },
+      ],
+    ] as const) {
+      yield* scoped(function* () {
+        const harness = createFakeRuntime();
+        const trace = newTrace();
+        const seen = boundaries();
+        const routes = countedRoutes(seen);
+        yield* routes.publish(bound());
+        const before = JSON.stringify(yield* routes.read(KEY));
+        yield* installLaunchStack(harness, trace, {
+          adapters: { claude: countedAdapter(seen) },
+          routeStore: routes,
+          compatibility: false,
+        });
+
+        yield* act(trace);
+
+        expect([name, seen.resumes]).toEqual([name, 0]);
+        expect([name, seen.creates]).toEqual([name, 0]);
+        expect([name, seen.allocations]).toEqual([name, 0]);
+        expect([name, harness.ensureCalls]).toEqual([name, []]);
+        expect([name, trace.launches]).toEqual([name, []]);
+        // The only publication that reached the store is the one this case made
+        // before the provider existed, and what it reads back is byte-identical.
+        expect([name, seen.published.length]).toEqual([name, 1]);
+        expect([name, JSON.stringify(yield* routes.read(KEY))]).toEqual([name, before]);
+      });
+    }
+  });
+
+  it("NP5: an admitted point still refuses a build the route does not name", function* () {
+    // Admission and continuity are different questions, and passing the first
+    // is not an answer to the second. The live build is exactly the proved one;
+    // the route names an earlier one, so this is the drift refusal, not the
+    // capability one.
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const seen = boundaries();
+    const routes = countedRoutes(seen);
+    yield* routes.publish(
+      bound({
+        schema: "executable-build.v1",
+        reportedVersion: PROVED_VERSION,
+        executableDigest: { algorithm: "sha256", value: "e".repeat(64) },
+      }),
+    );
+    yield* installLaunchStack(harness, trace, {
+      adapters: { claude: countedAdapter(seen) },
+      routeStore: routes,
+    });
+
+    const failure = yield* attempt(trace, INSTRUCTIONS);
+
+    expect(failure?.class).toBe("executable-binding-refused");
+    expect(seen.resumes).toBe(0);
+    expect(trace.launches).toEqual([]);
+  });
+
+  it("NP6: an incomplete replay is gated, and legacy history is unchanged", function* () {
+    // An incomplete replay: the point is checked before the live phase it is
+    // standing in front of, whichever suffix the journal retained.
+    for (const suffix of ["prepared", "prepared+detached"] as const) {
+      yield* scoped(function* () {
+        const harness = createFakeRuntime();
+        const trace = newTrace();
+        const seen = boundaries();
+        const routes = countedRoutes(seen);
+        yield* routes.publish(bound());
+        const before = JSON.stringify(yield* routes.read(KEY));
+        yield* installLaunchStack(harness, trace, {
+          adapters: { claude: countedAdapter(seen) },
+          routeStore: routes,
+          compatibility: false,
+        });
+        trace.replay = { prepared: preparedRecord(), suffix };
+
+        yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
+
+        const failure = trace.records.findLast((record) => record.failure)?.failure;
+        expect([suffix, failure?.class]).toEqual([suffix, "unsupported-capability"]);
+        expect([suffix, seen.resumes + seen.creates]).toEqual([suffix, 0]);
+        expect([suffix, trace.launches]).toEqual([suffix, []]);
+        expect([suffix, JSON.stringify(yield* routes.read(KEY))]).toEqual([suffix, before]);
+      });
+    }
+
+    // A legacy session, on a host that proves nothing: the released unbound
+    // behavior, unchanged. It refuses for the reason it always did — the run
+    // cannot say which build has this history — and never for a capability.
+    yield* scoped(function* () {
+      const harness = createFakeRuntime();
+      const trace = newTrace();
+      const seen = boundaries();
+      const routes = countedRoutes(seen);
+      yield* routes.publish(legacyRoute());
+      yield* installLaunchStack(harness, trace, {
+        adapters: { claude: countedAdapter(seen) },
+        routeStore: routes,
+        compatibility: false,
+      });
+      const { executableBinding: _unbound, ...legacyPrepared } = preparedRecord();
+      trace.replay = { prepared: legacyPrepared, suffix: "prepared+detached" };
+
+      yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
+
+      const failure = trace.records.findLast((record) => record.failure)?.failure;
+      expect(failure?.class).toBe("executable-binding-refused");
+    });
+  });
+
+  it("NP7: a completed replay neither observes a build nor asks about a point", function* () {
+    // Every phase is already retained, so the authority replays the journal
+    // whole and calls no live phase. A host that has proved nothing changes
+    // nothing about that: a launch that already happened is not work this run
+    // is being admitted to do, and the provider is never reached to say so.
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const seen = boundaries();
+    const observer = createFakeObserver();
+    const routes = countedRoutes(seen);
+    yield* routes.publish(bound());
+    yield* installLaunchStack(harness, trace, {
+      adapters: { claude: countedAdapter(seen) },
+      routeStore: routes,
+      observer: observer.observer,
+      compatibility: false,
+    });
+    trace.completed = {
+      prepared: preparedRecord(),
+      detached: { phase: "detached" },
+      exited: { phase: "exited", exitCode: 0 },
+    };
+
+    yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
+
+    expect(trace.records.map((record) => record.phase)).toEqual(["prepared", "detached", "exited"]);
+    expect(trace.records.some((record) => record.failure)).toBe(false);
+    expect(observer.observed).toEqual([]);
+    expect(seen.allocations + seen.creates + seen.resumes).toBe(0);
+    expect(trace.launches).toEqual([]);
+  });
+
+  it("NP8: a published route whose exact conversation is absent refuses, and is kept", function* () {
+    // The identity in the route is the only one this session has. A backend
+    // that does not have it is not an invitation to allocate another and
+    // publish over the account of a conversation a native UI may still hold —
+    // it is the end of this attempt.
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const seen = boundaries();
+    const routes = countedRoutes(seen);
+    yield* routes.publish(bound());
+    const before = JSON.stringify(yield* routes.read(KEY));
+    yield* installLaunchStack(harness, trace, {
+      adapters: { claude: countedAdapter(seen) },
+      routeStore: routes,
+    });
+    // Refused through the gate rather than `ensureFailure`, because the gate
+    // runs after the attempt is recorded: what this case needs to read is the
+    // identity that was asked for, not merely that asking failed.
+    harness.ensureGate = () =>
+      (function* (): Operation<void> {
+        throw new Error("No conversation found with that session ID");
+      })();
+
+    let raised: Error | undefined;
+    try {
+      yield* Agent.operations.session();
+    } catch (error) {
+      raised = error as Error;
+    }
+
+    // Asked for exactly once, under exactly the published identity.
+    expect(raised).toBeDefined();
+    expect(harness.ensureCalls.map((call) => call.resumeSessionId)).toEqual([ALLOCATED]);
+    expect(harness.turns).toEqual([]);
+    // No second identity was reached for, and the route still says what it said.
+    expect(seen.allocations).toBe(0);
+    expect(seen.published.length).toBe(1);
+    expect(JSON.stringify(yield* routes.read(KEY))).toBe(before);
+  });
+
+  it("NP9: a nonzero exact resume that provably settled leaves the session free", function* () {
+    // The native child's status is the launch's outcome, not evidence about
+    // whether it is gone. What decides ownership is whether teardown settled:
+    // one that did releases the session for the next acquisition, and one that
+    // could not be proven leaves the record standing to be recovered.
+    const shared = makeCoordinator();
+    const routes = createMemorySessionRouteStore();
+    const store = makeStore();
+    yield* routes.publish(bound());
+
+    const first = createFakeRuntime();
+    const firstTrace = newTrace();
+    firstTrace.ownership = shared;
+    yield* scoped(function* () {
+      const seen = boundaries();
+      yield* installLaunchStack(first, firstTrace, {
+        adapters: { claude: countedAdapter(seen) },
+        routeStore: routes,
+        store,
+        coordinator: shared.coordinator,
+        exitCode: 9,
+      });
+
+      yield* launch(INSTRUCTIONS);
+
+      // The exact published identity was resumed, never recreated.
+      expect(seen.resumes).toBe(1);
+      expect(seen.creates).toBe(0);
+      expect(firstTrace.launches[0]!.command).toEqual([OBSERVED_PATH, "--resume", ALLOCATED]);
+      expect(firstTrace.records.at(-1)).toMatchObject({ phase: "exited", exitCode: 9 });
+    });
+
+    // Everything the launch registered has unwound, and it settled, so the
+    // session was given back rather than left standing.
+    expect(shared.events.at(-1)).toBe("released-idle");
+
+    const second = createFakeRuntime();
+    const secondTrace = newTrace();
+    secondTrace.ownership = shared;
+    yield* scoped(function* () {
+      yield* installLaunchStack(second, secondTrace, {
+        adapters: { claude: countedAdapter(boundaries()) },
+        routeStore: routes,
+        store,
+        coordinator: shared.coordinator,
+      });
+      yield* launch(INSTRUCTIONS);
+    });
+
+    expect(shared.acquisitions.map((entry) => entry.outcome)).toEqual(["granted", "granted"]);
+    expect(secondTrace.launches.length).toBe(1);
   });
 });

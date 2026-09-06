@@ -104,6 +104,8 @@ import {
   nativeAdapterFor,
 } from "./native-launch.ts";
 import type { NativeAdapter } from "./native-launch.ts";
+import { admitsNativeCapability } from "./native-capability.ts";
+import type { NativeCapability, NativeCapabilityCompatibility } from "./native-capability.ts";
 
 /**
  * One MCP server as ACPX configures them.
@@ -241,6 +243,20 @@ export interface AcpxProviderDependencies {
    * whose sessions XMD names refuses before any provider effect.
    */
   executableObserver?: ExecutableObserver;
+  /**
+   * Which exact builds this host has proved each native capability on, and the
+   * machine it proved them for.
+   *
+   * Supplied by the trusted host beside the coordinator and the observer, and
+   * for the same reason: it carries this machine's OS and architecture, and
+   * shared provider code that went and read those would be answering the
+   * compatibility question with the thing being asked about.
+   *
+   * The advertised sets above choose which adapter to consider. This is what
+   * says the build actually found under it may be acted on. Absent admits
+   * nothing — a host that states no proof has none.
+   */
+  compatibility?: NativeCapabilityCompatibility;
   /**
    * Extra native adapters, by agent name. A harness driving an agent this
    * package has never heard of supplies its own resume command shape here
@@ -817,6 +833,7 @@ function* useAcpxProviderState(
   const coordinator = dependencies?.coordinator;
   const routeStore = dependencies?.routeStore;
   const executableObserver = dependencies?.executableObserver;
+  const compatibility = dependencies?.compatibility;
   const agentCwd = dependencies?.agentCwd ?? cwd;
   const prepareAgent = dependencies?.prepareAgent;
   const mcpServers = dependencies?.mcpServers;
@@ -1720,6 +1737,40 @@ function* useAcpxProviderState(
     };
   }
 
+  /**
+   * Whether this host has proved this capability on the build it just observed.
+   *
+   * One function for all four paths that reach a client-allocated adapter, so
+   * "proved" means the same tuple everywhere rather than four readings of it.
+   * It runs after the observation, because the build is what is being admitted,
+   * and before every effect on the other side — an identity, a published route,
+   * a private file, a child, an ACP ensure — because a capability nobody proved
+   * is not a thing to discover halfway through.
+   *
+   * Distinct from build drift beside it, which is a different question. Drift
+   * asks whether this is still the build that accepted one retained identity;
+   * this asks whether the build works at all. A session may fail either while
+   * passing the other.
+   */
+  function admitCapability(
+    agentName: string,
+    capability: NativeCapability,
+    build: BoundBuild,
+  ): LaunchFailure | undefined {
+    const { reportedVersion } = build.binding;
+    if (admitsNativeCapability(compatibility, { agent: agentName, capability, reportedVersion })) {
+      return undefined;
+    }
+    return {
+      class: "unsupported-capability",
+      message:
+        `this host has proved no ${capability} capability for "${agentName}" at ` +
+        `${reportedVersion} on the machine it is running on, so it will not act on a session ` +
+        `with it. An advertised adapter name selects a command shape; only a proof against ` +
+        `that exact installed build admits one.`,
+    };
+  }
+
   /** The stable comparison two builds of one session fail. */
   function buildDrift(
     sessionKey: string,
@@ -1817,6 +1868,14 @@ function* useAcpxProviderState(
     }
     const binding = (adapterFor(agentName) as ClientAllocatedAdapter).binding;
     const build = yield* observeBuild(agentName, agentCommand, binding);
+    // Before the comparison and long before the ensure. A build this host has
+    // not proved attachment on is refused whether or not it happens to be the
+    // build that created the session — being the right one is not evidence that
+    // joining the conversation through ACP works on it.
+    const unproved = admitCapability(agentName, "client-native-attachment", build);
+    if (unproved) {
+      throw new AttachmentRefused(unproved);
+    }
     if (!sameExecutableBuild(build.binding, route.executableBinding)) {
       throw new AttachmentRefused(
         buildDrift(prepared.sessionKey, route.executableBinding, build.binding),
@@ -2334,6 +2393,14 @@ function* useAcpxProviderState(
         return refusal(error.failure.class, error.failure.message, known);
       }
       throw error;
+    }
+    // Admitted here, which is before both of the things that follow: allocating
+    // an identity for a session that has none, and resuming one that has. The
+    // route is only read on this side of it, never written — a session already
+    // published stays exactly as its first publication left it.
+    const unproved = admitCapability(agentName, "native-launch", build);
+    if (unproved) {
+      return refusal(unproved.class, unproved.message, known);
     }
     if (
       route?.route === "client-native" &&
@@ -2967,6 +3034,14 @@ function* useAcpxProviderState(
         return error.failure;
       }
       throw error;
+    }
+    // The replay's own first live phase, and this is still ahead of it. A
+    // predecessor that was admitted proves nothing about this run: the build
+    // under the same command may have been replaced since, and a capability is
+    // a claim about the build rather than about the session.
+    const unproved = admitCapability(prepared.agent, "native-launch", build);
+    if (unproved) {
+      return unproved;
     }
     if (!sameExecutableBuild(build.binding, route.executableBinding)) {
       return buildDrift(prepared.sessionKey, route.executableBinding, build.binding);

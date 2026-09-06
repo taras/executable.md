@@ -146,9 +146,10 @@ export function* resolveAgentStack(
  * carrying an agent release this machine does not have (#672).
  *
  * Each of the rest reaches the provider directly rather than through a context:
- * who owns a session and which build it belongs to are security decisions, and
- * ones a document could replace are not ones. The two advertised sets are stated
- * by the host, not inherited.
+ * who owns a session, which build it belongs to and which builds this machine
+ * has proved are security decisions, and ones a document could replace are not
+ * ones. The two advertised sets are stated by the host, not inherited, and they
+ * select rather than authorize: the compatibility beside them is what admits.
  */
 export function hostAcpDependencies(stack: PlanWriterStack): AcpxProviderDependencies {
   const { sessions } = stack;
@@ -161,6 +162,7 @@ export function hostAcpDependencies(stack: PlanWriterStack): AcpxProviderDepende
     ...(sessions.coordinator ? { coordinator: sessions.coordinator } : {}),
     ...(sessions.routeStore ? { routeStore: sessions.routeStore } : {}),
     ...(sessions.executableObserver ? { executableObserver: sessions.executableObserver } : {}),
+    ...(sessions.compatibility ? { compatibility: sessions.compatibility } : {}),
     advertiseNativeLaunch: sessions.advertiseNativeLaunch,
     advertiseClientNativeAttachment: sessions.advertiseClientNativeAttachment,
   };
