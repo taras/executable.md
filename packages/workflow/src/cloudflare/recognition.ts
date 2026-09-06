@@ -30,7 +30,7 @@ import {
   PRIVATE_OBJECT_NAMES,
   privateStructureFailure,
 } from "./private-schema.ts";
-import type { OwnerTransactions } from "./owner-transaction.ts";
+import type { OwnerTransaction, OwnerTransactions } from "./owner-transaction.ts";
 import type { OwnerStorage } from "./storage.ts";
 
 /** Why storage could not be read as a version-1 workflow run. */
@@ -103,18 +103,33 @@ export function initializeObject(
       detail: "it already holds objects and carries no workflow schema marker",
     });
   }
-  transactions.run(storage, ({ dofs }) => {
-    storage.sql.exec(SCHEMA_SQL);
-    initializeDofsSchema(dofs, () => 0);
-    initializePrivateSchema(storage);
-    initializeRun();
-    storage.sql.exec(MARKER_SQL);
-    storage.sql.exec(
-      `INSERT INTO ${MARKER_TABLE} (id, application_id, schema_version) VALUES (1, ?, ?)`,
-      APPLICATION_ID,
-      SCHEMA_VERSION,
-    );
+  transactions.run(storage, (transaction) => {
+    initializeInside(storage, transaction, initializeRun);
   });
+}
+
+/**
+ * The same initialization, inside a transaction the caller already opened.
+ *
+ * Beginning a run creates it and records its first execution together, and
+ * those are one commit; opening a second transaction for the schema would make
+ * them two, with a window in between holding a run nothing had begun.
+ */
+export function initializeInside(
+  storage: OwnerStorage,
+  transaction: OwnerTransaction,
+  initializeRun: () => void,
+): void {
+  storage.sql.exec(SCHEMA_SQL);
+  initializeDofsSchema(transaction.dofs, () => 0);
+  initializePrivateSchema(storage);
+  initializeRun();
+  storage.sql.exec(MARKER_SQL);
+  storage.sql.exec(
+    `INSERT INTO ${MARKER_TABLE} (id, application_id, schema_version) VALUES (1, ?, ?)`,
+    APPLICATION_ID,
+    SCHEMA_VERSION,
+  );
 }
 
 /**

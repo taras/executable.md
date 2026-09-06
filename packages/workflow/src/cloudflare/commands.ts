@@ -62,6 +62,8 @@ export type CommandName =
   | "executions"
   | "mappings"
   | "open"
+  | "begin"
+  | "cancel"
   | "settle";
 
 export type CommandRefusal =
@@ -89,7 +91,9 @@ export type CommandRefusal =
    * the storage is intact and this is simply not its run, and a caller that
    * conflated them would go looking for a backup.
    */
-  | "wrong-run";
+  | "wrong-run"
+  /** Retained journal history this owner cannot read. */
+  | "corrupt-journal";
 
 export class CommandError extends Error {
   override name = "CommandError";
@@ -233,6 +237,28 @@ export interface OpenCommand extends CommandEnvelope {
   readonly creation: CreateWorkflowRunRequest | null;
 }
 
+/** Begin one document execution under the live acquisition. */
+export interface BeginCommand extends CommandEnvelope {
+  readonly command: "begin";
+  readonly runId: string;
+  readonly action: "start" | "resume";
+  readonly creation: CreateWorkflowRunRequest | null;
+  /**
+   * The execution's identity, minted by the runner.
+   *
+   * Minted there rather than here so the command is the same bytes on a retry:
+   * an owner that invented one would begin a second execution for a request it
+   * had already answered.
+   */
+  readonly executionId: string;
+}
+
+/** Make one run terminal, following what it retains. */
+export interface CancelCommand extends CommandEnvelope {
+  readonly command: "cancel";
+  readonly runId: string;
+}
+
 export interface SettleCommand extends CommandEnvelope {
   readonly command: "settle";
   readonly completion: DocumentExecutionCompletion;
@@ -250,6 +276,8 @@ export type RunnerCommand =
   | ExecutionsCommand
   | MappingsCommand
   | OpenCommand
+  | BeginCommand
+  | CancelCommand
   | SettleCommand;
 
 export type CommandResult =
@@ -277,6 +305,8 @@ const MEMBERS: Record<CommandName, readonly string[]> = {
   executions: [...ENVELOPE, "anchor", "after"],
   mappings: ENVELOPE,
   open: [...ENVELOPE, "runId", "creation"],
+  begin: [...ENVELOPE, "runId", "action", "creation", "executionId"],
+  cancel: [...ENVELOPE, "runId"],
   settle: [...ENVELOPE, "completion", "expectedWorkspaceRootId"],
 };
 
@@ -408,6 +438,8 @@ export function parseCommand(raw: string): RunnerCommand {
     command !== "executions" &&
     command !== "mappings" &&
     command !== "open" &&
+    command !== "begin" &&
+    command !== "cancel" &&
     command !== "settle"
   ) {
     throw new CommandError("unknown-command");
@@ -484,6 +516,37 @@ export function parseCommand(raw: string): RunnerCommand {
       throw new CommandError("malformed-member");
     }
     return { id, command, runId, creation: creation.value };
+  }
+  if (command === "begin") {
+    const runId = text(members, "runId", MAX_RUN_ID);
+    const action = members.get("action");
+    if (action !== "start" && action !== "resume") {
+      throw new CommandError("malformed-member");
+    }
+    const offered = members.get("creation");
+    let creation: CreateWorkflowRunRequest | null = null;
+    if (offered !== null) {
+      const parsed = parseCreateRequest(offered);
+      if (!parsed.ok || parsed.value.runId !== runId) {
+        throw new CommandError("malformed-member");
+      }
+      creation = parsed.value;
+    }
+    // A start that creates carries its creation; a resume never does.
+    if (action === "resume" && creation !== null) {
+      throw new CommandError("malformed-member");
+    }
+    return {
+      id,
+      command,
+      runId,
+      action,
+      creation,
+      executionId: text(members, "executionId", MAX_RUN_ID),
+    };
+  }
+  if (command === "cancel") {
+    return { id, command, runId: text(members, "runId", MAX_RUN_ID) };
   }
   if (command === "executions") {
     const anchor = sequence(members, "anchor");

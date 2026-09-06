@@ -103,6 +103,7 @@ export type PrivateRefusal =
   | "command:mapping-conflict"
   | "command:absent"
   | "command:wrong-run"
+  | "command:corrupt-journal"
   | "storage:foreign"
   | `storage:unsupported-version-v${number}`
   | "storage:corrupt";
@@ -181,6 +182,7 @@ function privateRefusal(value: string): PrivateRefusal {
     case "command:mapping-conflict":
     case "command:absent":
     case "command:wrong-run":
+    case "command:corrupt-journal":
     case "storage:foreign":
     case "storage:corrupt":
       return value;

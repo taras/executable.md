@@ -52,11 +52,12 @@ import {
   readJournalPage,
   readRoot,
 } from "./owner-reads.ts";
-import type { OwnerTransactions } from "./owner-transaction.ts";
+import type { OwnerTransaction, OwnerTransactions } from "./owner-transaction.ts";
 import { COMMAND_TABLE, MUTATION_TABLE, STAGING_TABLE } from "./private-schema.ts";
 import { applyCommit, applyRetrieval } from "./publish.ts";
 import { recognizeObject } from "./recognition.ts";
 import { openRun } from "./owner-open.ts";
+import { beginRun, cancelRunOnOwner, settleRun } from "./owner-lifecycle.ts";
 
 function requestFingerprint(command: RunnerCommand): string {
   // The command name is part of the fingerprint, so one textual id used for a
@@ -73,7 +74,16 @@ function requestFingerprint(command: RunnerCommand): string {
  * the next connection can find it.
  */
 function mutating(command: RunnerCommand): boolean {
-  return command.command === "commit" || command.command === "retrieval";
+  return (
+    command.command === "commit" ||
+    command.command === "retrieval" ||
+    // Each of these changes the run's own lifecycle, and each can commit
+    // before its answer is observed. A retry has to find the first decision
+    // rather than apply the transition again.
+    command.command === "begin" ||
+    command.command === "cancel" ||
+    command.command === "settle"
+  );
 }
 
 function integer(value: unknown): number {
@@ -214,6 +224,7 @@ function perform(
   runId: string,
   acquisitionId: string,
   command: RunnerCommand,
+  transaction: OwnerTransaction,
 ): CommandResult {
   if (command.command === "frontier") {
     return { id: command.id, outcome: "performed", value: readFrontier(ctx.storage, runId) };
@@ -269,6 +280,41 @@ function perform(
       value: readExecutions(ctx.storage, runId, command.anchor, command.after),
     };
   }
+  if (command.command === "begin") {
+    return {
+      id: command.id,
+      outcome: "performed",
+      value: beginRun(
+        ctx.storage,
+        transaction,
+        command.runId,
+        command.action,
+        command.creation,
+        command.executionId,
+        ownerTime,
+      ),
+    };
+  }
+  if (command.command === "cancel") {
+    return {
+      id: command.id,
+      outcome: "performed",
+      value: cancelRunOnOwner(ctx.storage, command.runId, ownerTime),
+    };
+  }
+  if (command.command === "settle") {
+    return {
+      id: command.id,
+      outcome: "performed",
+      value: settleRun(
+        ctx.storage,
+        runId,
+        command.completion,
+        command.expectedWorkspaceRootId,
+        ownerTime,
+      ),
+    };
+  }
   if (command.command === "mappings") {
     return {
       id: command.id,
@@ -306,7 +352,7 @@ export function dispatchCommand(
     };
   }
   const fingerprint = requestFingerprint(command);
-  return transactions.run(ctx.storage, () => {
+  return transactions.run(ctx.storage, (transaction) => {
     const inside = requireAcquisition(ctx, socket, runId);
     if (inside.acquisitionId !== held.acquisitionId) {
       throw new CommandError("duplicate-conflict");
@@ -355,7 +401,7 @@ export function dispatchCommand(
       }
       const decision = storedDecision(previous.response, command.id);
       return decision === "reconstruct"
-        ? perform(ctx, runId, held.acquisitionId, command)
+        ? perform(ctx, runId, held.acquisitionId, command, transaction)
         : decision;
     }
     const usage = ctx.storage.sql
@@ -371,7 +417,7 @@ export function dispatchCommand(
     ) {
       throw new CommandError("capacity");
     }
-    const result = perform(ctx, runId, held.acquisitionId, command);
+    const result = perform(ctx, runId, held.acquisitionId, command, transaction);
     const encoded = retainedDecision(command, result);
     const responseBytes = new TextEncoder().encode(encoded).length;
     if (integer(usage?.["bytes"]) + responseBytes > MAX_LEDGER_BYTES) {

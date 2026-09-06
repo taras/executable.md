@@ -768,16 +768,21 @@ describe("the remote owner protocol", () => {
     expect(first).toMatchObject({ outcome: "performed" });
   });
 
-  it("refuses a settlement rather than reporting placeholder success", async () => {
+  it("refuses a settlement naming an execution this run never began", async () => {
+    // Settlement is implemented now, so what it refuses is what it should:
+    // a completion addressed to an execution that is not here. The earlier
+    // shape of this test asserted the command was declined outright, which was
+    // true only while the transition was somebody else's checkpoint.
     const stub = executor();
     await on(stub, (owner) => owner.initialize());
     await admit(stub);
-    expect(
-      await send(stub, "settle", {
-        command: "settle",
-        completion: { executionId: "execution", status: "completed" },
-        expectedWorkspaceRootId: ROOT_ID,
-      }),
-    ).toEqual({ id: "settle", outcome: "refused", refusal: "command:unavailable" });
+    const answer = await send(stub, "settle", {
+      command: "settle",
+      completion: { executionId: "execution", status: "completed" },
+      expectedWorkspaceRootId: ROOT_ID,
+    });
+    expect(answer["outcome"]).toBe("refused");
+    // And nothing was published: the run is exactly where it was.
+    expect((await on(stub, (owner) => owner.published()))["events"]).toEqual([]);
   });
 });
