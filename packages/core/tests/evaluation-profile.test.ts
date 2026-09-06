@@ -18,33 +18,39 @@ import type { Operation } from "effection";
 
 import { captureEvaluationProfile } from "../src/evaluation-profile.ts";
 import type { FragmentEntry, FragmentEvaluationInput } from "../src/evaluation-profile.ts";
-import type { FunctionComponentDefinition, Json } from "../src/types.ts";
-
-const DEFINITION: FunctionComponentDefinition = {
-  kind: "function",
-  name: "Probe",
-  props: { type: "object", properties: {}, additionalProperties: false },
-  // deno-lint-ignore require-yield
-  *fn(): Operation<Json> {
-    return "probed";
-  },
-};
+import type { Json } from "../src/types.ts";
+import { recordedFiles } from "./support/fragment-files.ts";
 
 function entry(overrides: Partial<FragmentEntry> = {}): FragmentEntry {
+  const name = overrides.name ?? "File";
   return {
-    name: "Probe",
-    identity: { origin: "test://host", key: "Probe", revision: "1" },
+    name,
+    identity: { origin: "test://host", key: "File:read", revision: "1" },
     forms: ["self-closing"],
     props: { type: "object", properties: {}, additionalProperties: false },
-    definition: DEFINITION,
+    // The capability follows the name unless a row states otherwise: what these
+    // rows are about is how a ceiling is captured, not which body runs.
+    capability: name === "Fetch" ? "fetch" : "file:read",
     ...overrides,
   };
 }
 
+/**
+ * Capture a profile, with the operations every file entry needs supplied.
+ *
+ * A host that admits `<File />` states the operations it runs, and a profile
+ * that does not is refused — EP17 covers that on its own. Every other row is
+ * about what capture does with a profile a host *can* state, so they all supply
+ * them and none of them restates the fact.
+ */
+function capture(overrides: Partial<FragmentEvaluationInput> = {}) {
+  return captureEvaluationProfile({ read: [entry()], files: recordedFiles(), ...overrides });
+}
+
 /** What capturing this profile refused with, as a string. */
-function* refusal(input: FragmentEvaluationInput): Operation<string> {
+function* refusal(overrides: Partial<FragmentEvaluationInput>): Operation<string> {
   try {
-    yield* captureEvaluationProfile(input);
+    yield* capture(overrides);
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
@@ -59,13 +65,13 @@ function* emptyBasis(): Operation<{ roots: readonly string[]; current: string }>
 describe("Tier EP — a captured profile stops reading the host's objects", () => {
   it("EP1: a table the host mutates after capture does not change the profile", function* () {
     const read: FragmentEntry[] = [entry()];
-    const captured = yield* captureEvaluationProfile({ read });
+    const captured = yield* capture({ read });
 
     read.push(entry({ name: "Added", identity: { origin: "t", key: "Added", revision: "1" } }));
     read.length = 0;
 
     expect(captured.read).toHaveLength(1);
-    expect(captured.read[0]?.name).toBe("Probe");
+    expect(captured.read[0]?.name).toBe("File");
   });
 
   it("EP2: a schema the host edits after capture does not change what validates", function* () {
@@ -74,7 +80,7 @@ describe("Tier EP — a captured profile stops reading the host's objects", () =
       properties: { path: { type: "string" } },
       additionalProperties: false,
     };
-    const captured = yield* captureEvaluationProfile({ read: [entry({ props })] });
+    const captured = yield* capture({ read: [entry({ props })] });
 
     props.additionalProperties = true;
     const properties = props.properties;
@@ -91,7 +97,7 @@ describe("Tier EP — a captured profile stops reading the host's objects", () =
 
   it("EP3: an identity the host edits after capture does not change what is compared", function* () {
     const identity = { origin: "test://host", key: "Probe", revision: "1" };
-    const captured = yield* captureEvaluationProfile({ read: [entry({ identity })] });
+    const captured = yield* capture({ read: [entry({ identity })] });
 
     identity.revision = "2";
 
@@ -101,7 +107,7 @@ describe("Tier EP — a captured profile stops reading the host's objects", () =
   it("EP4: request headers and lists the host mutates do not widen the ceiling", function* () {
     const headers: Record<string, Json> = { accept: "text/plain" };
     const requests: Record<string, Json>[] = [{ url: "https://api.example.test/one", headers }];
-    const captured = yield* captureEvaluationProfile({
+    const captured = yield* capture({
       read: [entry({ name: "Fetch", requests })],
       fetchTimeout: 1000,
     });
@@ -116,7 +122,7 @@ describe("Tier EP — a captured profile stops reading the host's objects", () =
   });
 
   it("EP5: the host's resolved timeout is the ceiling, read once", function* () {
-    const captured = yield* captureEvaluationProfile({
+    const captured = yield* capture({
       read: [entry({ name: "Fetch", requests: [{ url: "https://api.example.test/one" }] })],
       fetchTimeout: 2500,
     });
@@ -127,7 +133,7 @@ describe("Tier EP — a captured profile stops reading the host's objects", () =
   });
 
   it("EP6: a request stating its own timeout outranks the host default", function* () {
-    const captured = yield* captureEvaluationProfile({
+    const captured = yield* capture({
       read: [
         entry({
           name: "Fetch",
@@ -142,7 +148,7 @@ describe("Tier EP — a captured profile stops reading the host's objects", () =
   });
 
   it("EP7: one ceiling stated twice is one ceiling", function* () {
-    const captured = yield* captureEvaluationProfile({
+    const captured = yield* capture({
       read: [
         entry({
           name: "Fetch",
@@ -159,7 +165,7 @@ describe("Tier EP — a captured profile stops reading the host's objects", () =
   });
 
   it("EP8: ceilings are canonically ordered, so two statements of one set match", function* () {
-    const one = yield* captureEvaluationProfile({
+    const one = yield* capture({
       read: [
         entry({
           name: "Fetch",
@@ -168,7 +174,7 @@ describe("Tier EP — a captured profile stops reading the host's objects", () =
       ],
       fetchTimeout: 1000,
     });
-    const other = yield* captureEvaluationProfile({
+    const other = yield* capture({
       read: [
         entry({
           name: "Fetch",
@@ -184,7 +190,7 @@ describe("Tier EP — a captured profile stops reading the host's objects", () =
   });
 
   it("EP9: each entry keeps its own ceiling rather than a flattened one", function* () {
-    const captured = yield* captureEvaluationProfile({
+    const captured = yield* capture({
       read: [
         entry({ name: "First", requests: [{ url: "https://api.example.test/first" }] }),
         entry({
@@ -208,7 +214,7 @@ describe("Tier EP — a captured profile stops reading the host's objects", () =
 
   it("EP10: a Workspace answer the host mutates afterwards does not move the basis", function* () {
     const roots = ["workspace://one"];
-    const captured = yield* captureEvaluationProfile({
+    const captured = yield* capture({
       read: [entry()],
       workspace: {
         // deno-lint-ignore require-yield
@@ -231,7 +237,7 @@ describe("Tier EP — a captured profile stops reading the host's objects", () =
         return { roots: ["workspace://honest"], current: "workspace://honest" };
       },
     };
-    const captured = yield* captureEvaluationProfile({ read: [entry()], workspace: access });
+    const captured = yield* capture({ read: [entry()], workspace: access });
 
     // deno-lint-ignore require-yield
     access.snapshot = function* () {
@@ -269,11 +275,24 @@ describe("Tier EP — a profile a host cannot state", () => {
     expect(yield* refusal({ read: [] })).toContain("no component at all");
   });
 
+  it("EP17: a file entry with no operations behind it refuses", function* () {
+    // A host that admits `<File />` and states no operations has admitted
+    // something it cannot perform. Refused at capture — rather than admitted and
+    // left to fall through to whichever provider a document installed, which is
+    // exactly the reach this profile exists to remove.
+    expect(
+      yield* refusal({
+        read: [entry()],
+        files: undefined,
+      }),
+    ).toContain("without stating the filesystem operations");
+  });
+
   it("EP16: forms are canonically ordered, so two statements of one pair match", function* () {
-    const one = yield* captureEvaluationProfile({
+    const one = yield* capture({
       read: [entry({ forms: ["paired", "self-closing"] })],
     });
-    const other = yield* captureEvaluationProfile({
+    const other = yield* capture({
       read: [entry({ forms: ["self-closing", "paired"] })],
     });
 

@@ -3122,6 +3122,16 @@ function* invoke(
   // execution does.
   const evaluation =
     stated[0] === undefined ? undefined : yield* captureEvaluationProfile(stated[0]);
+  if (evaluation !== undefined) {
+    // Registered before the first `install()`, so the operations this profile
+    // bound are revoked however the execution ends — returning, failing, or
+    // being halted partway through assembly. A fragment body, a handler or a
+    // retained callback that reaches one afterwards refuses rather than acting
+    // on a filesystem the run no longer holds a transaction for.
+    yield* ensure(function* () {
+      evaluation.revoke();
+    });
+  }
 
   for (const installation of installations) {
     if (installation.install) {

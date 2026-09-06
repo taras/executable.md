@@ -1005,15 +1005,15 @@ describe("Tier WGAC — the standard write table", () => {
       // resumed run is held to.
       const policy = policyOf(admissions(attempt.events)[0]!);
       expect(policy?.allowed).toEqual([
-        { name: "File", identity: "@executablemd/core#File:write@1", forms: ["paired"] },
+        { name: "File", identity: "@executablemd/core#File:write@2", forms: ["paired"] },
         {
           name: "Dir",
-          identity: "@executablemd/workflow/composition#Dir@2",
+          identity: "@executablemd/workflow/composition#Dir@3",
           forms: ["paired"],
         },
         {
           name: "File.Delete",
-          identity: "@executablemd/core#File.Delete@1",
+          identity: "@executablemd/core#File.Delete@2",
           forms: ["self-closing"],
         },
       ]);
@@ -1064,13 +1064,13 @@ describe("Tier WGAC — the standard write table", () => {
       const admission = admissions(attempt.events)[0]!;
       expect(policyOf(admission)?.allowed).toContainEqual({
         name: "File.Delete",
-        identity: "@executablemd/core#File.Delete@1",
+        identity: "@executablemd/core#File.Delete@2",
         forms: ["self-closing"],
       });
       expect(recordedNames(admission)).toEqual([
         {
           name: "File.Delete",
-          identity: "@executablemd/core#File.Delete@1",
+          identity: "@executablemd/core#File.Delete@2",
           form: "self-closing",
         },
       ]);

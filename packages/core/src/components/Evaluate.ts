@@ -248,7 +248,16 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
       ...(basis === undefined ? {} : { workspaceRoots: basis.roots, selectedRoot: basis.current }),
       ...(expansion.position === undefined ? {} : { position: expansion.position }),
     };
-    return answer(yield* evaluateGeneratedXmd(request));
+    // Every path in this fragment resolves against the directory the run is in
+    // now, and the cursor is restored however the evaluation ends — so a
+    // fragment produced inside another fragment's producer leaves the outer one
+    // where it was, and a failed one leaves nothing behind.
+    const leave = yield* profile.enterFragment();
+    try {
+      return answer(yield* evaluateGeneratedXmd(request));
+    } finally {
+      leave();
+    }
   };
 }
 
@@ -346,24 +355,6 @@ function selectedTables(
   const observations: GeneratedObservation[] = [];
   const mutations: GeneratedMutation[] = [];
   const admitted: CapturedEntry[] = [];
-  // One name may hold two identities in two classes — `<File />` observes and
-  // `<File>…</File>` writes — and the two entries run the same implementation.
-  // The evaluator resolves an import by name, so both must reach the same
-  // definition object: two structurally equal copies would be one name with two
-  // definitions, which it refuses before anything is admitted.
-  const definitions = new Map<FunctionComponentDefinition, FunctionComponentDefinition>();
-  const pinnedDefinition = (entry: CapturedEntry): FunctionComponentDefinition => {
-    const held = definitions.get(entry.definition);
-    if (held !== undefined) {
-      return held;
-    }
-    // The captured schema rather than the definition's own, so a host that
-    // edits the schema on the object it handed over does not change what a
-    // fragment's props are validated against.
-    const built = { ...entry.definition, props: entry.props };
-    definitions.set(entry.definition, built);
-    return built;
-  };
   if (allow.includes("read")) {
     if (profile.read.length === 0) {
       throw new ComponentInvocationError(NO_READ_TABLE);
@@ -372,7 +363,7 @@ function selectedTables(
       observations.push({
         name: entry.name,
         identity: pinned(entry),
-        definition: pinnedDefinition(entry),
+        definition: entry.definition,
         // An entry admitted for one spelling admits that one; an entry admitted
         // for both is the form-insensitive component it has always been.
         ...(entry.forms.length === 1 && entry.forms[0] === "self-closing"
@@ -391,7 +382,7 @@ function selectedTables(
       mutations.push({
         name: entry.name,
         identity: pinned(entry),
-        definition: pinnedDefinition(entry),
+        definition: entry.definition,
         form: entry.forms.length === 2 ? "either" : (entry.forms[0] ?? "self-closing"),
       });
       admitted.push(entry);

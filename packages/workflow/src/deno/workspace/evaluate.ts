@@ -50,22 +50,30 @@
  * and there is no document written against it to keep working.
  */
 
-import { timeoutFetch } from "@executablemd/runtime";
+import { API, timeoutFetch } from "@executablemd/runtime";
 import type { Operation } from "effection";
 import {
+  detachHeaders,
+  detachStatus,
+  directoryEntry,
   fetchEntry,
   fileDeleteEntry,
   fileReadEntry,
   fileWriteEntry,
 } from "@executablemd/core/host";
 import type {
+  FetchResponseRecord,
   FragmentEntry,
   FragmentEvaluationInput,
+  FragmentFetchAccess,
+  FragmentFileAccess,
   FragmentWorkspaceAccess,
   GeneratedRequest,
 } from "@executablemd/core/host";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
-import { COMPOSITION_ORIGIN, dirDefinition } from "../../composition/definitions.ts";
+import { COMPOSITION_ORIGIN } from "../../composition/definitions.ts";
+import { workflowFilesHandler } from "./files.ts";
+import { WORKSPACE_ROOT } from "./logical-path.ts";
 import { workspaceRootSelection } from "./effect.ts";
 
 /**
@@ -107,6 +115,37 @@ function workspaceAccess(database: WorkflowRunDatabase): FragmentWorkspaceAccess
 }
 
 /**
+ * The exact filesystem operations an admitted fragment performs in this run.
+ *
+ * This run's own transaction-bound handler, built here and handed to the
+ * profile, so an admitted effect still crosses the run's effect transaction and
+ * is still retained by the `workspace_file` effect that transaction publishes.
+ * What changed is where the handler comes from: a fragment no longer resolves
+ * `API.Files` when it runs, so the provider a document, a repository component
+ * or middleware installed nearer is not between a fragment and the Workspace.
+ *
+ * Five operations, not seven. The handler also globs and makes temporary
+ * directories; an admitted fragment does neither.
+ */
+function workspaceFiles(database: WorkflowRunDatabase): FragmentFileAccess {
+  const handler = workflowFilesHandler(database);
+  return {
+    checkFilePath: (input) => handler.checkFilePath(input),
+    readTextFile: (input) => handler.readTextFile(input),
+    writeTextFile: (input) => handler.writeTextFile(input),
+    deleteFile: (input) => handler.deleteFile(input),
+    ensureDirectory: (input) => handler.ensureDirectory(input),
+    // The Workspace root, and a logical path rather than a host one — the same
+    // root the run's documents resolve against. Nothing an admitted fragment
+    // writes reaches the directory the caller invoked `xmd` from.
+    // deno-lint-ignore require-yield
+    *workingDirectory(): Operation<string> {
+      return WORKSPACE_ROOT;
+    },
+  };
+}
+
+/**
  * The ceiling a workflow run's generated fragments are admitted under.
  *
  * An operation, because the effective Fetch timeout is resolved here — once,
@@ -119,6 +158,11 @@ export function* evaluationProfile(
   options: GeneratedEvaluationOptions = {},
 ): Operation<FragmentEvaluationInput> {
   const requests = [...(options.requests ?? [])];
+  // The transport, read once here rather than by a fragment when it runs. It is
+  // the run's own `API.Fetch` as this assembly sees it — which is the provider
+  // the workflow host installed, not whichever one a document later composes
+  // around itself.
+  const transport = yield* fetchAccess();
   // Built from the same definition the ordinary registration owns, so the two
   // cannot drift. Versioned in its revision because what the entry authorizes
   // changed: the former `Dir` authorized placement that created nothing, and
@@ -126,7 +170,6 @@ export function* evaluationProfile(
   // granted under the earlier revision must not silently receive the wider
   // authority, and the retained comparison refuses it before generated
   // execution.
-  const dir = dirDefinition();
   const timeout = yield* timeoutFetch;
   return {
     read: [
@@ -136,18 +179,53 @@ export function* evaluationProfile(
     ],
     write: [
       fileWriteEntry(),
-      {
-        name: dir.name,
-        identity: { origin: COMPOSITION_ORIGIN, key: "Dir", revision: "2" },
-        forms: ["paired"],
-        props: dir.props,
-        definition: dir,
-      },
+      // Revision 3: the grant is the workflow's, so the identity names this
+      // package. What changed from revision 2 is the authority behind it — the
+      // body is now closed over the `ensureDirectory` this profile handed over
+      // rather than resolving a Files provider when it runs — so a continuation
+      // granted under the older, composable one is refused rather than
+      // re-granted.
+      directoryEntry({ origin: COMPOSITION_ORIGIN, key: "Dir", revision: "3" }, "Dir"),
       fileDeleteEntry(),
       ...(options.writes ?? []),
     ],
+    files: workspaceFiles(database),
+    ...(requests.length === 0 ? {} : { fetch: transport }),
     workspace: workspaceAccess(database),
     deprecatedSourceAlias: true,
     ...(timeout === undefined ? {} : { fetchTimeout: timeout }),
+  };
+}
+
+/**
+ * The transport an admitted `<Fetch />` performs its request through.
+ *
+ * Resolved at assembly, so the operation the profile holds is the one this host
+ * installed. A fragment reaches this bound function and never `API.Fetch`, so a
+ * handler composed around the contextual chain while the document runs neither
+ * sees the request nor answers it.
+ */
+// deno-lint-ignore require-yield
+function* fetchAccess(): Operation<FragmentFetchAccess> {
+  // Read here, at assembly, and closed over. `API.Fetch.operations` resolves
+  // against whatever chain is current when it is *called*, so reading it inside
+  // the fragment's own body would be the dynamic lookup this exists to remove.
+  const perform = API.Fetch.operations.fetch;
+  return {
+    *fetch(request): Operation<FetchResponseRecord> {
+      const response = yield* perform(request.url, {
+        method: request.method,
+        headers: { ...request.headers },
+        ...(request.timeout === undefined ? {} : { timeout: request.timeout }),
+      });
+      // Detached before the body is read, because a provider may invalidate its
+      // own header collection once the body has been consumed. A `HEAD` never
+      // asks for a body: there is none, and asking would fail against a
+      // provider that says so.
+      const status = detachStatus(response.status);
+      const headers = detachHeaders(response.headers);
+      const body = request.method === "HEAD" ? "" : yield* response.text();
+      return { status, headers, body };
+    },
   };
 }

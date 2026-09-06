@@ -38,7 +38,19 @@
 
 import type { Operation } from "effection";
 
-import { CORE_ORIGIN, CORE_REGISTRY } from "./components/registry.ts";
+import { CORE_ORIGIN } from "./components/registry.ts";
+import {
+  CAPABILITY_FORMS,
+  capabilityDefinition,
+  capabilityProps,
+  captureCapabilities,
+} from "./fragment-capabilities.ts";
+import type {
+  CapturedCapabilities,
+  FragmentCapability,
+  FragmentFetchAccess,
+  FragmentFileAccess,
+} from "./fragment-capabilities.ts";
 import type { FetchRequest } from "./fetch-request.ts";
 import { normalizeFetchRequest, requestRecord } from "./fetch-request.ts";
 import type { GeneratedRequest } from "./generated-xmd.ts";
@@ -86,8 +98,17 @@ export interface FragmentEntry {
   readonly forms: readonly FragmentForm[];
   /** The contract this entry's props are validated against. */
   readonly props: PropsSchema;
-  /** The implementation this identity runs. */
-  readonly definition: FunctionComponentDefinition;
+  /**
+   * Which captured operation this entry runs.
+   *
+   * Not a definition, because a definition is where a provider lookup would go.
+   * A host names the capability and hands its private operations to the
+   * profile; canonical capture reads each one off exactly once and closes
+   * core's own body over the bound result. A host therefore chooses *what a
+   * fragment may do* and never *how it reaches it*
+   * (`fragment-capabilities.ts`).
+   */
+  readonly capability: FragmentCapability;
   /**
    * The exact requests this entry may perform, for an entry that performs any.
    *
@@ -134,6 +155,17 @@ export interface FragmentEvaluationInput {
   /** How this host answers for its Workspace, when it evaluates against one. */
   readonly workspace?: FragmentWorkspaceAccess;
   /**
+   * The exact filesystem operations the admitted entries run.
+   *
+   * Required by every file and directory entry, and read off this object once
+   * at capture. A profile that admits `<File />` without stating them is a
+   * profile that admitted an operation it cannot perform, and is refused rather
+   * than falling through to whatever provider a document installed.
+   */
+  readonly files?: FragmentFileAccess;
+  /** The exact transport an admitted `<Fetch />` performs its request through. */
+  readonly fetch?: FragmentFetchAccess;
+  /**
    * The effective Fetch timeout this host resolved, in milliseconds.
    *
    * Resolved once, by the host, when it builds the profile. Reading it from
@@ -157,70 +189,65 @@ export interface FragmentEvaluationInput {
  * One number for all of them, bumped whenever what any of these entries
  * authorizes changes. A continuation admitted under an earlier revision is
  * refused rather than silently granted the newer authority.
+ *
+ * Revision 2 is where the authority behind these entries changed: an admitted
+ * element used to invoke the ordinary component and resolve `API.Files` or
+ * `API.Fetch` wherever it happened to run, and now it invokes a body closed
+ * over the operations the host handed the profile. A continuation granted under
+ * revision 1 was granted something the run could still compose around, so it is
+ * refused rather than silently re-granted under the narrower one.
  */
-const CORE_REVISION = "1";
-
-/** The definition core's registry holds for this name, or the reason it has none. */
-function coreDefinition(name: string): FunctionComponentDefinition {
-  const definition = CORE_REGISTRY.get(name)?.default?.definition;
-  if (definition === undefined || definition.kind !== "function") {
-    throw new EvaluationProfileError(`core supplies no ${name} component to admit.`);
-  }
-  return definition;
-}
+const CORE_REVISION = "2";
 
 /**
  * Core's `<File />`, admitted to observe and not to write.
  *
- * `<File>` reads when it has no content and writes when it has some, so
- * admitting the unconstrained definition would admit a write. The form travels
- * with the identity and preflight decides between the two — before the first
- * effect, rather than inside the component after earlier elements already ran.
+ * `<File>` reads when it has no content and writes when it has some, so one
+ * unconstrained entry would admit a write. The form travels with the identity
+ * and preflight decides between the two — before the first effect, rather than
+ * inside a body that has already been entered.
  *
- * An admitted read invokes the ordinary component and therefore the installed
- * Files provider, which under a workflow run is the transaction-bound one.
- * There is no second filesystem path here.
+ * An admitted read reaches the `readTextFile` the host handed the profile and
+ * nothing else. Under a workflow run that is the transaction-bound operation,
+ * so the read still crosses the run's own transaction; what it no longer does
+ * is resolve a provider through the contextual API at the moment it runs.
  */
 export function fileReadEntry(): FragmentEntry {
-  const definition = coreDefinition("File");
-  return {
-    name: "File",
-    identity: { origin: CORE_ORIGIN, key: "File:read", revision: CORE_REVISION },
-    forms: ["self-closing"],
-    props: definition.props,
-    definition,
-  };
+  return coreEntry("File", "File:read", "file:read");
 }
 
 /** Core's `<File>…</File>`, admitted to write and not to read. */
 export function fileWriteEntry(): FragmentEntry {
-  const definition = coreDefinition("File");
-  return {
-    name: "File",
-    identity: { origin: CORE_ORIGIN, key: "File:write", revision: CORE_REVISION },
-    forms: ["paired"],
-    props: definition.props,
-    definition,
-  };
+  return coreEntry("File", "File:write", "file:write");
 }
 
 /**
  * Core's `<File.Delete />`, in the one form it has.
  *
  * One name, one identity: unlike `<File>`, whose two spellings do different
- * things, this component answers the self-closing form and refuses the paired
- * one. Stating the form anyway is what puts the decision in preflight, before
- * the fragment's first effect — a paired spelling costs an earlier admitted
- * element nothing.
+ * things, this answers the self-closing form alone. Stating the form is what
+ * puts the decision in preflight, before the fragment's first effect — a paired
+ * spelling costs an earlier admitted element nothing.
  */
 export function fileDeleteEntry(): FragmentEntry {
-  const definition = coreDefinition("File.Delete");
+  return coreEntry("File.Delete", "File.Delete", "file:delete");
+}
+
+/**
+ * A directory an admitted fragment may create, under the name the host gives it.
+ *
+ * The name is the host's because the component is: the workflow calls it
+ * `<Dir>`, and an ordinary run admits no such thing. What core supplies is the
+ * operation — `ensureDirectory`, from the profile — so the body a fragment
+ * reaches is not the ordinary registration and cannot be composed around.
+ */
+export function directoryEntry(identity: FragmentIdentity, name: string): FragmentEntry {
   return {
-    name: "File.Delete",
-    identity: { origin: CORE_ORIGIN, key: "File.Delete", revision: CORE_REVISION },
-    forms: ["self-closing"],
-    props: definition.props,
-    definition,
+    name,
+    identity,
+    forms: [...CAPABILITY_FORMS["directory:ensure"]],
+    capability: "directory:ensure",
+    props: capabilityProps("directory:ensure"),
   };
 }
 
@@ -233,14 +260,16 @@ export function fileDeleteEntry(): FragmentEntry {
  * and refusing everything it asks for.
  */
 export function fetchEntry(requests: readonly GeneratedRequest[]): FragmentEntry {
-  const definition = coreDefinition("Fetch");
+  return { ...coreEntry("Fetch", "Fetch", "fetch"), requests };
+}
+
+function coreEntry(name: string, key: string, capability: FragmentCapability): FragmentEntry {
   return {
-    name: "Fetch",
-    identity: { origin: CORE_ORIGIN, key: "Fetch", revision: CORE_REVISION },
-    forms: ["self-closing"],
-    props: definition.props,
-    definition,
-    requests,
+    name,
+    identity: { origin: CORE_ORIGIN, key, revision: CORE_REVISION },
+    forms: [...CAPABILITY_FORMS[capability]],
+    capability,
+    props: capabilityProps(capability),
   };
 }
 
@@ -250,6 +279,8 @@ export interface CapturedEntry {
   readonly identity: FragmentIdentity;
   readonly forms: readonly FragmentForm[];
   readonly props: PropsSchema;
+  readonly capability: FragmentCapability;
+  /** Core's own body, closed over the operations this capture bound. */
   readonly definition: FunctionComponentDefinition;
   /** This entry's own ceiling, normalized once and canonically ordered. */
   readonly requests?: readonly FetchRequest[];
@@ -261,8 +292,26 @@ export interface CapturedProfile {
   readonly write: readonly CapturedEntry[];
   readonly workspace?: FragmentWorkspaceAccess;
   readonly deprecatedSourceAlias: boolean;
+  /**
+   * Begin one fragment, and answer with how to end it.
+   *
+   * Reads the host's working directory once per fragment rather than once per
+   * element, and restores whatever was current afterwards — so a fragment
+   * produced inside another fragment's producer leaves the outer one where it
+   * was.
+   */
+  readonly enterFragment: () => Operation<() => void>;
   /** Whether this profile's bound operations are still usable. */
   readonly live: () => boolean;
+  /**
+   * End them.
+   *
+   * Called by canonical execution at teardown, and reachable from nowhere a
+   * document can put code: an operation a fragment or a handler retained past
+   * the execution refuses rather than acting on a filesystem the run no longer
+   * holds a transaction for.
+   */
+  readonly revoke: () => void;
 }
 
 /** What an execution that was offered no evaluation profile refuses with. */
@@ -299,8 +348,21 @@ export class EvaluationProfileError extends Error {
 export function* captureEvaluationProfile(
   input: FragmentEvaluationInput,
 ): Operation<CapturedProfile> {
-  const read = yield* captureEntries(input.read ?? [], input.fetchTimeout);
-  const write = yield* captureEntries(input.write ?? [], input.fetchTimeout);
+  // Every live operation is read off the host's objects here, once, before a
+  // single installation has run. What comes back is bound and revocable, and
+  // the host's own objects are never consulted again.
+  const capabilities = captureCapabilities({
+    ...(input.files === undefined ? {} : { files: input.files }),
+    ...(input.fetch === undefined ? {} : { fetch: input.fetch }),
+  });
+  // One definition per *name*, built from every capability that name holds
+  // across both tables. `<File />` observing and `<File>…</File>` writing are
+  // two entries under one name, and the evaluator resolves an import by name —
+  // so they arrive as one definition whose dispatch separates the two
+  // spellings, exactly as the ordinary `<File>` does.
+  const built = buildDefinitions(input, capabilities);
+  const read = yield* captureEntries(input.read ?? [], input.fetchTimeout, built);
+  const write = yield* captureEntries(input.write ?? [], input.fetchTimeout, built);
   if (read.length === 0 && write.length === 0) {
     throw new EvaluationProfileError(
       "an evaluation profile states no component at all. A host offering evaluation states what " +
@@ -312,7 +374,11 @@ export function* captureEvaluationProfile(
     write,
     ...(input.workspace === undefined ? {} : { workspace: bindWorkspace(input.workspace) }),
     deprecatedSourceAlias: input.deprecatedSourceAlias === true,
-    live: () => true,
+    enterFragment: () => capabilities.enterFragment(),
+    live: () => capabilities.live(),
+    revoke: () => {
+      capabilities.revoke();
+    },
   });
 }
 
@@ -338,13 +404,74 @@ function bindWorkspace(access: FragmentWorkspaceAccess): FragmentWorkspaceAccess
   });
 }
 
+/**
+ * One definition per admitted name, built before any entry is captured.
+ *
+ * Built here rather than per entry because a name's definition depends on
+ * *every* capability that name holds: a profile admitting `<File />` to read
+ * and `<File>…</File>` to write is describing one component with two spellings,
+ * and which body a spelling reaches is dispatch's decision rather than the
+ * table's.
+ *
+ * A ceiling belongs to the entry that states it, so the requests handed to a
+ * name's definition are that name's own — never a flattened set, which would
+ * let one entry's limit admit another's request.
+ */
+function buildDefinitions(
+  input: FragmentEvaluationInput,
+  capabilities: CapturedCapabilities,
+): Map<string, FunctionComponentDefinition> {
+  const admitted = new Map<
+    string,
+    { "self-closing"?: FragmentCapability; paired?: FragmentCapability }
+  >();
+  const ceilings = new Map<string, readonly GeneratedRequest[]>();
+  for (const entry of [...(input.read ?? []), ...(input.write ?? [])]) {
+    const held = admitted.get(entry.name) ?? {};
+    for (const form of CAPABILITY_FORMS[entry.capability]) {
+      held[form] = entry.capability;
+    }
+    admitted.set(entry.name, held);
+    if (entry.requests !== undefined) {
+      ceilings.set(entry.name, entry.requests);
+    }
+  }
+  const built = new Map<string, FunctionComponentDefinition>();
+  for (const [name, forms] of admitted) {
+    built.set(
+      name,
+      capabilityDefinition(name, forms, capabilities, normalizedCeiling(ceilings.get(name), input)),
+    );
+  }
+  return built;
+}
+
+/**
+ * One name's ceiling, normalized on the same terms the retained policy is.
+ *
+ * The component performs the admitted request rather than the props, so the
+ * value it holds has to be the one preflight compared against — normalized
+ * once, against the host's own resolved timeout, rather than read again from a
+ * context wherever the performance happens.
+ */
+function normalizedCeiling(
+  requests: readonly GeneratedRequest[] | undefined,
+  input: FragmentEvaluationInput,
+): readonly FetchRequest[] {
+  if (requests === undefined) {
+    return [];
+  }
+  return requests.map((request) => normalizeFetchRequest({ ...request }, input.fetchTimeout));
+}
+
 function* captureEntries(
   entries: readonly FragmentEntry[],
   fetchTimeout: number | undefined,
+  built: Map<string, FunctionComponentDefinition>,
 ): Operation<readonly CapturedEntry[]> {
   const captured: CapturedEntry[] = [];
   for (const entry of entries) {
-    captured.push(yield* captureEntry(entry, fetchTimeout));
+    captured.push(yield* captureEntry(entry, fetchTimeout, built));
   }
   return Object.freeze(captured);
 }
@@ -352,6 +479,7 @@ function* captureEntries(
 function* captureEntry(
   entry: FragmentEntry,
   fetchTimeout: number | undefined,
+  built: Map<string, FunctionComponentDefinition>,
 ): Operation<CapturedEntry> {
   const forms = canonicalForms(entry.forms);
   if (forms.length === 0) {
@@ -364,14 +492,25 @@ function* captureEntry(
     entry.requests === undefined
       ? undefined
       : yield* captureRequests(entry.requests, fetchTimeout, entry.name);
+  // Detached, so a host that edits its schema afterwards does not change what a
+  // fragment's props are validated against.
+  const props = detach(entry.props);
+  // The definition every entry under this name shares, built before any entry
+  // was captured.
+  const key = `${entry.name} ${entry.capability}`;
+  const definition = built.get(entry.name);
+  if (definition === undefined) {
+    throw new EvaluationProfileError(
+      "an evaluation profile admitted a name with no operation behind it.",
+    );
+  }
   return Object.freeze({
     name: entry.name,
     identity,
     forms,
-    // Detached, so a host that edits its schema afterwards does not change what
-    // a fragment's props are validated against.
-    props: detach(entry.props),
-    definition: entry.definition,
+    props,
+    capability: entry.capability,
+    definition,
     ...(requests === undefined ? {} : { requests }),
   });
 }

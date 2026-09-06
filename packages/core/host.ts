@@ -85,6 +85,32 @@ export type {
   FragmentWorkspaceAccess,
 } from "./src/evaluation-profile.ts";
 /**
+ * The private operations an admitted fragment performs, and the only ones it
+ * can reach.
+ *
+ * A host hands its own provider methods here; canonical capture reads each one
+ * off once and closes core's own fragment bodies over the bound result. There
+ * is no ordinary-core export for these, no getter for a live one, and no way to
+ * install one from a document — see `src/fragment-capabilities.ts`.
+ */
+export type {
+  FragmentCapability,
+  FragmentFetchAccess,
+  FragmentFileAccess,
+  FragmentPath,
+  FragmentWrite,
+} from "./src/fragment-capabilities.ts";
+/**
+ * The response shape a fragment transport answers with, and the detaching a
+ * host needs to build one.
+ *
+ * The same record an authored `<Fetch>` retains, through the same code, so a
+ * fragment's observation and a document's are the same shape and a continuation
+ * restores either.
+ */
+export type { FetchResponseRecord } from "./src/fetch-response.ts";
+export { detachHeaders, detachStatus } from "./src/fetch-response.ts";
+/**
  * Core's own entries, for the hosts that admit them.
  *
  * Constructors rather than a table a host assembles from `CORE_REGISTRY`,
@@ -93,6 +119,7 @@ export type {
  * the exact requests it may perform.
  */
 export {
+  directoryEntry,
   EvaluationProfileError,
   fetchEntry,
   fileDeleteEntry,

@@ -33,13 +33,48 @@
  */
 
 import { fileDeleteEntry, fileReadEntry, fileWriteEntry } from "@executablemd/core/host";
-import type { ExecutionInstallation, FragmentEvaluationInput } from "@executablemd/core/host";
+import type {
+  ExecutionInstallation,
+  FragmentEvaluationInput,
+  FragmentFileAccess,
+} from "@executablemd/core/host";
+import { cwd, hostFilesHandler } from "@executablemd/runtime";
+
+/**
+ * The exact filesystem operations an admitted fragment performs.
+ *
+ * A handler of this command's own, constructed here rather than read from
+ * `API.Files` when a fragment runs. The document's provider and this one behave
+ * identically — both are `hostFilesHandler()` — and the difference is that
+ * nothing a document, a repository component or middleware installs is between
+ * a fragment and this instance.
+ *
+ * Only the five operations a fragment can name are copied across. The handler
+ * also offers globbing and temporary directories; an admitted fragment has
+ * neither, and not copying them is what makes that true.
+ */
+function ordinaryFiles(): FragmentFileAccess {
+  const handler = hostFilesHandler();
+  return {
+    checkFilePath: (input) => handler.checkFilePath(input),
+    readTextFile: (input) => handler.readTextFile(input),
+    writeTextFile: (input) => handler.writeTextFile(input),
+    deleteFile: (input) => handler.deleteFile(input),
+    ensureDirectory: (input) => handler.ensureDirectory(input),
+    // The caller's working directory, which is what `xmd run` resolves every
+    // authored path against. Read when a fragment runs rather than frozen at
+    // assembly, so a fragment and the document that produced it resolve the
+    // same relative path to the same file.
+    workingDirectory: () => cwd(),
+  };
+}
 
 /** The ceiling `xmd run` and its run children state. */
 export function ordinaryEvaluationProfile(): FragmentEvaluationInput {
   return {
     read: [fileReadEntry()],
     write: [fileWriteEntry(), fileDeleteEntry()],
+    files: ordinaryFiles(),
   };
 }
 
