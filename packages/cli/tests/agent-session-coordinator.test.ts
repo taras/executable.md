@@ -34,22 +34,34 @@ import type { AgentSessionCoordinator } from "@executablemd/runtime";
 import {
   ADVERTISED_CLIENT_NATIVE_ATTACHMENT,
   ADVERTISED_NATIVE_LAUNCH,
+  admitsNativeCapability,
   createAcpxProvider,
   createDenoSessionRouteStore,
   createMemorySessionRouteStore,
 } from "@executablemd/acp";
-import type { AgentSessionRouteStore, NativeAdapter, NativeBinding } from "@executablemd/acp";
+import type {
+  AgentSessionRouteStore,
+  NativeAdapter,
+  NativeBinding,
+  NativeCapabilityHost,
+} from "@executablemd/acp";
 import type { ExecutableObserver } from "@executablemd/runtime";
 import type { NativeLaunchRequest } from "@executablemd/terminal";
 import { createFakeObserver } from "../../acp/tests/helpers.ts";
 import {
   sessionCoordinatorRoot,
   useExecutableObserver,
+  unassembledMachineSessions,
   useMachineSessions,
   useSessionCoordinator,
 } from "../src/session-coordinator.ts";
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
+
+/** The machine the shipped Claude points were proved on. */
+const PROVED_HOST: NativeCapabilityHost = { platform: "darwin", architecture: "arm64" };
+
+const CLAUDE_PROVED_VERSION = "2.1.241 (Claude Code)";
 
 /** Whether this is the runtime that can take a kernel-released advisory lock. */
 function onDeno(): boolean {
@@ -300,6 +312,12 @@ function* launchUnder(
       ...(coordinator ? { coordinator } : {}),
       ...(options.routeStore ? { routeStore: options.routeStore } : {}),
       ...(options.observer ? { executableObserver: options.observer } : {}),
+      // The points this host states, for the machine they were proved on rather
+      // than the one running the suite: the subject is what a host assembles,
+      // and stating the pair as a value is how a host does it.
+      ...(useMachineSessions(PROVED_HOST).compatibility === undefined
+        ? {}
+        : { compatibility: useMachineSessions(PROVED_HOST).compatibility }),
     });
     yield* factory(
       { defaultAgent: agent, permissionMode: "deny-all" },
@@ -513,7 +531,14 @@ describe("Tier HC — host session ownership", () => {
 
   it("HC5: the Deno and compiled entrypoints assemble machine sessions; Node and Bun do not", function* () {
     for (const name of ["deno.ts", "compiled.ts"]) {
-      expect((yield* entrypoint(name)).includes("useMachineSessions()")).toBe(true);
+      // The machine crosses from the entrypoint as values. Shared assembly is
+      // handed the pair rather than reading it, so the one place that is
+      // actually running on this host is the one place that says so.
+      expect(
+        (yield* entrypoint(name)).includes(
+          "useMachineSessions({ platform: process.platform, architecture: process.arch })",
+        ),
+      ).toBe(true);
     }
     for (const name of ["node.ts", "bun.ts"]) {
       const source = yield* entrypoint(name);
@@ -554,7 +579,7 @@ describe("Tier HC — host session ownership", () => {
     // says which adapters it has proven for each rather than inheriting either.
     expect([...ADVERTISED_NATIVE_LAUNCH]).toEqual(["claude"]);
     expect([...ADVERTISED_CLIENT_NATIVE_ATTACHMENT]).toEqual(["claude"]);
-    const assembly = useMachineSessions();
+    const assembly = useMachineSessions(PROVED_HOST);
     expect([...assembly.advertiseNativeLaunch]).toEqual(["claude"]);
     expect([...assembly.advertiseClientNativeAttachment]).toEqual(["claude"]);
     // Built from the same trusted root as the coordinator beside it.
@@ -562,5 +587,57 @@ describe("Tier HC — host session ownership", () => {
     expect(assembly.routeStore === undefined).toBe(!onDeno());
     expect(assembly.executableObserver === undefined).toBe(!onDeno());
     expect(useExecutableObserver() === undefined).toBe(!onDeno());
+  });
+
+  it("HC13: the machine an assembly admits for is the one it was handed", function* () {
+    // A name is a selection; a point is the proof. The assembly states the
+    // proved points beside the observer, and the machine they are proved for
+    // arrives as a value, so the same shared code admits nothing on a host it
+    // was never proved against.
+    const proved = useMachineSessions(PROVED_HOST).compatibility;
+    expect(proved?.host).toEqual(PROVED_HOST);
+    expect(proved?.points).toEqual([
+      {
+        agent: "claude",
+        capability: "native-launch",
+        reportedVersion: CLAUDE_PROVED_VERSION,
+        ...PROVED_HOST,
+      },
+      {
+        agent: "claude",
+        capability: "client-native-attachment",
+        reportedVersion: CLAUDE_PROVED_VERSION,
+        ...PROVED_HOST,
+      },
+    ]);
+    const claudeLaunch = {
+      agent: "claude",
+      capability: "native-launch",
+      reportedVersion: CLAUDE_PROVED_VERSION,
+    } as const;
+    expect(admitsNativeCapability(proved, claudeLaunch)).toBe(true);
+    for (const elsewhere of [
+      { platform: "linux", architecture: "arm64" },
+      { platform: "darwin", architecture: "x64" },
+    ]) {
+      expect(
+        admitsNativeCapability(useMachineSessions(elsewhere).compatibility, claudeLaunch),
+      ).toBe(false);
+    }
+    // Node and Bun keep the coarse names and assemble no authority, so the
+    // advertised name reaches a question this profile answers with a refusal.
+    const unassembled = unassembledMachineSessions();
+    expect([...unassembled.advertiseNativeLaunch]).toEqual(["claude"]);
+    expect(unassembled.compatibility).toBe(undefined);
+    expect(admitsNativeCapability(unassembled.compatibility, claudeLaunch)).toBe(false);
+    // Shared assembly is handed the machine rather than reading it: only the
+    // entrypoints checked in HC5 name the running runtime.
+    expect((yield* entrypoint("session-coordinator.ts")).includes("process.platform")).toBe(false);
+    // The workflow profile advertises neither capability and states no points,
+    // so a workflow Claude prompt never reaches this question at all.
+    const workflow = yield* entrypoint("workflow-agent.ts");
+    expect(workflow.includes("advertiseNativeLaunch: [],")).toBe(true);
+    expect(workflow.includes("advertiseClientNativeAttachment: [],")).toBe(true);
+    expect(workflow.includes("compatibility:")).toBe(false);
   });
 });

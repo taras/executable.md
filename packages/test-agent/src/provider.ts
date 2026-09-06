@@ -10,6 +10,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import process from "node:process";
 import type { Operation } from "effection";
 import { useAcpxProvider } from "@executablemd/acp";
 import type {
@@ -17,7 +18,11 @@ import type {
   AcpxProviderDependencies,
   SessionRouteContext,
 } from "@executablemd/acp";
-import type { AgentSessionRouteStore, NativeAdapter } from "@executablemd/acp";
+import type {
+  AgentSessionRouteStore,
+  NativeAdapter,
+  NativeCapabilityCompatibility,
+} from "@executablemd/acp";
 import { useRouteSlot } from "./route-slot.ts";
 import type { AgentSessionCoordinator, ExecutableObserver } from "@executablemd/runtime";
 import type { AcpAgentRegistry, AcpSessionRecord, AcpSessionStore } from "acpx/runtime";
@@ -142,6 +147,30 @@ export const TEST_AGENT_CLIENT_NATIVE_ADAPTER: NativeAdapter = {
   resume: (nativeSessionId) => ["xmd-test-agent-ui", "--resume", nativeSessionId],
 };
 
+/**
+ * The points this partition admits, for the machine it is running on.
+ *
+ * This partition is its own trusted host — it supplies its own coordinator,
+ * route store and observer — so it also says which builds it has proved. What
+ * a real host proves by driving an installed CLI, this one proves by being the
+ * build: the controlled UI reports exactly `TEST_AGENT_BUILD_VERSION` and does
+ * the same thing everywhere, so the live pair is what the point is stated for.
+ * Reading the machine here rather than in `@executablemd/acp` is the whole
+ * point of the seam — a scenario stating an exact foreign point still refuses.
+ */
+function testAgentCompatibility(): NativeCapabilityCompatibility {
+  const host = { platform: process.platform, architecture: process.arch };
+  return {
+    host,
+    points: (["native-launch", "client-native-attachment"] as const).map((capability) => ({
+      agent: TEST_AGENT_CLIENT_NATIVE,
+      capability,
+      reportedVersion: TEST_AGENT_BUILD_VERSION,
+      ...host,
+    })),
+  };
+}
+
 export function* useTestAgentProvider(
   options: TestAgentProviderOptions,
 ): Operation<TestAgentPartition> {
@@ -203,6 +232,7 @@ export function* useTestAgentProvider(
     ...(options.coordinator ? { coordinator: options.coordinator } : {}),
     ...(options.routeStore ? { routeStore: options.routeStore } : {}),
     ...(options.executableObserver ? { executableObserver: options.executableObserver } : {}),
+    compatibility: testAgentCompatibility(),
     ...(options.dependencies?.createRuntime
       ? { createRuntime: options.dependencies.createRuntime }
       : {}),

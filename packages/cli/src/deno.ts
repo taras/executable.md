@@ -119,7 +119,10 @@ if (paneWorker !== undefined) {
       denoRunRepositories(HELPER),
       () => readInputStream(process.stdin),
       () => useDenoWorkflowHost(HELPER),
-      useMachineSessions(),
+      // The machine, read at the one place that is actually running on it. A
+      // native capability is admitted for an exact OS and architecture, so
+      // those cross from here as values rather than being detected below.
+      useMachineSessions({ platform: process.platform, architecture: process.arch }),
       // This host presents grids: it has a terminal to divide, and it can
       // re-invoke itself for one pane.
       foregroundTerminalGrid(),
