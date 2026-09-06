@@ -8,6 +8,7 @@
  */
 
 import { run } from "effection";
+import type { DurableEvent } from "@executablemd/durable-streams";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
 import { acquisitionHolders } from "../../../src/cloudflare/acquisition.ts";
 import { WorkflowOwnerObject } from "../../../src/cloudflare/owner.ts";
@@ -66,6 +67,10 @@ export const ROOT_MANIFEST = JSON.stringify({
       manifest: MANIFEST_ID,
       hardlink: null,
     },
+    // Two directories a checkout can live in, so a retained Repository and a
+    // retained Worktree can qualify without sharing one.
+    { path: "/checkouts", kind: "directory", mode: 493, mtime: 0 },
+    { path: "/work", kind: "directory", mode: 493, mtime: 0 },
   ],
 });
 export const ROOT_ID = sha256Hex(`${WORKSPACE_ROOT_DOMAIN}${ROOT_MANIFEST}`);
@@ -419,6 +424,90 @@ export class ExecutorObject extends WorkflowOwnerObject {
     return row === undefined ? null : row;
   }
 
+  /**
+   * Retain one Repository whose checkout the starting Workspace holds.
+   *
+   * `/` is a directory in `ROOT_MANIFEST`, so this one qualifies for a fork
+   * source selected at that root — which is what makes it usable for proving
+   * that adding a qualifying mapping changes the selection's anchor.
+   */
+  retainQualifyingRepository(name: string): void {
+    this.retainRepositoryAt(name, "/");
+  }
+
+  /** Retain one Repository checked out in a directory this test names. */
+  retainRepositoryAt(name: string, checkoutPath: string): void {
+    this.ctx.storage.sql.exec(
+      `INSERT INTO workspace_repositories (name, locator, locator_fingerprint, requested_base,
+         creation_commit, primary_branch, object_format, checkout_path)
+       VALUES (?, ?, ?, NULL, ?, 'main', 'sha1', ?)`,
+      name,
+      "https://git.example.invalid/one.git",
+      "b".repeat(64),
+      "9".repeat(40),
+      checkoutPath,
+    );
+  }
+
+  /**
+   * Retain one Worktree of a retained Repository, in its own directory.
+   *
+   * `/work` is a directory in `ROOT_MANIFEST` and no Repository holds it, so
+   * the pair is a checkout graph a fork could restore as it stands.
+   */
+  retainQualifyingWorktree(repositoryName: string, name: string): void {
+    this.retainWorktreeAt(repositoryName, name, "/work");
+  }
+
+  /** Retain one Worktree checked out in a directory this test names. */
+  retainWorktreeAt(repositoryName: string, name: string, checkoutPath: string): void {
+    this.ctx.storage.sql.exec(
+      `INSERT INTO workspace_worktrees (repository_name, name, requested_branch, requested_base,
+         creation_commit, checkout_path)
+       VALUES (?, ?, 'topic', NULL, ?, ?)`,
+      repositoryName,
+      name,
+      "9".repeat(40),
+      checkoutPath,
+    );
+  }
+
+  /** Append enough journal events that one section cannot be read in one page. */
+  fillJournal(count: number): void {
+    for (let index = 0; index < count; index += 1) {
+      this.appendJournal(`event-${String(index).padStart(4, "0")}`, `step ${index}`);
+    }
+  }
+
+  /** Every retained journal record, in the order the journal holds them. */
+  journalRecords(): { eventId: string; record: string }[] {
+    return this.ctx.storage.sql
+      .exec("SELECT event_id, record FROM journal_events ORDER BY sequence")
+      .toArray()
+      .map((row) => ({
+        eventId: String(row["event_id"]),
+        record: String(row["record"]),
+      }));
+  }
+
+  /** Move one retained blob's watermark, leaving its content identical. */
+  touchBlobWatermark(): void {
+    this.ctx.storage.sql.exec("UPDATE vfs_blobs SET last_seen = last_seen + 1");
+  }
+
+  /**
+   * Give one retained row a value of the wrong SQLite type.
+   *
+   * `STRICT` tables refuse most of these, so the damaged column is one the
+   * schema declares loosely enough to hold it — which is exactly the case a
+   * reader that coerced would turn into a plausible value.
+   */
+  damageRetainedWatermark(): void {
+    // INTEGER affinity converts what it can; text that names no number stays
+    // text, which is the value a reader that coerced would turn into zero.
+    this.ctx.storage.sql.exec("UPDATE vfs_blobs SET last_seen = 'not a number'");
+  }
+
   /** Retain more Repository rows than one admitted snapshot may carry. */
   fillRepositories(from: number, count: number): void {
     for (let index = from; index < from + count; index += 1) {
@@ -594,6 +683,45 @@ export class ExecutorObject extends WorkflowOwnerObject {
     } catch (error) {
       return new Response(refusalOf(error), { status: 403 });
     }
+  }
+
+  /**
+   * Answer one ordinary read, the way a host's request route would.
+   *
+   * Deliberately not the WebSocket path: no socket, no upgrade, no
+   * acquisition. What a test proves through this is that reading takes nothing.
+   */
+  async readRequest(
+    admission: { release: string | null; token: string | null; runId: string | null },
+    body: string,
+  ): Promise<string> {
+    return JSON.stringify(await run(() => this.read(admission, body)));
+  }
+
+  /**
+   * Append the two rows a fork writes for itself, and one ordinary row.
+   *
+   * The run record and the root import are what a destination replaces, so a
+   * fork-source selection must exclude exactly them and keep the rest.
+   */
+  appendForkableHistory(): void {
+    const write = (eventId: string, type: string, name: string) => {
+      const record: DurableEvent = {
+        type: "yield",
+        coroutineId: "root",
+        description: { type, name },
+        result: { status: "ok", value: name },
+      };
+      this.ctx.storage.sql.exec(
+        "INSERT INTO journal_events (event_id, record, workspace_root_id) VALUES (?, ?, ?)",
+        eventId,
+        serializeDurableEvent(record),
+        ROOT_ID,
+      );
+    };
+    write("event-run", "workflow_run", "workflow_run");
+    write("event-import", "import_component", "__root__");
+    this.appendJournal("event-work", "work");
   }
 
   /** The correlation the live acquisition is partitioned by. */

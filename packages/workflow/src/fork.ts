@@ -38,6 +38,8 @@ import { Err, Ok, type Result } from "effection";
 import { describeWorkflowRun, WORKFLOW_RUN, type WorkflowRun } from "./journal.ts";
 import type { Forkability } from "./lifecycle/forkability.ts";
 import { WorkflowRequestError } from "./storage/errors.ts";
+import { isRootImportEvent, isRunRecordEvent } from "./journal-events.ts";
+export { isRootImportEvent, isRunRecordEvent } from "./journal-events.ts";
 
 /** The coroutine a run's own record and canonical outcome belong to. */
 const ROOT_COROUTINE = "root";
@@ -154,25 +156,6 @@ export function forkJournal(
     rootImport,
     ...selection.inherited.map((candidate) => candidate.event),
   ]);
-}
-
-/** Whether this event is the root coroutine's import of the root document. */
-export function isRootImportEvent(event: DurableEvent): boolean {
-  return (
-    event.type === "yield" &&
-    event.description.type === IMPORT_COMPONENT &&
-    event.description.name === ROOT_DOCUMENT
-  );
-}
-
-/** Whether this event is the root coroutine's own `workflow_run` record. */
-export function isRunRecordEvent(event: DurableEvent): boolean {
-  return (
-    event.type === "yield" &&
-    event.coroutineId === ROOT_COROUTINE &&
-    event.description.type === WORKFLOW_RUN &&
-    event.description.name === WORKFLOW_RUN
-  );
 }
 
 /** Whether this event is the root's Close — the run's canonical outcome. */

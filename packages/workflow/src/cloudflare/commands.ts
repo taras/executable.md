@@ -93,7 +93,9 @@ export type CommandRefusal =
    */
   | "wrong-run"
   /** Retained journal history this owner cannot read. */
-  | "corrupt-journal";
+  | "corrupt-journal"
+  /** The selected prefix is not one a fork could inherit. */
+  | "not-forkable";
 
 export class CommandError extends Error {
   override name = "CommandError";

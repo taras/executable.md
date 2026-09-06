@@ -104,6 +104,7 @@ export type PrivateRefusal =
   | "command:absent"
   | "command:wrong-run"
   | "command:corrupt-journal"
+  | "command:not-forkable"
   | "storage:foreign"
   | `storage:unsupported-version-v${number}`
   | "storage:corrupt";
@@ -163,7 +164,7 @@ function nullableIdentity(value: unknown): string | null {
   return value;
 }
 
-function privateRefusal(value: string): PrivateRefusal {
+export function privateRefusal(value: string): PrivateRefusal {
   switch (value) {
     case "acquisition:already-running":
     case "acquisition:not-acquired":
@@ -183,6 +184,7 @@ function privateRefusal(value: string): PrivateRefusal {
     case "command:absent":
     case "command:wrong-run":
     case "command:corrupt-journal":
+    case "command:not-forkable":
     case "storage:foreign":
     case "storage:corrupt":
       return value;
@@ -998,7 +1000,7 @@ function nullableSequence(value: unknown): number | null {
  * condition. Command names, refusal spellings, rows and cursors stay below this
  * line: they describe a protocol nobody above here is party to.
  */
-function storageFailure(refusal: PrivateRefusal): WorkflowStorageError {
+export function storageFailure(refusal: PrivateRefusal): WorkflowStorageError {
   // A host acts on these differently: storage belonging to something else may
   // not be written, a version this build does not implement may not be
   // migrated, and damage may not be repaired. Collapsing them would make all

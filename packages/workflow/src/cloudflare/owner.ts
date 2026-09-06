@@ -34,6 +34,12 @@ import {
 import { admitToken, type AdmissionPolicy, AdmissionError } from "./admission.ts";
 import { TokenError, type TokenVerification } from "./token.ts";
 import { CommandError, type CommandResult, parseCommand, type RunnerCommand } from "./commands.ts";
+import {
+  answerRead,
+  parseReadOperation,
+  type ReadAdmission,
+  type ReadAnswer,
+} from "./read-plane.ts";
 import { dispatchCommand } from "./dispatcher.ts";
 import { WorkflowRecordMalformedError } from "../storage/errors.ts";
 import { discardPriorAcquisitions, PRIVATE_OBJECT_NAMES } from "./private-schema.ts";
@@ -164,6 +170,33 @@ export abstract class WorkflowOwnerObject extends DurableObject {
         });
       }
     });
+  }
+
+  /**
+   * Answer one ordinary read, taking nothing.
+   *
+   * The same order admission uses — the build is compared before any token
+   * work, and the token is verified before the run is touched — and then it
+   * stops. No socket is accepted, no acquisition is minted or compared, and
+   * nothing is written, so this can be answered while an executor is live and
+   * a refusal at any step leaves the acquisition set and the run untouched.
+   */
+  *read(admission: ReadAdmission, body: string): Operation<ReadAnswer> {
+    const { policy, verification } = this.configuration();
+    try {
+      // The order is the contract, and the body takes no part in it. A build
+      // this owner will not talk to is refused before its request is decoded,
+      // and an unauthenticated one before the run is named.
+      requireSameRelease(policy.release, admission.release);
+      yield* admitToken(policy, verification, admission.token);
+      const runId = admitRunId(admission.runId);
+      return {
+        outcome: "performed",
+        value: answerRead(this.owned, runId, parseReadOperation(body)),
+      };
+    } catch (error) {
+      return { outcome: "refused", refusal: refusalOf(error) };
+    }
   }
 
   /**
