@@ -169,48 +169,174 @@ function optionEntries(help: string): string[] {
   return entries;
 }
 
-/** What one option entry declares: its spellings, and whether it takes a value. */
-function declaredFlags(entry: string): { flags: string[]; takesValue: boolean } {
-  const flags: string[] = [];
-  for (const raw of entry.split(" ")) {
-    const token = raw.endsWith(",") ? raw.slice(0, -1) : raw;
-    if (/^-{1,2}[A-Za-z0-9][\w-]*$/.test(token)) {
-      flags.push(token);
-      continue;
-    }
-    // The head of an entry is its spellings and at most one value placeholder.
-    // Anything else has begun the description, and a description is prose.
-    return { flags, takesValue: token.startsWith("<") || token.startsWith("[") };
-  }
-  return { flags, takesValue: false };
-}
-
 /**
- * How this executable declares one option, if it declares it at all.
+ * One option declaration, kept in parts rather than collapsed to a verdict.
  *
- * `ambiguous` is separate from `absent` on purpose. Two entries declaring one
- * spelling is output this adapter cannot read as a single answer, and choosing
- * either would be guessing which one a launch would reach.
+ * The parts are what make this a value contract instead of a spelling check.
+ * "Takes a value" cannot tell `--session-id <uuid>` from `--session-id <name>`,
+ * and a launch that supplied a UUID to the second would be naming a session by
+ * something the build does not accept as one. So the placeholder is retained
+ * whole, and so is the description an entry uses to say what its value is.
  */
-function declaresOption(
-  entries: string[],
-  flag: string,
-): "absent" | "ambiguous" | "flag" | "valued" {
-  const matched = entries
-    .map(declaredFlags)
-    .filter((declaration) => declaration.flags.includes(flag));
-  if (matched.length === 0) {
-    return "absent";
-  }
-  if (matched.length > 1) {
-    return "ambiguous";
-  }
-  return matched[0].takesValue ? "valued" : "flag";
+interface OptionDeclaration {
+  /** Every spelling this entry declares — `-r` and `--resume` alike. */
+  readonly flags: readonly string[];
+  /** The declared value with its brackets stripped, absent for a bare flag. */
+  readonly placeholder: string | undefined;
+  /** Whether the value is required (`<uuid>`) rather than optional (`[value]`). */
+  readonly required: boolean;
+  /** Everything after the head, whitespace-normalized and lowercased. */
+  readonly description: string;
+  /** The whole entry, for a spelling this adapter reads inside a description. */
+  readonly entry: string;
 }
 
 /** Whitespace-insensitive text, for reading prose rather than layout. */
 function normalized(text: string): string {
-  return text.replace(/\s+/g, " ");
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * One entry, split into the spellings it declares and the value it takes.
+ *
+ * An entry's head is its spellings and at most one placeholder; the first token
+ * that is neither has begun the description. The placeholder is matched against
+ * the rejoined remainder rather than a single token so a value written with
+ * spaces inside its brackets is still one value.
+ */
+function declaredOption(entry: string): OptionDeclaration {
+  const tokens = entry.split(" ").filter((token) => token.length > 0);
+  const flags: string[] = [];
+  let index = 0;
+  for (; index < tokens.length; index += 1) {
+    const raw = tokens[index] ?? "";
+    const token = raw.endsWith(",") ? raw.slice(0, -1) : raw;
+    if (!/^-{1,2}[A-Za-z0-9][\w-]*$/.test(token)) {
+      break;
+    }
+    flags.push(token);
+  }
+  const rest = tokens.slice(index).join(" ");
+  const value = /^<([^<>]*)>|^\[([^[\]]*)\]/.exec(rest);
+  return {
+    flags,
+    placeholder: value === null ? undefined : (value[1] ?? value[2]),
+    required: value !== null && rest.startsWith("<"),
+    description: normalized(value === null ? rest : rest.slice(value[0].length)).toLowerCase(),
+    entry,
+  };
+}
+
+/** A placeholder compared by its letters, so `<session-id>` and `[sessionId]` agree. */
+function placeholderName(placeholder: string): string {
+  return placeholder.replace(/[^a-z0-9]/gi, "").toLowerCase();
+}
+
+/**
+ * The one entry declaring `flag`, or nothing when it is absent or ambiguous.
+ *
+ * Two entries declaring one spelling is output this adapter cannot read as a
+ * single answer, and choosing either would be guessing which one a launch
+ * would reach. Both are the same absence of evidence.
+ */
+function soleDeclaration(
+  options: readonly OptionDeclaration[],
+  flag: string,
+): OptionDeclaration | undefined {
+  const matched = options.filter((option) => option.flags.includes(flag));
+  return matched.length === 1 ? matched[0] : undefined;
+}
+
+/**
+ * Whether this help surface is Claude Code's own.
+ *
+ * Read from dedicated, unindented lines. Every option entry and every wrapped
+ * continuation of one is indented, so a product named inside a description is a
+ * mention — `compatible with Claude Code`, or a usage example quoted in prose,
+ * says what some other tool interoperates with rather than what this build is.
+ */
+function declaresClaudeProduct(help: string): boolean {
+  let named = false;
+  let usage = false;
+  for (const line of help.split("\n")) {
+    named ||= /^Claude Code\b/.test(line);
+    usage ||= /^Usage: claude(\s|$)/.test(line);
+  }
+  return named && usage;
+}
+
+/**
+ * Whether this build accepts a session identity the caller chose.
+ *
+ * The value has to be required and has to be a UUID: that is the whole contract
+ * a client-allocated identity stands on. An option that will take any name is
+ * not one this adapter can hand a UUID to and expect the same session back.
+ */
+function declaresChosenIdentity(options: readonly OptionDeclaration[]): boolean {
+  const declaration = soleDeclaration(options, "--session-id");
+  return (
+    declaration?.placeholder !== undefined &&
+    declaration.required &&
+    placeholderName(declaration.placeholder) === "uuid"
+  );
+}
+
+/** Placeholders that name the identity itself. */
+const IDENTITY_VALUE = /^(session|conversation)id$/;
+
+/** Placeholders that commit to nothing, so the entry has to say what it takes. */
+const UNCOMMITTED_VALUE = /^(value|arg|argument|id)$/;
+
+/**
+ * Whether this build resumes the exact conversation an identity names.
+ *
+ * A placeholder that names the identity answers by itself. A placeholder that
+ * names something else — a URL, a path, a title — is a positive statement that
+ * the argument is not an identity, and no description overrides it. Only a
+ * placeholder committing to nothing is settled by the entry's own words, which
+ * is how the shipped `[value]` spelling is read without pinning its prose.
+ */
+function declaresIdentityResume(options: readonly OptionDeclaration[]): boolean {
+  const declaration = soleDeclaration(options, "--resume");
+  if (declaration?.placeholder === undefined) {
+    return false;
+  }
+  const value = placeholderName(declaration.placeholder);
+  if (IDENTITY_VALUE.test(value)) {
+    return true;
+  }
+  if (!UNCOMMITTED_VALUE.test(value)) {
+    return false;
+  }
+  return (
+    declaration.description.includes("session id") &&
+    declaration.description.includes("conversation")
+  );
+}
+
+/** A placeholder or description saying the value is a file on disk. */
+const FILE_VALUE = /\b(file|filename|filepath|path)\b/;
+
+/**
+ * Whether the instruction layer can be handed over as a private file.
+ *
+ * Two accepted spellings, because Claude documents the family rather than the
+ * member: builds that give `--system-prompt-file` no entry of its own name it
+ * as `--system-prompt[-file]` inside another option's description. That is a
+ * declaration this executable makes about itself, so it is read from a parsed
+ * entry — never from a header, a command list, a footer, or free prose, where
+ * the same characters say only that someone wrote them.
+ */
+function declaresPrivateInstructionFile(options: readonly OptionDeclaration[]): boolean {
+  const declaration = soleDeclaration(options, "--system-prompt-file");
+  if (
+    declaration?.placeholder !== undefined &&
+    (FILE_VALUE.test(placeholderName(declaration.placeholder)) ||
+      FILE_VALUE.test(declaration.description))
+  ) {
+    return true;
+  }
+  return options.some((option) => option.entry.includes("--system-prompt[-file]"));
 }
 
 /**
@@ -234,11 +360,12 @@ const CLAUDE_PROBE_PROFILE = "claude-help-native-session.v1";
  * rewords prose or rewraps lines still declares those, and a release that
  * stopped declaring one cannot launch whatever it calls itself.
  *
- * The private-file member has two accepted spellings because Claude declares
- * the family rather than the member: `--system-prompt-file` appears as the
- * documented `--system-prompt[-file]` spelling in builds that do not give it
- * its own entry. Both are the same declaration, and neither is inferred from
- * the other's absence.
+ * Each member is a value contract, not a flag spelling. A launch supplies a
+ * UUID it chose, names that exact conversation again later, and hands over
+ * instructions as a private file — so what is read is the value each option
+ * says it takes. A build offering `--session-id <name>` or `--resume <url>`
+ * accepts the spelling and means something else by it, and admitting it would
+ * be reading agreement out of a coincidence of names.
  *
  * The two capabilities are read independently from what is present, never one
  * from the other: attachment additionally needs the bridge this adapter pins,
@@ -251,14 +378,11 @@ function claudeNativeProbe(pinnedBridge: string | undefined): NativeCapabilityPr
     if (help === undefined) {
       return { probeProfile: CLAUDE_PROBE_PROFILE, capabilities };
     }
-    const text = normalized(help);
-    const entries = optionEntries(help);
-    const product = text.includes("Claude Code") && /(^| )Usage: claude( |$)/.test(text);
-    const identity = declaresOption(entries, "--session-id") === "valued";
-    const resume = declaresOption(entries, "--resume") === "valued";
-    const privateFile =
-      declaresOption(entries, "--system-prompt-file") === "valued" ||
-      text.includes("--system-prompt[-file]");
+    const options = optionEntries(help).map(declaredOption);
+    const product = declaresClaudeProduct(help);
+    const identity = declaresChosenIdentity(options);
+    const resume = declaresIdentityResume(options);
+    const privateFile = declaresPrivateInstructionFile(options);
 
     if (product && identity && resume && privateFile) {
       capabilities.push("native-launch");
