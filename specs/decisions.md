@@ -835,12 +835,12 @@ cross-check between the route and the prepared journal. It does not establish
 whether another release implements the same operation. That question belongs
 to the live capability profile.
 
-The client-allocated contract deliberately accepts two zero-turn outcomes: the
-same identity resumes, or the provider refuses that exact absent identity and
-XMD fails closed. A provider which persists no conversation until its first user
-turn therefore does not, by that fact alone, violate the contract. Adding a
-hidden materialization turn would instead violate the accepted rule that native
-launch performs no model turn.
+The client-allocated Claude contract deliberately accepts two zero-turn
+outcomes: the same identity resumes, or the provider refuses that exact absent
+identity and XMD fails closed. A provider which persists no conversation until
+its first user turn therefore does not, by that fact alone, violate that
+contract. A materialization turn is never inferred from this observation;
+DEC-018 records the separately proved Codex exception explicitly.
 
 ### Decision
 
@@ -916,10 +916,10 @@ child teardown, cleanup and handle release acknowledge quiescence even when the
 child exited unsuccessfully; any unproved teardown keeps the recovery tombstone
 active.
 
-No XMD-owned materialization turn is added. A provider-native creation protocol
-which retains the exact identity without a turn may replace the current command
-only after its own real-CLI proof. Allowing a fixed bootstrap/model turn is a
-separate product decision and specification change.
+Capability admission never adds a materialization turn. Claude remains
+zero-turn. A provider protocol requiring a fixed turn must declare and prove it
+as a separate product contract; DEC-018 does so for Codex without changing the
+Claude or generic admission rule.
 
 ### Consequences
 
@@ -952,3 +952,113 @@ This is a repair to the unmerged terminal/native-session stack and lands
 directly atop its delivery head. It is not a separate Story: the terminal grid
 made the native-launch path observable but did not create this capability
 boundary.
+
+## DEC-018: Codex native launch materializes one provider-returned conversation
+
+**Status:** Decided
+
+**Date:** 2026-09-06
+
+### Context
+
+The accepted two-agent terminal-grid document needs both Claude and Codex to be
+real product paths. Claude can create a named conversation directly in its
+native process. Codex cannot: its ACP App Server chooses the thread identity,
+and `codex resume <id>` cannot read that thread until its first accepted turn
+has written a rollout.
+
+The #755 installed-CLI proof established the complete provider-returned path on
+macOS arm64 with `codex-cli 0.153.2` and the vendored
+`@agentclientprotocol/codex-acp` 1.6.2 snapshot: ACP created one conversation,
+the adapter canonically asserted its App Server thread, one fixed turn made it
+resumable, the native UI resumed that exact identity, and ACP later rejoined the
+same conversation. The version and digest identify the evidence. DEC-017 means
+they cannot become a release allow-list or continuity lock.
+
+The sibling implementation wrote strict `session-route.v3` records into the
+shared machine store. A V1/V2 reader refuses those records as unknown. Treating
+them as absent would permit a second conversation under an occupied logical key,
+which is precisely what strict route parsing prevents.
+
+### Decision
+
+Codex is advertised for `native-launch` and the separate
+`provider-native-continuation` capability. Its stable protocol is
+`codex-provider-returned.v1`. The Deno and compiled hosts admit each capability
+only when the prospective live adapter has that compiled non-replaceable
+protocol interpretation, the resolved executable structurally declares the
+Codex product and required `resume` identity semantics, and the macOS arm64 host
+envelope matches. A reported version and executable digest remain optional audit
+evidence and never authorize or deny a compatible cross-release continuation.
+
+New Codex native construction publishes strict V3 before ACP runtime creation:
+
+```ts
+interface AgentSessionRouteV3 {
+  schema: "session-route.v3";
+  route: "acp-first";
+  provider: string;
+  agent: string;
+  sessionKey: string;
+  executableBinding: ExecutableBuildBindingV1;
+}
+```
+
+The exact V3 schema/route/provider/agent form fixes
+`codex-provider-returned.v1`; it has no replaceable protocol field. Its original
+binding and the agreeing launch journal remain immutable audit evidence. A
+future incompatible provider-returned protocol requires a new route schema.
+The integrated reader accepts exact V1, V2 and V3, writes V2 for new Claude
+client-native construction and V3 for new Codex provider-returned construction,
+and never upgrades or rewrites an existing route. Older V1/V2-only builds must
+continue refusing V3 rather than deleting it, treating it as absent or creating
+another session.
+
+`codex-provider-returned.v1` declares exactly one
+`codex-materialization.v1` turn for a conversation the launch just created. Its
+prompt bytes are fixed in the native-session-launch specification, contain no
+authored instructions or host values, deny every tool and external action, and
+are announced before the cost is incurred. Core retains the ordinary prompt
+operation before sending it, then retains `materialized` with the provider's
+exact canonical identity and filtered response/usage evidence. That response is
+not document output. A tool call, failed or cancelled turn, non-`end_turn` stop,
+missing acceptance signal, missing or changed identity, or failed checkpoint
+fails the launch before native execution.
+
+Replay never risks spending the turn twice. A retained prompt outcome can
+reconstruct a missing `materialized` phase; a prior invocation with only the
+prepared plan is `session-recovery-required`; a materialized or detached launch
+continues the exact retained identity; a completed launch observes and executes
+nothing. Deliberately stopped work is never revived.
+
+Every live V3 construction, native resume, provider-native ACP continuation and
+incomplete replay independently validates the stable protocol and admits the
+current executable before ensure, materialization, native execution or a turn.
+Route/journal disagreement, provider identity absence or substitution, protocol,
+profile, capability or host mismatch remains fail-closed. Compatible Codex
+releases continue the exact retained identity without allocation, route rewrite
+or same-build comparison. ACP runtime partitions use the current resolved agent
+command, executable observation and protocol rather than the historical V3
+binding; a live partition is never migrated and each handle closes through its
+creator.
+
+The materialization notification and native child use the selected root or pane
+terminal. Neutral notification and launch mechanics belong to
+`@executablemd/terminal`; tmux-specific transport remains in
+`@executablemd/terminal-tmux`. No deleted runtime, core or CLI terminal path is
+restored.
+
+### Consequences
+
+A newly constructed Codex native session costs one explicit model turn before
+its native UI appears. Claude remains zero-turn, an established Codex session
+receives no second materialization turn, and ordinary ACP-first prompting keeps
+its existing semantics. The authored two-agent terminal-grid document is
+therefore preserved without adding provider syntax or a demo-only fallback.
+
+The #755 implementation is ported semantically on top of the terminal-package
+and cross-release stack; it is not cherry-picked as a sibling commit. Its
+same-build comparisons and old core/runtime terminal paths are superseded. The
+frozen real-session proofs remain evidence and are not rerun for this
+integration. Controlled fixtures prove protocol/shape discrimination, V3
+compatibility, replay, mixed Claude/Codex pane launch, ownership and teardown.
