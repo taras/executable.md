@@ -4611,4 +4611,98 @@ describe("Tier NP — proved native capability points", () => {
     expect(shared.acquisitions.map((entry) => entry.outcome)).toEqual(["granted", "granted"]);
     expect(secondTrace.launches.length).toBe(1);
   });
+
+  it("NP10: a launch whose own cleanup failed as it completed stays owned", function* () {
+    // The other half of CX2. Cancellation is not the only way teardown fails:
+    // a launch that ran to completion unwinds its own finalizers on the way
+    // out, and a failure there leaves exactly the same fact unproved. Bringing
+    // that scope down afterwards says it is settled now — never that the
+    // cleanup which failed on the way had succeeded.
+    const CLEANUP_FAILED = "the native child could not be proven stopped";
+    const shared = makeCoordinator();
+    const seen = boundaries();
+    const routes = countedRoutes(seen);
+    const store = makeStore();
+    yield* routes.publish(bound());
+    const before = JSON.stringify(yield* routes.read(KEY));
+
+    const first = createFakeRuntime();
+    const firstTrace = newTrace();
+    firstTrace.ownership = shared;
+    const started = withResolvers<void>();
+    const release = withResolvers<void>();
+    let raised = "";
+
+    yield* scoped(function* () {
+      yield* installLaunchStack(first, firstTrace, {
+        adapters: { claude: countedAdapter(seen) },
+        routeStore: routes,
+        store,
+        coordinator: shared.coordinator,
+        cleanupFails: CLEANUP_FAILED,
+        hold: (function* () {
+          started.resolve();
+          yield* release.operation;
+        })(),
+      });
+
+      // Signalled rather than timed: the child is let go only once it has
+      // provably started, and the launch is then awaited to its own
+      // settlement — which is where its finalizers run.
+      yield* spawn(function* () {
+        yield* started.operation;
+        release.resolve();
+      });
+      try {
+        yield* launch(INSTRUCTIONS);
+      } catch (error) {
+        raised = error instanceof Error ? error.message : String(error);
+      }
+    });
+
+    // The child did start, under the identity the route names, and completed
+    // on its own — this is not a cancellation.
+    expect(firstTrace.launches.map((request) => request.command)).toEqual([
+      [OBSERVED_PATH, "--resume", ALLOCATED],
+    ]);
+    // What the caller was handed is the original cleanup failure itself.
+    expect(raised).toContain(CLEANUP_FAILED);
+    // And nothing was acknowledged: the live exclusion came back, the record
+    // stayed standing.
+    expect(shared.events).toEqual(["owned", "released-active"]);
+
+    const publishedBefore = seen.published.length;
+    const second = createFakeRuntime();
+    const secondTrace = newTrace();
+    secondTrace.ownership = shared;
+    const later = boundaries();
+    let failure: PreparedLaunchRecord["failure"];
+    // Under a private root that could not hold an instruction file, so a run
+    // that had reached the write would fail in the host's own words instead of
+    // refusing for the session.
+    yield* withUnusablePrivateRoot(function* () {
+      yield* scoped(function* () {
+        yield* installLaunchStack(second, secondTrace, {
+          adapters: { claude: countedAdapter(later) },
+          routeStore: routes,
+          store,
+          coordinator: shared.coordinator,
+        });
+        failure = yield* attempt(secondTrace, INSTRUCTIONS);
+      });
+    });
+
+    expect(failure?.class).toBe("session-recovery-required");
+    expect(shared.acquisitions.map((entry) => entry.outcome)).toEqual([
+      "granted",
+      "recovery-required",
+    ]);
+    // Refused in front of every boundary: no child, no ACP session, no second
+    // identity, no publication over the account of the one the route names.
+    expect(secondTrace.launches).toEqual([]);
+    expect(second.ensureCalls).toEqual([]);
+    expect(later.allocations + later.creates + later.resumes).toBe(0);
+    expect(seen.published.length).toBe(publishedBefore);
+    expect(JSON.stringify(yield* routes.read(KEY))).toBe(before);
+  });
 });
