@@ -100,29 +100,20 @@ export const Documentation: Api<DocumentationApi> = createApi<DocumentationApi>(
  * and through the reader the collector supplies: a bootstrap installed in one
  * execution's scope reads that execution's assets.
  *
- * **A contribution of the same value already in the chain is not appended
- * twice.** One package's declarative vocabulary is deliberately entered at more
- * than one layer — the repository-composition set by an ordinary run's bootstrap
- * *and* again inside a workflow attachment, because either may be the only one;
- * a nested run or evaluation host the same way — and the inner scope descends
- * from the outer, so both wrappers are in one chain. Appending the second would
- * refuse at collection, which turns valid layering into a failure while there is
- * no ambiguity to resolve: a repetition of the same value says exactly what the
- * first one said, and there is no winner to pick. So it coalesces, and the
- * repeated bootstrap keeps both its registrations and one documentation value.
- *
- * Equality is by value over all four of {@link identical}'s inputs. Anything
- * short of that — matching on the asset alone, say — would coalesce two
- * bootstraps that genuinely disagree, and silently keep whichever ran first.
+ * It appends, and nothing more. Whether a repeated bootstrap is one statement
+ * made twice or two bootstraps disagreeing is {@link capturedDocumentation}'s
+ * question, because this helper is a convenience and the Api it wraps is
+ * public: a package may compose `Documentation.around(...)` directly, and
+ * correctness cannot depend on which of the two it chose. Deduplicating here as
+ * well would put the rule in two places, and the copy that ran second would be
+ * the one nobody tested.
  */
 export function* contributeDocumentation(
   contribute: (read: DocumentationReader) => Operation<DocumentationContribution>,
 ): Operation<void> {
   yield* Documentation.around({
     *contributions([read], next): Operation<readonly DocumentationContribution[]> {
-      const enclosing = yield* next(read);
-      const mine = yield* contribute(read);
-      return enclosing.some((one) => identical(one, mine)) ? enclosing : [...enclosing, mine];
+      return [...(yield* next(read)), yield* contribute(read)];
     },
   });
 }
@@ -164,18 +155,29 @@ function sameNames(one: ReadonlySet<string>, other: ReadonlySet<string>): boolea
  * reason the installation boundary snapshots anything — the objects belong to
  * whoever built them, and their `Set`s and strings can move afterwards.
  *
- * Two contributions that *disagree* about one component of one package refuse
- * here, wherever they sat in the chain. A later one silently winning would make
- * what a document is told about a component depend on the order its host
- * happened to bootstrap packages in.
+ * **This boundary decides what a duplicate is**, not the helper that most
+ * bootstraps happen to use. `Documentation` is public: a package may compose
+ * `Documentation.around(...)` itself and hand back two value-identical
+ * contributions directly, and that assembly is exactly as valid as one built
+ * with {@link contributeDocumentation}. Classifying in the helper instead would
+ * make correctness depend on which spelling a package chose.
  *
- * Only a disagreement reaches this far: a repetition of the same value never
- * arrives, because `contributeDocumentation()` recognizes its own statement in
- * the chain and does not append it twice. What is left overlaps on one owning
- * package and one component name while differing in asset, text or the set of
- * components accounted for. Two *different owners* documenting a same-spelled
- * component is not a conflict — documentation joins by name and origin — and
- * neither is one owner accounting for disjoint sets from two files.
+ * So: snapshot first, then fold, then classify. A contribution is four
+ * values — owning package, asset identity, exact documentation text, and the set
+ * of components it accounts for. Every completely identical contribution folds
+ * to one, because a repetition says exactly what the first said and there is no
+ * winner to pick; that is what lets one package's declarative vocabulary be
+ * entered at more than one layer, as an ordinary run's bootstrap and a workflow
+ * attachment both do, without losing either layer's registrations.
+ *
+ * What is left after folding are contributions that *disagree*: they overlap on
+ * one owning package and one component name while differing in asset, text or
+ * the set accounted for. Those refuse, wherever they sat in the chain — a later
+ * one silently winning would make what a document is told about a component
+ * depend on the order its host bootstrapped packages in. Two *different owners*
+ * documenting a same-spelled component is not a conflict, because documentation
+ * joins by name and origin, and neither is one owner accounting for disjoint
+ * sets from two files.
  *
  * Collection is where a disagreement is caught, because it is the only boundary
  * every execution passes through. Deferring it to the named form's index would
@@ -185,13 +187,29 @@ function sameNames(one: ReadonlySet<string>, other: ReadonlySet<string>): boolea
 export function* capturedDocumentation(
   read: DocumentationReader = packagedAssetReader,
 ): Operation<readonly DocumentationContribution[]> {
-  const contributed = yield* Documentation.operations.contributions(read);
+  // Snapshotted *before* anything is compared, so what is classified is what
+  // will be kept. A contribution is a caller's object until this line — its
+  // strings and its `Set` can move afterwards — and comparing the live objects
+  // would decide identity against values the snapshot might not preserve.
+  const captured = snapshotContributions(yield* Documentation.operations.contributions(read));
+
+  // Every completely identical contribution folds to one, whichever way it
+  // reached the chain: the convenience helper and a direct
+  // `Documentation.around(...)` are the same to this boundary, which is the
+  // point of deciding here rather than in the helper.
+  const folded: DocumentationContribution[] = [];
+  for (const one of captured) {
+    if (!folded.some((kept) => identical(kept, one))) {
+      folded.push(one);
+    }
+  }
+
   // Keyed by owning package *and* component name, because that pair is what
   // documentation joins on. Two packages may document same-spelled components,
   // and one package may account for disjoint sets from two files; neither is a
   // question anyone has to answer, so neither is a conflict.
   const seen = new Map<string, DocumentationContribution>();
-  for (const one of contributed) {
+  for (const one of folded) {
     for (const name of one.supplies) {
       const owner = one.source.owner;
       const first = seen.get(`${owner} ${name}`);
@@ -206,7 +224,7 @@ export function* capturedDocumentation(
       seen.set(`${owner} ${name}`, one);
     }
   }
-  return snapshotContributions(contributed);
+  return Object.freeze(folded);
 }
 
 /**

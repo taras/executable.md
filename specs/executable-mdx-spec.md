@@ -2769,10 +2769,18 @@ declarative vocabulary is deliberately entered at more than one layer — the
 repository-composition set by an ordinary run's bootstrap and again inside a
 workflow attachment, because either may be the only one, and a nested run or
 evaluation host the same way — and the inner scope descends from the outer, so
-both wrappers sit in one chain. A bootstrap that finds its own value already
-there does not append it again: one bootstrap and two identical bootstraps
+both wrappers sit in one chain. One bootstrap and two identical bootstraps
 produce exactly the same captured documentation, and the repeated bootstrap
 keeps both its registrations and one documentation value.
+
+**Collection classifies duplicates, and a convenience helper does not.** The
+middleware namespace is public: a package may compose it directly and hand back
+two value-identical contributions rather than going through the helper most
+bootstraps use, and that assembly is exactly as valid. So canonical collection
+snapshots the composed chain by value first, folds every completely identical
+contribution to one, and only then classifies what is left. A helper may
+suppress a duplicate of its own as an optimization, but only where bypassing it
+produces exactly the same accepted snapshot and the same conflict behavior.
 
 **Two non-identical contributions overlapping one owning-package and
 component-name pair refuse before root execution**, whichever middleware or
@@ -10981,6 +10989,7 @@ component that observes one at an authored site.
 | SYN25l.3 | Distinct owner and disjoint set are controls | Two owners documenting a same-spelled component do not conflict and neither takes the other's prose; one owner accounting for disjoint sets from two files does not conflict either |
 | SYN25l.4 | Overlapping executions are isolated | An assembly carrying a genuine conflict refuses while a second execution live at the same time renders its own documentation, unaffected |
 | SYN25l.5 | Layered trusted bootstraps keep both halves | An inner trusted layer entering the same package bootstrap as the outer keeps every layer's registrations resolvable *and* the package's documentation, rendered once from one coalesced value |
+| SYN25l.6 | Collection owns duplicate classification | Two direct middleware wrappers that never call the convenience helper, contributing fresh objects with the same four values and differently ordered name sets, leave the named form, the bare form and a no-`<Syntax>` root each working with one contribution captured; the same three disagreements reached that way still refuse before the root in either order |
 | SYN25j | Scopes are isolated | A sibling scope that bootstrapped nothing reads none of the first scope's contributions, and the first scope's contribution does not outlive it |
 | SYN25k | Document-time middleware reaches nothing | A component that composes around the `Documentation` Api and renders `<Syntax names={…}>` inside its own scope is shown what the host bootstrapped, not what it installed |
 | SX17 | One index, two surfaces | `xmd syntax NAME` and `<Syntax names={[NAME]} />` return the same text for a component outside core's own file |

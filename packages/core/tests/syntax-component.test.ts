@@ -52,7 +52,11 @@ import { retainedSource } from "../src/root-source.ts";
 import { renderSyntaxMarkdown } from "../src/syntax-markdown.ts";
 import { syntaxReference, rootSyntaxReference } from "../src/syntax-reference.ts";
 import type { SyntaxReference } from "../src/syntax-reference.ts";
-import { capturedDocumentation, contributeDocumentation } from "../src/documentation-api.ts";
+import {
+  capturedDocumentation,
+  contributeDocumentation,
+  Documentation,
+} from "../src/documentation-api.ts";
 import { executeReadingAssetsWith } from "../src/execute.ts";
 import type { DocumentationContribution } from "../src/component-documentation.ts";
 import { SYNTAX_COMPONENT } from "../src/components/Syntax.ts";
@@ -850,6 +854,80 @@ describe("Tier SYN — the named form", () => {
     expect(beside).toContain("MARKER PROSE.");
     expect(beside).not.toContain("CONFLICTING");
     expect(yield* conflicted).toContain("contributes documentation for Marker twice");
+  });
+
+  it("SYN25l.6: duplicate classification belongs to collection, not to the helper", function* () {
+    // `Documentation` is public, so a package may compose `around(...)` itself
+    // and hand back two value-identical contributions directly. That assembly
+    // is exactly as valid as one built with `contributeDocumentation()`, and
+    // this proves collection says so — nothing below calls the helper.
+    //
+    // A rule that lived in the helper would pass every other row in this tier
+    // and fail here, which is the point of the row.
+    const { installation: marker } = stating(symbolsOf("Marker", "Other"));
+    const directly = (vary: Parameters<typeof useMarkerDocumentation>[0] = {}): Operation<void> =>
+      Documentation.around({
+        *contributions([read], next): Operation<readonly DocumentationContribution[]> {
+          // A fresh object on every ask, so nothing here can pass by identity.
+          return [
+            ...(yield* next(read)),
+            {
+              source: {
+                owner: vary.owner ?? "@executablemd/test",
+                asset: vary.asset ?? "packages/test/src/components.md",
+                text: vary.text ?? PAIR_PROSE,
+              },
+              supplies: new Set(vary.supplies ?? ["Marker", "Other"]),
+            },
+          ];
+        },
+      });
+
+    const twice = (source: string): Operation<Json> =>
+      scoped(function* () {
+        yield* directly();
+        // The same four values, with the names listed the other way round.
+        yield* directly({ supplies: ["Other", "Marker"] });
+        return yield* run(source, [marker]);
+      });
+
+    expect(String(yield* twice('<Syntax names={["Marker"]} />\n'))).toContain("MARKER PROSE.");
+    expect(String(yield* twice("<Syntax />\n"))).toContain("### `<Marker>`");
+    expect(String(yield* twice("nothing here\n"))).toContain("nothing here");
+
+    // And canonical capture holds one contribution, not two.
+    const captured = yield* scoped(function* () {
+      yield* directly();
+      yield* directly({ supplies: ["Other", "Marker"] });
+      return yield* capturedDocumentation();
+    });
+    expect(
+      captured.filter((one) => one.source.asset === "packages/test/src/components.md"),
+    ).toHaveLength(1);
+
+    // The same three disagreements, reached the same direct way, still refuse
+    // before the root — in either order, and with no `<Syntax>` to discover it.
+    const conflicts: [string, Parameters<typeof useMarkerDocumentation>[0]][] = [
+      ["a changed asset", { asset: "packages/other/src/components.md" }],
+      ["changed text", { text: `${PAIR_PROSE}\nSUBSTITUTED.\n` }],
+      ["an overlapping but different set", { supplies: ["Marker", "Extra"] }],
+    ];
+    for (const [what, changed] of conflicts) {
+      for (const reversed of [false, true]) {
+        const refused = yield* refusal(
+          scoped(function* () {
+            yield* directly(reversed ? changed : {});
+            yield* directly(reversed ? {} : changed);
+            return yield* run("nothing here\n", [marker]);
+          }),
+        );
+        expect([
+          what,
+          reversed,
+          refused.includes("contributes documentation for Marker twice"),
+        ]).toEqual([what, reversed, true]);
+      }
+    }
   });
 
   it("SYN25l.5: layered trusted bootstraps keep their registrations and documentation", function* () {

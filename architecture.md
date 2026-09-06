@@ -3731,10 +3731,18 @@ declarative vocabulary is deliberately entered at more than one layer, the
 repository-composition set by an ordinary run's bootstrap and again inside a
 workflow attachment because either may be the only one, and a nested run or
 evaluation host the same way. The inner scope descends from the outer, so both
-wrappers sit in one chain; the second finds its own value already there and does
-not append it, keeping its registrations and one documentation value. Comparing
-the asset alone would instead coalesce two bootstraps that genuinely disagree
-and silently keep whichever ran first.
+wrappers sit in one chain, and collection folds them to one — keeping every
+layer's registrations and one documentation value. Comparing the asset alone
+would instead coalesce two bootstraps that genuinely disagree and silently keep
+whichever ran first.
+
+**Collection classifies duplicates, not the helper a bootstrap happened to
+use.** The middleware namespace is public, so a package may compose it directly
+and hand back two value-identical contributions rather than going through the
+convenience helper; that assembly is exactly as valid. Canonical collection
+therefore snapshots the composed chain by value, folds every completely
+identical contribution, and only then classifies what is left — so correctness
+does not depend on which spelling a package chose.
 
 A different owner is unequal but is not by itself a conflict, because
 documentation joins by component name *and* origin — two packages may each
