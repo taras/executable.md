@@ -1433,6 +1433,19 @@ describe("Tier EB — executable build binding", () => {
     expect(parsed?.executableBinding).toBe(undefined);
   });
 
+  it("EB2b: a binding that reported no version is read as the digest-only one it is", function* () {
+    // What binds a session to a build is the bytes. An executable that would
+    // not say which release it is was still observed exactly, and a record
+    // that omitted the version made no claim rather than a bad one.
+    const digestOnly = {
+      schema: "executable-build.v1",
+      executableDigest: { algorithm: "sha256", value: "d".repeat(64) },
+    };
+    const parsed = parsePrepared(bound({ executableBinding: digestOnly }));
+    expect(parsed?.executableBinding).toEqual(digestOnly);
+    expect(parsed?.executableBinding?.reportedVersion).toBe(undefined);
+  });
+
   it("EB3: an inexact binding refuses rather than being read past", function* () {
     const cases: [string, Json][] = [
       ["unknown schema", { ...BOUND, schema: "executable-build.v2" }],
@@ -1469,7 +1482,7 @@ describe("Tier EB — executable build binding", () => {
     }
   });
 
-  it("EB4: equality is over the retained build, and a path is not part of it", function* () {
+  it("EB4: the digest decides, and a path is not part of it", function* () {
     // There is no path to ignore, which is the point: the same build reached
     // through a different path compares equal because nothing about where it
     // was ever entered the record.
@@ -1488,6 +1501,34 @@ describe("Tier EB — executable build binding", () => {
         executableDigest: { algorithm: "sha256", value: "e".repeat(64) },
       }),
     ).toBe(false);
+  });
+
+  it("EB4b: a retained version is a claim the live build must still make", function* () {
+    // Asymmetric, because the two sides are not the same kind of claim. A
+    // record written with a version has evidence a quiet build cannot
+    // reproduce; a record written without one never had that evidence, so a
+    // version appearing later adds nothing to reproduce.
+    const digest = { algorithm: "sha256", value: "d".repeat(64) } as const;
+    const versioned: ExecutableBuildBindingV1 = {
+      schema: "executable-build.v1",
+      reportedVersion: "2.1.241 (Claude Code)",
+      executableDigest: digest,
+    };
+    const quiet: ExecutableBuildBindingV1 = {
+      schema: "executable-build.v1",
+      executableDigest: digest,
+    };
+
+    expect(sameExecutableBuild(versioned, quiet)).toBe(false);
+    expect(sameExecutableBuild(quiet, versioned)).toBe(true);
+    expect(sameExecutableBuild(quiet, quiet)).toBe(true);
+    // And a changed digest refuses either way, whatever either says it is.
+    const moved: ExecutableBuildBindingV1 = {
+      ...quiet,
+      executableDigest: { algorithm: "sha256", value: "e".repeat(64) },
+    };
+    expect(sameExecutableBuild(quiet, moved)).toBe(false);
+    expect(sameExecutableBuild(moved, quiet)).toBe(false);
   });
 
   it("EB5: completed replay stays provider-cold for a bound preparation", function* () {

@@ -105,7 +105,7 @@ import {
 } from "./native-launch.ts";
 import type { NativeAdapter } from "./native-launch.ts";
 import { admitsNativeCapability } from "./native-capability.ts";
-import type { NativeCapability, NativeCapabilityCompatibility } from "./native-capability.ts";
+import type { NativeCapability, NativeCapabilityPolicy } from "./native-capability.ts";
 
 /**
  * One MCP server as ACPX configures them.
@@ -244,19 +244,19 @@ export interface AcpxProviderDependencies {
    */
   executableObserver?: ExecutableObserver;
   /**
-   * Which exact builds this host has proved each native capability on, and the
-   * machine it proved them for.
+   * Which protocol shapes this host has proved each native capability on, and
+   * the machine it proved them for.
    *
    * Supplied by the trusted host beside the coordinator and the observer, and
    * for the same reason: it carries this machine's OS and architecture, and
    * shared provider code that went and read those would be answering the
-   * compatibility question with the thing being asked about.
+   * admission question with the thing being asked about.
    *
    * The advertised sets above choose which adapter to consider. This is what
-   * says the build actually found under it may be acted on. Absent admits
+   * says the executable actually found under it may be acted on. Absent admits
    * nothing — a host that states no proof has none.
    */
-  compatibility?: NativeCapabilityCompatibility;
+  nativeCapabilityPolicy?: NativeCapabilityPolicy;
   /**
    * Extra native adapters, by agent name. A harness driving an agent this
    * package has never heard of supplies its own resume command shape here
@@ -347,6 +347,17 @@ interface BoundBuild {
   environment: Record<string, string>;
   /** The exact ACP adapter command this binding was proven against, if pinned. */
   adapterCommand: string | undefined;
+  /** The protocol the adapter this build was reached through speaks. */
+  adapterProtocol: string;
+  /**
+   * What this executable's own probe recognized, and which probe recognized it.
+   *
+   * Carried rather than recomputed, so admission is matched against the answer
+   * an observation actually produced instead of asking the question a second
+   * time and hoping for the same one.
+   */
+  probeProfile: string;
+  capabilities: readonly NativeCapability[];
 }
 
 /**
@@ -833,7 +844,7 @@ function* useAcpxProviderState(
   const coordinator = dependencies?.coordinator;
   const routeStore = dependencies?.routeStore;
   const executableObserver = dependencies?.executableObserver;
-  const compatibility = dependencies?.compatibility;
+  const nativeCapabilityPolicy = dependencies?.nativeCapabilityPolicy;
   const agentCwd = dependencies?.agentCwd ?? cwd;
   const prepareAgent = dependencies?.prepareAgent;
   const mcpServers = dependencies?.mcpServers;
@@ -899,11 +910,17 @@ function* useAcpxProviderState(
     return options;
   }
 
-  /** The `(agent command, build)` partition a bound runtime is kept under. */
+  /**
+   * The `(agent command, build)` partition a bound runtime is kept under.
+   *
+   * The digest is what separates two builds, so a build that reported no
+   * version still shares no partition with a different one — the version is
+   * kept beside it only so a partition names what a record names.
+   */
   function partitionOf(build: BoundBuild): string {
     return [
       build.agentCommand,
-      build.binding.reportedVersion,
+      build.binding.reportedVersion ?? "",
       build.binding.executableDigest.algorithm,
       build.binding.executableDigest.value,
     ].join("\u0000");
@@ -1677,16 +1694,24 @@ function* useAcpxProviderState(
    * would give a conversation that already exists a second identity.
    */
   /**
-   * The exact live path of the build behind an adapter's command.
+   * The exact live path of the build behind an adapter's command, and what its
+   * own probe recognized in it.
+   *
+   * One observation: the launcher is resolved and canonicalized, required to be
+   * an executable regular file, hashed once, and asked the adapter's read-only
+   * questions at that same exact path — so the shape recognized and the bytes
+   * bound are the same file rather than two resolutions of one name.
    *
    * Every way this can fail — no observer, resolution, canonicalization, an
-   * unreadable or non-executable file, a version this adapter does not
-   * recognize — ends in one stable class, because they are all the same
-   * question: is this the build that established the session.
+   * unreadable or non-executable file — ends in one stable class, because they
+   * are all the same question: is this the build that established the session.
+   * A version this adapter does not recognize is not among them; that is
+   * optional evidence, and its absence leaves a build bound by its digest.
    */
   function* observeBuild(
     agentName: string,
     agentCommand: string,
+    adapterProtocol: string,
     binding: NativeBinding,
   ): Operation<BoundBuild> {
     if (!executableObserver) {
@@ -1700,7 +1725,7 @@ function* useAcpxProviderState(
     let observed;
     try {
       observed = yield* executableObserver.observe(binding.command, {
-        ...(binding.versionArgs === undefined ? {} : { versionArgs: binding.versionArgs }),
+        metadata: binding.metadata,
       });
     } catch (error) {
       // Only the observer's own stable reason crosses. Its message names a
@@ -1712,28 +1737,24 @@ function* useAcpxProviderState(
         }`,
       });
     }
-    const version = binding.version(observed.versionOutput);
-    if (version === undefined) {
-      // Deliberately without the raw output: it is provider-private, and this
-      // message is retained in a diagnostic.
-      throw new AttachmentRefused({
-        class: "executable-binding-refused",
-        message:
-          `"${agentName}" reported a version this adapter does not recognize, so the build ` +
-          `behind it cannot be named`,
-      });
-    }
+    const probed = binding.probe(observed.metadata);
+    const version = binding.reportedVersion(observed.metadata);
     return {
       agentName,
       agentCommand,
       livePath: observed.path,
       binding: {
         schema: "executable-build.v1",
-        reportedVersion: version,
+        // Present only when this build said something the adapter recognized.
+        // A quiet build is bound by its bytes, which is what binds either way.
+        ...(version === undefined ? {} : { reportedVersion: version }),
         executableDigest: observed.digest,
       },
       environment: binding.environment(observed.path),
       adapterCommand: binding.adapterCommand,
+      adapterProtocol,
+      probeProfile: probed.probeProfile,
+      capabilities: probed.capabilities,
     };
   }
 
@@ -1757,31 +1778,51 @@ function* useAcpxProviderState(
     capability: NativeCapability,
     build: BoundBuild,
   ): LaunchFailure | undefined {
-    const { reportedVersion } = build.binding;
-    if (admitsNativeCapability(compatibility, { agent: agentName, capability, reportedVersion })) {
+    // Two questions, and both must answer. The executable has to declare the
+    // shape this capability needs, and this host has to have proved that
+    // protocol, that recognized shape, and this machine. Either alone would
+    // admit something nobody ran: a declaration is not a proof, and a proof
+    // elsewhere is not this executable.
+    const observed =
+      build.capabilities.includes(capability) &&
+      admitsNativeCapability(nativeCapabilityPolicy, {
+        adapterProtocol: build.adapterProtocol,
+        capability,
+        probeProfile: build.probeProfile,
+      });
+    if (observed) {
       return undefined;
     }
     return {
       class: "unsupported-capability",
       message:
-        `this host has proved no ${capability} capability for "${agentName}" at ` +
-        `${reportedVersion} on the machine it is running on, so it will not act on a session ` +
-        `with it. An advertised adapter name selects a command shape; only a proof against ` +
-        `that exact installed build admits one.`,
+        `this host has proved no ${capability} capability for the ${build.adapterProtocol} ` +
+        `protocol behind "${agentName}" in the shape observed on the machine it is running ` +
+        `on, so it will not act on a session with it. An advertised adapter name selects a ` +
+        `command shape; only a proof against that exact installed executable admits one.`,
     };
   }
 
-  /** The stable comparison two builds of one session fail. */
+  /**
+   * The stable comparison two builds of one session fail.
+   *
+   * Canonical versions appear when they exist because they are the readable
+   * half of the answer, and a build that reported none says so rather than
+   * substituting its digest — a digest is host-observable evidence and belongs
+   * in no message.
+   */
   function buildDrift(
     sessionKey: string,
     retained: ExecutableBuildBindingV1,
     live: ExecutableBuildBindingV1,
   ): LaunchFailure {
+    const named = (binding: ExecutableBuildBindingV1) =>
+      binding.reportedVersion ?? "a build reporting no version this adapter recognizes";
     return {
       class: "executable-binding-refused",
       message:
-        `session "${sessionKey}" was created by ${retained.reportedVersion} and this run ` +
-        `would use ${live.reportedVersion}, so the conversation it names cannot be confirmed`,
+        `session "${sessionKey}" was created by ${named(retained)} and this run ` +
+        `would use ${named(live)}, so the conversation it names cannot be confirmed`,
     };
   }
 
@@ -1866,8 +1907,13 @@ function* useAcpxProviderState(
           `<Session>.`,
       });
     }
-    const binding = (adapterFor(agentName) as ClientAllocatedAdapter).binding;
-    const build = yield* observeBuild(agentName, agentCommand, binding);
+    const attaching = adapterFor(agentName) as ClientAllocatedAdapter;
+    const build = yield* observeBuild(
+      agentName,
+      agentCommand,
+      attaching.protocol,
+      attaching.binding,
+    );
     // Before the comparison and long before the ensure. A build this host has
     // not proved attachment on is refused whether or not it happens to be the
     // build that created the session — being the right one is not evidence that
@@ -1876,7 +1922,7 @@ function* useAcpxProviderState(
     if (unproved) {
       throw new AttachmentRefused(unproved);
     }
-    if (!sameExecutableBuild(build.binding, route.executableBinding)) {
+    if (!sameExecutableBuild(route.executableBinding, build.binding)) {
       throw new AttachmentRefused(
         buildDrift(prepared.sessionKey, route.executableBinding, build.binding),
       );
@@ -2387,7 +2433,7 @@ function* useAcpxProviderState(
     // the launch before anything durable is written.
     let build: BoundBuild;
     try {
-      build = yield* observeBuild(agentName, agentCommand, adapter.binding);
+      build = yield* observeBuild(agentName, agentCommand, adapter.protocol, adapter.binding);
     } catch (error) {
       if (error instanceof AttachmentRefused) {
         return refusal(error.failure.class, error.failure.message, known);
@@ -2404,7 +2450,7 @@ function* useAcpxProviderState(
     }
     if (
       route?.route === "client-native" &&
-      !sameExecutableBuild(build.binding, route.executableBinding)
+      !sameExecutableBuild(route.executableBinding, build.binding)
     ) {
       const drift = buildDrift(sessionKey, route.executableBinding, build.binding);
       return refusal(drift.class, drift.message, known);
@@ -3023,7 +3069,13 @@ function* useAcpxProviderState(
           `accepted its identity, so this run cannot confirm the conversation it names`,
       };
     }
-    if (!sameExecutableBuild(route.executableBinding, prepared.executableBinding)) {
+    // Both directions, because neither of these is the live build: they are two
+    // durable accounts of one observation, so one saying less than the other is
+    // already a disagreement rather than a build that has gone quiet.
+    if (
+      !sameExecutableBuild(route.executableBinding, prepared.executableBinding) ||
+      !sameExecutableBuild(prepared.executableBinding, route.executableBinding)
+    ) {
       return stop(
         `session "${prepared.sessionKey}" is described differently by its journal and its ` +
           `construction route, and neither account repairs the other`,
@@ -3041,7 +3093,7 @@ function* useAcpxProviderState(
     }
     let build: BoundBuild;
     try {
-      build = yield* observeBuild(prepared.agent, agentCommand, adapter.binding);
+      build = yield* observeBuild(prepared.agent, agentCommand, adapter.protocol, adapter.binding);
     } catch (error) {
       if (error instanceof AttachmentRefused) {
         return error.failure;
@@ -3056,7 +3108,7 @@ function* useAcpxProviderState(
     if (unproved) {
       return unproved;
     }
-    if (!sameExecutableBuild(build.binding, route.executableBinding)) {
+    if (!sameExecutableBuild(route.executableBinding, build.binding)) {
       return buildDrift(prepared.sessionKey, route.executableBinding, build.binding);
     }
     invocation.bound.set(prepared.sessionKey, { build, adapter });

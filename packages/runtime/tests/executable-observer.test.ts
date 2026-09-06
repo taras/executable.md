@@ -4,12 +4,15 @@
  *
  * Real files and a real child, because every question here is about the host:
  * which file a name resolves to, whether a symlink and its target are one
- * build, what the bytes hash to, and what that exact path says when asked.
+ * build, what the bytes hash to, and what that exact path answers when asked
+ * the read-only questions a caller declared.
  *
- * The redaction cases matter as much as the observation ones. The canonical
- * path is live capability — it is spawned, and it reaches the matching ACP
- * child — and it must not be recoverable from anything this module hands to a
- * caller that will retain it.
+ * What this module must not do matters as much as what it does. It knows no
+ * provider: it runs the argv it was handed and reports the exit status and the
+ * captured channels, and every reading of those belongs to whoever asked. The
+ * canonical path is live capability — it is spawned, and it reaches the
+ * matching ACP child — and it must not be recoverable from anything this
+ * module hands to a caller that will retain it.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
@@ -20,6 +23,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmod, realpath, symlink } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import process from "node:process";
 import { until } from "effection";
 import {
   createDenoExecutableObserver,
@@ -56,6 +60,16 @@ function* script(root: string, name: string, version: string): Operation<string>
   return file;
 }
 
+/** A real executable that answers different argv differently. */
+function* answering(root: string, name: string, body: string): Operation<string> {
+  const file = path.join(root, name);
+  yield* writeTextFile(file, `#!/bin/sh\n${body}\n`);
+  yield* until(chmod(file, 0o755));
+  return file;
+}
+
+const VERSION_QUERY = [{ name: "version", args: ["--version"] }];
+
 function* refusalOf(op: () => Operation<unknown>): Operation<ExecutableRefusal | "none"> {
   try {
     yield* op();
@@ -72,19 +86,24 @@ describe("Tier EO — executable observation", () => {
     expect(createDenoExecutableObserver() === undefined).toBe(!onDeno);
   });
 
-  it("EO2: the digest is over the file's bytes, and the version comes from that same file", function* () {
+  it("EO2: the digest is over the file's bytes, and a query answers from that same file", function* () {
     const root = yield* workspace();
     const file = yield* script(root, "claude", "2.1.235 (Claude Code)");
     const observer = createDenoExecutableObserver()!;
 
-    const observed = yield* observer.observe(file);
+    const observed = yield* observer.observe(file, { metadata: VERSION_QUERY });
 
     const bytes = `#!/bin/sh\necho "2.1.235 (Claude Code)"\n`;
     expect(observed.digest).toEqual({
       algorithm: "sha256",
       value: createHash("sha256").update(bytes).digest("hex"),
     });
-    expect(observed.versionOutput.trim()).toBe("2.1.235 (Claude Code)");
+    expect(observed.metadata.version).toEqual({
+      settled: true,
+      code: 0,
+      stdout: "2.1.235 (Claude Code)\n",
+      stderr: "",
+    });
     expect(observed.path).toBe(yield* canonical(file));
   });
 
@@ -111,14 +130,14 @@ describe("Tier EO — executable observation", () => {
     const root = yield* workspace();
     const file = yield* script(root, "claude", "2.1.235");
     const observer = createDenoExecutableObserver()!;
-    const before = yield* observer.observe(file);
+    const before = yield* observer.observe(file, { metadata: VERSION_QUERY });
 
     yield* script(root, "claude", "2.2.0");
-    const after = yield* observer.observe(file);
+    const after = yield* observer.observe(file, { metadata: VERSION_QUERY });
 
     expect(after.path).toBe(before.path);
     expect(after.digest.value).not.toBe(before.digest.value);
-    expect(after.versionOutput.trim()).toBe("2.2.0");
+    expect(after.metadata.version.stdout.trim()).toBe("2.2.0");
   });
 
   it("EO5: PATH search finds a bare name, from the observer's own environment", function* () {
@@ -143,22 +162,102 @@ describe("Tier EO — executable observation", () => {
     yield* ensureDir(directory);
     const unreadable = path.join(root, "plain");
     yield* writeTextFile(unreadable, "not a program\n");
-    const broken = path.join(root, "broken");
-    yield* writeTextFile(broken, "#!/bin/sh\nexit 3\n");
-    yield* until(chmod(broken, 0o755));
 
     expect(yield* refusalOf(() => observer.observe(""))).toBe("not-found");
     expect(yield* refusalOf(() => observer.observe("absent-command"))).toBe("not-found");
     expect(yield* refusalOf(() => observer.observe(directory))).toBe("not-a-file");
     expect(yield* refusalOf(() => observer.observe(unreadable))).toBe("not-executable");
-    // Present, executable, and unwilling to say what it is: a build that
-    // cannot be identified is not one a session may be bound to.
-    expect(yield* refusalOf(() => observer.observe(broken))).toBe("version-unavailable");
   });
 
-  it("EO7: a refusal carries no path, and an observation retains none", function* () {
+  it("EO7: what a query answered is reported, never judged", function* () {
+    // A build that will not say what it is has still been observed. Whether
+    // that is fatal is the caller's question about its own capability, and a
+    // module that refused here would be answering it for every caller.
+    const root = yield* workspace();
+    const observer = createDenoExecutableObserver({ path: root })!;
+    const quiet = yield* answering(root, "quiet", `echo "trouble" >&2\nexit 3`);
+
+    const observed = yield* observer.observe(quiet, { metadata: VERSION_QUERY });
+
+    expect(observed.metadata.version).toEqual({
+      settled: true,
+      code: 3,
+      stdout: "",
+      stderr: "trouble\n",
+    });
+    expect(observed.digest.algorithm).toBe("sha256");
+  });
+
+  it("EO8: a child that never started answered nothing at all", function* () {
+    // An executable regular file whose interpreter does not exist. Reporting
+    // empty output beside an unknown status would let a build that could not
+    // run look like one that answered nothing.
+    const root = yield* workspace();
+    const observer = createDenoExecutableObserver({ path: root })!;
+    const broken = yield* answering(root, "broken", "");
+    yield* writeTextFile(broken, `#!/xmd-no-such-interpreter\n`);
+    yield* until(chmod(broken, 0o755));
+
+    const observed = yield* observer.observe(broken, { metadata: VERSION_QUERY });
+
+    expect(observed.metadata.version).toEqual({ settled: false, stdout: "", stderr: "" });
+  });
+
+  it("EO9: each declared query runs at the observed path, and only those", function* () {
+    const root = yield* workspace();
+    const observer = createDenoExecutableObserver({ path: root })!;
+    const file = yield* answering(root, "claude", `echo "asked: $*"`);
+
+    const observed = yield* observer.observe(file, {
+      metadata: [
+        { name: "help", args: ["--help"] },
+        { name: "version", args: ["--version"] },
+      ],
+    });
+
+    expect(observed.metadata.help.stdout.trim()).toBe("asked: --help");
+    expect(observed.metadata.version.stdout.trim()).toBe("asked: --version");
+    expect(Object.keys(observed.metadata).sort()).toEqual(["help", "version"]);
+    // A caller that declared none asked none.
+    const silent = yield* observer.observe(file);
+    expect(silent.metadata).toEqual({});
+  });
+
+  it("EO10: a query is asked with nothing — no environment, no stdin, no terminal", function* () {
+    // A read-only question given a working environment could read a credential
+    // out of it, and one attached to a terminal could draw on the reader's.
+    const root = yield* workspace();
+    const observer = createDenoExecutableObserver({ path: root })!;
+    // `PATH` and `HOME` are set in every process that runs this suite, so an
+    // inherited environment would be visible rather than merely possible. The
+    // shell sets a few of its own on the way in, which is the shell's doing and
+    // not this observer's, so what is asserted is that nothing crossed.
+    const file = yield* answering(
+      root,
+      "claude",
+      `echo "path: [$PATH]"\n` +
+        `echo "home: [$HOME]"\n` +
+        `echo "stdin: [$(cat)]"\n` +
+        `if [ -t 1 ]; then echo "tty: yes"; else echo "tty: no"; fi`,
+    );
+
+    const observed = yield* observer.observe(file, { metadata: VERSION_QUERY });
+
+    const answered = observed.metadata.version.stdout.split("\n");
+    expect(answered).toContain("home: []");
+    expect(answered).toContain("stdin: []");
+    expect(answered).toContain("tty: no");
+    // `PATH` is the one `/bin/sh` supplies a default for when it inherits
+    // none, so its emptiness would prove nothing. What proves the environment
+    // was cleared is that the value this process actually has did not cross.
+    const inherited = process.env.PATH ?? "";
+    expect(inherited.length).toBeGreaterThan(0);
+    expect(answered).not.toContain(`path: [${inherited}]`);
+  });
+
+  it("EO11: a refusal carries no path, and an observation retains none", function* () {
     // The canonical path is live capability. What a caller keeps is the digest
-    // and the version; the path is spawned and forgotten.
+    // and whatever it made of the answers; the path is spawned and forgotten.
     const root = yield* workspace();
     const secret = path.join(root, "secret-layout");
     yield* ensureDir(secret);
@@ -174,15 +273,15 @@ describe("Tier EO — executable observation", () => {
     expect(message).not.toContain(secret);
     expect(message).not.toContain(root);
 
-    // And the durable half of an observation is exactly two facts.
+    // And an observation is exactly three facts.
     const file = yield* script(secret, "claude", "2.1.235");
-    const observed = yield* observer.observe(file);
+    const observed = yield* observer.observe(file, { metadata: VERSION_QUERY });
     const retained = {
       schema: "executable-build.v1",
-      reportedVersion: observed.versionOutput.trim(),
+      reportedVersion: observed.metadata.version.stdout.trim(),
       executableDigest: observed.digest,
     };
     expect(JSON.stringify(retained)).not.toContain(root);
-    expect(Object.keys(observed).sort()).toEqual(["digest", "path", "versionOutput"]);
+    expect(Object.keys(observed).sort()).toEqual(["digest", "metadata", "path"]);
   });
 });

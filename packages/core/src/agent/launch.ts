@@ -107,12 +107,17 @@ export type IdentityProvenance = "provider-returned" | "client-allocated";
  * cannot be reproduced is refused rather than resumed.
  *
  * What is retained is deliberately not a path: a path says where a build was,
- * which stops being true, while a version and a digest say which build it was,
- * which does not. That also keeps the record free of host layout.
+ * which stops being true, while a digest says which build it was, which does
+ * not. That also keeps the record free of host layout.
+ *
+ * The digest is what binds. `reportedVersion` is optional evidence beside it:
+ * an executable that will not say which release it is, says something this
+ * provider does not recognize, or says several things is bound by its bytes
+ * alone rather than refused for being quiet.
  */
 export interface ExecutableBuildBindingV1 {
   readonly schema: "executable-build.v1";
-  readonly reportedVersion: string;
+  readonly reportedVersion?: string;
   readonly executableDigest: {
     readonly algorithm: "sha256";
     readonly value: string;
@@ -120,20 +125,27 @@ export interface ExecutableBuildBindingV1 {
 }
 
 /**
- * Whether two bindings name the same build.
+ * Whether `live` is the build `retained` names.
  *
- * Equality is over what was retained, so the same build reached through a
- * different path is compatible and a different build at the same path is not.
+ * Asymmetric, because the two arguments are not the same kind of claim. The
+ * digest decides: identical bytes are the same build reached through whatever
+ * path, and different bytes are a different build however it describes itself.
+ *
+ * A retained version is then a claim the live build must still make. A record
+ * that named a release and now meets one calling itself something else — or
+ * nothing at all — has lost the evidence it was written with. A record that
+ * named none never had that evidence, so a version appearing later adds
+ * nothing to reproduce and does not rewrite what was retained.
  */
 export function sameExecutableBuild(
-  left: ExecutableBuildBindingV1,
-  right: ExecutableBuildBindingV1,
+  retained: ExecutableBuildBindingV1,
+  live: ExecutableBuildBindingV1,
 ): boolean {
   return (
-    left.schema === right.schema &&
-    left.reportedVersion === right.reportedVersion &&
-    left.executableDigest.algorithm === right.executableDigest.algorithm &&
-    left.executableDigest.value === right.executableDigest.value
+    retained.schema === live.schema &&
+    retained.executableDigest.algorithm === live.executableDigest.algorithm &&
+    retained.executableDigest.value === live.executableDigest.value &&
+    (retained.reportedVersion === undefined || retained.reportedVersion === live.reportedVersion)
   );
 }
 

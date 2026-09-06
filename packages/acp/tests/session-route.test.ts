@@ -484,6 +484,22 @@ describe("Tier SV — the bound construction route", () => {
     }
   });
 
+  it("SV3b: a digest-only binding round-trips, and stays digest-only", function* () {
+    // A build that reported no version it recognized was still observed
+    // exactly. The record says so by omitting the member, and reading it back
+    // must not invent one — a version written in later would be a claim about
+    // a session nobody made.
+    const digestOnly = {
+      schema: "executable-build.v1",
+      executableDigest: { algorithm: "sha256", value: "c".repeat(64) },
+    } as const;
+    const route = boundClientNative({ executableBinding: digestOnly });
+    const text = serializeAgentSessionRoute(route);
+    expect(text).not.toContain("reportedVersion");
+    const round = parseAgentSessionRoute(JSON.parse(text));
+    expect(round).toEqual(route);
+  });
+
   it("SV4: serialization preserves the schema it was given", function* () {
     // Nothing here upgrades a route. A V1 record read and written again is
     // still V1, which is what keeps a build observed today from being written
