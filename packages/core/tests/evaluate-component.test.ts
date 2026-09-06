@@ -330,8 +330,6 @@ describe("Tier FE — the paired form produces its own program", () => {
     const files = recordedFiles({ "notes.md": NOTE });
     const intercepted: string[] = [];
     const output = yield* scoped(function* () {
-      // The public content chain, answered rather than delegated. A handler that
-      // could substitute here would decide what program ran.
       // Every public way a handler can reach an element's content, answered
       // rather than delegated. A handler that could substitute at any of them
       // would decide what program ran.
@@ -487,5 +485,266 @@ describe("Tier FE — an execution with no ceiling has no evaluation", () => {
     expect(
       yield* refusal(run(`nothing asked for\n`, [{ evaluation: { read: [fileReadEntry()] } }])),
     ).toContain("without stating the filesystem operations");
+  });
+});
+
+describe("Tier FE — what the element itself may say", () => {
+  it("FE6: a fragment carrying a construct the evaluator does not admit refuses", function* () {
+    const refused: Array<[string, string]> = [
+      ["an executable code block", "```ts exec\\nconsole.log(1)\\n```\\n"],
+      ["an expression prop", `<File path={somewhere} />\\n`],
+      ["an interpolated binding", `<File path="a.md" />\\n{binding}\\n`],
+      ["an `as` binding", `<File path="a.md" as="kept" />\\n`],
+      ["a structural construct", `<If condition={true}>\\n<File path="a.md" />\\n</If>\\n`],
+    ];
+    const outcomes: Array<[string, string[]]> = [];
+    for (const [what, fragment] of refused) {
+      const files = recordedFiles({ "a.md": NOTE });
+      yield* refusal(run(`<Evaluate text={'${fragment}'} />\n`, [reading(files)]));
+      outcomes.push([what, files.performed]);
+    }
+    // Refused whole, before the first effect: every one of them performed
+    // nothing at all, and the label says which row would have.
+    expect(outcomes).toEqual(refused.map(([what]) => [what, []]));
+  });
+
+  it("FE7: `as` captures the result and emits nothing; without it nothing is emitted either", function* () {
+    const captured = recordedFiles({ "notes.md": NOTE });
+    const bound = yield* run(
+      `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\nbetween\n`,
+      [reading(captured)],
+    );
+    // The value went to the binding, so the element emitted nothing of its own.
+    expect(String(bound)).toContain("between");
+    expect(String(bound)).not.toContain("the retained note");
+
+    const loose = recordedFiles({ "notes.md": NOTE });
+    const unbound = yield* run(`<Evaluate text={'<File path="notes.md" />\\n'} />\n\nbetween\n`, [
+      reading(loose),
+    ]);
+    // And an unbound occurrence emits nothing either: the result is a value,
+    // and a value has nowhere to render. The read still happened.
+    expect(String(unbound)).toContain("between");
+    expect(String(unbound)).not.toContain("the retained note");
+    expect(loose.performed).toEqual(["read notes.md"]);
+  });
+});
+
+describe("Tier FE — one occurrence, one durable decision", () => {
+  it("FE16: two occurrences do not consume one another's records", function* () {
+    const files = recordedFiles({ "one.md": "first\n", "two.md": "second\n" });
+    const stream = new InMemoryStream();
+    yield* run(
+      `<Evaluate text={'<File path="one.md" />\\n'} />\n\n` +
+        `<Evaluate text={'<File path="two.md" />\\n'} />\n`,
+      [reading(files)],
+      stream,
+    );
+
+    const recorded = admissions(yield* stream.readAll());
+    expect(recorded).toHaveLength(2);
+    // Two durable names. One shared name would make the second occurrence
+    // replay the first's admitted fragment.
+    const names = recorded.map((event) => (event.type === "yield" ? event.description.name : ""));
+    expect(new Set(names).size).toBe(2);
+    expect(files.performed).toEqual(["read one.md", "read two.md"]);
+  });
+
+  it("FE10: a continuation resumes the exact admitted text", function* () {
+    const first = recordedFiles({ "notes.md": NOTE });
+    const stream = new InMemoryStream();
+    const source = `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n`;
+    yield* run(source, [reading(first)], stream);
+    const complete = yield* stream.readAll();
+
+    // Truncated to the admission itself: the decision committed, and the read
+    // it authorized had not. That is the only state in which a resumed run
+    // still has fragment work left to do.
+    const admitted = complete.findIndex(
+      (event) => event.type === "yield" && event.description.type === "generated_xmd",
+    );
+    expect(admitted).toBeGreaterThanOrEqual(0);
+    const partial = complete.slice(0, admitted + 1);
+
+    const second = recordedFiles({ "notes.md": NOTE });
+    yield* run(source, [reading(second)], new InMemoryStream(partial));
+    // The retained admission was restored rather than made again, and the read
+    // it authorized ran on this attempt.
+    expect(second.performed).toEqual(["read notes.md"]);
+  });
+
+  it("FE10: a continuation offering different text refuses before any effect", function* () {
+    // The document is byte-identical across both attempts, so the occurrence
+    // identity — and therefore the durable name — is the same. What differs is
+    // the program the producer rendered, which is exactly the case a retained
+    // admission has to refuse: a decision was made about one fragment, and the
+    // run is now holding another.
+    const DOCUMENT = `<Evaluate>\n<Program />\n</Evaluate>\n`;
+
+    function producing(fragment: string) {
+      return function* (): Operation<void> {
+        yield* registerComponents([
+          {
+            name: "Program",
+            origin: "test://producer",
+            props: { type: "object", properties: {}, additionalProperties: false },
+            // deno-lint-ignore require-yield
+            *fn(): Operation<string> {
+              return fragment;
+            },
+          },
+        ]);
+      };
+    }
+
+    const first = recordedFiles({ "notes.md": NOTE });
+    const stream = new InMemoryStream();
+    yield* scoped(function* () {
+      yield* producing(`<File path="notes.md" />\n`)();
+      yield* run(DOCUMENT, [reading(first)], stream);
+    });
+    const complete = yield* stream.readAll();
+    const admitted = complete.findIndex(
+      (event) => event.type === "yield" && event.description.type === "generated_xmd",
+    );
+    expect(admitted).toBeGreaterThanOrEqual(0);
+    const partial = complete.slice(0, admitted + 1);
+
+    const second = recordedFiles({ "notes.md": NOTE, "other.md": "elsewhere\n" });
+    const failed = yield* refusal(
+      scoped(function* () {
+        yield* producing(`<File path="other.md" />\n`)();
+        return yield* run(DOCUMENT, [reading(second)], new InMemoryStream(partial));
+      }),
+    );
+
+    expect(failed).toContain("the exact text it was made about");
+    // Nothing was performed: neither the retained fragment nor the offered one.
+    expect(second.performed).toEqual([]);
+  });
+
+  it("FE10: a continuation whose ceiling moved refuses before any effect", function* () {
+    const first = recordedFiles({ "notes.md": NOTE });
+    const stream = new InMemoryStream();
+    const source = `<Evaluate text={'<File path="notes.md" />\\n'} />\n`;
+    yield* run(source, [reading(first)], stream);
+    const complete = yield* stream.readAll();
+    const admitted = complete.findIndex(
+      (event) => event.type === "yield" && event.description.type === "generated_xmd",
+    );
+    const partial = complete.slice(0, admitted + 1);
+
+    // The same fragment, admitted under a table that now states another
+    // identity. A grant is the exact set it was made under.
+    const second = recordedFiles({ "notes.md": NOTE });
+    const widened: ExecutionInstallation = {
+      evaluation: {
+        read: [
+          {
+            ...fileReadEntry(),
+            identity: { origin: "@executablemd/core", key: "File:read", revision: "99" },
+          },
+        ],
+        files: second,
+      },
+    };
+    const failed = yield* refusal(run(source, [widened], new InMemoryStream(partial)));
+
+    expect(failed).toContain("no longer states");
+    expect(second.performed).toEqual([]);
+  });
+
+  it("FE12: a retained record this version cannot read fails closed", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    const stream = new InMemoryStream();
+    const source = `<Evaluate text={'<File path="notes.md" />\\n'} />\n`;
+    yield* run(source, [reading(files)], stream);
+    const complete = yield* stream.readAll();
+
+    // The admission's own result, replaced with a shape no version wrote. A
+    // record that cannot be read is not a decision to guess at.
+    const hostile = complete.map((event) => {
+      if (event.type !== "yield" || event.description.type !== "generated_xmd") {
+        return event;
+      }
+      return { ...event, result: { status: "ok" as const, value: { decision: "maybe" } } };
+    });
+    const admitted = hostile.findIndex(
+      (event) => event.type === "yield" && event.description.type === "generated_xmd",
+    );
+
+    const second = recordedFiles({ "notes.md": NOTE });
+    const failed = yield* refusal(
+      run(source, [reading(second)], new InMemoryStream(hostile.slice(0, admitted + 1))),
+    );
+
+    expect(failed.length).toBeGreaterThan(0);
+    expect(second.performed).toEqual([]);
+  });
+});
+
+describe("Tier FE — protection settles which implementation runs, and grants nothing", () => {
+  it("FE26: protection adds no class and no identity to what `allow` selects", function* () {
+    // A profile with no write table. `<Evaluate>` being canonical core's does
+    // not add one, and no spelling of `allow` conjures one.
+    const files = recordedFiles();
+    expect(
+      yield* refusal(
+        run(`<Evaluate text={'<File path="a.md">x</File>\\n'} allow={["write"]} />\n`, [
+          reading(files),
+        ]),
+      ),
+    ).toContain("installed no write table");
+    expect(files.performed).toEqual([]);
+  });
+
+  it("FE23: a name in the enclosing symbols is still not admitted", function* () {
+    // `<Glob>` is an ordinary core component and appears in the document's own
+    // vocabulary. Naming it in a fragment reaches the fragment's table, which
+    // does not hold it — symbols text registers, resolves and authorizes
+    // nothing.
+    const files = recordedFiles({ "notes.md": NOTE });
+    const failed = yield* refusal(
+      run(`<Evaluate text={'<Glob pattern="*.md" />\\n'} />\n`, [reading(files)]),
+    );
+    expect(failed).toContain("did not admit");
+    expect(files.performed).toEqual([]);
+  });
+
+  it("FE29: nothing a document controls reads, replaces or widens the profile", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    const output = yield* scoped(function* () {
+      // A component that binds every composable channel it has before the
+      // `<Evaluate>` beneath it runs.
+      yield* registerComponents([
+        {
+          name: "Forge",
+          origin: "test://forge",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          *fn(): Operation<string> {
+            yield* API.Files.around(
+              {
+                // deno-lint-ignore require-yield
+                *readTextFile([input]): Operation<Result<string>> {
+                  return Ok(`forged ${String(input.path)}`);
+                },
+              },
+              { at: "min" },
+            );
+            return yield* content();
+          },
+        },
+      ]);
+      return yield* run(
+        `<Forge>\n<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n` +
+          `<Json value={answer} />\n</Forge>\n`,
+        [reading(files)],
+      );
+    });
+
+    // The fragment read the captured operation's file, not the forged one.
+    expect(String(output)).toContain("the retained note");
+    expect(String(output)).not.toContain("forged");
+    expect(files.performed).toEqual(["read notes.md"]);
   });
 });

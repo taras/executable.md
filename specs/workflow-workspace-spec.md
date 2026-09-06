@@ -1994,15 +1994,22 @@ about it is rewritten on the way to the document. Turning it into text is the
 document's decision, made where the text is wanted: the representative flow binds
 it and renders it into the next `<Prompt>` with `<Json>`.
 
-**How it is supplied.** `<Evaluate>` is not registered by the attachment. It
-names durable work after its own invocation, so the host **declares** it to the
-execution — one entry in the installation, captured before anything else is
-installed — and canonical execution calls the host's factory once for this
-attachment with the claimant it minted, then registers what comes back
-(executable-mdx-spec §5.6). The claimant is the argument of that one call: the
-implementation closes over it, and it is published nowhere, so a document, a
-component and middleware reach the implementation and never the claimant. A run
-whose host declares none has no `<Evaluate>` at all.
+**How it is supplied.** `<Evaluate>` is canonical core's own protected
+component, and this host supplies none of it. Core claims the name ahead of
+every host and author tier, so it means the same thing in every execution
+(executable-mdx-spec §5.3.2). What the attachment supplies is the *ceiling*:
+one `ExecutionInstallation.evaluation` profile, captured by value before
+anything else is installed. An execution accepts one profile and refuses two,
+and a run whose host states none has no evaluation at all — which `<Evaluate>`
+says when it is written rather than at startup.
+
+Each entry in that profile names a **capability** rather than a definition.
+Canonical capture reads the host's own operation off its object exactly once,
+binds it behind a revocation the execution owns, and closes core's own body over
+the bound result. An admitted `<File />` therefore reaches the `readTextFile`
+this attachment handed over — still the run's transaction-bound one — and never
+resolves `API.Files` while it runs. That is what keeps a fragment's authority
+out of reach of the document, a repository component and middleware.
 
 **How its durable operation is named.** The implementation claims on the exact
 invocation the engine handed it, in that invocation's own frame. A durable name
@@ -2039,14 +2046,15 @@ and takes the read-only `File` identity from core. No prop, binding, Context,
 contextual API answer, component registration, generated name or middleware
 return value supplies or widens any of them.
 
-A repository component named `Evaluate` shadows this default exactly as it
-shadows any other. That can change what a trusted document does; it cannot
-recover the captured closure, and it cannot name durable work — canonical
-resolution selected it rather than the implementation this execution built, so
-an invocation of it is in no domain. Agent-generated source never resolves through the
-registration at all — the evaluator consults only its own closed table of pinned
-identities — so a fragment naming `<Evaluate>` is refused like any other
-unadmitted component, live registration or not.
+A repository component named `Evaluate` does not shadow this one, and neither
+does a registration, a bundle member, a declared Markdown component or a second
+loaded copy: the name is canonical core's, and claiming it is refused where the
+claim is made. `Component.importComponent` middleware composes around the import
+exactly as it composes around any other — it may observe it, delegate it and
+refuse it by throwing — and what it cannot do is answer one. Agent-generated
+source resolves through none of that: the evaluator consults only its own closed
+table of pinned identities, so a fragment naming `<Evaluate>` is refused like any
+other unadmitted component.
 
 #### Mutation-proposal admission
 
@@ -3440,7 +3448,7 @@ fetch operation requires its own language and durability contract.
 | workflow Agent isolation | built by #302: no directory attachment, an empty host-owned working directory, no MCP servers, an empty requested tool set and deny-all with a failing permission path; the portable no-tool proof is tracked by #496 |
 | workflow Agent session retention | built by #302: a row in the run's own database, keyed by the engine-derived Session expansion identity alone — the authored name is descriptive — with provider, agent command and policy fingerprint beside it as compatibility attributes. A `<Session>` places one and creates nothing; the first subscribed Prompt constructs it, and the mapping commits after the backend accepted that turn and the provider made its canonical tagged assertion, before anything the turn produced is exposed. Occupancy of a provider key is never identity — including a record held for a first turn nobody accepted — and missing, mismatched, replaced or ambiguous assertions each refuse instead of starting a replacement session |
 | generated-XMD admission | built by #369, through `@executablemd/core/host`; the workflow policy wrapper is internal. Host policy is a read table and a write table of exact pinned identities, each entry carrying the authored forms it is admitted for, and an authored `allow` selects a canonical subset of the closed classes `read` and `write` — omitted means `read`. The complete fragment is preflighted inside one `generated_xmd` effect before its first generated effect |
-| `<Evaluate source allow>` and the authored loop | built by #302 and #369: a workflow-host component with a closed schema of one required `source` and one optional `allow`, declared to the execution rather than registered by the attachment — canonical execution calls the host's factory with the claimant it minted and registers what comes back, which provides availability only. Its ceilings come from the run's own storage, core's pinned `<File>` read and write identities and the versioned paired `@executablemd/workflow/composition/dir-v2#Dir`; iteration, branching, approval and exhaustion are ordinary Markdown |
+| `<Evaluate>` and the authored loop | built by #302 and #369 and made canonical by #713: core's own protected component, with a closed schema of `text`, this host's released `source` alias and an optional `allow`. The attachment supplies no component — it supplies one captured evaluation profile whose entries name capabilities rather than definitions, so an admitted element reaches the run's transaction-bound operations directly. Ceilings come from the run's own storage, core's `<File>` read, write and delete identities at revision 2 and the paired `@executablemd/workflow/composition#Dir` at revision 3; iteration, branching, approval and exhaustion are ordinary Markdown |
 | generated-XMD mutation-proposal admission | built by #369 and #567, amended by #643: the standard Deno profile's write table is core's paired `File:write`, the paired versioned `@executablemd/workflow/composition/dir-v2#Dir` and core's self-closing `File.Delete`, in that retained order and followed by any host extension. `allow={["write"]}` intentionally authorizes the current Dir's persistent recursive creation; the former unversioned identity never authorizes it and a retained table naming that identity refuses before generated execution. Admitted mutations run as the ordinary components they are through the run's effect transactions, directory ensure and deletion each publishing the same `workspace_file` effect their authored forms do; the evaluator adds no receipt or result entry, so a write-only fragment still binds `{ observations: [], output: "" }`; and approval is authored control flow before the element. Local Git, Git-host, issue, process, execution, credential and external-write effects are outside the class |
 | Deno-local DOFS persistence | POC proven by #349 / PR #350 |
 | scoped Deno Worker Shell | containment proven by #351 / PR #353 and transactions by #357 / PR #362; production integration unbuilt |

@@ -1554,8 +1554,8 @@ nothing in that value: its own durable effect record is the account of what it
 did, and a synthetic receipt beside it would be a second thing to keep true.
 
 An observation names its durable operation after the invocation the engine
-handed it, through the claimant this attachment's execution delivered to the
-`<Evaluate>` factory it built (*Capability-backed invocation identity*). Nothing
+handed it, through the claimant this execution delivered to the protected
+`<Evaluate>` body it built (*Capability-backed invocation identity*). Nothing
 else carries authority: an Effection Context is addressed by name, a contextual
 Api handler installed outside an invocation answers ahead of the engine's own,
 and a definition or registry answer is a value a handler may keep from one
@@ -1564,17 +1564,58 @@ durable name would each replay the other's admitted fragment, and an
 implementation running under another attachment's identity would commit against
 its own run's storage under that attachment's expansion.
 
+An admitted element reaches the operations the host handed the profile, and no
+others. It used to invoke the ordinary component — core's `<File>` — which
+resolves `API.Files` at the moment it runs, so the authority a fragment
+exercised was whatever the document, a repository component or middleware had
+installed by then. A profile now states a *capability* rather than a definition:
+canonical capture reads each of the host's methods off once, binds it behind a
+revocation the execution owns, and closes core's own body over the result. So a
+fragment reaches five filesystem operations and one transport — not the rest of
+the host's provider, not `API.Files`, `API.Fetch` or `API.Env`, and not for
+longer than the execution that captured them. A directory an admitted fragment
+creates scopes its content through the evaluation's own cursor rather than the
+contextual environment, because the contextual environment is exactly what a
+document can answer.
+
+That narrowing changed what these identities authorize, so core's entries state
+revision 2 and the workflow's `<Dir>` states revision 3. **A run suspended
+under the earlier revisions refuses to resume rather than silently receiving the
+narrower grant**, which is what a revision is for: a continuation resumes only
+under the exact identities it was admitted with.
+
 `<Prompt>` is one Agent turn. The host hides no Agent loop inside it. Ordinary
 authored Markdown owns iteration with `<Loop max>`, branches on whether a reply
 is another observation proposal or a final proposal, and makes exhaustion an
-explicit document failure. `<Evaluate source={…} />` is the workflow host's
-component that invokes the evaluator, and the host does not register it: it
-**declares** it to the execution, which mints the domain, calls the host's
-factory once per attachment with that domain's claimant, and registers what
-comes back. Being reachable from a trusted document is all registration decides;
-every ceiling comes from values the host captured before any document existed,
-and what an invocation may name comes from the execution that minted the
-claimant and the resolution that selected the implementation it was built for.
+explicit document failure. `<Evaluate>` is canonical core's own protected
+component, claimed ahead of every host and author tier, so the name means the
+same thing in every execution and no registration, repository file, bundle
+member, declared Markdown component, import handler or second loaded copy
+answers for it. A host does not supply the component; it supplies the
+*ceiling*, as one `ExecutionInstallation.evaluation` profile captured by value
+before any installation runs. An execution accepts one and refuses two, and one
+that was offered none has no evaluation at all — which `<Evaluate>` says when it
+is written rather than at startup.
+
+The document writes the program as `text`, or renders it as paired content:
+
+```mdx
+<Evaluate text={program} allow={["read"]} />
+
+<Evaluate allow={["read"]}>
+  <Plan>Read the changelog and report the version.</Plan>
+</Evaluate>
+```
+
+The two are disjoint — an element stating both is stating the program twice, and
+is refused rather than resolved by precedence. A paired producer renders under
+the *narrowed* syntax reference, so an agent asked to write a fragment is told
+what a fragment may contain rather than what the surrounding document may write,
+while keeping the producer's own operational authority: narrowing what may be
+*named* is not narrowing what the producer may *do*. The workflow profile also
+accepts the released `source` spelling, silently, because documents were written
+against it before `text` existed; the ordinary profile refuses it, and no
+profile has ever had `program`.
 
 Within one run a logical Agent session is identified by the Agent/Session
 expansion identity the engine derived, and by nothing else. The authored
@@ -4104,7 +4145,7 @@ Status is measured against main.
 | history fork | creates a new run from one compatible checkpoint and retained Workspace root, under a new immutable definition and normalized props | built on the #368 stack, Deno provider only |
 | workflow Agent session | a workflow document's `<Agent>` runs under a profile the host attaches only for a live or partial run: an empty host-owned working directory instead of any Workspace, checkout or caller path, no MCP servers, an empty requested native tool set, and `deny-all` with a permission path that denies every native request and fails the turn that asked without reaching the public permission chain. Within a run a session is identified by the Agent/Session expansion identity the engine derived — the authored name is descriptive, so two sibling `<Session name="review">` elements are two sessions — routed inside a placement bound to its element and good for one use, so a kept placement cannot be substituted for the next. The conversation is retained as a row in the run's own database with the provider, resolved agent command and policy fingerprint beside it as compatibility attributes. The order is placement, the backend's acceptance of the session's first turn, the provider's canonical tagged assertion, then the mapping commit — and only then is anything that turn produced exposed. A placement is inert: it creates no provider session and writes no row. Occupancy of a provider key is not an assertion, and a record held for a first turn nobody accepted asserts nothing at all; the pre-commit window reconciles only from exactly one canonical assertion, and a missing, conflicting, replaced or ambiguous assertion is one explicit refusal that starts no replacement. Deleting a run removes the row with the run and the provider-session directory beside it, and reports the categories. The profile selects ACP-only capability explicitly — no native-launch advertisement and no client-native attachment advertisement — rather than inheriting the provider package's ordinary-run sets by omission, and it supplies no machine session coordinator, construction-route store or executable observer: a workflow session belongs to a run, and the machine-wide account describes a different thing entirely | built on the #302 stack, with the explicit ACP-only selection from #561; the portable proof that an adapter honours an empty tool set is tracked by #496 and does not widen the ceiling |
 | generated-XMD admission | admits one Agent-generated fragment through the trusted-host seam: host policy is a `read` table and a `write` table of exact pinned identities, each carrying the authored forms it is admitted for, and an authored `allow` selects a canonical non-empty subset of the closed classes — omitted means `read`. The complete source is preflighted inside one `generated_xmd` durable effect before its first generated effect; only the pinned identity the selected classes hold for that name **and** that form executes; and the admitted source, class selection, selected root, every selected entry with its forms, the identity and form of each element named, and the normalized request policy are retained in that effect's own result — so a continuation restores the decision without reading the current candidate and expands only the retained source. The roots are an as-of-admission retained basis checked by membership — the run's own later root publications and an advanced retained current root pass, while a lost admission root or lost selected root refuses — and every non-root term is checked exactly, refusing a run whose classes, identities, forms or requests have moved. The admission and every nested generated effect are offered inline by the owning expansion in authored order, so a partial continuation restores each completed one without another live execution. Each admitted effect is retained by its own ordinary record, and a read's value is collected while a mutation's is not | built on the #369 stack, continuation basis amended by #589; core owns the mechanics and the workflow policy wrapper is internal |
-| `<Evaluate source>` | the workflow host's component an authored document writes where an observation should happen. The host does not register it: it **declares** it to the execution through `ExecutionInstallation.components`, captured before any installation runs, and canonical execution calls its factory once for that attachment with the claimant it minted and registers what comes back. Registration provides availability only — a name a trusted document may write — and carries none of the authority. Its schema is closed on one required `source` string and one optional `allow` array selecting a non-empty duplicate-free subset of the closed effect classes `read` and `write` — omitted means `read` — and paired content is refused. It declares no `returns` and answers with a detached value — `{ observations: [{ name, value }], output }`, each admitted read's own returned value under the name the fragment invoked it by, in invocation order, with whatever the fragment rendered under `output` rather than instead of them, and the pinned identity that produced one left in the retained admission rather than copied here — so an admitted `<Fetch>`, which renders nothing at all, still reaches the document. An admitted mutation contributes no entry and no receipt, so a write-only fragment binds `{ observations: [], output: "" }`; `as` is valid for every selection and binds that same shape. An ordinary `as` captures that value by reference, and an authored `<Json>` renders it into the next `<Prompt>`: deciding how a value becomes text is the document's. Every ceiling comes from values the host captured at installation — the run's retained roots and its authoritative current root read from the run's own storage at invocation, as-of-admission provenance a continuation holds by membership so the run's own later publications and an advanced retained current root invalidate nothing, core's pinned self-closing `<File>` read, the write table of core's paired `<File>`, this package's lexical `<Dir>` built from the definition the ordinary registration owns, and core's self-closing `<File.Delete>`, and `<Fetch>` only when the captured request ceiling is non-empty — and no prop, binding, context or middleware return value supplies or widens one. `allow` selects among those tables and adds nothing to them; approval, when a workflow needs one, is authored control flow before the element. Its durable operation is named through that claimant, on the exact invocation the engine handed it and in that invocation's own frame — not from a context a document could rebind, a contextual Api answer, a definition, or a registry answer. Generated source never resolves through the registration: the evaluator consults only its own closed table of pinned identities. It is deliberately not wrapped in `printErrors`, so a refused fragment stops the authored loop rather than becoming text the next turn could read as a read that happened | built on the #302 stack, extended by #369 |
+| `<Evaluate>` | canonical core's own protected component, written where program text the document did not author should run. Core claims the name ahead of every host and author tier, so no registration, repository file, bundle member, declared Markdown component, import handler answer or second loaded copy replaces it; a handler may observe or refuse the import, and only canonical execution answers one. Protection settles which implementation runs and grants nothing: a host supplies the *ceiling* as one `ExecutionInstallation.evaluation` profile, captured by value before any installation runs, and an execution accepts one and refuses two. Its schema is closed on `text`, the workflow-only `source` alias, and an optional `allow` array selecting a non-empty duplicate-free subset of the closed effect classes `read` and `write` — omitted means `read`. The two input forms are disjoint: `text` states the program, paired content renders it, and an element stating both is refused rather than resolved by precedence. A paired producer renders under the narrowed syntax reference through an execution-owned one-shot projection that bypasses the public `content()`/`tryContent()` chain, and keeps its own operational authority while doing so. It declares no `returns` and answers with a detached value — `{ observations: [{ name, value }], output }`, each admitted read's own returned value under the name the fragment invoked it by, in invocation order, with whatever the fragment rendered under `output` rather than instead of them, and the pinned identity that produced one left in the retained admission rather than copied here — so an admitted `<Fetch>`, which renders nothing at all, still reaches the document. An admitted mutation contributes no entry and no receipt, so a write-only fragment binds `{ observations: [], output: "" }`; `as` is valid for every selection and binds that same shape. An ordinary `as` captures that value by reference, and an authored `<Json>` renders it into the next `<Prompt>`: deciding how a value becomes text is the document's. Every ceiling comes from values the host captured at installation — the run's retained roots and its authoritative current root read from the run's own storage per invocation, as-of-admission provenance a continuation holds by membership so the run's own later publications and an advanced retained current root invalidate nothing, core's self-closing `<File>` read, the write table of core's paired `<File>`, the workflow's `<Dir>` and core's self-closing `<File.Delete>`, and `<Fetch>` only when the captured request ceiling is non-empty — and no prop, binding, context or middleware return value supplies or widens one. Each entry names a *capability* rather than a definition: canonical capture reads the host's own operation off once, binds it behind a revocation the execution owns, and closes core's own body over it, so an admitted element reaches those operations and never `API.Files`, `API.Fetch` or `API.Env`. `allow` selects among those tables and adds nothing to them; approval, when a workflow needs one, is authored control flow before the element. Its durable operation is named through that claimant, on the exact invocation the engine handed it and in that invocation's own frame — not from a context a document could rebind, a contextual Api answer, a definition, or a registry answer. Generated source resolves through none of that: the evaluator consults only its own closed table of pinned identities. It is deliberately not wrapped in `printErrors`, so a refused fragment stops the authored loop rather than becoming text the next turn could read as a read that happened | built on the #302 stack, extended by #369 |
 | generated mutation proposals | lets an Agent propose constrained executable changes that a separate admission then performs against the run's own Workspace | built on the #369 and #567 stacks, with directory creation added by #643: the standard Deno profile's write table is core's paired `File:write`, the paired `@executablemd/workflow/composition/dir-v2#Dir` and core's self-closing `File.Delete`, in that retained order and followed by any host extension. `allow={["write"]}` intentionally authorizes Dir's persistent recursive directory creation; its versioned identity makes every continuation retained under the former non-mutating Dir identity refuse before generated execution. Admitted mutations run as the ordinary components they are through the run's effect transactions, and the evaluator adds no mutation API or receipt. Approval is authored control flow before the write-enabled element. Local Git, Git-host, issue, process, execution, credential and external-write effects are outside the class |
 | Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, privately restores them, and atomically coordinates one Workspace mutation with its filtered Yield | built on the #365 stack; public document filesystem effects and the CLI lifecycle route to it on the #366 stack |
 | scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker | containment and effect-transaction POCs complete (#351, #357); production integration unbuilt |

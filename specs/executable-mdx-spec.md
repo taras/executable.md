@@ -3879,6 +3879,72 @@ function isTypedDefinition(value: unknown): boolean {
 }
 ```
 
+#### 5.3.2 `<Evaluate>`, the protected evaluation component
+
+`<Evaluate>` runs program text the document did not author. It is **public** —
+any author may write it — and canonical core owns what it means, on the same
+terms `<Syntax />` is owned: no registration, repository file, bundle member,
+declared Markdown component, import-handler answer or second loaded copy
+replaces it, and claiming the name is refused where the claim is made.
+
+**Protection settles which implementation runs, and grants nothing.** Everything
+the component can reach was stated by a trusted host at the installation
+boundary, as one `ExecutionInstallation.evaluation` profile captured by value
+before any installation runs. An execution accepts one profile and refuses two —
+even two identical ones, because a host that stated it twice has an assembly
+nobody validated. An execution offered none has no evaluation at all, and says
+so when the element is written rather than at startup: a document that never
+writes `<Evaluate>` is not asking for a ceiling.
+
+**Two disjoint input forms.**
+
+```mdx
+<Evaluate text={program} allow={["read"]} />
+
+<Evaluate allow={["read"]}>
+  <Plan>Read the changelog and report the version.</Plan>
+</Evaluate>
+```
+
+Self-closing takes the program as `text`. Paired makes the content the producer,
+and what it renders is the program. An element stating both is stating the
+program twice and is **refused** rather than resolved by precedence. The
+workflow host additionally accepts the released `source` spelling, silently; the
+ordinary profile refuses it, and no profile has ever accepted `program`.
+
+The producer renders through an **execution-owned, one-shot projection**
+delivered directly to the protected body. It bypasses the public
+`Component.content()` and `Component.tryContent()` chain, so a handler cannot
+decide what program ran; it narrows only the `SyntaxReference`, so the producer
+keeps its own imports, declarations, bindings, providers, working directory and
+error mode; and it is not published through `ActiveProjection`, so nothing else
+in the execution can obtain or influence it.
+
+**`allow` narrows; it never grants.** It names an effect *class* — `read` or
+`write` — and the class resolves to a table the host already installed. Omitting
+it asks for `read`. A class the host installed nothing for is refused before the
+program is read.
+
+**Entries name capabilities, not definitions.** A host states which operation an
+admitted name runs; canonical capture reads that operation off the host's object
+exactly once, binds it behind a revocation the execution owns, and closes core's
+own body over the bound result. An admitted element therefore reaches those
+operations and never `API.Files`, `API.Fetch` or `API.Env` — so what a fragment
+may do is not a property of what the document, a repository component or
+middleware installed. A directory an admitted fragment creates scopes its
+content through the evaluation's own cursor rather than the contextual
+environment.
+
+**What it answers with** is each admitted observation's own value in invocation
+order, with whatever the fragment rendered kept beside them under `output`. It
+declares no `returns`, so the value binds by reference under `as`. An admitted
+mutation contributes nothing to it. It is deliberately not a printing boundary.
+
+**One occurrence is one durable decision.** A continuation restores the
+admission rather than making it again, and refuses before any effect if the run
+now offers different text, or states ceilings — effect classes, Workspace roots,
+pinned identities, forms or requests — the admission was not granted under.
+
 ### 5.4 The root document is a component
 
 The entry point treats the root document through the same import
@@ -10993,6 +11059,37 @@ component that observes one at an authored site.
 | SYN25j | Scopes are isolated | A sibling scope that bootstrapped nothing reads none of the first scope's contributions, and the first scope's contribution does not outlive it |
 | SYN25k | Document-time middleware reaches nothing | A component that composes around the `Documentation` Api and renders `<Syntax names={…}>` inside its own scope is shown what the host bootstrapped, not what it installed |
 | SX17 | One index, two surfaces | `xmd syntax NAME` and `<Syntax names={[NAME]} />` return the same text for a component outside core's own file |
+
+### Tier FE — The public `<Evaluate>` component
+
+Defined in §5.3.2. The rows drive the real component through a real execution
+against a real captured profile; the filesystem operations are a recorder that
+is never installed as a provider, so an operation appearing in its log went
+through the captured capability because there is no other way to reach it.
+
+| # | Test | Verify |
+|---|------|--------|
+| FE1 | `text` evaluates | The program runs, its observations bind by name in invocation order, and every operation went through the captured capability |
+| FE2 | The paired producer | Content renders exactly once and what it rendered is the program; the producer keeps its own document-site authority while the fragment reaches only the captured operations; a producer that fails leaves no admission |
+| FE3 | Disjoint inputs, narrowed vocabulary | `text` beside content refuses; a producer's `<Syntax />` reports the admitted vocabulary and not the site's; hostile `content`, `tryContent` and `hasContent` handlers do not reach the projection, with an ordinary component in the same run as the live-handler control |
+| FE4 | `allow` selects | Omitted asks for `read`; a class the host installed nothing for refuses before the program is read; an admitted write reaches the captured write operations in order and contributes no observation; an unknown class refuses |
+| FE5 | One profile, or none | An execution offered none refuses at the element and not at startup; two are refused before anything installs; a file entry with no operations behind it is refused at capture |
+| FE6 | Constructs a fragment may not carry | An executable block, an expression prop, an interpolation, an `as` binding and a structural construct each refuse the whole fragment before its first effect |
+| FE7 | `as` and its absence | With `as` the result is captured and nothing emitted; without it nothing is emitted either, because the result is a value |
+| FE10 | Exact text and ceilings survive | A continuation restores the admission and performs the work it authorized; a byte-identical document whose producer now renders different text refuses; a moved identity refuses; neither performs anything |
+| FE12 | Hostile records fail closed | A retained admission this version cannot read refuses before any effect |
+| FE13 | Captured, not ambient | A Files provider installed nearer than the host's is never consulted; a fragment cannot name an operation the profile withheld; operations do not outlive the execution |
+| FE16 | One occurrence, one record | Two occurrences take two durable names and neither consumes the other's |
+| FE19 | The spellings | `source` and `text` behave identically under the workflow profile with no warning; the ordinary profile refuses `source`; no profile accepts `program` |
+| FE20 | Request ceilings | A request outside the stated ceiling refuses, and a profile stating none admits `<Fetch>` not at all |
+| FE21 | One evaluator, two hosts | The ordinary run reads the caller's files and the workflow run reads the run's Workspace, through the same component and the same evaluator |
+| FE23 | Symbols authorize nothing | A name in the enclosing vocabulary is still not admitted in a fragment |
+| FE24 | Nothing replaces the implementation | The name cannot be registered; a middleware answer is refused however honest; observation-only delegation is supported; a deliberate middleware refusal stays a refusal |
+| FE25 | A replacement that ignores `allow` | A handler answering the import with a body that writes through ambient authority is never entered, and nothing is written anywhere |
+| FE26 | Ownership is not authority | A profile with no write table still cannot write, and selecting a class reaches that class's entries alone |
+| FE27 | Replaceable elsewhere, not here | A repository `File` wins at an authored site and still cannot enter a fragment under the admitted name |
+| FE28 | Distribution surfaces | Source, npm and compiled symbols report `Evaluate` under the `protected` origin with the approved description and both forms, with no host bootstrap |
+| FE29 | Document state reaches nothing | A component that binds every composable channel it has before an `<Evaluate>` beneath it does not change what the fragment reads |
 
 ### Tier SX — The `xmd syntax` command
 
