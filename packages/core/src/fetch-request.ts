@@ -184,6 +184,22 @@ function admitHeaders(value: Json | undefined): Record<string, string> {
  * bound at all.
  */
 export function* prepareFetchRequest(props: Record<string, Json>): Operation<FetchRequest> {
+  return normalizeFetchRequest(props, yield* timeoutFetch);
+}
+
+/**
+ * The same normalization against a timeout the caller already resolved.
+ *
+ * A generated fragment's ceiling is compared across a suspension, so the bound
+ * it carries cannot come from a context read at whichever point the comparison
+ * happens. A trusted host resolves its effective timeout once when it builds
+ * its evaluation profile, and preflight and execution both normalize against
+ * that value rather than reading the context again.
+ */
+export function normalizeFetchRequest(
+  props: Record<string, Json>,
+  effective: number | undefined,
+): FetchRequest {
   const url = admitUrl(props.url);
   const method = admitMethod(props.method);
   const headers = admitHeaders(props.headers);
@@ -194,7 +210,7 @@ export function* prepareFetchRequest(props: Record<string, Json>): Operation<Fet
   }
   const timeout =
     declared === undefined
-      ? yield* timeoutFetch
+      ? effective
       : parseDuration(declared, '<Fetch timeout> ("timeout" prop)');
 
   return {

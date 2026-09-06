@@ -142,8 +142,8 @@ import type { ExpansionAuthority, ImportTier } from "./components/import-authori
 import { PROTECTED_COMPONENTS, ProtectedImports } from "./components/protected.ts";
 import { rootSyntaxReference } from "./syntax-reference.ts";
 import { capturedDocumentation } from "./documentation-api.ts";
-import { TWO_PROFILES } from "./evaluation-profile.ts";
-import type { FragmentEvaluationProfile } from "./evaluation-profile.ts";
+import { captureEvaluationProfile, TWO_PROFILES } from "./evaluation-profile.ts";
+import type { CapturedProfile, FragmentEvaluationInput } from "./evaluation-profile.ts";
 import { packagedAssetReader } from "./component-documentation.ts";
 import type { DocumentationContribution, DocumentationReader } from "./component-documentation.ts";
 import type { SyntaxSymbolsProvider } from "./syntax-reference.ts";
@@ -2183,7 +2183,7 @@ function* executeDocument(
    * is the ceiling `<Evaluate>` narrows from, and a document that could reach it
    * could raise it.
    */
-  evaluation?: FragmentEvaluationProfile,
+  evaluation?: CapturedProfile,
 ): Operation<DocumentExecution> {
   const {
     stream,
@@ -2686,7 +2686,7 @@ export interface ExecutionInstallation {
    * under a ceiling nobody stated. One execution accepts one; two are refused
    * rather than ordered.
    */
-  readonly evaluation?: FragmentEvaluationProfile;
+  readonly evaluation?: FragmentEvaluationInput;
   install?(): Operation<void>;
 }
 
@@ -3110,15 +3110,18 @@ function* invoke(
   // installation order would make authority depend on assembly. A host that
   // stated none offers no evaluation at all, which `<Evaluate>` refuses with
   // rather than inventing a ceiling for.
-  const profiles = Object.freeze(
-    installations.flatMap((installation) => {
-      const profile = installation.evaluation;
-      return profile === undefined ? [] : [profile];
-    }),
-  );
-  if (profiles.length > 1) {
+  const stated = installations.flatMap((installation) => {
+    const profile = installation.evaluation;
+    return profile === undefined ? [] : [profile];
+  });
+  if (stated.length > 1) {
     throw new Error(TWO_PROFILES);
   }
+  // Captured by value here, before any `install()` runs, so a host that mutates
+  // its own tables, schemas or headers from inside one changes nothing this
+  // execution does.
+  const evaluation =
+    stated[0] === undefined ? undefined : yield* captureEvaluationProfile(stated[0]);
 
   for (const installation of installations) {
     if (installation.install) {
@@ -3171,7 +3174,7 @@ function* invoke(
     providers,
     documentation,
     readAsset,
-    profiles[0],
+    evaluation,
   );
 }
 

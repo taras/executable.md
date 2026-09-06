@@ -69,6 +69,22 @@
 export { executeInstalled } from "./src/execute.ts";
 export type { ExecutionInstallation, JournalAdmission } from "./src/execute.ts";
 /**
+ * What a trusted host states about generated-fragment evaluation.
+ *
+ * Only the input a host writes, and only here, because this is the trusted
+ * surface `ExecutionInstallation` already lives on. What canonical execution
+ * captures from it — the bound operations and their revocation — is unexported:
+ * ordinary core publishes no getter for active authority and no way to install
+ * a provider.
+ */
+export type {
+  FragmentEntry,
+  FragmentEvaluationInput,
+  FragmentIdentity,
+  FragmentWorkspaceAccess,
+} from "./src/evaluation-profile.ts";
+export { EvaluationProfileError } from "./src/evaluation-profile.ts";
+/**
  * The symbols a host's profile describes, when they are not the ones the
  * execution would derive from its own captured inputs — see
  * `src/syntax-reference.ts`.

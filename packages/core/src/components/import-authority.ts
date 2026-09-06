@@ -27,7 +27,7 @@ import type {
 import type { DeclaredImports, PrivateClosure } from "./declared-markdown.ts";
 import type { ExactSource } from "../output/exact-source.ts";
 import type { SyntaxReference } from "../syntax-reference.ts";
-import type { FragmentEvaluationProfile } from "../evaluation-profile.ts";
+import type { CapturedProfile } from "../evaluation-profile.ts";
 
 /** A definition an import may answer with. */
 export type ImportedDefinition = ComponentDefinition | FunctionComponentDefinition;
@@ -136,7 +136,7 @@ export interface ExpansionAuthority {
    * Absent for a host that offers no evaluation. That is not an unrestricted
    * evaluation — it is no evaluation, and `<Evaluate>` refuses.
    */
-  readonly evaluation?: FragmentEvaluationProfile;
+  readonly evaluation?: CapturedProfile;
   /**
    * The bodies this execution will enter for the components canonical core
    * protects.
