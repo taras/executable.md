@@ -370,7 +370,7 @@ interface BoundBuild {
  */
 interface RuntimeEntry {
   runtime: ProbeCapableRuntime;
-  /** The `(agent command, binding)` partition, or nothing for the unbound one. */
+  /** The live-executable partition, or nothing for the unbound one. */
   partition: string | undefined;
   /** Handles created through this runtime that have not been closed. */
   handles: number;
@@ -911,11 +911,16 @@ function* useAcpxProviderState(
   }
 
   /**
-   * The `(agent command, build)` partition a bound runtime is kept under.
+   * The `(agent command, live executable)` partition a bound runtime is kept
+   * under.
    *
-   * The digest is what separates two builds, so a build that reported no
-   * version still shares no partition with a different one — the version is
-   * kept beside it only so a partition names what a record names.
+   * Keyed by the observation serving this work, never by what a route retained:
+   * a partition holds a live path and a running child, so what may share one is
+   * decided by which executable is being run now. Two sessions whose routes
+   * record different builds share this child when the same release serves them
+   * both, and two live releases never do. The digest is what separates them, so
+   * a build that reported no version still shares no partition with a different
+   * one.
    */
   function partitionOf(build: BoundBuild): string {
     return [
@@ -1704,9 +1709,9 @@ function* useAcpxProviderState(
    *
    * Every way this can fail — no observer, resolution, canonicalization, an
    * unreadable or non-executable file — ends in one stable class, because they
-   * are all the same question: is this the build that established the session.
-   * A version this adapter does not recognize is not among them; that is
-   * optional evidence, and its absence leaves a build bound by its digest.
+   * are all the same question: can this run see the executable it would use at
+   * all. A version this adapter does not recognize is not among them; that is
+   * optional evidence, and its absence leaves a build described by its digest.
    */
   function* observeBuild(
     agentName: string,
@@ -1768,10 +1773,13 @@ function* useAcpxProviderState(
    * a private file, a child, an ACP ensure — because a capability nobody proved
    * is not a thing to discover halfway through.
    *
-   * Distinct from build drift beside it, which is a different question. Drift
-   * asks whether this is still the build that accepted one retained identity;
-   * this asks whether the build works at all. A session may fail either while
-   * passing the other.
+   * It is the whole authorization for acting on an existing session, too. What
+   * a retained identity needs is an executable that implements the operation,
+   * and this asks exactly that; which executable happened to accept the identity
+   * first is history, and history is not a capability. So a release that changed
+   * under the same command continues the conversation once it passes here on its
+   * own, and one that no longer implements the operation is refused even if it
+   * is byte-for-byte the build that opened it.
    */
   function admitCapability(
     agentName: string,
@@ -1800,29 +1808,6 @@ function* useAcpxProviderState(
         `protocol behind "${agentName}" in the shape observed on the machine it is running ` +
         `on, so it will not act on a session with it. An advertised adapter name selects a ` +
         `command shape; only a proof against that exact installed executable admits one.`,
-    };
-  }
-
-  /**
-   * The stable comparison two builds of one session fail.
-   *
-   * Canonical versions appear when they exist because they are the readable
-   * half of the answer, and a build that reported none says so rather than
-   * substituting its digest — a digest is host-observable evidence and belongs
-   * in no message.
-   */
-  function buildDrift(
-    sessionKey: string,
-    retained: ExecutableBuildBindingV1,
-    live: ExecutableBuildBindingV1,
-  ): LaunchFailure {
-    const named = (binding: ExecutableBuildBindingV1) =>
-      binding.reportedVersion ?? "a build reporting no version this adapter recognizes";
-    return {
-      class: "executable-binding-refused",
-      message:
-        `session "${sessionKey}" was created by ${named(retained)} and this run ` +
-        `would use ${named(live)}, so the conversation it names cannot be confirmed`,
     };
   }
 
@@ -1861,8 +1846,8 @@ function* useAcpxProviderState(
    * `<Session>` and `<Prompt>` are eager, so a session nobody constructed is
    * constructed here as `acp-first` before ensure. A session a native process
    * constructed is attached to — never converted, never republished — and only
-   * when this host has proven that capability for this adapter and can still
-   * show it is talking to the build that created it.
+   * when this host has proven that capability for the executable it is about to
+   * run, whichever release that has become.
    */
   function* constructRoute(
     agentName: string,
@@ -1914,18 +1899,14 @@ function* useAcpxProviderState(
       attaching.protocol,
       attaching.binding,
     );
-    // Before the comparison and long before the ensure. A build this host has
-    // not proved attachment on is refused whether or not it happens to be the
-    // build that created the session — being the right one is not evidence that
-    // joining the conversation through ACP works on it.
+    // Long before the ensure, and the whole authorization. Being the executable
+    // that created the session was never evidence that joining the conversation
+    // through ACP works on it, and the route's retained binding is an account of
+    // a past observation rather than a claim about the one running now. What has
+    // to hold is that this executable independently implements the operation.
     const unproved = admitCapability(agentName, "client-native-attachment", build);
     if (unproved) {
       throw new AttachmentRefused(unproved);
-    }
-    if (!sameExecutableBuild(route.executableBinding, build.binding)) {
-      throw new AttachmentRefused(
-        buildDrift(prepared.sessionKey, route.executableBinding, build.binding),
-      );
     }
     yield* retainedAssertion(prepared.sessionKey, route.nativeSessionId);
     return { build, resumeSessionId: route.nativeSessionId };
@@ -2448,13 +2429,6 @@ function* useAcpxProviderState(
     if (unproved) {
       return refusal(unproved.class, unproved.message, known);
     }
-    if (
-      route?.route === "client-native" &&
-      !sameExecutableBuild(route.executableBinding, build.binding)
-    ) {
-      const drift = buildDrift(sessionKey, route.executableBinding, build.binding);
-      return refusal(drift.class, drift.message, known);
-    }
 
     // A session that already has an identity is resumed under it, and nothing
     // is allocated at all: a second candidate for a conversation that already
@@ -2513,14 +2487,14 @@ function* useAcpxProviderState(
       invocation.fresh.set(sessionKey, false);
       return retained(agentName, adapter, winner, instructions, sessionCwd, "resumed");
     }
-    if (!sameExecutableBuild(winner.executableBinding, build.binding)) {
-      const drift = buildDrift(sessionKey, winner.executableBinding, build.binding);
-      return refusal(drift.class, drift.message, known);
-    }
 
-    // The record is built from the winner rather than from the candidate, so
-    // the two accounts agree by construction rather than by comparison. Losing
-    // the race means this session already exists and is resumed.
+    // The record is built from the winner rather than from the candidate — its
+    // identity and its binding alike — so the two durable accounts agree by
+    // construction rather than by comparison. A winner published from a
+    // different compatible observation keeps the evidence it was written with:
+    // this launch already admitted the executable it will actually run, and the
+    // winner's account of an earlier one is not a second thing to satisfy.
+    // Losing the race means this session already exists and is resumed.
     const fresh = winner.nativeSessionId === candidate;
     invocation.fresh.set(sessionKey, fresh);
     invocation.bound.set(sessionKey, { build, adapter });
@@ -3107,9 +3081,6 @@ function* useAcpxProviderState(
     const unproved = admitCapability(prepared.agent, "native-launch", build);
     if (unproved) {
       return unproved;
-    }
-    if (!sameExecutableBuild(route.executableBinding, build.binding)) {
-      return buildDrift(prepared.sessionKey, route.executableBinding, build.binding);
     }
     invocation.bound.set(prepared.sessionKey, { build, adapter });
     return undefined;

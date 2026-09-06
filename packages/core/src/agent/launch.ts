@@ -125,27 +125,34 @@ export interface ExecutableBuildBindingV1 {
 }
 
 /**
- * Whether `live` is the build `retained` names.
+ * Whether `observed` is the build `retained` names.
  *
  * Asymmetric, because the two arguments are not the same kind of claim. The
  * digest decides: identical bytes are the same build reached through whatever
  * path, and different bytes are a different build however it describes itself.
  *
- * A retained version is then a claim the live build must still make. A record
+ * A retained version is then a claim the other account must still make. One
  * that named a release and now meets one calling itself something else — or
- * nothing at all — has lost the evidence it was written with. A record that
- * named none never had that evidence, so a version appearing later adds
- * nothing to reproduce and does not rewrite what was retained.
+ * nothing at all — has lost the evidence it was written with. One that named
+ * none never had that evidence, so a version appearing later adds nothing to
+ * reproduce and does not rewrite what was retained.
+ *
+ * This says which build an account describes, and nothing about what an
+ * installed executable can do. Continuation is not decided by asking it about a
+ * live observation — a session crosses releases on a fresh capability admission
+ * instead. What it is for is holding two durable accounts of one preparation to
+ * each other, which is exact when asked in both directions.
  */
 export function sameExecutableBuild(
   retained: ExecutableBuildBindingV1,
-  live: ExecutableBuildBindingV1,
+  observed: ExecutableBuildBindingV1,
 ): boolean {
   return (
-    retained.schema === live.schema &&
-    retained.executableDigest.algorithm === live.executableDigest.algorithm &&
-    retained.executableDigest.value === live.executableDigest.value &&
-    (retained.reportedVersion === undefined || retained.reportedVersion === live.reportedVersion)
+    retained.schema === observed.schema &&
+    retained.executableDigest.algorithm === observed.executableDigest.algorithm &&
+    retained.executableDigest.value === observed.executableDigest.value &&
+    (retained.reportedVersion === undefined ||
+      retained.reportedVersion === observed.reportedVersion)
   );
 }
 
