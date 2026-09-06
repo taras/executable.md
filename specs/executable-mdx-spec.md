@@ -2714,11 +2714,11 @@ bundled blob and declared Markdown are this run's, so a repository `Elicit.md`
 receives none of the built-in `Elicit`'s prose. **A first-party package documents every component it supplies.** The index is
 built from one `components.md` per registration boundary — core's own, its Agent
 registrations, the CLI, testing, web and the repository-composition set — each
-contributed at the trusted installation boundary from the same declarations that
-boundary registers, so a component added to a package demands documentation
-without anyone maintaining a second list. Contributions travel by value on the
-execution installation, which is what makes `xmd syntax NAME` and a document's
-own `<Syntax names={…}>` read one index rather than two.
+contributed by that boundary's own bootstrap from the same declarations it
+registers, so a component added to a package demands documentation without
+anyone maintaining a second list. What `xmd syntax NAME` and a document's own
+`<Syntax names={…}>` each read is the one snapshot canonical execution captured
+at collection, which is what makes them one index rather than two.
 
 A boundary that supplies a component with no section refuses the whole index — as does an unknown heading, a duplicate, and a
 component documented twice for one package. A partially documented first-party
@@ -2741,20 +2741,37 @@ not through `API.Fs` or the document-facing `Files` authority. Both of those are
 middleware a running document can compose around, and a document that could
 answer the read would decide what the product says about itself.
 
-**Documentation composes with the components it describes.** A package
-contributes the documentation for what it registers through one stable,
-namespaced contextual Api, in the same bootstrap call that registers it, so a
-host that bootstraps a package gets both. Canonical core is the terminal, and
-every wrapper delegates before appending its own, so composition order decides
-how the list reads and nothing else: two contributions naming one component of
-one package refuse wherever they sat in the chain rather than the later one
-winning. Canonical execution collects **once**, after the trusted host's
-bootstrap and before the root import or any document code, and snapshots the
-answer field by field — so middleware a running document or component installs
-afterwards composes into a chain nothing reads, and two executions assembled in
-separate scopes each read their own. A host-maintained list of every package's
-documentation, kept beside a host-maintained list of every package's
-registrations, is two lists that drift; this is one.
+**Documentation composes with the components it describes.** A package's
+bootstrap installs its registrations and its documentation together — the
+registrations, and additive middleware on one stable, namespaced contextual Api
+— so a host that bootstraps a package gets both from one call. Canonical core is
+the middleware **terminal**: every chain ends there, so core's own components are
+documented in an execution that bootstrapped no other package at all, and every
+wrapper delegates before appending its own. Composition order therefore decides
+how the list reads and nothing else.
+
+Canonical execution collects the composed contributions **once**, after the
+trusted host's bootstrap and before the root import or any document code, and
+snapshots the answer field by field. That captured snapshot — not a field on an
+execution installation — is what `xmd syntax` and an authored `<Syntax>` both
+consume. So middleware a running document or component installs afterwards
+composes into a chain nothing reads, and two executions assembled in separate
+scopes each read their own.
+
+**Any second contribution for one owning package and component refuses during
+collection**, including an exact repetition naming the same asset — which is what
+a profile that entered one package's bootstrap twice produces. Whether that
+second call also installed a provider, a launcher or an execution policy is not a
+question this boundary can answer, and the assembly is wrong either way.
+Collection is where it refuses because it is the only boundary every execution
+passes through: a document that writes bare `<Syntax />` builds no documentation
+index, and one that writes no `<Syntax>` at all builds no reference either, so
+deferring the check to named lookup would let both run to completion on an
+assembly nobody validated.
+
+A host-maintained list of every package's documentation, kept beside a
+host-maintained list of every package's registrations, is two lists that drift;
+this is one.
 
 **Reference and availability are separate.** The reference carries two inputs.
 Bare `<Syntax />` reports what may **execute** at this site. The named form
@@ -2805,7 +2822,7 @@ additions, so the symbols are **version 2**: a version-1 reader was promised a
 closed set of origins, and neither emitting an unknown kind nor reusing a
 neighbouring one would keep that promise. Nothing else about the shape changed.
 
-**Each occurrence observes once.** It claims the durable identity the execution
+**Each occurrence reads once.** It claims the durable identity the execution
 minted for it, performs one `syntax_symbols` durable read, and retains
 exactly `{ symbols: string }`. On continuation that record is parsed as a closed
 protocol and returned without consulting the filesystem, the registry, the
@@ -10911,7 +10928,7 @@ component that observes one at an authored site.
 | SYN1–SYN4 | One occurrence | The bare form renders the symbols once and `as` binds the same text emitting nothing; a paired spelling and an unknown prop refuse before any read; two occurrences read independently and a reused binding reads nothing again |
 | SYN5–SYN10 | The name canonical core owns | A repository `Syntax.md`, `Syntax.ts` and directory candidate never win selection, with an ordinary nearby component as the positive control that repository discovery is live; ordinary and reserved registrations are refused atomically; a workflow bundle member and a host's declared Markdown are each refused at admission before the root import |
 | SYN6 | The origin selection reports | Selection answers `{ kind: "protected", origin: "@executablemd/core" }` — its own kind, not a reserved registration |
-| SYN11–SYN15 | The import chain | Middleware that answers, substitutes, mutates, redirects, delegates twice or reuses another import's definition cannot run a replacement; ordinary delegation reaches canonical `<Syntax>`; a deliberate middleware refusal stays a refusal; document-authored context and a look-alike observation change nothing |
+| SYN11–SYN15 | The import chain | Middleware that answers, substitutes, mutates, redirects, delegates twice or reuses another import's definition cannot run a replacement; ordinary delegation reaches canonical `<Syntax>`; a deliberate middleware refusal stays a refusal; document-authored context and a look-alike reference change nothing |
 | SYN16–SYN18 | The site described | An ordinary run reports its own includes and registry; a workflow root reports its bundle without importing or running a member; a declared Markdown component's body reports the site it inherited |
 | SYN20–SYN22 | The record kept | Continuation restores the retained symbols after the environment moves and rediscovers nothing; missing, additional and wrong-typed payloads refuse before output or binding; a cancelled read completes teardown and commits nothing |
 | SYN23, SYN25b | Never authority | Symbols naming a component neither register, resolve nor authorize it; a fixed narrower reference answers with exactly the symbols it was handed and adds nothing — the seam `<Evaluate>` installs through |
@@ -10923,7 +10940,7 @@ component that observes one at an authored site.
 | SYN30 | Availability and absence | Each entry states whether it is available in the current evaluation; a selected entry with no authored documentation renders its metadata and says so |
 | SYN31 | Atomic refusal | An unknown name, an empty list, a duplicate, a non-string member, a non-array value and an undeclared prop each refuse with no successful retained result |
 | SYN39 | Named retention | The occurrence retains its final rendered text, a continuation restores it without rereading documentation or rebuilding the symbols, and a corrupted record refuses |
-| SYN25c | The narrowing seam | A narrowed observation reports the narrowed vocabulary bare, documents the enclosing symbols by name, and marks each entry's availability truthfully in both directions |
+| SYN25c | The narrowing seam | A narrowed reference reports the narrowed vocabulary bare, documents the enclosing symbols by name, and marks each entry's availability truthfully in both directions |
 | SYN32–SYN34 | Parsing one file | Bundle prose, a section per level-two heading with deeper headings kept inside it, a fenced heading read as the example it is, and a refusal for a duplicate section or a heading that is not a component name |
 | SYN35–SYN37 | Building the index | A heading naming something the package does not supply refuses; one component documented twice refuses; documentation attaches by name and owning package, never to a repository replacement |
 | SYN38 | Exact coverage | A package supplying a component it does not document refuses the whole index — deleting any one built-in's section fails — with a fully covered package as the positive control |
@@ -10933,6 +10950,7 @@ component that observes one at an authored site.
 | SYN25g | Collection captures by value | Rewriting a contribution's source object, its text, its owner and its name set after the collector returned changes neither the snapshot nor what a reference built from it renders |
 | SYN25h | One call, both halves | A profile whose package bootstrap was not entered describes the component and says it is undocumented; entering the bootstrap supplies the prose *and* keeps canonical core's own, so a wrapper that replaced rather than appended fails here |
 | SYN25i | Duplicates refuse either way | Two contributions naming one component of one package refuse whichever order they were bootstrapped in, and each refusal names the pair it actually saw |
+| SYN25l | A repeated bootstrap refuses at collection | An identical repeated bootstrap — one package entered twice, naming the same component from the same asset — refuses for a named `<Syntax>`, for a bare `<Syntax />`, and for a document containing no `<Syntax>` at all, because collection happens for the execution rather than for an occurrence; one bootstrap of the same package is the positive control |
 | SYN25j | Scopes are isolated | A sibling scope that bootstrapped nothing reads none of the first scope's contributions, and the first scope's contribution does not outlive it |
 | SYN25k | Document-time middleware reaches nothing | A component that composes around the `Documentation` Api and renders `<Syntax names={…}>` inside its own scope is shown what the host bootstrapped, not what it installed |
 | SX17 | One index, two surfaces | `xmd syntax NAME` and `<Syntax names={[NAME]} />` return the same text for a component outside core's own file |

@@ -6,7 +6,7 @@
  * about assembly, not about argv. The grammar, failure and delivery rows shell
  * out, so exit status, stdout and stderr are the ones an operator sees.
  *
- * Catalog behavior itself is Tier SY's; nothing here re-proves selection.
+ * Symbol behavior itself is Tier SY's; nothing here re-proves selection.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -59,15 +59,15 @@ const WORKSPACE: Record<string, string> = {
   "second/Only.md": "only in the second include\n",
 };
 
-function parseCatalog(text: string): SyntaxSymbols {
+function parseSymbols(text: string): SyntaxSymbols {
   const parsed: unknown = JSON.parse(text);
   if (typeof parsed !== "object" || parsed === null) {
-    throw new Error("the catalog is not an object");
+    throw new Error("the symbols are not an object");
   }
   const version = Reflect.get(parsed, "version");
   const categories = Reflect.get(parsed, "categories");
   if (version !== 2 || !Array.isArray(categories) || categories.length !== 3) {
-    throw new Error("the catalog is not the version-2 shape");
+    throw new Error("the symbols are not the version-2 shape");
   }
   return { version, categories: readCategories(categories) };
 }
@@ -79,7 +79,7 @@ function readCategories(categories: unknown[]): SyntaxSymbols["categories"] {
     builtIn?.kind !== "built-in" ||
     userProvided?.kind !== "user-provided"
   ) {
-    throw new Error("the catalog categories are not the fixed tuple");
+    throw new Error("the symbol categories are not the fixed tuple");
   }
   return [
     { kind: "structural", entries: structural.entries },
@@ -91,11 +91,11 @@ function readCategories(categories: unknown[]): SyntaxSymbols["categories"] {
 // deno-lint-ignore no-explicit-any
 function readCategory(category: unknown): { kind: unknown; entries: any[] } {
   if (typeof category !== "object" || category === null) {
-    throw new Error("a catalog category is not an object");
+    throw new Error("a symbol category is not an object");
   }
   const entries = Reflect.get(category, "entries");
   if (!Array.isArray(entries)) {
-    throw new Error("a catalog category has no entries");
+    throw new Error("a symbol category has no entries");
   }
   return { kind: Reflect.get(category, "kind"), entries };
 }
@@ -105,7 +105,7 @@ function names(entries: readonly { name: string }[]): string[] {
 }
 
 /** One built-in entry carrying `props`, for a renderer row that supplies its own. */
-function catalogWith(props: PropsSchema): SyntaxSymbols {
+function symbolsWith(props: PropsSchema): SyntaxSymbols {
   return {
     version: 2,
     categories: [
@@ -187,7 +187,7 @@ describe("Tier SX — the run profile the command describes", () => {
 
     const [entry] = everywhere;
     if (entry === undefined || entry.kind !== "component" || entry.inspectability !== "complete") {
-      throw new Error("the catalog describes <Syntax> without a contract");
+      throw new Error("the symbols describe <Syntax> without a contract");
     }
     expect(entry.origin).toEqual({ kind: "protected", origin: "@executablemd/core" });
     expect(entry.sourceKind).toBe("protected");
@@ -346,7 +346,7 @@ describe("Tier SX — the renderers take a value", () => {
 
   it("SX4b: escapes a table cell that would otherwise shift the columns", function* () {
     const markdown = renderSyntaxMarkdown(
-      catalogWith({
+      symbolsWith({
         type: "object",
         properties: {
           "left|right": { type: "string", description: "a | in the description, and\na break" },
@@ -368,7 +368,7 @@ describe("Tier SX — the renderers take a value", () => {
     }
   });
 
-  it("SX5: renders the same bytes twice from the same catalog", function* () {
+  it("SX5: renders the same bytes twice from the same symbols", function* () {
     const catalog = yield* syntaxSymbols([]);
 
     expect(renderSyntaxMarkdown(catalog)).toBe(renderSyntaxMarkdown(catalog));
@@ -396,7 +396,7 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
         ["syntax", "--json", "--include", "first", "--include", "second"],
         { cwd },
       ).expect();
-      const forwardCatalog = parseCatalog(forward.stdout);
+      const forwardCatalog = parseSymbols(forward.stdout);
       expect(names(forwardCatalog.categories[2].entries)).toEqual(["Only", "Shared"]);
       const shared = forwardCatalog.categories[2].entries.find((one) => one.name === "Shared");
       expect(shared?.origin).toEqual({ kind: "repository", path: "first/Shared.md" });
@@ -408,7 +408,7 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
         ["syntax", "--json", "--include", "second", "--include", "first"],
         { cwd },
       ).expect();
-      const reversedShared = parseCatalog(reversed.stdout).categories[2].entries.find(
+      const reversedShared = parseSymbols(reversed.stdout).categories[2].entries.find(
         (one) => one.name === "Shared",
       );
       expect(reversedShared?.origin).toEqual({ kind: "repository", path: "second/Shared.md" });
@@ -418,7 +418,7 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
   it("SX8: falls back to components and . when no include is written", function* () {
     yield* useWorkspace(WORKSPACE, function* (cwd) {
       const { stdout } = yield* runCli(["syntax", "--json"], { cwd }).expect();
-      const catalog = parseCatalog(stdout);
+      const catalog = parseSymbols(stdout);
 
       expect(names(catalog.categories[2].entries)).toContain("Default");
     });
@@ -457,7 +457,7 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
     );
   });
 
-  it("SX9: reports an unusable include on stderr, exits 1, and prints no catalog", function* () {
+  it("SX9: reports an unusable include on stderr, exits 1, and prints no symbols", function* () {
     yield* useWorkspace({ components: "not a directory\n" }, function* (cwd) {
       const { code, stdout, stderr } = yield* runCli(["syntax", "--include", "components"], {
         cwd,
@@ -527,7 +527,7 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
       expect(markdown.stdout).toContain("from the first include.");
 
       const json = yield* runCli(["syntax", "--json", "--include", "first"], { cwd }).expect();
-      const catalog = parseCatalog(json.stdout);
+      const catalog = parseSymbols(json.stdout);
       expect(catalog.version).toBe(2);
       expect(names(catalog.categories[2].entries)).toEqual(["Shared"]);
     });
@@ -558,13 +558,13 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
 
         expect(stderr).toBe("");
         expect(code).toBe(0);
-        const catalog = parseCatalog(stdout);
+        const catalog = parseSymbols(stdout);
         expect(names(catalog.categories[2].entries)).toEqual(["Widget"]);
       },
     );
   });
 
-  it("SX11: the catalog is inspection, and plan is the command that writes with it", function* () {
+  it("SX11: the symbols are inspection, and plan is the command that writes with them", function* () {
     const { stdout } = yield* runCli(["--help"]).expect();
 
     expect(stdout).toContain("syntax");
@@ -608,7 +608,7 @@ describe(
         const { redirected, piped } = yield* deliveries(["--json"], cwd);
 
         expect(piped).toBe(redirected);
-        const catalog = parseCatalog(piped);
+        const catalog = parseSymbols(piped);
         expect(catalog.version).toBe(2);
         expect(names(catalog.categories[2].entries)).toContain("ZBeyondTheBuffer");
         expect(piped.lastIndexOf(`"ZBeyondTheBuffer"`)).toBeGreaterThan(PIPE_BUFFER);
