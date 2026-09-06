@@ -2758,24 +2758,42 @@ consume. So middleware a running document or component installs afterwards
 composes into a chain nothing reads, and two executions assembled in separate
 scopes each read their own.
 
-**Two contributions that disagree about one component of one package refuse
-during collection** — the same component named from two different assets, in
-either order. Collection is where they refuse because it is the only boundary
-every execution passes through: a document that writes bare `<Syntax />` builds
-no documentation index, and one that writes no `<Syntax>` at all builds no
-reference either, so deferring the check to named lookup would let both run to
-completion on an assembly nobody validated.
+**One captured contribution is four values**: its owning package, its asset
+identity, its exact documentation text, and its component-name set. Equality
+covers all four. Set insertion order and JavaScript object identity do not
+matter, so two bootstraps that build fresh objects and list the same names in
+different orders have contributed the same value.
 
-**An identical repetition is not a disagreement.** One package's declarative
-vocabulary is deliberately installed at more than one layer — the
-repository-composition set is bootstrapped by an ordinary run and again inside a
-workflow attachment, because either may be the only one — and the inner scope
-descends from the outer, so both wrappers sit in one chain. A bootstrap that
-finds its own statement already there does not append it again, so the component
-is documented exactly once and the layering is not a failure. What makes two
-contributions the same statement is the owning package, the asset, and the exact
-set of components; differing in any of the three makes them two statements, and
-two statements about one component refuse.
+**A repetition of the same value adds nothing and succeeds.** One package's
+declarative vocabulary is deliberately entered at more than one layer — the
+repository-composition set by an ordinary run's bootstrap and again inside a
+workflow attachment, because either may be the only one, and a nested run or
+evaluation host the same way — and the inner scope descends from the outer, so
+both wrappers sit in one chain. A bootstrap that finds its own value already
+there does not append it again: one bootstrap and two identical bootstraps
+produce exactly the same captured documentation, and the repeated bootstrap
+keeps both its registrations and one documentation value.
+
+**Two non-identical contributions overlapping one owning-package and
+component-name pair refuse before root execution**, whichever middleware or
+bootstrap order supplied them — no order chooses a winner, and there is no
+last-write-wins. A changed asset, changed text, or a different-but-overlapping
+component set each refuse. Comparing the asset alone would coalesce two
+bootstraps that genuinely disagree and silently keep whichever ran first.
+
+**A different owner is unequal but is not by itself a conflict.** Documentation
+joins by component name *and* origin, so two packages may each document a
+same-spelled component and neither answers for the other's. Disjoint component
+sets from one owner coexist for the same reason. Collection is where a genuine
+conflict is caught, because it is the only boundary every execution passes
+through: a document that writes bare `<Syntax />` builds no documentation index,
+and one that writes no `<Syntax>` at all builds no reference either, so deferring
+the check to named lookup would let both run to completion on an assembly nobody
+validated.
+
+Bootstrap and execution scopes are isolated, and collection is already
+execution-scoped — so "refuse only within one scope" is not a separate duplicate
+policy; it only describes which contribution list either policy would inspect.
 
 A host-maintained list of every package's documentation, kept beside a
 host-maintained list of every package's registrations, is two lists that drift;
@@ -10958,7 +10976,11 @@ component that observes one at an authored site.
 | SYN25g | Collection captures by value | Rewriting a contribution's source object, its text, its owner and its name set after the collector returned changes neither the snapshot nor what a reference built from it renders |
 | SYN25h | One call, both halves | A profile whose package bootstrap was not entered describes the component and says it is undocumented; entering the bootstrap supplies the prose *and* keeps canonical core's own, so a wrapper that replaced rather than appended fails here |
 | SYN25i | Duplicates refuse either way | Two contributions naming one component of one package refuse whichever order they were bootstrapped in, and each refusal names the pair it actually saw |
-| SYN25l | A repeated bootstrap is idempotent | An identical repeated bootstrap — one package entered twice, naming the same components from the same asset — leaves a named `<Syntax>`, a bare `<Syntax />` and a document containing no `<Syntax>` at all each working, and the collected snapshot holds that contribution exactly once; two bootstraps naming one component from *different* assets still refuse, which is what keeps this from passing vacuously |
+| SYN25l.1 | A value-identical repetition adds nothing | One package entered twice — fresh contribution objects, the same four values, the names listed in the opposite order — leaves a named `<Syntax>`, a bare `<Syntax />` and a document containing no `<Syntax>` each working, and one bootstrap captures exactly what two capture |
+| SYN25l.2 | A changed value refuses, in either order | For one owner and an overlapping component, a changed asset, changed text and a different-but-overlapping component set each refuse before root execution, whichever order the bootstraps supplied them |
+| SYN25l.3 | Distinct owner and disjoint set are controls | Two owners documenting a same-spelled component do not conflict and neither takes the other's prose; one owner accounting for disjoint sets from two files does not conflict either |
+| SYN25l.4 | Overlapping executions are isolated | An assembly carrying a genuine conflict refuses while a second execution live at the same time renders its own documentation, unaffected |
+| SYN25l.5 | Layered trusted bootstraps keep both halves | An inner trusted layer entering the same package bootstrap as the outer keeps every layer's registrations resolvable *and* the package's documentation, rendered once from one coalesced value |
 | SYN25j | Scopes are isolated | A sibling scope that bootstrapped nothing reads none of the first scope's contributions, and the first scope's contribution does not outlive it |
 | SYN25k | Document-time middleware reaches nothing | A component that composes around the `Documentation` Api and renders `<Syntax names={…}>` inside its own scope is shown what the host bootstrapped, not what it installed |
 | SX17 | One index, two surfaces | `xmd syntax NAME` and `<Syntax names={[NAME]} />` return the same text for a component outside core's own file |

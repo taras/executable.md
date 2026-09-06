@@ -45,6 +45,7 @@ import type { DeclaredMarkdownComponent, ExecutionInstallation } from "../host.t
 import { inspectComponent, inspectSyntax } from "../src/inspect.ts";
 import { validateDocumentStructure } from "../src/document-validation.ts";
 import { registerComponents } from "../src/components/registration.ts";
+import type { ComponentRegistration } from "../src/components/registration.ts";
 import { selectComponent } from "../src/components/select.ts";
 import { installedBundle } from "../src/components/bundle.ts";
 import { retainedSource } from "../src/root-source.ts";
@@ -112,18 +113,65 @@ function stating(symbols: SyntaxSymbols, calls: { count: number } = { count: 0 }
  * A name core does not ship, so a case about contribution is not also a case
  * about colliding with core's real documentation.
  */
-function useMarkerDocumentation(asset = "packages/test/src/components.md"): Operation<void> {
+function useMarkerDocumentation(
+  /**
+   * Whichever of the four values a case wants to vary.
+   *
+   * All four are what a contribution *is*, so a case about equality has to be
+   * able to change exactly one and leave the rest alone. A fresh object is built
+   * on every ask, so nothing here can pass by object identity.
+   */
+  vary: {
+    owner?: string;
+    asset?: string;
+    text?: string;
+    supplies?: readonly string[];
+  } = {},
+): Operation<void> {
   // deno-lint-ignore require-yield
   return contributeDocumentation(function* () {
     return {
       source: {
-        owner: "@executablemd/test",
-        asset,
-        text: "## Marker\n\nMARKER PROSE.\n",
+        owner: vary.owner ?? "@executablemd/test",
+        asset: vary.asset ?? "packages/test/src/components.md",
+        text: vary.text ?? "## Marker\n\nMARKER PROSE.\n",
       },
-      supplies: new Set(["Marker"]),
+      supplies: new Set(vary.supplies ?? ["Marker"]),
     };
   });
+}
+
+/** Prose for a contribution accounting for two components at once. */
+const PAIR_PROSE = "## Marker\n\nMARKER PROSE.\n\n## Other\n\nOTHER PROSE.\n";
+
+/**
+ * A collected list as its values, for comparing two collections.
+ *
+ * Object identity says nothing here — every ask builds fresh objects — and a
+ * `Set` has no order, so the names are sorted. What is left is exactly the four
+ * values equality is defined over.
+ */
+function describeContributions(
+  contributions: readonly DocumentationContribution[],
+): readonly string[] {
+  return contributions.map((one) =>
+    [one.source.owner, one.source.asset, one.source.text, [...one.supplies].sort().join(",")].join(
+      " | ",
+    ),
+  );
+}
+
+/** A trivial registered component, for proving a layer kept its registrations. */
+function layeredComponent(which: string): ComponentRegistration {
+  return {
+    name: which === "outer" ? "Outer" : "Inner",
+    origin: "@executablemd/test",
+    props: { type: "object", properties: {}, additionalProperties: false },
+    // deno-lint-ignore require-yield
+    *fn(): Operation<string> {
+      return `${which} component ran`;
+    },
+  };
 }
 
 /** Run one root, with whatever installations the case supplies. */
@@ -656,15 +704,15 @@ describe("Tier SYN — the named form", () => {
       orders.push(
         yield* refusal(
           scoped(function* () {
-            yield* useMarkerDocumentation(first);
-            yield* useMarkerDocumentation(second);
+            yield* useMarkerDocumentation({ asset: first });
+            yield* useMarkerDocumentation({ asset: second });
             return yield* run('<Syntax names={["Marker"]} />\n', [marker]);
           }),
         ),
       );
     }
     for (const refused of orders) {
-      expect(refused).toContain("contributes documentation for Marker from both");
+      expect(refused).toContain("they name different assets");
     }
     // Both orders refuse, and each names the pair it saw rather than one fixed
     // winner: a refusal that reported the same asset either way would be
@@ -672,53 +720,166 @@ describe("Tier SYN — the named form", () => {
     expect(orders[0]).not.toBe(orders[1]);
   });
 
-  it("SYN25l: bootstrapping one package twice is idempotent, not a conflict", function* () {
-    // One package's declarative vocabulary is deliberately installed at more
-    // than one layer — the repository-composition set is bootstrapped by an
-    // ordinary run *and* again inside a workflow attachment, because either may
-    // be the only one — and the inner scope descends from the outer, so both
-    // wrappers sit in one chain. The second says exactly what the first said,
-    // so it is not appended: repeating a statement is not disagreeing with it.
+  it("SYN25l.1: a value-identical repeated bootstrap contributes nothing new", function* () {
+    // One package's declarative vocabulary is deliberately entered at more than
+    // one layer — the repository-composition set by an ordinary run's bootstrap
+    // and again inside a workflow attachment, because either may be the only
+    // one — and the inner scope descends from the outer, so both wrappers sit
+    // in one chain. Refusing the repeat turns valid layering into a failure
+    // while there is nothing ambiguous to resolve.
     //
-    // Refusing it instead would turn the product's own layering into a failure,
-    // which is what `xmd workflow` demonstrated.
-    const { installation: marker } = stating(symbolsOf("Marker"));
+    // Every ask builds a fresh object and the second names its components in
+    // the opposite order, so what passes here is value equality: object
+    // identity and set insertion order are both ruled out.
+    const { installation: marker } = stating(symbolsOf("Marker", "Other"));
     const twice = (source: string): Operation<Json> =>
       scoped(function* () {
-        yield* useMarkerDocumentation();
-        yield* useMarkerDocumentation();
+        yield* useMarkerDocumentation({ supplies: ["Marker", "Other"], text: PAIR_PROSE });
+        yield* useMarkerDocumentation({ supplies: ["Other", "Marker"], text: PAIR_PROSE });
         return yield* run(source, [marker]);
       });
 
     // Named, bare, and a document that writes no `<Syntax>` at all. Collection
-    // happens for the execution rather than for an occurrence, so if a repeat
-    // were going to break anything it would break all three.
+    // happens for the execution rather than for an occurrence, so a repeat that
+    // broke anything would break all three.
     expect(String(yield* twice('<Syntax names={["Marker"]} />\n'))).toContain("MARKER PROSE.");
     expect(String(yield* twice("<Syntax />\n"))).toContain("### `<Marker>`");
     expect(String(yield* twice("nothing here\n"))).toContain("nothing here");
 
-    // Documented exactly once, not twice: idempotent means the repeat left no
-    // second copy behind, which reading the collected snapshot shows directly.
-    const collected = yield* scoped(function* () {
-      yield* useMarkerDocumentation();
-      yield* useMarkerDocumentation();
-      return yield* capturedDocumentation();
-    });
-    expect(
-      collected.filter((one) => one.source.asset === "packages/test/src/components.md"),
-    ).toHaveLength(1);
-
-    // And the control that keeps this from passing vacuously: two bootstraps
-    // that genuinely disagree — the same component from a different asset —
-    // still refuse at collection.
-    const conflicting = yield* refusal(
+    // And one bootstrap produces the same documentation as two, which is what
+    // "contributes nothing new" means: not merely that the repeat is tolerated,
+    // but that it leaves the captured value unchanged.
+    const captured = (repeats: number): Operation<readonly DocumentationContribution[]> =>
       scoped(function* () {
+        for (let entered = 0; entered < repeats; entered += 1) {
+          yield* useMarkerDocumentation({ supplies: ["Marker", "Other"], text: PAIR_PROSE });
+        }
+        return yield* capturedDocumentation();
+      });
+    expect(describeContributions(yield* captured(2))).toEqual(
+      describeContributions(yield* captured(1)),
+    );
+  });
+
+  it("SYN25l.2: a changed asset, text or component set refuses, in either order", function* () {
+    // The three ways two contributions can overlap on one owner and component
+    // while disagreeing. Each refuses, and each refuses whichever order the
+    // bootstraps ran in — so no order picks a winner.
+    const { installation: marker } = stating(symbolsOf("Marker"));
+    const conflicts: [string, Parameters<typeof useMarkerDocumentation>[0]][] = [
+      ["a changed asset", { asset: "packages/other/src/components.md" }],
+      ["changed text", { text: "## Marker\n\nSUBSTITUTED PROSE.\n" }],
+      ["an overlapping but different set", { supplies: ["Marker", "Extra"] }],
+    ];
+
+    for (const [what, changed] of conflicts) {
+      for (const reversed of [false, true]) {
+        const refused = yield* refusal(
+          scoped(function* () {
+            yield* useMarkerDocumentation(reversed ? changed : {});
+            yield* useMarkerDocumentation(reversed ? {} : changed);
+            // No `<Syntax>` at all: the refusal is the execution's, before its
+            // root ran, not something an occurrence discovered.
+            return yield* run("nothing here\n", [marker]);
+          }),
+        );
+        expect([
+          what,
+          reversed,
+          refused.includes("contributes documentation for Marker twice"),
+        ]).toEqual([what, reversed, true]);
+      }
+    }
+  });
+
+  it("SYN25l.3: a distinct owner and a disjoint set are not conflicts", function* () {
+    // Documentation joins by component name *and* origin, so two packages may
+    // each document a component spelled `Marker`: neither answers for the
+    // other's, and there is no question for anyone to arbitrate. One owner
+    // accounting for disjoint sets from two files is the same story.
+    //
+    // These are the controls that keep SYN25l.2 from passing for the wrong
+    // reason — a rule that refused any repeated *name* would fail here.
+    const { installation: marker } = stating(symbolsOf("Marker"));
+    const rendered = String(
+      yield* scoped(function* () {
         yield* useMarkerDocumentation();
-        yield* useMarkerDocumentation("packages/other/src/components.md");
-        return yield* run("<Syntax />\n", [marker]);
+        yield* useMarkerDocumentation({
+          owner: "@executablemd/other",
+          asset: "packages/other/src/components.md",
+          text: "## Marker\n\nSOMEBODY ELSE'S MARKER.\n",
+        });
+        yield* useMarkerDocumentation({
+          asset: "packages/test/src/more.md",
+          text: "## Separate\n\nA DISJOINT SET.\n",
+          supplies: ["Separate"],
+        });
+        return yield* run('<Syntax names={["Marker"]} />\n', [marker]);
       }),
     );
-    expect(conflicting).toContain("contributes documentation for Marker from both");
+    // The execution ran, and the entry took its own owner's prose — not the
+    // other package's, which documents a different component of the same name.
+    expect(rendered).toContain("MARKER PROSE.");
+    expect(rendered).not.toContain("SOMEBODY ELSE'S MARKER");
+  });
+
+  it("SYN25l.4: overlapping executions each keep their own contributions", function* () {
+    // Collection is execution-scoped, so a conflict in one assembly is not a
+    // fact about another running beside it. The first scope is assembled with a
+    // genuine conflict and refuses; the second, live at the same time, is
+    // unaffected and renders its own.
+    const { installation: marker } = stating(symbolsOf("Marker"));
+    // Spawned in the case's own scope rather than a nested one, which would
+    // close and halt it: the point is that the two are live at the same time.
+    const conflicted = yield* spawn(() =>
+      refusal(
+        scoped(function* () {
+          yield* useMarkerDocumentation();
+          yield* useMarkerDocumentation({ text: "## Marker\n\nCONFLICTING.\n" });
+          return yield* run("nothing here\n", [marker]);
+        }),
+      ),
+    );
+
+    const beside = String(
+      yield* scoped(function* () {
+        yield* useMarkerDocumentation();
+        return yield* run('<Syntax names={["Marker"]} />\n', [marker]);
+      }),
+    );
+    expect(beside).toContain("MARKER PROSE.");
+    expect(beside).not.toContain("CONFLICTING");
+    expect(yield* conflicted).toContain("contributes documentation for Marker twice");
+  });
+
+  it("SYN25l.5: layered trusted bootstraps keep their registrations and documentation", function* () {
+    // The shape a nested run and an `<Evaluate>` host both take: an outer
+    // trusted layer enters a package's bootstrap, an inner one enters the same
+    // package again, and the inner scope descends from the outer. Both halves
+    // have to survive — the registrations *and* the documentation — because
+    // losing either is how the two-list design failed in the first place.
+    const outerThenInner = yield* scoped(function* () {
+      yield* useMarkerDocumentation();
+      yield* registerComponents([layeredComponent("outer")]);
+      return yield* scoped(function* () {
+        // The inner layer enters the same package bootstrap, and adds a
+        // registration of its own.
+        yield* useMarkerDocumentation();
+        yield* registerComponents([layeredComponent("inner")]);
+        return yield* run('<Outer />\n\n<Inner />\n\n<Syntax names={["Marker"]} />\n', [
+          stating(symbolsOf("Marker")).installation,
+        ]);
+      });
+    });
+
+    const rendered = String(outerThenInner);
+    // Both registrations resolve: entering the bootstrap twice took nothing
+    // away from the enclosing layer.
+    expect(rendered).toContain("outer component ran");
+    expect(rendered).toContain("inner component ran");
+    // And the documentation is there exactly once, from one coalesced value.
+    expect(rendered).toContain("MARKER PROSE.");
+    expect(rendered.match(/MARKER PROSE\./g)).toHaveLength(1);
   });
 
   it("SYN25j: two scopes each read their own contributions", function* () {

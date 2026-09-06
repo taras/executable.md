@@ -100,16 +100,20 @@ export const Documentation: Api<DocumentationApi> = createApi<DocumentationApi>(
  * and through the reader the collector supplies: a bootstrap installed in one
  * execution's scope reads that execution's assets.
  *
- * **An identical contribution already in the chain is not appended twice.** One
- * package's declarative vocabulary is deliberately installed at more than one
- * layer — the repository-composition set is registered by an ordinary run's
- * bootstrap *and* again inside a workflow attachment, because either may be the
- * only one — and the inner scope descends from the outer, so both wrappers are
- * in one chain. Appending the second would refuse at collection, which would
- * turn the product's own layering into a failure. Contributing the same
- * component from the same asset says exactly what the first one said, so
- * repeating it is a no-op rather than a conflict; two *different* assets still
- * refuse at collection, because those disagree.
+ * **A contribution of the same value already in the chain is not appended
+ * twice.** One package's declarative vocabulary is deliberately entered at more
+ * than one layer — the repository-composition set by an ordinary run's bootstrap
+ * *and* again inside a workflow attachment, because either may be the only one;
+ * a nested run or evaluation host the same way — and the inner scope descends
+ * from the outer, so both wrappers are in one chain. Appending the second would
+ * refuse at collection, which turns valid layering into a failure while there is
+ * no ambiguity to resolve: a repetition of the same value says exactly what the
+ * first one said, and there is no winner to pick. So it coalesces, and the
+ * repeated bootstrap keeps both its registrations and one documentation value.
+ *
+ * Equality is by value over all four of {@link identical}'s inputs. Anything
+ * short of that — matching on the asset alone, say — would coalesce two
+ * bootstraps that genuinely disagree, and silently keep whichever ran first.
  */
 export function* contributeDocumentation(
   contribute: (read: DocumentationReader) => Operation<DocumentationContribution>,
@@ -124,20 +128,31 @@ export function* contributeDocumentation(
 }
 
 /**
- * Whether two contributions say the same thing.
+ * Whether two contributions are the same value.
  *
- * Owner, asset and the exact set of names — everything the index joins on and
- * everything collection refuses over. A pair agreeing on all three is one
- * statement made twice; a pair differing in any is two statements, and which of
- * those it is decides whether the repeat is a layering or a conflict.
+ * All four of what a contribution *is*: the owning package, the asset identity,
+ * the exact documentation text, and the set of components it accounts for. The
+ * text is not redundant with the asset — two bootstraps can name one path and
+ * read different bytes, from a stale build tree or a substituted reader — and
+ * coalescing those would pick a winner silently, which is the whole thing this
+ * boundary exists to prevent.
+ *
+ * Compared by value, not by identity: each bootstrap builds a fresh object, and
+ * a `Set` has no order, so two contributions listing the same names in different
+ * orders are the same statement.
  */
 function identical(one: DocumentationContribution, other: DocumentationContribution): boolean {
   return (
     one.source.owner === other.source.owner &&
     one.source.asset === other.source.asset &&
-    one.supplies.size === other.supplies.size &&
-    [...one.supplies].every((name) => other.supplies.has(name))
+    one.source.text === other.source.text &&
+    sameNames(one.supplies, other.supplies)
   );
+}
+
+/** Two name sets holding the same names, whatever order they were built in. */
+function sameNames(one: ReadonlySet<string>, other: ReadonlySet<string>): boolean {
+  return one.size === other.size && [...one].every((name) => other.has(name));
 }
 
 /**
@@ -149,16 +164,18 @@ function identical(one: DocumentationContribution, other: DocumentationContribut
  * reason the installation boundary snapshots anything — the objects belong to
  * whoever built them, and their `Set`s and strings can move afterwards.
  *
- * Two contributions naming one component of one package refuse here, wherever
- * they sat in the chain. A later one silently winning would make what a
- * document is told about a component depend on the order its host happened to
- * bootstrap packages in.
+ * Two contributions that *disagree* about one component of one package refuse
+ * here, wherever they sat in the chain. A later one silently winning would make
+ * what a document is told about a component depend on the order its host
+ * happened to bootstrap packages in.
  *
- * What reaches here is therefore a genuine disagreement: two *different* assets
- * claiming one component of one package. An identical repetition never arrives,
- * because `contributeDocumentation()` recognizes its own statement already in
- * the chain and does not append it twice — that is the product's own layering,
- * not a conflict.
+ * Only a disagreement reaches this far: a repetition of the same value never
+ * arrives, because `contributeDocumentation()` recognizes its own statement in
+ * the chain and does not append it twice. What is left overlaps on one owning
+ * package and one component name while differing in asset, text or the set of
+ * components accounted for. Two *different owners* documenting a same-spelled
+ * component is not a conflict — documentation joins by name and origin — and
+ * neither is one owner accounting for disjoint sets from two files.
  *
  * Collection is where a disagreement is caught, because it is the only boundary
  * every execution passes through. Deferring it to the named form's index would
@@ -169,29 +186,45 @@ export function* capturedDocumentation(
   read: DocumentationReader = packagedAssetReader,
 ): Operation<readonly DocumentationContribution[]> {
   const contributed = yield* Documentation.operations.contributions(read);
-  const seen = new Map<string, string>();
+  // Keyed by owning package *and* component name, because that pair is what
+  // documentation joins on. Two packages may document same-spelled components,
+  // and one package may account for disjoint sets from two files; neither is a
+  // question anyone has to answer, so neither is a conflict.
+  const seen = new Map<string, DocumentationContribution>();
   for (const one of contributed) {
     for (const name of one.supplies) {
       const owner = one.source.owner;
-      const key = `${owner} ${name}`;
-      const first = seen.get(key);
+      const first = seen.get(`${owner} ${name}`);
       if (first !== undefined) {
         throw new DocumentationIndexError(
-          first === one.source.asset
-            ? // Same asset, but the contributions were not identical — otherwise
-              // one of them would not be here. So two bootstraps disagree about
-              // which components that one file accounts for.
-              `${owner} contributes documentation for ${name} twice from ` +
-                `${one.source.asset}, in two contributions that name different components. ` +
-                "One asset accounts for one set of components, however many bootstraps " +
-                "installed it."
-            : `${owner} contributes documentation for ${name} from both ${first} and ` +
-                `${one.source.asset}. One component of one package has one documentation ` +
-                "source, whichever order the packages bootstrapped in.",
+          `${owner} contributes documentation for ${name} twice, and the two ` +
+            `contributions are not the same: ${difference(first, one)}. One component of ` +
+            "one package has one documentation value, whichever order the bootstraps " +
+            "supplied it — so there is no winner to pick.",
         );
       }
-      seen.set(key, one.source.asset);
+      seen.set(`${owner} ${name}`, one);
     }
   }
   return snapshotContributions(contributed);
+}
+
+/**
+ * What two conflicting contributions disagree about, for the refusal to name.
+ *
+ * An identical pair never reaches this — `contributeDocumentation()` coalesces
+ * those — so at least one of the three differs, and saying which is the
+ * difference between a diagnosis and a complaint.
+ */
+function difference(first: DocumentationContribution, second: DocumentationContribution): string {
+  if (first.source.asset !== second.source.asset) {
+    return `they name different assets, ${first.source.asset} and ${second.source.asset}`;
+  }
+  if (first.source.text !== second.source.text) {
+    return `both name ${first.source.asset}, but its text differs between them`;
+  }
+  return (
+    `both name ${first.source.asset} with the same text, but they account for ` +
+    "different components"
+  );
 }
