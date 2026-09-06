@@ -5464,6 +5464,13 @@ describe("Tier NP — proved native capability admissions", () => {
  * launcher speaking a protocol the route never named — that last one with the
  * host's policy admitting exactly what the newcomer declares, so the only thing
  * left refusing is the contract the route itself fixes.
+ *
+ * The contract is asked twice, because a read that finds no route settles
+ * nothing: a publication is where a concurrent one is revealed. So it is asked
+ * prospectively, before a build is observed or an identity exists, and again of
+ * the record that actually won — and the two are discriminated apart, by a case
+ * that reaches the race with an adapter this build fixes nothing for and one
+ * that reaches it entitled to construct and meets someone else's account.
  */
 describe("Tier XR — one session across two releases", () => {
   const ALLOCATED = "5eed0000-1111-2222-3333-444444444444";
@@ -5901,24 +5908,42 @@ describe("Tier XR — one session across two releases", () => {
     }
 
     yield* scoped(function* () {
-      // Adoption, where the route arrives after the read that found none. The
-      // winner is the account that governs, so it is the account this adapter
-      // has to have been constructed under — and it was not.
+      // The race, from the side that reads no route. An empty read is not a
+      // session nobody has — a concurrent publication is revealed by publishing
+      // — so a run that met this adapter here is a run that could not have
+      // accounted for whatever the publication returns. It is refused
+      // prospectively, and the whole point is what that costs: nothing at all.
       const inner = createMemorySessionRouteStore();
+      const publications: AgentSessionRoute[] = [];
       const routes: AgentSessionRouteStore = {
         // deno-lint-ignore require-yield
         *read() {
           return undefined;
         },
-        publish: (candidate) => inner.publish(candidate),
+        *publish(candidate) {
+          publications.push(candidate);
+          return yield* inner.publish(candidate);
+        },
       };
       const space = yield* continuing({ ...foreign, routes, published: route() });
+      // The one publication this case made before the provider existed.
+      expect(publications).toEqual([route()]);
 
       const failure = yield* attempt(space.trace, INSTRUCTIONS);
 
       expect(failure?.class).toBe("unsupported-capability");
+      // Nothing was asked of the executable: not which file it is, and not one
+      // of the read-only questions the adapter would have put to it.
+      expect([space.observer.observed, space.observer.queried]).toEqual([[], []]);
+      // Nothing was reached for on the session's behalf, and nothing offered to
+      // the namespace — so the candidate that would have raced does not exist.
+      expect(space.counts.allocations).toBe(0);
+      expect(publications).toEqual([route()]);
+      // And no live effect on either side of the handoff.
       expect(space.trace.launches).toEqual([]);
       expect([space.counts.resumes, space.counts.creates]).toEqual([0, 0]);
+      expect(space.harness.ensureCalls).toEqual([]);
+      expect(space.harness.createdOptions).toEqual([]);
       expect(JSON.stringify(space.trace.records)).not.toContain(CANDIDATE);
       // The winner kept its identity and the evidence it was written with.
       expect(yield* inner.read(KEY)).toEqual(route());
@@ -5944,5 +5969,66 @@ describe("Tier XR — one session across two releases", () => {
     expect(space.harness.createdOptions).toEqual([]);
     expect(space.observer.observed).toEqual([]);
     yield* unchanged(space);
+  });
+
+  it("XR11: a winner this run cannot account for is not adopted, however it got there", function* () {
+    // The other half of the race, and the one the prospective check cannot
+    // stand in for: this adapter is exactly what this build fixes for its
+    // launcher, so it was entitled to observe a build and prepare a route of
+    // its own — and the account that reached the namespace first is still not
+    // one it can read. That account names another provider, which is the
+    // difference a candidate's own contract says nothing about: same launcher,
+    // same instruction layer, same schema, published by something else.
+    //
+    // Losing a race is ordinary, and XR6 adopts its winner whole. What
+    // separates them is whose account the winner is, so this run refuses before
+    // it acts through the winner at all.
+    const inner = createMemorySessionRouteStore();
+    const foreignKey = { ...KEY, provider: "other-provider" };
+    const foreignWinner: AgentSessionRoute = { ...route(), provider: "other-provider" };
+    yield* inner.publish(foreignWinner);
+
+    const publications: AgentSessionRoute[] = [];
+    const routes: AgentSessionRouteStore = {
+      // deno-lint-ignore require-yield
+      *read() {
+        return undefined;
+      },
+      *publish(candidate) {
+        // The publication is where the concurrent account is revealed, and it
+        // is read back rather than remembered, so a rewrite would show here.
+        publications.push(candidate);
+        const winner = yield* inner.read(foreignKey);
+        return winner ?? candidate;
+      },
+    };
+    const space = yield* continuing({ routes });
+    // The one publication this case made before the provider existed.
+    expect(publications).toEqual([route()]);
+
+    const failure = yield* attempt(space.trace, INSTRUCTIONS);
+
+    expect(failure?.class).toBe("unsupported-capability");
+    // The observation this run was entitled to make is allowed to have
+    // happened; what may not is anything downstream of adopting the winner.
+    expect(space.trace.launches).toEqual([]);
+    expect([space.counts.resumes, space.counts.creates]).toEqual([0, 0]);
+    expect(space.harness.ensureCalls).toEqual([]);
+    expect(space.harness.createdOptions).toEqual([]);
+    // Neither identity was acted on: not the winner's, and not the candidate
+    // this run offered and lost with.
+    expect(JSON.stringify(space.trace.records)).not.toContain(ALLOCATED);
+    expect(JSON.stringify(space.trace.records)).not.toContain(CANDIDATE);
+    // This run's own candidate, offered exactly once under its own provider —
+    // and never offered again to make its account the true one.
+    expect(publications.length).toBe(2);
+    expect(publications[1]).toMatchObject({
+      schema: "session-route.v2",
+      provider: "acpx",
+      nativeSessionId: CANDIDATE,
+      launcher: "claude",
+    });
+    // Read back through the same strict reader the durable store uses.
+    expect(yield* inner.read(foreignKey)).toEqual(foreignWinner);
   });
 });

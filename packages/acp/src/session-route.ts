@@ -162,10 +162,13 @@ function declared(
 /**
  * Read a retained build binding strictly.
  *
- * The digest is required and exact — it is what binds a session to a build.
- * A present `reportedVersion` must still be a real one: a member written as an
- * empty string is a claim about a release nobody can reproduce, which is not
- * the same as having made no claim.
+ * The digest is required and exact — it is what names the build this record
+ * describes. Reading it strictly is not a gate on the executable installed now:
+ * this account is audit evidence, and the only thing it is ever held to is the
+ * prepared journal derived from the same observation. A present
+ * `reportedVersion` must still be a real one: a member written as an empty
+ * string is a claim about a release nobody can reproduce, which is not the same
+ * as having made no claim.
  */
 function parseExecutableBinding(value: unknown): ExecutableBuildBindingV1 | undefined {
   if (!isRecord(value) || !declared(value, BINDING_MEMBERS, BINDING_OPTIONAL_MEMBERS)) {
