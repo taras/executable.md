@@ -39,23 +39,26 @@ import {
   allocatesIdentity,
   knownNativeAdapters,
   nativeAdapterFor,
-  nativeCapabilityCompatibility,
+  nativeCapabilityPolicy,
 } from "../src/native-launch.ts";
 import type {
   NativeCapability,
-  NativeCapabilityCompatibility,
   NativeCapabilityHost,
+  NativeCapabilityPolicy,
 } from "../src/native-capability.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import process from "node:process";
-import type { NativeAdapter, NativeBinding } from "../src/native-launch.ts";
+import type { ClientAllocatedAdapter, NativeAdapter, NativeBinding } from "../src/native-launch.ts";
 import { AgentSessionRouteError, createMemorySessionRouteStore } from "../src/session-route.ts";
 import type { AgentSessionRoute, AgentSessionRouteStore } from "../src/session-route.ts";
 import { deriveSessionKey } from "../src/session-key.ts";
 import {
+  answered,
+  claudeHelp,
+  CLAUDE_HELP_DECLARATIONS,
   createFakeObserver,
   createFakeRuntime,
   makeCoordinator,
@@ -64,7 +67,12 @@ import {
   makeStore,
   useFlatWorld,
 } from "./helpers.ts";
-import type { CoordinatorHarness, FakeObserverHarness, FakeRuntimeHarness } from "./helpers.ts";
+import type {
+  CoordinatorHarness,
+  FakeObservation,
+  FakeObserverHarness,
+  FakeRuntimeHarness,
+} from "./helpers.ts";
 import type { ExecutableBuildBindingV1 } from "@executablemd/core";
 import type { AcpxSessionPolicy } from "../src/provider.ts";
 import type { ExecutableObserver } from "@executablemd/runtime";
@@ -144,23 +152,45 @@ function createCwdBarrier(dir: string): CwdBarrier {
 }
 
 /**
+ * The shipped Claude adapter, so the controlled adapters here carry the real
+ * one's evidence rather than a convenient stand-in.
+ *
+ * What a build declares is adapter-owned knowledge, and a test binding that
+ * read help its own way would prove a parser nothing ships. Taking the shipped
+ * one means removing a declaration from an observation exercises production
+ * admission, which is the point of injecting the whole observation.
+ */
+function shippedClaude(): ClientAllocatedAdapter {
+  const adapter = nativeAdapterFor("claude");
+  if (adapter === undefined || !allocatesIdentity(adapter)) {
+    throw new Error("the shipped claude adapter names its own sessions");
+  }
+  return adapter;
+}
+const CLAUDE_ADAPTER = shippedClaude();
+const CLAUDE_PROTOCOL = CLAUDE_ADAPTER.protocol;
+const CLAUDE_PROBE_PROFILE = CLAUDE_ADAPTER.binding.probe({}).probeProfile;
+
+/**
  * The Claude-shaped build contract every controlled client-allocated adapter
- * here carries: which command to observe, what its version output means, and
- * what the ACP child needs in order to run that same build.
+ * here carries: which command to observe, which read-only questions to ask it,
+ * what the answers mean, and what the ACP child needs to run that same build.
  */
 const TEST_BINDING: NativeBinding = {
   command: "claude",
-  // The same contract the shipped Claude adapter carries: exactly one canonical
-  // line is an answer, and zero or several are not.
-  version: (output) => {
-    const canonical = output
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => /^\d+\.\d+\.\d+ \(Claude Code\)$/.test(line));
-    return canonical.length === 1 ? canonical[0] : undefined;
-  },
+  metadata: CLAUDE_ADAPTER.binding.metadata,
+  probe: CLAUDE_ADAPTER.binding.probe,
+  reportedVersion: CLAUDE_ADAPTER.binding.reportedVersion,
   environment: (livePath) => ({ CLAUDE_CODE_EXECUTABLE: livePath }),
 };
+
+/**
+ * The ACP bridge the shipped adapter pins.
+ *
+ * Attachment is observed from exact resume plus this pin, so a controlled
+ * adapter that dropped it would be describing a different contract.
+ */
+const TEST_BRIDGE = CLAUDE_ADAPTER.binding.adapterCommand;
 
 /** What `createFakeObserver()`'s default observation binds to. */
 const OBSERVED_BUILD: ExecutableBuildBindingV1 = {
@@ -169,13 +199,46 @@ const OBSERVED_BUILD: ExecutableBuildBindingV1 = {
   executableDigest: { algorithm: "sha256", value: "a".repeat(64) },
 };
 
+/** The same build, bound by a build that reported no version it recognized. */
+const DIGEST_ONLY_BUILD: ExecutableBuildBindingV1 = {
+  schema: "executable-build.v1",
+  executableDigest: { algorithm: "sha256", value: "a".repeat(64) },
+};
+
 /** The canonical path that same observation reports. */
 const OBSERVED_PATH = "/opt/builds/claude";
 
 /**
+ * One controlled observation, varying only what a case is about.
+ *
+ * The default is a build that declares the whole native-launch shape and
+ * reports the proved version, so a case that changes nothing is describing an
+ * ordinary installation.
+ */
+function observation(overrides?: {
+  path?: string;
+  digest?: string;
+  /** What `--help` answered. `false` is a build that would not answer it. */
+  help?: string | false;
+  /** What `--version` answered. `false` is a query that did not settle. */
+  version?: string | false;
+}): FakeObservation {
+  return {
+    path: overrides?.path ?? OBSERVED_PATH,
+    digest: overrides?.digest ?? "a".repeat(64),
+    metadata: {
+      ...(overrides?.help === false ? {} : { help: answered(overrides?.help ?? claudeHelp()) }),
+      ...(overrides?.version === false
+        ? {}
+        : { version: answered(overrides?.version ?? "2.1.241 (Claude Code)\n") }),
+    },
+  };
+}
+
+/**
  * The machine these cases describe.
  *
- * Stated, never read from the runner. A capability point names an exact OS and
+ * Stated, never read from the runner. An admission names an exact OS and
  * architecture, so a suite that asked the machine underneath it what it was
  * would be admitting whatever it happened to run on — and the shipped Claude
  * evidence, which is a Mac with Apple silicon, would be exercised on one CI
@@ -184,24 +247,25 @@ const OBSERVED_PATH = "/opt/builds/claude";
 const PROVED_HOST: NativeCapabilityHost = { platform: "darwin", architecture: "arm64" };
 
 /**
- * A host that has proved the named builds of `claude`, both capabilities each.
+ * A host that has proved the named protocol on this machine, both capabilities.
  *
- * For the cases that need two admitted builds at once. Everything else takes
- * the package's own evidence, so what most of this file runs against is the
- * shipped table rather than a convenient stand-in.
+ * For the cases that describe a host which proved something other than what
+ * ships. Everything else takes the package's own evidence, so what most of this
+ * file runs against is the shipped policy.
  */
-function admitting(...reportedVersions: readonly string[]): NativeCapabilityCompatibility {
+function admitting(
+  adapterProtocol: string = CLAUDE_PROTOCOL,
+  probeProfile: string = CLAUDE_PROBE_PROFILE,
+): NativeCapabilityPolicy {
   const capabilities: readonly NativeCapability[] = ["native-launch", "client-native-attachment"];
   return {
     host: PROVED_HOST,
-    points: reportedVersions.flatMap((reportedVersion) =>
-      capabilities.map((capability) => ({
-        agent: "claude",
-        capability,
-        reportedVersion,
-        ...PROVED_HOST,
-      })),
-    ),
+    admissions: capabilities.map((capability) => ({
+      adapterProtocol,
+      capability,
+      probeProfile,
+      ...PROVED_HOST,
+    })),
   };
 }
 
@@ -243,13 +307,13 @@ interface ProviderOptions {
   /** `false` gives this host no way to observe a build at all. */
   observer?: ExecutableObserver | false;
   /**
-   * Which exact points this host has proved.
+   * Which exact admissions this host has proved.
    *
    * Defaults to the package's own evidence for the machine above, so a case
    * says nothing unless it is describing a host that proved something else.
    * `false` is a host that has proved nothing and admits nothing.
    */
-  compatibility?: NativeCapabilityCompatibility | false;
+  nativeCapabilityPolicy?: NativeCapabilityPolicy | false;
   store?: AcpSessionStore;
   adapters?: Record<string, NativeAdapter>;
   /**
@@ -432,9 +496,12 @@ function* installLaunchStack(
     ...(options.observer === false
       ? {}
       : { executableObserver: options.observer ?? createFakeObserver().observer }),
-    ...(options.compatibility === false
+    ...(options.nativeCapabilityPolicy === false
       ? {}
-      : { compatibility: options.compatibility ?? nativeCapabilityCompatibility(PROVED_HOST) }),
+      : {
+          nativeCapabilityPolicy:
+            options.nativeCapabilityPolicy ?? nativeCapabilityPolicy(PROVED_HOST),
+        }),
     coordinator: options.coordinator ?? trace.ownership.coordinator,
     ...(options.routeStore ? { routeStore: options.routeStore } : {}),
     ...(options.withSessionRoute ? { withSessionRoute: options.withSessionRoute } : {}),
@@ -463,6 +530,7 @@ function newTrace(): Trace {
  */
 const PROVIDER_RETURNED_CLAUDE: NativeAdapter = {
   launcher: "claude",
+  protocol: "claude-provider-returned.v1",
   identity: "provider-returned",
   resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
 };
@@ -1513,6 +1581,7 @@ describe("Tier CN — client-allocated construction", () => {
   function clientNative(allocate: () => string = () => ALLOCATED): NativeAdapter {
     return {
       launcher: "claude",
+      protocol: CLAUDE_PROTOCOL,
       identity: "client-allocated",
       binding: TEST_BINDING,
       allocate,
@@ -1905,6 +1974,7 @@ describe("Tier CR — client-allocated incomplete replay", () => {
 
   const ADAPTER: NativeAdapter = {
     launcher: "claude",
+    protocol: CLAUDE_PROTOCOL,
     identity: "client-allocated",
     binding: TEST_BINDING,
     allocate: () => ALLOCATED,
@@ -2181,6 +2251,7 @@ describe("Tier PF — normalized private failures", () => {
         adapters: {
           claude: {
             launcher: "claude",
+            protocol: CLAUDE_PROTOCOL,
             identity: "client-allocated",
             binding: TEST_BINDING,
             allocate: () => "66666666-7777-8888-9999-000000000000",
@@ -2216,6 +2287,7 @@ describe("Tier PF — normalized private failures", () => {
       adapters: {
         claude: {
           launcher: "claude",
+          protocol: CLAUDE_PROTOCOL,
           identity: "client-allocated",
           binding: TEST_BINDING,
           allocate: () => "77777777-8888-9999-0000-111111111111",
@@ -2265,6 +2337,7 @@ describe("Tier PF — normalized private failures", () => {
       adapters: {
         claude: {
           launcher: "claude",
+          protocol: CLAUDE_PROTOCOL,
           identity: "client-allocated",
           binding: TEST_BINDING,
           allocate: () => "88888888-9999-0000-1111-222222222222",
@@ -2313,6 +2386,7 @@ describe("Tier PF — normalized private failures", () => {
       adapters: {
         claude: {
           launcher: "claude",
+          protocol: CLAUDE_PROTOCOL,
           identity: "client-allocated",
           binding: TEST_BINDING,
           allocate: () => "33333333-4444-5555-6666-777777777777",
@@ -2352,6 +2426,7 @@ describe("Tier RR — racing construction routes", () => {
 
   const ADAPTER: NativeAdapter = {
     launcher: "claude",
+    protocol: CLAUDE_PROTOCOL,
     identity: "client-allocated",
     binding: TEST_BINDING,
     allocate: () => ALLOCATED,
@@ -2573,6 +2648,7 @@ describe("Tier CX — cancellation before ownership ends", () => {
         adapters: {
           claude: {
             launcher: "claude",
+            protocol: CLAUDE_PROTOCOL,
             identity: "client-allocated",
             binding: TEST_BINDING,
             allocate: () => "55555555-6666-7777-8888-999999999999",
@@ -2683,6 +2759,7 @@ describe("Tier CA — client-native attachment", () => {
   function adapter(): NativeAdapter {
     return {
       launcher: "claude",
+      protocol: CLAUDE_PROTOCOL,
       identity: "client-allocated",
       binding: TEST_BINDING,
       allocate: () => ALLOCATED,
@@ -2846,13 +2923,13 @@ describe("Tier CA — client-native attachment", () => {
       [
         "another version of the same bytes",
         (observer: FakeObserverHarness) => {
-          observer.observation.versionOutput = "2.1.242 (Claude Code)\n";
+          observer.observation.metadata.version = answered("2.1.242 (Claude Code)\n");
         },
       ],
       [
-        "output this adapter does not recognize",
+        "a build that no longer reproduces the version this route retained",
         (observer: FakeObserverHarness) => {
-          observer.observation.versionOutput = "claude version 2.1.241\n";
+          observer.observation.metadata.version = answered("claude version 2.1.241\n");
         },
       ],
       [
@@ -2955,14 +3032,7 @@ describe("Tier CA — client-native attachment", () => {
     // somewhere else is the same partition key and a different file to run —
     // and handing the next attachment the old path is how it would run one.
     const observer = createFakeObserver();
-    observer.queued = [
-      { path: OBSERVED_PATH, digest: "a".repeat(64), versionOutput: "2.1.241 (Claude Code)\n" },
-      {
-        path: "/moved/bin/claude",
-        digest: "a".repeat(64),
-        versionOutput: "2.1.241 (Claude Code)\n",
-      },
-    ];
+    observer.queued = [observation(), observation({ path: "/moved/bin/claude" })];
     const space = yield* installAttachment(bound(), { observer: observer.observer });
     // A second session bound to the same build, so what the next attachment
     // reaches for is the same partition. It is a different session because the
@@ -3123,14 +3193,7 @@ describe("Tier CA — client-native attachment", () => {
 
   it("CA16: a halted ensure that then fails gives its claim back", function* () {
     const observer = createFakeObserver();
-    observer.queued = [
-      { path: OBSERVED_PATH, digest: "a".repeat(64), versionOutput: "2.1.241 (Claude Code)\n" },
-      {
-        path: "/moved/bin/claude",
-        digest: "a".repeat(64),
-        versionOutput: "2.1.241 (Claude Code)\n",
-      },
-    ];
+    observer.queued = [observation(), observation({ path: "/moved/bin/claude" })];
     const space = yield* installAttachment(bound(), { observer: observer.observer });
     const second = deriveSessionKey(AGENT_COMMAND, CWD, "second");
     yield* space.routes.publish(bound({ sessionKey: second, nativeSessionId: SECOND_ALLOCATED }));
@@ -3167,14 +3230,7 @@ describe("Tier CA — client-native attachment", () => {
     // that goes with it is a fresh one: a value that still named a runtime
     // would answer from the path that runtime was built with.
     const observer = createFakeObserver();
-    observer.queued = [
-      { path: OBSERVED_PATH, digest: "a".repeat(64), versionOutput: "2.1.241 (Claude Code)\n" },
-      {
-        path: "/moved/bin/claude",
-        digest: "a".repeat(64),
-        versionOutput: "2.1.241 (Claude Code)\n",
-      },
-    ];
+    observer.queued = [observation(), observation({ path: "/moved/bin/claude" })];
     const space = yield* installAttachment(bound(), { observer: observer.observer });
 
     const session = yield* Agent.operations.session();
@@ -3248,17 +3304,22 @@ describe("Tier CA — client-native attachment", () => {
     expect(space.harness.createdOptions).toHaveLength(2);
   });
 
-  it("CA14: output naming several builds refuses before a child, an ensure or a turn", function* () {
+  it("CA14: a route's retained version that this build will not reproduce refuses before a child, an ensure or a turn", function* () {
     // One canonical line is an answer. Several is a list of builds, and taking
-    // the first would be choosing one — which is the question this refuses.
+    // the first would be choosing one — so this build reports no version. That
+    // is not a refusal in itself; what refuses is that the route retained one,
+    // and a claim the live build no longer makes cannot be confirmed.
     const observer = createFakeObserver({
-      versionOutput: "2.1.241 (Claude Code)\n2.1.242 (Claude Code)\n",
+      metadata: {
+        help: answered(claudeHelp()),
+        version: answered("2.1.241 (Claude Code)\n2.1.242 (Claude Code)\n"),
+      },
     });
     const space = yield* installAttachment(bound(), { observer: observer.observer });
 
     const raised = yield* attach();
 
-    expect(raised?.message).toContain("does not recognize");
+    expect(raised?.message).toContain("cannot be confirmed");
     // Nothing was repeated back: the output is the provider's, not the reader's.
     expect(raised?.message).not.toContain("2.1.242");
     expect(space.harness.createdOptions).toEqual([]);
@@ -3326,6 +3387,7 @@ describe("Tier RT — bound runtime partitions", () => {
   function adapter(): NativeAdapter {
     return {
       launcher: "claude",
+      protocol: CLAUDE_PROTOCOL,
       identity: "client-allocated",
       binding: TEST_BINDING,
       allocate: () => FIRST,
@@ -3428,8 +3490,8 @@ describe("Tier RT — bound runtime partitions", () => {
     const routes = createMemorySessionRouteStore();
     const observer = createFakeObserver();
     observer.queued = [
-      { path: OBSERVED_PATH, digest: "a".repeat(64), versionOutput: "2.1.241 (Claude Code)\n" },
-      { path: OTHER_PATH, digest: "d".repeat(64), versionOutput: "2.1.242 (Claude Code)\n" },
+      observation(),
+      observation({ path: OTHER_PATH, digest: "d".repeat(64), version: "2.1.242 (Claude Code)\n" }),
     ];
     const second = deriveSessionKey(AGENT_COMMAND, CWD, "second");
     yield* routes.publish(route(SESSION_KEY, FIRST));
@@ -3438,8 +3500,6 @@ describe("Tier RT — bound runtime partitions", () => {
       adapters: { claude: adapter() },
       routeStore: routes,
       observer: observer.observer,
-      // Two builds is the whole case, so this host has proved both of them.
-      compatibility: admitting("2.1.241 (Claude Code)", "2.1.242 (Claude Code)"),
     });
 
     yield* Agent.operations.session();
@@ -3784,6 +3844,7 @@ describe("Tier LU — legacy unbound client-native", () => {
 
   const ADAPTER: NativeAdapter = {
     launcher: "claude",
+    protocol: CLAUDE_PROTOCOL,
     identity: "client-allocated",
     binding: TEST_BINDING,
     allocate: () => ALLOCATED,
@@ -3960,20 +4021,161 @@ describe("Tier AO — explicit ACP-only capability", () => {
 });
 
 /**
+ * Tier CP — what the shipped Claude adapter reads out of a build's help
+ * (specs/native-agent-session-launch-spec.md §Executable binding).
+ *
+ * The fixtures above carry this same probe, but they are fixtures. This is the
+ * parser production runs, and what it decides is which builds may be handed a
+ * session at all.
+ *
+ * It is structural rather than a snapshot: a release that adds options, rewords
+ * prose or rewraps a line still declares the same operations, and one that
+ * stopped declaring one cannot do the work whatever it calls itself.
+ */
+describe("Tier CP — the Claude capability probe", () => {
+  function probe(help: string | undefined): readonly NativeCapability[] {
+    return CLAUDE_ADAPTER.binding.probe(help === undefined ? {} : { help: answered(help) })
+      .capabilities;
+  }
+
+  it("CP1: a build declaring all three operations can be handed a session", function* () {
+    expect(probe(claudeHelp())).toEqual(["native-launch", "client-native-attachment"]);
+    // And the profile it answers under is the one an admission names.
+    expect(CLAUDE_ADAPTER.binding.probe({}).probeProfile).toBe("claude-help-native-session.v1");
+  });
+
+  it("CP2: options, prose and wrapping this adapter did not ask about change nothing", function* () {
+    const noisy = claudeHelp({
+      product:
+        "Claude Code - starts an interactive session by default\n\n" +
+        "Learn more at https://docs.claude.com/en/docs/claude-code",
+      extra: [
+        "  --brand-new-option <value>      An option no proof has ever seen",
+        "  -c, --continue                  Continue the most recent conversation",
+        "  --bare                          Print only the response. Use --system-prompt[-file]",
+        "                                  to steer it.",
+      ],
+    });
+    expect(probe(noisy)).toEqual(["native-launch", "client-native-attachment"]);
+
+    // The same declarations, wrapped onto continuation lines the way Commander
+    // wraps a long description. What is read is the flag and whether it takes a
+    // value, so where the description broke is not part of the answer.
+    const wrapped = claudeHelp({
+      declarations: [
+        "  --session-id <uuid>             Use a specific session ID for the",
+        "                                  conversation (must be a valid UUID)",
+        "  -r, --resume [sessionId]        Resume a conversation — provide a session",
+        "                                  ID or interactively select one",
+        "  --system-prompt-file <file>     Load the system prompt from a file, for",
+        "                                  this invocation only",
+      ],
+    });
+    expect(probe(wrapped)).toEqual(["native-launch", "client-native-attachment"]);
+  });
+
+  it("CP3: the private-file declaration is read in either spelling Claude uses", function* () {
+    // Builds that give it no entry of its own document the family in prose
+    // instead. Both are the same declaration, and neither is inferred from the
+    // other's absence.
+    const family = claudeHelp({
+      declarations: [CLAUDE_HELP_DECLARATIONS.sessionId, CLAUDE_HELP_DECLARATIONS.resume],
+      extra: [
+        "  --system-prompt <prompt>        Override the system prompt",
+        "  --bare                          Print only the response. Combine with",
+        "                                  --system-prompt[-file] to steer it.",
+      ],
+    });
+    expect(family).toContain("--system-prompt[-file]");
+    expect(probe(family)).toEqual(["native-launch", "client-native-attachment"]);
+  });
+
+  it("CP4: a missing or unreadable declaration is not a capability", function* () {
+    // Each row withdraws exactly one thing and states what is left. A build
+    // missing something only launch needs still attaches, because the two are
+    // read independently — what must never survive is the capability whose own
+    // evidence went away.
+    const entries = CLAUDE_HELP_DECLARATIONS;
+    const ATTACH_ONLY: readonly NativeCapability[] = ["client-native-attachment"];
+    for (const [name, help, remaining] of [
+      // Nothing is recognized without the product, so both go.
+      ["no help at all", undefined, []],
+      ["help that names another product", claudeHelp({ product: "gemini-cli" }), []],
+      [
+        "help whose usage line is another command",
+        claudeHelp({ usage: "Usage: gemini [options]" }),
+        [],
+      ],
+      // Exact resume is the one declaration both capabilities need.
+      [
+        "no exact resume",
+        claudeHelp({ declarations: [entries.sessionId, entries.privateFile] }),
+        [],
+      ],
+      // Launch-only evidence: attachment is untouched by its absence.
+      [
+        "no caller-supplied identity",
+        claudeHelp({ declarations: [entries.resume, entries.privateFile] }),
+        ATTACH_ONLY,
+      ],
+      [
+        "an identity option that takes no value",
+        claudeHelp({
+          declarations: [
+            "  --session-id                    Start a new session",
+            entries.resume,
+            entries.privateFile,
+          ],
+        }),
+        ATTACH_ONLY,
+      ],
+      [
+        "two entries declaring the same identity option",
+        claudeHelp({
+          declarations: [
+            entries.sessionId,
+            "  --session-id <name>             Deprecated spelling",
+            entries.resume,
+            entries.privateFile,
+          ],
+        }),
+        ATTACH_ONLY,
+      ],
+      [
+        "no private instruction file",
+        claudeHelp({ declarations: [entries.sessionId, entries.resume] }),
+        ATTACH_ONLY,
+      ],
+    ] as const) {
+      expect([name, probe(help)]).toEqual([name, remaining]);
+    }
+  });
+
+  it("CP5: neither capability is inferred from the other", function* () {
+    // Exact resume is what attachment needs, and it is one of the three things
+    // launch needs. A build declaring resume and nothing else attaches and
+    // cannot launch — the shared declaration authorizes only its own capability.
+    const resumeOnly = claudeHelp({ declarations: [CLAUDE_HELP_DECLARATIONS.resume] });
+    expect(probe(resumeOnly)).toEqual(["client-native-attachment"]);
+
+    // And launch does not carry attachment, because attachment also needs the
+    // ACP bridge this adapter pins — knowledge about the child process rather
+    // than about the CLI, which no help surface can supply.
+    expect(TEST_BRIDGE).toBe("npx -y @agentclientprotocol/claude-agent-acp@0.70.0");
+  });
+});
+
+/**
  * Tier CV — the shipped Claude adapter's canonical version
  * (specs/native-agent-session-launch-spec.md §Executable binding).
  *
- * The fixtures above carry the same contract, but they are fixtures. This is
- * the parser production runs, and what it decides is which builds a session may
- * be bound to at all.
+ * Optional evidence, deliberately: a version says which release is installed,
+ * not what it can do. Nothing here decides a capability, and every unreadable
+ * answer is an ordinary absence rather than a refusal.
  */
 describe("Tier CV — canonical Claude version", () => {
   function parse(output: string): string | undefined {
-    const adapter = nativeAdapterFor("claude");
-    if (!adapter || !allocatesIdentity(adapter)) {
-      throw new Error("the shipped claude adapter names its own sessions");
-    }
-    return adapter.binding.version(output);
+    return CLAUDE_ADAPTER.binding.reportedVersion({ version: answered(output) });
   }
 
   it("CV1: one canonical line is the answer, whole", function* () {
@@ -4007,6 +4209,21 @@ describe("Tier CV — canonical Claude version", () => {
     // this adapter cannot read as one answer.
     expect(parse("2.1.241 (Claude Code)\n2.1.241 (Claude Code)\n")).toBe(undefined);
   });
+
+  it("CV4: a query that failed, never settled, or was never asked reports nothing", function* () {
+    const version = CLAUDE_ADAPTER.binding.reportedVersion;
+    // Never asked.
+    expect(version({})).toBe(undefined);
+    // Asked, and the child never started.
+    expect(version({ version: { settled: false, stdout: "", stderr: "" } })).toBe(undefined);
+    // Asked, answered, and exited nonzero — output beside a failure is not a
+    // report, whatever it happens to say.
+    expect(
+      version({
+        version: { settled: true, code: 1, stdout: "2.1.241 (Claude Code)\n", stderr: "" },
+      }),
+    ).toBe(undefined);
+  });
 });
 
 /**
@@ -4014,20 +4231,43 @@ describe("Tier CV — canonical Claude version", () => {
  * (specs/decisions.md §DEC-017).
  *
  * An advertised adapter name selects a command shape. What admits work on a
- * session is a point: one agent, one capability, one canonical reported
- * version, one OS and one architecture, matched whole. These cases run the four
- * paths that check one — fresh client-native construction, bound native resume,
- * bound ACP attachment and incomplete replay — and each refusal is read at the
- * boundary it is supposed to stop in front of, rather than by its message
- * alone: nothing may be allocated, published, written, spawned, ensured or
- * retained behind it.
+ * session is an admission: one adapter protocol, one capability, one probe
+ * profile, one OS and one architecture, matched whole — and it is only reached
+ * when the executable itself declared that shape. Both gates are needed:
+ * declaring the shape is not proof this host ran it, and proving a machine is
+ * not proof the build installed on it can do the work.
+ *
+ * No Claude Code version appears in any of it. Which release is installed is a
+ * fact about a route, retained when the build will say and absent when it will
+ * not; what admits is what the build declares it can do.
+ *
+ * These cases run the four paths that check one — fresh client-native
+ * construction, bound native resume, bound ACP attachment and incomplete replay
+ * — and each refusal is read at the boundary it is supposed to stop in front
+ * of, rather than by its message alone: nothing may be allocated, published,
+ * written, spawned, ensured or retained behind it.
  */
-describe("Tier NP — proved native capability points", () => {
+describe("Tier NP — proved native capability admissions", () => {
   const ALLOCATED = "cafe0000-1111-2222-3333-444444444444";
 
-  /** The build the shipped Claude evidence names, and the one that follows it. */
+  /** The build the shipped Claude proof ran against, and one that follows it. */
   const PROVED_VERSION = "2.1.241 (Claude Code)";
   const LATER_VERSION = "2.1.263 (Claude Code)";
+
+  /**
+   * The same help surface with exactly one required declaration withdrawn.
+   *
+   * A build is refused for what it stopped declaring, not for what a test
+   * turned off: the observation is complete and the adapter's own probe reads
+   * it, so each row here is a release that could ship.
+   */
+  function without(member: keyof typeof CLAUDE_HELP_DECLARATIONS): string {
+    return claudeHelp({
+      declarations: Object.entries(CLAUDE_HELP_DECLARATIONS)
+        .filter(([name]) => name !== member)
+        .map(([, entry]) => entry),
+    });
+  }
 
   /** Every boundary a refused point must stop in front of. */
   interface Boundaries {
@@ -4052,6 +4292,7 @@ describe("Tier NP — proved native capability points", () => {
   function countedAdapter(seen: Boundaries, allocate: () => string = () => ALLOCATED) {
     return {
       launcher: "claude",
+      protocol: CLAUDE_PROTOCOL,
       identity: "client-allocated",
       binding: TEST_BINDING,
       allocate: () => {
@@ -4166,54 +4407,82 @@ describe("Tier NP — proved native capability points", () => {
     }
   }
 
-  it("NP1: the exact proved launch point constructs, on the machine it names", function* () {
-    // The package's own evidence, unmodified, against the build it was proved
-    // against. Nothing here supplies a point: what admits this launch is the
-    // shipped Claude adapter's, read for darwin/arm64.
-    const harness = createFakeRuntime();
-    const trace = newTrace();
-    const seen = boundaries();
-    const routes = countedRoutes(seen);
-    yield* installLaunchStack(harness, trace, {
-      adapters: { claude: countedAdapter(seen) },
-      routeStore: routes,
-    });
+  it("NP1: a build that declares the proved shape constructs, whatever release it is", function* () {
+    // The package's own evidence, unmodified. Nothing here supplies a policy:
+    // what admits these launches is the shipped Claude adapter's, read for
+    // darwin/arm64 — and the release the build reports is not part of it, so
+    // the version the proof ran against and a later one are the same admission.
+    for (const [name, version] of [
+      ["the release the proof ran against", PROVED_VERSION],
+      ["a later release declaring the same shape", LATER_VERSION],
+    ] as const) {
+      yield* scoped(function* () {
+        const harness = createFakeRuntime();
+        const trace = newTrace();
+        const seen = boundaries();
+        const observer = createFakeObserver(observation({ version: `${version}\n` }));
+        yield* installLaunchStack(harness, trace, {
+          adapters: { claude: countedAdapter(seen) },
+          routeStore: countedRoutes(seen),
+          observer: observer.observer,
+        });
 
-    yield* launch(INSTRUCTIONS);
+        yield* launch(INSTRUCTIONS);
 
-    const prepared = trace.records[0] as PreparedLaunchRecord;
-    expect(prepared.failure).toBe(undefined);
-    expect(prepared.nativeSessionId).toBe(ALLOCATED);
-    expect(prepared.executableBinding?.reportedVersion).toBe(PROVED_VERSION);
-    expect(seen.allocations).toBe(1);
-    expect(seen.published).toHaveLength(1);
-    expect(trace.launches).toHaveLength(1);
-    // And the point that admitted it is the shipped one, for both capabilities.
-    expect(nativeCapabilityCompatibility(PROVED_HOST).points).toEqual([
+        const prepared = trace.records[0] as PreparedLaunchRecord;
+        expect([name, prepared.failure]).toEqual([name, undefined]);
+        expect([name, prepared.nativeSessionId]).toEqual([name, ALLOCATED]);
+        // Retained, because this build would say — but it is the digest that
+        // binds, and the two runs are admitted alike.
+        expect([name, prepared.executableBinding?.reportedVersion]).toEqual([name, version]);
+        expect([name, seen.allocations]).toEqual([name, 1]);
+        expect([name, seen.published]).toHaveLength(2);
+        expect([name, trace.launches]).toHaveLength(2);
+        // And the only questions the build was asked are the read-only ones the
+        // adapter declared, at the exact path that was observed.
+        expect([name, observer.queried]).toEqual([name, ["help --help", "version --version"]]);
+      });
+    }
+
+    // The admissions that let both through are the shipped ones, for both
+    // capabilities, and they name no release at all.
+    expect(nativeCapabilityPolicy(PROVED_HOST).admissions).toEqual([
       {
-        agent: "claude",
+        adapterProtocol: CLAUDE_PROTOCOL,
         capability: "native-launch",
-        reportedVersion: PROVED_VERSION,
+        probeProfile: CLAUDE_PROBE_PROFILE,
         ...PROVED_HOST,
       },
       {
-        agent: "claude",
+        adapterProtocol: CLAUDE_PROTOCOL,
         capability: "client-native-attachment",
-        reportedVersion: PROVED_VERSION,
+        probeProfile: CLAUDE_PROBE_PROFILE,
         ...PROVED_HOST,
       },
     ]);
+    expect(JSON.stringify(nativeCapabilityPolicy(PROVED_HOST))).not.toContain("Claude Code");
   });
 
-  it("NP2: an unproved point refuses a construction before it does anything", function* () {
-    // Four ways to be outside the proof, one refusal each. A later build, the
-    // same build on another OS, the same build on another architecture, and a
-    // host that has proved nothing at all: none of them is a near miss that
-    // some other reading could let through.
+  it("NP2: an unadmitted construction refuses before it does anything", function* () {
+    // Two ways to fail, several of each. A build that stopped declaring one of
+    // the operations native launch is made of, or would not answer at all; and
+    // a host whose proof does not cover this protocol, this profile, this OS or
+    // this architecture — or that has proved nothing. None is a near miss that
+    // some other reading could let through, and neither gate stands in for the
+    // other.
     for (const [name, options] of [
-      ["a later build of the proved agent", { versionOutput: `${LATER_VERSION}\n` }],
+      ["a build declaring no caller-supplied identity", { help: without("sessionId") }],
+      ["a build declaring no exact resume", { help: without("resume") }],
+      ["a build declaring no private instruction file", { help: without("privateFile") }],
+      ["a build that is not the Claude product", { help: claudeHelp({ product: "gemini-cli" }) }],
+      ["a build that would not answer the required query", { help: false }],
       ["another operating system", { host: { platform: "linux", architecture: "arm64" } }],
       ["another architecture", { host: { platform: "darwin", architecture: "x64" } }],
+      ["a host that proved another adapter protocol", { policy: admitting("claude-fork.v1") }],
+      [
+        "a host that proved another probe profile",
+        { policy: admitting(CLAUDE_PROTOCOL, "claude-help-native.v2") },
+      ],
       ["a host that has proved nothing", { none: true }],
     ] as const) {
       yield* scoped(function* () {
@@ -4222,7 +4491,7 @@ describe("Tier NP — proved native capability points", () => {
         const seen = boundaries();
         const store = makeStore();
         const observer = createFakeObserver(
-          "versionOutput" in options ? { versionOutput: options.versionOutput } : {},
+          "help" in options ? observation({ help: options.help }) : {},
         );
 
         yield* withUnusablePrivateRoot(function* () {
@@ -4231,12 +4500,14 @@ describe("Tier NP — proved native capability points", () => {
             routeStore: countedRoutes(seen),
             store,
             observer: observer.observer,
-            compatibility:
+            nativeCapabilityPolicy:
               "none" in options
                 ? false
                 : "host" in options
-                  ? nativeCapabilityCompatibility(options.host)
-                  : undefined,
+                  ? nativeCapabilityPolicy(options.host)
+                  : "policy" in options
+                    ? options.policy
+                    : undefined,
           });
           const failure = yield* attempt(trace, INSTRUCTIONS);
           // Not `process-creation-failed`: the private root is unusable for the
@@ -4245,7 +4516,7 @@ describe("Tier NP — proved native capability points", () => {
           expect([name, failure?.class]).toEqual([name, "unsupported-capability"]);
         });
 
-        // The build was observed — that is how the point became a question at
+        // The build was observed — that is how admission became a question at
         // all — and then everything the answer gates stopped. Each of these is
         // something NP1 sees happen on the admitted path.
         expect([name, observer.observed]).toEqual([name, ["claude"]]);
@@ -4288,24 +4559,24 @@ describe("Tier NP — proved native capability points", () => {
     // Two capabilities, two proofs. A host that has proved one of them does
     // that one thing and refuses the other, in both directions — so neither is
     // ever inferred from the other having been proved.
-    const launchOnly: NativeCapabilityCompatibility = {
+    const launchOnly: NativeCapabilityPolicy = {
       host: PROVED_HOST,
-      points: [
+      admissions: [
         {
-          agent: "claude",
+          adapterProtocol: CLAUDE_PROTOCOL,
           capability: "native-launch",
-          reportedVersion: PROVED_VERSION,
+          probeProfile: CLAUDE_PROBE_PROFILE,
           ...PROVED_HOST,
         },
       ],
     };
-    const attachOnly: NativeCapabilityCompatibility = {
+    const attachOnly: NativeCapabilityPolicy = {
       host: PROVED_HOST,
-      points: [
+      admissions: [
         {
-          agent: "claude",
+          adapterProtocol: CLAUDE_PROTOCOL,
           capability: "client-native-attachment",
-          reportedVersion: PROVED_VERSION,
+          probeProfile: CLAUDE_PROBE_PROFILE,
           ...PROVED_HOST,
         },
       ],
@@ -4320,7 +4591,7 @@ describe("Tier NP — proved native capability points", () => {
       yield* installLaunchStack(harness, trace, {
         adapters: { claude: countedAdapter(seen) },
         routeStore: countedRoutes(seen),
-        compatibility: launchOnly,
+        nativeCapabilityPolicy: launchOnly,
       });
 
       yield* launch(INSTRUCTIONS);
@@ -4347,7 +4618,7 @@ describe("Tier NP — proved native capability points", () => {
       yield* installLaunchStack(harness, trace, {
         adapters: { claude: countedAdapter(seen) },
         routeStore: routes,
-        compatibility: attachOnly,
+        nativeCapabilityPolicy: attachOnly,
       });
 
       const session = yield* Agent.operations.session();
@@ -4389,7 +4660,7 @@ describe("Tier NP — proved native capability points", () => {
         yield* installLaunchStack(harness, trace, {
           adapters: { claude: countedAdapter(seen) },
           routeStore: routes,
-          compatibility: false,
+          nativeCapabilityPolicy: false,
         });
 
         yield* act(trace);
@@ -4435,6 +4706,133 @@ describe("Tier NP — proved native capability points", () => {
     expect(trace.launches).toEqual([]);
   });
 
+  it("NP5b: a build whose release cannot be read is still admitted, and binds by digest", function* () {
+    // The version query is a courtesy, not a gate. Four ways for it to tell
+    // this run nothing — it answered nothing, it answered in words this adapter
+    // does not recognize, it answered with several things that could each be a
+    // version, and it did not settle at all. Under every one of them the shape
+    // was observed, so the launch runs; and the route it publishes says only
+    // what the run can stand behind, which is the digest.
+    for (const [name, version] of [
+      ["no output at all", ""],
+      ["output in words this adapter does not recognize", "claude, the coding agent\n"],
+      [
+        "several lines that could each be the release",
+        "2.1.241 (Claude Code)\n9.9.9 (Claude Code)\n",
+      ],
+      ["a query that never settled", false],
+    ] as const) {
+      yield* scoped(function* () {
+        const harness = createFakeRuntime();
+        const trace = newTrace();
+        const seen = boundaries();
+        const observer = createFakeObserver(observation({ version }));
+        yield* installLaunchStack(harness, trace, {
+          adapters: { claude: countedAdapter(seen) },
+          routeStore: countedRoutes(seen),
+          observer: observer.observer,
+        });
+
+        yield* launch(INSTRUCTIONS);
+
+        const prepared = trace.records[0] as PreparedLaunchRecord;
+        expect([name, prepared.failure]).toEqual([name, undefined]);
+        expect([name, prepared.executableBinding]).toEqual([name, DIGEST_ONLY_BUILD]);
+        expect([name, seen.allocations]).toEqual([name, 1]);
+        expect([name, trace.launches]).toHaveLength(2);
+        // And what the build did say is nowhere the route could be read back.
+        const published = JSON.stringify(seen.published);
+        expect([name, published.includes("9.9.9")]).toEqual([name, false]);
+        expect([name, published.includes("the coding agent")]).toEqual([name, false]);
+      });
+    }
+  });
+
+  it("NP5c: a digest-only route continues on its digest, and is never rewritten", function* () {
+    // What the earlier run could not read, this one can. That is a fact about
+    // the query, not about the executable: the digest is the same, so this is
+    // the same build and the session continues. The route keeps saying what the
+    // run that published it could stand behind — a version observed later is
+    // not a claim that route ever made.
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const seen = boundaries();
+    const routes = countedRoutes(seen);
+    yield* routes.publish(bound(DIGEST_ONLY_BUILD));
+    const before = JSON.stringify(yield* routes.read(KEY));
+    yield* installLaunchStack(harness, trace, {
+      adapters: { claude: countedAdapter(seen) },
+      routeStore: routes,
+      observer: createFakeObserver(observation({ version: `${LATER_VERSION}\n` })).observer,
+    });
+
+    // Both continuations: the native resume and the ACP attachment.
+    yield* launch(INSTRUCTIONS);
+    const session = yield* Agent.operations.session();
+
+    expect(trace.records.some((record) => record.failure)).toBe(false);
+    expect(seen.resumes).toBe(1);
+    expect(seen.creates).toBe(0);
+    expect(session.agentSessionId).toBe(ALLOCATED);
+    expect(harness.ensureCalls.map((call) => call.resumeSessionId)).toEqual([ALLOCATED]);
+    // Nothing republished the route, and it still names no release.
+    expect(seen.published.length).toBe(1);
+    expect(JSON.stringify(yield* routes.read(KEY))).toBe(before);
+    expect(before).not.toContain(LATER_VERSION);
+  });
+
+  it("NP5d: a retained release must still be reproduced, and a digest decides regardless", function* () {
+    // The two halves of the asymmetry. A route that named a release is a claim
+    // the live build has to still make: one that reports another, or none this
+    // adapter can read, is not the build that history belongs to. And the
+    // digest is the one that always decides — a build whose shape is admitted
+    // and whose release matches is still refused when it is a different build.
+    for (const [name, retained, live] of [
+      [
+        "a live build reporting another release",
+        OBSERVED_BUILD,
+        observation({ version: `${LATER_VERSION}\n` }),
+      ],
+      ["a live build whose release cannot be read", OBSERVED_BUILD, observation({ version: "" })],
+      [
+        "a different build, admitted and reporting the retained release",
+        OBSERVED_BUILD,
+        observation({ digest: "b".repeat(64) }),
+      ],
+      [
+        "a different build, admitted, where the route named no release",
+        DIGEST_ONLY_BUILD,
+        observation({ digest: "b".repeat(64) }),
+      ],
+    ] as const) {
+      yield* scoped(function* () {
+        const harness = createFakeRuntime();
+        const trace = newTrace();
+        const seen = boundaries();
+        const routes = countedRoutes(seen);
+        yield* routes.publish(bound(retained));
+        const before = JSON.stringify(yield* routes.read(KEY));
+        yield* installLaunchStack(harness, trace, {
+          adapters: { claude: countedAdapter(seen) },
+          routeStore: routes,
+          observer: createFakeObserver(live).observer,
+        });
+
+        const failure = yield* attempt(trace, INSTRUCTIONS);
+
+        expect([name, failure?.class]).toEqual([name, "executable-binding-refused"]);
+        expect([name, seen.resumes + seen.creates]).toEqual([name, 0]);
+        expect([name, harness.ensureCalls]).toEqual([name, []]);
+        expect([name, trace.launches]).toEqual([name, []]);
+        expect([name, seen.published.length]).toEqual([name, 1]);
+        expect([name, JSON.stringify(yield* routes.read(KEY))]).toEqual([name, before]);
+        // The refusal says which releases are involved and never the digest.
+        expect([name, failure?.message.includes("a".repeat(64))]).toEqual([name, false]);
+        expect([name, failure?.message.includes("b".repeat(64))]).toEqual([name, false]);
+      });
+    }
+  });
+
   it("NP6: an incomplete replay is gated, and legacy history is unchanged", function* () {
     // An incomplete replay: the point is checked before the live phase it is
     // standing in front of, whichever suffix the journal retained.
@@ -4449,7 +4847,7 @@ describe("Tier NP — proved native capability points", () => {
         yield* installLaunchStack(harness, trace, {
           adapters: { claude: countedAdapter(seen) },
           routeStore: routes,
-          compatibility: false,
+          nativeCapabilityPolicy: false,
         });
         trace.replay = { prepared: preparedRecord(), suffix };
 
@@ -4475,7 +4873,7 @@ describe("Tier NP — proved native capability points", () => {
       yield* installLaunchStack(harness, trace, {
         adapters: { claude: countedAdapter(seen) },
         routeStore: routes,
-        compatibility: false,
+        nativeCapabilityPolicy: false,
       });
       const { executableBinding: _unbound, ...legacyPrepared } = preparedRecord();
       trace.replay = { prepared: legacyPrepared, suffix: "prepared+detached" };
@@ -4502,7 +4900,7 @@ describe("Tier NP — proved native capability points", () => {
       adapters: { claude: countedAdapter(seen) },
       routeStore: routes,
       observer: observer.observer,
-      compatibility: false,
+      nativeCapabilityPolicy: false,
     });
     trace.completed = {
       prepared: preparedRecord(),
@@ -4515,6 +4913,8 @@ describe("Tier NP — proved native capability points", () => {
     expect(trace.records.map((record) => record.phase)).toEqual(["prepared", "detached", "exited"]);
     expect(trace.records.some((record) => record.failure)).toBe(false);
     expect(observer.observed).toEqual([]);
+    // Not merely no build observation — no read-only query against one either.
+    expect(observer.queried).toEqual([]);
     expect(seen.allocations + seen.creates + seen.resumes).toBe(0);
     expect(trace.launches).toEqual([]);
   });

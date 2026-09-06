@@ -2,24 +2,25 @@
  * What one real-CLI proof admits, and nothing wider (specs/decisions.md
  * DEC-017).
  *
- * An adapter name says which command shape to consider. It does not say that
- * the thing found under that name works: a proof ran against one build of one
- * CLI, on one operating system, on one architecture, and every other build and
- * machine is a claim nobody made. So admission is stated as points, and a point
- * is the whole tuple —
+ * An Agent name says which command shape to consider. It does not say that the
+ * thing found under that name works: a proof ran against one implementation's
+ * protocol, on one operating system, on one architecture, and every other
+ * protocol and machine is a claim nobody made. So admission is stated as
+ * profiles, and a profile is the whole tuple —
  *
- *   adapter + capability + canonical reported version + host OS + host
+ *   adapter protocol + capability + observed probe profile + host OS + host
  *   architecture
  *
- * — matched exactly. Nothing here parses, orders or ranges a version. A
- * semver-shaped line is a value one adapter recognized, not evidence about the
- * build behind it, and comparing two of them would turn one installed CLI into
- * a statement about releases that have never run.
+ * — matched exactly. Nothing here is a version. A version says which release
+ * was installed, not what it can do, and admitting one would make a routine
+ * upgrade disable every new session while telling nobody why. What is matched
+ * instead is the adapter's stable protocol identifier and what its own
+ * side-effect-free probe recognized in the exact executable that was hashed.
  *
  * The host pair is supplied rather than read. Which machine this is is a fact
  * the trusted host has and shared provider code must not go looking for: a
- * provider that detected its own runtime would answer the compatibility
- * question with the thing being asked about.
+ * provider that detected its own runtime would answer the admission question
+ * with the thing being asked about.
  */
 
 /**
@@ -37,55 +38,61 @@ export interface NativeCapabilityHost {
   readonly architecture: string;
 }
 
-/** One capability, proved for one exact build on one exact machine. */
-export interface NativeCapabilityCompatibilityPoint {
-  readonly agent: string;
+/** One capability, proved for one protocol shape on one exact machine. */
+export interface NativeCapabilityAdmission {
+  /**
+   * The adapter implementation whose protocol was proved.
+   *
+   * Deliberately not the Agent registry name and not the launcher command:
+   * either can be pointed at something else, and neither says which protocol
+   * the thing behind it speaks.
+   */
+  readonly adapterProtocol: string;
   readonly capability: NativeCapability;
-  /** The canonical line the adapter recognized, whole. Never a number alone. */
-  readonly reportedVersion: string;
+  /** The probe whose recognized shape this admission was proved against. */
+  readonly probeProfile: string;
   readonly platform: string;
   readonly architecture: string;
 }
 
 /** Everything a host admits, beside the machine it admits it on. */
-export interface NativeCapabilityCompatibility {
+export interface NativeCapabilityPolicy {
   readonly host: NativeCapabilityHost;
-  readonly points: readonly NativeCapabilityCompatibilityPoint[];
+  readonly admissions: readonly NativeCapabilityAdmission[];
 }
 
 /** What an adapter carries about its own proofs, before a host names a machine. */
-export type ProvedNativeCapability = Omit<NativeCapabilityCompatibilityPoint, "agent">;
+export type ProvedNativeCapability = Omit<NativeCapabilityAdmission, "adapterProtocol">;
 
 /** The live capability an observation offers for admission. */
 export interface ObservedNativeCapability {
-  readonly agent: string;
+  readonly adapterProtocol: string;
   readonly capability: NativeCapability;
-  readonly reportedVersion: string;
+  readonly probeProfile: string;
 }
 
 /**
  * Whether this host admits what was actually observed.
  *
- * The host's own OS and architecture are what an admitted point is compared
- * against, so a point proved elsewhere cannot admit anything here. Absent
- * compatibility admits nothing: a host that states no proof has none, and
- * treating silence as permission is the failure this whole tuple exists to
- * prevent.
+ * The host's own OS and architecture are what an admitted profile is compared
+ * against, so a profile proved elsewhere cannot admit anything here. An absent
+ * policy admits nothing: a host that states no proof has none, and treating
+ * silence as permission is the failure this whole tuple exists to prevent.
  */
 export function admitsNativeCapability(
-  compatibility: NativeCapabilityCompatibility | undefined,
+  policy: NativeCapabilityPolicy | undefined,
   observed: ObservedNativeCapability,
 ): boolean {
-  if (compatibility === undefined) {
+  if (policy === undefined) {
     return false;
   }
-  const { platform, architecture } = compatibility.host;
-  return compatibility.points.some(
-    (point) =>
-      point.agent === observed.agent &&
-      point.capability === observed.capability &&
-      point.reportedVersion === observed.reportedVersion &&
-      point.platform === platform &&
-      point.architecture === architecture,
+  const { platform, architecture } = policy.host;
+  return policy.admissions.some(
+    (admission) =>
+      admission.adapterProtocol === observed.adapterProtocol &&
+      admission.capability === observed.capability &&
+      admission.probeProfile === observed.probeProfile &&
+      admission.platform === platform &&
+      admission.architecture === architecture,
   );
 }

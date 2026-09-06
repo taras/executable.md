@@ -19,7 +19,11 @@ import { createHash } from "node:crypto";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
 import { ExecutableObservationError } from "./executable-observer.ts";
-import type { ExecutableObserver, ObservedExecutable } from "./executable-observer.ts";
+import type {
+  ExecutableMetadataObservation,
+  ExecutableObserver,
+  ObservedExecutable,
+} from "./executable-observer.ts";
 
 type HostCall = (...args: unknown[]) => unknown;
 
@@ -73,17 +77,25 @@ export function hasDenoExecutableObserver(): boolean {
   return observerHost() !== undefined;
 }
 
-/** What the version invocation produced, decoded. */
-function decode(value: unknown): { code: number; text: string } {
+/** What one metadata query produced, decoded. */
+function decode(value: unknown): ExecutableMetadataObservation {
+  const decoder = new TextDecoder();
+  const text = (channel: unknown) => (channel instanceof Uint8Array ? decoder.decode(channel) : "");
   if (typeof value !== "object" || value === null) {
-    return { code: -1, text: "" };
+    return { settled: false, stdout: "", stderr: "" };
   }
   const code = Reflect.get(value, "code");
-  const stdout = Reflect.get(value, "stdout");
-  const decoder = new TextDecoder();
+  if (typeof code !== "number") {
+    // A child that produced no status did not answer, whatever it wrote on the
+    // way. Reporting output beside an unknown status would invite reading it as
+    // an answer.
+    return { settled: false, stdout: "", stderr: "" };
+  }
   return {
-    code: typeof code === "number" ? code : -1,
-    text: stdout instanceof Uint8Array ? decoder.decode(stdout) : "",
+    settled: true,
+    code,
+    stdout: text(Reflect.get(value, "stdout")),
+    stderr: text(Reflect.get(value, "stderr")),
   };
 }
 
@@ -174,29 +186,43 @@ export function createDenoExecutableObserver(overrides?: {
         }),
       );
 
-      const versionArgs = options?.versionArgs ?? ["--version"];
-      const produced = yield* until(
-        host
-          .command(path, { args: [...versionArgs], stdout: "piped", stderr: "null" })
-          .output()
-          .catch((cause: unknown) => {
-            throw new ExecutableObservationError(`${command} could not be asked its version`, {
-              refusal: "version-unavailable",
-              cause,
-            });
-          }),
-      );
-      const version = decode(produced);
-      if (version.code !== 0) {
-        throw new ExecutableObservationError(`${command} refused to report a version`, {
-          refusal: "version-unavailable",
-        });
+      // Asked with nothing: no inherited environment, no stdin, and both
+      // channels captured rather than attached. A metadata query is meant to
+      // report and exit, so it is given nothing to read, nothing to inherit and
+      // no terminal to draw on — and what it writes is returned to the caller
+      // rather than appearing on the reader's.
+      const metadata: Record<string, ExecutableMetadataObservation> = {};
+      for (const query of options?.metadata ?? []) {
+        // `output()` raises rather than rejecting when the child cannot be
+        // spawned at all, so a failure to start is caught here as well as
+        // there. Either way it is an observation that did not answer, not a
+        // failed observation: the file was found, and asking it a question is
+        // not what decides whether it is the build.
+        let answer: unknown;
+        try {
+          answer = yield* until(
+            host
+              .command(path, {
+                args: [...query.args],
+                clearEnv: true,
+                env: {},
+                stdin: "null",
+                stdout: "piped",
+                stderr: "piped",
+              })
+              .output()
+              .catch(() => undefined),
+          );
+        } catch {
+          answer = undefined;
+        }
+        metadata[query.name] = decode(answer);
       }
 
       return {
         path,
         digest: { algorithm: "sha256", value: createHash("sha256").update(bytes).digest("hex") },
-        versionOutput: version.text,
+        metadata,
       };
     },
   };

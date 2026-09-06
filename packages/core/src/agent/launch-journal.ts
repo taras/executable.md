@@ -132,7 +132,17 @@ function provenance(value: unknown): IdentityProvenance | undefined {
   return value === "provider-returned" || value === "client-allocated" ? value : undefined;
 }
 
-const BINDING_MEMBERS = ["schema", "reportedVersion", "executableDigest"];
+const BINDING_MEMBERS = ["schema", "executableDigest"];
+/**
+ * The one member a binding may omit.
+ *
+ * Separate from the required set rather than merged into it, because a binding
+ * is compared for equality: an unexpected member is still a fact the writer
+ * thought was part of the build's identity, and reading past it would call two
+ * different builds the same one. Omitting this one is not an unexpected member
+ * — it is the record saying the build reported no version it recognized.
+ */
+const BINDING_OPTIONAL_MEMBERS = ["reportedVersion"];
 const DIGEST_MEMBERS = ["algorithm", "value"];
 const LOWERCASE_SHA256 = /^[0-9a-f]{64}$/;
 
@@ -141,24 +151,38 @@ function exactMembers(value: Record<string, unknown>, members: readonly string[]
   return keys.length === members.length && members.every((member) => keys.includes(member));
 }
 
+function declaredMembers(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[],
+): boolean {
+  const keys = Object.keys(value);
+  return (
+    required.every((member) => keys.includes(member)) &&
+    keys.every((key) => required.includes(key) || optional.includes(key))
+  );
+}
+
 /**
  * Read a retained build binding strictly.
  *
- * The member set is exact rather than minimal, because a binding is compared
- * for equality: a member this build ignores is a fact the writer thought was
- * part of the build's identity, and comparing without it would call two
- * different builds the same one.
+ * The digest is required and exact — it is what binds a session to a build.
+ * A present `reportedVersion` must still be a real one: a member written as an
+ * empty string is a claim about a release nobody can reproduce, which is not
+ * the same as having made no claim.
  */
 function executableBinding(value: unknown): ExecutableBuildBindingV1 | undefined {
-  if (!isRecord(value) || !exactMembers(value, BINDING_MEMBERS)) {
+  if (!isRecord(value) || !declaredMembers(value, BINDING_MEMBERS, BINDING_OPTIONAL_MEMBERS)) {
     return undefined;
   }
   const { schema, reportedVersion, executableDigest } = value;
   if (schema !== "executable-build.v1") {
     return undefined;
   }
-  if (typeof reportedVersion !== "string" || reportedVersion.length === 0) {
-    return undefined;
+  if (reportedVersion !== undefined) {
+    if (typeof reportedVersion !== "string" || reportedVersion.length === 0) {
+      return undefined;
+    }
   }
   if (!isRecord(executableDigest) || !exactMembers(executableDigest, DIGEST_MEMBERS)) {
     return undefined;
@@ -172,7 +196,7 @@ function executableBinding(value: unknown): ExecutableBuildBindingV1 | undefined
   }
   return {
     schema: "executable-build.v1",
-    reportedVersion,
+    ...(reportedVersion === undefined ? {} : { reportedVersion }),
     executableDigest: { algorithm: "sha256", value: digestValue },
   };
 }
@@ -180,7 +204,7 @@ function executableBinding(value: unknown): ExecutableBuildBindingV1 | undefined
 function serializeBinding(binding: ExecutableBuildBindingV1): Json {
   return {
     schema: binding.schema,
-    reportedVersion: binding.reportedVersion,
+    ...(binding.reportedVersion === undefined ? {} : { reportedVersion: binding.reportedVersion }),
     executableDigest: {
       algorithm: binding.executableDigest.algorithm,
       value: binding.executableDigest.value,

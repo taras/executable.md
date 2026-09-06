@@ -162,7 +162,9 @@ export function hostAcpDependencies(stack: AuthorshipStack): AcpxProviderDepende
     ...(sessions.coordinator ? { coordinator: sessions.coordinator } : {}),
     ...(sessions.routeStore ? { routeStore: sessions.routeStore } : {}),
     ...(sessions.executableObserver ? { executableObserver: sessions.executableObserver } : {}),
-    ...(sessions.compatibility ? { compatibility: sessions.compatibility } : {}),
+    ...(sessions.nativeCapabilityPolicy
+      ? { nativeCapabilityPolicy: sessions.nativeCapabilityPolicy }
+      : {}),
     advertiseNativeLaunch: sessions.advertiseNativeLaunch,
     advertiseClientNativeAttachment: sessions.advertiseClientNativeAttachment,
   };

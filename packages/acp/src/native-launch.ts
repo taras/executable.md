@@ -32,11 +32,37 @@
 
 import { randomUUID } from "node:crypto";
 import type { IdentityProvenance } from "@executablemd/core";
+import type { ExecutableMetadata, ExecutableMetadataQuery } from "@executablemd/runtime";
 import type {
-  NativeCapabilityCompatibility,
+  NativeCapability,
   NativeCapabilityHost,
+  NativeCapabilityPolicy,
   ProvedNativeCapability,
 } from "./native-capability.ts";
+
+/**
+ * What one adapter's probe recognized in the executable that was just hashed.
+ *
+ * The profile travels with the answer rather than being assumed by the caller,
+ * because it is what an admission is matched against: a probe that recognized a
+ * different shape than the one a proof ran on must not be read as the proved
+ * one. An empty capability list is the ordinary answer for an executable this
+ * probe does not recognize — the shape was looked for and was not there.
+ */
+export interface ProbedNativeCapabilities {
+  readonly probeProfile: string;
+  readonly capabilities: readonly NativeCapability[];
+}
+
+/**
+ * An adapter's own reading of its executable's read-only declarations.
+ *
+ * Adapter-owned because only the adapter knows which declarations it consumes.
+ * Structural rather than a snapshot: it inspects the shapes this adapter's argv
+ * depends on, so added options, unrelated prose and rewrapped lines mean
+ * nothing and a missing or renamed one means everything.
+ */
+export type NativeCapabilityProbe = (metadata: ExecutableMetadata) => ProbedNativeCapabilities;
 
 /**
  * What an adapter knows about the build behind its executable.
@@ -44,22 +70,32 @@ import type {
  * A session whose identity XMD chose only means something while the build that
  * accepted it can be recognized later: two builds of one provider accept the
  * same identity and disagree silently about what it names. Everything here is
- * that adapter's private dialect — which command to observe, what its version
- * output looks like, and what the ACP adapter child needs in order to run the
- * same build. None of it reaches a document.
+ * that adapter's private dialect — which command to observe, which read-only
+ * questions to ask it, how to read the answers, and what the ACP adapter child
+ * needs in order to run the same build. None of it reaches a document.
  */
 export interface NativeBinding {
   /** The command whose build is observed, bound and retained. */
   command: string;
-  /** The arguments that ask that exact file its version. */
-  versionArgs?: readonly string[];
   /**
-   * The canonical version from that output, or `undefined` when the output is
-   * not something this adapter recognizes. An unrecognized version is a
-   * refusal, not a value to retain — a build XMD cannot name is one it cannot
-   * later confirm.
+   * The read-only questions one observation asks that exact file.
+   *
+   * Declared here so the host's observer runs argv it was handed rather than
+   * argv it invented. A question that did anything but report would be a side
+   * effect on a session nobody has decided to act on yet.
    */
-  version(output: string): string | undefined;
+  metadata: readonly ExecutableMetadataQuery[];
+  /** What those answers say this build can do. */
+  probe: NativeCapabilityProbe;
+  /**
+   * The canonical version those answers report, or `undefined` when they report
+   * none this adapter recognizes.
+   *
+   * Optional evidence, deliberately: a version says which release is installed,
+   * not what it can do. A build that will not say, says something unexpected, or
+   * says several things is bound by its digest alone rather than refused.
+   */
+  reportedVersion(metadata: ExecutableMetadata): string | undefined;
   /**
    * The exact ACP adapter command this binding was proven against, when the
    * proof is tied to one.
@@ -88,20 +124,170 @@ export interface NativeBinding {
 }
 
 /**
+ * The output one query produced, or nothing when it did not answer.
+ *
+ * A query that failed to start, failed to settle, or settled nonzero reported
+ * nothing about the shape it was asked about. Reading its output anyway would
+ * let a crashing executable look like one missing an option.
+ */
+function answered(metadata: ExecutableMetadata, name: string): string | undefined {
+  const observation = metadata[name];
+  if (observation === undefined || !observation.settled || observation.code !== 0) {
+    return undefined;
+  }
+  return observation.stdout;
+}
+
+/**
+ * The option declarations in a help surface, one entry per option, rewrapped.
+ *
+ * Claude's help is Commander's: an option entry begins at exactly two spaces
+ * and a dash, and its description wraps onto more deeply indented lines. Those
+ * continuations are rejoined so a declaration that happened to wrap reads the
+ * same as one that did not — which is the difference between a structural
+ * reading and a snapshot of one terminal width.
+ *
+ * Everything else is dropped, and that is the point: `Arguments:`, `Commands:`
+ * and free prose are not declarations. An option named inside another option's
+ * description is a mention, not a thing this executable accepts.
+ */
+function optionEntries(help: string): string[] {
+  const entries: string[] = [];
+  let open = false;
+  for (const line of help.split("\n")) {
+    if (/^ {2}-/.test(line)) {
+      entries.push(line.trim());
+      open = true;
+      continue;
+    }
+    if (open && /^ {3,}\S/.test(line)) {
+      entries[entries.length - 1] += ` ${line.trim()}`;
+      continue;
+    }
+    open = false;
+  }
+  return entries;
+}
+
+/** What one option entry declares: its spellings, and whether it takes a value. */
+function declaredFlags(entry: string): { flags: string[]; takesValue: boolean } {
+  const flags: string[] = [];
+  for (const raw of entry.split(" ")) {
+    const token = raw.endsWith(",") ? raw.slice(0, -1) : raw;
+    if (/^-{1,2}[A-Za-z0-9][\w-]*$/.test(token)) {
+      flags.push(token);
+      continue;
+    }
+    // The head of an entry is its spellings and at most one value placeholder.
+    // Anything else has begun the description, and a description is prose.
+    return { flags, takesValue: token.startsWith("<") || token.startsWith("[") };
+  }
+  return { flags, takesValue: false };
+}
+
+/**
+ * How this executable declares one option, if it declares it at all.
+ *
+ * `ambiguous` is separate from `absent` on purpose. Two entries declaring one
+ * spelling is output this adapter cannot read as a single answer, and choosing
+ * either would be guessing which one a launch would reach.
+ */
+function declaresOption(
+  entries: string[],
+  flag: string,
+): "absent" | "ambiguous" | "flag" | "valued" {
+  const matched = entries
+    .map(declaredFlags)
+    .filter((declaration) => declaration.flags.includes(flag));
+  if (matched.length === 0) {
+    return "absent";
+  }
+  if (matched.length > 1) {
+    return "ambiguous";
+  }
+  return matched[0].takesValue ? "valued" : "flag";
+}
+
+/** Whitespace-insensitive text, for reading prose rather than layout. */
+function normalized(text: string): string {
+  return text.replace(/\s+/g, " ");
+}
+
+/**
+ * The ACP adapter Claude's attachment proof ran against.
+ *
+ * Named once and used twice — pinned for the child that actually runs, and an
+ * input to the probe that decides whether attachment was observed — so the
+ * capability cannot be answered for a bridge nobody proved.
+ */
+const CLAUDE_ACP_BRIDGE = "npx -y @agentclientprotocol/claude-agent-acp@0.70.0";
+
+/** The probe whose recognized shape Claude's admissions were proved against. */
+const CLAUDE_PROBE_PROFILE = "claude-help-native-session.v1";
+
+/**
+ * What Claude's own help declares about the operations a launch needs.
+ *
+ * Structural rather than a version comparison: what matters is whether this
+ * build accepts a caller-chosen session identity, resumes one exactly, and
+ * takes its private instruction layer as a file. A release that adds options,
+ * rewords prose or rewraps lines still declares those, and a release that
+ * stopped declaring one cannot launch whatever it calls itself.
+ *
+ * The private-file member has two accepted spellings because Claude declares
+ * the family rather than the member: `--system-prompt-file` appears as the
+ * documented `--system-prompt[-file]` spelling in builds that do not give it
+ * its own entry. Both are the same declaration, and neither is inferred from
+ * the other's absence.
+ *
+ * The two capabilities are read independently from what is present, never one
+ * from the other: attachment additionally needs the bridge this adapter pins,
+ * which is knowledge about the ACP child rather than about the CLI.
+ */
+function claudeNativeProbe(pinnedBridge: string | undefined): NativeCapabilityProbe {
+  return (metadata) => {
+    const capabilities: NativeCapability[] = [];
+    const help = answered(metadata, "help");
+    if (help === undefined) {
+      return { probeProfile: CLAUDE_PROBE_PROFILE, capabilities };
+    }
+    const text = normalized(help);
+    const entries = optionEntries(help);
+    const product = text.includes("Claude Code") && /(^| )Usage: claude( |$)/.test(text);
+    const identity = declaresOption(entries, "--session-id") === "valued";
+    const resume = declaresOption(entries, "--resume") === "valued";
+    const privateFile =
+      declaresOption(entries, "--system-prompt-file") === "valued" ||
+      text.includes("--system-prompt[-file]");
+
+    if (product && identity && resume && privateFile) {
+      capabilities.push("native-launch");
+    }
+    if (product && resume && pinnedBridge === CLAUDE_ACP_BRIDGE) {
+      capabilities.push("client-native-attachment");
+    }
+    return { probeProfile: CLAUDE_PROBE_PROFILE, capabilities };
+  };
+}
+
+/**
  * Claude reports `2.1.241 (Claude Code)`.
  *
  * The whole line is retained rather than the number alone, because the number
  * alone is not a build: the same version string from a different product would
- * compare equal. Anything that does not look like this is unrecognized, and an
- * unrecognized build is refused rather than retained under a guess.
+ * compare equal.
  *
- * Exactly one line may match. Zero is an output this adapter does not
- * recognize; two or more is output it cannot read as one answer, and taking
- * the first would be picking a build out of a list of them. Neither is
- * repeated anywhere — the caller refuses with a stable class, and the output
- * itself is provider-private.
+ * Exactly one line may match. Zero is output this adapter does not recognize;
+ * two or more is output it cannot read as one answer, and taking the first
+ * would be picking a build out of a list of them. Both mean no version was
+ * reported, which is an ordinary answer rather than a refusal — the digest is
+ * what binds the build.
  */
-function claudeVersion(output: string): string | undefined {
+function claudeReportedVersion(metadata: ExecutableMetadata): string | undefined {
+  const output = answered(metadata, "version");
+  if (output === undefined) {
+    return undefined;
+  }
   const canonical = output
     .split("\n")
     .map((line) => line.trim())
@@ -112,6 +298,15 @@ function claudeVersion(output: string): string | undefined {
 interface AdapterCommands {
   /** Stable adapter identity — `claude`, `codex`. Never an executable path. */
   launcher: string;
+  /**
+   * The protocol this adapter speaks, as an admission names it.
+   *
+   * Distinct from both the Agent registry name and the launcher command, and
+   * versioned, because either of those can be pointed at something else while
+   * neither says what the thing behind it speaks. Changing what this adapter
+   * does to a session is a new protocol identifier, not an edit to this one.
+   */
+  protocol: string;
   /** Who chooses this adapter's native session identity. */
   identity: IdentityProvenance;
   /** The argv that resumes this exact provider-native session. */
@@ -168,16 +363,20 @@ export function allocatesIdentity(adapter: NativeAdapter): adapter is ClientAllo
 }
 
 /**
- * The one build and machine Claude's proofs ran on.
+ * The one shape and machine Claude's proofs ran on.
  *
  * Written once and shared by both points below so they cannot drift apart into
- * two claims about two builds. Raising either is a new proof rather than an
+ * two claims about two things. Raising either is a new proof rather than an
  * edit here: what makes this admissible is that a real CLI was driven through
  * the whole applicable contract on exactly this, and nothing about that
- * generalizes to the next release or the next machine.
+ * generalizes to another machine or another way of recognizing the shape.
+ *
+ * No version appears. A version says which release was installed, not what it
+ * can do, and admitting one would disable every new session on a routine
+ * upgrade while telling nobody why.
  */
 const CLAUDE_PROVED_BUILD = {
-  reportedVersion: "2.1.241 (Claude Code)",
+  probeProfile: CLAUDE_PROBE_PROFILE,
   platform: "darwin",
   architecture: "arm64",
 } as const;
@@ -185,6 +384,7 @@ const CLAUDE_PROVED_BUILD = {
 const ADAPTERS: Readonly<Record<string, NativeAdapter>> = {
   claude: {
     launcher: "claude",
+    protocol: "claude-client-native.v1",
     // XMD names the session before Claude exists, so the native process is
     // told which conversation to make rather than reporting one afterwards.
     identity: "client-allocated",
@@ -200,10 +400,17 @@ const ADAPTERS: Readonly<Record<string, NativeAdapter>> = {
     ],
     binding: {
       command: "claude",
-      version: claudeVersion,
-      // The version #561's gates are proven against. Raising it is a new proof,
-      // not a version bump.
-      adapterCommand: "npx -y @agentclientprotocol/claude-agent-acp@0.70.0",
+      // Read-only by construction: both report and exit, and neither carries a
+      // session, an instruction, or anything else a launch would act on.
+      metadata: [
+        { name: "help", args: ["--help"] },
+        { name: "version", args: ["--version"] },
+      ],
+      probe: claudeNativeProbe(CLAUDE_ACP_BRIDGE),
+      reportedVersion: claudeReportedVersion,
+      // The bridge #561's attachment gate is proven against. Raising it is a
+      // new proof, not a version bump.
+      adapterCommand: CLAUDE_ACP_BRIDGE,
       // The first thing the Claude ACP adapter consults when deciding which
       // Claude to run. Without it the adapter resolves the build shipped with
       // the Agent SDK it pins, which is not the build that created the session.
@@ -220,6 +427,7 @@ const ADAPTERS: Readonly<Record<string, NativeAdapter>> = {
   },
   codex: {
     launcher: "codex",
+    protocol: "codex-provider-returned.v1",
     identity: "provider-returned",
     resume: (nativeSessionId) => ["codex", "resume", nativeSessionId],
   },
@@ -230,8 +438,9 @@ const ADAPTERS: Readonly<Record<string, NativeAdapter>> = {
  *
  * A coarse selection and nothing more. For an adapter that names its own
  * sessions the name authorizes no work by itself: what admits one is the
- * compatibility point below, matched against the build actually found and the
- * machine actually running. A name reaches the question; it does not answer it.
+ * admission below, matched against the protocol resolved, the shape its own
+ * probe recognized in the executable actually found, and the machine actually
+ * running. A name reaches the question; it does not answer it.
  *
  * `codex` is absent. Its command shape is known and its adapter contract tests
  * pass, and neither is the proof: nothing has run it against an installed
@@ -253,19 +462,21 @@ export const ADVERTISED_CLIENT_NATIVE_ATTACHMENT: readonly string[] = ["claude"]
 /**
  * What this build's adapters have proved, on the machine a host says it is.
  *
- * The two halves come from where each is known. Which builds were driven
- * through a real CLI is the adapters' own evidence and is compiled in beside
- * them; which OS and architecture are underneath right now is the host's, and
- * arrives here rather than being detected. Neither half admits anything alone —
- * a point is only admitted where a proof and the machine it ran on meet.
+ * The two halves come from where each is known. Which protocols and shapes were
+ * driven through a real CLI is the adapters' own evidence and is compiled in
+ * beside them; which OS and architecture are underneath right now is the host's,
+ * and arrives here rather than being detected. Neither half admits anything
+ * alone — an admission stands only where a proof and the machine it ran on meet.
+ *
+ * Keyed by each adapter's protocol rather than by the Agent name it happens to
+ * be registered under, because the Agent name is what a document can point
+ * somewhere else.
  */
-export function nativeCapabilityCompatibility(
-  host: NativeCapabilityHost,
-): NativeCapabilityCompatibility {
+export function nativeCapabilityPolicy(host: NativeCapabilityHost): NativeCapabilityPolicy {
   return {
     host,
-    points: Object.entries(ADAPTERS).flatMap(([agent, adapter]) =>
-      (adapter.proved ?? []).map((proved) => ({ agent, ...proved })),
+    admissions: Object.values(ADAPTERS).flatMap((adapter) =>
+      (adapter.proved ?? []).map((proved) => ({ adapterProtocol: adapter.protocol, ...proved })),
     ),
   };
 }

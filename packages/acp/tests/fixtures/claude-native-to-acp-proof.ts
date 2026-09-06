@@ -86,8 +86,15 @@ const RECOVER_PREFIX = "RECOVERED-";
 /** The production target, exactly as an operator would type it. */
 const TARGET = "AGENTS.md#Implementor";
 
-/** The compatibility point these journeys are only meaningful against. */
-const REQUIRED_CLAUDE_VERSION = "2.1.241 (Claude Code)";
+/**
+ * What the installed build has to declare for these journeys to mean anything.
+ *
+ * The shape, not a release. A build that declares caller-supplied identity,
+ * exact resume and private-file instructions is one these journeys can be run
+ * against whatever it calls itself, and a build that does not is one where a
+ * failure would say nothing about the product.
+ */
+const REQUIRED_CAPABILITIES = ["native-launch", "client-native-attachment"] as const;
 
 /**
  * The role contract's opening sentence.
@@ -1616,9 +1623,11 @@ function* ready(journey: Journey, verdict: JourneyVerdict): Operation<boolean> {
     return false;
   }
   verdict.claudeVersion = yield* claudeVersion(journey);
-  if (verdict.claudeVersion !== REQUIRED_CLAUDE_VERSION) {
+  const declared = (yield* observeBuild(journey)).capabilities;
+  const missing = REQUIRED_CAPABILITIES.filter((capability) => !declared.includes(capability));
+  if (missing.length > 0) {
     verdict.verdict = "ENVIRONMENT_BLOCKED";
-    verdict.detail = `this journey is only meaningful against ${REQUIRED_CLAUDE_VERSION}`;
+    verdict.detail = `the installed build does not declare ${missing.join(" or ")}`;
     return false;
   }
   if (!verdict.projectCopyVerified) {
@@ -1712,20 +1721,29 @@ function boundAdapterCommand(): string {
   return adapter.binding.adapterCommand ?? "";
 }
 
-/** What this run's own observer says the installed Claude build is. */
-function* observeBuild(journey: Journey): Operation<{ version: string; digest: string }> {
+/**
+ * What this run's own observer says the installed Claude build is.
+ *
+ * The declared read-only queries are asked through the shipped adapter's own
+ * binding, so what this reads is the same evidence the provider will read.
+ * `version` is optional evidence: a build that will not name its release is
+ * bound by its digest, and this reports that as the empty string.
+ */
+function* observeBuild(
+  journey: Journey,
+): Operation<{ version: string; digest: string; capabilities: readonly string[] }> {
   const observer = createDenoExecutableObserver();
-  if (!observer) {
-    return { version: "", digest: "" };
-  }
-  const found = yield* observer.observe("claude");
   const adapter = nativeAdapterFor("claude");
-  const version =
-    adapter && allocatesIdentity(adapter)
-      ? adapter.binding.version(found.versionOutput)
-      : undefined;
+  if (!observer || !adapter || !allocatesIdentity(adapter)) {
+    return { version: "", digest: "", capabilities: [] };
+  }
+  const found = yield* observer.observe("claude", { metadata: adapter.binding.metadata });
   void journey;
-  return { version: version ?? "", digest: found.digest.value };
+  return {
+    version: adapter.binding.reportedVersion(found.metadata) ?? "",
+    digest: found.digest.value,
+    capabilities: adapter.binding.probe(found.metadata).capabilities,
+  };
 }
 
 /**
@@ -1746,7 +1764,7 @@ function* runAbsentIdentity(journey: Journey, verdict: JourneyVerdict): Operatio
   journey.absentKey = sessionKey;
   const store = createDenoSessionRouteStore(SESSION_COORDINATOR_ROOT);
   const observed = yield* observeBuild(journey);
-  if (!store || observed.version.length === 0 || observed.digest.length !== 64) {
+  if (!store || observed.digest.length !== 64) {
     verdict.verdict = "HARNESS_FAILED";
     verdict.detail = "the absent-identity case could not name a build to bind to";
     return;
@@ -1763,7 +1781,9 @@ function* runAbsentIdentity(journey: Journey, verdict: JourneyVerdict): Operatio
     launcher: "claude",
     executableBinding: {
       schema: "executable-build.v1",
-      reportedVersion: observed.version,
+      // Only when this build named a release. A binding that invented one would
+      // refuse for drift, and this case is about an absent conversation.
+      ...(observed.version.length > 0 ? { reportedVersion: observed.version } : {}),
       executableDigest: { algorithm: "sha256", value: observed.digest },
     },
   });
@@ -1844,8 +1864,14 @@ function decideAttachment(verdict: JourneyVerdict): void {
     verdict.detail = "the route, the journal and the ACP arrangement do not name one conversation";
     return;
   }
+  // The digest is what binds, and the route and the journal both carry one or
+  // this run never got a build observation at all. A retained release is a
+  // further claim the live build has to still make — checked when the route
+  // named one, and nothing to reproduce when it did not.
   verdict.observed.matchesRoute =
-    verdict.observed.version.length > 0 && verdict.observed.version === verdict.route.buildVersion;
+    verdict.route.buildVersion.length === 0
+      ? verdict.route.buildDigestPresent && verdict.observed.digestPresent
+      : verdict.observed.version === verdict.route.buildVersion;
   if (
     !verdict.observed.matchesRoute ||
     verdict.journal.buildVersion !== verdict.route.buildVersion

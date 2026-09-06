@@ -42,18 +42,20 @@ export {
   ADVERTISED_NATIVE_LAUNCH,
   knownNativeAdapters,
   nativeAdapterFor,
-  nativeCapabilityCompatibility,
+  nativeCapabilityPolicy,
 } from "./src/native-launch.ts";
 export { allocatesIdentity } from "./src/native-launch.ts";
 export type {
   ClientAllocatedAdapter,
   NativeAdapter,
   NativeBinding,
+  NativeCapabilityProbe,
+  ProbedNativeCapabilities,
   ProviderReturnedAdapter,
 } from "./src/native-launch.ts";
 
 /**
- * Which exact builds and machines a native capability is admitted on.
+ * Which protocol shapes and machines a native capability is admitted on.
  *
  * Public because the host is what states them: it supplies its own OS and
  * architecture beside the coordinator and the observer, and shared provider
@@ -62,9 +64,9 @@ export type {
 export { admitsNativeCapability } from "./src/native-capability.ts";
 export type {
   NativeCapability,
-  NativeCapabilityCompatibility,
-  NativeCapabilityCompatibilityPoint,
+  NativeCapabilityAdmission,
   NativeCapabilityHost,
+  NativeCapabilityPolicy,
   ObservedNativeCapability,
   ProvedNativeCapability,
 } from "./src/native-capability.ts";

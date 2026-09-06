@@ -23,11 +23,11 @@ import {
   ADVERTISED_CLIENT_NATIVE_ATTACHMENT,
   ADVERTISED_NATIVE_LAUNCH,
   createDenoSessionRouteStore,
-  nativeCapabilityCompatibility,
+  nativeCapabilityPolicy,
 } from "@executablemd/acp";
 import type {
   AgentSessionRouteStore,
-  NativeCapabilityCompatibility,
+  NativeCapabilityPolicy,
   NativeCapabilityHost,
 } from "@executablemd/acp";
 
@@ -52,14 +52,14 @@ export interface MachineSessionAssembly {
   advertiseNativeLaunch: readonly string[];
   advertiseClientNativeAttachment: readonly string[];
   /**
-   * Which exact builds this host admits each capability on, and the machine it
-   * admits them for.
+   * Which protocol shapes this host admits each capability on, and the machine
+   * it admits them for.
    *
    * Beside the observer rather than derived from the names above, because the
    * names are a coarse selection: an adapter reaches the question through them
    * and is answered here. Absent admits nothing.
    */
-  compatibility?: NativeCapabilityCompatibility;
+  nativeCapabilityPolicy?: NativeCapabilityPolicy;
 }
 
 /** This host's session coordinator, or nothing when it cannot provide one. */
@@ -93,9 +93,9 @@ export function useExecutableObserver(): ExecutableObserver | undefined {
  *
  * `host` is passed in rather than read here, and read at the entrypoint rather
  * than anywhere below it. Which OS and architecture are underneath is exactly
- * the fact a capability point is matched against, so a module that went and
- * found it for itself would be supplying the answer as well as the question —
- * and a case stating an exact point could never contradict it.
+ * the fact an admission is matched against, so a module that went and found it
+ * for itself would be supplying the answer as well as the question — and a case
+ * stating an exact machine could never contradict it.
  */
 export function useMachineSessions(host: NativeCapabilityHost): MachineSessionAssembly {
   return {
@@ -106,7 +106,7 @@ export function useMachineSessions(host: NativeCapabilityHost): MachineSessionAs
       : { executableObserver: useExecutableObserver() }),
     advertiseNativeLaunch: ADVERTISED_NATIVE_LAUNCH,
     advertiseClientNativeAttachment: ADVERTISED_CLIENT_NATIVE_ATTACHMENT,
-    compatibility: nativeCapabilityCompatibility(host),
+    nativeCapabilityPolicy: nativeCapabilityPolicy(host),
   };
 }
 

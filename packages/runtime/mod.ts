@@ -150,6 +150,9 @@ export {
 } from "./deno-agent-session-coordinator.ts";
 export { ExecutableObservationError } from "./executable-observer.ts";
 export type {
+  ExecutableMetadata,
+  ExecutableMetadataObservation,
+  ExecutableMetadataQuery,
   ExecutableObserver,
   ExecutableRefusal,
   ObservedExecutable,

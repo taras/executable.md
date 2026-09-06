@@ -105,7 +105,17 @@ const CLIENT_NATIVE_MEMBERS = [
   "launcher",
 ];
 const BOUND_CLIENT_NATIVE_MEMBERS = [...CLIENT_NATIVE_MEMBERS, "executableBinding"];
-const BINDING_MEMBERS = ["schema", "reportedVersion", "executableDigest"];
+const BINDING_MEMBERS = ["schema", "executableDigest"];
+/**
+ * The one member a binding may omit.
+ *
+ * Separate from the required set rather than merged into it, because a binding
+ * is compared for equality: an unexpected member is still a fact the writer
+ * thought was part of the build's identity, and reading past it would call two
+ * different builds the same one. Omitting this one is not an unexpected member
+ * — it is the record saying the build reported no version it recognized.
+ */
+const BINDING_OPTIONAL_MEMBERS = ["reportedVersion"];
 const DIGEST_MEMBERS = ["algorithm", "value"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -115,6 +125,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function exactly(value: Record<string, unknown>, members: readonly string[]): boolean {
   const keys = Object.keys(value);
   return keys.length === members.length && keys.every((key) => members.includes(key));
+}
+
+function declared(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[],
+): boolean {
+  const keys = Object.keys(value);
+  return (
+    required.every((member) => keys.includes(member)) &&
+    keys.every((key) => required.includes(key) || optional.includes(key))
+  );
 }
 
 /**
@@ -129,21 +151,23 @@ function exactly(value: Record<string, unknown>, members: readonly string[]): bo
 /**
  * Read a retained build binding strictly.
  *
- * The member set is exact rather than minimal, because a binding is compared
- * for equality: a member this build ignores is a fact the writer thought was
- * part of the build's identity, and comparing without it would call two
- * different builds the same one.
+ * The digest is required and exact — it is what binds a session to a build.
+ * A present `reportedVersion` must still be a real one: a member written as an
+ * empty string is a claim about a release nobody can reproduce, which is not
+ * the same as having made no claim.
  */
 function parseExecutableBinding(value: unknown): ExecutableBuildBindingV1 | undefined {
-  if (!isRecord(value) || !exactly(value, BINDING_MEMBERS)) {
+  if (!isRecord(value) || !declared(value, BINDING_MEMBERS, BINDING_OPTIONAL_MEMBERS)) {
     return undefined;
   }
   const { schema, reportedVersion, executableDigest } = value;
   if (schema !== "executable-build.v1") {
     return undefined;
   }
-  if (typeof reportedVersion !== "string" || reportedVersion.length === 0) {
-    return undefined;
+  if (reportedVersion !== undefined) {
+    if (typeof reportedVersion !== "string" || reportedVersion.length === 0) {
+      return undefined;
+    }
   }
   if (!isRecord(executableDigest) || !exactly(executableDigest, DIGEST_MEMBERS)) {
     return undefined;
@@ -154,7 +178,7 @@ function parseExecutableBinding(value: unknown): ExecutableBuildBindingV1 | unde
   }
   return {
     schema: "executable-build.v1",
-    reportedVersion,
+    ...(reportedVersion === undefined ? {} : { reportedVersion }),
     executableDigest: { algorithm: "sha256", value: digest },
   };
 }
@@ -250,7 +274,9 @@ export function serializeAgentSessionRoute(route: AgentSessionRoute): string {
   if (route.schema === "session-route.v2") {
     payload.executableBinding = {
       schema: route.executableBinding.schema,
-      reportedVersion: route.executableBinding.reportedVersion,
+      ...(route.executableBinding.reportedVersion === undefined
+        ? {}
+        : { reportedVersion: route.executableBinding.reportedVersion }),
       executableDigest: {
         algorithm: route.executableBinding.executableDigest.algorithm,
         value: route.executableBinding.executableDigest.value,

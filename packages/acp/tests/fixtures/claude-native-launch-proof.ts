@@ -46,8 +46,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { createAgentRegistry } from "../../src/acpx-runtime.ts";
-import { agentSessionKeyDigest } from "@executablemd/runtime";
-import { ADVERTISED_NATIVE_LAUNCH } from "../../src/native-launch.ts";
+import { agentSessionKeyDigest, createDenoExecutableObserver } from "@executablemd/runtime";
+import {
+  ADVERTISED_NATIVE_LAUNCH,
+  allocatesIdentity,
+  nativeAdapterFor,
+} from "../../src/native-launch.ts";
 
 /** Opting in at all. Absent, every mode refuses before a provider child. */
 const PROOF_ENV = "XMD_CLAUDE_NATIVE_PROOF";
@@ -58,8 +62,26 @@ const AUTHORIZED_TURNS = "2";
 /** The production target, exactly as an operator would type it. */
 const TARGET = "AGENTS.md#Implementor";
 
-/** The compatibility point these journeys are only meaningful against. */
-const REQUIRED_CLAUDE_VERSION = "2.1.241 (Claude Code)";
+/**
+ * What the installed build has to declare for these journeys to mean anything.
+ *
+ * The shape, not a release. What is proved here is that a build declaring
+ * caller-supplied identity, exact resume and private-file instructions can be
+ * handed a session — so the journeys run against any build that declares it,
+ * and refuse to draw conclusions from one that does not.
+ */
+const REQUIRED_CAPABILITY = "native-launch";
+
+/** Whether the installed build declares the shape, read by the shipped adapter. */
+function* declaresRequiredShape(): Operation<boolean> {
+  const observer = createDenoExecutableObserver();
+  const adapter = nativeAdapterFor("claude");
+  if (!observer || !adapter || !allocatesIdentity(adapter)) {
+    return false;
+  }
+  const found = yield* observer.observe("claude", { metadata: adapter.binding.metadata });
+  return adapter.binding.probe(found.metadata).capabilities.includes(REQUIRED_CAPABILITY);
+}
 
 /**
  * The role contract's opening sentence.
@@ -1502,9 +1524,9 @@ function* ready(journey: Journey, verdict: JourneyVerdict): Operation<boolean> {
     return false;
   }
   verdict.claudeVersion = yield* claudeVersion(journey);
-  if (verdict.claudeVersion !== REQUIRED_CLAUDE_VERSION) {
+  if (!(yield* declaresRequiredShape())) {
     verdict.verdict = "ENVIRONMENT_BLOCKED";
-    verdict.detail = `this journey is only meaningful against ${REQUIRED_CLAUDE_VERSION}`;
+    verdict.detail = `the installed build does not declare ${REQUIRED_CAPABILITY}`;
     return false;
   }
   if (!verdict.projectCopyVerified) {
@@ -1830,8 +1852,10 @@ function* runPreflight(): Operation<PreflightVerdict> {
   verdict.ptyUsable = pty.stdout.includes("PTY");
   verdict.binaryBuilt = yield* exists(XMD_BINARY);
 
+  // No release is named here. The three flag readings below are the shape this
+  // preflight exists to establish, and a build that declares them is one these
+  // journeys can be run against whatever release it reports.
   const established =
-    verdict.claudeVersion === REQUIRED_CLAUDE_VERSION &&
     verdict.platform === "darwin" &&
     verdict.architecture === "arm64" &&
     !verdict.claudeConfigDirSet &&
@@ -1846,8 +1870,8 @@ function* runPreflight(): Operation<PreflightVerdict> {
     verdict.advertised[0] === "claude";
   verdict.verdict = established ? "PASS" : "ENVIRONMENT_BLOCKED";
   verdict.detail = established
-    ? "the frozen compatibility point is established, and no model turn was spent"
-    : "the frozen compatibility point is not established";
+    ? "the required capability shape and host are established, and no model turn was spent"
+    : "the required capability shape and host are not established";
   return verdict;
 }
 
