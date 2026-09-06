@@ -209,6 +209,20 @@ const DIGEST_ONLY_BUILD: ExecutableBuildBindingV1 = {
 const OBSERVED_PATH = "/opt/builds/claude";
 
 /**
+ * Two real Claude releases, and where a build of the later one is installed.
+ *
+ * A session opened under the first and continued under the second is the case
+ * the cross-release contract exists for, so it is named once here rather than
+ * assembled per tier: the releases differ, the bytes differ, and the path
+ * differs, which is every way a durable account can stop describing what is
+ * installed.
+ */
+const RETAINED_RELEASE = "2.1.261 (Claude Code)";
+const LATER_RELEASE = "2.1.263 (Claude Code)";
+const LATER_DIGEST = "b".repeat(64);
+const LATER_PATH = "/opt/builds/claude-2.1.263";
+
+/**
  * One controlled observation, varying only what a case is about.
  *
  * The default is a build that declares the whole native-launch shape and
@@ -2912,44 +2926,65 @@ describe("Tier CA — client-native attachment", () => {
     expect(space.harness.createdOptions).toEqual([]);
   });
 
-  it("CA5: a build this run cannot name, or cannot reach, refuses before ensure", function* () {
-    for (const [name, mutate] of [
-      [
-        "another build at the same command",
-        (observer: FakeObserverHarness) => {
-          observer.observation.digest = "b".repeat(64);
-        },
-      ],
-      [
-        "another version of the same bytes",
-        (observer: FakeObserverHarness) => {
-          observer.observation.metadata.version = answered("2.1.242 (Claude Code)\n");
-        },
-      ],
-      [
-        "a build that no longer reproduces the version this route retained",
-        (observer: FakeObserverHarness) => {
-          observer.observation.metadata.version = answered("claude version 2.1.241\n");
-        },
-      ],
-      [
-        "an executable that could not be observed at all",
-        (observer: FakeObserverHarness) => {
-          observer.failure = "not-executable";
-        },
-      ],
+  it("CA5: an executable this run cannot reach refuses before ensure", function* () {
+    // What stops an attachment is not knowing which release is installed — it
+    // is not being able to see the executable at all. Every way of failing to
+    // reach one ends in the same class, because none of them produced an
+    // account of a build this run could then admit.
+    for (const [name, failure] of [
+      ["an executable that is not there", "not-found"],
+      ["a path that is not an executable file", "not-executable"],
     ] as const) {
       yield* scoped(function* () {
         const observer = createFakeObserver();
-        mutate(observer);
+        observer.failure = failure;
         const space = yield* installAttachment(bound(), { observer: observer.observer });
 
         const raised = yield* attach();
 
         expect([name, raised === undefined]).toEqual([name, false]);
         expect([name, space.harness.ensureCalls]).toEqual([name, []]);
-        // A moved build is still that build, so nothing here may name a path.
+        expect([name, space.harness.createdOptions]).toEqual([name, []]);
         expect([name, raised?.message.includes(OBSERVED_PATH)]).toEqual([name, false]);
+      });
+    }
+  });
+
+  it("CA5b: a release this route never met attaches on its own admission", function* () {
+    // The counterpart, and the whole of the new rule at this seam. A route's
+    // binding is an account of the build that opened the conversation; joining
+    // it is a question about the build running now. Each of these is a live
+    // executable the retained account does not describe — other bytes, another
+    // release, a release this adapter cannot read — and each independently
+    // declares the attachment shape on the proved host, so each joins.
+    for (const [name, live] of [
+      ["another build at the same command", observation({ digest: "b".repeat(64) })],
+      ["another release of the same bytes", observation({ version: `${LATER_RELEASE}\n` })],
+      [
+        "a release this adapter cannot read",
+        observation({ version: "claude, the coding agent\n" }),
+      ],
+    ] as const) {
+      yield* scoped(function* () {
+        const route = bound();
+        const observer = createFakeObserver(live);
+        const space = yield* installAttachment(route, { observer: observer.observer });
+
+        const session = yield* Agent.operations.session();
+
+        // The route's own identity crossed, unchanged and unreplaced.
+        expect([name, session.agentSessionId]).toEqual([name, ALLOCATED]);
+        expect([name, space.harness.ensureCalls.map((call) => call.resumeSessionId)]).toEqual([
+          name,
+          [ALLOCATED],
+        ]);
+        // Served by the executable observed now, not by the one recorded then.
+        expect([name, space.harness.createdOptions.at(-1)?.agentProcessEnv]).toEqual([
+          name,
+          { CLAUDE_CODE_EXECUTABLE: live.path },
+        ]);
+        // And the account of how it started is exactly as it was written.
+        expect([name, yield* space.routes.read(KEY)]).toEqual([name, route]);
       });
     }
   });
@@ -3304,11 +3339,13 @@ describe("Tier CA — client-native attachment", () => {
     expect(space.harness.createdOptions).toHaveLength(2);
   });
 
-  it("CA14: a route's retained version that this build will not reproduce refuses before a child, an ensure or a turn", function* () {
+  it("CA14: a build that names no release attaches on its shape, and repeats nothing", function* () {
     // One canonical line is an answer. Several is a list of builds, and taking
-    // the first would be choosing one — so this build reports no version. That
-    // is not a refusal in itself; what refuses is that the route retained one,
-    // and a claim the live build no longer makes cannot be confirmed.
+    // the first would be choosing one — so this build reports no version at
+    // all. That settles nothing about whether it can join a conversation, which
+    // is a question about the shape it declares; the shape is there, so it
+    // does. The route retained a release, and this build makes no claim about
+    // it either way.
     const observer = createFakeObserver({
       metadata: {
         help: answered(claudeHelp()),
@@ -3317,15 +3354,14 @@ describe("Tier CA — client-native attachment", () => {
     });
     const space = yield* installAttachment(bound(), { observer: observer.observer });
 
-    const raised = yield* attach();
+    const session = yield* Agent.operations.session();
 
-    expect(raised?.message).toContain("cannot be confirmed");
-    // Nothing was repeated back: the output is the provider's, not the reader's.
-    expect(raised?.message).not.toContain("2.1.242");
-    expect(space.harness.createdOptions).toEqual([]);
-    expect(space.harness.ensureCalls).toEqual([]);
-    expect(space.harness.turns).toEqual([]);
-    expect(space.trace.launches).toEqual([]);
+    expect(session.agentSessionId).toBe(ALLOCATED);
+    expect(space.harness.ensureCalls.map((call) => call.resumeSessionId)).toEqual([ALLOCATED]);
+    // Nothing the build said was repeated back through the session it opened.
+    expect(JSON.stringify(space.harness.createdOptions)).not.toContain("2.1.242");
+    // The route still says what the run that published it could stand behind.
+    expect(yield* space.routes.read(KEY)).toEqual(bound());
   });
 
   it("CA9: a legacy unbound route refuses rather than attaching", function* () {
@@ -3459,19 +3495,70 @@ describe("Tier RT — bound runtime partitions", () => {
     });
 
     yield* Agent.operations.session();
-    // The same command, a different build behind it, and a route that names
-    // the old one: the attachment refuses rather than reusing the child.
+    // The same command and the same route, with a different build behind it
+    // now. The session continues — that is the cross-release contract — but it
+    // continues through the executable that is actually installed, so the
+    // second attachment is served by a child of its own.
     observer.observation.digest = "c".repeat(64);
     observer.observation.path = "/opt/builds/other-claude";
-    let raised: Error | undefined;
-    try {
-      yield* Agent.operations.session();
-    } catch (error) {
-      raised = error as Error;
-    }
+    yield* Agent.operations.session();
 
-    expect(raised?.message).toContain("cannot be confirmed");
-    // One runtime, for the one build that was ever accepted.
+    // Two builds, two children, and each one given the path it was built for.
+    expect(environments(harness)).toEqual([OBSERVED_PATH, "/opt/builds/other-claude"]);
+    // Nothing was rekeyed: each handle went back through its own runtime.
+    expect(harness.closeCalls).toHaveLength(2);
+    expect(harness.closeRuntimes).toEqual([OBSERVED_PATH, "/opt/builds/other-claude"]);
+  });
+
+  it("RT2b: one live build serves routes that record different builds", function* () {
+    // The other direction, and the one the old rule could not express. These
+    // two sessions were opened by different releases and their routes still
+    // say so. What decides whether they may share a child is which executable
+    // is running now, and it is the same one — so they do.
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const routes = createMemorySessionRouteStore();
+    const observer = createFakeObserver();
+    const other: ExecutableBuildBindingV1 = {
+      schema: "executable-build.v1",
+      reportedVersion: RETAINED_RELEASE,
+      executableDigest: { algorithm: "sha256", value: "e".repeat(64) },
+    };
+    const held = deriveSessionKey(AGENT_COMMAND, CWD, "held");
+    const beside = deriveSessionKey(AGENT_COMMAND, CWD, "beside");
+    yield* routes.publish(route(held, FIRST));
+    yield* routes.publish(route(beside, SECOND, other));
+    yield* installLaunchStack(harness, trace, {
+      adapters: { claude: adapter() },
+      routeStore: routes,
+      observer: observer.observer,
+    });
+
+    // A partition is only shared while something is holding it, so the first
+    // session is kept in flight rather than allowed to return — otherwise the
+    // second would find an evicted partition and build its own either way.
+    const gate = withResolvers<void>();
+    const arrived = withResolvers<void>();
+    harness.ensureGate = (input) => {
+      if (input.sessionKey === held) {
+        arrived.resolve();
+        return gate.operation;
+      }
+      return undefined;
+    };
+
+    const first = yield* spawn(() => Agent.operations.session("held"));
+    yield* arrived.operation;
+    const later = yield* Agent.operations.session("beside");
+    const built = harness.createdOptions.length;
+    gate.resolve();
+    const settled = yield* first;
+
+    expect([settled.agentSessionId, later.agentSessionId]).toEqual([FIRST, SECOND]);
+    // Both were observed — neither was taken on the strength of its route —
+    // and one child answered for both.
+    expect(observer.observed).toEqual(["claude", "claude"]);
+    expect(built).toBe(1);
     expect(environments(harness)).toEqual([OBSERVED_PATH]);
   });
 
@@ -4495,7 +4582,7 @@ describe("Tier NP — proved native capability admissions", () => {
 
   /** The build the shipped Claude proof ran against, and one that follows it. */
   const PROVED_VERSION = "2.1.241 (Claude Code)";
-  const LATER_VERSION = "2.1.263 (Claude Code)";
+  const LATER_VERSION = LATER_RELEASE;
 
   /**
    * The same help surface with exactly one required declaration withdrawn.
@@ -4921,32 +5008,37 @@ describe("Tier NP — proved native capability admissions", () => {
     }
   });
 
-  it("NP5: an admitted point still refuses a build the route does not name", function* () {
-    // Admission and continuity are different questions, and passing the first
-    // is not an answer to the second. The live build is exactly the proved one;
-    // the route names an earlier one, so this is the drift refusal, not the
-    // capability one.
+  it("NP5: an admitted point continues a session the route's build did not open", function* () {
+    // Admission is the whole authorization, and it is a question about the
+    // executable this run would use. The route names bytes that are not
+    // installed any more; this build declares the shape on the proved host, so
+    // it continues the conversation rather than being asked to account for its
+    // predecessor.
     const harness = createFakeRuntime();
     const trace = newTrace();
     const seen = boundaries();
     const routes = countedRoutes(seen);
-    yield* routes.publish(
-      bound({
-        schema: "executable-build.v1",
-        reportedVersion: PROVED_VERSION,
-        executableDigest: { algorithm: "sha256", value: "e".repeat(64) },
-      }),
-    );
+    const published = bound({
+      schema: "executable-build.v1",
+      reportedVersion: PROVED_VERSION,
+      executableDigest: { algorithm: "sha256", value: "e".repeat(64) },
+    });
+    yield* routes.publish(published);
     yield* installLaunchStack(harness, trace, {
       adapters: { claude: countedAdapter(seen) },
       routeStore: routes,
     });
 
-    const failure = yield* attempt(trace, INSTRUCTIONS);
+    yield* launch(INSTRUCTIONS);
 
-    expect(failure?.class).toBe("executable-binding-refused");
-    expect(seen.resumes).toBe(0);
-    expect(trace.launches).toEqual([]);
+    expect(trace.records.some((record) => record.failure)).toBe(false);
+    // The exact retained identity, resumed rather than recreated, and no
+    // second identity reached for.
+    expect([seen.resumes, seen.creates, seen.allocations]).toEqual([1, 0, 0]);
+    expect(trace.launches[0]!.command).toEqual([OBSERVED_PATH, "--resume", ALLOCATED]);
+    // The audit evidence is what it was, and nothing published over it.
+    expect(seen.published.length).toBe(1);
+    expect(yield* routes.read(KEY)).toEqual(published);
   });
 
   it("NP5b: a build whose release cannot be read is still admitted, and binds by digest", function* () {
@@ -5024,28 +5116,28 @@ describe("Tier NP — proved native capability admissions", () => {
     expect(before).not.toContain(LATER_VERSION);
   });
 
-  it("NP5d: a retained release must still be reproduced, and a digest decides regardless", function* () {
-    // The two halves of the asymmetry. A route that named a release is a claim
-    // the live build has to still make: one that reports another, or none this
-    // adapter can read, is not the build that history belongs to. And the
-    // digest is the one that always decides — a build whose shape is admitted
-    // and whose release matches is still refused when it is a different build.
+  it("NP5d: no way a live build can differ from the retained one stops the resume", function* () {
+    // Every shape the difference can take, because the rule is that the
+    // comparison is not made at all — not that some differences are tolerated.
+    // A later release, a release this adapter cannot read, other bytes under
+    // the same release, other bytes where the route named no release: each is
+    // admitted on its own and each resumes the one identity there is.
     for (const [name, retained, live] of [
       [
-        "a live build reporting another release",
+        "a live build reporting a later release",
         OBSERVED_BUILD,
-        observation({ version: `${LATER_VERSION}\n` }),
+        observation({ version: `${LATER_RELEASE}\n` }),
       ],
       ["a live build whose release cannot be read", OBSERVED_BUILD, observation({ version: "" })],
       [
-        "a different build, admitted and reporting the retained release",
+        "a different build reporting the release the route retained",
         OBSERVED_BUILD,
-        observation({ digest: "b".repeat(64) }),
+        observation({ digest: LATER_DIGEST }),
       ],
       [
-        "a different build, admitted, where the route named no release",
+        "a different build where the route named no release",
         DIGEST_ONLY_BUILD,
-        observation({ digest: "b".repeat(64) }),
+        observation({ digest: LATER_DIGEST }),
       ],
     ] as const) {
       yield* scoped(function* () {
@@ -5061,17 +5153,18 @@ describe("Tier NP — proved native capability admissions", () => {
           observer: createFakeObserver(live).observer,
         });
 
-        const failure = yield* attempt(trace, INSTRUCTIONS);
+        yield* launch(INSTRUCTIONS);
 
-        expect([name, failure?.class]).toEqual([name, "executable-binding-refused"]);
-        expect([name, seen.resumes + seen.creates]).toEqual([name, 0]);
-        expect([name, harness.ensureCalls]).toEqual([name, []]);
-        expect([name, trace.launches]).toEqual([name, []]);
+        expect([name, trace.records.some((record) => record.failure)]).toEqual([name, false]);
+        // Resumed under the retained identity; nothing created, nothing allocated.
+        expect([name, [seen.resumes, seen.creates, seen.allocations]]).toEqual([name, [1, 0, 0]]);
+        expect([name, trace.launches[0]?.command]).toEqual([
+          name,
+          [live.path, "--resume", ALLOCATED],
+        ]);
+        // The durable account is untouched: one publication, byte-identical.
         expect([name, seen.published.length]).toEqual([name, 1]);
         expect([name, JSON.stringify(yield* routes.read(KEY))]).toEqual([name, before]);
-        // The refusal says which releases are involved and never the digest.
-        expect([name, failure?.message.includes("a".repeat(64))]).toEqual([name, false]);
-        expect([name, failure?.message.includes("b".repeat(64))]).toEqual([name, false]);
       });
     }
   });
@@ -5347,5 +5440,381 @@ describe("Tier NP — proved native capability admissions", () => {
     expect(later.allocations + later.creates + later.resumes).toBe(0);
     expect(seen.published.length).toBe(publishedBefore);
     expect(JSON.stringify(yield* routes.read(KEY))).toBe(before);
+  });
+});
+
+/**
+ * Tier XR — one session across two releases
+ * (specs/native-agent-session-launch-spec.md §Cross-release continuation).
+ *
+ * A session opened by 2.1.261 and continued by 2.1.263. The retained binding is
+ * an account of the observation that opened it, written once and never again;
+ * what authorizes acting on that session now is what the executable running now
+ * independently proves — the route's stable protocol, the capability the work
+ * needs, the shape it declares, and this host. The two are never held to each
+ * other, which is the whole of what these cases discriminate: every one of them
+ * fails under a rule that compares them, and none of them is a fixture change.
+ *
+ * What that must not cost is the fail-closed boundary. A release changing is not
+ * a protocol changing, so the last cases here take the same 2.1.263 build to a
+ * host that proved something else, and to a journal that disagrees with its
+ * route about the build history it retained.
+ */
+describe("Tier XR — one session across two releases", () => {
+  const ALLOCATED = "5eed0000-1111-2222-3333-444444444444";
+  /** What a candidate would allocate if this run ever reached for an identity. */
+  const CANDIDATE = "beef0000-1111-2222-3333-444444444444";
+
+  /** The audit evidence 2.1.261 wrote when it opened the session. */
+  const RETAINED_BUILD: ExecutableBuildBindingV1 = {
+    schema: "executable-build.v1",
+    reportedVersion: RETAINED_RELEASE,
+    executableDigest: { algorithm: "sha256", value: "a".repeat(64) },
+  };
+
+  /** The 2.1.263 build installed now: other bytes, other release, other path. */
+  function live(overrides: { version?: string | false } = {}): FakeObservation {
+    return observation({
+      path: LATER_PATH,
+      digest: LATER_DIGEST,
+      version: overrides.version === undefined ? `${LATER_RELEASE}\n` : overrides.version,
+    });
+  }
+
+  const KEY = { provider: "acpx", agent: AGENT_COMMAND, sessionKey: SESSION_KEY };
+
+  interface Seen {
+    allocations: number;
+    creates: number;
+    resumes: number;
+    published: AgentSessionRoute[];
+  }
+
+  function seen(): Seen {
+    return { allocations: 0, creates: 0, resumes: 0, published: [] };
+  }
+
+  /** The adapter, with every identity-bearing act it can perform counted. */
+  function countedAdapter(counts: Seen): NativeAdapter {
+    return {
+      launcher: "claude",
+      protocol: CLAUDE_PROTOCOL,
+      identity: "client-allocated",
+      binding: TEST_BINDING,
+      allocate: () => {
+        counts.allocations += 1;
+        return CANDIDATE;
+      },
+      create: (nativeSessionId: string, instructionFile: string) => {
+        counts.creates += 1;
+        return ["claude", "--session-id", nativeSessionId, "--system-prompt-file", instructionFile];
+      },
+      resume: (nativeSessionId: string) => {
+        counts.resumes += 1;
+        return ["claude", "--resume", nativeSessionId];
+      },
+    };
+  }
+
+  function countedRoutes(counts: Seen, inner = createMemorySessionRouteStore()) {
+    return {
+      read: (key: Parameters<AgentSessionRouteStore["read"]>[0]) => inner.read(key),
+      *publish(candidate: AgentSessionRoute) {
+        counts.published.push(candidate);
+        return yield* inner.publish(candidate);
+      },
+    } satisfies AgentSessionRouteStore;
+  }
+
+  /** The route 2.1.261 published, which no run after it may rewrite. */
+  function route(binding: ExecutableBuildBindingV1 = RETAINED_BUILD): AgentSessionRoute {
+    return {
+      schema: "session-route.v2",
+      route: "client-native",
+      provider: "acpx",
+      agent: AGENT_COMMAND,
+      sessionKey: SESSION_KEY,
+      nativeSessionId: ALLOCATED,
+      identityProvenance: "client-allocated",
+      instructionsDigest: createHash("sha256").update(INSTRUCTIONS).digest("hex"),
+      launcher: "claude",
+      executableBinding: binding,
+    };
+  }
+
+  /** The journal 2.1.261 left, agreeing with that route exactly. */
+  function prepared(overrides: Partial<PreparedLaunchRecord> = {}): PreparedLaunchRecord {
+    return {
+      phase: "prepared",
+      agent: "claude",
+      sessionKey: SESSION_KEY,
+      provider: "acpx",
+      nativeSessionId: ALLOCATED,
+      sessionState: "created",
+      instructionChannel: "claude.systemPromptFile",
+      instructionReconciliation: "installed",
+      identityProvenance: "client-allocated",
+      executableBinding: RETAINED_BUILD,
+      instructionsDigest: createHash("sha256").update(INSTRUCTIONS).digest("hex"),
+      instructions: INSTRUCTIONS,
+      cwd: CWD,
+      additionalDirectories: [],
+      permissionMode: "approve-reads",
+      launcher: "claude",
+      ...overrides,
+    };
+  }
+
+  interface Continued {
+    harness: FakeRuntimeHarness;
+    trace: Trace;
+    routes: AgentSessionRouteStore;
+    observer: FakeObserverHarness;
+    counts: Seen;
+  }
+
+  /**
+   * The published 2.1.261 session, with 2.1.263 the executable under the command.
+   *
+   * Everything else is the ordinary installation, so what each case varies is
+   * the one thing it is about.
+   */
+  function* continuing(
+    options: {
+      published?: AgentSessionRoute;
+      observation?: FakeObservation;
+      routes?: AgentSessionRouteStore;
+      nativeCapabilityPolicy?: NativeCapabilityPolicy | false;
+    } = {},
+  ): Operation<Continued> {
+    const counts = seen();
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const routes = options.routes ?? countedRoutes(counts);
+    const observer = createFakeObserver(options.observation ?? live());
+    yield* routes.publish(options.published ?? route());
+    yield* installLaunchStack(harness, trace, {
+      adapters: { claude: countedAdapter(counts) },
+      routeStore: routes,
+      observer: observer.observer,
+      ...(options.nativeCapabilityPolicy === undefined
+        ? {}
+        : { nativeCapabilityPolicy: options.nativeCapabilityPolicy }),
+    });
+    return { harness, trace, routes, observer, counts };
+  }
+
+  /** Everything a continuation must leave exactly as 2.1.261 wrote it. */
+  function* unchanged(space: Continued, published: AgentSessionRoute = route()): Operation<void> {
+    // The account of how this session started, read back whole: the identity
+    // it names, and the build that opened it, neither converted nor supplemented
+    // by the release that is continuing it.
+    expect(yield* space.routes.read(KEY)).toEqual(published);
+    // And read as the one publication this case made before the provider
+    // existed, so "unchanged" is not a rewrite that happened to agree.
+    expect(space.counts.published).toEqual([published]);
+    expect(space.counts.allocations).toBe(0);
+  }
+
+  it("XR1: a native resume runs the installed release under the retained identity", function* () {
+    const space = yield* continuing();
+
+    yield* launch(INSTRUCTIONS);
+
+    expect(space.trace.records.some((record) => record.failure)).toBe(false);
+    // The one identity this session has, resumed by the executable installed
+    // now — not the path the route's build was found at.
+    expect(space.trace.launches.map((request) => request.command)).toEqual([
+      [LATER_PATH, "--resume", ALLOCATED],
+    ]);
+    expect([space.counts.resumes, space.counts.creates]).toEqual([1, 0]);
+    yield* unchanged(space);
+  });
+
+  it("XR2: an ACP attachment joins through the installed release", function* () {
+    const space = yield* continuing();
+
+    const session = yield* Agent.operations.session();
+
+    // Attachment is admitted on its own capability, and the identity that
+    // crosses is the route's — required back from the provider before a turn.
+    expect(session.agentSessionId).toBe(ALLOCATED);
+    expect(space.harness.ensureCalls.map((call) => call.resumeSessionId)).toEqual([ALLOCATED]);
+    expect(space.harness.createdOptions.map((options) => options.agentProcessEnv)).toEqual([
+      { CLAUDE_CODE_EXECUTABLE: LATER_PATH },
+    ]);
+    yield* unchanged(space);
+  });
+
+  it("XR3: a prepared-only replay creates under the retained identity", function* () {
+    // The predecessor never detached, so creation may still be owed. It is
+    // owed under the identity 2.1.261 allocated, performed by 2.1.263, with an
+    // instruction file this run wrote.
+    const space = yield* continuing();
+    space.trace.replay = { prepared: prepared(), suffix: "prepared" };
+
+    yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
+
+    expect(space.trace.records.some((record) => record.failure)).toBe(false);
+    const command = space.trace.launches[0]!.command;
+    expect(command[0]).toBe(LATER_PATH);
+    expect(command).toContain("--session-id");
+    expect(command).toContain(ALLOCATED);
+    expect(command).not.toContain("--resume");
+    expect([space.counts.creates, space.counts.resumes]).toEqual([1, 0]);
+    yield* unchanged(space);
+  });
+
+  it("XR4: a detached replay resumes, and never falls back to creating", function* () {
+    // The journal proves the session was already handed to a native process,
+    // so there is a conversation under this identity. A creation here would
+    // open a second one, and no change of release makes that the fallback.
+    const space = yield* continuing();
+    space.trace.replay = { prepared: prepared(), suffix: "prepared+detached" };
+
+    yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
+
+    expect(space.trace.records.some((record) => record.failure)).toBe(false);
+    expect(space.trace.launches.map((request) => request.command)).toEqual([
+      [LATER_PATH, "--resume", ALLOCATED],
+    ]);
+    expect([space.counts.resumes, space.counts.creates]).toEqual([1, 0]);
+    expect(space.harness.ensureCalls).toEqual([]);
+    yield* unchanged(space);
+  });
+
+  it("XR5: a live build that reports no release continues just the same", function* () {
+    // The version query is evidence beside the digest, not a gate, and a build
+    // that will not answer it says nothing about the session either way. Both
+    // continuations, so neither seam is quietly reading the release.
+    const space = yield* continuing({ observation: live({ version: false }) });
+
+    yield* launch(INSTRUCTIONS);
+    const session = yield* Agent.operations.session();
+
+    expect(space.trace.records.some((record) => record.failure)).toBe(false);
+    expect(space.trace.launches.map((request) => request.command)).toEqual([
+      [LATER_PATH, "--resume", ALLOCATED],
+    ]);
+    expect(session.agentSessionId).toBe(ALLOCATED);
+    yield* unchanged(space);
+  });
+
+  it("XR6: a compatible winner is adopted with the evidence it was written with", function* () {
+    // What losing a publication race looks like from inside the loser: it read
+    // no route, so it prepared one of its own, and the store handed back the
+    // account that got there first. That winner records a build this run never
+    // observed. It is adopted whole — its identity and its audit evidence —
+    // because the winner is the session, and this run has already admitted the
+    // executable it is about to run.
+    const inner = createMemorySessionRouteStore();
+    const routes: AgentSessionRouteStore = {
+      // The read this invocation made happened before the winner existed, and
+      // a compare-and-set publication is where it finds out otherwise.
+      // deno-lint-ignore require-yield
+      *read() {
+        return undefined;
+      },
+      publish: (candidate) => inner.publish(candidate),
+    };
+    const space = yield* continuing({ routes, published: route() });
+
+    yield* launch(INSTRUCTIONS);
+
+    expect(space.trace.records.some((record) => record.failure)).toBe(false);
+    // The winner's identity, resumed — never the one this run allocated.
+    expect(space.trace.launches.map((request) => request.command)).toEqual([
+      [LATER_PATH, "--resume", ALLOCATED],
+    ]);
+    expect(JSON.stringify(space.trace.launches)).not.toContain(CANDIDATE);
+    expect([space.counts.resumes, space.counts.creates]).toEqual([1, 0]);
+    // The winner's own binding survived the adoption, unrewritten.
+    const adopted = space.trace.records[0] as PreparedLaunchRecord;
+    expect(adopted.nativeSessionId).toBe(ALLOCATED);
+    expect(adopted.executableBinding).toEqual(RETAINED_BUILD);
+    expect(yield* inner.read(KEY)).toEqual(route());
+  });
+
+  it("XR7: a release changing is not a protocol changing", function* () {
+    // The fail-closed half. Continuation asks the installed executable to prove
+    // the route's protocol, the capability, the shape and this host — so a
+    // 2.1.263 build that is admitted for something else, or on some other
+    // machine, continues nothing. Both seams, because they are admitted apart.
+    for (const [name, policy] of [
+      ["another adapter protocol", admitting("some-other-native.v1")],
+      ["another probe profile", admitting(CLAUDE_PROTOCOL, "some-other-help.v1")],
+      ["another platform", { ...admitting(), host: { platform: "linux", architecture: "arm64" } }],
+      [
+        "another architecture",
+        { ...admitting(), host: { platform: "darwin", architecture: "x64" } },
+      ],
+      ["a host that proved nothing", false],
+    ] as const) {
+      yield* scoped(function* () {
+        const space = yield* continuing({ nativeCapabilityPolicy: policy });
+
+        const failure = yield* attempt(space.trace, INSTRUCTIONS);
+        let raised: Error | undefined;
+        try {
+          yield* Agent.operations.session();
+        } catch (error) {
+          raised = error as Error;
+        }
+
+        expect([name, failure?.class]).toEqual([name, "unsupported-capability"]);
+        expect([name, raised === undefined]).toEqual([name, false]);
+        // In front of every live boundary, on both paths.
+        expect([name, space.trace.launches]).toEqual([name, []]);
+        expect([name, space.harness.ensureCalls]).toEqual([name, []]);
+        expect([name, space.harness.createdOptions]).toEqual([name, []]);
+        expect([name, [space.counts.resumes, space.counts.creates]]).toEqual([name, [0, 0]]);
+        yield* unchanged(space);
+      });
+    }
+  });
+
+  it("XR8: a journal and route that disagree about the build refuse before the live phase", function* () {
+    // The one place two build accounts are still held to each other, and the
+    // reason it survives: these are two durable records of a single
+    // observation, so a difference between them is a replay that cannot say
+    // which session it is resuming. Asked in both directions, because a record
+    // saying less than its route has lost evidence just as surely as one saying
+    // something else.
+    const quiet: ExecutableBuildBindingV1 = {
+      schema: "executable-build.v1",
+      executableDigest: RETAINED_BUILD.executableDigest,
+    };
+    const elsewhere: ExecutableBuildBindingV1 = {
+      schema: "executable-build.v1",
+      reportedVersion: RETAINED_RELEASE,
+      executableDigest: { algorithm: "sha256", value: "f".repeat(64) },
+    };
+    const disagreements: [string, ExecutableBuildBindingV1, ExecutableBuildBindingV1][] = [
+      ["a journal naming other bytes", RETAINED_BUILD, elsewhere],
+      ["a journal that named no release", RETAINED_BUILD, quiet],
+      ["a route that named no release", quiet, RETAINED_BUILD],
+    ];
+
+    for (const suffix of ["prepared", "prepared+detached"] as const) {
+      for (const [name, retained, journalled] of disagreements) {
+        const label = `${suffix}/${name}`;
+        yield* scoped(function* () {
+          const published = route(retained);
+          const space = yield* continuing({ published });
+          space.trace.replay = {
+            prepared: prepared({ executableBinding: journalled }),
+            suffix,
+          };
+
+          yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
+
+          const failed = space.trace.records.findLast((record) => record.failure);
+          expect([label, failed?.failure?.class]).toEqual([label, "identity-unavailable"]);
+          expect([label, space.trace.launches]).toEqual([label, []]);
+          expect([label, [space.counts.resumes, space.counts.creates]]).toEqual([label, [0, 0]]);
+          yield* unchanged(space, published);
+        });
+      }
+    }
   });
 });
