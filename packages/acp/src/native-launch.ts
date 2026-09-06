@@ -248,6 +248,19 @@ function soleDeclaration(
 }
 
 /**
+ * A line whose whole subject is Claude Code, rather than one beginning with it.
+ *
+ * A program description line is a name and then a summary of it, so the name
+ * ends where the separator starts. `Claude Code compatibility wrapper` does not
+ * name Claude Code and describe it — it continues the words into the name of
+ * something else, which is exactly what a wrapper is.
+ */
+const CLAUDE_PRODUCT_LINE = /^Claude Code\s*(?:[-–—:]|$)/;
+
+/** The invocation this build documents for itself, not one it mentions. */
+const CLAUDE_USAGE_LINE = /^Usage: claude(?:\s|$)/;
+
+/**
  * Whether this help surface is Claude Code's own.
  *
  * Read from dedicated, unindented lines. Every option entry and every wrapped
@@ -259,10 +272,30 @@ function declaresClaudeProduct(help: string): boolean {
   let named = false;
   let usage = false;
   for (const line of help.split("\n")) {
-    named ||= /^Claude Code\b/.test(line);
-    usage ||= /^Usage: claude(\s|$)/.test(line);
+    named ||= CLAUDE_PRODUCT_LINE.test(line);
+    usage ||= CLAUDE_USAGE_LINE.test(line);
   }
   return named && usage;
+}
+
+/**
+ * The separately-stated parts of a description.
+ *
+ * Prose is read one clause at a time because a sentence states one thing and
+ * its neighbours are not it. `Resume a conversation by URL; session ID is not
+ * supported` contains every word a naive read wants, distributed across two
+ * clauses that each deny what the read would conclude.
+ */
+function clauses(description: string): readonly string[] {
+  return description.split(/[;.]/).map((clause) => clause.trim());
+}
+
+/** Wording that takes back the clause it appears in. */
+const DENIED = /\b(?:not|never|no|cannot|unsupported|instead of|rather than)\b/;
+
+/** A clause that states `stated` and does not then withdraw it. */
+function states(description: string, stated: RegExp): boolean {
+  return clauses(description).some((clause) => stated.test(clause) && !DENIED.test(clause));
 }
 
 /**
@@ -288,6 +321,14 @@ const IDENTITY_VALUE = /^(session|conversation)id$/;
 const UNCOMMITTED_VALUE = /^(value|arg|argument|id)$/;
 
 /**
+ * The one thing an uncommitted resume value may be: what the conversation is
+ * named by. Read as a phrase rather than as words that happen to co-occur —
+ * `by session ID` says the argument is the identity, where `conversation` and
+ * `session ID` scattered through a sentence say only that both were mentioned.
+ */
+const RESUMED_BY_IDENTITY = /\bby (?:its |the |a )?(?:session|conversation) id\b/;
+
+/**
  * Whether this build resumes the exact conversation an identity names.
  *
  * A placeholder that names the identity answers by itself. A placeholder that
@@ -308,17 +349,18 @@ function declaresIdentityResume(options: readonly OptionDeclaration[]): boolean 
   if (!UNCOMMITTED_VALUE.test(value)) {
     return false;
   }
-  return (
-    declaration.description.includes("session id") &&
-    declaration.description.includes("conversation")
-  );
+  return states(declaration.description, RESUMED_BY_IDENTITY);
 }
 
-/** A placeholder or description saying the value is a file on disk. */
-const FILE_VALUE = /\b(file|filename|filepath|path)\b/;
+/** A placeholder naming a file on disk, compared by its letters. */
+const FILE_VALUE = /^(?:file|filename|filepath|path)$/;
 
 /**
  * Whether the instruction layer can be handed over as a private file.
+ *
+ * The argument itself has to be the file. A description is where a build
+ * explains its value, not where it changes it: `--system-prompt-file <text>`
+ * takes the prompt inline whatever its prose goes on to mention about paths.
  *
  * Two accepted spellings, because Claude documents the family rather than the
  * member: builds that give `--system-prompt-file` no entry of its own name it
@@ -331,12 +373,11 @@ function declaresPrivateInstructionFile(options: readonly OptionDeclaration[]): 
   const declaration = soleDeclaration(options, "--system-prompt-file");
   if (
     declaration?.placeholder !== undefined &&
-    (FILE_VALUE.test(placeholderName(declaration.placeholder)) ||
-      FILE_VALUE.test(declaration.description))
+    FILE_VALUE.test(placeholderName(declaration.placeholder))
   ) {
     return true;
   }
-  return options.some((option) => option.entry.includes("--system-prompt[-file]"));
+  return options.some((option) => states(option.entry.toLowerCase(), /--system-prompt\[-file]/));
 }
 
 /**
