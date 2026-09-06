@@ -353,37 +353,46 @@ retains which build accepted it:
 ```ts
 interface ExecutableBuildBindingV1 {
   readonly schema: "executable-build.v1";
-  readonly reportedVersion: string;
+  readonly reportedVersion?: string;
   readonly executableDigest: { readonly algorithm: "sha256"; readonly value: string };
 }
 ```
 
-Every member is exact, and equality requires all of them to agree. The digest is
-the lowercase SHA-256 of the canonical executable target; `reportedVersion` is
-the adapter's canonical parse of what that exact target reports. That parse
-accepts exactly one canonical line: output naming no build is unrecognized, and
-output naming several is a list of builds rather than an answer — taking the
-first would be choosing one, which is the question a binding exists to settle.
-Neither is repeated in a diagnostic. A matching build
-reached at another path is the same build; a changed build at the same path is
-not. A path is never a member: it says where a build was, which stops being
-true, and it names host layout besides.
+The digest is always present and exact: it is the lowercase SHA-256 of the
+canonical executable target. A matching digest reached at another path is the
+same build; a changed build at the same path is not. `reportedVersion` is the
+adapter's optional canonical parse of what that exact target reports. One
+canonical line is retained as supplemental continuity evidence and may appear
+in a diagnostic; raw output is never retained or repeated. A failed version
+query, no output, changed wording or several candidate lines leaves the member
+absent and does not make an otherwise observable executable or capability
+unsupported.
+
+Continuity always requires digest equality. When the retained binding carries a
+version, a later observation must reproduce that same canonical value; a
+different or absent value refuses conservatively. A binding created without a
+version compares by digest alone, and a later version observation does not
+rewrite it. A path is never a member: it says where a build was, which stops
+being true, and it names host layout besides.
 
 The host supplies an executable observer directly to the provider, alongside the
 coordinator and the route store. It resolves the launcher command through the
 host's real execution environment, canonicalizes the target, requires an
-executable regular file, hashes that target, and asks that same file its
-version. It is deliberately not a Context, contextual Api, Agent operation,
-component or middleware value: executable validation decides which retained
-history may be accepted, and a resolver document middleware could replace could
-point the observation at one binary while the run spawns another. A controlled
-test substitutes the whole observer through the same constructor seam.
+executable regular file, hashes that target, and runs only the adapter's declared
+read-only metadata queries against that same path. It is deliberately not a
+Context, contextual Api, Agent operation, component or middleware value:
+executable validation decides which retained history may be accepted, and a
+resolver document middleware could replace could point the observation at one
+binary while the run spawns another. A controlled test substitutes the whole
+observer through the same constructor seam. The shared observer executes argv
+and returns settled status and captured channel data; it does not know Claude,
+parse a provider's output or detect the active runtime.
 
 One observation yields two kinds of value:
 
 ```text
-durable: the executable build binding
-live:    the canonical executable path
+durable: the executable build binding, with a version only when reported canonically
+live:    the canonical executable path and provider-private metadata observations
 ```
 
 The live path exists only in the operation that observed it. Native creation and
@@ -401,77 +410,108 @@ is installed now, not which one established the conversation.
 
 ### Compatibility admission
 
-An installed-CLI proof admits one **compatibility point**, not an adapter name
-for every build which happens to parse. The point consists of the adapter, the
-capability proved, the adapter-canonical reported version, the host operating
-system and the host architecture. Native launch and client-native attachment
-have independent points because their proofs ask different questions. The
-executable digest remains the exact continuity binding for one retained
-session; it is not a global allow-list for one operator's installation.
+An installed-CLI proof establishes a **capability admission profile**, not an
+adapter name or version allow-list. A live admission consists of a stable
+adapter protocol, one independently requested capability, an observed CLI shape
+that satisfies that protocol, and the host operating system and architecture on
+which the applicable real-CLI proof passed. Native launch and client-native
+attachment have independent admissions because their proofs ask different
+questions. The executable digest remains the exact continuity binding for one
+retained session; it is not a global allow-list for one operator's installation.
 
 ```ts
-interface NativeCapabilityCompatibilityPoint {
-  readonly agent: string;
+interface NativeCapabilityAdmission {
+  readonly adapterProtocol: string;
   readonly capability: "native-launch" | "client-native-attachment";
-  readonly reportedVersion: string;
+  readonly probeProfile: string;
   readonly platform: string;
   readonly architecture: string;
 }
 
-interface NativeCapabilityCompatibility {
+interface NativeCapabilityPolicy {
   readonly host: { readonly platform: string; readonly architecture: string };
-  readonly points: readonly NativeCapabilityCompatibilityPoint[];
+  readonly admissions: readonly NativeCapabilityAdmission[];
 }
 ```
 
-The ACP provider receives `NativeCapabilityCompatibility` through its trusted
-construction dependencies. The built-in point list is adapter-owned evidence;
-the Deno and compiled entrypoints supply their live host pair, and controlled
-tests replace the whole value. The existing advertised-name sets remain the
-coarse host selection needed by provider-returned adapters and by hosts which
-must explain why their authority is incomplete. For a client-allocated adapter,
-a selected name without a matching point authorizes nothing.
+The ACP provider receives `NativeCapabilityPolicy` through its trusted
+construction dependencies. Each `NativeAdapter` carries a stable protocol
+identifier and an adapter-owned probe profile. These are implementation
+identities, not the Agent registry key, launcher command or document input. The
+Deno and compiled entrypoints supply their live host pair, and controlled tests
+replace the whole policy and observation. The existing advertised-name sets
+remain the coarse host selection needed by provider-returned adapters and by
+hosts which must explain why their authority is incomplete. For a
+client-allocated adapter, a selected name without a matching protocol,
+observation and host admission authorizes nothing.
+
+The built-in Claude probe invokes the exact resolved executable with `--help`,
+an empty environment, no TTY or stdin, and stdout and stderr captured. It
+supplies no session identity, instruction text, provider state or credential and
+never invokes the native UI or ACP adapter. Its parser recognizes a Claude Code
+help surface and only the option shapes the adapter consumes. For native launch
+that means a caller-supplied UUID session identity, an instruction layer supplied by
+private file, and exact resume by identity. For client-native attachment it
+means exact resume by identity together with the pinned ACP bridge's proven
+`resumeSessionId` contract. The two capability answers are computed separately.
+An exact option declaration and Claude's documented `--system-prompt[-file]`
+family spelling both establish the private-file member. Added options, changed
+line wrapping and unrelated prose do not change the answer; a missing,
+ambiguous or renamed required member does.
 
 The trusted host supplies its operating system and architecture directly with
 the coordinator, route store and executable observer. They are not document
-values, Context, Agent input or middleware. After observing a client-allocated
-adapter's build, the provider requires a matching compatibility point before it
-allocates an identity, publishes a route, writes the instruction file or starts
-a process. Existing bound routes are checked again before native resume,
-client-native attachment or incomplete replay can contact the provider. A
-canonical semver-shaped line establishes only that the build can be named; it
-does not advertise a capability.
+values, Context, Agent input or middleware. The initial real-CLI evidence proves
+the Claude profile on macOS arm64, so that remains the admitted host envelope;
+the same help shape on another operating system or architecture is insufficient
+until the applicable proof passes there. Shared provider code detects no
+runtime.
 
-A point mismatch is `unsupported-capability`. The diagnostic may identify the
-agent and capability, and carries no raw version output, executable path,
-digest, environment or host message. The route and journal schemas do not
-change: platform facts are live admission inputs, while the route's build
-binding continues to answer whether this is the exact executable that accepted
-the retained identity.
+After resolving and hashing a client-allocated adapter's executable, the
+provider runs the read-only probe against that exact path and requires the
+requested capability in its result. This precedes identity allocation, route
+publication, private-file creation and native child start. Existing bound
+routes are checked again before native resume, client-native attachment or
+incomplete replay can contact the provider. A canonical version line is
+evidence about the observed build, not capability admission.
 
-Claude's two admitted points are scoped to `2.1.241 (Claude Code)` on
-`darwin`/`arm64`, where the applicable launch and attachment proofs ran. A
-different Claude version, operating system or architecture is unsupported until
-the applicable real-CLI proof passes there and that exact point is added. The
-observed zero-turn behavior of a newer Claude that retains no conversation is
-not by itself a regression: claim 5 explicitly permits the provider to refuse
-that exact identity, provided XMD fails closed without substitution.
+A protocol, shape, capability or host mismatch is `unsupported-capability`.
+The diagnostic may identify the agent, capability, adapter protocol and
+canonical reported version when one exists; it carries no raw help or version
+output, executable path, digest, environment or host message. Platform and
+probe facts remain live admission inputs. The route's build binding continues
+to answer whether this is the exact executable that accepted the retained
+identity, with optional `reportedVersion` as specified above.
+
+The version query is optional and independent of the help probe. A future
+Claude build with the same admitted protocol shape on macOS arm64 remains
+usable when its version changes, its version wording changes, or it omits
+version output. A build that omits a canonical version creates a binding with
+only its digest. An upgraded executable may establish new sessions, while a
+route bound to an earlier digest remains bound to that build and refuses rather
+than migrating its identity implicitly. The observed zero-turn behavior of a
+newer Claude that retains no conversation is not by itself a regression: claim
+5 explicitly permits the provider to refuse that exact identity, provided XMD
+fails closed without substitution.
 
 Compatibility admission adds no materialization turn. Launch still performs no
-model turn, and bootstrap turns remain outside this contract. Enabling a build
-which cannot satisfy the accepted protocol requires either a different
-provider-native creation mechanism proven to retain the same identity without a
-turn, or an explicit product decision that changes this contract; parsing its
-version is never enough.
+model turn, and bootstrap turns remain outside this contract. The metadata
+query is not a disposable session and proves no hidden implementation behavior;
+it is the CLI's side-effect-free declaration that the previously proved
+protocol remains present. A provider that cannot make that declaration, or
+needs a model turn to establish it, remains unsupported. Enabling a different
+protocol requires its own real-CLI proof and admission profile; a version string
+or adapter name is never enough.
 
 ### Attachment capability
 
 Native launch and client-native ACP attachment are separate trusted-host
-choices, and neither is inferred from the other or from an adapter's shape. An
-adapter may be proven to hand a session to a native UI without being proven to
-join that conversation afterwards.
+choices. Both may inspect one adapter protocol shape, but neither capability is
+inferred from the other or from the Agent name. An adapter may be proven to hand
+a session to a native UI without being proven to join that conversation
+afterwards.
 
-`claude` is advertised for both only when the live compatibility point matches.
+`claude` is advertised for both only when each capability's live profile matches.
 Its attachment claim was proven by
 `packages/acp/src/ClaudeNativeToAcp.test.md`: one native turn planted a random
 marker, a checked-in marker-free ACP `<Prompt>` recovered it under the same
@@ -490,10 +530,11 @@ before a provider-returned adapter's ACP session is released, and before a
 client-allocated adapter allocates an identity or writes a private file. That is
 the failure this contract asks for rather than a hopeful spawn.
 
-`claude` is advertised only at the applicable compatibility points. Its
-client-allocated claims were proven through the production CLI against
-**Claude Code 2.1.241 on macOS arm64**. `codex` is unadvertised: its command
-shape and adapter contract tests exist, and nothing has run its
+`claude` is advertised only when the applicable profile is observed inside the
+proved **macOS arm64** host envelope. Its client-allocated protocol claims were
+established through the production CLI at Claude Code 2.1.241; that version is
+evidence for the profile, not its upper or lower bound. `codex` is unadvertised:
+its command shape and adapter contract tests exist, and nothing has run its
 provider-returned claims against an installed Codex.
 
 ## Runtime sequence
@@ -534,16 +575,19 @@ owner to release — what has to be settled first is which conversation this is:
 9. The provider reads both durable accounts under ownership and refuses rather
    than converting: a session ACP already established, or a route that
    disagrees about the instruction layer or the launcher, ends the launch here.
-10. The build is observed before an identity is made, so a build this run
-    cannot name ends the launch before anything durable is written. The
-    adapter, capability, canonical reported version and the trusted host's
-    operating system and architecture must then match a proved compatibility
-    point; a mismatch ends with `unsupported-capability`, still before an
-    identity or session-state mutation. The launch retains that refusal at
-    `prepared` without an identity, as it does every other preparation refusal.
-    A route that already names a different exact build ends with
-    `executable-binding-refused`. A legacy unbound route is the exception: it
-    observes nothing, resumes under the launcher name, and gains no binding.
+10. The build is resolved and hashed before an identity is made, so an
+    executable this run cannot observe ends the launch before anything durable
+    is written. The exact path is asked for its read-only metadata next. The
+    resolved adapter protocol, requested capability, observed protocol shape
+    and trusted host operating system and architecture must match one admitted
+    profile; a mismatch ends with `unsupported-capability`, still before an
+    identity or session-state mutation. Reported version does not participate
+    in that decision. The launch retains the refusal at `prepared` without an
+    identity, as it does every other preparation refusal. A route that already
+    names a different exact digest, or cannot reproduce a version its binding
+    retained, ends with `executable-binding-refused`. A legacy unbound route is
+    the exception: it observes nothing, resumes under the launcher name, and
+    gains no binding.
     Whether an identity is needed at all is decided next. An existing
     compatible `client-native` route already names this conversation, so its
     retained identity is adopted and **nothing is allocated** — a second
@@ -1171,19 +1215,21 @@ the session it named rather than meeting one.
 
 A build this run cannot show is the build behind the session fails with
 `executable-binding-refused`. Resolution, canonicalization, executable-file
-validation, version parsing, digesting, schema recognition, equality, and a
-session established before any build was recorded all end there. The diagnostic
-names the stable class, the launcher, and the two canonical versions being
-compared; it carries no executable path, raw version output, host error, argv,
-environment, credential, instruction text or provider payload.
+validation, digesting, schema recognition, digest equality, failure to reproduce
+a retained canonical version, and a session established before any build was
+recorded all end there. The diagnostic names the stable class and launcher and
+may name canonical versions which were actually observed; it carries no
+executable path, raw metadata output, host error, argv, environment, credential,
+instruction text or provider payload.
 
-A build the provider can name but whose adapter, capability, canonical version,
-operating system or architecture has no admitted compatibility point fails with
+An observed executable whose adapter protocol, requested capability, required
+CLI shape, operating system or architecture has no admitted profile fails with
 `unsupported-capability`. On initial construction this is before identity
 allocation and every provider or session-state mutation; the launch's retained
 refusal is the only durable outcome. On a bound route it is before native
 resume, attachment ensure or incomplete replay performs live work. The route
-remains unchanged.
+remains unchanged. A changed or absent reported version alone never produces
+this refusal.
 
 An attachment that reaches the provider and cannot open the conversation the
 route names fails with `identity-unavailable`: missing provider history, an
@@ -1266,7 +1312,7 @@ means a launch under `<TestAgent>` never reaches the host's launcher.
 
 Only the Deno and compiled hosts assemble machine-wide agent sessions: a session
 coordinator, a construction-route store and an executable observer, all rooted
-together, plus live host platform facts and the compatibility points the
+together, plus live host platform facts and the capability profiles the
 applicable proofs admitted. Node and Bun keep the same coarse advertised names
 and assemble none of those answers, so every advertised operation refuses
 before provider work rather than acting while a native UI may be in the
@@ -1369,9 +1415,10 @@ Focused tests prove:
     natural key, contention refuses instead of queueing, a crashed owner leaves
     a recovery tombstone, and a host with no coordinator refuses before
     contacting an agent;
-18. a build binding is read and compared exactly — a moved matching build is
-    accepted, a changed build is not, and an inexact record refuses rather than
-    being read past;
+18. a build binding is read and compared conservatively — a moved matching
+    digest is accepted, a changed digest is not, a retained version must be
+    reproduced, a binding created without one compares by digest, and an
+    inexact record refuses rather than being read past;
 19. new client-native construction observes the build before it allocates,
     publishes a bound V2 route, and retains a preparation that agrees with it,
     while a legacy V1 route resumes natively under the launcher name and gains
@@ -1390,20 +1437,32 @@ Focused tests prove:
     created it, a cancellation waits for an ensure already in flight and closes
     what it answers with before acknowledging quiescence, and a close that
     failed releases nothing and withholds quiescence; and
-23. a canonical version parse accepts exactly one matching line, and refuses
-    zero or several without repeating the output; and
+23. a canonical version parse retains exactly one matching line as optional
+    evidence, while zero, several or a changed version format leaves it absent
+    without repeating the output or denying a valid capability shape; and
 24. launches on distinct pane terminals run concurrently while launches in one
     pane remain exclusive, the same logical Agent session still contends across
     panes, pane readiness occurs only after successful native-child start, grid
     close awaits launch cancellation and session quiescence, and completed and
     partial grid replay preserve the launch's existing identity rules; and
-25. compatibility admission accepts only the separately proved capability,
-    canonical version, operating system and architecture; an unproved point is
-    refused before identity allocation, route publication, private-file
-    creation, child start, attachment ensure or incomplete replay, while an
-    already-published absent identity is retained and never substituted. A
-    settled exact-resume refusal acknowledges quiescence after cleanup, while a
-    planted unproved teardown leaves the recovery tombstone active.
+25. capability admission requires the stable adapter protocol, separately
+    requested capability, required read-only CLI shape, operating system and
+    architecture; neither an Agent name nor version string admits it. A newer
+    canonical version, omitted version and additive unrelated help are accepted
+    when that shape and host envelope match, while a missing or ambiguous
+    required member, another adapter protocol, or an unproved host is refused;
+26. the metadata probe runs against the exact resolved executable and carries
+    no terminal, stdin, session identity, instructions, credential or provider
+    state. It completes before identity allocation, route publication,
+    private-file creation, native child start, attachment ensure and incomplete
+    replay; its raw output reaches no route, journal, result or diagnostic, and
+    completed replay runs no probe;
+27. native launch and client-native attachment are admitted independently. A
+    launch-only observation cannot attach, an attachment-only observation
+    cannot launch, and a bound route whose exact identity is absent remains
+    authoritative and is never substituted. A settled exact-resume refusal
+    acknowledges quiescence after cleanup, while a planted unproved teardown
+    leaves the recovery tombstone active.
 
 The authored half of this is one executable Markdown document,
 `packages/test-agent/src/NativeSessionLaunch.test.md`, run whole. It authors the
@@ -1479,8 +1538,9 @@ provider-native identity that is either asserted by the provider or allocated by
 the adapter before the provider exists, retained explicitly and never inferred;
 a strict create-once construction route beside the coordinator's own records,
 in a released unbound form and a bound one; the host-owned executable observer
-and the build binding it produces; proof-scoped compatibility admission over
-the adapter, capability, canonical version and live host platform; ACP
+and the build binding it produces; proof-scoped capability admission over the
+adapter protocol, independently requested capability, observed CLI shape and
+live host platform; ACP
 attachment to a bound client-native session under its exact retained identity,
 through runtime partitions keyed by agent command and build;
 an inherited root- or pane-terminal interactive child with cancellation and
@@ -1492,15 +1552,16 @@ model.
 The following capabilities remain outside V1 and fail closed rather than
 degrading:
 
-- **Only `claude` has advertised compatibility points**, and separately for
-  each capability. It is client-allocated, and its applicable points are Claude
-  Code 2.1.241 on macOS arm64, where the claims under *Provider-native identity*
-  passed. A different build or platform is unadvertised until its applicable
-  real-CLI proof passes. `codex` has a command shape and contract tests and is
-  not launch-capable, because nothing has proven its provider-returned claims
-  against an installed Codex. A launch naming an unadvertised agent or point is
-  refused with `unsupported-capability` before anything of the session moves,
-  and so is an attachment whose own point was not proved.
+- **Only the Claude client-native protocol has admitted profiles**, and
+  separately for each capability. Its applicable profiles recognize the
+  required CLI help shape on macOS arm64, where the claims under
+  *Provider-native identity* passed at Claude Code 2.1.241. A compatible newer
+  version remains admitted; a missing required shape or different platform does
+  not. `codex` has a command shape and contract tests and is not launch-capable,
+  because nothing has proven its provider-returned claims against an installed
+  Codex. A launch naming an unadvertised protocol or profile is refused with
+  `unsupported-capability` before anything of the session moves, and so is an
+  attachment whose own capability was not proved.
 - **`Agent.AddDir` is unbuilt**, so a launch declares no additional roots. The
   retained request says so explicitly — an empty ordered list — rather than
   omitting the fact, and no adapter maps a root it was never given. The ACP
@@ -1612,14 +1673,16 @@ Implementation review checks these frozen invariants:
     module, the tmux package imports only the neutral terminal domain, and the
     package extraction itself changes no request, route, record, provider
     advertisement or diagnostic.
-31. A real-CLI proof advertises only its adapter, capability, canonical version,
-    operating system and architecture. A client-allocated point mismatch is
-    refused after observation but before allocation or any provider or
-    session-state mutation; its identity-free launch refusal is retained. The
-    point is checked again before bound resume, attachment and incomplete
-    replay. An exact absent identity remains authoritative and unavailable;
-    neither that refusal nor an unproved compatibility point creates a
-    replacement conversation or a materialization turn.
+31. A real-CLI proof admits only its adapter protocol, independently requested
+    capability, required observable CLI shape, operating system and
+    architecture. Version output is optional evidence, not an allow-list key. A
+    client-allocated profile mismatch is refused after read-only observation but
+    before allocation or any provider or session-state mutation; its
+    identity-free launch refusal is retained. The profile is checked again
+    before bound resume, attachment and incomplete replay. An exact absent
+    identity remains authoritative and unavailable; neither that refusal nor an
+    unproved profile creates a replacement conversation or a materialization
+    turn.
 
 Item 12 is the 2026-08-20 architecture amendment. ACPX fixes `systemPrompt` at
 session creation, while native turns are not authoritative in its cached
