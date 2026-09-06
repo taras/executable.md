@@ -240,8 +240,8 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     expect(syntax[0].forms).toEqual(["self-closing"]);
     expect(syntax[0].returnMode).toBe("text");
     expect(syntax[0].description).toBe(
-      "Inspect components and control-flow constructs. `<Syntax />` renders the current " +
-        'catalog; `<Syntax names={["Elicit"]} />` renders selected documentation.',
+      "Inspect available components and control-flow constructs. `<Syntax />` lists the " +
+        'symbols available here; `<Syntax names={["Elicit"]} />` renders selected documentation.',
     );
 
     // The documentation assets travel with the package, and the emitted binary
