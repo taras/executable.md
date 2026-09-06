@@ -520,7 +520,6 @@ function* captureEntry(
   const props = detach(entry.props);
   // The definition every entry under this name shares, built before any entry
   // was captured.
-  const key = `${entry.name} ${entry.capability}`;
   const definition = built.get(entry.name);
   if (definition === undefined) {
     throw new EvaluationProfileError(

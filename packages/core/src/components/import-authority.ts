@@ -152,6 +152,13 @@ export interface ExpansionAuthority {
 /** Why an answer is not the one canonical execution produced for this name. */
 export type ImportRefusal = "unissued" | "another-name" | "changed";
 
+/** How a provider states an identity for the answer it is returning. */
+export type ClaimAnswer = (
+  name: string,
+  answer: ImportedDefinition,
+  identity: ClaimedIdentity,
+) => ImportedDefinition;
+
 /** What canonical execution kept of one definition it produced. */
 interface Witness {
   readonly name: string;
@@ -266,8 +273,170 @@ function read<T>(inspect: () => T): T | undefined {
  * authorized because it *is* the object the terminal minted, not because it
  * resembles one.
  */
+/**
+ * A provider's stable statement about the implementation it supplied.
+ *
+ * `origin` is canonical execution's to fix, not the provider's: a claimant is
+ * minted per provider installation and carries that installation's origin, so
+ * one provider cannot state an identity under another's name.
+ */
+export interface AnswerIdentity {
+  readonly origin: string;
+  readonly key: string;
+  readonly revision: string;
+}
+
+/** What a provider states, minus the part it does not get to choose. */
+export interface ClaimedIdentity {
+  readonly key: string;
+  readonly revision: string;
+}
+
+/** One claim this owner recorded, with core's own copy of what was claimed. */
+interface Claim {
+  readonly name: string;
+  readonly identity: AnswerIdentity;
+  /** Which claimant stated it, so a second provider cannot overwrite. */
+  readonly claimant: object;
+  readonly canonical: ImportedDefinition | undefined;
+}
+
+/** A claimant used after the execution that minted it ended. */
+export const REVOKED_CLAIMANT =
+  "the execution that minted this identity claimant has ended, so nothing it states identifies " +
+  "an implementation here";
+
+/** An identity a provider stated in a shape this execution cannot record. */
+export class AnswerIdentityError extends Error {
+  override name = "AnswerIdentityError";
+}
+
+/** The retained spelling of one identity, for a reader. */
+export function identityRecord(identity: AnswerIdentity): string {
+  return `${identity.origin}#${identity.key}@${identity.revision}`;
+}
+
 export class CanonicalImports {
   readonly #issued = new WeakMap<object, Witness>();
+  /**
+   * The identities providers stated, in the same owner that holds issuance.
+   *
+   * One owner rather than two registries: retention, exact-object lookup, the
+   * `stillDescribes` comparison and the lifecycle are one question asked about
+   * one table, and a parallel WeakMap would be a second place for an answer to
+   * be authorized from.
+   */
+  readonly #claims = new WeakMap<object, Claim>();
+  /**
+   * Whether this owner identifies anything yet.
+   *
+   * Starts inactive. Canonical execution registers teardown, then activates,
+   * then mints claimants — so a failure between construction and activation
+   * cannot leave a live claimant with no teardown behind it.
+   */
+  #active = false;
+
+  /** Begin identifying. Called after teardown is registered. */
+  activate(): void {
+    this.#active = true;
+  }
+
+  /** Stop. Called at teardown, on completion, failure or cancellation. */
+  revoke(): void {
+    this.#active = false;
+  }
+
+  get identifying(): boolean {
+    return this.#active;
+  }
+
+  /**
+   * A claimant for one provider installation, fixed to that origin.
+   *
+   * The claimant is an ordinary closure. A separately loaded copy of core
+   * receives this object and can state identities with it; what it cannot do is
+   * state one under an origin canonical execution did not give it, or reach the
+   * table any other way — there is no shared symbol, module registry or context
+   * name behind this.
+   */
+  claimant(origin: string): { claim: ClaimAnswer } {
+    const token = Object.freeze({});
+    const owner = this;
+    return {
+      claim(name: string, answer: ImportedDefinition, stated: ClaimedIdentity): ImportedDefinition {
+        return owner.#record(token, origin, name, answer, stated);
+      },
+    };
+  }
+
+  #record(
+    claimant: object,
+    origin: string,
+    name: string,
+    answer: ImportedDefinition,
+    stated: ClaimedIdentity,
+  ): ImportedDefinition {
+    if (!this.#active) {
+      throw new AnswerIdentityError(REVOKED_CLAIMANT);
+    }
+    const identity = complete(origin, stated);
+    const held =
+      typeof answer === "object" && answer !== null ? this.#claims.get(answer) : undefined;
+    if (held !== undefined) {
+      // Restating exactly what is already there is what a provider installed
+      // twice does, and it is not a conflict. Anything else is two providers
+      // disagreeing about one object, and the first statement stands: a later
+      // claim that overwrote it would let a second provider rename the first's
+      // implementation.
+      if (
+        held.claimant !== claimant ||
+        held.name !== name ||
+        held.identity.origin !== identity.origin ||
+        held.identity.key !== identity.key ||
+        held.identity.revision !== identity.revision
+      ) {
+        throw new AnswerIdentityError(
+          "this answer already carries an identity, and a second claim does not replace it. One " +
+            "implementation states what it is once.",
+        );
+      }
+      return answer;
+    }
+    // Copied on the way in, so a later edit of the claimed object is visible as
+    // the change it is.
+    this.#claims.set(answer, {
+      name,
+      identity,
+      claimant,
+      canonical: retain(answer),
+    });
+    return answer;
+  }
+
+  /**
+   * The identity stated for this exact answer, under this exact name.
+   *
+   * Read after the whole public chain has returned, so what is asked about is
+   * the final answer rather than an intermediate one. Nothing here refuses: an
+   * unidentified answer is an ordinary answer, and whether that is enough is
+   * the caller's question.
+   */
+  identify(name: string, answer: unknown): AnswerIdentity | undefined {
+    if (!this.#active || typeof answer !== "object" || answer === null) {
+      return undefined;
+    }
+    const claim = this.#claims.get(answer);
+    if (claim === undefined || claim.name !== name) {
+      return undefined;
+    }
+    // A claimed object the chain went on to edit is not the thing that was
+    // claimed. Reading it runs whatever it is made of, and a value that refuses
+    // to be compared has failed the comparison.
+    if (claim.canonical === undefined || !stillDescribes(claim.canonical, answer)) {
+      return undefined;
+    }
+    return claim.identity;
+  }
 
   /**
    * Record that canonical execution produced this answer for this name, and
@@ -311,6 +480,32 @@ export class CanonicalImports {
     }
     return canonical;
   }
+}
+
+/**
+ * The identity as this owner records it, or the reason it cannot.
+ *
+ * Three non-empty strings, checked here rather than trusted: what a
+ * continuation is compared against must be a value a reader can look at and say
+ * which part moved, and a partial identity would compare equal to a different
+ * partial one. `origin` is canonical execution's, so only the two the provider
+ * states are read off its object.
+ */
+function complete(origin: string, stated: ClaimedIdentity): AnswerIdentity {
+  const { key, revision } = stated;
+  if (
+    typeof key !== "string" ||
+    key.length === 0 ||
+    typeof revision !== "string" ||
+    revision.length === 0
+  ) {
+    throw new AnswerIdentityError(
+      "an identity states a non-empty key and revision. A continuation is compared against both " +
+        "and the origin canonical execution fixed, so a partial one would compare equal to a " +
+        "different partial one.",
+    );
+  }
+  return Object.freeze({ origin, key, revision });
 }
 
 /**
