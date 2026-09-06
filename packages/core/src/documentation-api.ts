@@ -99,15 +99,45 @@ export const Documentation: Api<DocumentationApi> = createApi<DocumentationApi>(
  * The contribution is read when the collector asks, not when this is called,
  * and through the reader the collector supplies: a bootstrap installed in one
  * execution's scope reads that execution's assets.
+ *
+ * **An identical contribution already in the chain is not appended twice.** One
+ * package's declarative vocabulary is deliberately installed at more than one
+ * layer — the repository-composition set is registered by an ordinary run's
+ * bootstrap *and* again inside a workflow attachment, because either may be the
+ * only one — and the inner scope descends from the outer, so both wrappers are
+ * in one chain. Appending the second would refuse at collection, which would
+ * turn the product's own layering into a failure. Contributing the same
+ * component from the same asset says exactly what the first one said, so
+ * repeating it is a no-op rather than a conflict; two *different* assets still
+ * refuse at collection, because those disagree.
  */
 export function* contributeDocumentation(
   contribute: (read: DocumentationReader) => Operation<DocumentationContribution>,
 ): Operation<void> {
   yield* Documentation.around({
     *contributions([read], next): Operation<readonly DocumentationContribution[]> {
-      return [...(yield* next(read)), yield* contribute(read)];
+      const enclosing = yield* next(read);
+      const mine = yield* contribute(read);
+      return enclosing.some((one) => identical(one, mine)) ? enclosing : [...enclosing, mine];
     },
   });
+}
+
+/**
+ * Whether two contributions say the same thing.
+ *
+ * Owner, asset and the exact set of names — everything the index joins on and
+ * everything collection refuses over. A pair agreeing on all three is one
+ * statement made twice; a pair differing in any is two statements, and which of
+ * those it is decides whether the repeat is a layering or a conflict.
+ */
+function identical(one: DocumentationContribution, other: DocumentationContribution): boolean {
+  return (
+    one.source.owner === other.source.owner &&
+    one.source.asset === other.source.asset &&
+    one.supplies.size === other.supplies.size &&
+    [...one.supplies].every((name) => other.supplies.has(name))
+  );
 }
 
 /**
@@ -124,15 +154,16 @@ export function* contributeDocumentation(
  * document is told about a component depend on the order its host happened to
  * bootstrap packages in.
  *
- * **Including an exact repetition.** Two bootstraps of one package name the
- * same component from the same asset, and admitting that would say a profile
- * which bootstrapped a package twice is a valid profile. It is not: whether the
- * second call also installed a provider, a launcher or an execution policy is
- * not a question this boundary can answer, and the assembly is wrong either
- * way. Collection is where that is caught, because it is the only boundary
- * every execution passes through — deferring it to the named form's index
- * would let a document that writes bare `<Syntax />`, or no `<Syntax>` at all,
- * run to completion on an assembly nobody validated.
+ * What reaches here is therefore a genuine disagreement: two *different* assets
+ * claiming one component of one package. An identical repetition never arrives,
+ * because `contributeDocumentation()` recognizes its own statement already in
+ * the chain and does not append it twice — that is the product's own layering,
+ * not a conflict.
+ *
+ * Collection is where a disagreement is caught, because it is the only boundary
+ * every execution passes through. Deferring it to the named form's index would
+ * let a document that writes bare `<Syntax />`, or no `<Syntax>` at all, run to
+ * completion on an assembly nobody validated.
  */
 export function* capturedDocumentation(
   read: DocumentationReader = packagedAssetReader,
@@ -147,9 +178,13 @@ export function* capturedDocumentation(
       if (first !== undefined) {
         throw new DocumentationIndexError(
           first === one.source.asset
-            ? `${owner} contributes documentation for ${name} twice, both times from ` +
-                `${one.source.asset}. A package is bootstrapped once per execution: a second ` +
-                "contribution means the assembly installed it twice."
+            ? // Same asset, but the contributions were not identical — otherwise
+              // one of them would not be here. So two bootstraps disagree about
+              // which components that one file accounts for.
+              `${owner} contributes documentation for ${name} twice from ` +
+                `${one.source.asset}, in two contributions that name different components. ` +
+                "One asset accounts for one set of components, however many bootstraps " +
+                "installed it."
             : `${owner} contributes documentation for ${name} from both ${first} and ` +
                 `${one.source.asset}. One component of one package has one documentation ` +
                 "source, whichever order the packages bootstrapped in.",

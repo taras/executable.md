@@ -2758,16 +2758,24 @@ consume. So middleware a running document or component installs afterwards
 composes into a chain nothing reads, and two executions assembled in separate
 scopes each read their own.
 
-**Any second contribution for one owning package and component refuses during
-collection**, including an exact repetition naming the same asset — which is what
-a profile that entered one package's bootstrap twice produces. Whether that
-second call also installed a provider, a launcher or an execution policy is not a
-question this boundary can answer, and the assembly is wrong either way.
-Collection is where it refuses because it is the only boundary every execution
-passes through: a document that writes bare `<Syntax />` builds no documentation
-index, and one that writes no `<Syntax>` at all builds no reference either, so
-deferring the check to named lookup would let both run to completion on an
-assembly nobody validated.
+**Two contributions that disagree about one component of one package refuse
+during collection** — the same component named from two different assets, in
+either order. Collection is where they refuse because it is the only boundary
+every execution passes through: a document that writes bare `<Syntax />` builds
+no documentation index, and one that writes no `<Syntax>` at all builds no
+reference either, so deferring the check to named lookup would let both run to
+completion on an assembly nobody validated.
+
+**An identical repetition is not a disagreement.** One package's declarative
+vocabulary is deliberately installed at more than one layer — the
+repository-composition set is bootstrapped by an ordinary run and again inside a
+workflow attachment, because either may be the only one — and the inner scope
+descends from the outer, so both wrappers sit in one chain. A bootstrap that
+finds its own statement already there does not append it again, so the component
+is documented exactly once and the layering is not a failure. What makes two
+contributions the same statement is the owning package, the asset, and the exact
+set of components; differing in any of the three makes them two statements, and
+two statements about one component refuse.
 
 A host-maintained list of every package's documentation, kept beside a
 host-maintained list of every package's registrations, is two lists that drift;
@@ -10950,7 +10958,7 @@ component that observes one at an authored site.
 | SYN25g | Collection captures by value | Rewriting a contribution's source object, its text, its owner and its name set after the collector returned changes neither the snapshot nor what a reference built from it renders |
 | SYN25h | One call, both halves | A profile whose package bootstrap was not entered describes the component and says it is undocumented; entering the bootstrap supplies the prose *and* keeps canonical core's own, so a wrapper that replaced rather than appended fails here |
 | SYN25i | Duplicates refuse either way | Two contributions naming one component of one package refuse whichever order they were bootstrapped in, and each refusal names the pair it actually saw |
-| SYN25l | A repeated bootstrap refuses at collection | An identical repeated bootstrap — one package entered twice, naming the same component from the same asset — refuses for a named `<Syntax>`, for a bare `<Syntax />`, and for a document containing no `<Syntax>` at all, because collection happens for the execution rather than for an occurrence; one bootstrap of the same package is the positive control |
+| SYN25l | A repeated bootstrap is idempotent | An identical repeated bootstrap — one package entered twice, naming the same components from the same asset — leaves a named `<Syntax>`, a bare `<Syntax />` and a document containing no `<Syntax>` at all each working, and the collected snapshot holds that contribution exactly once; two bootstraps naming one component from *different* assets still refuse, which is what keeps this from passing vacuously |
 | SYN25j | Scopes are isolated | A sibling scope that bootstrapped nothing reads none of the first scope's contributions, and the first scope's contribution does not outlive it |
 | SYN25k | Document-time middleware reaches nothing | A component that composes around the `Documentation` Api and renders `<Syntax names={…}>` inside its own scope is shown what the host bootstrapped, not what it installed |
 | SX17 | One index, two surfaces | `xmd syntax NAME` and `<Syntax names={[NAME]} />` return the same text for a component outside core's own file |

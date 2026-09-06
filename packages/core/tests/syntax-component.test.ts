@@ -672,16 +672,16 @@ describe("Tier SYN — the named form", () => {
     expect(orders[0]).not.toBe(orders[1]);
   });
 
-  it("SYN25l: bootstrapping one package twice refuses at collection", function* () {
-    // The exact repetition, which is what a profile that called one bootstrap
-    // twice produces: same owner, same component, same asset. Admitting it
-    // would say that assembly is valid, and this boundary cannot know what else
-    // the second call installed — a provider, a launcher, an execution policy.
+  it("SYN25l: bootstrapping one package twice is idempotent, not a conflict", function* () {
+    // One package's declarative vocabulary is deliberately installed at more
+    // than one layer — the repository-composition set is bootstrapped by an
+    // ordinary run *and* again inside a workflow attachment, because either may
+    // be the only one — and the inner scope descends from the outer, so both
+    // wrappers sit in one chain. The second says exactly what the first said,
+    // so it is not appended: repeating a statement is not disagreeing with it.
     //
-    // It has to refuse at *collection*, not in the named form's index. A
-    // document that writes bare `<Syntax />` never builds an index, and one
-    // that writes no `<Syntax>` at all never builds a reference either, so
-    // deferring would let both run to completion on an assembly nobody checked.
+    // Refusing it instead would turn the product's own layering into a failure,
+    // which is what `xmd workflow` demonstrated.
     const { installation: marker } = stating(symbolsOf("Marker"));
     const twice = (source: string): Operation<Json> =>
       scoped(function* () {
@@ -690,27 +690,35 @@ describe("Tier SYN — the named form", () => {
         return yield* run(source, [marker]);
       });
 
-    // Named, bare, and a document that writes no `<Syntax>` at all: the same
-    // refusal reaches all three, because collection happens for the execution
-    // rather than for an occurrence.
-    for (const source of ['<Syntax names={["Marker"]} />\n', "<Syntax />\n", "nothing here\n"]) {
-      const refused = yield* refusal(twice(source));
-      expect([source, refused.includes("contributes documentation for Marker twice")]).toEqual([
-        source,
-        true,
-      ]);
-      expect(refused).toContain("packages/test/src/components.md");
-    }
+    // Named, bare, and a document that writes no `<Syntax>` at all. Collection
+    // happens for the execution rather than for an occurrence, so if a repeat
+    // were going to break anything it would break all three.
+    expect(String(yield* twice('<Syntax names={["Marker"]} />\n'))).toContain("MARKER PROSE.");
+    expect(String(yield* twice("<Syntax />\n"))).toContain("### `<Marker>`");
+    expect(String(yield* twice("nothing here\n"))).toContain("nothing here");
 
-    // The positive control: one bootstrap of the same package is fine, and the
-    // no-`<Syntax>` document is not refused for some unrelated reason.
-    const once = String(
-      yield* scoped(function* () {
+    // Documented exactly once, not twice: idempotent means the repeat left no
+    // second copy behind, which reading the collected snapshot shows directly.
+    const collected = yield* scoped(function* () {
+      yield* useMarkerDocumentation();
+      yield* useMarkerDocumentation();
+      return yield* capturedDocumentation();
+    });
+    expect(
+      collected.filter((one) => one.source.asset === "packages/test/src/components.md"),
+    ).toHaveLength(1);
+
+    // And the control that keeps this from passing vacuously: two bootstraps
+    // that genuinely disagree — the same component from a different asset —
+    // still refuse at collection.
+    const conflicting = yield* refusal(
+      scoped(function* () {
         yield* useMarkerDocumentation();
-        return yield* run('<Syntax names={["Marker"]} />\n', [marker]);
+        yield* useMarkerDocumentation("packages/other/src/components.md");
+        return yield* run("<Syntax />\n", [marker]);
       }),
     );
-    expect(once).toContain("MARKER PROSE.");
+    expect(conflicting).toContain("contributes documentation for Marker from both");
   });
 
   it("SYN25j: two scopes each read their own contributions", function* () {
