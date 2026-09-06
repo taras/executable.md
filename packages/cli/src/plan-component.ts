@@ -39,7 +39,7 @@
  *
  * `<Syntax />` is not among them. What a document may write here is a public
  * question with a public answer, and canonical core owns both — so `Plan.md`
- * writes the same component any other document writes, and the catalog the Agent
+ * writes the same component any other document writes, and the symbols the Agent
  * is shown is the one an operator can print.
  */
 
@@ -121,8 +121,8 @@ export type StructuralValidation = (candidate: string) => Operation<DocumentVali
  *
  * The declarations are read when the question is asked rather than when this is
  * built, because the `<Plan>` declaration has to be able to describe itself: the
- * profile a Plan will run in contains `<Plan>`, and the catalog the agent was
- * shown says so.
+ * profile a Plan will run in contains `<Plan>`, and the symbols the agent was
+ * shown say so.
  */
 export function structuralValidation(
   includes: readonly string[],
@@ -327,7 +327,7 @@ export function* planComponentDeclaration(
 ): Operation<DeclaredMarkdownComponent> {
   const source = yield* readPackagedDocument(PLAN_DOCUMENT);
   // The admission validates against the profile a Plan will run in, and that
-  // profile now contains `<Plan>` — the catalog the agent was shown says so. So
+  // profile now contains `<Plan>` — the symbols the agent was shown say so. So
   // the declaration has to be able to describe itself, which is why it is
   // assigned back rather than rebuilt: a second copy of these bytes would be a
   // second Component identity.
@@ -368,7 +368,7 @@ export function* planComponentDeclaration(
  * Inspection and validation answer about what a document may write. They mint no
  * execution, so there is no claimant to build a private capability from and no
  * frame to install — and none of that is describable anyway: a private name
- * is not syntax a document may write, so a catalog listing one would describe an
+ * is not syntax a document may write, so symbols listing one would describe an
  * environment that does not exist.
  *
  * What they do report is the identity: the same name, the same origin, the same
@@ -437,7 +437,7 @@ function* uninvocable(): Operation<never> {
  *
  * The vocabulary the Agent is shown is not here. `<Syntax />` is a public
  * component canonical core owns, it retains its own observation, and `Plan.md`
- * binds it directly — so the catalog and the question are two records that can
+ * binds it directly — so the symbols and the question are two records that can
  * be read and reconciled independently rather than one that has to be read
  * whole.
  *
