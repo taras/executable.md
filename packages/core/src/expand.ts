@@ -105,7 +105,7 @@ import { elementFrame, elementSite, extendPath, publishExpansion, snapshot } fro
 import type { ExpansionFrame } from "./expansion.ts";
 import { isPrivateImplementation, issueInvocation } from "./invocation-identity.ts";
 import type { IdentityDomain } from "./invocation-identity.ts";
-import { ComponentInvocationError } from "./invocation-identity.ts";
+import { protectedContentLease } from "./protected-content.ts";
 import type { SyntaxReference } from "./syntax-reference.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
@@ -3236,19 +3236,13 @@ function* expandFunctionComponent(
           // the expansion, from the authority it is already holding.
           const guarded = authority?.protectedBodies?.body(definition.fn);
           if (guarded !== undefined) {
-            // One-shot, and closed with the body. A projector the body kept
-            // reaches a spent flag rather than the projection machinery.
-            let projected = false;
-            let open = true;
-            const projectContent = selfClosing
+            // What to project, under which authority and in which scope stays
+            // here, where those things already are. How many times it may
+            // answer, and for how long, is the lease's
+            // (`protected-content.ts`).
+            const lease = selfClosing
               ? undefined
-              : function* (syntax: SyntaxReference): Operation<string> {
-                  if (!open || projected) {
-                    throw new ComponentInvocationError(
-                      `<${name} /> may render its own content once, while its body is running.`,
-                    );
-                  }
-                  projected = true;
+              : protectedContentLease(name, function* (syntax: SyntaxReference) {
                   // The same state the ordinary handle was built from, with only
                   // the reference replaced: the producer keeps its own imports,
                   // declarations, closure, identities, bindings, providers,
@@ -3272,15 +3266,17 @@ function* expandFunctionComponent(
                     throw new ContentExpansionFailure(errors, undefined, outcome.segments);
                   }
                   return renderSegments(outcome.segments);
-                };
+                });
             try {
               return yield* guarded(validatedProps, issued.invocation, {
                 syntax: authority?.syntax,
                 evaluation: authority?.evaluation,
-                projectContent,
+                projectContent: lease?.project,
               });
             } finally {
-              open = false;
+              // Closed in the same breath the issuance is: a projector a body
+              // kept authorizes nothing once that body has finished.
+              lease?.close();
               issued.close();
             }
           }

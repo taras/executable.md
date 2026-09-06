@@ -16,7 +16,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
-import { Ok, scoped } from "effection";
+import { ensure, Ok, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { API } from "@executablemd/runtime";
 
@@ -193,6 +193,47 @@ describe("Tier FE — a fragment reaches the captured operations and nothing els
 });
 
 describe("Tier FE — the paired form produces its own program", () => {
+  it("FE2: the exact bytes the producer rendered are the admitted source", function* () {
+    // Not "contains" and not "after trimming": the retained admission is a
+    // decision about one exact fragment, and a continuation is held to those
+    // bytes. A projection that trimmed, re-indented or normalised newlines
+    // would make the retained text disagree with what the producer wrote.
+    const PROGRAM = `\n<File path="notes.md" />\n\n<File path="other.md" />\n`;
+    const files = recordedFiles({ "notes.md": NOTE, "other.md": "the other note\n" });
+    const stream = new InMemoryStream();
+    yield* scoped(function* () {
+      yield* registerComponents([
+        {
+          name: "Producer",
+          origin: "test://producer",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          // deno-lint-ignore require-yield
+          *fn(): Operation<string> {
+            return PROGRAM;
+          },
+        },
+      ]);
+      return yield* run(`<Evaluate>\n<Producer />\n</Evaluate>\n`, [reading(files)], stream);
+    });
+
+    const recorded = admissions(yield* stream.readAll());
+    expect(recorded).toHaveLength(1);
+    const event = recorded[0];
+    const value =
+      event?.type === "yield" && event.result.status === "ok" ? event.result.value : undefined;
+    const source =
+      typeof value === "object" && value !== null && !Array.isArray(value)
+        ? value.source
+        : undefined;
+    // The content region is `\n<Producer />\n` — the newlines the document put
+    // around the element are part of what `<Evaluate>` was given to render, so
+    // the admitted source is those bytes with the producer's own in place of
+    // the element. Byte-exact in both directions: nothing was trimmed, and
+    // nothing the document did not write was added.
+    expect(source).toBe(`\n${PROGRAM}\n`);
+    expect(files.performed).toEqual(["read notes.md", "read other.md"]);
+  });
+
   it("FE2: content renders once, and what it rendered is the program", function* () {
     const files = recordedFiles({ "notes.md": NOTE });
     const rendered: string[] = [];
@@ -275,6 +316,85 @@ describe("Tier FE — the paired form produces its own program", () => {
     expect(failed).toContain("the producer refused");
     expect(admissions(yield* stream.readAll())).toHaveLength(0);
     expect(files.performed).toEqual([]);
+  });
+
+  it("FE17: cancelling inside the producer waits for its cleanup and admits nothing", function* () {
+    const stream = new InMemoryStream();
+    const files = recordedFiles({ "notes.md": NOTE });
+    const cleanup: string[] = [];
+    const reached = withResolvers<void>();
+
+    yield* scoped(function* () {
+      const running = yield* spawn(() =>
+        scoped(function* () {
+          yield* registerComponents([
+            {
+              name: "Slow",
+              origin: "test://producer",
+              props: { type: "object", properties: {}, additionalProperties: false },
+              *fn(): Operation<string> {
+                // Registered before the barrier, so cancellation cannot arrive
+                // between entering the body and owning the cleanup.
+                yield* ensure(function* () {
+                  cleanup.push("producer cleanup");
+                });
+                reached.resolve();
+                yield* suspend();
+                return `<File path="notes.md" />\n`;
+              },
+            },
+          ]);
+          return yield* run(`<Evaluate>\n<Slow />\n</Evaluate>\n`, [reading(files)], stream);
+        }),
+      );
+      // The producer has actually entered, so this is cancellation of work in
+      // flight rather than of work that never started.
+      yield* reached.operation;
+      yield* running.halt();
+    });
+
+    // Halt waited for the producer's own cleanup before returning.
+    expect(cleanup).toEqual(["producer cleanup"]);
+    // And nothing was decided: no admission, and no fragment operation. A run
+    // that recorded an admission here would resume believing a decision was
+    // made about a program that never finished being written.
+    expect(admissions(yield* stream.readAll())).toHaveLength(0);
+    expect(files.performed).toEqual([]);
+  });
+
+  it("FE17: cancellation before the producer enters is the negative control", function* () {
+    const stream = new InMemoryStream();
+    const files = recordedFiles({ "notes.md": NOTE });
+    const entered: string[] = [];
+
+    yield* scoped(function* () {
+      const running = yield* spawn(() =>
+        scoped(function* () {
+          yield* registerComponents([
+            {
+              name: "Never",
+              origin: "test://producer",
+              props: { type: "object", properties: {}, additionalProperties: false },
+              // deno-lint-ignore require-yield
+              *fn(): Operation<string> {
+                entered.push("entered");
+                return `<File path="notes.md" />\n`;
+              },
+            },
+          ]);
+          return yield* run(`<Evaluate>\n<Never />\n</Evaluate>\n`, [reading(files)], stream);
+        }),
+      );
+      // Halted without waiting for any signal that work began.
+      yield* running.halt();
+    });
+
+    // Whether the producer entered at all is not what this row fixes — what it
+    // fixes is that halting early records no admission either, so the row above
+    // is about *cancelling live work* rather than about halting in general.
+    expect(admissions(yield* stream.readAll())).toHaveLength(0);
+    expect(files.performed).toEqual([]);
+    expect(entered.length).toBeLessThanOrEqual(1);
   });
 
   it("FE3: the producer is told the narrowed vocabulary, not the site's", function* () {
