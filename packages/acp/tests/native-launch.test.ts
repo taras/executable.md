@@ -4151,6 +4151,208 @@ describe("Tier CP — the Claude capability probe", () => {
     }
   });
 
+  /**
+   * Two real releases, transcribed to the declarations this adapter reads.
+   *
+   * Compact rather than whole: the surface is hundreds of lines and pinning it
+   * would be a snapshot, which is the thing this probe exists not to be. What
+   * is kept is every part an answer is read from, in the layout the release
+   * actually printed — including 2.1.263 putting the usage line first, giving
+   * `--resume` a generic placeholder settled by its own words, and naming the
+   * private-file spelling only inside `--bare`.
+   */
+  const RELEASE_2_1_241 = [
+    "Claude Code - starts an interactive session by default",
+    "",
+    "Usage: claude [options] [command] [prompt]",
+    "",
+    "Options:",
+    "  --session-id <uuid>             Use a specific session ID for the conversation",
+    "  -r, --resume [sessionId]        Resume a conversation",
+    "  --system-prompt-file <file>     Load the system prompt from a file",
+    "",
+  ].join("\n");
+
+  const RELEASE_2_1_263 = [
+    "Usage: claude [options] [command] [prompt]",
+    "",
+    "Claude Code - starts an interactive session by default, use -p/--print for",
+    "non-interactive output",
+    "",
+    "Options:",
+    "  --bare                                Minimal mode: skip hooks, LSP, plugin",
+    "                                        sync. Explicitly provide context",
+    "                                        via: --system-prompt[-file],",
+    "                                        --append-system-prompt[-file], --add-dir",
+    "  -r, --resume [value]                  Resume a conversation by session ID, or",
+    "                                        open interactive picker with optional",
+    "                                        search term",
+    "  --session-id <uuid>                   Use a specific session ID for the",
+    "                                        conversation (must be a valid UUID)",
+    "  --system-prompt <prompt>              System prompt to use for the session",
+    "  --system-prompt-snapshot <on|off>     Record the system prompt once per session",
+    "",
+  ].join("\n");
+
+  it("CP6: both real releases declare the shape, in the layouts they printed it", function* () {
+    // Neither is read as a version. 2.1.241 gives the private file its own
+    // entry and names the resume argument in its placeholder; 2.1.263 leads
+    // with usage, settles a generic `[value]` in the entry's own words, and
+    // documents the private-file family inside another option. Same answer.
+    expect(probe(RELEASE_2_1_241)).toEqual(["native-launch", "client-native-attachment"]);
+    expect(probe(RELEASE_2_1_263)).toEqual(["native-launch", "client-native-attachment"]);
+  });
+
+  it("CP7: an option accepting the spelling but not the value is not the operation", function* () {
+    // Each row takes a release that does declare the shape and changes exactly
+    // what the argument is. The flag survives; the contract does not — and a
+    // launch that read the flag alone would hand a UUID to an option that
+    // takes a name, or ask for a conversation from one that takes a URL.
+    const ATTACH_ONLY: readonly NativeCapability[] = ["client-native-attachment"];
+    for (const [name, help, remaining] of [
+      // Identity. Launch needs it; attachment never did, so it stays.
+      [
+        "an identity that takes any name",
+        RELEASE_2_1_263.replace("--session-id <uuid>", "--session-id <name>"),
+        ATTACH_ONLY,
+      ],
+      [
+        "an identity whose value is optional and generic",
+        RELEASE_2_1_263.replace("--session-id <uuid>", "--session-id [value]"),
+        ATTACH_ONLY,
+      ],
+      [
+        "two identity entries disagreeing about the value",
+        RELEASE_2_1_241.replace(
+          "  --session-id <uuid>             Use a specific session ID for the conversation",
+          "  --session-id <uuid>             Use a specific session ID for the conversation\n" +
+            "  --session-id <name>             Deprecated: name the session",
+        ),
+        ATTACH_ONLY,
+      ],
+      // Resume. Both capabilities stand on it, so both go.
+      [
+        "a resume that takes a URL",
+        RELEASE_2_1_263.replace("--resume [value]", "--resume <url>"),
+        [],
+      ],
+      [
+        "a resume that takes a path",
+        RELEASE_2_1_241.replace("--resume [sessionId]", "--resume <path>    "),
+        [],
+      ],
+      [
+        "a generic resume whose entry never says which conversation",
+        RELEASE_2_1_263.replace(
+          "Resume a conversation by session ID, or",
+          "Reopen a workspace, or",
+        ),
+        [],
+      ],
+      // Private instructions. Launch only.
+      [
+        "a private-instruction option that takes text rather than a file",
+        RELEASE_2_1_241.replace(
+          "  --system-prompt-file <file>     Load the system prompt from a file",
+          "  --system-prompt-file <text>     Use this as the system prompt",
+        ),
+        ATTACH_ONLY,
+      ],
+      [
+        "the family spelling written in free prose instead of an entry",
+        `${RELEASE_2_1_241.replace(
+          "  --system-prompt-file <file>     Load the system prompt from a file\n",
+          "",
+        )}\nSee the docs for --system-prompt[-file] and friends.\n`,
+        ATTACH_ONLY,
+      ],
+    ] as const) {
+      expect([name, probe(help)]).toEqual([name, remaining]);
+    }
+  });
+
+  it("CP8: a product named in passing is not this executable saying what it is", function* () {
+    // Both readings come from dedicated, unindented lines. Every option entry
+    // and every wrapped continuation is indented, so a product or a usage
+    // example quoted inside a description says what someone wrote about this
+    // build rather than what the build is — and nothing is recognized without
+    // the product, so both capabilities go.
+    for (const [name, help] of [
+      [
+        "a product line that only claims compatibility",
+        RELEASE_2_1_241.replace(
+          "Claude Code - starts",
+          "A wrapper compatible with Claude Code - starts",
+        ),
+      ],
+      [
+        "the product named inside an option's description",
+        RELEASE_2_1_241.replace(/^Claude Code.*$/m, "Session tooling").replace(
+          "  --session-id <uuid>             Use a specific session ID for the conversation",
+          "  --session-id <uuid>             Use a specific session ID, as Claude Code does",
+        ),
+      ],
+      [
+        "the usage line quoted in prose",
+        RELEASE_2_1_241.replace(
+          "Usage: claude [options] [command] [prompt]",
+          "Run it as Usage: claude",
+        ),
+      ],
+      [
+        "the usage line quoted inside an option's description",
+        RELEASE_2_1_241.replace(
+          "Usage: claude [options] [command] [prompt]",
+          "Usage: wrapper [options]",
+        ).replace(
+          "  -r, --resume [sessionId]        Resume a conversation",
+          "  -r, --resume [sessionId]        Resume a conversation, like Usage: claude --resume",
+        ),
+      ],
+    ] as const) {
+      expect([name, probe(help)]).toEqual([name, []]);
+    }
+  });
+
+  it("CP9: a surface that only talks about the shape declares none of it", function* () {
+    // Product and usage are the real ones, so the only thing missing is the
+    // declarations themselves. Every spelling this adapter looks for is here —
+    // in a header, in a section body, in a command's description, and in
+    // footer prose — and not one of them is an option this build accepts.
+    const talksAboutIt = [
+      "Claude Code - session tooling",
+      "",
+      "Usage: claude [options] [command] [prompt]",
+      "",
+      "Session options are forwarded: --session-id <uuid>, --resume [sessionId],",
+      "and --system-prompt-file <file>.",
+      "",
+      "Commands:",
+      "  resume                          Resume a conversation by session ID",
+      "",
+      "Options:",
+      "  -h, --help                      Show this message",
+      "",
+      "Instructions can be supplied with --system-prompt[-file].",
+      "",
+    ].join("\n");
+    expect(probe(talksAboutIt)).toEqual([]);
+
+    // The one variable. The same surface, with those three spellings declared
+    // as options it accepts, is admitted — so what the row above reads is the
+    // absence of declarations, not the presence of anything else.
+    const declaresIt = talksAboutIt.replace(
+      "  -h, --help                      Show this message",
+      [
+        "  -h, --help                      Show this message",
+        "  --session-id <uuid>             Use a specific session ID for the conversation",
+        "  -r, --resume [sessionId]        Resume a conversation",
+        "  --system-prompt-file <file>     Load the system prompt from a file",
+      ].join("\n"),
+    );
+    expect(probe(declaresIt)).toEqual(["native-launch", "client-native-attachment"]);
+  });
+
   it("CP5: neither capability is inferred from the other", function* () {
     // Exact resume is what attachment needs, and it is one of the three things
     // launch needs. A build declaring resume and nothing else attaches and
