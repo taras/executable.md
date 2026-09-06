@@ -77,7 +77,7 @@ export type NativeCapabilityProbe = (metadata: ExecutableMetadata) => ProbedNati
  * needs in order to run the same build. None of it reaches a document.
  */
 export interface NativeBinding {
-  /** The command whose build is observed, bound and retained. */
+  /** The command whose build is observed, admitted and recorded. */
   command: string;
   /**
    * The read-only questions one observation asks that exact file.
@@ -448,7 +448,7 @@ function claudeNativeProbe(pinnedBridge: string | undefined): NativeCapabilityPr
  * two or more is output it cannot read as one answer, and taking the first
  * would be picking a build out of a list of them. Both mean no version was
  * reported, which is an ordinary answer rather than a refusal — the digest is
- * what binds the build.
+ * what names the build.
  */
 function claudeReportedVersion(metadata: ExecutableMetadata): string | undefined {
   const output = answered(metadata, "version");

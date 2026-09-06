@@ -71,12 +71,18 @@ export type LaunchFailureClass =
  * last owner never proved it stopped, so nothing here can say the session is
  * free, and no elapsed time, pid or released lock changes that.
  *
- * `executable-binding-refused` is the build question: the session was
- * established by one build of a provider executable, and this run could not
- * show it is talking to that same build. Resolution, canonicalization,
- * executable-file validation, version parsing, digesting, schema recognition,
- * equality, and a session established before any build was recorded all end
- * here.
+ * `executable-binding-refused` is the question of whether this run can account
+ * for the build behind a provider command at all — never whether that build is
+ * the one a session was opened by. Failing to see it ends here: no observer on
+ * this host, resolution, canonicalization, executable-file validation, and
+ * digesting. So does a client-allocated session whose durable records were
+ * written before one of them said which build accepted the identity, because a
+ * launch nobody completed is resumed by holding those two records to each
+ * other, and there is nothing there to hold.
+ *
+ * Whether an executable this run *can* see may act is a different question with
+ * a different answer: it is admitted on its own terms, and refusing it is
+ * `unsupported-capability`.
  */
 export interface LaunchFailure {
   class: LaunchFailureClass;
@@ -112,10 +118,10 @@ export type IdentityProvenance = "provider-returned" | "client-allocated";
  * which stops being true, while a digest says which build it was, which does
  * not. That also keeps the record free of host layout.
  *
- * The digest is what binds. `reportedVersion` is optional evidence beside it:
- * an executable that will not say which release it is, says something this
- * provider does not recognize, or says several things is bound by its bytes
- * alone rather than refused for being quiet.
+ * The digest is what names the build. `reportedVersion` is optional evidence
+ * beside it: an executable that will not say which release it is, says
+ * something this provider does not recognize, or says several things is
+ * described by its bytes alone rather than refused for being quiet.
  */
 export interface ExecutableBuildBindingV1 {
   readonly schema: "executable-build.v1";
@@ -187,8 +193,14 @@ export interface PreparedLaunchRecord {
   identityProvenance: IdentityProvenance;
   /**
    * Which build accepted the client-allocated identity, present exactly when
-   * this provider binds one. A provider that returns its own identity owns its
-   * own session lifetime and binds nothing, so it carries none.
+   * this provider records one. Copied from the construction route rather than
+   * observed here, so the journal and the route are two accounts of a single
+   * observation instead of two observations. A provider that returns its own
+   * identity owns its own session lifetime and records none.
+   *
+   * It is never held against a build installed later; the one comparison it
+   * takes part in is with the route it was copied from, which is how an
+   * incomplete launch proves which session it is resuming.
    *
    * Optional because the client-allocated path was released before any build
    * was observed. A record without it is legacy history: readable, resumable by

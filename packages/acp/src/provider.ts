@@ -337,7 +337,9 @@ export interface AcpxProviderDependencies {
 }
 
 /**
- * One observed build, ready to be bound to a session.
+ * One observed build: what this run may do with the executable it is about to
+ * spawn, and the account it writes down if this observation is the one that
+ * first accepts an identity.
  *
  * `livePath` is the canonical path this run spawns and hands to the matching
  * ACP child through `environment`. It appears in no record, route, diagnostic,
@@ -877,12 +879,16 @@ function* useAcpxProviderState(
   );
 
   /**
-   * One ACP runtime per `(agent command, executable build)`, plus the unbound
+   * One ACP runtime per `(agent command, live executable)`, plus the unbound
    * one ordinary ACP-first work has always used.
    *
-   * Sessions established against different builds never share an ACP child.
-   * That is what observing a build is for: a child running the wrong Claude
-   * accepts the session identity and disagrees silently about what it names.
+   * Two live releases never share an ACP child. That is what observing a build
+   * is for here, and it is a fact about the executable this work runs rather
+   * than about the one a session was established against: a child is a running
+   * thing, and two of them running different Claudes accept the same session
+   * identity and disagree silently about what it names. Sessions whose durable
+   * accounts record different builds share this child freely once one installed
+   * release serves them both.
    */
   let unbound: RuntimeEntry | undefined;
   const runtimes = new Map<string, RuntimeEntry>();
@@ -1756,7 +1762,8 @@ function* useAcpxProviderState(
       binding: {
         schema: "executable-build.v1",
         // Present only when this build said something the adapter recognized.
-        // A quiet build is bound by its bytes, which is what binds either way.
+        // A quiet build is named by its bytes, which is what names one either
+        // way.
         ...(version === undefined ? {} : { reportedVersion: version }),
         executableDigest: observed.digest,
       },
@@ -1817,6 +1824,55 @@ function* useAcpxProviderState(
   }
 
   /**
+   * Whether this adapter speaks the protocol a V2 route naming its launcher
+   * fixes.
+   *
+   * The single reading of the pin, so "the protocol this session is" means one
+   * thing whether it is asked of a route that exists or of the route this run
+   * is about to publish. Deliberately not read off the adapter's own
+   * declaration: an adapter is registered, and a registration is a live fact —
+   * taking its word would let anything filed under this launcher speak for the
+   * launcher, and a host policy that had proved that newcomer's own protocol
+   * would then call it admitted.
+   */
+  function speaksPinnedProtocol(adapter: NativeAdapter): boolean {
+    const pinned = pinnedRouteProtocol(adapter.launcher);
+    return pinned !== undefined && adapter.protocol === pinned;
+  }
+
+  /**
+   * Whether this run may construct a V2 route under this adapter at all.
+   *
+   * Asked before the executable is observed, before an identity is allocated,
+   * and before anything is published — because a publication is the durable
+   * account of which conversation this is, and an adapter whose protocol this
+   * build fixes no route contract for cannot be the thing that account names.
+   * Deciding it afterwards would mean reaching a concurrent winner having
+   * already observed a build, allocated an identity and written a candidate for
+   * a session this run was never entitled to construct.
+   *
+   * A launcher with no compiled interpretation is refused rather than trusted.
+   * There is no protocol migration and no default: what a session is was fixed
+   * when it was published, and a build that fixes nothing for this launcher has
+   * no account of that to offer.
+   */
+  function admitConstructionContract(
+    sessionKey: string,
+    adapter: NativeAdapter,
+  ): LaunchFailure | undefined {
+    if (speaksPinnedProtocol(adapter)) {
+      return undefined;
+    }
+    return {
+      class: "unsupported-capability",
+      message:
+        `session "${sessionKey}" would be constructed under a native protocol this build fixes ` +
+        `no construction route for, and a route it cannot interpret is one it must not publish. ` +
+        `Launch it with the adapter this build knows that launcher by.`,
+    };
+  }
+
+  /**
    * Whether the adapter this run would use is the one a published V2 route
    * names.
    *
@@ -1828,14 +1884,6 @@ function* useAcpxProviderState(
    * has to be this adapter's, and the protocol this adapter speaks has to be the
    * one that contract fixes.
    *
-   * Deliberately not read off the adapter. An adapter is registered, and a
-   * registration is a live fact — accepting whatever protocol it declares would
-   * let anything filed under this launcher adopt the session, and a host policy
-   * that had proved that newcomer's own protocol would then call it admitted.
-   * The pin is compiled in, so the admission below answers "can this build do
-   * the thing" for the protocol the session already has rather than for whatever
-   * protocol happens to be asking.
-   *
    * A refusal here reads nothing further and writes nothing at all: the route
    * and the journal keep the identity and the build evidence they were published
    * with, and no identity, private file, child, ensure or turn follows.
@@ -1845,12 +1893,10 @@ function* useAcpxProviderState(
     route: AgentSessionRouteV2,
     adapter: NativeAdapter,
   ): LaunchFailure | undefined {
-    const pinned =
-      route.provider === ACPX_PROVIDER ? pinnedRouteProtocol(route.launcher) : undefined;
     if (
-      pinned !== undefined &&
+      route.provider === ACPX_PROVIDER &&
       adapter.launcher === route.launcher &&
-      adapter.protocol === pinned
+      speaksPinnedProtocol(adapter)
     ) {
       return undefined;
     }
@@ -1925,9 +1971,11 @@ function* useAcpxProviderState(
       return undefined;
     }
     if (route.schema === "session-route.v1") {
-      // Constructed before any build was recorded. A build observed now says
-      // which build is installed today, not which one established this
-      // conversation, so there is nothing to compare and nothing to attach to.
+      // Constructed under the native-only contract, which published no account
+      // of the build that accepted the identity. Attaching was released
+      // alongside that account and is not retroactive: writing one now from a
+      // build observed today would claim knowledge of a publication XMD never
+      // witnessed, so a legacy session stays a native-only one.
       throw new AttachmentRefused({
         class: "executable-binding-refused",
         message:
@@ -2391,8 +2439,14 @@ function* useAcpxProviderState(
    * The order is the contract, and every step happens while the coordinator
    * holds this session:
    *
-   *   route + existing ACPX state -> refuse conversion -> allocate a UUID ->
+   *   route + existing ACPX state -> refuse conversion -> settle which protocol
+   *   this session is -> observe and admit the build -> allocate a UUID ->
    *   publish or adopt the route -> retain a record that matches it exactly.
+   *
+   * The protocol is settled first because it is the only step that says which
+   * conversation this is. Everything after it acts on that answer, and a run
+   * that reached the publication before asking would already have observed a
+   * build and reached for an identity on a session's behalf.
    *
    * Nothing is created through ACP here. A client-native session is
    * materialized by the native process itself, which is why the route has to be
@@ -2483,6 +2537,17 @@ function* useAcpxProviderState(
       }
     }
 
+    // And when the read found none, the same pin asked prospectively. The read
+    // is not the last word on whether this session already exists — a concurrent
+    // publication is revealed by publishing — so an adapter that could not
+    // account for a route it met cannot be allowed to observe a build, allocate
+    // an identity and write a candidate first and find that out afterwards.
+    // Refused here, the race has nothing of this run's in it to lose.
+    const unfixed = admitConstructionContract(sessionKey, adapter);
+    if (unfixed) {
+      return refusal(unfixed.class, unfixed.message, known);
+    }
+
     // Observed before an identity exists, so a build this run cannot name stops
     // the launch before anything durable is written.
     let build: BoundBuild;
@@ -2561,11 +2626,12 @@ function* useAcpxProviderState(
       return retained(agentName, adapter, winner, instructions, sessionCwd, "resumed");
     }
 
-    // The winner is the account that governs, so it is the account whose
-    // protocol this adapter has to speak. A concurrent publication that reached
-    // the namespace first describes a session this launch did not construct, and
-    // adopting it is acting on it: the same contract check the read above makes,
-    // asked again of the record that actually won.
+    // The winner is the account that governs, and it is not this run's
+    // candidate: a publication that reached the namespace first describes a
+    // session this launch did not construct, under whatever contract its writer
+    // gave it. This adapter having a fixed protocol says nothing about that
+    // record, so the contract is asked again — of the route that actually won.
+    // Adopting one is acting on it.
     const foreign = admitRouteContract(sessionKey, winner, adapter);
     if (foreign) {
       return refusal(foreign.class, foreign.message, known);
@@ -3115,9 +3181,10 @@ function* useAcpxProviderState(
       );
     }
     // A launch that never got as far as the native process, prepared under a
-    // contract that recorded no build. Nothing here can show which build has
-    // this session's history, and resuming anyway would be answering the
-    // question by ignoring it. A completed launch never reaches this code.
+    // contract that published no account of the build that accepted the
+    // identity. The cross-check below is what makes an incomplete launch
+    // resumable, and with only one account there is nothing to hold to
+    // anything. A completed launch never reaches this code.
     if (route.schema === "session-route.v1" || prepared.executableBinding === undefined) {
       return {
         class: "executable-binding-refused",
