@@ -57,6 +57,8 @@
     "@executablemd/core": "workspace:*",
     "@executablemd/durable-streams": "workspace:*",
     "@executablemd/runtime": "workspace:*",
+    "@executablemd/terminal": "workspace:*",
+    "@executablemd/terminal-tmux": "workspace:*",
     "@executablemd/test-agent": "workspace:*",
     "@executablemd/test-support": "workspace:*",
     "@executablemd/testing": "workspace:*",

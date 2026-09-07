@@ -105,6 +105,12 @@ importers:
       '@executablemd/runtime':
         specifier: workspace:*
         version: link:packages/runtime
+      '@executablemd/terminal':
+        specifier: workspace:*
+        version: link:packages/terminal
+      '@executablemd/terminal-tmux':
+        specifier: workspace:*
+        version: link:packages/terminal-tmux
       '@executablemd/test-agent':
         specifier: workspace:*
         version: link:packages/test-agent

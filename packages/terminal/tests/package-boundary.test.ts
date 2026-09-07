@@ -203,6 +203,16 @@ describe("Tier TG21 — the terminal package boundary", () => {
     }
   });
 
+  it("TG21m: the repository supplies test dependencies without reversing the domain boundary", function* () {
+    const root = JSON.parse(yield* readTextFile(path.resolve("package.json")));
+    expect(root.private).toBe(true);
+    for (const name of ["@executablemd/terminal", "@executablemd/terminal-tmux"]) {
+      expect([name, root.devDependencies[name]]).toEqual([name, "workspace:*"]);
+    }
+    const domain = JSON.parse(yield* readTextFile(path.resolve("packages/terminal/package.json")));
+    expect(domain.dependencies).not.toHaveProperty("@executablemd/terminal-tmux");
+  });
+
   it("TG21c: runtime owns no terminal dependency, and only CLI composes both", function* () {
     // The amendment's load-bearing change: runtime keeps no terminal edge at
     // all, in its sources or its manifest, because there is no unreleased path

@@ -147,6 +147,29 @@ describe("Tier TP — proving a terminal pane is free", () => {
     return Object.assign(new Error(code), { code });
   }
 
+  it("TP2h: Linux and macOS no-terminal readings share the canonical marker", function* () {
+    yield* installDenoTerminalProcesses(
+      probes({
+        ps: {
+          code: 0,
+          stdout: [
+            "100 1 100 ? -1 linux worker",
+            "200 1 200 ?? -1 macOS worker",
+            "300 1 300 pts/3 300 linux pane",
+            "400 1 400 ttys003 400 macOS pane",
+          ].join("\n"),
+        },
+      }),
+    );
+
+    expect(yield* processTable()).toEqual([
+      { pid: 100, ppid: 1, pgid: 100, tty: "??", tpgid: -1, command: "linux worker" },
+      { pid: 200, ppid: 1, pgid: 200, tty: "??", tpgid: -1, command: "macOS worker" },
+      { pid: 300, ppid: 1, pgid: 300, tty: "pts/3", tpgid: 300, command: "linux pane" },
+      { pid: 400, ppid: 1, pgid: 400, tty: "ttys003", tpgid: 400, command: "macOS pane" },
+    ]);
+  });
+
   it("TP2b: a process this user may not signal is not an absent one", function* () {
     yield* installDenoTerminalProcesses(
       probes({
