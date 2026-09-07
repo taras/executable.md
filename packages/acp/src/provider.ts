@@ -23,11 +23,13 @@
 import {
   createChannel,
   createScope,
+  each,
   ensure,
   Err,
   Ok,
   scoped,
   spawn,
+  stream,
   suspend,
   until,
   useScope,
@@ -51,19 +53,29 @@ import type {
   InstructionReconciliation,
   ExitedLaunchRecord,
   LaunchFailure,
+  LaunchFailureClass,
   LaunchOptions,
+  MaterializationPlan,
+  MaterializationUsage,
+  MaterializedLaunchRecord,
   PreparedLaunchRecord,
   PromptOptions,
   Session,
   SessionLaunchResult,
 } from "@executablemd/core";
-import { allocatesIdentity } from "./native-launch.ts";
-import type { ClientAllocatedAdapter, NativeBinding } from "./native-launch.ts";
+import { allocatesIdentity, bindsBuild } from "./native-launch.ts";
+import type {
+  BoundProviderReturnedAdapter,
+  BuildBoundAdapter,
+  ClientAllocatedAdapter,
+  NativeBinding,
+} from "./native-launch.ts";
 import { AgentSessionRouteError } from "./session-route.ts";
 import type {
   AgentSessionRoute,
   AgentSessionRouteStore,
   AgentSessionRouteV2,
+  AgentSessionRouteV3,
 } from "./session-route.ts";
 import { createAcpRuntime, createAgentRegistry, createRuntimeStore } from "./acpx-runtime.ts";
 import type {
@@ -75,6 +87,9 @@ import type {
   AcpRuntimeMaterialization,
   AcpRuntimeOptions,
   AcpRuntimeTurn,
+  AcpRuntimeTurnResult,
+  AcpRuntimeUsageBreakdown,
+  AcpRuntimeUsageCost,
   AcpSessionRecord,
   AcpSessionStore,
   SessionAgentOptions,
@@ -85,6 +100,7 @@ import {
   strictPermissions,
 } from "./permission-bridge.ts";
 import { consumeTurn } from "./events.ts";
+import { checkpointFromResult } from "./checkpoint.ts";
 import { resolveSessionPlacement } from "./session-key.ts";
 import { useSerialQueues } from "./serial-queue.ts";
 import {
@@ -93,7 +109,7 @@ import {
   cwd,
   ExecutableObservationError,
 } from "@executablemd/runtime";
-import { nativeLaunch } from "@executablemd/terminal";
+import { nativeLaunch, notifyTerminal } from "@executablemd/terminal";
 import type {
   AgentSessionCoordinator,
   AgentSessionKey,
@@ -104,9 +120,11 @@ import type {
 import {
   ADVERTISED_CLIENT_NATIVE_ATTACHMENT,
   ADVERTISED_NATIVE_LAUNCH,
+  ADVERTISED_PROVIDER_NATIVE_CONTINUATION,
   knownNativeAdapters,
   nativeAdapterFor,
   pinnedRouteProtocol,
+  pinnedProviderRouteProtocol,
 } from "./native-launch.ts";
 import type { NativeAdapter } from "./native-launch.ts";
 import { admitsNativeCapability } from "./native-capability.ts";
@@ -235,6 +253,7 @@ export interface AcpxProviderDependencies {
    * prove different things. Absent means none.
    */
   advertiseClientNativeAttachment?: readonly string[];
+  advertiseProviderNativeContinuation?: readonly string[];
   /**
    * How this host observes the build behind an executable.
    *
@@ -534,7 +553,7 @@ interface LaunchInvocation {
    * path is only true for the run that observed it. A later replay reobserves
    * rather than finding one lying about.
    */
-  readonly bound: Map<string, { build: BoundBuild; adapter: ClientAllocatedAdapter }>;
+  readonly bound: Map<string, { build: BoundBuild; adapter: BuildBoundAdapter }>;
   /** Sessions whose detach phase ran live in this invocation. */
   readonly detachedLive: Set<string>;
   /**
@@ -838,6 +857,9 @@ function* useAcpxProviderState(
     dependencies?.withSessionRoute ??
     (<T>(_c: SessionRouteContext, op: () => Operation<T>) => op());
   const launchAdvertised = new Set(dependencies?.advertiseNativeLaunch ?? ADVERTISED_NATIVE_LAUNCH);
+  const continuationAdvertised = new Set(
+    dependencies?.advertiseProviderNativeContinuation ?? ADVERTISED_PROVIDER_NATIVE_CONTINUATION,
+  );
   const attachAdvertised = new Set(
     dependencies?.advertiseClientNativeAttachment ?? ADVERTISED_CLIENT_NATIVE_ATTACHMENT,
   );
@@ -936,6 +958,10 @@ function* useAcpxProviderState(
   function partitionOf(build: BoundBuild): string {
     return [
       build.agentCommand,
+      build.adapterProtocol,
+      build.probeProfile,
+      build.livePath,
+      build.adapterCommand ?? "",
       build.binding.reportedVersion ?? "",
       build.binding.executableDigest.algorithm,
       build.binding.executableDigest.value,
@@ -1221,14 +1247,16 @@ function* useAcpxProviderState(
     if (prepareAgent !== undefined) {
       yield* prepareAgent(selected);
     }
-    // Resolution is read-only for an agent whose sessions XMD names. Probing
-    // spawns an ACP child, and that is provider work on a session whose
+    // Resolution is read-only for an agent whose sessions are bound to a build.
+    // Probing spawns an ACP child, and that is provider work on a session whose
     // construction has not been settled yet — it would run before the route is
-    // published, before a client-native route can refuse this surface, and
-    // before a host missing either capability has said so. Nothing on that path
-    // needs the answer: the session is created by a native process, and where
-    // ACP does serve one, the establishment itself reports being unable to.
-    if (!validatedAgents.has(selected) && !namesOwnSessions(selected)) {
+    // published, before a route this surface cannot serve can refuse it, and
+    // before a host missing either capability has said so. It would also spawn a
+    // child of a build nothing has observed, which is the one thing a bound
+    // session may not talk to. Nothing on that path needs the answer: a
+    // client-native session is created by a native process, and where ACP does
+    // serve one, the establishment itself reports being unable to.
+    if (!validatedAgents.has(selected) && !boundSessions(selected)) {
       const base = yield* runtimeOptions();
       const probe = createRuntime({ ...base, probeAgent: selected });
       const report = yield* until(probe.doctor());
@@ -1409,7 +1437,16 @@ function* useAcpxProviderState(
 
   /** What one ensure is for, beyond the placement it is for. */
   interface EnsureIntent {
-    attachment?: { build: BoundBuild; resumeSessionId: string };
+    /**
+     * The observed build this ensure's ACP child must be.
+     *
+     * Separate from `attachment`, because the two answer different questions
+     * and not every session that has one has the other: a session the provider
+     * named is bound to a build without any identity for ACP to be told to
+     * reopen.
+     */
+    build?: BoundBuild;
+    attachment?: { resumeSessionId: string };
     /** The placement's state, as the caller resolved it. */
     state: "pending" | "established";
     /**
@@ -1445,7 +1482,7 @@ function* useAcpxProviderState(
     let managedEntry: ManagedSession;
     try {
       managedEntry = yield* ensureThrough(
-        attachment?.build,
+        intent.build,
         {
           sessionKey: prepared.placement.sessionKey,
           agent: agentName,
@@ -1558,7 +1595,9 @@ function* useAcpxProviderState(
    */
   function ownable(agentName: string): boolean {
     return (
-      (launchAdvertised.has(agentName) || attachAdvertised.has(agentName)) &&
+      (launchAdvertised.has(agentName) ||
+        attachAdvertised.has(agentName) ||
+        continuationAdvertised.has(agentName)) &&
       adapterFor(agentName) !== undefined
     );
   }
@@ -1599,10 +1638,6 @@ function* useAcpxProviderState(
 
   /**
    * Whether this agent's sessions are constructed under an identity XMD names.
-   *
-   * Only that shape needs a construction route: a provider that returns its own
-   * identity constructs nothing this route governs, and keeps exactly its
-   * merged behavior on a host that installs no route store.
    */
   function namesOwnSessions(agentName: string): boolean {
     const adapter = adapterFor(agentName);
@@ -1610,13 +1645,24 @@ function* useAcpxProviderState(
   }
 
   /**
+   * Whether this agent's sessions carry build-described construction routes.
+   *
+   * The retained observation describes construction. Admission of the current
+   * executable is a separate capability decision, not a comparison to it.
+   */
+  function boundSessions(agentName: string): boolean {
+    const adapter = adapterFor(agentName);
+    return ownable(agentName) && adapter !== undefined && bindsBuild(adapter);
+  }
+
+  /**
    * Refuse an advertised agent this host is not assembled to serve.
    *
    * Fail-closed, and closed means what the agent actually needs: every
-   * advertised session needs a coordinator to say who owns it, and one whose
-   * sessions XMD names also needs a route store to say how it was constructed.
-   * A host that can answer one question but not the other cannot act on a
-   * session a native UI may be in.
+   * advertised session needs a coordinator to say who owns it, and one bound to
+   * a build also needs a route store to say how it was constructed and an
+   * observer to say which build that was. A host that can answer one question
+   * but not the other cannot act on a session a native UI may be in.
    */
   function requireAssembly(agentName: string, sessionKey: string): void {
     if (!ownable(agentName)) {
@@ -1626,7 +1672,7 @@ function* useAcpxProviderState(
     if (!coordinator) {
       missing.push("exclusive ownership");
     }
-    if (namesOwnSessions(agentName)) {
+    if (boundSessions(agentName)) {
       if (!routeStore) {
         missing.push("construction routes");
       }
@@ -1697,6 +1743,22 @@ function* useAcpxProviderState(
       provider: ACPX_PROVIDER,
       agent: agentCommand,
       sessionKey,
+    };
+  }
+
+  /** The same route, for a session whose build was observed as it was bound. */
+  function boundAcpFirstRoute(
+    agentCommand: string,
+    sessionKey: string,
+    executableBinding: AgentSessionRouteV3["executableBinding"],
+  ): AgentSessionRouteV3 {
+    return {
+      schema: "session-route.v3",
+      route: "acp-first",
+      provider: ACPX_PROVIDER,
+      agent: agentCommand,
+      sessionKey,
+      executableBinding,
     };
   }
 
@@ -1948,14 +2010,122 @@ function* useAcpxProviderState(
    * when this host has proven that capability for the executable it is about to
    * run, whichever release that has become.
    */
+  function providerRouteContract(
+    agentCommand: string,
+    sessionKey: string,
+    adapter: BoundProviderReturnedAdapter,
+    route?: AgentSessionRoute,
+  ): LaunchFailure | undefined {
+    const protocol = pinnedProviderRouteProtocol(adapter.launcher);
+    if (protocol === undefined || adapter.protocol !== protocol) {
+      return {
+        class: "unsupported-capability",
+        message: "this build fixes no provider-returned construction contract for this adapter",
+      };
+    }
+    if (route === undefined) {
+      return undefined;
+    }
+    if (
+      route.provider !== ACPX_PROVIDER ||
+      route.agent !== agentCommand ||
+      route.sessionKey !== sessionKey ||
+      route.route !== "acp-first"
+    ) {
+      return {
+        class: "identity-unavailable",
+        message: `session "${sessionKey}" has a construction route for a different conversation`,
+      };
+    }
+    if (route.schema !== "session-route.v3") {
+      return {
+        class: "executable-binding-refused",
+        message: `session "${sessionKey}" was constructed before XMD recorded its provider-returned contract; name a different <Session>`,
+      };
+    }
+    return undefined;
+  }
+
+  function* bindProviderNamed(
+    agentName: string,
+    agentCommand: string,
+    adapter: BoundProviderReturnedAdapter,
+    sessionKey: string,
+    hasProviderState: boolean,
+    capability: NativeCapability,
+  ): Operation<{ build: BoundBuild; route: AgentSessionRouteV3 }> {
+    let found: AgentSessionRoute | undefined;
+    try {
+      found = yield* routeStore!.read(sessionKeyOf(agentCommand, sessionKey));
+    } catch (error) {
+      throw new AttachmentRefused({ class: "identity-unavailable", message: routeMessage(error) });
+    }
+    const foreign = providerRouteContract(agentCommand, sessionKey, adapter, found);
+    if (foreign) {
+      throw new AttachmentRefused(foreign);
+    }
+    const build = yield* observeBuild(agentName, agentCommand, adapter.protocol, adapter.binding);
+    const unproved = admitCapability(agentName, capability, build);
+    if (unproved) {
+      throw new AttachmentRefused(unproved);
+    }
+    let route: AgentSessionRoute;
+    try {
+      route = yield* reconcileRoute(
+        agentCommand,
+        sessionKey,
+        function* () {
+          return boundAcpFirstRoute(agentCommand, sessionKey, build.binding);
+        },
+        hasProviderState,
+      );
+    } catch (error) {
+      throw new AttachmentRefused({ class: "identity-unavailable", message: routeMessage(error) });
+    }
+    const winner = providerRouteContract(agentCommand, sessionKey, adapter, route);
+    if (winner) {
+      throw new AttachmentRefused(winner);
+    }
+    if (route.schema !== "session-route.v3") {
+      throw new AttachmentRefused({
+        class: "identity-unavailable",
+        message: "the provider route is not readable",
+      });
+    }
+    return { build, route };
+  }
+
   function* constructRoute(
     agentName: string,
     prepared: Prepared,
-  ): Operation<{ build: BoundBuild; resumeSessionId: string } | undefined> {
-    if (!namesOwnSessions(agentName)) {
+  ): Operation<{ build: BoundBuild; resumeSessionId?: string } | undefined> {
+    const adapter = adapterFor(agentName);
+    if (!ownable(agentName) || adapter === undefined) {
       return undefined;
     }
     const agentCommand = agentCommandOf(prepared);
+    const constructed =
+      prepared.kind === "existing" || (yield* until(store.load(prepared.sessionKey))) !== undefined;
+    if (!allocatesIdentity(adapter)) {
+      if (!bindsBuild(adapter)) {
+        return undefined;
+      }
+      if (!continuationAdvertised.has(agentName)) {
+        throw new AttachmentRefused({
+          class: "unsupported-capability",
+          message: `agent "${agentName}" is not advertised as provider-native-continuation capable`,
+        });
+      }
+      const { build } = yield* bindProviderNamed(
+        agentName,
+        agentCommand,
+        adapter,
+        prepared.sessionKey,
+        constructed,
+        "provider-native-continuation",
+      );
+      return { build };
+    }
     const route = yield* reconcileRoute(
       agentCommand,
       prepared.sessionKey,
@@ -1963,9 +2133,7 @@ function* useAcpxProviderState(
       function* () {
         return acpFirstRoute(agentCommand, prepared.sessionKey);
       },
-      // An existing managed entry, or a durable record ACPX already kept, is
-      // provider state — and existing history is never reclassified.
-      prepared.kind === "existing" || (yield* until(store.load(prepared.sessionKey))) !== undefined,
+      constructed,
     );
     if (route.route !== "client-native") {
       return undefined;
@@ -1993,7 +2161,7 @@ function* useAcpxProviderState(
           `<Session>.`,
       });
     }
-    const attaching = adapterFor(agentName) as ClientAllocatedAdapter;
+    const attaching = adapter;
     // Which conversation this is, before anything about which build is
     // installed. Joining through ACP acts on the session a native process was
     // handed, so the adapter doing the joining has to be the one that contract
@@ -2277,14 +2445,18 @@ function* useAcpxProviderState(
           // first Prompt constructs this session through ACP, so that is what
           // its construction route says — and a session a native process
           // constructed is attached to under the identity it already has.
-          const attachment = yield* constructRoute(agentName, prepared);
+          const construction = yield* constructRoute(agentName, prepared);
+          const resumeSessionId = construction?.resumeSessionId;
           // The pending ACP-first branch, and the only one that defers: an
           // attachment resumes an identity that already exists, and an
-          // established placement has one of its own.
+          // established placement has one of its own. A build alone does not
+          // defer anything — a session the provider names is still constructed
+          // by this ensure, bound to the build that names it.
           const constructing =
-            state === "pending" && attachment === undefined && prepared.kind === "placement";
+            state === "pending" && resumeSessionId === undefined && prepared.kind === "placement";
           const entry = yield* ensureFromPrepared(agentName, prepared, {
-            ...(attachment === undefined ? {} : { attachment }),
+            ...(construction === undefined ? {} : { build: construction.build }),
+            ...(resumeSessionId === undefined ? {} : { attachment: { resumeSessionId } }),
             state,
             materialization: constructing,
             deferEstablished: constructing,
@@ -2744,9 +2916,18 @@ function* useAcpxProviderState(
     // return — a store read that fails, an instruction layer this provider will
     // not replace — and a claim taken before them is one those exits would have
     // to remember to give back.
-    const existing = yield* until(store.load(sessionKey));
-    let sessionState: "created" | "resumed" = existing ? "resumed" : "created";
-    let reconciliation: InstructionReconciliation = existing ? "resumed" : "installed";
+    const stored = yield* until(store.load(sessionKey));
+    // A pending record is occupancy an earlier attempt left behind: ACPX will
+    // not reuse it, no backend ever accepted a turn in it, and treating it as a
+    // conversation would skip the very turn that would make one openable. So
+    // this launch is creating, whatever is on disk under the same key.
+    const existing =
+      stored !== undefined && stored.sessionMaterialization?.state !== "pending"
+        ? stored
+        : undefined;
+    const sessionState: "created" | "resumed" = existing ? "resumed" : "created";
+    const reconciliation: InstructionReconciliation = existing ? "resumed" : "installed";
+    const known = { agent: agentName, sessionKey, cwd: sessionCwd, launcher: adapter.launcher };
 
     if (existing && storedSystemPrompt(existing) !== instructions) {
       // ACPX fixes a session's instruction layer when its ACP session is
@@ -2764,8 +2945,67 @@ function* useAcpxProviderState(
         `session "${sessionKey}" already carries a different XMD instruction layer, and ` +
           `this provider does not replace one. Launch a differently named <Session>, or ` +
           `launch the same prepared instructions again.`,
-        { agent: agentName, sessionKey, cwd: sessionCwd, launcher: adapter.launcher },
+        known,
       );
+    }
+
+    let build: BoundBuild | undefined;
+    let retainedBinding: ExecutableBuildBindingV1 | undefined;
+    if (bindsBuild(adapter)) {
+      try {
+        const construction = yield* bindProviderNamed(
+          agentName,
+          agentCommand,
+          adapter,
+          sessionKey,
+          existing !== undefined,
+          "native-launch",
+        );
+        build = construction.build;
+        retainedBinding = construction.route.executableBinding;
+      } catch (error) {
+        if (error instanceof AttachmentRefused) {
+          return refusal(error.failure.class, error.failure.message, known);
+        }
+        throw error;
+      }
+      invocation.bound.set(sessionKey, { build, adapter });
+      // The check a replay performs at its own first live phase, performed here
+      // against a live observation. Recording it is what keeps the detach or the
+      // spawn below from reading the same two accounts a second time.
+      invocation.reconciled.add(sessionKey);
+    }
+
+    // Planned before the ensure it decides the shape of, and only for the
+    // conversation this launch creates through an adapter that says one is
+    // owed. A resumed session has already been spoken in — whatever made it
+    // openable happened before this run — so taking a turn in it would be
+    // spending someone's model turn to learn nothing. The request id is minted
+    // here rather than at the turn so a replay reading the retained record is
+    // looking for the turn the first attempt committed to.
+    const plan: MaterializationPlan | undefined =
+      sessionState === "created" && adapter.materialization
+        ? {
+            promptVersion: adapter.materialization.promptVersion,
+            requestId: randomUUID(),
+            prompt: adapter.materialization.prompt,
+          }
+        : undefined;
+
+    const ensureInput: AcpRuntimeEnsureInput = {
+      sessionKey,
+      agent: agentName,
+      mode: "persistent",
+      cwd: sessionCwd,
+      sessionOptions: { systemPrompt: instructions },
+    };
+    if (plan !== undefined) {
+      // A conversation this adapter cannot open until something has been said
+      // in it is not one the record may assert. ACPX holds it as occupancy
+      // instead, and only the adapter's own acceptance of the turn below
+      // promotes it — which is what makes that acceptance decide whether this
+      // launch reaches a native UI at all.
+      ensureInput.materialization = "first-turn-acceptance";
     }
 
     // Claimed here, one line before the ensure it is for, and settled by the
@@ -2773,35 +3013,27 @@ function* useAcpxProviderState(
     // the moment it exists, bound to the runtime that made it: everything below
     // can refuse, and a handle only the managed map knew about is one teardown
     // could not close through its creator.
-    const managedEntry = yield* ensureThrough(
-      undefined,
-      {
-        sessionKey,
-        agent: agentName,
-        mode: "persistent",
+    const managedEntry = yield* ensureThrough(build, ensureInput, (handle, entry) => {
+      const session: Session = { sessionKey, cwd: sessionCwd };
+      if (handle.agentSessionId !== undefined) {
+        session.agentSessionId = handle.agentSessionId;
+      }
+      // Established by construction when nothing is owed: this adapter's
+      // provider returns the identity, so the session exists the moment the
+      // ensure answers. A launch that owes a turn holds a placement instead,
+      // and the accepted turn is what establishes it.
+      return {
+        handle,
+        runtime: entry,
+        agentCommand,
         cwd: sessionCwd,
-        sessionOptions: { systemPrompt: instructions },
-      },
-      (handle, entry) => {
-        const session: Session = { sessionKey, cwd: sessionCwd };
-        if (handle.agentSessionId !== undefined) {
-          session.agentSessionId = handle.agentSessionId;
-        }
-        // Established by construction: this adapter's provider returns the
-        // identity, so the session exists the moment the ensure answers.
-        return {
-          handle,
-          runtime: entry,
-          agentCommand,
-          cwd: sessionCwd,
-          session,
-          state: "established" as const,
-        };
-      },
-    );
+        session,
+        state: plan === undefined ? "established" : "pending",
+      };
+    });
     managed.set(sessionKey, managedEntry);
 
-    const nativeSessionId = managedEntry.handle.agentSessionId;
+    const nativeSessionId = plan === undefined ? managedEntry.handle.agentSessionId : "";
     if (nativeSessionId === undefined) {
       // An ACP session id and an ACPX record id are not native identities, and
       // neither is a string that merely looks like one.
@@ -2814,7 +3046,7 @@ function* useAcpxProviderState(
         "identity-unavailable",
         `agent "${agentName}" created a session but asserted no provider-native ` +
           `session identity, so there is nothing ${adapter.launcher} can resume`,
-        { agent: agentName, sessionKey, cwd: sessionCwd, launcher: adapter.launcher },
+        known,
       );
     }
 
@@ -2836,6 +3068,12 @@ function* useAcpxProviderState(
       permissionMode: providerOptions.permissionMode,
       launcher: adapter.launcher,
     };
+    if (retainedBinding) {
+      record.executableBinding = retainedBinding;
+    }
+    if (plan !== undefined) {
+      record.materialization = plan;
+    }
     let model: string | undefined;
     try {
       model = yield* effectiveModel(managedEntry.runtime.runtime, managedEntry.handle);
@@ -2860,6 +3098,310 @@ function* useAcpxProviderState(
     }
     const status = yield* until(acp.getStatus({ handle }));
     return status.models?.currentModelId;
+  }
+
+  /**
+   * What the provider said this turn cost, and nothing else.
+   *
+   * A member the provider did not report is left absent rather than copied as
+   * `undefined`, because these are merged over what earlier events reported: an
+   * explicit `undefined` would overwrite a figure the provider did give with the
+   * claim that it gave none. Zero is a figure; saying nothing is not.
+   */
+  function reportedUsage(
+    breakdown: AcpRuntimeUsageBreakdown | undefined,
+    cost: AcpRuntimeUsageCost | undefined,
+  ): MaterializationUsage {
+    const usage: {
+      -readonly [K in keyof MaterializationUsage]: MaterializationUsage[K];
+    } = {};
+    if (breakdown?.inputTokens !== undefined) {
+      usage.inputTokens = breakdown.inputTokens;
+    }
+    if (breakdown?.outputTokens !== undefined) {
+      usage.outputTokens = breakdown.outputTokens;
+    }
+    if (breakdown?.cachedReadTokens !== undefined) {
+      usage.cachedReadTokens = breakdown.cachedReadTokens;
+    }
+    if (breakdown?.cachedWriteTokens !== undefined) {
+      usage.cachedWriteTokens = breakdown.cachedWriteTokens;
+    }
+    if (breakdown?.thoughtTokens !== undefined) {
+      usage.thoughtTokens = breakdown.thoughtTokens;
+    }
+    if (breakdown?.totalTokens !== undefined) {
+      usage.totalTokens = breakdown.totalTokens;
+    }
+    if (cost?.amount !== undefined) {
+      usage.costAmount = cost.amount;
+    }
+    if (cost?.currency !== undefined) {
+      usage.costCurrency = cost.currency;
+    }
+    return usage;
+  }
+
+  /** One line per member, saying `provider did not report` where it did not. */
+  function usageLines(usage: MaterializationUsage): string {
+    const figure = (value: number | undefined): string =>
+      value === undefined ? "provider did not report" : String(value);
+    const cost =
+      usage.costAmount === undefined
+        ? "provider did not report"
+        : `${usage.costAmount}${usage.costCurrency === undefined ? "" : ` ${usage.costCurrency}`}`;
+    return [
+      `  input tokens: ${figure(usage.inputTokens)}`,
+      `  output tokens: ${figure(usage.outputTokens)}`,
+      `  cached read tokens: ${figure(usage.cachedReadTokens)}`,
+      `  cached write tokens: ${figure(usage.cachedWriteTokens)}`,
+      `  thought tokens: ${figure(usage.thoughtTokens)}`,
+      `  total tokens: ${figure(usage.totalTokens)}`,
+      `  cost: ${cost}`,
+    ].join("\n");
+  }
+
+  /**
+   * Spend the one turn this launch planned, and report what it cost.
+   *
+   * Reached only for a preparation that planned one, which is only ever a
+   * conversation this launch created through an adapter that says a fresh one is
+   * not yet openable. Everything about it is fixed before it runs: the exact
+   * prompt and the request id come from the retained plan, so a replay is
+   * looking for this turn rather than authorizing another.
+   *
+   * It is not a Prompt. It publishes no event stream, reaches no authored
+   * middleware, and is deliberately not registered with the permission bridge —
+   * an unregistered turn's permission request is refused by the bridge's own
+   * fail-closed answer, so there is no composed handler that could grant this
+   * turn the tool authority its prompt already forbids. A tool call that arrives
+   * anyway fails materialization, and the session is never handed over.
+   *
+   * It is also what settles the session's identity. The preparation held
+   * occupancy and asserted nothing, so the conversation this launch hands over
+   * is named here — by the backend's own acceptance of this turn, and by
+   * nothing else.
+   */
+  function materializeSession(
+    placed: Prepared,
+    prepared: PreparedLaunchRecord,
+    plan: MaterializationPlan,
+  ): Operation<MaterializedLaunchRecord> {
+    return scoped(function* (): Operation<MaterializedLaunchRecord> {
+      const base: Pick<MaterializedLaunchRecord, "phase" | "promptVersion" | "requestId"> = {
+        phase: "materialized",
+        promptVersion: plan.promptVersion,
+        requestId: plan.requestId,
+      };
+      const refused = (message: string): MaterializedLaunchRecord => ({
+        ...base,
+        usage: {},
+        response: "",
+        failure: { class: "materialization-failed", message },
+      });
+
+      const entry = managed.get(prepared.sessionKey);
+      if (!entry || !isLive(entry)) {
+        return refused(
+          `session "${prepared.sessionKey}" is no longer held by this provider, so the turn ` +
+            `that would make it resumable cannot be taken here`,
+        );
+      }
+      // Occupancy, and only occupancy. The preparation asserted no identity
+      // because no backend had accepted a turn here, so a handle that already
+      // names a conversation is not the placement this launch prepared — and
+      // spending a turn in it would be spending one in someone else's.
+      if (entry.handle.agentSessionId !== undefined) {
+        return refused(
+          `session "${prepared.sessionKey}" is held under a provider-native identity this ` +
+            `launch never prepared`,
+        );
+      }
+
+      // Before the turn, never after: what is about to be spent is the reader's
+      // model turn, and telling them once it is gone is telling them too late.
+      yield* notifyTerminal(
+        `${prepared.agent}: spending one model turn in session "${prepared.sessionKey}" so ` +
+          `${prepared.launcher} can open it (${plan.promptVersion}).`,
+      );
+
+      // Registered before the turn exists, and reaching it through a slot the
+      // start fills. Registering afterwards puts a suspension point between a
+      // live turn and the only thing that would stop it, and a cancellation
+      // landing there — a reader closing the grid this launch is running in is
+      // one — leaves a model turn running in their conversation that nothing
+      // is waiting for and nothing cancels until this whole provider comes
+      // down. There is no such gap this way round: `startTurn` answers without
+      // suspending, so the slot is filled in the step that creates the turn.
+      let turn: AcpRuntimeTurn | undefined;
+      let settled = false;
+      yield* ensure(function* () {
+        if (!turn || settled) {
+          return;
+        }
+        activeTurns.delete(turn);
+        try {
+          yield* until(turn.cancel());
+        } catch (error) {
+          cleanupErrors.push(toError(error));
+        }
+      });
+      turn = entry.runtime.runtime.startTurn({
+        handle: entry.handle,
+        text: plan.prompt,
+        mode: "prompt",
+        requestId: plan.requestId,
+      });
+      activeTurns.add(turn);
+
+      const started = Date.now();
+      let response = "";
+      let usage: MaterializationUsage = {};
+      let acted = false;
+      let outcome: Result<AcpRuntimeTurnResult>;
+      try {
+        for (const event of yield* each(stream(turn.events))) {
+          if (event.type === "text_delta" && (event.stream ?? "output") === "output") {
+            response += event.text;
+          } else if (event.type === "tool_call") {
+            // The prompt forbids this, so an arriving tool call means the turn
+            // did something other than acknowledge. Recorded rather than acted
+            // on: the turn is already running, and what this decides is that no
+            // native UI opens on what it left behind.
+            acted = true;
+          } else if (event.type === "status") {
+            usage = { ...usage, ...reportedUsage(event.breakdown, event.cost) };
+          }
+          yield* each.next();
+        }
+        outcome = Ok(yield* until(turn.result));
+      } catch (error) {
+        outcome = Err(toError(error));
+      }
+      settled = true;
+      const durationMs = Date.now() - started;
+
+      const stopped = (
+        message: string,
+        stopReason?: string,
+        failureClass: LaunchFailureClass = "materialization-failed",
+      ): MaterializedLaunchRecord => {
+        const record: MaterializedLaunchRecord = {
+          ...base,
+          durationMs,
+          usage,
+          response,
+          failure: { class: failureClass, message },
+        };
+        if (stopReason !== undefined) {
+          record.stopReason = stopReason;
+        }
+        return record;
+      };
+
+      if (!outcome.ok) {
+        return stopped(outcome.error.message);
+      }
+      const result = outcome.value;
+      if (result.status === "cancelled") {
+        return stopped("the materialization turn was cancelled", result.stopReason);
+      }
+      if (result.status === "failed") {
+        return stopped(result.error.message);
+      }
+      // ACP defines end_turn as the only successful stop reason, and an adapter
+      // that omits it on a normal completion means that one.
+      const stopReason = result.stopReason ?? "end_turn";
+      if (stopReason !== "end_turn") {
+        return stopped(
+          `the materialization turn ended with stop reason "${stopReason}"`,
+          stopReason,
+        );
+      }
+      if (acted) {
+        return stopped(
+          "the materialization turn called a tool, which its prompt forbids, so this launch " +
+            "will not hand the session to a native UI",
+          stopReason,
+        );
+      }
+      // The backend's own acceptance, asked for after the turn completed. A
+      // turn that failed, was cancelled, or simply ended without the adapter
+      // saying so rejects here, and a turn nothing accepted materialized
+      // nothing — so there is no identity, and nothing to hand over.
+      const accepted: Result<AcpRuntimeMaterialization> = yield* until(
+        turn.materialized.then(
+          (value): Result<AcpRuntimeMaterialization> => Ok(value),
+          (error: unknown): Result<AcpRuntimeMaterialization> => Err(toError(error)),
+        ),
+      );
+      if (!accepted.ok) {
+        return stopped(accepted.error.message, stopReason);
+      }
+      const nativeSessionId = accepted.value.agentSessionId;
+      if (nativeSessionId === undefined || nativeSessionId.length === 0) {
+        // The turn itself reached the backend and was accepted; what is absent
+        // is the conversation's name, which is the same thing an adapter that
+        // asserts no identity leaves absent before any turn. Classed as that
+        // rather than as a failed turn, because the turn did not fail.
+        return stopped(
+          "the backend accepted the materialization turn without naming the session it made " +
+            "openable, so there is nothing a native UI could resume",
+          stopReason,
+          "identity-unavailable",
+        );
+      }
+      // The provider's own name for the turn, read from the response metadata
+      // this package recognizes and from nothing else. Without it there is no
+      // evidence the exchange reached the backend rather than a socket.
+      const named = checkpointFromResult(result);
+      if (named === undefined) {
+        return stopped(
+          "the materialization turn completed without naming the provider turn it was",
+          stopReason,
+        );
+      }
+      if (response.length === 0) {
+        return stopped(
+          "the materialization turn produced no assistant response, so nothing was said in " +
+            "the conversation this launch was making openable",
+          stopReason,
+        );
+      }
+
+      // The durable order the prompt path uses, for the same reason: ACPX's own
+      // record asserted the identity as it promoted this session, the host's
+      // mapping commits second, and the placement becomes established last. A
+      // host that refuses to retain it leaves a session nobody may prompt
+      // through, so the handle is given up rather than held under a mapping
+      // that does not exist.
+      const identity: AcpxSessionIdentity = {
+        acpxRecordId: accepted.value.acpxRecordId,
+        agentSessionId: nativeSessionId,
+      };
+      if (sessions?.established && placed.kind === "placement") {
+        try {
+          yield* sessions.established(placed.placement, identity);
+        } catch (error) {
+          yield* abandonHandle(entry, "session retention refused");
+          if (!holding(prepared.sessionKey)) {
+            detachPlacement(prepared.sessionKey, entry);
+          }
+          return stopped(toError(error).message, stopReason);
+        }
+      }
+      entry.session.agentSessionId = nativeSessionId;
+      entry.state = "established";
+
+      yield* notifyTerminal(
+        `${prepared.agent}: materialization turn completed in ${durationMs}ms ` +
+          `(${named.provider} ${named.kind} ${named.value}).\n` +
+          `${response}\n` +
+          `${usageLines(usage)}`,
+      );
+
+      return { ...base, nativeSessionId, turn: named, durationMs, usage, response, stopReason };
+    });
   }
 
   /**
@@ -2907,12 +3449,14 @@ function* useAcpxProviderState(
     if (invocation.fresh.has(sessionKey)) {
       return { phase: "detached" };
     }
-    // Nothing was prepared live, so this is a replay — and for a session XMD
-    // named, this detach is its first live phase. The two durable accounts are
-    // checked here rather than at the spawn, because retaining a detach is
-    // itself advancing the launch: a journal that says the handoff began is not
-    // something to write about a session this run cannot confirm.
-    if (prepared.identityProvenance === "client-allocated") {
+    // For a session bound to a build, this detach may be the first live phase of
+    // a replay. The durable accounts are checked here rather than at the spawn,
+    // because retaining a detach is itself advancing the launch: a journal that
+    // says the handoff began is not something to write about a session this run
+    // cannot confirm. A launch that prepared live has already checked them, and
+    // this reads them once per invocation.
+    const bound = adapterFor(prepared.agent);
+    if (bound && bindsBuild(bound)) {
       const refused = yield* reconcile(invocation, prepared, agentCommand);
       if (refused) {
         return { phase: "detached", failure: refused };
@@ -3048,6 +3592,7 @@ function* useAcpxProviderState(
                       placement,
                     ),
                   ),
+                materialize: (prepared, plan) => materializeSession(placement, prepared, plan),
                 detach: (prepared) =>
                   detachSession(invocation, prepared, agentCommandOf(placement)),
                 exit: (prepared) => runNativeUi(invocation, prepared, agentCommandOf(placement)),
@@ -3086,11 +3631,11 @@ function* useAcpxProviderState(
   function* nativeCommand(
     invocation: LaunchInvocation,
     prepared: PreparedLaunchRecord,
-    adapter: ClientAllocatedAdapter,
+    adapter: NativeAdapter,
     agentCommand: string,
   ): Operation<Result<string[]>> {
     const publishedHere = invocation.fresh.get(prepared.sessionKey);
-    if (publishedHere === undefined) {
+    if (publishedHere === undefined && bindsBuild(adapter)) {
       // A replay. Whichever suffix it holds, the two durable accounts are
       // checked before this run does anything a native process could act on —
       // a detached replay reaches here as its first live phase, and a
@@ -3100,13 +3645,21 @@ function* useAcpxProviderState(
         return Err(new RetainedRefusal(refused));
       }
     }
-    const creating = publishedHere ?? invocation.detachedLive.has(prepared.sessionKey);
-    const argv = creating
-      ? adapter.create(
-          prepared.nativeSessionId,
-          yield* privateInstructionFile(prepared.instructions),
-        )
-      : adapter.resume(prepared.nativeSessionId);
+    // Creation is a question only for an identity XMD chose. A session the
+    // provider named already exists — ACP made it — so there is nothing here to
+    // create and no instruction layer to install through argv.
+    let argv: string[];
+    if (
+      allocatesIdentity(adapter) &&
+      (publishedHere ?? invocation.detachedLive.has(prepared.sessionKey))
+    ) {
+      argv = adapter.create(
+        prepared.nativeSessionId,
+        yield* privateInstructionFile(prepared.instructions),
+      );
+    } else {
+      argv = adapter.resume(prepared.nativeSessionId);
+    }
     // The exact file this run observed, in place of the launcher name the
     // adapter writes. The name is what durable records carry; the path is what
     // this invocation spawns, and it is live only. A legacy session observed no
@@ -3147,15 +3700,20 @@ function* useAcpxProviderState(
     agentCommand: string,
   ): Operation<LaunchFailure | undefined> {
     const stop = (message: string): LaunchFailure => ({ class: "identity-unavailable", message });
-    // Which provider retained this preparation, before anything is compared
-    // against it. A record another provider wrote describes a session this one
-    // does not own, and an ACPX route that happens to agree about a UUID is not
-    // evidence that it does — it is two providers naming one string.
-    if (prepared.provider !== ACPX_PROVIDER) {
-      return stop(
-        `session "${prepared.sessionKey}" was prepared by a different provider, so this one ` +
-          `cannot confirm the conversation it names`,
+    const disagree = (): LaunchFailure =>
+      stop(
+        `session "${prepared.sessionKey}" is described differently by its journal and its construction route, and neither account repairs the other`,
       );
+    const unrecorded = (): LaunchFailure => ({
+      class: "executable-binding-refused",
+      message: `session "${prepared.sessionKey}" was prepared before XMD recorded which build its identity belongs to, so this run cannot confirm the conversation it names`,
+    });
+    if (prepared.provider !== ACPX_PROVIDER) {
+      return stop(`session "${prepared.sessionKey}" was prepared by a different provider`);
+    }
+    const adapter = adapterFor(prepared.agent);
+    if (!adapter || !bindsBuild(adapter)) {
+      return unrecorded();
     }
     let route;
     try {
@@ -3163,66 +3721,64 @@ function* useAcpxProviderState(
     } catch (error) {
       return stop(routeMessage(error));
     }
-    if (!route || route.route !== "client-native") {
-      return stop(
-        `session "${prepared.sessionKey}" has no client-allocated construction route, so the ` +
-          `conversation this launch prepared cannot be confirmed`,
-      );
-    }
     if (
-      route.nativeSessionId !== prepared.nativeSessionId ||
-      route.identityProvenance !== prepared.identityProvenance ||
-      route.instructionsDigest !== prepared.instructionsDigest ||
-      route.launcher !== prepared.launcher
+      !route ||
+      route.provider !== ACPX_PROVIDER ||
+      route.agent !== agentCommand ||
+      route.sessionKey !== prepared.sessionKey
     ) {
-      return stop(
-        `session "${prepared.sessionKey}" is described differently by its journal and its ` +
-          `construction route, and neither account repairs the other`,
-      );
+      return disagree();
     }
-    // A launch that never got as far as the native process, prepared under a
-    // contract that published no account of the build that accepted the
-    // identity. The cross-check below is what makes an incomplete launch
-    // resumable, and with only one account there is nothing to hold to
-    // anything. A completed launch never reaches this code.
-    if (route.schema === "session-route.v1" || prepared.executableBinding === undefined) {
-      return {
-        class: "executable-binding-refused",
-        message:
-          `session "${prepared.sessionKey}" was prepared before XMD recorded which build ` +
-          `accepted its identity, so this run cannot confirm the conversation it names`,
-      };
+    let retainedBinding: ExecutableBuildBindingV1;
+    if (allocatesIdentity(adapter)) {
+      if (
+        route.route !== "client-native" ||
+        route.nativeSessionId !== prepared.nativeSessionId ||
+        route.identityProvenance !== prepared.identityProvenance ||
+        route.instructionsDigest !== prepared.instructionsDigest ||
+        route.launcher !== prepared.launcher
+      ) {
+        return disagree();
+      }
+      if (route.schema === "session-route.v1") {
+        return unrecorded();
+      }
+      const foreign = admitRouteContract(prepared.sessionKey, route, adapter);
+      if (foreign) {
+        return foreign;
+      }
+      retainedBinding = route.executableBinding;
+    } else {
+      const foreign = providerRouteContract(agentCommand, prepared.sessionKey, adapter, route);
+      if (foreign) {
+        return foreign;
+      }
+      if (
+        route.schema !== "session-route.v3" ||
+        prepared.identityProvenance !== "provider-returned" ||
+        prepared.launcher !== adapter.launcher
+      ) {
+        return disagree();
+      }
+      retainedBinding = route.executableBinding;
+      try {
+        yield* retainedAssertion(prepared.sessionKey, prepared.nativeSessionId);
+      } catch (error) {
+        if (error instanceof AttachmentRefused) {
+          return error.failure;
+        }
+        throw error;
+      }
     }
-    // Both directions, because neither of these is the live build: they are two
-    // durable accounts of one observation, so one saying less than the other is
-    // already a disagreement rather than a build that has gone quiet.
+    if (prepared.executableBinding === undefined) {
+      return unrecorded();
+    }
+    // These are two durable accounts, not a retained-versus-live admission test.
     if (
-      !sameExecutableBuild(route.executableBinding, prepared.executableBinding) ||
-      !sameExecutableBuild(prepared.executableBinding, route.executableBinding)
+      !sameExecutableBuild(retainedBinding, prepared.executableBinding) ||
+      !sameExecutableBuild(prepared.executableBinding, retainedBinding)
     ) {
-      return stop(
-        `session "${prepared.sessionKey}" is described differently by its journal and its ` +
-          `construction route, and neither account repairs the other`,
-      );
-    }
-    // The live half, before the first effect a native process could act on.
-    const adapter = adapterFor(prepared.agent);
-    if (!adapter || !allocatesIdentity(adapter)) {
-      return {
-        class: "executable-binding-refused",
-        message:
-          `session "${prepared.sessionKey}" names a launcher this build has no way to observe, ` +
-          `so the conversation it prepared cannot be confirmed`,
-      };
-    }
-    // Still ahead of the observation, and ahead of every phase a replay could
-    // act with. A replay resumes a conversation someone else's process may
-    // already be in, so what it must establish first is that this adapter is
-    // what that conversation was constructed under — not that some adapter under
-    // this launcher is admitted for something.
-    const foreign = admitRouteContract(prepared.sessionKey, route, adapter);
-    if (foreign) {
-      return foreign;
+      return disagree();
     }
     let build: BoundBuild;
     try {
@@ -3233,10 +3789,6 @@ function* useAcpxProviderState(
       }
       throw error;
     }
-    // The replay's own first live phase, and this is still ahead of it. A
-    // predecessor that was admitted proves nothing about this run: the build
-    // under the same command may have been replaced since, and a capability is
-    // a claim about the build rather than about the session.
     const unproved = admitCapability(prepared.agent, "native-launch", build);
     if (unproved) {
       return unproved;
@@ -3263,9 +3815,7 @@ function* useAcpxProviderState(
     }
     let resolved: Result<string[]>;
     try {
-      resolved = allocatesIdentity(adapter)
-        ? yield* nativeCommand(invocation, prepared, adapter, agentCommand)
-        : Ok(adapter.resume(prepared.nativeSessionId));
+      resolved = yield* nativeCommand(invocation, prepared, adapter, agentCommand);
     } catch {
       // Anything raised here came from private setup — an adapter's own code, a
       // temporary directory, a write. Whatever shape it has, it says nothing
@@ -3385,11 +3935,13 @@ function* useAcpxProviderState(
         // before the caller saw the failure, and preserving the route is what
         // stops that uncertainty from later being reclassified as
         // client-native.
-        const attachment = yield* constructRoute(agentName, prepared);
+        const construction = yield* constructRoute(agentName, prepared);
+        const resumeSessionId = construction?.resumeSessionId;
         const session = yield* turns.withSlot(prepared.sessionKey, () =>
           withSessionRoute(context, function* () {
             const entry = yield* ensureFromPrepared(agentName, prepared, {
-              ...(attachment === undefined ? {} : { attachment }),
+              ...(construction === undefined ? {} : { build: construction.build }),
+              ...(resumeSessionId === undefined ? {} : { attachment: { resumeSessionId } }),
               state,
             });
             return entry.session;

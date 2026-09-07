@@ -26,11 +26,13 @@
 /**
  * Which behavior a proof established.
  *
- * Two, not one, because they are proved separately: handing a session to a
- * native UI and later joining that same conversation through ACP are different
- * things that can be true independently.
+ * Native launch, joining a client-created conversation, and continuing one
+ * returned by a provider each have independent proofs.
  */
-export type NativeCapability = "native-launch" | "client-native-attachment";
+export type NativeCapability =
+  | "native-launch"
+  | "client-native-attachment"
+  | "provider-native-continuation";
 
 /** The machine a host is actually running on, as that host states it. */
 export interface NativeCapabilityHost {

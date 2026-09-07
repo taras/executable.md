@@ -462,6 +462,133 @@ function claudeReportedVersion(metadata: ExecutableMetadata): string | undefined
   return canonical.length === 1 ? canonical[0] : undefined;
 }
 
+const CODEX_PROBE_PROFILE = "codex-help-native-session.v1";
+const CODEX_PROVIDER_PROTOCOL = "codex-provider-returned.v1";
+
+function helpSection(help: string, heading: string): string[] {
+  const lines: string[] = [];
+  let inside = false;
+  for (const line of help.split("\n")) {
+    if (/^\S.*:$/.test(line)) {
+      inside = line === `${heading}:`;
+    } else if (inside) {
+      lines.push(line);
+    }
+  }
+  return lines;
+}
+
+interface PositionalDeclaration {
+  readonly name: string;
+  readonly optional: boolean;
+  description: string;
+}
+
+function positionalDeclarations(help: string): PositionalDeclaration[] {
+  const positions: PositionalDeclaration[] = [];
+  let current: PositionalDeclaration | undefined;
+  for (const line of helpSection(help, "Arguments")) {
+    const head = /^ {2}(?:\[([^\[\]]+)\]|<([^<>]+)>)(?:\s+(.*))?$/.exec(line);
+    if (head) {
+      current = {
+        name: head[1] ?? head[2],
+        optional: head[1] !== undefined,
+        description: normalized(head[3] ?? "").toLowerCase(),
+      };
+      positions.push(current);
+    } else if (current && /^ {3,}\S/.test(line)) {
+      current.description += ` ${normalized(line).toLowerCase()}`;
+    } else if (line.trim().length > 0) {
+      return [];
+    }
+  }
+  return positions;
+}
+
+function usageDeclarations(help: string): string[] {
+  const entries: string[] = [];
+  let inside = false;
+  for (const line of help.split("\n")) {
+    if (/^Usage:/.test(line)) {
+      entries.push(normalized(line));
+      inside = true;
+    } else if (inside && /^ {3,}[[<]/.test(line)) {
+      entries[entries.length - 1] += ` ${normalized(line)}`;
+    } else {
+      inside = false;
+    }
+  }
+  return entries;
+}
+
+function declaresCodexResume(root: string, resume: string): boolean {
+  const product = root.split("\n").some((line) => /^Codex CLI\s*(?:[-–—:]|$)/.test(line));
+  const rootUsage = root.split("\n").some((line) => /^Usage: codex(?:\s|$)/.test(line));
+  const commands = helpSection(root, "Commands").filter((line) => /^ {2}resume(?:\s|$)/.test(line));
+  const usages = usageDeclarations(resume);
+  const usage =
+    usages.length === 1
+      ? /^Usage: codex resume \[OPTIONS\] \[SESSION_ID\](?: \[PROMPT\])?$/.exec(
+          normalized(usages[0]),
+        )
+      : null;
+  const positions = positionalDeclarations(resume);
+  const identity = positions[0];
+  const optionalPrompt =
+    positions.length === 1 ||
+    (positions.length === 2 && positions[1].name === "PROMPT" && positions[1].optional);
+  const uuidIdentity =
+    identity !== undefined &&
+    states(
+      identity.description,
+      /\b(?:session|conversation) (?:id|identity|identifier)\s*\(\s*uuid\s*\)/,
+    );
+  return (
+    product &&
+    rootUsage &&
+    commands.length === 1 &&
+    usage !== null &&
+    identity?.name === "SESSION_ID" &&
+    identity.optional &&
+    optionalPrompt &&
+    uuidIdentity
+  );
+}
+
+function codexNativeProbe(pinnedBridgeProtocol: string | undefined): NativeCapabilityProbe {
+  return (metadata) => {
+    const capabilities: NativeCapability[] = [];
+    const root = answered(metadata, "help");
+    const resume = answered(metadata, "resume-help");
+    if (root !== undefined && resume !== undefined && declaresCodexResume(root, resume)) {
+      capabilities.push("native-launch");
+      // This assertion belongs to the compiled vendored bridge contract. An
+      // executable declaration alone cannot confer ACP continuation.
+      if (pinnedBridgeProtocol === CODEX_PROVIDER_PROTOCOL) {
+        capabilities.push("provider-native-continuation");
+      }
+    }
+    return { probeProfile: CODEX_PROBE_PROFILE, capabilities };
+  };
+}
+
+function codexReportedVersion(metadata: ExecutableMetadata): string | undefined {
+  const output = answered(metadata, "version");
+  if (output === undefined) {
+    return undefined;
+  }
+  const canonical = output
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^codex-cli \d+\.\d+\.\d+$/.test(line));
+  return canonical.length === 1 ? canonical[0] : undefined;
+}
+
+export interface MaterializationContract {
+  readonly promptVersion: string;
+  readonly prompt: string;
+}
+
 interface AdapterCommands {
   /** Stable adapter identity — `claude`, `codex`. Never an executable path. */
   launcher: string;
@@ -478,6 +605,7 @@ interface AdapterCommands {
   identity: IdentityProvenance;
   /** The argv that resumes this exact provider-native session. */
   resume(nativeSessionId: string): string[];
+  materialization?: MaterializationContract;
   /**
    * The exact builds and machines a real-CLI proof of this adapter ran on.
    *
@@ -523,11 +651,20 @@ export interface ProviderReturnedAdapter extends AdapterCommands {
   identity: "provider-returned";
 }
 
-export type NativeAdapter = ProviderReturnedAdapter | ClientAllocatedAdapter;
+export interface BoundProviderReturnedAdapter extends ProviderReturnedAdapter {
+  binding: NativeBinding;
+}
+
+export type BuildBoundAdapter = BoundProviderReturnedAdapter | ClientAllocatedAdapter;
+export type NativeAdapter = ProviderReturnedAdapter | BuildBoundAdapter;
 
 /** Whether this adapter names its own sessions. */
 export function allocatesIdentity(adapter: NativeAdapter): adapter is ClientAllocatedAdapter {
   return adapter.identity === "client-allocated";
+}
+
+export function bindsBuild(adapter: NativeAdapter): adapter is BuildBoundAdapter {
+  return "binding" in adapter;
 }
 
 /**
@@ -548,6 +685,12 @@ const CLAUDE_PROVED_BUILD = {
   platform: "darwin",
   architecture: "arm64",
 } as const;
+
+const CODEX_PROVED_HOST = {
+  probeProfile: CODEX_PROBE_PROFILE,
+  platform: "darwin",
+  architecture: "arm64",
+};
 
 const ADAPTERS: Readonly<Record<string, NativeAdapter>> = {
   claude: {
@@ -595,8 +738,32 @@ const ADAPTERS: Readonly<Record<string, NativeAdapter>> = {
   },
   codex: {
     launcher: "codex",
-    protocol: "codex-provider-returned.v1",
+    protocol: CODEX_PROVIDER_PROTOCOL,
     identity: "provider-returned",
+    proved: [
+      { capability: "native-launch", ...CODEX_PROVED_HOST },
+      { capability: "provider-native-continuation", ...CODEX_PROVED_HOST },
+    ],
+    binding: {
+      command: "codex",
+      metadata: [
+        { name: "help", args: ["--help"] },
+        { name: "resume-help", args: ["resume", "--help"] },
+        { name: "version", args: ["--version"] },
+      ],
+      probe: codexNativeProbe(CODEX_PROVIDER_PROTOCOL),
+      reportedVersion: codexReportedVersion,
+      // The host registry supplies the vendored bridge. Replacing its command
+      // here would bypass the snapshot whose identity contract is proved.
+      environment: (livePath) => ({ CODEX_PATH: livePath }),
+    },
+    materialization: {
+      promptVersion: "codex-materialization.v1",
+      prompt:
+        "This turn only makes the Codex conversation resumable. Do not perform the prepared " +
+        "task, inspect or modify files, call tools, or take any external action. Reply with a " +
+        "brief acknowledgement only.",
+    },
     resume: (nativeSessionId) => ["codex", "resume", nativeSessionId],
   },
 };
@@ -631,6 +798,11 @@ export function pinnedRouteProtocol(launcher: string): string | undefined {
   return Object.hasOwn(ROUTE_PROTOCOLS, launcher) ? ROUTE_PROTOCOLS[launcher] : undefined;
 }
 
+/** V3 has one compiled interpretation, independent of a registered adapter. */
+export function pinnedProviderRouteProtocol(launcher: string): string | undefined {
+  return launcher === "codex" ? CODEX_PROVIDER_PROTOCOL : undefined;
+}
+
 /**
  * The adapters this host will consider for native launch at all.
  *
@@ -640,12 +812,11 @@ export function pinnedRouteProtocol(launcher: string): string | undefined {
  * probe recognized in the executable actually found, and the machine actually
  * running. A name reaches the question; it does not answer it.
  *
- * `codex` is absent. Its command shape is known and its adapter contract tests
- * pass, and neither is the proof: nothing has run it against an installed
- * Codex. A host may still name an adapter itself by passing it through
- * `AcpxProviderDependencies.advertiseNativeLaunch`.
+ * Codex's provider-returned proof used codex-cli 0.153.2 on macOS arm64. That
+ * release identifies the evidence; each current executable still has to pass
+ * the live protocol, shape, capability and host admission independently.
  */
-export const ADVERTISED_NATIVE_LAUNCH: readonly string[] = ["claude"];
+export const ADVERTISED_NATIVE_LAUNCH: readonly string[] = ["claude", "codex"];
 
 /**
  * The adapters this host will consider for client-native ACP attachment.
@@ -656,6 +827,8 @@ export const ADVERTISED_NATIVE_LAUNCH: readonly string[] = ["claude"];
  * second. Like that list, this one selects rather than authorizes.
  */
 export const ADVERTISED_CLIENT_NATIVE_ATTACHMENT: readonly string[] = ["claude"];
+
+export const ADVERTISED_PROVIDER_NATIVE_CONTINUATION: readonly string[] = ["codex"];
 
 /**
  * What this build's adapters have proved, on the machine a host says it is.

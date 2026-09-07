@@ -10,9 +10,9 @@
  *
  * What it owns is everything that decides whether a launch happened: which
  * request is live, whether this provider is the one installed for it, the order
- * of `prepared -> detached -> exited`, whether each returned record describes
- * the request that was routed, and the result the document settles on. A
- * provider supplies the work; it never supplies the verdict.
+ * of `prepared -> materialized -> detached -> exited`, whether each returned
+ * record describes the request that was routed, and the result the document
+ * settles on. A provider supplies the work; it never supplies the verdict.
  */
 
 import type { Operation } from "effection";
@@ -22,16 +22,35 @@ import { AgentLaunchProtocolError } from "./launch-request.ts";
 import type { AgentLaunchRequest, IssuedLaunch } from "./launch-request.ts";
 import { readPlacement } from "./session-request.ts";
 import type { AgentSessionRequest } from "./session-request.ts";
-import type { DetachedLaunchRecord, ExitedLaunchRecord, PreparedLaunchRecord } from "./launch.ts";
+import type {
+  DetachedLaunchRecord,
+  ExitedLaunchRecord,
+  MaterializationPlan,
+  MaterializedLaunchRecord,
+  PreparedLaunchRecord,
+} from "./launch.ts";
 
 /**
  * The live work one provider offers for a launch.
  *
  * Each runs at most once, and only when its phase is absent from the journal.
  * A replay of a completed phase never reaches these at all.
+ *
+ * `materialize` is offered only by a provider whose freshly created session is
+ * not yet openable, and is reached only for a preparation that planned the turn.
+ * A preparation carrying a plan the provider cannot perform is a protocol
+ * violation rather than a launch that quietly skips what it planned to spend.
+ *
+ * `detach` and `exit` receive the preparation carrying the identity the launch
+ * is handing over, which for a launch that owed a turn is the one that turn
+ * asserted rather than the empty one the preparation was retained with.
  */
 export interface AgentLaunchPhases {
   prepare(): Operation<PreparedLaunchRecord>;
+  materialize?(
+    prepared: PreparedLaunchRecord,
+    plan: MaterializationPlan,
+  ): Operation<MaterializedLaunchRecord>;
   detach(prepared: PreparedLaunchRecord): Operation<DetachedLaunchRecord>;
   exit(prepared: PreparedLaunchRecord): Operation<ExitedLaunchRecord>;
 }
@@ -86,6 +105,11 @@ export interface AgentProviderAuthority {
 /** How one launch retains its phases, supplied by the invocation that issued it. */
 export interface LaunchRetention {
   prepared(live: () => Operation<PreparedLaunchRecord>): Operation<PreparedLaunchRecord>;
+  materialized(
+    prepared: PreparedLaunchRecord,
+    plan: MaterializationPlan,
+    live: () => Operation<MaterializedLaunchRecord>,
+  ): Operation<MaterializedLaunchRecord>;
   detached(live: () => Operation<DetachedLaunchRecord>): Operation<DetachedLaunchRecord>;
   exited(live: () => Operation<ExitedLaunchRecord>): Operation<ExitedLaunchRecord>;
 }
@@ -98,6 +122,8 @@ export interface LiveLaunch {
   settled?: SessionLaunchResult;
   /** The retained preparation, so a refusal is reportable to the caller. */
   preparation?: PreparedLaunchRecord;
+  /** The retained materialization, for a launch that owed a turn. */
+  materialization?: MaterializedLaunchRecord;
   /** The retained detach, so a handoff that stopped there says why. */
   detachment?: DetachedLaunchRecord;
   /** The retained exit, so how the native UI ended is the caller's answer. */
@@ -143,14 +169,6 @@ function crossCheck(request: AgentLaunchRequest, record: PreparedLaunchRecord): 
     if (typeof request.session === "object") {
       return "session";
     }
-  }
-  // A provider that returns its own identity owns its own session lifetime and
-  // binds no build, so a binding beside one describes a check nothing performed.
-  // The parser refuses the same pairing on the way back in; this is the live
-  // half, before anything durable exists. The other direction stays open: the
-  // client-allocated path was released unbound, and legacy history is readable.
-  if (record.identityProvenance === "provider-returned" && record.executableBinding !== undefined) {
-    return "identity provenance";
   }
   return undefined;
 }
@@ -206,19 +224,64 @@ export function createLaunchAuthority(
           `the provider prepared a session whose ${mismatch} is not what this launch asked for`,
         );
       }
-      if (prepared.nativeSessionId.length === 0) {
+      const plan = prepared.materialization;
+      // A launch that owes a turn has nothing to name yet, and one that owes
+      // none has everything to name. Either preparation asserting the other's
+      // identity would mean the phase order stopped describing this launch.
+      if (plan === undefined && prepared.nativeSessionId.length === 0) {
         throw new AgentLaunchProtocolError(
           "the provider prepared a session but asserted no provider-native identity",
         );
       }
+      if (plan !== undefined && prepared.nativeSessionId.length > 0) {
+        throw new AgentLaunchProtocolError(
+          "the provider prepared a provider-native identity for a session no backend has " +
+            "accepted a turn in yet",
+        );
+      }
 
-      const detached = yield* launch.retention.detached(() => phases.detach(prepared));
+      // What the handoff is given: the preparation, carrying whichever identity
+      // this launch is entitled to assert by the time it reaches one.
+      let handed = prepared;
+      if (plan) {
+        const materialize = phases.materialize;
+        if (!materialize) {
+          throw new AgentLaunchProtocolError(
+            "this launch planned a materialization turn and its provider offers no way to spend one",
+          );
+        }
+        const materialized = yield* launch.retention.materialized(prepared, plan, () =>
+          materialize(prepared, plan),
+        );
+        launch.materialization = materialized;
+        if (
+          materialized.promptVersion !== plan.promptVersion ||
+          materialized.requestId !== plan.requestId
+        ) {
+          throw new AgentLaunchProtocolError(
+            "the provider retained a materialization turn other than the one this launch planned",
+          );
+        }
+        if (materialized.failure) {
+          return;
+        }
+        const asserted = materialized.nativeSessionId;
+        if (asserted === undefined || asserted.length === 0) {
+          throw new AgentLaunchProtocolError(
+            "the materialization turn completed without asserting the provider-native identity " +
+              "it made openable",
+          );
+        }
+        handed = { ...prepared, nativeSessionId: asserted };
+      }
+
+      const detached = yield* launch.retention.detached(() => phases.detach(handed));
       launch.detachment = detached;
       if (detached.failure) {
         return;
       }
 
-      const exited = yield* launch.retention.exited(() => phases.exit(prepared));
+      const exited = yield* launch.retention.exited(() => phases.exit(handed));
       launch.exit = exited;
       if (exited.failure) {
         return;
@@ -231,10 +294,10 @@ export function createLaunchAuthority(
       }
 
       launch.settled = {
-        agent: prepared.agent,
-        session: { sessionKey: prepared.sessionKey, cwd: prepared.cwd },
-        nativeSessionId: prepared.nativeSessionId,
-        launcher: prepared.launcher,
+        agent: handed.agent,
+        session: { sessionKey: handed.sessionKey, cwd: handed.cwd },
+        nativeSessionId: handed.nativeSessionId,
+        launcher: handed.launcher,
       };
     },
 

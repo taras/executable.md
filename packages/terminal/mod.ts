@@ -28,6 +28,7 @@ export {
   NativeLauncherUnavailableError,
   nativeLaunch,
   NO_TERMINAL,
+  notifyTerminal,
   reserveTerminal,
 } from "./src/native-launcher.ts";
 export type {

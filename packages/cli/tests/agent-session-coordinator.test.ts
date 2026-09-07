@@ -34,6 +34,7 @@ import type { AgentSessionCoordinator } from "@executablemd/runtime";
 import {
   ADVERTISED_CLIENT_NATIVE_ATTACHMENT,
   ADVERTISED_NATIVE_LAUNCH,
+  ADVERTISED_PROVIDER_NATIVE_CONTINUATION,
   admitsNativeCapability,
   createAcpxProvider,
   createDenoSessionRouteStore,
@@ -321,6 +322,7 @@ function* launchUnder(
         : {
             advertiseNativeLaunch: ["claude"],
             advertiseClientNativeAttachment: ["claude"],
+            advertiseProviderNativeContinuation: ["codex"],
             nativeAdapters: { claude: options.adapter ?? PROVIDER_RETURNED },
           }),
       ...(coordinator ? { coordinator } : {}),
@@ -456,11 +458,10 @@ describe("Tier HC — host session ownership", () => {
     expect(counted.operations).toEqual([]);
   });
 
-  it("HC8: the shipped default advertises claude, and Codex stays off it", function* () {
+  it("HC8: the shipped default advertises Claude and Codex", function* () {
     // What a host actually assembles. A case that injected an advertisement
     // would prove the mechanism and say nothing about what ships.
-    expect([...ADVERTISED_NATIVE_LAUNCH]).toEqual(["claude"]);
-    expect(ADVERTISED_NATIVE_LAUNCH).not.toContain("codex");
+    expect([...ADVERTISED_NATIVE_LAUNCH]).toEqual(["claude", "codex"]);
   });
 
   it("HC9: a default Claude launch reaches the launcher here, and refuses elsewhere", function* () {
@@ -532,11 +533,10 @@ describe("Tier HC — host session ownership", () => {
   });
 
   it("HC10: an unadvertised agent keeps ordinary behavior on every runtime", function* () {
-    // Codex has a command shape and no advertisement, so nothing about session
-    // ownership applies to it — including on the host that could have owned it.
+    // An agent with no native advertisement needs no machine-session assembly.
     const records: LaunchRecord[] = [];
     const probe: RuntimeProbe = { ensures: 0, closes: 0, doctors: 0, runtimes: 0 };
-    yield* launchUnder(undefined, records, probe, { defaults: true, agent: "codex" });
+    yield* launchUnder(undefined, records, probe, { defaults: true, agent: "gemini" });
 
     const failure = records.find((record) => record.failure)?.failure;
     expect(failure?.class).toBe("unsupported-capability");
@@ -587,15 +587,17 @@ describe("Tier HC — host session ownership", () => {
     expect(probe.ensures).toBe(0);
   });
 
-  it("HC12: the two advertised sets are separate, and this host states both", function* () {
+  it("HC12: the three advertised sets are separate, and this host states each", function* () {
     // What a host actually assembles. Native launch and ACP attachment are
     // different proofs, so they are different lists — and the ordinary profile
     // says which adapters it has proven for each rather than inheriting either.
-    expect([...ADVERTISED_NATIVE_LAUNCH]).toEqual(["claude"]);
+    expect([...ADVERTISED_NATIVE_LAUNCH]).toEqual(["claude", "codex"]);
     expect([...ADVERTISED_CLIENT_NATIVE_ATTACHMENT]).toEqual(["claude"]);
+    expect([...ADVERTISED_PROVIDER_NATIVE_CONTINUATION]).toEqual(["codex"]);
     const assembly = useMachineSessions(PROVED_HOST);
-    expect([...assembly.advertiseNativeLaunch]).toEqual(["claude"]);
+    expect([...assembly.advertiseNativeLaunch]).toEqual(["claude", "codex"]);
     expect([...assembly.advertiseClientNativeAttachment]).toEqual(["claude"]);
+    expect([...assembly.advertiseProviderNativeContinuation]).toEqual(["codex"]);
     // Built from the same trusted root as the coordinator beside it.
     expect(assembly.coordinator === undefined).toBe(!onDeno());
     expect(assembly.routeStore === undefined).toBe(!onDeno());
@@ -621,6 +623,18 @@ describe("Tier HC — host session ownership", () => {
         adapterProtocol: CLAUDE_PROTOCOL,
         capability: "client-native-attachment",
         probeProfile: CLAUDE_PROBE_PROFILE,
+        ...PROVED_HOST,
+      },
+      {
+        adapterProtocol: "codex-provider-returned.v1",
+        capability: "native-launch",
+        probeProfile: "codex-help-native-session.v1",
+        ...PROVED_HOST,
+      },
+      {
+        adapterProtocol: "codex-provider-returned.v1",
+        capability: "provider-native-continuation",
+        probeProfile: "codex-help-native-session.v1",
         ...PROVED_HOST,
       },
     ]);
@@ -654,7 +668,8 @@ describe("Tier HC — host session ownership", () => {
     // Node and Bun keep the coarse names and assemble no authority, so the
     // advertised name reaches a question this profile answers with a refusal.
     const unassembled = unassembledMachineSessions();
-    expect([...unassembled.advertiseNativeLaunch]).toEqual(["claude"]);
+    expect([...unassembled.advertiseNativeLaunch]).toEqual(["claude", "codex"]);
+    expect([...unassembled.advertiseProviderNativeContinuation]).toEqual(["codex"]);
     expect(unassembled.nativeCapabilityPolicy).toBe(undefined);
     expect(admitsNativeCapability(unassembled.nativeCapabilityPolicy, claudeLaunch)).toBe(false);
     // Shared assembly is handed the machine rather than reading it: only the
@@ -665,6 +680,7 @@ describe("Tier HC — host session ownership", () => {
     const workflow = yield* entrypoint("workflow-agent.ts");
     expect(workflow.includes("advertiseNativeLaunch: [],")).toBe(true);
     expect(workflow.includes("advertiseClientNativeAttachment: [],")).toBe(true);
+    expect(workflow.includes("advertiseProviderNativeContinuation: [],")).toBe(true);
     expect(workflow.includes("nativeCapabilityPolicy")).toBe(false);
   });
 });
