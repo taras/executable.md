@@ -96,7 +96,12 @@ export type {
  * that is what the profile admitted, and resolves the name itself through the
  * ordinary import chain.
  */
-export type { ComponentAnswerClaim, ComponentAnswerInstallation } from "./src/component-answers.ts";
+export type {
+  ComponentAnswerHandler,
+  ComponentAnswerInstallation,
+  ComponentAnswerRegistrar,
+  ComponentAnswerRequest,
+} from "./src/component-answers.ts";
 /**
  * The private operations an admitted fragment performs, and the only ones it
  * can reach.

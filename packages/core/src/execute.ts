@@ -162,7 +162,7 @@ import type {
   ResolvedAnswer,
   ResolvedAnswers,
 } from "./evaluation-profile.ts";
-import { componentAnswerClaim } from "./component-answers.ts";
+import { componentAnswerRegistrar } from "./component-answers.ts";
 import type { ComponentAnswerInstallation } from "./component-answers.ts";
 import { packagedAssetReader } from "./component-documentation.ts";
 import type { DocumentationContribution, DocumentationReader } from "./component-documentation.ts";
@@ -811,7 +811,7 @@ function* resolveComponentAnswers(
       // One resolution, one claim window. It opens before the chain is asked
       // and closes however this iteration leaves — answered, refused, or
       // cancelled partway through — so a handler that lost this decision, or
-      // one still holding its claimant while the *next* name resolves, states
+      // one still holding its request while the *next* name resolves, states
       // nothing into a decision that is already made.
       //
       // One call, one result. The claim and core's copy of what was claimed
@@ -820,7 +820,11 @@ function* resolveComponentAnswers(
       const resolution = imports.beginResolution(name);
       let identified;
       try {
-        identified = imports.identify(name, yield* importComponent(name));
+        // The resolution this run opened is handed to identification rather
+        // than looked up: what makes an answer this import's is the exact
+        // window object, so provenance is never read out of whichever window
+        // happens to be current when the question is asked.
+        identified = imports.identify(resolution, yield* importComponent(name));
       } finally {
         resolution.close();
       }
@@ -2916,9 +2920,10 @@ export interface ExecutionInstallation {
    * The providers behind this installation's `component-answer` entries.
    *
    * Run during profile capture, before this installation's ordinary
-   * `install()`, and handed a claimant fixed to each installer's own origin.
-   * Captured by value with the rest: what a provider may identify is settled
-   * before any document code exists.
+   * `install()`, and handed a registrar fixed to each provider installation.
+   * Every registered handler receives a fresh request carrying that
+   * installation's origin. Captured by value with the rest: what a provider may
+   * identify is settled before any document code exists.
    */
   readonly componentAnswers?: readonly ComponentAnswerInstallation[];
   install?(): Operation<void>;
@@ -3398,12 +3403,12 @@ function* invoke(
   canonicalImports.activate();
 
   // Each provider installer first, then that installation's ordinary `install`,
-  // in the order the installations were captured. A provider states what it is
-  // returning with a claimant fixed to its own origin, so it composes middleware
-  // for its names before anything else in this installation runs.
+  // in the order the installations were captured. A provider registers
+  // middleware through its registrar, and each invocation states what it is
+  // returning through a fresh request fixed to the provider's origin.
   for (const { providers, install } of assembly) {
     for (const { origin, install: installProvider } of providers) {
-      yield* installProvider(componentAnswerClaim(canonicalImports.claimant(origin).claim));
+      yield* installProvider(componentAnswerRegistrar(canonicalImports.provider(origin)));
     }
     if (install !== undefined) {
       yield* install();

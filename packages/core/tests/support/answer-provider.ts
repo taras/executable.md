@@ -3,9 +3,9 @@
  *
  * The shape a real provider has: it composes `Component.importComponent`
  * middleware for its own name, and states an identity for the exact object it
- * returns using the claimant canonical execution minted for it. It holds no
- * definition the profile could read, because the profile arm it backs has
- * nowhere to put one.
+ * returns using the request canonical execution minted for that handler
+ * invocation. It holds no definition the profile could read, because the
+ * profile arm it backs has nowhere to put one.
  *
  * Every deviation a row needs is a member here rather than a second provider,
  * so what one case changes about the honest one is visible in the case.
@@ -13,8 +13,11 @@
 
 import type { Operation } from "effection";
 
-import { Component } from "../../src/component-api.ts";
-import type { ComponentAnswerClaim, ComponentAnswerInstallation } from "../../host.ts";
+import type {
+  ComponentAnswerInstallation,
+  ComponentAnswerRegistrar,
+  ComponentAnswerRequest,
+} from "../../host.ts";
 import type { FunctionComponentDefinition, Json, PropsSchema } from "../../src/types.ts";
 
 /** The contract an implementation states when a row does not care what it is. */
@@ -109,7 +112,7 @@ export interface ProviderOptions {
    * this name — which is what a race between two resolutions has to be observed
    * from, since there is no other way to be inside one.
    */
-  readonly whileResolving?: () => void;
+  readonly whileResolving?: (request: ComponentAnswerRequest) => void;
   /**
    * Answer with a value whose contract reads differently each time it is read.
    *
@@ -121,8 +124,8 @@ export interface ProviderOptions {
    * provider never claimed.
    */
   readonly alternating?: { readonly substitute: PropsSchema; readonly reads: string[] };
-  /** Where this provider leaves the claimant it was handed, for a row to keep. */
-  readonly retain?: ComponentAnswerClaim[];
+  /** Where this provider leaves each request its handler received, for a row to keep. */
+  readonly retain?: ComponentAnswerRequest[];
 }
 
 /**
@@ -175,67 +178,66 @@ export function answerProvider(
   let settled = false;
   return {
     origin,
-    *install(claim: ComponentAnswerClaim): Operation<void> {
-      options.retain?.push(claim);
-      yield* Component.around({
-        *importComponent([asked, position], next) {
-          if (asked !== name) {
-            return yield* next(asked, position);
+    *install(registrar: ComponentAnswerRegistrar): Operation<void> {
+      yield* registrar.around(function* (request, next) {
+        const asked = request.name;
+        if (asked !== name) {
+          return yield* next();
+        }
+        // Retained *per invocation*, which is what a row keeping a stale one
+        // is keeping: the installation is never handed over, so there is no
+        // stable object for a provider to hold instead.
+        options.retain?.push(request);
+        options.asked?.push(asked);
+        if (settled) {
+          if (options.reclaimsLater) {
+            // Still trying to *identify* an answer after its resolution
+            // settled. There is no window open for this name, so the claim
+            // itself is what refuses.
+            return request.claim(answer, { key, revision });
           }
-          options.asked?.push(asked);
-          if (settled) {
-            if (options.reclaimsLater) {
-              // Still trying to *identify* an answer after its resolution
-              // settled. There is no window open for this name, so the claim
-              // itself is what refuses.
-              return claim.claim(name, answer, { key, revision });
-            }
-            if (options.keepsAnswering) {
-              // Still answering, without claiming. Whatever this returns is not
-              // the object canonical execution issued for the import that asked,
-              // so the witness is what refuses.
-              return answer;
-            }
-            return yield* next(asked, position);
-          }
-          settled = true;
-          options.lookups?.push(asked);
-          if (options.observesOnly) {
-            const answered = yield* next(asked, position);
-            options.delegated?.push(answered);
-            return answered;
-          }
-          if (options.delegatesFirst) {
-            // An outer provider sees the chain's answer before deciding. What
-            // it does with it is a row's business; recording it is what lets a
-            // row say the inner half genuinely answered.
-            options.delegated?.push(yield* next(asked, position));
-          }
-          options.whileResolving?.();
-          if (options.unclaimed) {
+          if (options.keepsAnswering) {
+            // Still answering, without claiming. Whatever this returns is not
+            // the object canonical execution issued for the import that asked,
+            // so the witness is what refuses.
             return answer;
           }
-          const supplied =
-            options.alternating === undefined
-              ? answer
-              : alternatingAnswer(
-                  answer,
-                  options.alternating.substitute,
-                  options.alternating.reads,
-                );
-          const claimed = claim.claim(name, supplied, { key, revision });
-          if (options.copied) {
-            // The outer-replacement case: a handler further out returns its own
-            // object, so the claim does not travel with the name.
-            return { ...claimed };
-          }
-          if (options.mutated) {
-            // The same object, edited after the claim. What was claimed is no
-            // longer what is there.
-            Object.assign(claimed, { name: `${name}Substituted` });
-          }
-          return claimed;
-        },
+          return yield* next();
+        }
+        settled = true;
+        options.lookups?.push(asked);
+        if (options.observesOnly) {
+          const answered = yield* next();
+          options.delegated?.push(answered);
+          return answered;
+        }
+        if (options.delegatesFirst) {
+          // An outer provider sees the chain's answer before deciding. What it
+          // does with it is a row's business; recording it is what lets a row
+          // say the inner half genuinely answered — and claiming *after*
+          // delegating is what an outer replacement has to be able to do.
+          options.delegated?.push(yield* next());
+        }
+        options.whileResolving?.(request);
+        if (options.unclaimed) {
+          return answer;
+        }
+        const supplied =
+          options.alternating === undefined
+            ? answer
+            : alternatingAnswer(answer, options.alternating.substitute, options.alternating.reads);
+        const claimed = request.claim(supplied, { key, revision });
+        if (options.copied) {
+          // The outer-replacement case: a handler further out returns its own
+          // object, so the claim does not travel with the name.
+          return { ...claimed };
+        }
+        if (options.mutated) {
+          // The same object, edited after the claim. What was claimed is no
+          // longer what is there.
+          Object.assign(claimed, { name: `${name}Substituted` });
+        }
+        return claimed;
       });
     },
   };

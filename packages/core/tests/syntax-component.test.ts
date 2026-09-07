@@ -42,7 +42,7 @@ import { collect } from "../src/collect.ts";
 import { execute } from "../src/execute.ts";
 import { executeInstalled, sourceDigest } from "../host.ts";
 import type {
-  ComponentAnswerClaim,
+  ComponentAnswerRequest,
   DeclaredMarkdownComponent,
   ExecutionInstallation,
   FragmentEvaluationInput,
@@ -1021,7 +1021,7 @@ describe("Tier SYN — the named form", () => {
     const inheritedLookups: string[] = [];
     const localLookups: string[] = [];
     const observed: unknown[] = [];
-    const retained: ComponentAnswerClaim[] = [];
+    const retained: ComponentAnswerRequest[] = [];
 
     // The inherited layer's entry into the bootstrap: documentation, a
     // registration, and the package's provider — which observes and delegates,
@@ -1085,19 +1085,16 @@ describe("Tier SYN — the named form", () => {
     expect(rendered).toContain("the layered answer ran");
     expect(answer.invoked).toEqual(["the layered answer ran"]);
 
-    // Teardown is the execution's, not the layer's: the claimant the local
-    // bootstrap was handed states nothing once the child run is over, and the
-    // enclosing layers are still standing.
+    // Teardown is the execution's, not the layer's: the request the local
+    // bootstrap's handler was given states nothing once the child run is over,
+    // and the enclosing layers are still standing.
     const held = retained[0];
     if (held === undefined) {
-      throw new Error("the local provider was never installed");
+      throw new Error("the local provider was never asked");
     }
     let refused: unknown;
     try {
-      held.claim("Open", implementation("Open", "late").definition, {
-        key: "Open",
-        revision: "1",
-      });
+      held.claim(implementation("Open", "late").definition, { key: "Open", revision: "1" });
     } catch (error) {
       refused = error;
     }

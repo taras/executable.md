@@ -1084,6 +1084,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
     const A = implementation("Open", "A ran");
     const B = implementation("Open", "B ran");
     const delegated: unknown[] = [];
+    const outerRequests: string[] = [];
 
     // The positive control for the row above, and a real chain rather than one
     // provider. Two providers answer for one name: the one installed first
@@ -1099,6 +1100,9 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
             key: "Outer",
             delegatesFirst: true,
             delegated,
+            whileResolving(request) {
+              outerRequests.push(request.name);
+            },
           }),
           answerProvider("Open", A.definition, { key: "Inner" }),
         ],
@@ -1109,6 +1113,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
     // object the inner provider claimed. So A was resolvable, and the row below
     // it is about which of two live answers runs rather than about one.
     expect(delegated[0]).toBe(A.definition);
+    expect(outerRequests).toEqual(["Open"]);
     expect(String(output)).toContain("B ran");
     expect(B.invoked).toEqual(["B ran"]);
     expect(A.invoked).toEqual([]);

@@ -2,15 +2,15 @@
  * Tier FE15 — what a provider's answer is bound to, at execution scale.
  *
  * `answer-identity.test.ts` holds the unit half: an identity belongs to one
- * object in one execution, and a claimant that outlived its execution states
- * nothing. These rows are the other half — the same guarantees driven through a
- * real execution, where the provider is installed by a trusted host, the
+ * object in one execution, and a request that outlived its invocation states
+ * nothing. These rows are the other half — the same guarantees driven through
+ * a real execution, where the provider is installed by a trusted host, the
  * resolution happens during capture before the root import, and the sealed
  * answer is what a fragment runs.
  *
  * The failure this tier exists to prevent is a provider that keeps working
  * after the run that admitted it. A resolution suspended when the execution is
- * cancelled, a claimant retained past teardown, a losing answer arriving late,
+ * cancelled, a request retained past teardown, a losing answer arriving late,
  * and a captured body invoked afterwards are four shapes of the same thing, and
  * each of them here is asked about state the run actually left behind rather
  * than about the wording of a refusal.
@@ -27,7 +27,8 @@ import { collect } from "../src/collect.ts";
 import { Component } from "../src/component-api.ts";
 import { executeInstalled } from "../host.ts";
 import type {
-  ComponentAnswerClaim,
+  ComponentAnswerRegistrar,
+  ComponentAnswerRequest,
   ExecutionInstallation,
   FragmentEvaluationInput,
 } from "../host.ts";
@@ -91,20 +92,17 @@ function run(
   });
 }
 
-/** What a retained claimant refused with when it was used, as a string. */
-function refusalFrom(claimant: ComponentAnswerClaim | undefined): string {
-  if (claimant === undefined) {
-    throw new Error("the provider was never installed");
+/** What a retained request refused with when it was used, as a string. */
+function refusalFrom(request: ComponentAnswerRequest | undefined): string {
+  if (request === undefined) {
+    throw new Error("the provider was never asked");
   }
   try {
-    claimant.claim("Open", implementation("Open", "late").definition, {
-      key: "Open",
-      revision: "1",
-    });
+    request.claim(implementation("Open", "late").definition, { key: "Open", revision: "1" });
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
-  throw new Error("expected the retained claimant to refuse");
+  throw new Error("expected the retained request to refuse");
 }
 
 /** What one execution refused with, as a string. */
@@ -135,12 +133,12 @@ function importedRoot(events: readonly DurableEvent[]): boolean {
 }
 
 describe("Tier FE15 — a provider's answer belongs to the execution that captured it", () => {
-  it("FE15: cancelling a suspended resolution waits for cleanup and revokes the claimant", function* () {
+  it("FE15: cancelling a suspended resolution waits for cleanup and revokes the request", function* () {
     const A = implementation("Open", "A ran");
     const stream = new InMemoryStream();
     const cleanup: string[] = [];
     const reached = withResolvers<void>();
-    const retained: ComponentAnswerClaim[] = [];
+    const retained: ComponentAnswerRequest[] = [];
 
     yield* scoped(function* () {
       const running = yield* spawn(() =>
@@ -152,26 +150,21 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
               componentAnswers: [
                 {
                   origin: "test://provider",
-                  *install(claim: ComponentAnswerClaim): Operation<void> {
-                    retained.push(claim);
-                    yield* Component.around({
-                      *importComponent([asked, position], next) {
-                        if (asked !== "Open") {
-                          return yield* next(asked, position);
-                        }
-                        // Registered before the barrier, so cancellation cannot
-                        // arrive between entering the handler and owning the
-                        // cleanup.
-                        yield* ensure(function* () {
-                          cleanup.push("resolution cleanup");
-                        });
-                        reached.resolve();
-                        yield* suspend();
-                        return claim.claim("Open", A.definition, {
-                          key: "Open",
-                          revision: "1",
-                        });
-                      },
+                  *install(registrar: ComponentAnswerRegistrar): Operation<void> {
+                    yield* registrar.around(function* (request, next) {
+                      if (request.name !== "Open") {
+                        return yield* next();
+                      }
+                      retained.push(request);
+                      // Registered before the barrier, so cancellation cannot
+                      // arrive between entering the handler and owning the
+                      // cleanup.
+                      yield* ensure(function* () {
+                        cleanup.push("resolution cleanup");
+                      });
+                      reached.resolve();
+                      yield* suspend();
+                      return request.claim(A.definition, { key: "Open", revision: "1" });
                     });
                   },
                 },
@@ -196,16 +189,16 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     expect(importedRoot(events)).toBe(false);
     expect(admissions(events)).toHaveLength(0);
     expect(A.invoked).toEqual([]);
-    // Cancellation is a teardown like any other: the claimant this provider was
+    // Cancellation is a teardown like any other: the request this handler was
     // handed belongs to an execution that is over.
     expect(refusalFrom(retained[0])).toContain("has ended");
   });
 
-  it("FE15: a claimant retained past a successful execution states nothing afterwards", function* () {
+  it("FE15: a request retained past a successful execution states nothing afterwards", function* () {
     const A = implementation("Open", "A ran");
-    const retained: ComponentAnswerClaim[] = [];
+    const retained: ComponentAnswerRequest[] = [];
 
-    // The provider keeps the claimant, which is the thing a real one holds onto.
+    // The provider keeps the request its handler received.
     const output = yield* run(OPEN, [
       {
         evaluation: admits(),
@@ -214,14 +207,14 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     ]);
     expect(String(output)).toContain("A ran");
 
-    // The execution has ended. The claimant is the object the provider kept,
+    // The execution has ended. The request is the object the provider kept,
     // and it refuses rather than recording into a run that is over.
     expect(refusalFrom(retained[0])).toContain("has ended");
   });
 
-  it("FE15: a failed execution revokes the claimant it minted", function* () {
+  it("FE15: a failed execution revokes the request it minted", function* () {
     const A = implementation("Open", "A ran");
-    const retained: ComponentAnswerClaim[] = [];
+    const retained: ComponentAnswerRequest[] = [];
 
     // The third way a run ends. The fragment names something the profile never
     // admitted, so the run fails after capture succeeded — and teardown is
@@ -240,20 +233,21 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     expect(refusalFrom(retained[0])).toContain("has ended");
   });
 
-  it("FE15: a losing claimant states nothing into the execution still running", function* () {
+  it("FE15: a losing handler's request states nothing into the execution still running", function* () {
     const A = implementation("Open", "A ran");
     const B = implementation("Open", "B ran");
-    const late: ComponentAnswerClaim[] = [];
+    const late: ComponentAnswerRequest[] = [];
     const attempted: string[] = [];
 
-    // Two providers under one name. The first is installed outermost and
-    // declines to answer at all, which is what losing looks like; the second
-    // answers, and the capture seals what it claimed.
+    // Two providers under one name. The first is installed outermost, is
+    // genuinely asked, keeps the request it was handed and delegates without
+    // claiming — which is what losing looks like. The second answers, and the
+    // capture seals what it claimed.
     //
     // `<Meddle />` runs from the document, *after* the capture and while this
-    // execution is still live — which is the window a post-run row cannot
-    // reach. So what it proves is not that a revoked claimant is inert; it is
-    // that a live losing one changes nothing either.
+    // execution is still live — the window a post-run row cannot reach. So what
+    // it proves is not that a revoked handle is inert; it is that a live losing
+    // one changes nothing either.
     const output = yield* scoped(function* () {
       yield* registerComponents([
         {
@@ -264,17 +258,16 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
           *fn(): Operation<string> {
             const held = late[0];
             if (held === undefined) {
-              throw new Error("the losing provider was never installed");
+              throw new Error("the losing provider was never asked");
             }
             // The resolution of `Open` settled during capture, before the root
-            // import. This claimant lost it, and the execution is still very
-            // much alive — so what refuses here is the *occurrence*, not the
-            // teardown. A claim admitted now would identify an answer nobody
-            // asked this provider for.
-            attempted.push(refused(() => held.claim("Open", A.definition, IDENTITY)));
-            // The same for the winner's own implementation: there is no window
-            // to retag it in either.
-            attempted.push(refused(() => held.claim("Open", B.definition, IDENTITY)));
+            // import, and this handler returned before that. The execution is
+            // still very much alive — so what refuses is the invocation, not
+            // the teardown.
+            attempted.push(refused(() => held.claim(A.definition, IDENTITY)));
+            // The same for the winner's own implementation: there is no live
+            // request to retag it through either.
+            attempted.push(refused(() => held.claim(B.definition, IDENTITY)));
             return "meddled";
           },
         },
@@ -286,10 +279,14 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
             evaluation: admits(),
             componentAnswers: [
               {
-                origin: "test://provider",
-                // deno-lint-ignore require-yield
-                *install(claim: ComponentAnswerClaim): Operation<void> {
-                  late.push(claim);
+                origin: "test://losing",
+                *install(registrar: ComponentAnswerRegistrar): Operation<void> {
+                  yield* registrar.around(function* (request, next) {
+                    if (request.name === "Open") {
+                      late.push(request);
+                    }
+                    return yield* next();
+                  });
                 },
               },
               answerProvider("Open", B.definition),
@@ -300,8 +297,7 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     });
 
     // The meddling really happened, while the run was live, and neither attempt
-    // was admitted. The refusal names the settled resolution rather than a
-    // finished execution — the document was still running when it was made.
+    // was admitted.
     expect(attempted).toEqual(["this resolution has settled", "this resolution has settled"]);
     // And the fragment ran what the capture sealed.
     expect(String(output)).toContain("B ran");
@@ -309,16 +305,89 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     expect(A.invoked).toEqual([]);
   });
 
-  it("FE15: a claimant from one settled resolution cannot restate that name", function* () {
+  it("FE15: a losing handler cannot claim once it has returned, mid-resolution", function* () {
+    const A = implementation("Open", "A ran");
+    const B = implementation("Open", "B ran");
+    const inner: ComponentAnswerRequest[] = [];
+    const attempted: string[] = [];
+    const delegated: unknown[] = [];
+    let outerSettled = false;
+    let innerSettled = false;
+
+    // The frozen mid-resolution race. The inner provider is asked, keeps its
+    // request and returns without claiming; the outer provider is *still
+    // running* the same resolution, and invokes the inner one's request from
+    // inside its own handler. The window is open, the name is right, the
+    // execution is live — and the invocation that would have been speaking is
+    // over.
+    const output = yield* run(OPEN, [
+      {
+        evaluation: admits(),
+        componentAnswers: [
+          {
+            // The origin the profile admits: this is the provider whose claim
+            // has to be the one the capture reconciles.
+            origin: "test://provider",
+            *install(registrar: ComponentAnswerRegistrar): Operation<void> {
+              yield* registrar.around(function* (request, next) {
+                // Settles at the capture, like any provider: a fragment's own
+                // import is canonical execution's to answer.
+                if (request.name !== "Open" || outerSettled) {
+                  return yield* next();
+                }
+                outerSettled = true;
+                // Delegating first is what an outer replacement does, and it is
+                // what closes the inner handler.
+                delegated.push(yield* next());
+                const held = inner[0];
+                if (held === undefined) {
+                  throw new Error("the inner provider was never asked");
+                }
+                attempted.push(refused(() => held.claim(A.definition, IDENTITY)));
+                // And the outer handler's own request is still live, so it may
+                // claim its replacement before returning.
+                return request.claim(B.definition, { key: "Open", revision: "1" });
+              });
+            },
+          },
+          {
+            origin: "test://inner",
+            *install(registrar: ComponentAnswerRegistrar): Operation<void> {
+              yield* registrar.around(function* (request, next) {
+                if (request.name !== "Open" || innerSettled) {
+                  return yield* next();
+                }
+                innerSettled = true;
+                // Answers, keeps its request, and claims nothing — so it loses
+                // the decision the outer handler goes on to make.
+                inner.push(request);
+                return A.definition;
+              });
+            },
+          },
+        ],
+      },
+    ]);
+
+    expect(delegated).toHaveLength(1);
+    expect(attempted).toEqual(["this resolution has settled"]);
+    // The outer replacement is what ran, which is the positive half: claiming
+    // after delegating has to keep working.
+    expect(String(output)).toContain("B ran");
+    expect(B.invoked).toEqual(["B ran"]);
+    expect(A.invoked).toEqual([]);
+  });
+
+  it("FE15: a request from one settled resolution cannot restate that name", function* () {
     const A = implementation("Open", "A ran");
     const B = implementation("Other", "B ran");
     const late = implementation("Open", "late ran");
-    const stale: ComponentAnswerClaim[] = [];
+    const stale: ComponentAnswerRequest[] = [];
     const attempted: string[] = [];
     const carried: unknown[] = [];
 
     // Two provider-backed names, so the capture opens two resolutions in order.
-    // The stale claimant is the one that *answered* the first, used from inside
+    // The stale request is the one that *answered* the first, used from inside
     // the second resolution's live handler.
     const output = yield* run(
       `<Evaluate text={'<Open />\\n<Other />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
@@ -335,14 +404,13 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
               whileResolving: () => {
                 const held = stale[0];
                 if (held === undefined) {
-                  throw new Error("the first provider was never installed");
+                  throw new Error("the first provider was never asked");
                 }
-                // The name it already answered is not the name being decided,
-                // so this states nothing into the live resolution.
-                attempted.push(refused(() => held.claim("Open", late.definition, IDENTITY)));
-                // And what the first resolution recorded does not answer this
-                // one: the claim on `A` names `Open` and belongs to an import
-                // already settled, so it identifies nothing here.
+                // The request is fixed to the name it was asked, so it cannot
+                // even address the name being decided — and its own invocation
+                // is over.
+                expect(held.name).toBe("Open");
+                attempted.push(refused(() => held.claim(late.definition, IDENTITY)));
                 carried.push(A.definition);
               },
             }),
@@ -368,12 +436,15 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     const A = implementation("Open", "A ran");
     const B = implementation("Other", "B ran");
     const answered: string[] = [];
+    let installations = 0;
 
-    // The positive control the opportunity rule exists to keep working. One
-    // installation owns one origin and composes middleware for both admitted
-    // names; the capture opens a resolution per name and each takes one
-    // statement from the same claimant. A claimant spent on its first answer
-    // would fail here, on the second name.
+    // The positive control the request contract exists to keep working. One
+    // installation owns one origin and registers *one* handler for both
+    // admitted names; the capture opens a resolution per name, and that handler
+    // is invoked once per resolution with a distinct request each time. An
+    // installation spent on its first answer would fail here, on the second
+    // name.
+    const requests: ComponentAnswerRequest[] = [];
     const output = yield* run(
       `<Evaluate text={'<Open />\\n<Other />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
       [
@@ -385,20 +456,20 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
           componentAnswers: [
             {
               origin: "test://provider",
-              *install(claim: ComponentAnswerClaim): Operation<void> {
+              *install(registrar: ComponentAnswerRegistrar): Operation<void> {
+                installations += 1;
                 const supplied: Record<string, Implementation> = { Open: A, Other: B };
-                yield* Component.around({
-                  *importComponent([asked, position], next) {
-                    const held = supplied[asked];
-                    if (held === undefined || answered.includes(asked)) {
-                      return yield* next(asked, position);
-                    }
-                    answered.push(asked);
-                    return claim.claim(asked, held.definition, {
-                      key: asked,
-                      revision: "1",
-                    });
-                  },
+                yield* registrar.around(function* (request, next) {
+                  const held = supplied[request.name];
+                  if (held === undefined || answered.includes(request.name)) {
+                    return yield* next();
+                  }
+                  answered.push(request.name);
+                  requests.push(request);
+                  return request.claim(held.definition, {
+                    key: request.name,
+                    revision: "1",
+                  });
                 });
               },
             },
@@ -407,9 +478,13 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
       ],
     );
 
-    // Both resolutions were answered by the one claimant, and both admitted
-    // implementations ran.
+    // One installation, one registered handler, two distinct requests — each
+    // fixed to the name its own invocation was asked.
+    expect(installations).toBe(1);
     expect(answered).toEqual(["Open", "Other"]);
+    expect(requests).toHaveLength(2);
+    expect(requests[0]).not.toBe(requests[1]);
+    expect(requests.map((request) => request.name)).toEqual(["Open", "Other"]);
     expect(String(output)).toContain("A ran");
     expect(String(output)).toContain("B ran");
     expect(A.invoked).toEqual(["A ran"]);
