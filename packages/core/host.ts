@@ -91,10 +91,13 @@ export type {
  * entry.
  *
  * An installer, not a definition: canonical execution runs it during profile
- * capture and hands it a claimant fixed to this installation's origin. The
- * provider states what it is returning; canonical execution decides whether
- * that is what the profile admitted, and resolves the name itself through the
- * ordinary import chain.
+ * capture and hands it a registrar fixed to this installation's origin. The
+ * registrar composes import middleware, and every invocation of that middleware
+ * receives its own request — fixed to the name and position it was asked, and
+ * closed when that invocation ends — which is the only thing that states what
+ * the provider is returning. Canonical execution then decides whether that is
+ * what the profile admitted, and resolves the name itself through the ordinary
+ * import chain.
  */
 export type {
   ComponentAnswerHandler,

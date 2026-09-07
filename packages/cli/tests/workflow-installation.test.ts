@@ -287,28 +287,40 @@ describe("Tier WFI — what a run hands to canonical core", () => {
     );
     expect(preparing.length).toEqual(1);
     expect(preparing[0]?.admissions?.length).toEqual(1);
-    // Every installation this run was given is one of two things, and neither
-    // is a second execution: one `executeInstalled()`, not one per phase.
-    // A run-contract installation carries its admission; the declaration of the
-    // components that name durable work carries components and nothing else.
+    // Every installation this run was given is one of three things, and none of
+    // them is a second execution: one `executeInstalled()`, not one per phase.
+    // A run-contract installation carries its admission; a bundle carries its
+    // own admission and no preparation; and the fragment-evaluation profile
+    // carries a ceiling and no admission at all, because stating what a
+    // generated fragment may do is not a claim about this run's history.
+    const profiles = (execution?.installations ?? []).filter(
+      (candidate) => candidate.evaluation !== undefined,
+    );
     for (const candidate of execution?.installations ?? []) {
-      if (candidate.components === undefined) {
-        expect(candidate.admissions?.length).toEqual(1);
+      if (candidate.evaluation !== undefined) {
+        expect(candidate.admissions).toBe(undefined);
+        expect(candidate.prepare).toBe(undefined);
+        expect(candidate.components).toBe(undefined);
         continue;
       }
-      expect(candidate.admissions).toBe(undefined);
-      expect(candidate.prepare).toBe(undefined);
+      expect(candidate.admissions?.length).toEqual(1);
     }
-    // And there is exactly one declaration, naming `<Evaluate>`: a live or
-    // partial run has that component because this run told the execution about
-    // it, and nothing else declares one.
-    const declared = (execution?.installations ?? []).filter(
-      (candidate) => candidate.components !== undefined,
+
+    // The ceiling is stated exactly once, and it is a real one: a run that
+    // installed no profile, or an empty one, would leave `<Evaluate>` with
+    // nothing to narrow and is the regression this asserts against rather than
+    // merely tolerating a third shape.
+    expect(profiles).toHaveLength(1);
+    expect((profiles[0]?.evaluation?.read ?? []).length).toBeGreaterThan(0);
+
+    // And nothing declares `<Evaluate>`. It is canonical core's own protected
+    // component, so a run states the profile it narrows from and never the
+    // component — a declaration here would be the workflow answering for a name
+    // core owns.
+    const declared = (execution?.installations ?? []).flatMap(
+      (candidate) => candidate.components ?? [],
     );
-    expect(declared).toHaveLength(1);
-    expect((declared[0]?.components ?? []).map((component) => component.name)).toEqual([
-      "Evaluate",
-    ]);
+    expect(declared.map((component) => component.name)).not.toContain("Evaluate");
   });
 
   it("WFI2: a completed run is given no Workspace to attach", function* () {
