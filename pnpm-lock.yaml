@@ -336,8 +336,8 @@ importers:
         specifier: 0.3.0
         version: 0.3.0(effection@4.1.0)
       '@effectionx/node':
-        specifier: 0.2.4
-        version: 0.2.4(effection@4.1.0)
+        specifier: 0.2.5
+        version: 0.2.5(effection@4.1.0)
       '@effectionx/process':
         specifier: 0.8.1
         version: 0.8.1(effection@4.1.0)

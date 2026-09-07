@@ -4134,7 +4134,7 @@
           "dependencies": [
             "npm:@effectionx/context-api@0.6.0",
             "npm:@effectionx/fs@0.3.0",
-            "npm:@effectionx/node@0.2.4",
+            "npm:@effectionx/node@0.2.5",
             "npm:@effectionx/process@0.8.1",
             "npm:effection@4.1.0"
           ]
