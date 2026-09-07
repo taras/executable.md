@@ -125,6 +125,9 @@ describe("Tier SYN — a staged JSR consumer", () => {
     yield* ensureDir(consumer);
     yield* writeTextFile(path.join(consumer, "document.md"), CONSUMER_DOCUMENT);
     const imports = yield* consumerImports(staging);
+    const lifecycle = path.join(staged, "grid/lifecycle.ts");
+    expect(imports["@executablemd/grid/lifecycle"]).toBe(lifecycle);
+    expect(yield* exists(lifecycle)).toBe(true);
     yield* writeTextFile(path.join(consumer, "deno.json"), JSON.stringify({ imports }, null, 2));
     yield* writeTextFile(
       path.join(consumer, "main.ts"),
