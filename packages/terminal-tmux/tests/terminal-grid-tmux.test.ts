@@ -30,6 +30,7 @@ import {
   withResolvers,
 } from "effection";
 import type { Operation } from "effection";
+import { once } from "@effectionx/node/events";
 import { spawn as spawnChild } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import net from "node:net";
@@ -344,15 +345,9 @@ function useWorker(directory: string, ordinal: number): Operation<ChildProcess> 
     });
     yield* ensure(function* () {
       child.kill("SIGKILL");
-      yield* until(
-        new Promise<void>((resolve) => {
-          if (child.exitCode !== null || child.signalCode !== null) {
-            resolve();
-            return;
-          }
-          child.once("exit", () => resolve());
-        }),
-      );
+      if (child.exitCode === null && child.signalCode === null) {
+        yield* once(child, "exit");
+      }
     });
     yield* provide(child);
   });
@@ -376,14 +371,25 @@ function untilFrame(link: PaneLink, type: FromWorker["type"]): Operation<FromWor
 /** A raw connection to a pane's socket, for the rows about admission. */
 function useImpostor(directory: string, ordinal: number): Operation<net.Socket> {
   return resource<net.Socket>(function* (provide) {
-    const socket = net.createConnection(paneSocketPath(directory, ordinal));
-    const connected = withResolvers<void>();
-    socket.once("connect", () => connected.resolve());
-    socket.once("error", (error: Error) => connected.reject(error));
-    yield* connected.operation;
+    let opened: net.Socket | undefined;
+    // Registered before the connection exists, so a halt between opening a
+    // socket and registering its cleanup cannot leave one open.
     yield* ensure(() => {
-      socket.destroy();
+      opened?.destroy();
     });
+    const socket = net.createConnection(paneSocketPath(directory, ordinal));
+    opened = socket;
+    // Both waits are interpreted inline, in the same synchronous run as the
+    // connection, so whichever the socket reports is already being waited for.
+    yield* race([
+      (function* (): Operation<void> {
+        yield* once(socket, "connect");
+      })(),
+      (function* (): Operation<void> {
+        const [error] = yield* once<[Error]>(socket, "error");
+        throw error;
+      })(),
+    ]);
     yield* provide(socket);
   });
 }
@@ -391,13 +397,14 @@ function useImpostor(directory: string, ordinal: number): Operation<net.Socket> 
 /** Settle when a socket closes, or say it did not within the grace given. */
 function closedWithin(socket: net.Socket, limitMs: number): Operation<boolean> {
   return (function* (): Operation<boolean> {
-    const closed = withResolvers<boolean>();
     if (socket.destroyed) {
       return true;
     }
-    socket.once("close", () => closed.resolve(true));
     return yield* race([
-      closed.operation,
+      (function* (): Operation<boolean> {
+        yield* once(socket, "close");
+        return true;
+      })(),
       (function* (): Operation<boolean> {
         yield* sleep(limitMs);
         return false;
@@ -2142,38 +2149,51 @@ function useTeardown(options: {
     // this row freezes is per-pane rather than per-event.
     let panes = 0;
     const belongs = new Map<Socket, number>();
-    const detachments: (() => void)[] = [];
+    /** Each socket this row watched, with the `close` listener it put on it. */
+    const socketClosings = new Map<Socket, () => void>();
+    /** The same, for the servers. */
+    const serverClosings = new Map<Server, () => void>();
+    /** The same, for the servers whose connections this row attributes. */
+    const connections = new Map<Server, (socket: Socket) => void>();
     const noteSocket = (socket: Socket, what: () => string): void => {
       handles.push(socket);
       const onClose = (): void => {
         log.push(what());
       };
+      socketClosings.set(socket, onClose);
       socket.on("close", onClose);
-      detachments.push(() => socket.off("close", onClose));
     };
     const noteServer = (server: Server, what: () => string): void => {
       handles.push(server);
       const onClose = (): void => {
         log.push(what());
       };
+      serverClosings.set(server, onClose);
       server.on("close", onClose);
-      detachments.push(() => server.off("close", onClose));
     };
+    // Established before a single handle exists. A listener this row installed
+    // is this row's, and a cancelled row never sees the closes it was waiting
+    // for, so each pair is removed from the emitter it was recorded against.
     yield* ensure(() => {
-      // This row's own listeners, off the emitters this row put them on.
-      for (const detach of detachments) {
-        detach();
+      for (const [socket, onClose] of socketClosings) {
+        socket.off("close", onClose);
+      }
+      for (const [server, onClose] of serverClosings) {
+        server.off("close", onClose);
+      }
+      for (const [server, onConnection] of connections) {
+        server.off("connection", onConnection);
       }
     });
     const channels = yield* usePaneChannels(options.workers.length, {
       onSocket: (socket) => noteSocket(socket, () => `socket-closed:${belongs.get(socket) ?? -1}`),
-      onServer: (server) => {
+      onServer: (server: Server) => {
         const ordinal = panes++;
         const onConnection = (socket: Socket): void => {
           belongs.set(socket, ordinal);
         };
+        connections.set(server, onConnection);
         server.on("connection", onConnection);
-        detachments.push(() => server.off("connection", onConnection));
         noteServer(server, () => `server-closed:${ordinal}`);
       },
     });

@@ -154,18 +154,19 @@ interface Live {
  */
 export function useForegroundSignals(): Operation<void> {
   return resource<void>(function* (provide) {
-    const foreground: NodeJS.Signals[] = ["SIGINT", "SIGQUIT", "SIGTSTP"];
     const ignore = (): void => {};
-    for (const name of foreground) {
-      process.on(name, ignore);
-    }
+    // Installed and removed by the scope that runs this worker, so a worker
+    // that has finished stops answering for a pane it no longer owns. Each
+    // signal is named on both sides, and the removals are established before
+    // the first registration: entering an ensure() is itself a suspension.
     yield* ensure(() => {
-      // Installed and removed by the scope that runs this worker, so a worker
-      // that has finished stops answering for a pane it no longer owns.
-      for (const name of foreground) {
-        process.off(name, ignore);
-      }
+      process.off("SIGINT", ignore);
+      process.off("SIGQUIT", ignore);
+      process.off("SIGTSTP", ignore);
     });
+    process.on("SIGINT", ignore);
+    process.on("SIGQUIT", ignore);
+    process.on("SIGTSTP", ignore);
     yield* provide();
   });
 }
