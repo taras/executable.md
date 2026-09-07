@@ -26,6 +26,7 @@ import { copyFile, ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   agentIdentityComponents,
   installAgentComponents,
@@ -69,7 +70,12 @@ import {
   useFlatWorld,
 } from "../../acp/tests/helpers.ts";
 
-const WORKER = cliBase();
+// Each reconnect starts the real worker without loading unrelated CLI commands.
+// Public CLI dispatch remains covered by smoke TG1 and worker-lifecycle tests.
+const WORKER = [
+  ...cliBase().slice(0, -1),
+  fileURLToPath(new URL("./fixtures/terminal-grid-worker.ts", import.meta.url)),
+];
 
 const MIXED_GRID = [
   "<Grid columns={2}>",
@@ -864,6 +870,8 @@ describe(
 
     it("GN2: no pane identity reaches the launch request or the retained record", function* () {
       const run = yield* runJourney();
+      expect(run.result.ok ? "" : run.result.error.message).toBe("");
+      expect(run.results.map((result) => result.status)).toEqual(["pass"]);
 
       // The launch's own surfaces: what the provider was asked to start, and
       // what the launch retained. The grid's layout record is a different thing
