@@ -458,6 +458,10 @@ export const OBJECTS: ReadonlyMap<string, DeclaredObject> = new Map([
   checkpoint_event_id TEXT NOT NULL CHECK (length(checkpoint_event_id) > 0),
   checkpoint_workspace_root_id TEXT NOT NULL
     REFERENCES workspace_roots(root_id) ON DELETE RESTRICT,
+  selection_anchor TEXT CHECK (
+    selection_anchor IS NULL
+    OR (length(selection_anchor) = 64 AND selection_anchor NOT GLOB '*[^0-9a-f]*')
+  ),
   created_at TEXT NOT NULL
 ) STRICT`,
     },

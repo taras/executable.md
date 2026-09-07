@@ -118,7 +118,8 @@ const MUTATION_SQL = `CREATE TABLE ${MUTATION_TABLE} (
     length(request_fingerprint) = 64 AND request_fingerprint NOT GLOB '*[^0-9a-f]*'
   ),
   response TEXT NOT NULL CHECK (json_valid(response)),
-  response_bytes INTEGER NOT NULL CHECK (response_bytes >= 0)
+  response_bytes INTEGER NOT NULL CHECK (response_bytes >= 0),
+  execution_id TEXT
 ) STRICT, WITHOUT ROWID`;
 
 const PRIVATE_OBJECTS = new Map([
@@ -186,6 +187,56 @@ export function discardPriorAcquisitions(storage: OwnerStorage, acquisitionId: s
   // unfinished is decided by recovery, from what the run itself retains.
   storage.sql.exec(`DELETE FROM ${FORK_TABLE} WHERE acquisition_id <> ?`, acquisitionId);
   storage.sql.exec(`DELETE FROM ${HOLD_TABLE} WHERE acquisition_id <> ?`, acquisitionId);
+}
+
+/**
+ * Adopt the execution a retained decision began, when nobody else holds it.
+ *
+ * The case this exists for: a mutation committed, its answer was lost, the
+ * connection that asked died, and a replacement acquisition asked the same
+ * question again. Re-observing the decision is not enough — the execution it
+ * began has to become this acquisition's, or the caller would be handed a run
+ * it cannot settle. The old acquisition is already gone by the time this runs,
+ * because its scratch and its hold went with it.
+ */
+export function adoptExecution(
+  storage: OwnerStorage,
+  acquisitionId: string,
+  commandId: string,
+): void {
+  const decided = storage.sql
+    .exec(`SELECT execution_id FROM ${MUTATION_TABLE} WHERE command_id = ?`, commandId)
+    .toArray()[0];
+  const executionId = decided?.["execution_id"];
+  if (typeof executionId !== "string") {
+    return;
+  }
+  const open = storage.sql
+    .exec(
+      "SELECT execution_id FROM document_executions WHERE execution_id = ? AND stopped_at IS NULL",
+      executionId,
+    )
+    .toArray()[0];
+  if (open === undefined) {
+    // Finished since. There is nothing to authorize, and the decision stands
+    // as the answer it always was.
+    return;
+  }
+  const holder = storage.sql
+    .exec(`SELECT acquisition_id FROM ${HOLD_TABLE} WHERE execution_id = ?`, executionId)
+    .toArray()[0];
+  if (holder !== undefined) {
+    if (holder["acquisition_id"] !== acquisitionId) {
+      // Somebody live began it. Two acquisitions cannot hold one execution.
+      throw new Error("private protocol storage holds a conflicting execution hold");
+    }
+    return;
+  }
+  storage.sql.exec(
+    `INSERT INTO ${HOLD_TABLE} (acquisition_id, execution_id) VALUES (?, ?)`,
+    acquisitionId,
+    executionId,
+  );
 }
 
 /** Which execution this acquisition began, when it has begun one. */

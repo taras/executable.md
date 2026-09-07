@@ -54,6 +54,7 @@ import {
 } from "./owner-reads.ts";
 import type { OwnerTransaction, OwnerTransactions } from "./owner-transaction.ts";
 import {
+  adoptExecution,
   COMMAND_TABLE,
   initializePrivateSchema,
   MUTATION_TABLE,
@@ -128,6 +129,22 @@ function integer(value: unknown): number {
     throw new Error("private protocol storage holds a malformed count");
   }
   return value;
+}
+
+/**
+ * Which execution one performed mutation began, if it began one.
+ *
+ * Read from the command rather than from the answer: what the runner asked to
+ * begin is what the owner began, and a decision that refused began nothing.
+ */
+function begunExecution(command: RunnerCommand, result: CommandResult): string | null {
+  if (result.outcome !== "performed") {
+    return null;
+  }
+  if (command.command === "begin" || command.command === "fork") {
+    return command.executionId;
+  }
+  return null;
 }
 
 /** What this acquisition has already spent of its own ledger. */
@@ -343,6 +360,7 @@ function perform(
         command.runId,
         command.action,
         command.creation,
+        command.retrieval,
         command.executionId,
         ownerTime,
       ),
@@ -367,6 +385,7 @@ function perform(
       {
         runId: command.runId,
         creation: command.creation,
+        retrieval: command.retrieval,
         origin: command.origin,
         counts: command.counts,
         runRecord: command.runRecord,
@@ -486,6 +505,10 @@ export function dispatchCommand(
           // would mean applying it again.
           throw new Error("private protocol storage holds a malformed result");
         }
+        // The answer was lost, not the fact. If this decision began an
+        // execution and nobody live holds it, it becomes this acquisition's —
+        // otherwise the caller would be handed a run it could not settle.
+        adoptExecution(ctx.storage, held.acquisitionId, command.id);
         return decision;
       }
     }
@@ -546,12 +569,16 @@ export function dispatchCommand(
       }
       ctx.storage.sql.exec(
         `INSERT INTO ${MUTATION_TABLE}
-          (command_id, request_fingerprint, response, response_bytes)
-          VALUES (?, ?, ?, ?)`,
+          (command_id, request_fingerprint, response, response_bytes, execution_id)
+          VALUES (?, ?, ?, ?, ?)`,
         command.id,
         fingerprint,
         encoded,
         responseBytes,
+        // Which execution this decision began, when it began one, so a
+        // replacement acquisition re-observing it can adopt the run rather
+        // than being told about an execution it may not touch.
+        begunExecution(command, result),
       );
     }
     return result;

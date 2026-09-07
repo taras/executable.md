@@ -14,7 +14,7 @@
  */
 
 import type { Operation, Result } from "effection";
-import type { DurableEvent } from "@executablemd/durable-streams";
+import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import type {
   DocumentExecutionCompletion,
   DocumentExecutionRecord,
@@ -58,20 +58,37 @@ export interface RemoteForkOrigin {
 export interface RemoteForkCounts {
   readonly inherited: number;
   readonly roots: number;
+  readonly manifests: number;
+  readonly blobs: number;
   readonly checkouts: number;
 }
 
 /** One part of a fork's source, offered before any of it is a run. */
 export interface RemoteForkPart {
-  readonly section: "inherited" | "roots" | "checkouts";
+  readonly section: "inherited" | "roots" | "manifests" | "blobs" | "checkouts";
   readonly position: number;
   readonly part: Record<string, unknown>;
 }
 
+/** One begin, as the provider addresses it and may address it again. */
+export interface RemoteBeginCommand {
+  /** The identity this logical invocation keeps, retry after retry. */
+  readonly commandId: string;
+  readonly runId: string;
+  readonly action: "start" | "resume";
+  readonly creation: CreateWorkflowRunRequest | null;
+  /** Where the definition can be fetched from, when this begin creates. */
+  readonly retrieval: Json | undefined;
+  readonly executionId: string;
+}
+
 /** Everything one committed fork is decided from. */
 export interface RemoteForkCommit {
+  /** The identity this logical invocation keeps, retry after retry. */
+  readonly commandId: string;
   readonly runId: string;
   readonly creation: CreateWorkflowRunRequest;
+  readonly retrieval: Json | undefined;
   readonly origin: RemoteForkOrigin;
   readonly counts: RemoteForkCounts;
   readonly runRecord: DurableEvent;
@@ -101,21 +118,20 @@ export interface RemoteExecutorConnection {
  */
 export interface RemoteLifecycleLink {
   /** Begin one document execution under this acquisition. */
-  begin(request: {
-    readonly runId: string;
-    readonly action: "start" | "resume";
-    readonly creation: CreateWorkflowRunRequest | null;
-    readonly executionId: string;
-  }): Operation<Result<RemoteLifecycleAnswer<RemoteBegun>>>;
+  begin(request: RemoteBeginCommand): Operation<Result<RemoteLifecycleAnswer<RemoteBegun>>>;
   /** Finish the execution this acquisition began. */
   settle(
+    commandId: string,
     completion: DocumentExecutionCompletion,
     expectedWorkspaceRootId: string,
   ): Operation<Result<RemoteFrontierSnapshot>>;
   /** Make this run terminal, following what it retains. */
-  cancel(runId: string): Operation<Result<RemoteLifecycleAnswer<WorkflowRunRecord>>>;
+  cancel(
+    commandId: string,
+    runId: string,
+  ): Operation<Result<RemoteLifecycleAnswer<WorkflowRunRecord>>>;
   /** Offer one part of a fork's source to this acquisition's scratch. */
-  stageForkPart(part: RemoteForkPart): Operation<Result<void>>;
+  stageForkPart(commandId: string, part: RemoteForkPart): Operation<Result<void>>;
   /** Commit the offered parts as one destination run and its first execution. */
-  commitFork(commit: RemoteForkCommit): Operation<Result<RemoteBegun>>;
+  commitFork(commit: RemoteForkCommit): Operation<Result<RemoteLifecycleAnswer<RemoteBegun>>>;
 }

@@ -39,7 +39,9 @@ import { describeWorkflowRun, WORKFLOW_RUN, type WorkflowRun } from "./journal.t
 import type { Forkability } from "./lifecycle/forkability.ts";
 import { WorkflowRequestError } from "./storage/errors.ts";
 import { isRootImportEvent, isRunRecordEvent } from "./journal-events.ts";
-export { isRootImportEvent, isRunRecordEvent } from "./journal-events.ts";
+import { forkRunRecordEvent } from "./journal-events.ts";
+
+export { forkRunRecordEvent, isRootImportEvent, isRunRecordEvent } from "./journal-events.ts";
 
 /** The coroutine a run's own record and canonical outcome belong to. */
 const ROOT_COROUTINE = "root";
@@ -119,25 +121,6 @@ export function selectForkPrefix(
     ),
     checkpointWorkspaceRootId: checkpoint.workspaceRootId,
   });
-}
-
-/**
- * The record the fork writes at position zero, exactly as its own execution
- * would have written it.
- *
- * Composed here rather than in a host, so the value a fork is admitted with and
- * the value its first execution replays are the same shape by construction.
- */
-export function forkRunRecordEvent(run: WorkflowRun): DurableEvent {
-  return {
-    type: "yield",
-    coroutineId: ROOT_COROUTINE,
-    description: describeWorkflowRun(run.base),
-    result: {
-      status: "ok",
-      value: { runId: run.runId, base: run.base, pinnedCommit: run.pinnedCommit },
-    },
-  };
 }
 
 /**

@@ -240,6 +240,7 @@ export function beginRun(
   runId: string,
   action: "start" | "resume",
   creation: CreateWorkflowRunRequest | null,
+  retrieval: string | null,
   executionId: string,
   now: () => string,
 ): LifecycleValue<BegunValue> {
@@ -247,7 +248,7 @@ export function beginRun(
     // Creating and beginning are one commit — this runs inside the caller's
     // transaction — so a reader observes the whole begun run or no run at all,
     // never an initialized candidate with no execution.
-    const opened = establishRun(storage, transaction, runId, creation, now);
+    const opened = establishRun(storage, transaction, runId, creation, now, retrieval ?? undefined);
     if (opened !== null) {
       return { conflict: opened, refusal: null, value: null };
     }

@@ -25,6 +25,7 @@ import type {
 import type { CreateWorkflowRunRequest } from "../storage/api.ts";
 import type { RemoteFrontierSnapshot } from "../remote/read.ts";
 import type {
+  RemoteBeginCommand,
   RemoteBegun,
   RemoteForkCommit,
   RemoteForkPart,
@@ -122,20 +123,16 @@ export function cloudflareLifecycleLink(
   }
 
   return {
-    *begin(request: {
-      readonly runId: string;
-      readonly action: "start" | "resume";
-      readonly creation: CreateWorkflowRunRequest | null;
-      readonly executionId: string;
-    }): Operation<Result<RemoteLifecycleAnswer<RemoteBegun>>> {
+    *begin(request: RemoteBeginCommand): Operation<Result<RemoteLifecycleAnswer<RemoteBegun>>> {
       try {
         const offered = yield* connection.ask(
-          nextId(),
+          request.commandId,
           {
             command: "begin",
             runId: request.runId,
             action: request.action,
             creation: request.creation,
+            retrieval: request.retrieval ?? null,
             executionId: request.executionId,
           },
           (value: unknown) => value,
@@ -158,12 +155,13 @@ export function cloudflareLifecycleLink(
     },
 
     *settle(
+      commandId: string,
       completion: DocumentExecutionCompletion,
       expectedWorkspaceRootId: string,
     ): Operation<Result<RemoteFrontierSnapshot>> {
       try {
         const offered = yield* connection.ask(
-          nextId(),
+          commandId,
           { command: "settle", completion, expectedWorkspaceRootId },
           (value: unknown) => value,
           privateRefusal,
@@ -177,10 +175,13 @@ export function cloudflareLifecycleLink(
       }
     },
 
-    *cancel(runId: string): Operation<Result<RemoteLifecycleAnswer<WorkflowRunRecord>>> {
+    *cancel(
+      commandId: string,
+      runId: string,
+    ): Operation<Result<RemoteLifecycleAnswer<WorkflowRunRecord>>> {
       try {
         const offered = yield* connection.ask(
-          nextId(),
+          commandId,
           { command: "cancel", runId },
           (value: unknown) => value,
           privateRefusal,
@@ -199,10 +200,10 @@ export function cloudflareLifecycleLink(
       }
     },
 
-    *stageForkPart(part: RemoteForkPart): Operation<Result<void>> {
+    *stageForkPart(commandId: string, part: RemoteForkPart): Operation<Result<void>> {
       try {
         const offered = yield* connection.ask(
-          nextId(),
+          commandId,
           {
             command: "fork-stage",
             section: part.section,
@@ -221,14 +222,15 @@ export function cloudflareLifecycleLink(
       }
     },
 
-    *commitFork(commit: RemoteForkCommit): Operation<Result<RemoteBegun>> {
+    *commitFork(commit: RemoteForkCommit): Operation<Result<RemoteLifecycleAnswer<RemoteBegun>>> {
       try {
         const offered = yield* connection.ask(
-          nextId(),
+          commit.commandId,
           {
             command: "fork",
             runId: commit.runId,
             creation: commit.creation,
+            retrieval: commit.retrieval ?? null,
             origin: commit.origin,
             counts: commit.counts,
             runRecord: record(commit.runRecord),
@@ -241,7 +243,19 @@ export function cloudflareLifecycleLink(
         if (offered.outcome === "refused") {
           return Err(storageFailure(privateRefusal(offered.refusal)));
         }
-        const found = members(offered.value, ["conflict", "value"]);
+        const found = members(offered.value, ["conflict", "refusal", "value"]);
+        const refusal = found.get("refusal");
+        if (refusal !== null) {
+          if (refusal !== "cancelled" && refusal !== "resume-failed" && refusal !== "terminal") {
+            return Err(
+              new WorkflowRecordMalformedError(
+                "lifecycle answer this run's owner returned",
+                "it named no condition this build reads",
+              ),
+            );
+          }
+          return Ok({ kind: "refused", refusal });
+        }
         const conflict = found.get("conflict");
         if (conflict !== null) {
           if (!Array.isArray(conflict) || conflict.length === 0) {
@@ -261,10 +275,13 @@ export function cloudflareLifecycleLink(
         }
         const held = members(found.get("value"), ["frontier", "execution"]);
         return Ok({
-          frontier: yield* frontierOf(held.get("frontier")),
-          execution: execution(held.get("execution")),
-          replay: false,
-          recovered: null,
+          kind: "performed",
+          value: {
+            frontier: yield* frontierOf(held.get("frontier")),
+            execution: execution(held.get("execution")),
+            replay: false,
+            recovered: null,
+          },
         });
       } catch (error) {
         return Err(translate(error));

@@ -18,6 +18,8 @@ import {
 import { type AgentSessionRecord, parseAgentSessionRecord } from "../storage/agent-session.ts";
 import { parseCreateRequest } from "../storage/create-request.ts";
 import type { CreateWorkflowRunRequest } from "../storage/api.ts";
+import { parseJsonValue } from "../storage/members.ts";
+import { canonicalJson } from "../storage/record.ts";
 
 /** The most characters a public run id may carry. */
 const MAX_RUN_ID = 128;
@@ -260,6 +262,15 @@ export interface BeginCommand extends CommandEnvelope {
   readonly action: "start" | "resume";
   readonly creation: CreateWorkflowRunRequest | null;
   /**
+   * Where this run's definition can be fetched from again, when it is being
+   * created.
+   *
+   * Replaceable state rather than identity, so it travels beside the creation
+   * instead of inside it: a run is not a different run for having been fetched
+   * from somewhere else.
+   */
+  readonly retrieval: string | null;
+  /**
    * The execution's identity, minted by the runner.
    *
    * Minted there rather than here so the command is the same bytes on a retry:
@@ -276,7 +287,7 @@ export interface CancelCommand extends CommandEnvelope {
 }
 
 /** The sections a fork's parts arrive in, each in its own order. */
-export type ForkSection = "inherited" | "roots" | "checkouts";
+export type ForkSection = "inherited" | "roots" | "manifests" | "blobs" | "checkouts";
 
 /** One part of a fork, as the runner offers it. */
 export interface ForkPart {
@@ -289,6 +300,8 @@ export interface ForkPart {
 export interface ForkCounts {
   readonly inherited: number;
   readonly roots: number;
+  readonly manifests: number;
+  readonly blobs: number;
   readonly checkouts: number;
 }
 
@@ -321,6 +334,7 @@ export interface ForkCommand extends CommandEnvelope {
   readonly command: "fork";
   readonly runId: string;
   readonly creation: CreateWorkflowRunRequest;
+  readonly retrieval: string | null;
   readonly origin: ForkOrigin;
   readonly counts: ForkCounts;
   readonly runRecord: DurableEvent;
@@ -376,7 +390,7 @@ const MEMBERS: Record<CommandName, readonly string[]> = {
   executions: [...ENVELOPE, "anchor", "after"],
   mappings: ENVELOPE,
   open: [...ENVELOPE, "runId", "creation"],
-  begin: [...ENVELOPE, "runId", "action", "creation", "executionId"],
+  begin: [...ENVELOPE, "runId", "action", "creation", "retrieval", "executionId"],
   cancel: [...ENVELOPE, "runId"],
   settle: [...ENVELOPE, "completion", "expectedWorkspaceRootId"],
   "fork-stage": [...ENVELOPE, "section", "position", "part"],
@@ -384,6 +398,7 @@ const MEMBERS: Record<CommandName, readonly string[]> = {
     ...ENVELOPE,
     "runId",
     "creation",
+    "retrieval",
     "origin",
     "counts",
     "runRecord",
@@ -626,6 +641,7 @@ export function parseCommand(raw: string): RunnerCommand {
       runId,
       action,
       creation,
+      retrieval: retrieval(members.get("retrieval"), creation),
       executionId: text(members, "executionId", MAX_RUN_ID),
     };
   }
@@ -634,7 +650,13 @@ export function parseCommand(raw: string): RunnerCommand {
   }
   if (command === "fork-stage") {
     const section = members.get("section");
-    if (section !== "inherited" && section !== "roots" && section !== "checkouts") {
+    if (
+      section !== "inherited" &&
+      section !== "roots" &&
+      section !== "manifests" &&
+      section !== "blobs" &&
+      section !== "checkouts"
+    ) {
       throw new CommandError("malformed-member");
     }
     const part = members.get("part");
@@ -660,6 +682,7 @@ export function parseCommand(raw: string): RunnerCommand {
       command,
       runId,
       creation: creation.value,
+      retrieval: retrieval(members.get("retrieval"), creation.value),
       origin: origin(members.get("origin")),
       counts: counts(members.get("counts")),
       runRecord: forkEvent(members.get("runRecord")),
@@ -702,6 +725,29 @@ export function parseCommand(raw: string): RunnerCommand {
   };
 }
 
+/**
+ * The retrieval metadata a creation carries, canonically encoded.
+ *
+ * Only a creating request may carry one: a resume is not creating anything for
+ * it to belong to. The value is held to the same JSON rules every retained
+ * record is, and to the same bound one message is.
+ */
+function retrieval(value: unknown, creation: CreateWorkflowRunRequest | null): string | null {
+  if (value === null) {
+    return null;
+  }
+  if (creation === null) {
+    throw new CommandError("malformed-member");
+  }
+  const encoded = canonicalJson(
+    parseJsonValue(value, "$.retrieval", () => new CommandError("malformed-member")),
+  );
+  if (new TextEncoder().encode(encoded).length > MAX_MESSAGE_BYTES) {
+    throw new CommandError("too-large");
+  }
+  return encoded;
+}
+
 /** A whole count, as a member rather than a column. */
 function whole(value: unknown): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
@@ -734,10 +780,12 @@ function origin(value: unknown): ForkOrigin {
 /** How many parts each section should have arrived in. */
 function counts(value: unknown): ForkCounts {
   const found = object(value);
-  closed(found, ["inherited", "roots", "checkouts"]);
+  closed(found, ["inherited", "roots", "manifests", "blobs", "checkouts"]);
   return {
     inherited: whole(found.get("inherited")),
     roots: whole(found.get("roots")),
+    manifests: whole(found.get("manifests")),
+    blobs: whole(found.get("blobs")),
     checkouts: whole(found.get("checkouts")),
   };
 }

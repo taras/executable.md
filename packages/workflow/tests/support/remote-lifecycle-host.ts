@@ -12,6 +12,7 @@
 import { ensure, Err, Ok, type Operation, type Result } from "effection";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import type {
+  RemoteBeginCommand,
   RemoteBegun,
   RemoteExecutorConnection,
   RemoteForkCommit,
@@ -32,7 +33,7 @@ import type {
   DocumentExecutionRecord,
   WorkflowRunRecord,
 } from "../../src/storage/record.ts";
-import { WorkflowRequestError } from "../../src/storage/errors.ts";
+import { WorkflowRequestError, WorkflowTransactionError } from "../../src/storage/errors.ts";
 import type { RemoteWorkspaceLink } from "../../src/remote/database.ts";
 
 export const RUN_ID = "5cktgrv2zyutngh7bbddr2tyg2b5a567cg725hu5e7u42orerxaa";
@@ -62,6 +63,14 @@ export interface Script {
   readonly staged?: RemoteForkPart[];
   /** Every fork commit the provider asked for. */
   readonly commits?: RemoteForkCommit[];
+  /** Every command identity the provider addressed, in order. */
+  readonly commands?: string[];
+  /** Every retrieval value a begin carried. */
+  readonly retrievals?: (unknown | null)[];
+  /** Command identities whose first answer is lost after the owner commits. */
+  readonly loseAnswer?: Set<string>;
+  /** What an owner decided for a command identity, once it has decided. */
+  readonly committed?: Map<string, RemoteBegun>;
 }
 
 export function record(): WorkflowRunRecord {
@@ -154,10 +163,21 @@ function lifecycle(script: Script): RemoteLifecycleLink {
   let minted = 0;
   return {
     // deno-lint-ignore require-yield
-    *begin(request: {
-      readonly executionId: string;
-    }): Operation<Result<RemoteLifecycleAnswer<RemoteBegun>>> {
+    *begin(request: RemoteBeginCommand): Operation<Result<RemoteLifecycleAnswer<RemoteBegun>>> {
       script.asked?.push("begin");
+      script.commands?.push(request.commandId);
+      script.retrievals?.push(request.retrieval ?? null);
+      if (script.loseAnswer?.has(request.commandId) === true) {
+        // The owner committed and the answer never arrived.
+        script.loseAnswer.delete(request.commandId);
+        script.committed?.set(request.commandId, begun(request.executionId, script));
+        return Err(new WorkflowTransactionError("the connection ended before it answered."));
+      }
+      const already = script.committed?.get(request.commandId);
+      if (already !== undefined) {
+        // The same question again: the decision it already made.
+        return Ok({ kind: "performed", value: already });
+      }
       if (script.begin !== undefined) {
         return Ok({ kind: "refused", refusal: script.begin });
       }
@@ -165,30 +185,45 @@ function lifecycle(script: Script): RemoteLifecycleLink {
       return Ok({ kind: "performed", value: begun(request.executionId, script) });
     },
     // deno-lint-ignore require-yield
-    *settle(_completion: DocumentExecutionCompletion): Operation<Result<RemoteFrontierSnapshot>> {
+    *settle(
+      commandId: string,
+      _completion: DocumentExecutionCompletion,
+    ): Operation<Result<RemoteFrontierSnapshot>> {
       script.asked?.push("settle");
+      script.commands?.push(commandId);
       return Ok(frontier());
     },
     // deno-lint-ignore require-yield
-    *cancel(): Operation<Result<RemoteLifecycleAnswer<WorkflowRunRecord>>> {
+    *cancel(commandId: string): Operation<Result<RemoteLifecycleAnswer<WorkflowRunRecord>>> {
       script.asked?.push("cancel");
+      script.commands?.push(commandId);
       return Ok({ kind: "performed", value: record() });
     },
     // deno-lint-ignore require-yield
-    *stageForkPart(part: RemoteForkPart): Operation<Result<void>> {
+    *stageForkPart(_commandId: string, part: RemoteForkPart): Operation<Result<void>> {
       script.asked?.push("fork-stage");
       script.staged?.push(part);
       return Ok(undefined);
     },
     // deno-lint-ignore require-yield
-    *commitFork(commit: RemoteForkCommit): Operation<Result<RemoteBegun>> {
+    *commitFork(commit: RemoteForkCommit): Operation<Result<RemoteLifecycleAnswer<RemoteBegun>>> {
       script.asked?.push("fork");
       script.commits?.push(commit);
       if (script.forkConflict !== undefined) {
         return Err(new WorkflowRequestError("this destination is another run"));
       }
       void minted;
-      return Ok(begun(commit.executionId));
+      script.commands?.push(commit.commandId);
+      if (script.loseAnswer?.has(commit.commandId) === true) {
+        script.loseAnswer.delete(commit.commandId);
+        script.committed?.set(commit.commandId, begun(commit.executionId, script));
+        return Err(new WorkflowTransactionError("the connection ended before it answered."));
+      }
+      const already = script.committed?.get(commit.commandId);
+      if (already !== undefined) {
+        return Ok({ kind: "performed", value: already });
+      }
+      return Ok({ kind: "performed", value: begun(commit.executionId, script) });
     },
   };
 }
@@ -196,6 +231,7 @@ function lifecycle(script: Script): RemoteLifecycleLink {
 /** The provider's host, scripted. */
 export function installedHost(script: Script): RemoteLifecycleHost {
   let executions = 0;
+  let commands = 0;
   return {
     *admit(runId: string): Operation<Result<RemoteExecutorConnection | "already-running">> {
       if (script.admit === "already-running") {
@@ -240,6 +276,10 @@ export function installedHost(script: Script): RemoteLifecycleHost {
       execution: () => {
         executions += 1;
         return `execution-${executions}`;
+      },
+      command: () => {
+        commands += 1;
+        return `command-${commands}`;
       },
     },
   };

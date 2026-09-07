@@ -28,6 +28,13 @@ import { recognizeObject } from "./recognition.ts";
 import { isRootImportEvent, isRunRecordEvent } from "../journal-events.ts";
 import { parseDurableEvent } from "@executablemd/durable-streams";
 import { compareUtf8, parseWorkspaceRootManifest } from "../workspace/root-manifest.ts";
+import {
+  type AnchorBlob,
+  type AnchorManifest,
+  type AnchorRoot,
+  checkoutKey,
+  forkSelectionAnchor,
+} from "./fork-anchor.ts";
 import { encodeBase64, sha256Hex } from "./encoding.ts";
 import {
   retainedBytes,
@@ -519,26 +526,86 @@ function selectionAnchor(
     checkoutPaths: ReadonlySet<string>;
   },
 ): string {
-  return sha256Hex(
-    JSON.stringify({
-      checkpointEventId: selection.checkpointEventId,
-      checkpointWorkspaceRootId: selection.checkpointWorkspaceRootId,
-      runRecordWorkspaceRootId: selection.runRecordWorkspaceRootId,
-      rootImportWorkspaceRootId: selection.rootImportWorkspaceRootId,
-      inherited: selection.inherited.map((row) => [row.eventId, row.record, row.workspaceRootId]),
-      roots: selection.rootIds.map((rootId) => readStoredRoot(storage, rootId)),
-      // The metadata, not only the identities. A digest stands for its bytes
-      // and for the size derived from them, but not for a watermark: that is
-      // copied into destination storage and can change while the content does
-      // not.
-      manifests: selection.manifestHashes.map((hash) => readStoredManifest(storage, hash)),
-      blobs: selection.blobHashes.map((hash) => blobMetadata(storage, hash)),
-      checkouts: [
-        ...readCheckoutRepositories(storage, selection.checkoutPaths),
-        ...readCheckoutWorktrees(storage, selection.checkoutPaths),
-      ].map((entry) => [entry.cursor, entry.value]),
-    }),
-  );
+  // Built here from what this owner retains, and hashed by the shared rule a
+  // destination will hash its own copy with. The two sides read from different
+  // places on purpose; what they must not do is describe the selection
+  // differently.
+  return forkSelectionAnchor({
+    checkpointEventId: selection.checkpointEventId,
+    checkpointWorkspaceRootId: selection.checkpointWorkspaceRootId,
+    runRecordWorkspaceRootId: selection.runRecordWorkspaceRootId,
+    rootImportWorkspaceRootId: selection.rootImportWorkspaceRootId,
+    inherited: selection.inherited,
+    roots: selection.rootIds.map((rootId) => anchorRoot(storage, rootId)),
+    manifests: selection.manifestHashes.map((hash) => anchorManifest(storage, hash)),
+    blobs: selection.blobHashes.map((hash) => anchorBlob(storage, hash)),
+    checkouts: [
+      ...readCheckoutRepositories(storage, selection.checkoutPaths),
+      ...readCheckoutWorktrees(storage, selection.checkoutPaths),
+    ].map((entry) => ({ key: entry.cursor, value: entry.value })),
+  });
+}
+
+/** One root, as the shared selection describes it. */
+function anchorRoot(storage: OwnerStorage, rootId: string): AnchorRoot {
+  const read = readStoredRoot(storage, rootId);
+  return {
+    rootId: retainedTextOf(read, "rootId"),
+    formatVersion: retainedNumberOf(read, "formatVersion"),
+    manifest: retainedTextOf(read, "manifest"),
+    manifestHashes: retainedListOf(read, "manifestHashes"),
+    blobHashes: retainedListOf(read, "blobHashes"),
+  };
+}
+
+/** One content manifest, as the shared selection describes it. */
+function anchorManifest(storage: OwnerStorage, hash: string): AnchorManifest {
+  const read = readStoredManifest(storage, hash);
+  return {
+    hash,
+    size: retainedNumberOf(read, "size"),
+    lastSeen: retainedNumberOf(read, "lastSeen"),
+    encoded: retainedTextOf(read, "encoded"),
+  };
+}
+
+/** One blob's metadata, as the shared selection describes it. */
+function anchorBlob(storage: OwnerStorage, hash: string): AnchorBlob {
+  const read = blobMetadata(storage, hash);
+  return {
+    hash,
+    size: retainedNumberOf(read, "size"),
+    lastSeen: retainedNumberOf(read, "lastSeen"),
+  };
+}
+
+function retainedTextOf(value: Record<string, unknown>, name: string): string {
+  const found = value[name];
+  if (typeof found !== "string") {
+    throw new CommandError("corrupt-journal");
+  }
+  return found;
+}
+
+function retainedNumberOf(value: Record<string, unknown>, name: string): number {
+  const found = value[name];
+  if (typeof found !== "number") {
+    throw new CommandError("corrupt-journal");
+  }
+  return found;
+}
+
+function retainedListOf(value: Record<string, unknown>, name: string): string[] {
+  const found = value[name];
+  if (!Array.isArray(found)) {
+    throw new CommandError("corrupt-journal");
+  }
+  return found.map((entry) => {
+    if (typeof entry !== "string") {
+      throw new CommandError("corrupt-journal");
+    }
+    return entry;
+  });
 }
 
 /** The directories the checkpoint's own Workspace held. */
@@ -782,10 +849,6 @@ function readStoredBlob(storage: OwnerStorage, hash: string): Record<string, unk
  * A JSON array of the parts escapes what it must and separates what it must,
  * so distinct tuples spell distinct keys.
  */
-function checkoutKey(parts: readonly string[]): string {
-  return JSON.stringify(parts);
-}
-
 /** Only the Repositories whose checkout the checkpoint's Workspace holds. */
 function readCheckoutRepositories(
   storage: OwnerStorage,

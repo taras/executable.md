@@ -60,10 +60,24 @@ export function establishRun(
   runId: string,
   creation: CreateWorkflowRunRequest,
   now: () => string,
+  retrieval?: string,
 ): readonly string[] | null {
   if (pristine(storage)) {
     const stamp = now();
-    initializeInside(storage, transaction, () => insertRun(storage, creation, stamp));
+    initializeInside(storage, transaction, () => {
+      insertRun(storage, creation, stamp);
+      if (retrieval !== undefined) {
+        // Written with the run rather than by a later command: where a
+        // definition can be fetched from is part of what this caller created,
+        // and a run that had to be told twice could be told once and crash.
+        storage.sql.exec(
+          `INSERT INTO definition_retrieval (id, metadata, revision, updated_at)
+            VALUES (1, ?, 1, ?)`,
+          retrieval,
+          stamp,
+        );
+      }
+    });
     return null;
   }
   recognizeObject(storage);

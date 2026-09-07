@@ -23,6 +23,8 @@ import {
   VALID_CLAIMS,
 } from "./support/executor-object.ts";
 import { generateKeys, signToken, type TestKeys } from "./support/tokens.ts";
+import { forkSelectionAnchor } from "../../src/cloudflare/fork-anchor.ts";
+import { forkRunRecordEvent } from "../../src/journal-events.ts";
 
 let unique = 0;
 const NOW = 1_800_000_000;
@@ -84,15 +86,11 @@ function event(name: string): string {
   });
 }
 
-const HEAD = serializeDurableEvent({
-  type: "yield",
-  coroutineId: "root",
-  description: { type: "workflow_run", name: "workflow_run", base: "main" },
-  result: {
-    status: "ok",
-    value: { runId: RUN_ID, base: "main", pinnedCommit: "0".repeat(40) },
-  },
-});
+// The canonical record this destination's own identity implies. Composed by
+// the shared helper, because the owner holds the head to exactly that.
+const HEAD = serializeDurableEvent(
+  forkRunRecordEvent({ runId: RUN_ID, base: "main", pinnedCommit: "0".repeat(40) }),
+);
 
 const IMPORT = serializeDurableEvent({
   type: "yield",
@@ -100,6 +98,37 @@ const IMPORT = serializeDurableEvent({
   description: { type: "import_component", name: "__root__" },
   result: { status: "ok", value: { kind: "repository", path: "README.md", content: "# fork" } },
 });
+
+const ROOT_PART = {
+  rootId: ROOT_ID,
+  formatVersion: 1,
+  manifest: ROOT_MANIFEST,
+  manifestHashes: [MANIFEST_ID],
+  blobHashes: [BLOB_ID],
+};
+const MANIFEST_PART = { hash: MANIFEST_ID, size: FILE_BYTES.length, lastSeen: 7 };
+const BLOB_PART = { hash: BLOB_ID, size: FILE_BYTES.length, lastSeen: 9 };
+const INHERITED_PART = {
+  eventId: "event-work",
+  record: event("work"),
+  workspaceRootId: ROOT_ID,
+};
+
+/** The anchor this selection has, computed the way the source computes it. */
+function anchorOf(overrides: Record<string, unknown> = {}): string {
+  return forkSelectionAnchor({
+    checkpointEventId: "event-work",
+    checkpointWorkspaceRootId: ROOT_ID,
+    runRecordWorkspaceRootId: ROOT_ID,
+    rootImportWorkspaceRootId: ROOT_ID,
+    inherited: [INHERITED_PART],
+    roots: [ROOT_PART],
+    manifests: [{ ...MANIFEST_PART, encoded: base64(new TextEncoder().encode(DOFS_MANIFEST)) }],
+    blobs: [BLOB_PART],
+    checkouts: [],
+    ...overrides,
+  });
+}
 
 /** Offer everything one small source is made of, as the runner would. */
 async function offer(stub: ReturnType<typeof executor>, id: () => string): Promise<void> {
@@ -132,13 +161,7 @@ async function offer(stub: ReturnType<typeof executor>, id: () => string): Promi
         command: "fork-stage",
         section: "roots",
         position: 0,
-        part: {
-          rootId: ROOT_ID,
-          formatVersion: 1,
-          manifest: ROOT_MANIFEST,
-          manifestHashes: [MANIFEST_ID],
-          blobHashes: [BLOB_ID],
-        },
+        part: ROOT_PART,
       })
     )["outcome"],
   ).toBe("performed");
@@ -149,10 +172,28 @@ async function offer(stub: ReturnType<typeof executor>, id: () => string): Promi
         command: "fork-stage",
         section: "inherited",
         position: 0,
-        part: { eventId: "event-work", record: event("work"), workspaceRootId: ROOT_ID },
+        part: INHERITED_PART,
       })
     )["outcome"],
   ).toBe("performed");
+  // The metadata a digest cannot stand for, offered beside the content.
+  const metadata: { section: string; part: Record<string, number | string> }[] = [
+    { section: "manifests", part: MANIFEST_PART },
+    { section: "blobs", part: BLOB_PART },
+  ];
+  for (const offered of metadata) {
+    expect(
+      (
+        await ask(stub, {
+          id: id(),
+          command: "fork-stage",
+          section: offered.section,
+          position: 0,
+          part: offered.part,
+        })
+      )["outcome"],
+    ).toBe("performed");
+  }
 }
 
 /** The event ids one published snapshot reports, in journal order. */
@@ -186,9 +227,10 @@ function commit(overrides: Record<string, unknown> = {}): Record<string, unknown
       checkpointWorkspaceRootId: ROOT_ID,
       runRecordWorkspaceRootId: ROOT_ID,
       rootImportWorkspaceRootId: ROOT_ID,
-      anchor: "f".repeat(64),
+      anchor: anchorOf(),
     },
-    counts: { inherited: 1, roots: 1, checkouts: 0 },
+    retrieval: null,
+    counts: { inherited: 1, roots: 1, manifests: 1, blobs: 1, checkouts: 0 },
     runRecord: HEAD,
     rootImport: IMPORT,
     executionId: "execution-1",
@@ -270,7 +312,7 @@ describe("committing a fork on its destination owner", () => {
           checkpointWorkspaceRootId: ROOT_ID,
           runRecordWorkspaceRootId: "b".repeat(64),
           rootImportWorkspaceRootId: ROOT_ID,
-          anchor: "f".repeat(64),
+          anchor: anchorOf({ runRecordWorkspaceRootId: "b".repeat(64) }),
         },
       }),
     );
@@ -303,12 +345,159 @@ describe("committing a fork on its destination owner", () => {
     await connected(stub);
     let minted = 0;
     await offer(stub, () => `command-${(minted += 1)}`);
-    expect(await on(stub, (owner) => owner.forkParts())).toHaveLength(2);
+    expect(await on(stub, (owner) => owner.forkParts())).toHaveLength(4);
 
     // A replacement acquisition inherits nothing its predecessor offered.
     await on(stub, (owner) => owner.dropConnections());
     await connected(stub);
 
     expect(await on(stub, (owner) => owner.forkParts())).toEqual([]);
+  });
+
+  it("refuses an anchor that is not this selection's, before it creates anything", async () => {
+    const stub = executor();
+    await connected(stub);
+    let minted = 0;
+    await offer(stub, () => `command-${(minted += 1)}`);
+
+    // Well-formed, and not the digest this selection produces.
+    const refused = await ask(
+      stub,
+      commit({
+        origin: {
+          sourceRunId: SOURCE_RUN_ID,
+          checkpointEventId: "event-work",
+          checkpointWorkspaceRootId: ROOT_ID,
+          runRecordWorkspaceRootId: ROOT_ID,
+          rootImportWorkspaceRootId: ROOT_ID,
+          anchor: "f".repeat(64),
+        },
+      }),
+    );
+
+    expect(refused["outcome"]).toBe("refused");
+    expect(await on(stub, (owner) => owner.hasWorkflowSchema())).toBe(false);
+  });
+
+  it("refuses a changed watermark, which no content digest stands for", async () => {
+    const stub = executor();
+    await connected(stub);
+    let minted = 0;
+    const id = () => `command-${(minted += 1)}`;
+    // Everything as before, except the blob's copied watermark.
+    await ask(stub, {
+      id: id(),
+      command: "stage",
+      kind: "manifest",
+      digest: MANIFEST_ID,
+      bytes: base64(new TextEncoder().encode(DOFS_MANIFEST)),
+    });
+    await ask(stub, {
+      id: id(),
+      command: "stage",
+      kind: "blob",
+      digest: BLOB_ID,
+      bytes: base64(FILE_BYTES),
+    });
+    await ask(stub, {
+      id: id(),
+      command: "fork-stage",
+      section: "roots",
+      position: 0,
+      part: ROOT_PART,
+    });
+    await ask(stub, {
+      id: id(),
+      command: "fork-stage",
+      section: "inherited",
+      position: 0,
+      part: INHERITED_PART,
+    });
+    await ask(stub, {
+      id: id(),
+      command: "fork-stage",
+      section: "manifests",
+      position: 0,
+      part: MANIFEST_PART,
+    });
+    await ask(stub, {
+      id: id(),
+      command: "fork-stage",
+      section: "blobs",
+      position: 0,
+      part: { ...BLOB_PART, lastSeen: BLOB_PART.lastSeen + 1 },
+    });
+
+    const refused = await ask(stub, commit());
+    expect(refused["outcome"]).toBe("refused");
+    expect(await on(stub, (owner) => owner.hasWorkflowSchema())).toBe(false);
+  });
+
+  it("refuses a head record that is not the one this fork's identity implies", async () => {
+    const stub = executor();
+    await connected(stub);
+    let minted = 0;
+    await offer(stub, () => `command-${(minted += 1)}`);
+
+    const refused = await ask(
+      stub,
+      commit({
+        runRecord: serializeDurableEvent(
+          forkRunRecordEvent({ runId: RUN_ID, base: "other", pinnedCommit: "0".repeat(40) }),
+        ),
+      }),
+    );
+
+    expect(refused["outcome"]).toBe("refused");
+    expect(await on(stub, (owner) => owner.hasWorkflowSchema())).toBe(false);
+  });
+
+  it("retains the watermarks the source copied rather than starting them again", async () => {
+    const stub = executor();
+    await connected(stub);
+    let minted = 0;
+    await offer(stub, () => `command-${(minted += 1)}`);
+    await ask(stub, commit());
+
+    const watermarks = await on(stub, (owner) => owner.contentWatermarks());
+    expect(watermarks.manifests).toEqual([MANIFEST_PART.lastSeen]);
+    expect(watermarks.blobs).toEqual([BLOB_PART.lastSeen]);
+  });
+
+  it("recovers the previous executor's work before a later fork begins again", async () => {
+    const stub = executor();
+    await connected(stub);
+    let minted = 0;
+    await offer(stub, () => `command-${(minted += 1)}`);
+    expect((await ask(stub, commit()))["outcome"]).toBe("performed");
+
+    // The executor that committed the fork is gone with its execution open.
+    await on(stub, (owner) => owner.dropConnections());
+    await connected(stub);
+    await offer(stub, () => `later-${(minted += 1)}`);
+    const again = await ask(stub, commit({ id: "fork-again", executionId: "execution-2" }));
+
+    expect(again["outcome"]).toBe("performed");
+    const executions = await on(stub, (owner) => owner.executionRows());
+    // The first was closed by recovery, and exactly one replacement began.
+    expect(executions).toHaveLength(2);
+    expect(executions[0]?.["stop_status"]).toBe("interrupted");
+    expect(executions[1]?.["stopped_at"]).toBe(null);
+    expect(executions.filter((row) => row["stopped_at"] === null)).toHaveLength(1);
+  });
+
+  it("writes the retrieval its creation carried, with the run", async () => {
+    const stub = executor();
+    await connected(stub);
+    let minted = 0;
+    await offer(stub, () => `command-${(minted += 1)}`);
+    await ask(stub, commit({ retrieval: { kind: "git", remote: "origin" } }));
+
+    const retrieval = await on(stub, (owner) => owner.retrieval());
+    expect(retrieval?.["revision"]).toBe(1);
+    expect(JSON.parse(String(retrieval?.["metadata"]))).toEqual({
+      kind: "git",
+      remote: "origin",
+    });
   });
 });

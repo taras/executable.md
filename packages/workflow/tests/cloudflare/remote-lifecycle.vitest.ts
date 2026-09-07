@@ -85,6 +85,7 @@ async function started(
     runId: RUN_ID,
     action: "start",
     creation: creation(),
+    retrieval: null,
     executionId,
   });
 }
@@ -182,6 +183,7 @@ describe("a run's lifecycle on its owner", () => {
       runId: RUN_ID,
       action: "resume",
       creation: null,
+      retrieval: null,
       executionId: "execution-2",
     });
 
@@ -216,6 +218,7 @@ describe("a run's lifecycle on its owner", () => {
       runId: RUN_ID,
       action: "start",
       creation: creation(),
+      retrieval: null,
       executionId: "execution-2",
     });
 
@@ -236,6 +239,7 @@ describe("a run's lifecycle on its owner", () => {
       runId: RUN_ID,
       action: "resume",
       creation: null,
+      retrieval: null,
       executionId: "execution-2",
     });
 
@@ -267,5 +271,131 @@ describe("a run's lifecycle on its owner", () => {
     // cancelling the run does not rewrite what that execution became.
     expect(state.executions).toHaveLength(1);
     expect(state.executions[0]?.["stop_status"]).toBe("interrupted");
+  });
+
+  it("writes the retrieval a start carried, with the run it creates", async () => {
+    const stub = executor();
+    await connected(stub);
+
+    const answered = await ask(stub, {
+      id: "command-1",
+      command: "begin",
+      runId: RUN_ID,
+      action: "start",
+      creation: creation(),
+      retrieval: { kind: "git", remote: "origin" },
+      executionId: "execution-1",
+    });
+
+    expect(answered["outcome"]).toBe("performed");
+    const retrieval = await on(stub, (owner) => owner.retrieval());
+    // Revision one, written in the transaction that made the run.
+    expect(retrieval?.["revision"]).toBe(1);
+    expect(JSON.parse(String(retrieval?.["metadata"]))).toEqual({
+      kind: "git",
+      remote: "origin",
+    });
+  });
+
+  it("writes no retrieval row when a start carries none", async () => {
+    const stub = executor();
+    await connected(stub);
+    await started(stub, "command-1", "execution-1");
+
+    expect(await on(stub, (owner) => owner.retrieval())).toBe(null);
+  });
+
+  it("refuses a retrieval nothing is being created for, and one too large", async () => {
+    const stub = executor();
+    await connected(stub);
+
+    // A resume creates nothing, so there is nothing for a retrieval to belong
+    // to. Carrying one is a request this build does not answer.
+    const orphan = await ask(stub, {
+      id: "command-1",
+      command: "begin",
+      runId: RUN_ID,
+      action: "resume",
+      creation: null,
+      retrieval: { kind: "git" },
+      executionId: "execution-1",
+    });
+    // Refused while the command was still being read, so the answer names no
+    // command at all.
+    expect(orphan).toEqual({ id: "", outcome: "refused", refusal: "command:malformed-member" });
+
+    const huge = await ask(stub, {
+      id: "command-2",
+      command: "begin",
+      runId: RUN_ID,
+      action: "start",
+      creation: creation(),
+      retrieval: { remote: "x".repeat(2 * 1024 * 1024) },
+      executionId: "execution-1",
+    });
+    expect(huge["outcome"]).toBe("refused");
+
+    // Neither one made anything.
+    expect(await on(stub, (owner) => owner.hasWorkflowSchema())).toBe(false);
+  });
+
+  it("leaves an existing run's retrieval alone when it is taken up again", async () => {
+    const stub = executor();
+    await connected(stub);
+    await ask(stub, {
+      id: "command-1",
+      command: "begin",
+      runId: RUN_ID,
+      action: "start",
+      creation: creation(),
+      retrieval: { kind: "git", remote: "origin" },
+      executionId: "execution-1",
+    });
+    await on(stub, (owner) => owner.dropConnections());
+    await connected(stub);
+
+    await ask(stub, {
+      id: "command-2",
+      command: "begin",
+      runId: RUN_ID,
+      action: "resume",
+      creation: null,
+      retrieval: null,
+      executionId: "execution-2",
+    });
+
+    const retrieval = await on(stub, (owner) => owner.retrieval());
+    // Replaceable state, not identity: a resume neither compares it nor
+    // clears it.
+    expect(retrieval?.["revision"]).toBe(1);
+  });
+
+  it("hands a replacement acquisition the execution a lost answer began", async () => {
+    const stub = executor();
+    await connected(stub);
+    const first = await started(stub, "command-1", "execution-1");
+    expect(first["outcome"]).toBe("performed");
+
+    // The answer never arrived and the connection died. The replacement asks
+    // the same question, with the same identity.
+    await on(stub, (owner) => owner.dropConnections());
+    await connected(stub);
+    const again = await started(stub, "command-1", "execution-1");
+
+    expect(again).toEqual(first);
+    // One execution, and it is this acquisition's to settle now.
+    expect(await on(stub, (owner) => owner.executionRows())).toHaveLength(1);
+    const held = await on(stub, (owner) => owner.heldExecutions());
+    expect(held).toHaveLength(1);
+    expect(held[0]?.["execution_id"]).toBe("execution-1");
+
+    const root = await on(stub, (owner) => owner.currentRootId());
+    const settled = await ask(stub, {
+      id: "command-3",
+      command: "settle",
+      completion: { executionId: "execution-1", status: "completed" },
+      expectedWorkspaceRootId: root,
+    });
+    expect(settled["outcome"]).toBe("performed");
   });
 });

@@ -48,6 +48,8 @@ import {
   type WorkflowStorageError,
 } from "../storage/errors.ts";
 import { useRemoteRunDatabase } from "./database.ts";
+import { canonicalJson } from "../storage/record.ts";
+import { definitionToJson } from "../storage/definition.ts";
 import type { RemoteForkSource, RemoteReadPlane } from "./read.ts";
 import { forkRunRecordEvent } from "../fork.ts";
 import type {
@@ -88,7 +90,23 @@ export interface RemoteLifecycleHost {
     head: { readonly runRecord: DurableEvent; readonly rootImport: DurableEvent },
   ): Operation<Result<WorkflowRunDatabase>>;
   /** Fresh identities for this provider's own commands and executions. */
-  readonly ids: { readonly execution: () => string };
+  readonly ids: { readonly execution: () => string; readonly command: () => string };
+}
+
+/**
+ * One logical lifecycle invocation, as it is addressed and re-addressed.
+ *
+ * Minted once and kept by the run it belongs to rather than by the connection
+ * that first sent it. A connection that died between an owner's commit and its
+ * answer is exactly the case this exists for: the replacement acquisition asks
+ * the same question, with the same identity and the same bytes, and the owner
+ * answers with what it already decided instead of deciding again.
+ */
+interface Invocation {
+  readonly commandId: string;
+  readonly executionId: string;
+  /** What this invocation asked, so a different question gets a new identity. */
+  readonly shape: string;
 }
 
 /** What one issued lock is allowed to do, and what it has already done. */
@@ -115,6 +133,29 @@ export function* useRemoteLifecycle(
   // Keyed by the object itself: two locks are the same lock when they are the
   // same object, and nothing about their fields is consulted.
   const held = new Map<ExecutorLock, Hold>();
+  // Keyed by the run and the question asked, so the same question after a lost
+  // answer is the same invocation. Not authority: what it carries is an
+  // identity, and the owner decides what that identity already means.
+  const invocations = new Map<string, Invocation>();
+
+  function invocation(runId: string, shape: string): Invocation {
+    const key = `${runId}\u0000${shape}`;
+    const found = invocations.get(key);
+    if (found !== undefined) {
+      return found;
+    }
+    const minted: Invocation = {
+      commandId: host.ids.command(),
+      executionId: host.ids.execution(),
+      shape,
+    };
+    invocations.set(key, minted);
+    return minted;
+  }
+
+  function settled(runId: string, shape: string): void {
+    invocations.delete(`${runId}\u0000${shape}`);
+  }
 
   function hold(lock: ExecutorLock): Hold | undefined {
     // Fabricated, copied, foreign, released and closed locks all answer
@@ -172,10 +213,13 @@ export function* useRemoteLifecycle(
           ),
         );
       }
-      const answered = yield* admitted.value.lifecycle.cancel(runId);
+      const shape = questionOf(["cancel"]);
+      const addressed = invocation(runId, shape);
+      const answered = yield* admitted.value.lifecycle.cancel(addressed.commandId, runId);
       if (!answered.ok) {
         return answered;
       }
+      settled(runId, shape);
       if (answered.value.kind === "refused") {
         return Err(
           new WorkflowRequestError(
@@ -189,16 +233,22 @@ export function* useRemoteLifecycle(
     });
   }
 
-  yield* WorkflowLifecycle.around({
-    *acquireExecutor([runId]): Operation<Result<ExecutorAcquisition>> {
-      return yield* acquireExecutor(runId);
+  yield* WorkflowLifecycle.around(
+    {
+      *acquireExecutor([runId]): Operation<Result<ExecutorAcquisition>> {
+        return yield* acquireExecutor(runId);
+      },
+      *cancel([runId]): Operation<Result<WorkflowRunRecord>> {
+        return yield* cancel(runId);
+      },
     },
-    *cancel([runId]): Operation<Result<WorkflowRunRecord>> {
-      return yield* cancel(runId);
-    },
-  });
+    // Nearest wins, the same way storage and the read provider install: a
+    // scope that installed this one answers with it, not with whatever an
+    // enclosing scope happened to install first.
+    { at: "min" },
+  );
 
-  return transitions(host, hold);
+  return transitions(host, hold, invocation, settled);
 }
 
 /** What an unrecognized lock answers, wherever one is offered. */
@@ -211,6 +261,8 @@ function unauthorized(): WorkflowRequestError {
 function transitions(
   host: RemoteLifecycleHost,
   hold: (lock: ExecutorLock) => Hold | undefined,
+  invocation: (runId: string, shape: string) => Invocation,
+  settled: (runId: string, shape: string) => void,
 ): WorkflowExecutionTransitions {
   return {
     *begin(
@@ -236,21 +288,38 @@ function transitions(
       if (request.action === "resume" && request.creation !== undefined) {
         return Err(new WorkflowRequestError("a resume does not carry a creation."));
       }
-      // Minted once, outside anything that could retry: the owner recognizes a
-      // repeat by this identity, and a fresh one would be a second execution.
-      const executionId = host.ids.execution();
+      // Minted once for this question, outside anything that could retry: the
+      // owner recognizes a repeat by this identity, and a fresh one would be a
+      // second execution. A later acquisition asking the same question finds
+      // the same identity and re-observes the decision.
+      const creation = creationOf(request.runId, request.creation);
+      const shape = questionOf([
+        "begin",
+        request.action,
+        creation === null ? null : creationShape(creation),
+        request.creation?.retrieval === undefined
+          ? null
+          : canonicalJson(request.creation.retrieval),
+      ]);
+      const addressed = invocation(request.runId, shape);
       const answered = yield* held.connection.lifecycle.begin({
+        commandId: addressed.commandId,
         runId: request.runId,
         action: request.action,
-        creation: creationOf(request.runId, request.creation),
-        executionId,
+        creation,
+        retrieval: request.creation?.retrieval,
+        executionId: addressed.executionId,
       });
       if (!answered.ok) {
+        // The answer is lost, not the question. The identity stays, so the
+        // next acquisition asks the same one.
         return answered;
       }
       if (answered.value.kind === "refused") {
+        settled(request.runId, shape);
         return Err(refusalError(answered.value.refusal, request.runId));
       }
+      settled(request.runId, shape);
       held.execution = answered.value.value.execution.executionId;
       return Ok(yield* begun(held, answered.value.value));
     },
@@ -276,13 +345,22 @@ function transitions(
       // The root the owner is held to comes from the same connection-owned
       // frontier the execution ran against, after the host has torn down.
       const frontier = yield* held.connection.link.frontierSnapshot();
+      const shape = questionOf([
+        "settle",
+        completion.executionId,
+        completion.status,
+        frontier.workspaceRootId,
+      ]);
+      const addressed = invocation(held.runId, shape);
       const answered = yield* held.connection.lifecycle.settle(
+        addressed.commandId,
         completion,
         frontier.workspaceRootId,
       );
       if (!answered.ok) {
         return answered;
       }
+      settled(held.runId, shape);
       held.execution = undefined;
       return Ok(answered.value.record);
     },
@@ -311,13 +389,21 @@ function transitions(
       if (!source.ok) {
         return source;
       }
-      const staged = yield* offer(held.connection.lifecycle, source.value);
+      const staged = yield* offer(host, held.connection.lifecycle, source.value);
       if (!staged.ok) {
         return staged;
       }
-      const executionId = host.ids.execution();
+      const shape = questionOf([
+        "fork",
+        request.runId,
+        source.value.anchor,
+        source.value.checkpointEventId,
+      ]);
+      const addressed = invocation(request.runId, shape);
       const answered = yield* held.connection.lifecycle.commitFork({
+        commandId: addressed.commandId,
         runId: request.runId,
+        retrieval: request.creation.retrieval,
         creation: creationRequest(request.runId, request.creation),
         origin: {
           sourceRunId: source.value.sourceRunId,
@@ -330,17 +416,24 @@ function transitions(
         counts: {
           inherited: source.value.inherited.length,
           roots: source.value.roots.length,
+          manifests: source.value.manifests.length,
+          blobs: source.value.blobs.length,
           checkouts: source.value.checkouts.length,
         },
         runRecord: headOf(request).runRecord,
         rootImport: request.rootImport,
-        executionId,
+        executionId: addressed.executionId,
       });
       if (!answered.ok) {
         return answered;
       }
-      held.execution = answered.value.execution.executionId;
-      return Ok(yield* begun(held, answered.value));
+      if (answered.value.kind === "refused") {
+        settled(request.runId, shape);
+        return Err(refusalError(answered.value.refusal, request.runId));
+      }
+      settled(request.runId, shape);
+      held.execution = answered.value.value.execution.executionId;
+      return Ok(yield* begun(held, answered.value.value));
     },
 
     *stageFork(request: WorkflowForkRequest): Operation<Result<WorkflowRunDatabase>> {
@@ -388,6 +481,27 @@ function headOf(request: WorkflowForkRequest): {
   };
 }
 
+/** One creation, as text: the fields a run's identity is compared by. */
+function creationShape(creation: CreateWorkflowRunRequest): string {
+  return canonicalJson({
+    runId: creation.runId,
+    definition: definitionToJson(creation.definition),
+    base: creation.base,
+    props: creation.props,
+  });
+}
+
+/**
+ * What one invocation is asking, as text two calls can be compared by.
+ *
+ * Canonical, so the same question always spells the same way, and a different
+ * one never spells like it. This decides only whether a retry is the same
+ * logical invocation; what that identity already means is the owner's to say.
+ */
+function questionOf(parts: readonly (string | null)[]): string {
+  return canonicalJson([...parts]);
+}
+
 /** Read one source through the accepted no-acquisition plane. */
 function* readSource(
   host: RemoteLifecycleHost,
@@ -414,7 +528,11 @@ function* readSource(
  * that name where they belong. Nothing here is a run: the final command decides
  * whether these add up to one.
  */
-function* offer(lifecycle: RemoteLifecycleLink, source: RemoteForkSource): Operation<Result<void>> {
+function* offer(
+  host: RemoteLifecycleHost,
+  lifecycle: RemoteLifecycleLink,
+  source: RemoteForkSource,
+): Operation<Result<void>> {
   const parts: RemoteForkPart[] = [];
   source.roots.forEach((root, position) => {
     parts.push({
@@ -429,6 +547,23 @@ function* offer(lifecycle: RemoteLifecycleLink, source: RemoteForkSource): Opera
       },
     });
   });
+  source.manifests.forEach((manifest, position) => {
+    // The metadata, not the bytes: the bytes cross through the content staging
+    // the publication path already uses, and what a digest cannot stand for is
+    // the watermark copied beside it.
+    parts.push({
+      section: "manifests",
+      position,
+      part: { hash: manifest.hash, size: manifest.size, lastSeen: manifest.lastSeen },
+    });
+  });
+  source.blobs.forEach((blob, position) => {
+    parts.push({
+      section: "blobs",
+      position,
+      part: { hash: blob.hash, size: blob.size, lastSeen: blob.lastSeen },
+    });
+  });
   source.inherited.forEach((row, position) => {
     parts.push({
       section: "inherited",
@@ -440,7 +575,7 @@ function* offer(lifecycle: RemoteLifecycleLink, source: RemoteForkSource): Opera
     parts.push({ section: "checkouts", position, part: { ...checkout } });
   });
   for (const part of parts) {
-    const staged = yield* lifecycle.stageForkPart(part);
+    const staged = yield* lifecycle.stageForkPart(host.ids.command(), part);
     if (!staged.ok) {
       return staged;
     }

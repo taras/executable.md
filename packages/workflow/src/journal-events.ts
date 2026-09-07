@@ -13,7 +13,7 @@
  */
 
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { WORKFLOW_RUN } from "./journal.ts";
+import { describeWorkflowRun, WORKFLOW_RUN } from "./journal.ts";
 
 const ROOT_COROUTINE = "root";
 const IMPORT_COMPONENT = "import_component";
@@ -36,4 +36,28 @@ export function isRunRecordEvent(event: DurableEvent): boolean {
     event.description.type === WORKFLOW_RUN &&
     event.description.name === WORKFLOW_RUN
   );
+}
+
+/**
+ * The record a fork writes at position zero, exactly as its own execution would
+ * have written it.
+ *
+ * Composed here rather than in a host, so the value a fork is admitted with,
+ * the value its destination owner validates, and the value its first execution
+ * replays are the same shape by construction.
+ */
+export function forkRunRecordEvent(run: {
+  readonly runId: string;
+  readonly base: string;
+  readonly pinnedCommit: string;
+}): DurableEvent {
+  return {
+    type: "yield",
+    coroutineId: ROOT_COROUTINE,
+    description: describeWorkflowRun(run.base),
+    result: {
+      status: "ok",
+      value: { runId: run.runId, base: run.base, pinnedCommit: run.pinnedCommit },
+    },
+  };
 }

@@ -134,16 +134,25 @@ describe("a remote fork's destination", () => {
     expect([outcome.ok, outcome.ok === false && String(outcome.error)]).toEqual([true, false]);
     // Everything was offered, and the commit came last.
     expect(asked.at(-1)).toBe("fork");
-    expect(asked.filter((command) => command === "fork-stage")).toHaveLength(4);
+    expect(asked.filter((command) => command === "fork-stage")).toHaveLength(6);
     expect(staged.map((part) => `${part.section}:${part.position}`)).toEqual([
       "roots:0",
+      // The metadata a digest cannot stand for travels beside the content.
+      "manifests:0",
+      "blobs:0",
       "inherited:0",
       "inherited:1",
       "checkouts:0",
     ]);
     // What the final command claims is what was offered, and where it came
     // from is the selection that was read.
-    expect(commits[0]?.counts).toEqual({ inherited: 2, roots: 1, checkouts: 1 });
+    expect(commits[0]?.counts).toEqual({
+      inherited: 2,
+      roots: 1,
+      manifests: 1,
+      blobs: 1,
+      checkouts: 1,
+    });
     expect(commits[0]?.origin).toEqual({
       sourceRunId: SOURCE_RUN_ID,
       checkpointEventId: "event-work",

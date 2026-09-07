@@ -349,6 +349,16 @@ export class ExecutorObject extends WorkflowOwnerObject {
     return this.ctx.storage.sql.exec(`SELECT * FROM ${HOLD_TABLE}`).toArray();
   }
 
+  /** The watermarks retained beside this run's copied content. */
+  contentWatermarks(): { manifests: number[]; blobs: number[] } {
+    const read = (table: string) =>
+      this.ctx.storage.sql
+        .exec(`SELECT last_seen FROM ${table} ORDER BY last_seen`)
+        .toArray()
+        .map((row) => Number(row["last_seen"]));
+    return { manifests: read("vfs_manifests"), blobs: read("vfs_blobs") };
+  }
+
   /** Every fork part this owner is holding for anyone. */
   forkParts(): Record<string, unknown>[] {
     return this.ctx.storage.sql

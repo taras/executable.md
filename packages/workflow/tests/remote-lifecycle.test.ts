@@ -204,4 +204,95 @@ describe("a remote run's executor lifecycle", () => {
     // rather than installing an object that answers only its own.
     expect(outcome.asked).toBe(true);
   });
+
+  it("answers from the nearest provider, over one installed further out", function* () {
+    const answered: string[] = [];
+    const outcome = yield* scoped(function* () {
+      // A provider in an enclosing scope, installed the way every provider in
+      // this repository installs. Nothing should reach it.
+      yield* WorkflowLifecycle.around(
+        {
+          // deno-lint-ignore require-yield
+          *acquireExecutor(): Operation<Result<never>> {
+            answered.push("outer-acquire");
+            throw new WorkflowRequestError("the outer provider answered acquireExecutor");
+          },
+          // deno-lint-ignore require-yield
+          *cancel(): Operation<Result<never>> {
+            answered.push("outer-cancel");
+            throw new WorkflowRequestError("the outer provider answered cancel");
+          },
+          // deno-lint-ignore require-yield
+          *inspect(): Operation<Result<never>> {
+            answered.push("outer-inspect");
+            throw new WorkflowRequestError("the outer provider answered inspect");
+          },
+        },
+        { at: "min" },
+      );
+      return yield* scoped(function* () {
+        // The read provider, then the lifecycle provider, both nearer the work.
+        yield* WorkflowLifecycle.around(
+          {
+            // deno-lint-ignore require-yield
+            *inspect(): Operation<Result<never>> {
+              answered.push("inner-inspect");
+              throw new WorkflowRequestError("the inner read provider answered inspect");
+            },
+          },
+          { at: "min" },
+        );
+        yield* useRemoteLifecycle(installedHost({}));
+        const taken = yield* WorkflowLifecycle.operations.acquireExecutor(RUN_ID);
+        const cancelled = yield* WorkflowLifecycle.operations.cancel(RUN_ID);
+        try {
+          yield* WorkflowLifecycle.operations.inspect(RUN_ID);
+        } catch {
+          // The read provider answers by raising; which one raised is what is
+          // being observed.
+        }
+        return { taken, cancelled };
+      });
+    });
+
+    expect(outcome.taken.ok).toBe(true);
+    expect(outcome.cancelled.ok).toBe(true);
+    // The nearest provider answered its own operations, the read provider
+    // installed beside it still answered its own, and the outer one answered
+    // nothing at all.
+    expect(answered).toEqual(["inner-inspect"]);
+  });
+
+  it("asks the same question after a lost answer, and gets one decision", function* () {
+    const commands: string[] = [];
+    const loseAnswer = new Set<string>();
+    const committed = new Map<string, never>();
+    const script: Script = { commands, loseAnswer, committed: committed as never };
+    const outcome = yield* scoped(function* () {
+      const transitions = yield* useRemoteLifecycle(installedHost(script));
+      const first = yield* scoped(function* () {
+        const lock = yield* acquired();
+        // The owner will commit and the answer will be lost.
+        loseAnswer.add("command-1");
+        return yield* transitions.begin(lock, { runId: RUN_ID, action: "resume" });
+      });
+      // The connection is gone with its answer. A replacement acquisition asks
+      // the same question.
+      const second = yield* scoped(function* () {
+        const lock = yield* acquired();
+        return yield* transitions.begin(lock, { runId: RUN_ID, action: "resume" });
+      });
+      return { first, second };
+    });
+
+    expect(outcome.first.ok).toBe(false);
+    expect(outcome.second.ok).toBe(true);
+    // The same command identity both times, so the owner answered with the
+    // decision it had already made rather than making a second one.
+    expect(commands).toEqual(["command-1", "command-1"]);
+    if (outcome.second.ok) {
+      // And the execution the caller is handed is the one that was begun.
+      expect(outcome.second.value.execution.executionId).toBe("execution-1");
+    }
+  });
 });
