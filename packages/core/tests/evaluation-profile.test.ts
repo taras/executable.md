@@ -15,6 +15,9 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
+import { scoped, useScope } from "effection";
+import { installIdentities } from "../src/invocation-identity.ts";
+import type { ProtectedBodies, ProtectedSite } from "../src/invocation-identity.ts";
 
 import { prepareEvaluationProfile } from "../src/evaluation-profile.ts";
 import type {
@@ -27,6 +30,155 @@ import type {
 } from "../src/evaluation-profile.ts";
 import type { Json } from "../src/types.ts";
 import { recordedFiles } from "./support/fragment-files.ts";
+
+describe("protected route projection", () => {
+  function installation() {
+    return installIdentities(
+      [],
+      [],
+      ["Admitted", "Hidden"].map((name) => ({
+        name,
+        origin: "test://protected",
+        props: { type: "object" },
+        build: (claim) =>
+          function* (_props, invocation): Operation<string> {
+            return `${name}:${yield* claim(invocation)}`;
+          },
+      })),
+    );
+  }
+
+  function invoke(route: ProtectedBodies, fn: unknown): Operation<unknown> {
+    return scoped(function* () {
+      const body = route.body(fn);
+      const issued = route.issue(fn, "occurrence", "Admitted", yield* useScope(), false);
+      if (body === undefined || issued === undefined) {
+        return "unrouted";
+      }
+      try {
+        const site: ProtectedSite = {
+          syntax: undefined,
+          evaluation: undefined,
+          projectContent: undefined,
+          narrowProtectedBodies: route.narrow,
+        };
+        return yield* body({}, issued.invocation, site);
+      } finally {
+        issued.close();
+      }
+    });
+  }
+
+  it("projects exact sealed functions and cannot widen a child from any other source", function* () {
+    const owner = installation();
+    const other = installation();
+    owner.activate();
+    other.activate();
+    try {
+      const original = owner.protected.get("Admitted");
+      if (original === undefined) {
+        throw new Error("missing protected definition");
+      }
+      const prepared = yield* prepareEvaluationProfile({
+        read: [
+          {
+            kind: "component-answer",
+            name: "Admitted",
+            identity: { origin: "test://provider", key: "Admitted", revision: "1" },
+            forms: ["self-closing"],
+          },
+        ],
+      });
+      const captured = yield* prepared.seal(
+        new Map([["Admitted", { definition: original }]]),
+        owner.protectedBodies.project,
+      );
+      const sealed = captured.read[0]?.definition.fn;
+      expect(yield* invoke(owner.protectedBodies, sealed)).toBe("Admitted:occurrence");
+      const child = owner.protectedBodies.narrow([sealed]);
+      const wrapper = function* (): Operation<never> {
+        throw new Error("unrouted wrapper ran");
+      };
+      child.project(sealed, wrapper);
+      expect(yield* invoke(child, wrapper)).toBe("Admitted:occurrence");
+      expect(yield* invoke(owner.protectedBodies, wrapper)).toBe("unrouted");
+      expect(yield* invoke(other.protectedBodies, sealed)).toBe("unrouted");
+      const independent = function* Admitted(): Operation<string> {
+        return "independent";
+      };
+      for (const source of [
+        original.fn,
+        owner.protected.get("Hidden")?.fn,
+        other.protected.get("Admitted")?.fn,
+        independent,
+        { ...original, fn: independent },
+      ]) {
+        const attempted = function* (): Operation<string> {
+          return "attempted";
+        };
+        child.project(source, attempted);
+        expect(yield* invoke(child, source)).toBe("unrouted");
+        expect(yield* invoke(child, attempted)).toBe("unrouted");
+      }
+      child.close();
+      expect(yield* invoke(child, wrapper)).toBe("unrouted");
+      expect(yield* invoke(owner.protectedBodies, sealed)).toBe("Admitted:occurrence");
+      prepared.revoke();
+    } finally {
+      owner.identities.revoke();
+      other.identities.revoke();
+    }
+  });
+
+  it("revokes retained lookup, body, projection and narrowing operations at teardown", function* () {
+    const owner = installation();
+    owner.activate();
+    const original = owner.protected.get("Admitted")?.fn;
+    const child = owner.protectedBodies.narrow([original]);
+    const project = child.project;
+    const narrow = child.narrow;
+    const wrapper = function* (): Operation<string> {
+      return "wrapper";
+    };
+    project(original, wrapper);
+    expect(yield* invoke(child, wrapper)).toBe("Admitted:occurrence");
+    const body = child.body(wrapper);
+    if (body === undefined) {
+      throw new Error("expected a live body");
+    }
+    owner.identities.revoke();
+    project(original, wrapper);
+    expect(yield* invoke(child, wrapper)).toBe("unrouted");
+    expect(yield* invoke(narrow([original, wrapper]), wrapper)).toBe("unrouted");
+    let message = "";
+    try {
+      yield* body(
+        {},
+        { hasContent: () => false },
+        {
+          syntax: undefined,
+          evaluation: undefined,
+          projectContent: undefined,
+          narrowProtectedBodies: narrow,
+        },
+      );
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("route has closed");
+    const later = installation();
+    later.activate();
+    try {
+      later.protectedBodies.project(wrapper, later.protected.get("Admitted")?.fn);
+      expect(yield* invoke(later.protectedBodies, wrapper)).toBe("unrouted");
+      expect(yield* invoke(later.protectedBodies, later.protected.get("Admitted")?.fn)).toBe(
+        "Admitted:occurrence",
+      );
+    } finally {
+      later.identities.revoke();
+    }
+  });
+});
 
 function entry(overrides: Partial<CapabilityEntry> = {}): CapabilityEntry {
   const name = overrides.name ?? "File";

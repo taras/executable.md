@@ -71,7 +71,7 @@ import type { Operation } from "effection";
 import { getExpansion } from "../expansion.ts";
 import { NO_PROFILE, REVOKED } from "../evaluation-profile.ts";
 import type { CapturedEntry, CapturedProfile } from "../evaluation-profile.ts";
-import { evaluateGeneratedXmd } from "../generated-xmd.ts";
+import { evaluateProtectedGeneratedXmd } from "../generated-xmd.ts";
 import type {
   GeneratedEffectClass,
   GeneratedMutation,
@@ -224,8 +224,8 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
     // producer is told about is the vocabulary the fragment is admitted for —
     // and reported as availability against the enclosing reference, which keeps
     // the authoring documentation the site already had.
-    const narrowed = narrow(site.syntax, entries);
-    const source = stated === undefined ? yield* project(site, narrowed) : stated;
+    const narrowedSyntax = narrow(site.syntax, entries);
+    const source = stated === undefined ? yield* project(site, narrowedSyntax) : stated;
 
     // Read after the producer has rendered, and exactly once per occurrence: a
     // producer may itself commit mutations, and the basis this admission is
@@ -254,9 +254,13 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
     // fragment produced inside another fragment's producer leaves the outer one
     // where it was, and a failed one leaves nothing behind.
     const leave = yield* profile.enterFragment();
+    const narrowedBodies = site.narrowProtectedBodies(
+      entries.admitted.map((entry) => entry.definition.fn),
+    );
     try {
-      return answer(yield* evaluateGeneratedXmd(request));
+      return answer(yield* evaluateProtectedGeneratedXmd(request, narrowedBodies, narrowedSyntax));
     } finally {
+      narrowedBodies?.close();
       leave();
     }
   };

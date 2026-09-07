@@ -30,9 +30,8 @@ const UNDECLARED: ReturnsSchema = { type: "string" };
  *
  * The identity's origin is what each entry reports it came from, because that
  * is what the host stated and what a continuation is compared against. Reported
- * as a registration rather than as core's own protected tier even for core's
- * pinned `<File>`: inside a fragment it is an identity the *host* admitted, and
- * a fragment cannot re-register or shadow anything at all.
+ * as a registration for ordinary entries. An exact protected answer keeps its
+ * canonical documentation origin even when a different provider delegates it.
  */
 export function admittedSymbols(entries: readonly CapturedEntry[]): SyntaxSymbols {
   return {
@@ -50,8 +49,11 @@ function describe(entry: CapturedEntry): CompleteComponentSyntaxEntry {
   return {
     kind: "component",
     name: entry.name,
-    origin: { kind: "registered", origin: entry.identity.origin, reserved: false },
-    sourceKind: "registered",
+    origin:
+      entry.protectedOrigin === undefined
+        ? { kind: "registered", origin: entry.identity.origin, reserved: false }
+        : { kind: "protected", origin: entry.protectedOrigin },
+    sourceKind: entry.protectedOrigin === undefined ? "registered" : "protected",
     inspectability: "complete",
     // The forms the *host admitted this entry for*, which is narrower than the
     // forms the implementation accepts whenever one name holds two identities:

@@ -106,6 +106,24 @@ function probe(): GeneratedObservation {
   return pinnedComponent("Probe", hostIdentity("test://probe", "Probe"), PROBE);
 }
 
+describe("generated authority stays internal", () => {
+  it("ignores route and lexical-reference injection on the public request", function* () {
+    const candidate = {
+      ...request("<Probe />", [probe()]),
+      get protectedBodies(): never {
+        throw new Error("public route was read");
+      },
+      get syntax(): never {
+        throw new Error("public syntax was read");
+      },
+    };
+    const result = yield* evaluate(candidate);
+    expect(result.failure).toBeUndefined();
+    expect(result.output).toBe("probed");
+    expect(result.values).toEqual([{ name: "Probe", value: "probed" }]);
+  });
+});
+
 function useWorkspace(): Operation<string> {
   return resource(function* (provide) {
     const root = yield* until(realpath(yield* until(mkdtemp(join(tmpdir(), "generated-xmd-")))));

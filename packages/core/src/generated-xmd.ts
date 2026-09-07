@@ -129,8 +129,9 @@ import { scanSegments } from "./scanner.ts";
 import { sourceDescription } from "./source-position.ts";
 import { RESERVED_STRUCTURAL } from "./structural.ts";
 import { installFormSelections, invocationForm } from "./invocation-identity.ts";
-import type { FormSelections } from "./invocation-identity.ts";
+import type { FormSelections, ProtectedBodies } from "./invocation-identity.ts";
 import type { ComponentInvocation } from "./invocation-identity.ts";
+import type { SyntaxReference } from "./syntax-reference.ts";
 import type {
   FunctionComponentDefinition,
   Json,
@@ -887,6 +888,8 @@ class GeneratedImportAuthority implements ImportAuthority {
   readonly #forms = installFormSelections();
   /** The form authority under each admitted name's wrapper. */
   readonly #dispatchers = new Map<string, unknown>();
+  readonly #protectedBodies: ProtectedBodies | undefined;
+  readonly #invocations = new WeakMap<object, Planned>();
 
   /**
    * A generated fragment may invoke only what the host admitted for it, so
@@ -898,7 +901,7 @@ class GeneratedImportAuthority implements ImportAuthority {
     return true;
   }
 
-  constructor(named: readonly Planned[]) {
+  constructor(named: readonly Planned[], protectedBodies?: ProtectedBodies) {
     const planned = new Map<string, Planned[]>();
     for (const invocation of named) {
       const queue = planned.get(invocation.name);
@@ -909,6 +912,7 @@ class GeneratedImportAuthority implements ImportAuthority {
       queue.push(invocation);
     }
     this.#planned = planned;
+    this.#protectedBodies = protectedBodies;
   }
 
   /** What each admitted read returned, in invocation order. */
@@ -937,30 +941,14 @@ class GeneratedImportAuthority implements ImportAuthority {
     // invocation to it — a wrapper that collected results is trusted host code
     // and takes no part in deciding which form-specific body runs.
 
-    // The value is taken where the component produced it. Reading it back from
-    // the rendered fragment would lose every observation that renders nothing,
-    // which is most of them. A mutation collects nothing: its own durable
-    // record is the account of it.
-    const values = entry.effect === "read" ? this.#values : undefined;
     const admitted: FunctionComponentDefinition = {
       ...copy,
       *fn(props, invocation) {
-        // Before the component runs, and therefore before it reaches a
-        // provider: the form that chose this identity must be the form this
-        // invocation is of.
         holdForm(form, invocation);
-        const value = yield* implementation(props, invocation);
-        values?.push({
-          name: entry.name,
-          // Parsed rather than asserted: this value is retained and handed back
-          // to a trusted host, and a component that returned something with no
-          // JSON shape has broken the contract an observation runs under. A
-          // component that returned nothing observed nothing, which is `null`.
-          value: value === undefined ? null : parseJson(value),
-        });
-        return value;
+        return yield* implementation(props, invocation);
       },
     };
+    this.#invocations.set(admitted.fn, planned);
     // The wrapper above is the answer to the import; the dispatcher underneath
     // it is the form authority. Remembered by name so `authorize` can record it
     // against core's own copy — the object expansion actually invokes — because
@@ -970,7 +958,30 @@ class GeneratedImportAuthority implements ImportAuthority {
     // is core's guard around somebody else's would otherwise offer the guard,
     // and a form authority read off the guard selects no body at all.
     this.#dispatchers.set(name, entry.dispatch ?? implementation);
+    this.#protectedBodies?.project(implementation, admitted.fn);
     return this.#imports.issue(name, admitted);
+  }
+
+  // Protected dispatch bypasses the public wrapper function, so collection and
+  // form checking surround canonical dispatch rather than that function alone.
+  *invoke(
+    fn: unknown,
+    invocation: ComponentInvocation,
+    body: Operation<unknown>,
+  ): Operation<unknown> {
+    const planned = typeof fn === "function" ? this.#invocations.get(fn) : undefined;
+    if (planned === undefined) {
+      throw new GeneratedXmdError(CONSTRUCT.component);
+    }
+    holdForm(planned.form, invocation);
+    const value = yield* body;
+    if (planned.entry.effect === "read") {
+      this.#values.push({
+        name: planned.entry.name,
+        value: value === undefined ? null : parseJson(value),
+      });
+    }
+    return value;
   }
 
   /** The frames this fragment's own imports record into. */
@@ -1935,10 +1946,12 @@ function expand(
   id: string,
   segments: Segment[],
   named: readonly Planned[],
+  protectedBodies: ProtectedBodies | undefined,
+  syntax: SyntaxReference | undefined,
 ): Operation<GeneratedObservationResult> {
   return scoped(function* () {
     yield* ErrorMode.set("throw");
-    const authority = new GeneratedImportAuthority(named);
+    const authority = new GeneratedImportAuthority(named, protectedBodies);
     yield* Component.around(
       {
         // deno-lint-ignore require-yield
@@ -1958,12 +1971,16 @@ function expand(
       extendPath("", { f: "gen", id }),
       0,
       undefined,
-      // No identity domains: a generated fragment names no durable work of its
-      // own, and what it may invoke is this table and nothing else. The
-      // selection frames are this fragment's own, so what its admitted imports
-      // select is not the enclosing document's business and cannot be reached
-      // from it.
-      { imports: authority, forms: authority.forms },
+      // No enclosing identity table: protected invocation domains travel only
+      // through the narrowed route. Import and form selection belong to this
+      // fragment, while the reference preserves the admitting site's documentation.
+      {
+        imports: authority,
+        forms: authority.forms,
+        invoke: (fn, invocation, body) => authority.invoke(fn, invocation, body),
+        ...(protectedBodies === undefined ? {} : { protectedBodies }),
+        ...(syntax === undefined ? {} : { syntax }),
+      },
       // A generated fragment is the engine's own text, so it owns no value body
       // and a <Return> written into it satisfies no declaration.
       undefined,
@@ -1983,8 +2000,17 @@ function expand(
  * the same sequence and restores the admission and every observation that
  * already committed rather than performing them again.
  */
-export function* evaluateGeneratedXmd(
+export function evaluateGeneratedXmd(
   request: GeneratedXmdRequest,
+): Operation<GeneratedObservationResult> {
+  return evaluateProtectedGeneratedXmd(request, undefined, undefined);
+}
+
+/** Canonical Evaluate's internal handoff; absent from the public host surface. */
+export function* evaluateProtectedGeneratedXmd(
+  request: GeneratedXmdRequest,
+  protectedBodies: ProtectedBodies | undefined,
+  syntax: SyntaxReference | undefined,
 ): Operation<GeneratedObservationResult> {
   const allow = selection(request.allow);
   const entries = selectedEntries(request, allow);
@@ -2027,5 +2053,5 @@ export function* evaluateGeneratedXmd(
   // The retained source is what expands, so a continuation runs exactly the
   // bytes this run admitted rather than a caller's copy of them.
   const restored = yield* preflight(decided.source, table, ceilings);
-  return yield* expand(request.id, restored.segments, restored.named);
+  return yield* expand(request.id, restored.segments, restored.named, protectedBodies, syntax);
 }

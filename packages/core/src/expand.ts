@@ -3085,14 +3085,26 @@ function* expandFunctionComponent(
         // the contextual answer below is. Both report it; only this one is
         // beyond reach of the chain that reports it, which is what a component
         // choosing an effect from it needs.
-        const issued = issueInvocation(
-          expansion.id,
-          name,
-          selected,
-          yield* useScope(),
-          !selfClosing,
-          dispatcher,
-        );
+        const frame = yield* useScope();
+        // An authored import must still settle its selection frame, including
+        // refusing multiple delegations. Only a generated expansion has no such
+        // table and issues through its narrowed protected route instead.
+        const issued =
+          (authority?.identities === undefined
+            ? authority?.protectedBodies?.issue(
+                definition.fn,
+                expansion.id,
+                name,
+                frame,
+                !selfClosing,
+                dispatcher,
+              )
+            : undefined) ??
+          issueInvocation(expansion.id, name, selected, frame, !selfClosing, dispatcher);
+        const dispatchBody = (body: Operation<unknown>) =>
+          authority?.invoke === undefined
+            ? body
+            : authority.invoke(definition.fn, issued.invocation, body);
         const projectionState: ProjectionState = {
           invocation,
           projecting: issued.projecting,
@@ -3267,23 +3279,29 @@ function* expandFunctionComponent(
                   }
                   return renderSegments(outcome.segments);
                 });
+            let active = true;
             try {
-              return yield* guarded(validatedProps, issued.invocation, {
-                syntax: authority?.syntax,
-                evaluation: authority?.evaluation,
-                projectContent: lease?.project,
-              });
+              return yield* dispatchBody(
+                guarded(validatedProps, issued.invocation, {
+                  syntax: authority?.syntax,
+                  evaluation: authority?.evaluation,
+                  projectContent: lease?.project,
+                  narrowProtectedBodies: (implementations: Iterable<unknown>) =>
+                    active ? authority?.protectedBodies?.narrow(implementations) : undefined,
+                }),
+              );
             } finally {
               // Closed in the same breath the issuance is: a projector a body
               // kept authorizes nothing once that body has finished.
               lease?.close();
+              active = false;
               issued.close();
             }
           }
           // Ended in the same breath the body is: an issuance a wrapper kept
           // from a finished element authorizes nothing when it is routed here.
           try {
-            return yield* definition.fn(validatedProps, issued.invocation);
+            return yield* dispatchBody(definition.fn(validatedProps, issued.invocation));
           } finally {
             issued.close();
           }

@@ -58,7 +58,11 @@ interface LoadedCopy {
     protectedComponents: readonly unknown[],
   ): {
     protected: ReadonlyMap<string, { fn: unknown }>;
-    protectedBodies: { body(fn: unknown): unknown };
+    protectedBodies: {
+      body(fn: unknown): unknown;
+      project(source: unknown, wrapper: unknown): unknown;
+    };
+    identities: { revoke(): void };
     activate(): void;
   };
 }
@@ -139,12 +143,15 @@ function answering(definition: unknown): ExecutionInstallation {
   };
 }
 
-function runRoot(installations: readonly ExecutionInstallation[]): Operation<unknown> {
+function runRoot(
+  installations: readonly ExecutionInstallation[],
+  source = "<Syntax />\n",
+): Operation<unknown> {
   return scoped(function* () {
     return yield* collect(
       yield* executeInstalled(
         {
-          ...retainedSource("documents/root.md", "<Syntax />\n"),
+          ...retainedSource("documents/root.md", source),
           stream: new InMemoryStream(),
           includes: [],
         },
@@ -188,6 +195,7 @@ describe("Tier SYN — a separately loaded protected implementation", () => {
         },
       ],
     );
+    yield* ensure(() => installed.identities.revoke());
     installed.activate();
     const foreign = installed.protected.get(SYNTAX_COMPONENT);
     if (foreign === undefined) {
@@ -218,5 +226,52 @@ describe("Tier SYN — a separately loaded protected implementation", () => {
     ]);
     expect(String(output)).toContain("### `<Syntax>`");
     expect(String(output)).not.toContain("a foreign catalog");
+
+    const forged = function* (): Operation<string> {
+      return "foreign projection";
+    };
+    const projected: unknown[] = [];
+    const observed: string[] = [];
+    let captured = false;
+    const profile: ExecutionInstallation = {
+      evaluation: {
+        read: [
+          {
+            kind: "component-answer",
+            name: "Syntax",
+            identity: { origin: "test://delegate", key: "Syntax", revision: "1" },
+            forms: ["self-closing"],
+          },
+        ],
+      },
+      componentAnswers: [
+        {
+          origin: "test://delegate",
+          *install(registrar) {
+            yield* registrar.around(function* (request, next) {
+              const answer = yield* next();
+              if (request.name === "Syntax" && answer.kind === "function") {
+                observed.push(request.name);
+                projected.push(installed.protectedBodies.project(answer.fn, forged));
+                if (!captured) {
+                  captured = true;
+                  return request.claim(answer, { key: "Syntax", revision: "1" });
+                }
+              }
+              return answer;
+            });
+          },
+        },
+      ],
+    };
+    const generated = yield* runRoot(
+      [profile],
+      `<Evaluate text={'<Syntax />'} as="answer" />\n<Json value={answer} />`,
+    );
+    expect(String(generated)).toContain("### `<Syntax>`");
+    expect(String(generated)).not.toContain("foreign projection");
+    expect(observed).toEqual(["Syntax", "Syntax"]);
+    expect(projected).toEqual([undefined, undefined]);
+    expect(installed.protectedBodies.body(forged)).toBeUndefined();
   });
 });

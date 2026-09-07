@@ -31,6 +31,278 @@ import { recordedFiles } from "./support/fragment-files.ts";
 import type { RecordedFiles } from "./support/fragment-files.ts";
 import { answerProvider, implementation } from "./support/answer-provider.ts";
 import type { Implementation, ProviderOptions } from "./support/answer-provider.ts";
+import type { FunctionComponentDefinition } from "../src/types.ts";
+import { ActiveProjection } from "../src/projection.ts";
+import { installIdentities } from "../src/invocation-identity.ts";
+import { SYNTAX_PROTECTED } from "../src/components/Syntax.ts";
+import { prepareEvaluationProfile } from "../src/evaluation-profile.ts";
+import { admittedSymbols } from "../src/syntax-admitted.ts";
+
+function independentWrapper(answer: FunctionComponentDefinition): FunctionComponentDefinition {
+  const fn = answer.fn;
+  if (typeof fn !== "function") {
+    throw new Error("expected an ordinary function");
+  }
+  return { ...answer, fn: (props, invocation) => fn(props, invocation) };
+}
+
+function syntaxProfile(
+  options: {
+    transform?: (answer: FunctionComponentDefinition) => FunctionComponentDefinition;
+    retained?: FunctionComponentDefinition[];
+    unclaimed?: boolean;
+    revision?: string;
+  } = {},
+): ExecutionInstallation {
+  let captured = false;
+  return {
+    evaluation: {
+      read: [
+        {
+          kind: "component-answer",
+          name: "Syntax",
+          identity: { origin: "test://syntax-provider", key: "Syntax", revision: "1" },
+          forms: ["self-closing"],
+        },
+      ],
+    },
+    componentAnswers: [
+      {
+        origin: "test://syntax-provider",
+        *install(registrar) {
+          yield* registrar.around(function* (request, next) {
+            const answer = yield* next();
+            if (request.name === "Syntax" && !captured) {
+              captured = true;
+              if (answer.kind !== "function") {
+                throw new Error("expected canonical Syntax");
+              }
+              options.retained?.push(answer);
+              if (options.unclaimed) {
+                return answer;
+              }
+              request.claim(answer, { key: "Syntax", revision: options.revision ?? "1" });
+              return options.transform?.(answer) ?? answer;
+            }
+            return answer;
+          });
+        },
+      },
+    ],
+  };
+}
+
+describe("protected generated component answers", () => {
+  it("routes delegated Syntax through both wrappers and collects its actual read value", function* () {
+    const profile = syntaxProfile();
+    if (profile.evaluation === undefined) {
+      throw new Error("expected a Syntax evaluation profile");
+    }
+    // syntax_symbols retains rendered text, so sourceKind must be checked on
+    // the sealed profile's structured symbols before rendering drops that field.
+    const identity = installIdentities([], [], [SYNTAX_PROTECTED]);
+    const prepared = yield* prepareEvaluationProfile(profile.evaluation);
+    try {
+      const definition = identity.protected.get("Syntax");
+      if (definition === undefined) {
+        throw new Error("expected canonical Syntax");
+      }
+      const captured = yield* prepared.seal(
+        new Map([["Syntax", { definition }]]),
+        identity.protectedBodies.project,
+      );
+      const symbols = admittedSymbols(captured.read);
+      expect(symbols.categories[2].entries).toMatchObject([
+        {
+          name: "Syntax",
+          origin: { kind: "protected", origin: "@executablemd/core" },
+          sourceKind: "protected",
+        },
+      ]);
+    } finally {
+      prepared.revoke();
+      identity.identities.revoke();
+    }
+    const stream = new InMemoryStream();
+    const source = '<Syntax names={["Syntax", "File"]} />';
+    const result = yield* run(
+      `---\nreturns:\n  type: object\n---\n<Evaluate text={${JSON.stringify(source)}} as="answer" />\n<Return value={answer} />`,
+      [profile],
+      stream,
+    );
+    expect(result).toMatchObject({ observations: [{ name: "Syntax" }] });
+    if (typeof result !== "object" || result === null || Array.isArray(result)) {
+      throw new Error("expected an evaluation result");
+    }
+    expect(result.output).toContain("**Available in this evaluation:** yes");
+    expect(result.output).toContain("**Available in this evaluation:** no");
+    expect(result.observations).toEqual([{ name: "Syntax", value: result.output }]);
+    const retained = (yield* stream.readAll()).filter(
+      (event) => event.type === "yield" && event.description.type === "syntax_symbols",
+    );
+    expect(retained).toHaveLength(1);
+    expect(retained[0]).toMatchObject({
+      result: { status: "ok", value: { symbols: result.output } },
+    });
+  });
+
+  it("keeps the producer's route while the generated child admits only Syntax", function* () {
+    const told: string[] = [];
+    const stream = new InMemoryStream();
+    yield* scoped(function* () {
+      yield* registerComponents([
+        {
+          name: "Producer",
+          origin: "test://producer",
+          props: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+          // deno-lint-ignore require-yield
+          *fn(props): Operation<string> {
+            told.push(String(props.text));
+            return '<Syntax names={["File"]} />';
+          },
+        },
+      ]);
+      const output = yield* run(
+        '<Evaluate as="answer">\n<Syntax as="vocabulary" />\n<Producer text={vocabulary} />\n</Evaluate>\n<Json value={answer} />',
+        [syntaxProfile()],
+        stream,
+      );
+      expect(String(output)).toContain("**Available in this evaluation:** no");
+    });
+    expect(told).toHaveLength(1);
+    expect(told[0]).toContain("### `<Syntax>`");
+    expect(told[0]).not.toContain("### `<File>`");
+    expect(told[0]).not.toContain("### `<Producer>`");
+    const reads = (yield* stream.readAll()).filter(
+      (event) => event.type === "yield" && event.description.type === "syntax_symbols",
+    );
+    expect(reads).toHaveLength(2);
+    expect(reads[0]).not.toEqual(reads[1]);
+    for (const text of ["<Producer />", "<Evaluate text='inert' />", "<File path='x' />"]) {
+      expect(
+        yield* refusal(run(`<Evaluate text={${JSON.stringify(text)}} />`, [syntaxProfile()])),
+      ).toContain("did not admit");
+    }
+  });
+
+  it("refuses copied, mutated, wrapped, unclaimed, misidentified and wrong-form answers", function* () {
+    const source = `<Evaluate text={'<Syntax />'} />`;
+    const ran: string[] = [];
+    const transforms: ((answer: FunctionComponentDefinition) => FunctionComponentDefinition)[] = [
+      (answer) => ({ ...answer }),
+      (answer) => ({
+        ...answer,
+        *fn(): Operation<string> {
+          ran.push("same name");
+          return "forged";
+        },
+      }),
+      independentWrapper,
+      (answer) => {
+        answer.props = { type: "object" };
+        return answer;
+      },
+    ];
+    for (const transform of transforms) {
+      const stream = new InMemoryStream();
+      expect(yield* refusal(run(source, [syntaxProfile({ transform })], stream))).toBeTruthy();
+      expect(admissions(yield* stream.readAll())).toHaveLength(0);
+    }
+    for (const options of [{ unclaimed: true }, { revision: "2" }]) {
+      const stream = new InMemoryStream();
+      expect(yield* refusal(run(source, [syntaxProfile(options)], stream))).toBeTruthy();
+      expect(admissions(yield* stream.readAll())).toHaveLength(0);
+    }
+    expect(
+      yield* refusal(run(`<Evaluate text={'<Syntax></Syntax>'} />`, [syntaxProfile()])),
+    ).toContain("self-closing");
+    expect(ran).toEqual([]);
+  });
+
+  it("exposes no route to middleware and rejects a generated-import wrapper replacement", function* () {
+    const seen: FunctionComponentDefinition[] = [];
+    const surfaces: string[][] = [];
+    const stream = new InMemoryStream();
+    const failed = yield* refusal(
+      scoped(function* () {
+        yield* Component.around({
+          *importComponent([name, position], next) {
+            const answer = yield* next(name, position);
+            if (name === "Syntax" && answer.kind === "function") {
+              seen.push(answer);
+              surfaces.push(Reflect.ownKeys(answer).map(String));
+              surfaces.push(Reflect.ownKeys(answer.fn).map(String));
+              const projection = yield* ActiveProjection.get();
+              surfaces.push(
+                projection === undefined ? [] : Reflect.ownKeys(projection).map(String),
+              );
+              if (seen.length === 2) {
+                return independentWrapper(answer);
+              }
+            }
+            return answer;
+          },
+        });
+        return yield* run(`<Evaluate text={'<Syntax />'} />`, [syntaxProfile()], stream);
+      }),
+    );
+    expect(failed).toContain("canonical execution");
+    expect(seen).toHaveLength(2);
+    for (const keys of surfaces) {
+      expect(keys).not.toContain("protectedBodies");
+      expect(keys).not.toContain("narrowProtectedBodies");
+      expect(keys).not.toContain("syntax");
+    }
+    expect(
+      (yield* stream.readAll()).some(
+        (event) => event.type === "yield" && event.description.type === "syntax_symbols",
+      ),
+    ).toBe(false);
+  });
+
+  it("rebuilds routes on continuation and cannot resurrect a retained callable", function* () {
+    const source = `<Evaluate text={'<Syntax names={["File"]} />'} as="answer" />\n<Json value={answer} />`;
+    const stream = new InMemoryStream();
+    const retained: FunctionComponentDefinition[] = [];
+    const original = yield* run(source, [syntaxProfile({ retained })], stream);
+    const events = yield* stream.readAll();
+    const admission = events.findIndex(
+      (event) => event.type === "yield" && event.description.type === "generated_xmd",
+    );
+    expect(admission).toBeGreaterThanOrEqual(0);
+    const partial = events.slice(0, admission + 1);
+    expect(yield* run(source, [syntaxProfile()], new InMemoryStream(partial))).toEqual(original);
+    expect(yield* run(source, [syntaxProfile()], new InMemoryStream(events))).toEqual(original);
+    const held = retained[0];
+    if (held === undefined || typeof held.fn !== "function") {
+      throw new Error("no delegated answer was retained");
+    }
+    expect(yield* refusal(held.fn({}, { hasContent: () => false }))).toContain("canonical core");
+    expect(
+      yield* refusal(
+        run(source, [syntaxProfile({ transform: () => held })], new InMemoryStream(partial)),
+      ),
+    ).toContain("carries no identity");
+    expect(
+      yield* refusal(run(source, [syntaxProfile({ unclaimed: true })], new InMemoryStream(events))),
+    ).toContain("carries no identity");
+    function inspect(value: unknown): void {
+      expect(typeof value).not.toBe("function");
+      if (typeof value === "object" && value !== null) {
+        for (const key of Reflect.ownKeys(value)) {
+          expect([
+            "protectedBodies",
+            "narrowProtectedBodies",
+            "projectContent",
+            "protectedOrigin",
+          ]).not.toContain(String(key));
+          inspect(Reflect.get(value, key));
+        }
+      }
+    }
+    inspect(events);
+  });
+});
 
 const ROOT_PATH = "evaluate.md";
 
