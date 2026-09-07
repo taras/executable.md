@@ -33,6 +33,10 @@ import { answerProvider, implementation } from "./support/answer-provider.ts";
 import type { Implementation, ProviderOptions } from "./support/answer-provider.ts";
 import type { FunctionComponentDefinition } from "../src/types.ts";
 import { ActiveProjection } from "../src/projection.ts";
+import { installIdentities } from "../src/invocation-identity.ts";
+import { SYNTAX_PROTECTED } from "../src/components/Syntax.ts";
+import { prepareEvaluationProfile } from "../src/evaluation-profile.ts";
+import { admittedSymbols } from "../src/syntax-admitted.ts";
 
 function independentWrapper(answer: FunctionComponentDefinition): FunctionComponentDefinition {
   const fn = answer.fn;
@@ -90,10 +94,41 @@ function syntaxProfile(
 
 describe("protected generated component answers", () => {
   it("routes delegated Syntax through both wrappers and collects its actual read value", function* () {
+    const profile = syntaxProfile();
+    if (profile.evaluation === undefined) {
+      throw new Error("expected a Syntax evaluation profile");
+    }
+    // syntax_symbols retains rendered text, so sourceKind must be checked on
+    // the sealed profile's structured symbols before rendering drops that field.
+    const identity = installIdentities([], [], [SYNTAX_PROTECTED]);
+    const prepared = yield* prepareEvaluationProfile(profile.evaluation);
+    try {
+      const definition = identity.protected.get("Syntax");
+      if (definition === undefined) {
+        throw new Error("expected canonical Syntax");
+      }
+      const captured = yield* prepared.seal(
+        new Map([["Syntax", { definition }]]),
+        identity.protectedBodies.project,
+      );
+      const symbols = admittedSymbols(captured.read);
+      expect(symbols.categories[2].entries).toMatchObject([
+        {
+          name: "Syntax",
+          origin: { kind: "protected", origin: "@executablemd/core" },
+          sourceKind: "protected",
+        },
+      ]);
+    } finally {
+      prepared.revoke();
+      identity.identities.revoke();
+    }
+    const stream = new InMemoryStream();
     const source = '<Syntax names={["Syntax", "File"]} />';
     const result = yield* run(
       `---\nreturns:\n  type: object\n---\n<Evaluate text={${JSON.stringify(source)}} as="answer" />\n<Return value={answer} />`,
-      [syntaxProfile()],
+      [profile],
+      stream,
     );
     expect(result).toMatchObject({ observations: [{ name: "Syntax" }] });
     if (typeof result !== "object" || result === null || Array.isArray(result)) {
@@ -102,6 +137,13 @@ describe("protected generated component answers", () => {
     expect(result.output).toContain("**Available in this evaluation:** yes");
     expect(result.output).toContain("**Available in this evaluation:** no");
     expect(result.observations).toEqual([{ name: "Syntax", value: result.output }]);
+    const retained = (yield* stream.readAll()).filter(
+      (event) => event.type === "yield" && event.description.type === "syntax_symbols",
+    );
+    expect(retained).toHaveLength(1);
+    expect(retained[0]).toMatchObject({
+      result: { status: "ok", value: { symbols: result.output } },
+    });
   });
 
   it("keeps the producer's route while the generated child admits only Syntax", function* () {

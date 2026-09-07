@@ -53,7 +53,7 @@ function describe(entry: CapturedEntry): CompleteComponentSyntaxEntry {
       entry.protectedOrigin === undefined
         ? { kind: "registered", origin: entry.identity.origin, reserved: false }
         : { kind: "protected", origin: entry.protectedOrigin },
-    sourceKind: "registered",
+    sourceKind: entry.protectedOrigin === undefined ? "registered" : "protected",
     inspectability: "complete",
     // The forms the *host admitted this entry for*, which is narrower than the
     // forms the implementation accepts whenever one name holds two identities:
