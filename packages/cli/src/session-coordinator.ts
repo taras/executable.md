@@ -22,6 +22,7 @@ import type { AgentSessionCoordinator, ExecutableObserver } from "@executablemd/
 import {
   ADVERTISED_CLIENT_NATIVE_ATTACHMENT,
   ADVERTISED_NATIVE_LAUNCH,
+  ADVERTISED_PROVIDER_NATIVE_CONTINUATION,
   createDenoSessionRouteStore,
   nativeCapabilityPolicy,
 } from "@executablemd/acp";
@@ -38,7 +39,7 @@ export function sessionCoordinatorRoot(): string {
 /**
  * Everything a trusted host states about machine-wide agent sessions.
  *
- * The two capability sets are stated rather than inherited. They are separate
+ * The capability sets are stated rather than inherited. They are separate
  * choices — handing a session to a native UI and later joining that same
  * conversation through ACP prove different things — and a profile whose session
  * authority differs from ordinary `xmd run` must not acquire either by
@@ -51,6 +52,7 @@ export interface MachineSessionAssembly {
   executableObserver?: ExecutableObserver;
   advertiseNativeLaunch: readonly string[];
   advertiseClientNativeAttachment: readonly string[];
+  advertiseProviderNativeContinuation: readonly string[];
   /**
    * Which protocol shapes this host admits each capability on, and the machine
    * it admits them for.
@@ -106,6 +108,7 @@ export function useMachineSessions(host: NativeCapabilityHost): MachineSessionAs
       : { executableObserver: useExecutableObserver() }),
     advertiseNativeLaunch: ADVERTISED_NATIVE_LAUNCH,
     advertiseClientNativeAttachment: ADVERTISED_CLIENT_NATIVE_ATTACHMENT,
+    advertiseProviderNativeContinuation: ADVERTISED_PROVIDER_NATIVE_CONTINUATION,
     nativeCapabilityPolicy: nativeCapabilityPolicy(host),
   };
 }
@@ -123,5 +126,6 @@ export function unassembledMachineSessions(): MachineSessionAssembly {
   return {
     advertiseNativeLaunch: ADVERTISED_NATIVE_LAUNCH,
     advertiseClientNativeAttachment: ADVERTISED_CLIENT_NATIVE_ATTACHMENT,
+    advertiseProviderNativeContinuation: ADVERTISED_PROVIDER_NATIVE_CONTINUATION,
   };
 }

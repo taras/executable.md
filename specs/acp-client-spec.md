@@ -411,7 +411,7 @@ received.
 `allowedTools` and `mcpServers` are stated as empty arrays rather than omitted:
 omission is ACPX's own default, and this host is making a different statement.
 
-The profile states both native capability sets empty for the same reason. A
+The profile states all three native capability sets empty for the same reason. A
 workflow session belongs to a run — named by a row in the run's own database,
 arranged in the run's own sidecar, continued by reattaching that row — and the
 machine-wide account of ownership, construction routes and executable builds

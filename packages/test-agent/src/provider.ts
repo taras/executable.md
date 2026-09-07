@@ -276,6 +276,7 @@ export function* useTestAgentProvider(
     // This partition proves them the same way — deterministically — so it
     // advertises the same names for each.
     advertiseClientNativeAttachment: options.agents,
+    advertiseProviderNativeContinuation: options.agents,
     // Every agent this partition serves gets the provider-returned adapter,
     // except the one name reserved for the client-allocated contract.
     nativeAdapters: Object.fromEntries(

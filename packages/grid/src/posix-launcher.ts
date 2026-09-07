@@ -94,6 +94,12 @@ export function* installForegroundLauncher(
       *launch([request, spawned]) {
         return yield* runForeground(request, spawned, options.observe);
       },
+      *notify([text]) {
+        // Written and drained, not queued: the next thing to reach this
+        // terminal may be a child drawing over it.
+        process.stdout.write(`${text}\n`);
+        yield* drainStream(process.stdout);
+      },
     },
     { at: "min" },
   );

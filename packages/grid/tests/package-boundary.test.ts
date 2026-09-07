@@ -590,6 +590,7 @@ describe("Tier TG21 — the authored names and the public roots", () => {
           "NativeLauncherUnavailableError",
           "flushOutput",
           "nativeLaunch",
+          "notifyTerminal",
           "paneTerminal",
           "registerGridProvider",
           "reserveTerminal",

@@ -148,7 +148,7 @@ export function* resolveAgentStack(
  * Each of the rest reaches the provider directly rather than through a context:
  * who owns a session, which build it belongs to and which builds this machine
  * has proved are security decisions, and ones a document could replace are not
- * ones. The two advertised sets are stated by the host, not inherited, and they
+ * ones. The advertised sets are stated by the host, not inherited, and they
  * select rather than authorize: the compatibility beside them is what admits.
  */
 export function hostAcpDependencies(stack: PlanWriterStack): AcpxProviderDependencies {
@@ -167,6 +167,7 @@ export function hostAcpDependencies(stack: PlanWriterStack): AcpxProviderDepende
       : {}),
     advertiseNativeLaunch: sessions.advertiseNativeLaunch,
     advertiseClientNativeAttachment: sessions.advertiseClientNativeAttachment,
+    advertiseProviderNativeContinuation: sessions.advertiseProviderNativeContinuation,
   };
 }
 
