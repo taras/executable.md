@@ -18,7 +18,9 @@
     "cleanup"
   ],
   "properties": {
-    "schema": { "const": "terminal-repl-poc-report.v1" },
+    "schema": {
+      "const": "terminal-repl-poc-report.v1"
+    },
     "verdict": {
       "enum": [
         "PASS",
@@ -29,30 +31,52 @@
         "NOT_AUTHORIZED"
       ]
     },
-    "mode": { "enum": ["deterministic", "live-claude", "live-codex"] },
-    "runtime": { "type": "string" },
-    "detail": { "type": "string" },
+    "mode": {
+      "enum": ["deterministic", "live-claude", "live-codex"]
+    },
+    "runtime": {
+      "type": "string"
+    },
+    "detail": {
+      "type": "string"
+    },
     "base": {
       "type": "object",
       "additionalProperties": false,
       "required": ["sha"],
       "properties": {
-        "sha": { "type": "string" },
-        "parent": { "type": "string" }
+        "sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "parent": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
       }
     },
     "head": {
       "type": "object",
       "additionalProperties": false,
-      "properties": { "sha": { "type": "string" } }
+      "required": ["sha"],
+      "properties": {
+        "sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
     },
     "providers": {
       "type": "object",
       "additionalProperties": false,
       "required": ["claude", "codex"],
       "properties": {
-        "claude": { "$ref": "#/definitions/provider" },
-        "codex": { "$ref": "#/definitions/provider" }
+        "claude": {
+          "$ref": "#/definitions/provider"
+        },
+        "codex": {
+          "$ref": "#/definitions/provider"
+        }
       }
     },
     "turnBudgets": {
@@ -60,10 +84,22 @@
       "additionalProperties": false,
       "required": ["claudeAuthorized", "claudeSpent", "codexAuthorized", "codexSpent"],
       "properties": {
-        "claudeAuthorized": { "type": "integer", "minimum": 0 },
-        "claudeSpent": { "type": "integer", "minimum": 0 },
-        "codexAuthorized": { "type": "integer", "minimum": 0 },
-        "codexSpent": { "type": "integer", "minimum": 0 }
+        "claudeAuthorized": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "claudeSpent": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "codexAuthorized": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "codexSpent": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
     "matrix": {
@@ -73,9 +109,16 @@
         "additionalProperties": false,
         "required": ["id", "result", "evidence"],
         "properties": {
-          "id": { "type": "string", "pattern": "^RP[0-9]+$" },
-          "result": { "enum": ["pass", "fail", "n/a"] },
-          "evidence": { "type": "string" }
+          "id": {
+            "type": "string",
+            "pattern": "^RP[0-9]+$"
+          },
+          "result": {
+            "enum": ["pass", "fail", "n/a"]
+          },
+          "evidence": {
+            "type": "string"
+          }
         }
       }
     },
@@ -94,15 +137,42 @@
         "replays"
       ],
       "properties": {
-        "convergenceAttempts": { "type": "integer", "minimum": 0 },
-        "admittedDeliveries": { "type": "integer", "minimum": 0 },
-        "refusals": { "type": "integer", "minimum": 0 },
-        "uncertain": { "type": "integer", "minimum": 0 },
-        "duplicateDeliveries": { "type": "integer", "minimum": 0 },
-        "wrongPaneDeliveries": { "type": "integer", "minimum": 0 },
-        "busyAdmissions": { "type": "integer", "minimum": 0 },
-        "manualActivityAdmissions": { "type": "integer", "minimum": 0 },
-        "replays": { "type": "integer", "minimum": 0 }
+        "convergenceAttempts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "admittedDeliveries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "refusals": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "uncertain": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "duplicateDeliveries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "wrongPaneDeliveries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "busyAdmissions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "manualActivityAdmissions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "replays": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
     "deliveries": {
@@ -112,8 +182,14 @@
         "additionalProperties": false,
         "required": ["messageHash", "byteCount"],
         "properties": {
-          "messageHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-          "byteCount": { "type": "integer", "minimum": 0 }
+          "messageHash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "byteCount": {
+            "type": "integer",
+            "minimum": 0
+          }
         }
       }
     },
@@ -122,10 +198,22 @@
       "additionalProperties": false,
       "required": ["queuedRestored", "uncertainAfterRestart", "completedRestored", "reExecutions"],
       "properties": {
-        "queuedRestored": { "type": "integer", "minimum": 0 },
-        "uncertainAfterRestart": { "type": "integer", "minimum": 0 },
-        "completedRestored": { "type": "integer", "minimum": 0 },
-        "reExecutions": { "type": "integer", "minimum": 0 }
+        "queuedRestored": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "uncertainAfterRestart": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "completedRestored": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reExecutions": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
     "cleanup": {
@@ -133,9 +221,15 @@
       "additionalProperties": false,
       "required": ["storeRemoved", "messageFilesRemoved", "providerFilesUntouched"],
       "properties": {
-        "storeRemoved": { "type": "boolean" },
-        "messageFilesRemoved": { "type": "boolean" },
-        "providerFilesUntouched": { "type": "boolean" }
+        "storeRemoved": {
+          "type": "boolean"
+        },
+        "messageFilesRemoved": {
+          "type": "boolean"
+        },
+        "providerFilesUntouched": {
+          "type": "boolean"
+        }
       }
     }
   },
@@ -148,9 +242,185 @@
         "verdict": {
           "enum": ["PASS", "VIEW_ONLY", "PROVIDER_EXCLUDED", "NOT_AUTHORIZED", "n/a"]
         },
-        "versionKnown": { "type": "boolean" },
-        "identityHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        "versionKnown": {
+          "type": "boolean"
+        },
+        "version": {
+          "type": "string"
+        },
+        "identityHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "sourceIdentityHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "accepted": {
+          "type": "boolean"
+        },
+        "completed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "passProvider": {
+      "required": [
+        "verdict",
+        "versionKnown",
+        "version",
+        "identityHash",
+        "sourceIdentityHash",
+        "accepted",
+        "completed"
+      ],
+      "properties": {
+        "verdict": {
+          "const": "PASS"
+        },
+        "versionKnown": {
+          "const": true
+        },
+        "accepted": {
+          "const": true
+        },
+        "completed": {
+          "const": true
+        }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "PASS"
+          },
+          "mode": {
+            "const": "live-claude"
+          }
+        },
+        "required": ["verdict", "mode"]
+      },
+      "then": {
+        "required": ["head", "deliveries"],
+        "properties": {
+          "deliveries": {
+            "minItems": 1
+          },
+          "turnBudgets": {
+            "properties": {
+              "claudeAuthorized": {
+                "minimum": 1
+              },
+              "claudeSpent": {
+                "minimum": 1
+              }
+            }
+          },
+          "providers": {
+            "properties": {
+              "claude": {
+                "$ref": "#/definitions/passProvider"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "PASS"
+          },
+          "mode": {
+            "const": "live-codex"
+          }
+        },
+        "required": ["verdict", "mode"]
+      },
+      "then": {
+        "required": ["head", "deliveries"],
+        "properties": {
+          "deliveries": {
+            "minItems": 1
+          },
+          "turnBudgets": {
+            "properties": {
+              "codexAuthorized": {
+                "minimum": 1
+              },
+              "codexSpent": {
+                "minimum": 1
+              }
+            }
+          },
+          "providers": {
+            "properties": {
+              "codex": {
+                "$ref": "#/definitions/passProvider"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "PASS"
+          },
+          "mode": {
+            "const": "deterministic"
+          }
+        },
+        "required": ["verdict", "mode"]
+      },
+      "then": {
+        "required": ["head", "deliveries"],
+        "properties": {
+          "matrix": {
+            "minItems": 18,
+            "not": {
+              "contains": {
+                "type": "object",
+                "required": ["result"],
+                "properties": {
+                  "result": {
+                    "enum": ["fail", "n/a"]
+                  }
+                }
+              }
+            }
+          },
+          "deliveries": {
+            "minItems": 1
+          },
+          "turnBudgets": {
+            "properties": {
+              "claudeSpent": {
+                "minimum": 1
+              },
+              "codexSpent": {
+                "minimum": 1
+              }
+            }
+          },
+          "providers": {
+            "properties": {
+              "claude": {
+                "$ref": "#/definitions/passProvider"
+              },
+              "codex": {
+                "$ref": "#/definitions/passProvider"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

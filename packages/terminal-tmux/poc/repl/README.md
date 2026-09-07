@@ -36,8 +36,8 @@ capability, no journal record, no replay rule, and no workflow syntax.
 - `report.ts` with `report.schema.json` — the `terminal-repl-poc-report.v1`
   artifact and its validator. It carries hashes, counters, versions, turn budgets,
   the RP matrix and restart/cleanup evidence, and no conversation content.
-- `live-supervisor.ts`, `live-worker.ts`, `TerminalReplLive.md`,
-  `ClaudeBlackBoxRepl.test.md`, `CodexBlackBoxRepl.test.md` — the gated live
+- `live-supervisor.ts`, `live-worker.ts`, `TerminalReplClaude.md`,
+  `TerminalReplCodex.md`, `ClaudeBlackBoxRepl.test.md`, `CodexBlackBoxRepl.test.md` — the gated live
   journey. It refuses before starting any agent or opening any transcript unless
   both of its exact gates are supplied.
 
@@ -67,5 +67,7 @@ XMD_TERMINAL_REPL_CODEX_PROOF=1 XMD_TERMINAL_REPL_CODEX_MODEL_TURNS_AUTHORIZED=2
 ```
 
 Without both exact values the supervisor prints a `NOT_AUTHORIZED` report and starts
-nothing. The live journey body in `live-worker.ts` is unexercised until an
-authorized run, which is the only context allowed to spend the turns it needs.
+nothing. Each provider has its own single-pane grid document, so authorizing one
+provider can never launch the other. The live journey body in `live-worker.ts` is
+unexercised until an authorized run, which is the only context allowed to spend the
+turns it needs.

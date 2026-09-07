@@ -2,21 +2,22 @@
  * Issue #774 POC — the Codex rollout-file parser.
  *
  * Codex maps a thread identity to one rollout `.jsonl` file. A `session_meta`
- * header declares the identity once; the `event_msg` records that follow do not
- * repeat it, so they inherit the located file's identity. A second `session_meta`
- * naming a different identity in the same file is a conflict the shared observer
- * refuses.
+ * header declares both the identity and the project (`cwd`) once; the `event_msg`
+ * records that follow do not repeat the identity, so they inherit the located
+ * file's. The shared observer reads only that header to decide whose a file is,
+ * and constrains the match by the exact identity and the exact project, so the
+ * shared sessions root cannot hand back another project's thread.
  *
  * Only three event shapes bear on the contract: `user_message` is acceptance,
  * `agent_message` is assistant output, and `task_complete` is the explicit
- * completion boundary. An `event_msg` whose payload is one of those but is
- * otherwise malformed is refused rather than skipped; every other event is
- * ignored.
+ * completion boundary. Codex threads are linear, so events carry no turn
+ * identity. An `event_msg` whose payload is one of those but is otherwise
+ * malformed is refused rather than skipped; every other event is ignored.
  */
 
 import type { ParsedRecord, ProviderParser } from "./observer.ts";
 
-/** The Codex parser: `session_meta` identity, `event_msg` events. */
+/** The Codex parser: `session_meta` identity and project, `event_msg` events. */
 export const codexParser: ProviderParser = {
   provider: "codex",
   identityFromName() {
@@ -36,13 +37,18 @@ export const codexParser: ProviderParser = {
   },
 };
 
-/** The header record that names the thread. */
+/** The header record that names the thread and the project it ran in. */
 function classifyMeta(record: Record<string, unknown>): ParsedRecord {
   const payload = record["payload"];
   if (!isRecord(payload) || typeof payload["id"] !== "string" || payload["id"].length === 0) {
     return { kind: "unsupported", reason: "session_meta with no payload id" };
   }
-  return { kind: "identity", identity: payload["id"] };
+  const cwd = payload["cwd"];
+  return {
+    kind: "identity",
+    identity: payload["id"],
+    ...(typeof cwd === "string" && cwd.length > 0 ? { project: cwd } : {}),
+  };
 }
 
 /** One `event_msg`, read only for the three payload types that matter. */

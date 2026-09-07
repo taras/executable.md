@@ -109,6 +109,8 @@ export interface UserAccepted {
   readonly eventKey: string;
   readonly identity: string;
   readonly text: string;
+  /** The provider turn this acceptance belongs to, when grouped by turn. */
+  readonly turn?: string;
 }
 
 /** Assistant output observed under the intended identity. */
@@ -118,6 +120,8 @@ export interface AssistantObserved {
   readonly eventKey: string;
   readonly identity: string;
   readonly text: string;
+  /** The provider turn this output belongs to, when grouped by turn. */
+  readonly turn?: string;
 }
 
 /** An explicit provider completion boundary closed the turn. */
@@ -127,6 +131,8 @@ export interface AssistantCompleted {
   readonly id: string;
   readonly eventKey: string;
   readonly identity: string;
+  /** The provider turn this completion closes, when grouped by turn. */
+  readonly turn?: string;
 }
 
 /** The observer cursor advanced past a complete, strictly parsed record. */

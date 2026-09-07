@@ -7,11 +7,16 @@
  * keystroke, so linefeeds in the message stay in the message rather than
  * submitting it. Bracketed paste is used where the terminal supports it.
  *
+ * Every native resource this acquires has its cleanup registered *before* the
+ * acquisition, so a halt between acquiring and registering cannot strand it: the
+ * private file and the tmux buffer are both scheduled for removal before either
+ * is created. They are removed however the attempt settles.
+ *
  * The paste itself is the final guarded operation: it rechecks the pane against
  * the guard convergence produced and either declines or pastes, with no
- * suspension in between. An unproved outcome is never a delivery — the caller
- * turns a decline into a message that stays queued, and a paste into an attempt
- * whose acceptance only the provider file can confirm.
+ * suspension in between. An unproved outcome is never a silent success — a
+ * decline sent nothing and keeps the message queued, while an uncertain outcome
+ * means bytes may have gone and the message becomes uncertain, never retried.
  */
 
 import { ensure, scoped, until } from "effection";
@@ -47,7 +52,8 @@ export type DeliveryOutcome =
       /** A hash of the delivered bytes; the bytes themselves never leave here. */
       readonly hash: string;
     }
-  | { readonly outcome: "declined"; readonly reason: string };
+  | { readonly outcome: "declined"; readonly reason: string }
+  | { readonly outcome: "uncertain"; readonly reason: string };
 
 /** A uniquely named tmux buffer for one message. */
 export function bufferName(id: string): string {
@@ -57,18 +63,23 @@ export function bufferName(id: string): string {
 /**
  * Deliver one message's literal bytes to a pane, under the final guard.
  *
- * The private file is this scope's: it is removed when the attempt settles,
- * whether the guard pasted or declined.
+ * The private file and the tmux buffer are this scope's: both are removed when
+ * the attempt settles, whether the guard pasted, declined, or left the outcome
+ * uncertain, and whichever cleanup order the scope unwinds in.
  */
 export function deliver(probe: PaneProbe, request: DeliveryRequest): Operation<DeliveryOutcome> {
   return scoped(function* (): Operation<DeliveryOutcome> {
     const path = join(request.dir, `${request.id}.msg`);
-    yield* writeTextFile(path, request.bytes);
-    yield* until(chmod(path, 0o600));
+    const buffer = bufferName(request.id);
+    // Cleanup registered before either resource exists, so a halt between
+    // acquiring and registering cannot leave the file or the buffer behind.
+    yield* ensure(() => probe.deleteBuffer(buffer));
     yield* ensure(() => rm(path, { force: true }));
 
-    const buffer = bufferName(request.id);
+    yield* writeTextFile(path, request.bytes);
+    yield* until(chmod(path, 0o600));
     yield* probe.loadBuffer(buffer, path);
+
     const guarded: GuardOutcome = yield* probe.guardedPaste(request.guard, {
       buffer,
       bracketedPaste: request.bracketedPaste,
@@ -76,6 +87,9 @@ export function deliver(probe: PaneProbe, request: DeliveryRequest): Operation<D
     });
     if (guarded.outcome === "declined") {
       return { outcome: "declined", reason: guarded.reason };
+    }
+    if (guarded.outcome === "uncertain") {
+      return { outcome: "uncertain", reason: guarded.reason };
     }
     return {
       outcome: "pasted",

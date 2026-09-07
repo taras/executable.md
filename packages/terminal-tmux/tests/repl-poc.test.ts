@@ -6,21 +6,23 @@
  * algorithm reads, and synthetic append-only files supply the provider evidence
  * the observer reads. The fake also holds the hidden truth — actually busy,
  * actually typed-into — that only these assertions see, so a paste admitted while
- * either was true is caught.
+ * either was true is caught, and it models the two ways the final guard can go
+ * wrong on a real server (a declined command and an unacknowledged submit).
+ *
+ * Beyond the frozen matrix, supporting rows exercise the boundaries the live
+ * worker relies on: provider state folded into convergence, the guard's command
+ * outcome, project-scoped location, turn grouping, per-provider authorization,
+ * strict persisted-action parsing, and the report's PASS gate.
  *
  * Every success is a parsed record, an explicit event, or a counted delivery;
- * elapsed time proves nothing here. The final row builds the
- * `terminal-repl-poc-report.v1` artifact and validates it against the checked-in
- * schema.
- *
- * The whole suite is portable: it uses no tmux, no CLI subprocess, and no
- * runtime-specific API, so it runs under Deno, Node and Bun like any other file.
+ * elapsed time proves nothing here. The suite is portable — no tmux, no CLI
+ * subprocess, no runtime-specific API — so it runs under Deno, Node and Bun.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { useTempDirectory } from "@executablemd/test-support/temp";
-import { ensureDir, exists, readTextFile } from "@effectionx/fs";
+import { ensureDir, exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -33,10 +35,11 @@ import {
   settleUnconfirmed,
 } from "../poc/repl/controller.ts";
 import type { DeliveryOptions, ObserverSource } from "../poc/repl/controller.ts";
-import { purgeStore, useReplStore } from "../poc/repl/store.ts";
+import { purgeStore, ReplStoreError, useReplStore } from "../poc/repl/store.ts";
 import type { ReplStore } from "../poc/repl/store.ts";
 import { claudeParser } from "../poc/repl/claude-observer.ts";
 import { codexParser } from "../poc/repl/codex-observer.ts";
+import { gatesSatisfied, runLiveProof } from "../poc/repl/live-supervisor.ts";
 import type { Provider, ReplState } from "../poc/repl/state.ts";
 import type { ProviderParser } from "../poc/repl/observer.ts";
 import { identityHash, REPORT_SCHEMA, validateReport, zeroCounters } from "../poc/repl/report.ts";
@@ -45,42 +48,43 @@ import type {
   MatrixEntry,
   ReportCounters,
   RestartEvidence,
+  TerminalReplReport,
 } from "../poc/repl/report.ts";
 import {
   appendPartial,
   appendRecords,
+  claudeAssistant,
+  claudeResult,
   claudeSessionPath,
   claudeUnsupported,
+  claudeUser,
+  codexAgent,
+  codexComplete,
+  codexMeta,
   codexRolloutPath,
   codexUnsupported,
+  codexUser,
   createFakePane,
   rotateFile,
   truncateFile,
   writeRecords,
 } from "./fixtures/repl-poc/fake-terminal.ts";
 import type { FakePane } from "./fixtures/repl-poc/fake-terminal.ts";
-import {
-  claudeAssistant,
-  claudeResult,
-  claudeUser,
-  codexAgent,
-  codexComplete,
-  codexMeta,
-  codexUser,
-} from "./fixtures/repl-poc/fake-terminal.ts";
 
 /** The exact base the POC was implemented from, recorded in the report. */
 const BASE_SHA = "97fda6aa7b5f85db747c066898fd3ef3c6d1dbeb";
+/** A representative head, only for proving the schema accepts a full PASS. */
+const HEAD_SHA = "0123456789abcdef0123456789abcdef01234567";
 
 /** One provider's record shapes, so a scenario can run against either agent. */
 interface ProviderKit {
   readonly provider: Provider;
   readonly parser: ProviderParser;
   path(directory: string, id: string): string;
-  idle(id: string): string[];
-  user(id: string, text: string): string;
-  assistant(id: string, text: string): string;
-  complete(id: string): string;
+  idle(id: string, project: string): string[];
+  user(id: string, text: string, turn?: string): string;
+  assistant(id: string, text: string, turn?: string): string;
+  complete(id: string, turn?: string): string;
   unsupported(id: string): string;
 }
 
@@ -89,9 +93,9 @@ const CLAUDE_KIT: ProviderKit = {
   parser: claudeParser,
   path: (directory, id) => claudeSessionPath(directory, id),
   idle: () => [],
-  user: (id, text) => claudeUser(id, text),
-  assistant: (id, text) => claudeAssistant(id, text),
-  complete: (id) => claudeResult(id),
+  user: (id, text, turn) => claudeUser(id, text, turn),
+  assistant: (id, text, turn) => claudeAssistant(id, text, turn),
+  complete: (id, turn) => claudeResult(id, turn),
   unsupported: (id) => claudeUnsupported(id),
 };
 
@@ -99,7 +103,7 @@ const CODEX_KIT: ProviderKit = {
   provider: "codex",
   parser: codexParser,
   path: (directory) => codexRolloutPath(directory, "main"),
-  idle: (id) => [codexMeta(id)],
+  idle: (id, project) => [codexMeta(id, project)],
   user: (_id, text) => codexUser(text),
   assistant: (_id, text) => codexAgent(text),
   complete: () => codexComplete(),
@@ -112,6 +116,7 @@ interface Bag {
   readonly storeDir: string;
   readonly providerDir: string;
   readonly messageDir: string;
+  readonly project: string;
   readonly store: ReplStore;
   readonly pane: FakePane;
   readonly identity: { readonly provider: Provider; readonly id: string };
@@ -149,6 +154,7 @@ function scaffold(
     const storeDir = join(root, `store-${suffix}`);
     const providerDir = join(root, `provider-${suffix}`);
     const messageDir = join(root, `messages-${suffix}`);
+    const project = join(root, `project-${suffix}`);
     yield* ensureDir(providerDir);
     yield* ensureDir(messageDir);
     yield* until(chmod(messageDir, 0o700));
@@ -162,10 +168,11 @@ function scaffold(
       storeDir,
       providerDir,
       messageDir,
+      project,
       store,
       pane,
       identity,
-      observer: { parser: kit.parser, directory: providerDir },
+      observer: { parser: kit.parser, directory: providerDir, project },
       options: { messageDir, bracketedPaste: true, submitKey: "Enter" },
       path: kit.path(providerDir, identity.id),
     };
@@ -184,7 +191,7 @@ function bind(bag: Bag, options: { readonly generation?: number } = {}): Operati
       identity: bag.identity,
       paneGeneration: options.generation ?? 1,
     });
-    yield* writeRecords(bag.path, bag.kit.idle(bag.identity.id));
+    yield* writeRecords(bag.path, bag.kit.idle(bag.identity.id, bag.project));
   })();
 }
 
@@ -217,8 +224,13 @@ function messageState(store: ReplStore, key: string, id: string): string {
 describe("issue #774 — black-box REPL messaging POC", () => {
   it("RP1 — an idle pane accepts exactly one literal message and completes", function* () {
     const root = yield* useTempDirectory("xmd-repl-rp1-");
-    for (const kit of [CLAUDE_KIT, CODEX_KIT]) {
-      const bag = yield* scaffold(kit, root);
+    // Claude carries an explicit turn identity; Codex is a linear thread.
+    const cases: { kit: ProviderKit; turn: string | undefined }[] = [
+      { kit: CLAUDE_KIT, turn: "req-1" },
+      { kit: CODEX_KIT, turn: undefined },
+    ];
+    for (const scenario of cases) {
+      const bag = yield* scaffold(scenario.kit, root);
       yield* bind(bag);
       const message = yield* queue(bag);
 
@@ -235,16 +247,14 @@ describe("issue #774 — black-box REPL messaging POC", () => {
         tally.admittedDeliveries += 1;
         deliveries.push({ messageHash: attempt.hash, byteCount: attempt.byteCount });
       }
-      // Exactly one paste reached the pane, and not while busy or manual.
       expect(bag.pane.deliveries.length).toEqual(1);
       expect(bag.pane.deliveries[0]?.whileBusy).toEqual(false);
       expect(bag.pane.deliveries[0]?.whileManual).toEqual(false);
 
-      // The intended file records the exact user event and a complete assistant turn.
       yield* appendRecords(bag.path, [
-        kit.user(bag.identity.id, message.text),
-        kit.assistant(bag.identity.id, "Working on it."),
-        kit.complete(bag.identity.id),
+        scenario.kit.user(bag.identity.id, message.text, scenario.turn),
+        scenario.kit.assistant(bag.identity.id, "Working on it.", scenario.turn),
+        scenario.kit.complete(bag.identity.id, scenario.turn),
       ]);
       yield* observeStep(bag.store, bag.identity.id, bag.observer);
       expect(messageState(bag.store, bag.identity.id, message.id)).toEqual("completed");
@@ -260,7 +270,6 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     yield* bind(bag);
     const message = yield* queue(bag);
 
-    // The provider is mid-turn: a user event with no completion is an open turn.
     yield* appendRecords(bag.path, [codexUser("someone else's turn"), codexAgent("thinking")]);
     bag.pane.setBusy(true);
     const attempt = yield* attemptStep(
@@ -275,7 +284,6 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     expect(bag.pane.deliveries.length).toEqual(0);
     expect(messageState(bag.store, bag.identity.id, message.id)).toEqual("queued");
 
-    // The turn completes; the pane is idle; the message is admitted now.
     yield* appendRecords(bag.path, [codexComplete()]);
     bag.pane.setBusy(false);
     yield* observeStep(bag.store, bag.identity.id, bag.observer);
@@ -330,10 +338,9 @@ describe("issue #774 — black-box REPL messaging POC", () => {
       tally.admittedDeliveries += 1;
     }
 
-    // Each file records only its own message.
     yield* appendRecords(claude.path, [
-      claude.kit.user(claude.identity.id, claudeMessage.text),
-      claude.kit.complete(claude.identity.id),
+      claude.kit.user(claude.identity.id, claudeMessage.text, "req-c"),
+      claude.kit.complete(claude.identity.id, "req-c"),
     ]);
     yield* appendRecords(codex.path, [
       codex.kit.user(codex.identity.id, codexMessage.text),
@@ -376,7 +383,6 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     if (one.outcome === "pasted") {
       tally.admittedDeliveries += 1;
     }
-    // The second cannot begin: a message is in flight.
     const blocked = yield* attemptStep(
       bag.store,
       bag.identity.id,
@@ -387,7 +393,6 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     expect(blocked.outcome).toEqual("skipped");
     expect(bag.pane.deliveries.length).toEqual(1);
 
-    // The first completes; only then does the second go.
     yield* appendRecords(bag.path, [codexUser(first.text), codexComplete()]);
     yield* observeStep(bag.store, bag.identity.id, bag.observer);
     expect(messageState(bag.store, bag.identity.id, first.id)).toEqual("completed");
@@ -440,13 +445,10 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     if (attempt.outcome === "pasted") {
       tally.admittedDeliveries += 1;
     }
-    // The bytes the pane received are exactly the bytes queued — nothing was
-    // interpreted by a shell or a tmux argument vector.
     expect(bag.pane.deliveries[0]?.bytes).toEqual(text);
 
     yield* appendRecords(bag.path, [codexUser(text), codexComplete()]);
     yield* observeStep(bag.store, bag.identity.id, bag.observer);
-    // The provider event carries the exact bytes, so acceptance and completion settled.
     expect(messageState(bag.store, bag.identity.id, id)).toEqual("completed");
     expect(
       record(
@@ -463,7 +465,6 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     yield* bind(bag);
     const message = yield* queue(bag);
 
-    // Restart: a second store handle replays the persisted log.
     const restarted = yield* useReplStore(bag.storeDir);
     const settled = yield* reconcileRestart(restarted);
     expect(settled).toEqual(0);
@@ -509,7 +510,6 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     }
     expect(messageState(bag.store, bag.identity.id, message.id)).toEqual("attempt-started");
 
-    // Restart after the attempt but before acceptance: the outcome is uncertain.
     const restarted = yield* useReplStore(bag.storeDir);
     const settled = yield* reconcileRestart(restarted);
     expect(settled).toEqual(1);
@@ -517,7 +517,6 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     tally.uncertain += 1;
     expect(messageState(restarted, bag.identity.id, message.id)).toEqual("uncertain");
 
-    // A fresh pane for the restarted controller: it must not paste again.
     const restartedPane = createFakePane();
     const again = yield* attemptStep(
       restarted,
@@ -530,7 +529,6 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     expect(again.outcome).toEqual("skipped");
     expect(restartedPane.deliveries.length).toEqual(0);
 
-    // A later exact user event resolves the uncertainty without a new paste.
     yield* appendRecords(bag.path, [codexUser(message.text), codexComplete()]);
     yield* observeStep(restarted, bag.identity.id, bag.observer);
     expect(messageState(restarted, bag.identity.id, message.id)).toEqual("completed");
@@ -607,11 +605,9 @@ describe("issue #774 — black-box REPL messaging POC", () => {
       tally.admittedDeliveries += 1;
     }
 
-    // Consume the idle baseline first, so the cursor sits at the file's end.
     yield* observeStep(bag.store, bag.identity.id, bag.observer);
     const cursorBefore = role(bag.store.state(), bag.identity.id).cursor;
 
-    // A half-written user record: no newline yet. The cursor must not move.
     const full = codexUser(message.text);
     const partial = full.slice(0, Math.floor(full.length / 2));
     yield* appendPartial(bag.path, partial);
@@ -619,7 +615,6 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     expect(role(bag.store.state(), bag.identity.id).cursor).toEqual(cursorBefore);
     expect(messageState(bag.store, bag.identity.id, message.id)).toEqual("attempt-started");
 
-    // Complete the record: it emits exactly once.
     yield* appendPartial(bag.path, full.slice(partial.length));
     yield* appendRecords(bag.path, [codexComplete()]);
     yield* observeStep(bag.store, bag.identity.id, bag.observer);
@@ -642,8 +637,8 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     const bag = yield* scaffold(CODEX_KIT, root);
     yield* bind(bag);
     const message = yield* queue(bag);
-    // A person types between convergence and the final guard: the load hook
-    // fires just before the guarded paste and moves client activity.
+    // A person types between convergence and the final guard, without changing
+    // the pane's PID: the load hook fires just before the guarded paste.
     bag.pane.armLoad(() => {
       bag.pane.setManual(true);
       bag.pane.clientActivity();
@@ -659,13 +654,12 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     expect(attempt.outcome).toEqual("declined");
     expect(bag.pane.deliveries.length).toEqual(0);
     expect(bag.pane.declines).toEqual(1);
-    // The message is queued again, not lost.
     expect(messageState(bag.store, bag.identity.id, message.id)).toEqual("queued");
     expect(
       record(
         "RP10",
         true,
-        "activity between convergence and the guard declined the paste; zero bytes sent",
+        "same-PID manual activity between convergence and the guard declined the paste; zero bytes sent",
       ),
     ).toEqual(true);
   });
@@ -702,7 +696,6 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     const bag = yield* scaffold(CODEX_KIT, root);
     yield* bind(bag, { generation: 1 });
     const message = yield* queue(bag);
-    // The pane is replaced: a fresh generation the role never bound to.
     bag.pane.replace();
     const attempt = yield* attemptStep(
       bag.store,
@@ -728,9 +721,9 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     const bag = yield* scaffold(CODEX_KIT, root);
     yield* bind(bag);
     const message = yield* queue(bag);
-    // A second rollout file names the same identity: now two files match.
+    // A second rollout for the same identity and project: now two files match.
     const second = codexRolloutPath(bag.providerDir, "duplicate");
-    yield* writeRecords(second, [codexMeta(bag.identity.id)]);
+    yield* writeRecords(second, [codexMeta(bag.identity.id, bag.project)]);
     const attempt = yield* attemptStep(
       bag.store,
       bag.identity.id,
@@ -746,7 +739,11 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     expect(bag.pane.deliveries.length).toEqual(0);
     expect(messageState(bag.store, bag.identity.id, message.id)).toEqual("queued");
     expect(
-      record("RP13", true, "two files for one identity refused both observation and delivery"),
+      record(
+        "RP13",
+        true,
+        "two files for one identity and project refused both observation and delivery",
+      ),
     ).toEqual(true);
   });
 
@@ -771,7 +768,6 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     const cursorAfterAccept = role(bag.store.state(), bag.identity.id).cursor;
     expect(cursorAfterAccept > 0).toEqual(true);
 
-    // Truncate below the cursor: the observer refuses rather than rewinding.
     yield* truncateFile(bag.path, cursorAfterAccept - 5);
     const truncated = yield* observeStep(bag.store, bag.identity.id, bag.observer);
     expect(truncated.outcome).toEqual("refused");
@@ -781,9 +777,8 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     tally.refusals += 1;
     expect(role(bag.store.state(), bag.identity.id).cursor).toEqual(cursorAfterAccept);
 
-    // Rotate the file to a new inode: a replacement is refused, not read.
     yield* rotateFile(bag.path, [
-      codexMeta(bag.identity.id),
+      codexMeta(bag.identity.id, bag.project),
       codexUser(message.text),
       codexComplete(),
     ]);
@@ -815,7 +810,6 @@ describe("issue #774 — black-box REPL messaging POC", () => {
       if (attempt.outcome === "pasted") {
         tally.admittedDeliveries += 1;
       }
-      // A relevant record whose required member is missing is unsupported.
       yield* appendRecords(bag.path, [kit.unsupported(bag.identity.id)]);
       const observed = yield* observeStep(bag.store, bag.identity.id, bag.observer);
       expect(observed.outcome).toEqual("refused");
@@ -823,7 +817,6 @@ describe("issue #774 — black-box REPL messaging POC", () => {
         expect(observed.refusal).toEqual("unsupported-shape");
       }
       tally.refusals += 1;
-      // Nothing was accepted, and the cursor did not move past the bad record.
       expect(messageState(bag.store, bag.identity.id, message.id)).toEqual("attempt-started");
     }
     expect(
@@ -852,7 +845,6 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     if (attempt.outcome === "pasted") {
       tally.admittedDeliveries += 1;
     }
-    // No exact user event ever appears; a bounded observation shows nothing.
     yield* observeStep(bag.store, bag.identity.id, bag.observer);
     expect(messageState(bag.store, bag.identity.id, message.id)).toEqual("attempt-started");
     const settled = yield* settleUnconfirmed(bag.store, bag.identity.id, "no-acceptance");
@@ -860,7 +852,6 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     tally.uncertain += 1;
     expect(messageState(bag.store, bag.identity.id, message.id)).toEqual("uncertain");
 
-    // It is not retried: a further attempt step delivers nothing new.
     const again = yield* attemptStep(
       bag.store,
       bag.identity.id,
@@ -878,7 +869,6 @@ describe("issue #774 — black-box REPL messaging POC", () => {
   it("RP17 — wrong evidence never settles a message as accepted", function* () {
     const root = yield* useTempDirectory("xmd-repl-rp17-");
 
-    // (a) A marker under another identity: the observer refuses it.
     const other = yield* scaffold(CLAUDE_KIT, root);
     yield* bind(other);
     const otherMessage = yield* queue(other);
@@ -893,8 +883,9 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     if (attemptA.outcome === "pasted") {
       tally.admittedDeliveries += 1;
     }
-    // A user record under a different sessionId, in the intended file.
-    yield* appendRecords(other.path, [claudeUser("someone-else-entirely", otherMessage.text)]);
+    yield* appendRecords(other.path, [
+      claudeUser("someone-else-entirely", otherMessage.text, "req-x"),
+    ]);
     const refused = yield* observeStep(other.store, other.identity.id, other.observer);
     expect(refused.outcome).toEqual("refused");
     if (refused.outcome === "refused") {
@@ -905,7 +896,6 @@ describe("issue #774 — black-box REPL messaging POC", () => {
       "attempt-started",
     );
 
-    // (b) Different text under the intended identity: no acceptance.
     const bag = yield* scaffold(CODEX_KIT, root);
     yield* bind(bag);
     const message = yield* queue(bag);
@@ -932,7 +922,7 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     ).toEqual(true);
   });
 
-  it("RP18 — ownership and cleanup remove only owned state and never touch provider files", function* () {
+  it("RP18 — ownership and cleanup remove owned state across success, cancellation and partial acquisition", function* () {
     const root = yield* useTempDirectory("xmd-repl-rp18-");
     const bag = yield* scaffold(CODEX_KIT, root);
     yield* bind(bag);
@@ -948,12 +938,30 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     if (attempt.outcome === "pasted") {
       tally.admittedDeliveries += 1;
     }
-    // The private message file is removed once the attempt settled.
+    // On success, the private message file and the tmux buffer are both gone.
     const messageFile = join(bag.messageDir, `${message.id}.msg`);
     cleanup.messageFilesRemoved = !(yield* exists(messageFile));
+    expect(bag.pane.pendingBuffers()).toEqual(0);
+
+    // A declined attempt (partial acquisition: file written, guard declined)
+    // still removes the file and the buffer.
+    const second = yield* queue(bag);
+    yield* appendRecords(bag.path, [codexUser(message.text), codexComplete()]);
+    yield* observeStep(bag.store, bag.identity.id, bag.observer);
+    bag.pane.armGuardFailure("declined");
+    const declined = yield* attemptStep(
+      bag.store,
+      bag.identity.id,
+      bag.pane.probe,
+      bag.observer,
+      bag.options,
+    );
+    tally.convergenceAttempts += 1;
+    expect(declined.outcome).toEqual("declined");
+    expect(yield* exists(join(bag.messageDir, `${second.id}.msg`))).toEqual(false);
+    expect(bag.pane.pendingBuffers()).toEqual(0);
 
     // Observing does not write: the provider file bytes are unchanged.
-    yield* appendRecords(bag.path, [codexUser(message.text), codexComplete()]);
     const before = yield* readTextFile(bag.path);
     yield* observeStep(bag.store, bag.identity.id, bag.observer);
     const after = yield* readTextFile(bag.path);
@@ -971,12 +979,352 @@ describe("issue #774 — black-box REPL messaging POC", () => {
       record(
         "RP18",
         true,
-        "message file removed, provider file byte-identical after observe, store dir purged, provider file survived",
+        "message file and buffer removed on success and on a declined partial attempt; provider file byte-identical; store purged; provider file survived",
       ),
     ).toEqual(true);
   });
 
-  it("produces a valid terminal-repl-poc-report.v1 with every row passing", function* () {
+  // --- Supporting rows for the boundaries the live worker relies on ------------
+
+  it("provider state is part of convergence: a turn opening during the barrier refuses", function* () {
+    const root = yield* useTempDirectory("xmd-repl-barrier-");
+    const bag = yield* scaffold(CODEX_KIT, root);
+    yield* bind(bag);
+    const message = yield* queue(bag);
+    // A provider turn appears during the acknowledged barrier, exactly the race
+    // the Architect reported. Convergence samples the provider after the barrier
+    // and must refuse rather than paste.
+    bag.pane.armBarrier(() =>
+      appendRecords(bag.path, [codexUser("an interleaved turn"), codexAgent("busy")]),
+    );
+    const attempt = yield* attemptStep(
+      bag.store,
+      bag.identity.id,
+      bag.pane.probe,
+      bag.observer,
+      bag.options,
+    );
+    tally.convergenceAttempts += 1;
+    expect(attempt.outcome).toEqual("not-ready");
+    expect(bag.pane.deliveries.length).toEqual(0);
+    expect(bag.pane.deliveries.every((delivery) => !delivery.whileBusy)).toEqual(true);
+    expect(messageState(bag.store, bag.identity.id, message.id)).toEqual("queued");
+  });
+
+  it("pane output or a mode change during the barrier refuses", function* () {
+    const root = yield* useTempDirectory("xmd-repl-panechange-");
+    for (const disturb of [
+      (pane: FakePane) => pane.output(),
+      (pane: FakePane) => pane.setMode("copy"),
+    ]) {
+      const bag = yield* scaffold(CODEX_KIT, root);
+      yield* bind(bag);
+      yield* queue(bag);
+      bag.pane.armBarrier(() => {
+        disturb(bag.pane);
+        return until(Promise.resolve());
+      });
+      const attempt = yield* attemptStep(
+        bag.store,
+        bag.identity.id,
+        bag.pane.probe,
+        bag.observer,
+        bag.options,
+      );
+      expect(attempt.outcome).toEqual("not-ready");
+      expect(bag.pane.deliveries.length).toEqual(0);
+    }
+  });
+
+  it("the guard's command outcome is honored: a failed command declines, an unacknowledged submit is uncertain", function* () {
+    const root = yield* useTempDirectory("xmd-repl-guard-");
+    const declinedBag = yield* scaffold(CODEX_KIT, root);
+    yield* bind(declinedBag);
+    const first = yield* queue(declinedBag);
+    declinedBag.pane.armGuardFailure("declined");
+    const declined = yield* attemptStep(
+      declinedBag.store,
+      declinedBag.identity.id,
+      declinedBag.pane.probe,
+      declinedBag.observer,
+      declinedBag.options,
+    );
+    expect(declined.outcome).toEqual("declined");
+    expect(declinedBag.pane.deliveries.length).toEqual(0);
+    expect(messageState(declinedBag.store, declinedBag.identity.id, first.id)).toEqual("queued");
+
+    const uncertainBag = yield* scaffold(CODEX_KIT, root);
+    yield* bind(uncertainBag);
+    const second = yield* queue(uncertainBag);
+    uncertainBag.pane.armGuardFailure("uncertain");
+    const uncertain = yield* attemptStep(
+      uncertainBag.store,
+      uncertainBag.identity.id,
+      uncertainBag.pane.probe,
+      uncertainBag.observer,
+      uncertainBag.options,
+    );
+    expect(uncertain.outcome).toEqual("uncertain");
+    expect(uncertainBag.pane.deliveries.length).toEqual(0);
+    expect(messageState(uncertainBag.store, uncertainBag.identity.id, second.id)).toEqual(
+      "uncertain",
+    );
+    // Not retried.
+    const again = yield* attemptStep(
+      uncertainBag.store,
+      uncertainBag.identity.id,
+      uncertainBag.pane.probe,
+      uncertainBag.observer,
+      uncertainBag.options,
+    );
+    expect(again.outcome).toEqual("skipped");
+  });
+
+  it("a source under the wrong project is not located", function* () {
+    const root = yield* useTempDirectory("xmd-repl-project-");
+    const bag = yield* scaffold(CODEX_KIT, root);
+    yield* bind(bag);
+    yield* queue(bag);
+    // The only file for this identity names a different project.
+    yield* writeRecords(bag.path, [codexMeta(bag.identity.id, `${bag.project}-elsewhere`)]);
+    const attempt = yield* attemptStep(
+      bag.store,
+      bag.identity.id,
+      bag.pane.probe,
+      bag.observer,
+      bag.options,
+    );
+    expect(attempt.outcome).toEqual("refused");
+    if (attempt.outcome === "refused") {
+      expect(attempt.refusal).toEqual("not-found");
+    }
+    expect(bag.pane.deliveries.length).toEqual(0);
+  });
+
+  it("Claude output and completion are grouped by turn identity", function* () {
+    const root = yield* useTempDirectory("xmd-repl-turn-");
+    const bag = yield* scaffold(CLAUDE_KIT, root);
+    yield* bind(bag);
+    const message = yield* queue(bag);
+    const attempt = yield* attemptStep(
+      bag.store,
+      bag.identity.id,
+      bag.pane.probe,
+      bag.observer,
+      bag.options,
+    );
+    expect(attempt.outcome).toEqual("pasted");
+    // Accept under turn "t1"; a stray assistant output under "t2" must not be
+    // attributed to it, and only the "t1" completion completes the message.
+    yield* appendRecords(bag.path, [
+      claudeUser(bag.identity.id, message.text, "t1"),
+      claudeAssistant(bag.identity.id, "unrelated other turn", "t2"),
+      claudeAssistant(bag.identity.id, "the real answer", "t1"),
+      claudeResult(bag.identity.id, "t1"),
+    ]);
+    yield* observeStep(bag.store, bag.identity.id, bag.observer);
+    expect(messageState(bag.store, bag.identity.id, message.id)).toEqual("completed");
+    const events = role(bag.store.state(), bag.identity.id).events;
+    const strayAttributed = events.some(
+      (event) => event.kind === "assistant-output" && event.turn === "t2",
+    );
+    expect(strayAttributed).toEqual(false);
+  });
+
+  it("per-provider authorization does not launch the other provider", function* () {
+    // Only Codex gates are set; a Claude proof still refuses without launching.
+    const codexOnly = {
+      XMD_TERMINAL_REPL_CODEX_PROOF: "1",
+      XMD_TERMINAL_REPL_CODEX_MODEL_TURNS_AUTHORIZED: "2",
+    };
+    expect(gatesSatisfied("codex", codexOnly)).toEqual(true);
+    expect(gatesSatisfied("claude", codexOnly)).toEqual(false);
+    const claudeReport = yield* runLiveProof("claude", codexOnly, BASE_SHA);
+    expect(claudeReport.verdict).toEqual("NOT_AUTHORIZED");
+    expect(claudeReport.turnBudgets.claudeSpent).toEqual(0);
+    expect(claudeReport.turnBudgets.codexSpent).toEqual(0);
+
+    const claudeOnly = {
+      XMD_TERMINAL_REPL_CLAUDE_PROOF: "1",
+      XMD_TERMINAL_REPL_CLAUDE_MODEL_TURNS_AUTHORIZED: "1",
+    };
+    expect(gatesSatisfied("claude", claudeOnly)).toEqual(true);
+    expect(gatesSatisfied("codex", claudeOnly)).toEqual(false);
+    const codexReport = yield* runLiveProof("codex", claudeOnly, BASE_SHA);
+    expect(codexReport.verdict).toEqual("NOT_AUTHORIZED");
+    expect(codexReport.turnBudgets.codexSpent).toEqual(0);
+  });
+
+  it("a wrong turn value gate refuses: previous authorization does not count", function* () {
+    const wrongTurns = {
+      XMD_TERMINAL_REPL_CODEX_PROOF: "1",
+      XMD_TERMINAL_REPL_CODEX_MODEL_TURNS_AUTHORIZED: "1",
+    };
+    expect(gatesSatisfied("codex", wrongTurns)).toEqual(false);
+    const report = yield* runLiveProof("codex", wrongTurns, BASE_SHA);
+    expect(report.verdict).toEqual("NOT_AUTHORIZED");
+  });
+
+  it("the store refuses malformed, mislabeled, gapped, duplicated and conflicting histories", function* () {
+    const root = yield* useTempDirectory("xmd-repl-store-");
+    const write = (dir: string, name: string, body: unknown): Operation<void> =>
+      (function* (): Operation<void> {
+        yield* ensureDir(dir);
+        yield* writeTextFile(join(dir, name), `${JSON.stringify(body)}\n`);
+      })();
+    const refuses = (dir: string): Operation<boolean> =>
+      (function* (): Operation<boolean> {
+        try {
+          yield* useReplStore(dir);
+          return false;
+        } catch (error) {
+          return error instanceof ReplStoreError;
+        }
+      })();
+
+    // A known action missing a required member.
+    const malformed = join(root, "malformed");
+    yield* write(malformed, "000000.json", { seq: 0, action: { type: "RoleBound" } });
+    expect(yield* refuses(malformed)).toEqual(true);
+
+    // The file name disagrees with the record's sequence number.
+    const mislabeled = join(root, "mislabeled");
+    yield* write(mislabeled, "000005.json", { seq: 0, action: { type: "ReplClosed" } });
+    expect(yield* refuses(mislabeled)).toEqual(true);
+
+    // A gap: sequence 0 then 2, no 1.
+    const gapped = join(root, "gapped");
+    yield* write(gapped, "000000.json", { seq: 0, action: { type: "ReplClosed" } });
+    yield* write(gapped, "000002.json", { seq: 2, action: { type: "ReplClosed" } });
+    expect(yield* refuses(gapped)).toEqual(true);
+
+    // An unknown action type.
+    const unknown = join(root, "unknown");
+    yield* write(unknown, "000000.json", { seq: 0, action: { type: "NotARealAction" } });
+    expect(yield* refuses(unknown)).toEqual(true);
+  });
+
+  it("a restart interleaved between the user event and its completion resolves once", function* () {
+    const root = yield* useTempDirectory("xmd-repl-interleave-");
+    const bag = yield* scaffold(CODEX_KIT, root);
+    yield* bind(bag);
+    const message = yield* queue(bag);
+    const attempt = yield* attemptStep(
+      bag.store,
+      bag.identity.id,
+      bag.pane.probe,
+      bag.observer,
+      bag.options,
+    );
+    expect(attempt.outcome).toEqual("pasted");
+
+    // The user event lands; the observer records acceptance; then the process
+    // restarts before the completion is appended.
+    yield* appendRecords(bag.path, [codexUser(message.text)]);
+    yield* observeStep(bag.store, bag.identity.id, bag.observer);
+    expect(messageState(bag.store, bag.identity.id, message.id)).toEqual("accepted");
+
+    const restarted = yield* useReplStore(bag.storeDir);
+    yield* reconcileRestart(restarted);
+    tally.replays += 1;
+    // Accepted work is not disturbed by restart, and is not re-attempted.
+    expect(messageState(restarted, bag.identity.id, message.id)).toEqual("accepted");
+    const restartedPane = createFakePane();
+    const again = yield* attemptStep(
+      restarted,
+      bag.identity.id,
+      restartedPane.probe,
+      bag.observer,
+      bag.options,
+    );
+    expect(again.outcome).toEqual("skipped");
+    expect(restartedPane.deliveries.length).toEqual(0);
+
+    // The completion arrives after restart; it completes exactly once.
+    yield* appendRecords(bag.path, [codexComplete()]);
+    yield* observeStep(restarted, bag.identity.id, bag.observer);
+    expect(messageState(restarted, bag.identity.id, message.id)).toEqual("completed");
+    const completions = role(restarted.state(), bag.identity.id).events.filter(
+      (event) => event.kind === "turn-completed",
+    );
+    expect(completions.length).toEqual(1);
+  });
+
+  it("the report schema accepts a provider PASS and rejects an incomplete one", function* () {
+    const passProvider = (agent: string) => ({
+      verdict: "PASS" as const,
+      versionKnown: true,
+      version: agent,
+      identityHash: identityHash(`${agent}-identity`),
+      sourceIdentityHash: identityHash(`${agent}-source`),
+      accepted: true,
+      completed: true,
+    });
+    // A single-provider live journey attests its own provider; the gate for
+    // `live-claude` requires Claude's full evidence and a spent turn.
+    const claudePass: TerminalReplReport = {
+      schema: REPORT_SCHEMA,
+      verdict: "PASS",
+      mode: "live-claude",
+      runtime: "deno",
+      base: { sha: BASE_SHA },
+      head: { sha: HEAD_SHA },
+      providers: {
+        claude: passProvider("2.1.263"),
+        codex: { verdict: "n/a", versionKnown: false },
+      },
+      turnBudgets: { claudeAuthorized: 1, claudeSpent: 1, codexAuthorized: 0, codexSpent: 0 },
+      matrix: [],
+      counters: tally,
+      deliveries,
+      restart,
+      cleanup: { storeRemoved: true, messageFilesRemoved: true, providerFilesUntouched: true },
+    };
+    expect((yield* validateReport(claudePass)).valid).toEqual(true);
+
+    // Each of these is a Claude PASS missing a piece of the proof it requires.
+    const noHead = { ...claudePass };
+    delete (noHead as { head?: unknown }).head;
+    expect((yield* validateReport(noHead)).valid).toEqual(false);
+
+    const noClaudeTurn = {
+      ...claudePass,
+      turnBudgets: { ...claudePass.turnBudgets, claudeSpent: 0 },
+    };
+    expect((yield* validateReport(noClaudeTurn)).valid).toEqual(false);
+
+    const claudeNotAccepted = {
+      ...claudePass,
+      providers: {
+        ...claudePass.providers,
+        claude: { ...passProvider("2.1.263"), accepted: false },
+      },
+    };
+    expect((yield* validateReport(claudeNotAccepted)).valid).toEqual(false);
+
+    const claudeNoVersion = {
+      ...claudePass,
+      providers: {
+        ...claudePass.providers,
+        claude: {
+          verdict: "PASS" as const,
+          versionKnown: true,
+          identityHash: identityHash("c-identity"),
+          sourceIdentityHash: identityHash("c-source"),
+          accepted: true,
+          completed: true,
+        },
+      },
+    };
+    expect((yield* validateReport(claudeNoVersion)).valid).toEqual(false);
+
+    const noDeliveries = { ...claudePass, deliveries: [] };
+    expect((yield* validateReport(noDeliveries)).valid).toEqual(false);
+
+    const forbiddenField = { ...claudePass, secret: "leak" };
+    expect((yield* validateReport(forbiddenField)).valid).toEqual(false);
+  });
+  it("produces a valid terminal-repl-poc-report.v1 with every RP row passing", function* () {
     const passed = matrix.filter((entry) => entry.result === "pass").length;
     expect(matrix.length).toEqual(18);
     expect(passed).toEqual(18);
@@ -985,23 +1333,19 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     expect(tally.busyAdmissions).toEqual(0);
     expect(tally.manualActivityAdmissions).toEqual(0);
 
-    const report = {
+    // The offline suite cannot spend a live turn, so its own report is the
+    // honest NOT_AUTHORIZED shape rather than an overall PASS — which the schema
+    // reserves for a run that also completed both authorized live journeys.
+    const offline: TerminalReplReport = {
       schema: REPORT_SCHEMA,
-      verdict: "PASS" as const,
-      mode: "deterministic" as const,
+      verdict: "NOT_AUTHORIZED",
+      mode: "deterministic",
       runtime: runtimeName(),
+      detail: "offline deterministic matrix; live journeys require authorization",
       base: { sha: BASE_SHA },
       providers: {
-        claude: {
-          verdict: "PASS" as const,
-          versionKnown: false,
-          identityHash: identityHash("claude-deterministic"),
-        },
-        codex: {
-          verdict: "PASS" as const,
-          versionKnown: false,
-          identityHash: identityHash("codex-deterministic"),
-        },
+        claude: { verdict: "NOT_AUTHORIZED", versionKnown: false },
+        codex: { verdict: "NOT_AUTHORIZED", versionKnown: false },
       },
       turnBudgets: { claudeAuthorized: 0, claudeSpent: 0, codexAuthorized: 0, codexSpent: 0 },
       matrix,
@@ -1010,7 +1354,7 @@ describe("issue #774 — black-box REPL messaging POC", () => {
       restart,
       cleanup,
     };
-    const validation = yield* validateReport(report);
+    const validation = yield* validateReport(offline);
     if (!validation.valid) {
       throw new Error(`report failed schema validation: ${validation.errors.join("; ")}`);
     }

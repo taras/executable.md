@@ -9,21 +9,21 @@
  *
  * The rules that keep it honest:
  *
- * - It matches only the exact native identity the isolated launch journal
- *   retained. A relevant record under any other identity refuses observation
- *   rather than being read.
+ * - It locates a file by both the exact native identity and the exact temporary
+ *   project identity, and it reads only header/identity records while locating —
+ *   never a transcript's contents. Claude is scoped by its per-project directory
+ *   and identified by file name; Codex is scoped by the `cwd` its `session_meta`
+ *   declares.
+ * - A relevant record's own identity, when it carries one, must equal the located
+ *   identity; a mismatch refuses.
  * - The cursor advances only past a complete, strictly parsed record. A partial
- *   tail is retained and reread, so a half-written record never emits an event
- *   or moves the cursor.
- * - Ambiguity (zero or several files for one identity), truncation (the file is
- *   shorter than the cursor), rotation (the file identity changed), and an
- *   unsupported relevant shape each refuse, and a refusal never advances the
- *   cursor.
+ *   tail is retained and reread.
+ * - Ambiguity, truncation, rotation, identity mismatch and an unsupported
+ *   relevant shape each refuse, and a refusal never advances the cursor.
+ * - Assistant output and completion carry the provider's own turn identity, so a
+ *   completion for a different turn cannot close ours.
  * - It only ever reads. It never writes, repairs, truncates, renames or sweeps a
  *   provider-owned file.
- *
- * A provider supplies only how to read *its* records; this module owns the file
- * identity, the byte accounting and the refusals.
  */
 
 import { until } from "effection";
@@ -62,23 +62,34 @@ export interface ProviderParser {
 /**
  * What one provider record turns out to be.
  *
- * A relevant record's `identity` is optional: some formats repeat the identity
- * on every record (Claude carries `sessionId`), and some declare it once in a
- * header and leave later records to inherit it (Codex's `session_meta`). An
- * `undefined` identity inherits the located file's; a present one is checked
- * against it exactly, and a mismatch refuses.
+ * A relevant record's `identity` is optional: some formats repeat the identity on
+ * every record (Claude carries `sessionId`), and some declare it once in a header
+ * and leave later records to inherit it (Codex's `session_meta`). An `undefined`
+ * identity inherits the located file's; a present one is checked against it
+ * exactly. `project` on the identity record scopes a shared session root, and
+ * `turn` groups assistant output and completion.
  */
 export type ParsedRecord =
-  | { readonly kind: "identity"; readonly identity: string }
-  | { readonly kind: "user-accepted"; readonly identity?: string; readonly text: string }
-  | { readonly kind: "assistant-output"; readonly identity?: string; readonly text: string }
-  | { readonly kind: "turn-completed"; readonly identity?: string }
+  | { readonly kind: "identity"; readonly identity: string; readonly project?: string }
+  | {
+      readonly kind: "user-accepted";
+      readonly identity?: string;
+      readonly text: string;
+      readonly turn?: string;
+    }
+  | {
+      readonly kind: "assistant-output";
+      readonly identity?: string;
+      readonly text: string;
+      readonly turn?: string;
+    }
+  | { readonly kind: "turn-completed"; readonly identity?: string; readonly turn?: string }
   /** A record with no bearing on acceptance or completion. */
   | { readonly kind: "ignore" }
   /** A relevant record whose required shape is wrong: refuse, never skip. */
   | { readonly kind: "unsupported"; readonly reason: string };
 
-/** The result of locating a provider file for one exact identity. */
+/** The result of locating a provider file for one exact identity and project. */
 export type LocateOutcome =
   | { readonly outcome: "located"; readonly source: ObservedSource }
   | { readonly outcome: "refused"; readonly refusal: ObservationRefusal };
@@ -112,17 +123,19 @@ export function hasOpenTurn(events: readonly NormalizedEvent[]): boolean {
 }
 
 /**
- * Find the one file whose native identity matches `expected`, exactly.
+ * Find the one file matching `expected` identity and `expectedProject`, exactly.
  *
- * Every `.jsonl` under `directory` is a candidate; a file is a match when its
- * name declares the identity or a record inside it does. Zero matches is
- * `not-found`; more than one is `identity-ambiguous`. Newest-file and
- * most-recently-modified heuristics are deliberately not used.
+ * Every `.jsonl` under `directory` is a candidate; a file matches when its name
+ * declares the identity (Claude, scoped by its per-project directory) or its
+ * header identity record declares the identity and the expected project (Codex).
+ * Zero matches is `not-found`; more than one is `identity-ambiguous`. Only
+ * header/identity records are read here — never transcript contents.
  */
 export function locate(
   parser: ProviderParser,
   directory: string,
   expected: string,
+  expectedProject?: string,
 ): Operation<LocateOutcome> {
   return (function* (): Operation<LocateOutcome> {
     let names: string[];
@@ -135,8 +148,13 @@ export function locate(
     for (const name of names) {
       const path = join(directory, name);
       const fromName = parser.identityFromName(name);
-      const declares = fromName === expected || (yield* declaresIdentity(parser, path, expected));
-      if (declares) {
+      // A file name that carries the identity is scoped by its directory; a
+      // shared root is scoped by the header's own project.
+      const named = fromName === expected;
+      const declared = named
+        ? false
+        : yield* headerMatches(parser, path, expected, expectedProject);
+      if (named || declared) {
         matches.push({ path, identity: expected, fileKey: yield* fileIdentity(path) });
       }
     }
@@ -154,11 +172,17 @@ export function locate(
   })();
 }
 
-/** Whether any record in `path` declares `expected` as its identity. */
-function declaresIdentity(
+/**
+ * Whether `path`'s header declares `expected` under `expectedProject`.
+ *
+ * Reads only up to and including the first identity record — a transcript's user
+ * and assistant content is never opened for location.
+ */
+function headerMatches(
   parser: ProviderParser,
   path: string,
   expected: string,
+  expectedProject: string | undefined,
 ): Operation<boolean> {
   return (function* (): Operation<boolean> {
     let bytes: Uint8Array;
@@ -176,15 +200,28 @@ function declaresIdentity(
       try {
         record = JSON.parse(line);
       } catch {
-        continue;
+        return false;
       }
       if (!isRecord(record)) {
-        continue;
+        return false;
       }
       const parsed = parser.classify(record);
-      if (parsed.kind === "identity" && parsed.identity === expected) {
-        return true;
+      if (parsed.kind !== "identity") {
+        // No identity record before the first relevant/other record: this file
+        // does not declare an identity header, so it is not a match here.
+        continue;
       }
+      if (parsed.identity !== expected) {
+        return false;
+      }
+      if (
+        expectedProject !== undefined &&
+        parsed.project !== undefined &&
+        parsed.project !== expectedProject
+      ) {
+        return false;
+      }
+      return true;
     }
     return false;
   })();
@@ -194,9 +231,9 @@ function declaresIdentity(
  * Read every complete record after `cursor`, and report the normalized events.
  *
  * The cursor is a byte offset. A trailing record with no newline is a partial
- * tail: it is retained, emits nothing, and does not move the cursor. A refusal
- * — truncation, rotation, an unsupported relevant shape, or a relevant record
- * under the wrong identity — leaves the cursor exactly where it was.
+ * tail: it is retained, emits nothing, and does not move the cursor. A refusal —
+ * truncation, rotation, an unsupported relevant shape, or a relevant record under
+ * the wrong identity — leaves the cursor exactly where it was.
  */
 export function read(
   parser: ProviderParser,
@@ -287,7 +324,13 @@ function classifyStep(parsed: ParsedRecord, identity: string, key: string): Step
       }
       return {
         outcome: "kept",
-        event: { kind: parsed.kind, key, identity, text: parsed.text },
+        event: {
+          kind: parsed.kind,
+          key,
+          identity,
+          text: parsed.text,
+          ...(parsed.turn === undefined ? {} : { turn: parsed.turn }),
+        },
       };
     case "turn-completed":
       if (!identityMatches(parsed.identity, identity)) {
@@ -295,7 +338,13 @@ function classifyStep(parsed: ParsedRecord, identity: string, key: string): Step
       }
       return {
         outcome: "kept",
-        event: { kind: "turn-completed", key, identity, text: "" },
+        event: {
+          kind: "turn-completed",
+          key,
+          identity,
+          text: "",
+          ...(parsed.turn === undefined ? {} : { turn: parsed.turn }),
+        },
       };
   }
 }

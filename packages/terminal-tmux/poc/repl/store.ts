@@ -7,23 +7,23 @@
  * crash never leaves a half-written record in the log. The directory is mode
  * `0700` and each record `0600`.
  *
- * Restart restores the store by replaying that log. The log is required to be
- * contiguous from zero with no duplicate and no malformed record; anything else
- * is a conflicting history and is refused rather than read past, because a store
- * that guessed at a gap would resume a run it cannot actually account for.
+ * Restart restores the store by replaying that log. Every record's complete shape
+ * and legal type are parsed with a schema — a known action missing a member, an
+ * unknown type, a record whose file name disagrees with its sequence number, a
+ * gap, a duplicate, or any conflicting history is refused rather than read past,
+ * because a store that guessed would resume a run it cannot account for.
  *
  * StarFX was evaluated as an implementation aid and deliberately not adopted:
  * the reducer and the log are small enough to own directly, and the POC must add
  * no production dependency.
  */
 
-import { createSignal, ensure, resource } from "effection";
+import { createSignal, ensure, resource, until } from "effection";
 import type { Operation, Stream } from "effection";
 import { ensureDir, exists, readdir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { chmod, rename } from "node:fs/promises";
 import { join } from "node:path";
-import { until } from "effection";
-import { ACTION_TYPES } from "./actions.ts";
+import { z } from "zod";
 import type { ReplAction } from "./actions.ts";
 import { emptyState, reduce } from "./state.ts";
 import type { ReplState } from "./state.ts";
@@ -54,11 +54,108 @@ export interface ReplStore {
   readonly states: Stream<ReplState, void>;
 }
 
-const ACTION_TYPE_SET: ReadonlySet<string> = new Set(ACTION_TYPES);
+const IdentitySchema = z.object({
+  provider: z.enum(["claude", "codex"]),
+  id: z.string(),
+});
+
+const ReadinessSchema = z.enum(["unknown", "converging", "ready", "busy", "unavailable"]);
+
+/** The complete shape of every action, so a malformed one is refused. */
+const ActionSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("ReplOpened"), replSession: z.string() }),
+  z.object({
+    type: z.literal("RoleBound"),
+    key: z.string(),
+    role: z.string(),
+    issue: z.string(),
+    identity: IdentitySchema,
+    paneGeneration: z.number().int(),
+  }),
+  z.object({
+    type: z.literal("MessageQueued"),
+    key: z.string(),
+    id: z.string(),
+    text: z.string(),
+    marker: z.string(),
+  }),
+  z.object({ type: z.literal("TerminalObserved"), key: z.string(), readiness: ReadinessSchema }),
+  z.object({ type: z.literal("ProviderBusy"), key: z.string() }),
+  z.object({ type: z.literal("ProviderIdle"), key: z.string() }),
+  z.object({ type: z.literal("ConvergenceStarted"), key: z.string(), id: z.string() }),
+  z.object({
+    type: z.literal("ConvergenceInvalidated"),
+    key: z.string(),
+    id: z.string(),
+    reason: z.string(),
+  }),
+  z.object({ type: z.literal("AttemptStarted"), key: z.string(), id: z.string() }),
+  z.object({
+    type: z.literal("AttemptDeclined"),
+    key: z.string(),
+    id: z.string(),
+    reason: z.string(),
+  }),
+  z.object({
+    type: z.literal("AttemptUncertain"),
+    key: z.string(),
+    id: z.string(),
+    reason: z.string(),
+  }),
+  z.object({
+    type: z.literal("UserAccepted"),
+    key: z.string(),
+    id: z.string(),
+    eventKey: z.string(),
+    identity: z.string(),
+    text: z.string(),
+    turn: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("AssistantObserved"),
+    key: z.string(),
+    eventKey: z.string(),
+    identity: z.string(),
+    text: z.string(),
+    turn: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("AssistantCompleted"),
+    key: z.string(),
+    id: z.string(),
+    eventKey: z.string(),
+    identity: z.string(),
+    turn: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("ObserverAdvanced"),
+    key: z.string(),
+    cursor: z.number().int(),
+    source: z.string(),
+  }),
+  z.object({ type: z.literal("PaneUnavailable"), key: z.string(), reason: z.string() }),
+  z.object({ type: z.literal("ObserverRefused"), key: z.string(), reason: z.string() }),
+  z.object({ type: z.literal("ReplClosed") }),
+]);
+
+const EntrySchema = z.object({
+  seq: z.number().int().nonnegative(),
+  action: ActionSchema,
+});
+
+// The schema is held to the declared action union rather than the union being
+// read off it: a change to either the schema stops compiling here.
+const _actionSchema: z.ZodType<ReplAction> = ActionSchema;
 
 /** A stored entry's file name: zero-padded so a lexical sort is numeric. */
 function recordName(seq: number): string {
   return `${String(seq).padStart(6, "0")}.json`;
+}
+
+/** The sequence number a record file name encodes, or NaN when it encodes none. */
+function seqFromName(name: string): number {
+  const digits = name.slice(0, -".json".length);
+  return /^\d+$/.test(digits) ? Number(digits) : Number.NaN;
 }
 
 /**
@@ -133,14 +230,17 @@ function parseEntry(text: string, name: string): StoredAction {
   } catch {
     throw new ReplStoreError(`a record that is not JSON (${name})`);
   }
-  if (!isRecord(value) || typeof value.seq !== "number" || !Number.isInteger(value.seq)) {
-    throw new ReplStoreError(`a record with no integer sequence (${name})`);
+  const parsed = EntrySchema.safeParse(value);
+  if (!parsed.success) {
+    throw new ReplStoreError(
+      `a malformed record (${name}): ${parsed.error.issues[0]?.message ?? "invalid"}`,
+    );
   }
-  const action = value.action;
-  if (!isRecord(action) || typeof action.type !== "string" || !ACTION_TYPE_SET.has(action.type)) {
-    throw new ReplStoreError(`a record with no known action type (${name})`);
+  const nameSeq = seqFromName(name);
+  if (Number.isNaN(nameSeq) || nameSeq !== parsed.data.seq) {
+    throw new ReplStoreError(`a record whose file name disagrees with its sequence (${name})`);
   }
-  return { seq: value.seq, action: action as unknown as ReplAction };
+  return { seq: parsed.data.seq, action: parsed.data.action };
 }
 
 /** Write one record through a staged file and a rename, at mode `0600`. */
@@ -155,8 +255,4 @@ function* persist(dir: string, entry: StoredAction): Operation<void> {
 /** Remove one store's whole directory. For a POC harness cleaning up after itself. */
 export function purgeStore(dir: string): Operation<void> {
   return rm(dir, { recursive: true, force: true });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

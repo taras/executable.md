@@ -4,17 +4,21 @@
  * The unproven boundary this whole experiment exists for: can generic terminal
  * state identify a safe point to deliver input without parsing what the agent
  * drew on the screen? The algorithm below reads only structural facts about a
- * pane — its generation, its process, its terminal, whether it is in a mode,
- * how much output and client activity it has seen — plus whether the provider's
- * own session file shows an open turn. It never reads prompt wording or screen
- * text.
+ * pane — its generation, its process, its terminal, whether it is in a mode, how
+ * much output and client activity it has seen — and the provider's own
+ * open-turn/cursor/event state from its session file. It never reads prompt
+ * wording or screen text.
  *
- * Convergence authorizes an *attempt*. It never establishes acceptance: only the
- * provider session file does that. Two structurally equal snapshots separated by
- * an acknowledged terminal barrier, with no intervening event and no open
- * provider turn, are what "ready" means here.
+ * Provider state is part of convergence, not a one-time precheck. Both samples
+ * carry the provider's open-turn flag, its cursor and its event count, so a turn
+ * that opens *during* the acknowledged barrier — a record appended between the
+ * two samples — fails convergence exactly as a pane change does. Convergence
+ * authorizes an *attempt*; it never establishes acceptance, which only the
+ * provider session file does.
  *
- * A `PaneProbe` is the seam. The tmux provider would implement it over a private
+ * A `PaneProbe` is the seam for the pane facts and the final guarded paste. The
+ * provider facts arrive through a `sample()` the caller composes from the
+ * observer. The tmux provider implements the pane seam over a private
  * control-mode client; the deterministic suite implements it with a fake pane
  * that also holds hidden busy and manual ground truth — exposed only to the
  * assertions, never to this algorithm.
@@ -43,6 +47,27 @@ export interface PaneSnapshot {
   readonly epoch: number;
 }
 
+/** The provider's session-file state at one instant, read structurally. */
+export interface ProviderSample {
+  /** Whether the provider file shows an open turn now. */
+  readonly openTurn: boolean;
+  /** The provider file's readable length, so growth between samples is visible. */
+  readonly cursor: number;
+  /** The number of relevant records observed, so a new turn is a new event. */
+  readonly eventCount: number;
+}
+
+/** One combined sample of the pane and the provider it hosts. */
+export interface ConvergenceSample {
+  readonly pane: PaneSnapshot;
+  readonly provider: ProviderSample;
+}
+
+/** The result of taking one combined sample. */
+export type SampleResult =
+  | { readonly outcome: "sampled"; readonly sample: ConvergenceSample }
+  | { readonly outcome: "unreadable"; readonly reason: string };
+
 /** A literal paste, described without any bytes crossing an argument vector. */
 export interface PasteRequest {
   /** The uniquely named tmux buffer the message bytes were loaded into. */
@@ -53,68 +78,95 @@ export interface PasteRequest {
   readonly submitKey: string;
 }
 
-/** What the one guarded paste operation established. */
+/**
+ * What the one guarded paste operation established.
+ *
+ * `uncertain` is distinct from `declined`: a decline is a proved safe non-paste
+ * (the guard caught a change before any byte was sent), while uncertain is a
+ * guard whose own outcome could not be read — the command failed, or the paste
+ * may or may not have happened. The caller re-queues a decline and never retries
+ * an uncertain outcome.
+ */
 export type GuardOutcome =
   | { readonly outcome: "pasted" }
-  | { readonly outcome: "declined"; readonly reason: string };
+  | { readonly outcome: "declined"; readonly reason: string }
+  | { readonly outcome: "uncertain"; readonly reason: string };
 
 /**
  * The pane operations convergence and delivery need.
  *
- * Everything here is a structural tmux-shaped verb. `guardedPaste` is the single
- * server-side operation that rechecks the pane and either declines or pastes
- * without suspending in between — the last gate before bytes reach a terminal.
+ * Every verb is a structural tmux-shaped operation. `guardedPaste` is the single
+ * server-side operation that rechecks every required final pane fact and either
+ * pastes, declines, or reports its own outcome unreadable — with no suspension
+ * between the recheck and the paste.
  */
 export interface PaneProbe {
   /** Read the pane's current structural state. */
   snapshot(): Operation<PaneSnapshot>;
-  /** An acknowledged terminal round-trip, so two snapshots straddle a barrier. */
+  /** An acknowledged terminal round-trip, so two samples straddle a barrier. */
   barrier(): Operation<void>;
   /** Load the private message file's bytes into a uniquely named buffer. */
   loadBuffer(buffer: string, path: string): Operation<void>;
+  /** Remove a buffer this delivery created, whichever way the attempt ended. */
+  deleteBuffer(buffer: string): Operation<void>;
   /**
-   * Recheck the pane against the converged guard and paste, or decline — in one
-   * operation, with no suspension between the recheck and the paste.
+   * Recheck the pane against the converged guard and paste, decline, or report
+   * the outcome unreadable — in one operation, with no suspension between the
+   * recheck and the paste.
    */
   guardedPaste(guard: PaneSnapshot, delivery: PasteRequest): Operation<GuardOutcome>;
 }
 
 /** The result of one convergence attempt. */
 export type ConvergenceOutcome =
-  | { readonly outcome: "converged"; readonly guard: PaneSnapshot }
+  | { readonly outcome: "converged"; readonly guard: ConvergenceSample }
   | { readonly outcome: "not-ready"; readonly reason: string };
 
 /**
  * Attempt to converge one pane to a safe input point.
  *
- * Takes a snapshot, requires the pane usable and the provider idle, crosses an
- * acknowledged barrier, and takes a second snapshot. It converges only when the
- * two are structurally equal and no event occurred between them. Any difference
- * — including the epoch advancing, which is any observable event at all — is
- * `not-ready`, and the caller leaves the message queued.
+ * Takes a combined sample, requires the pane usable and the provider idle,
+ * crosses an acknowledged barrier, and takes a second combined sample. It
+ * converges only when the pane is structurally equal, no pane event occurred,
+ * and the provider's open-turn/cursor/event state is unchanged and still idle.
+ * Any difference — a pane change, an epoch bump, a newly opened turn, or a new
+ * provider record between the samples — is `not-ready`.
  */
 export function converge(
-  probe: PaneProbe,
-  providerOpenTurn: boolean,
+  sample: () => Operation<SampleResult>,
+  barrier: () => Operation<void>,
 ): Operation<ConvergenceOutcome> {
   return (function* (): Operation<ConvergenceOutcome> {
-    if (providerOpenTurn) {
+    const first = yield* sample();
+    if (first.outcome === "unreadable") {
+      return { outcome: "not-ready", reason: `provider-${first.reason}` };
+    }
+    if (first.sample.provider.openTurn) {
       return { outcome: "not-ready", reason: "provider-open-turn" };
     }
-    const first = yield* probe.snapshot();
-    const usable = usability(first);
+    const usable = usability(first.sample.pane);
     if (usable !== undefined) {
       return { outcome: "not-ready", reason: usable };
     }
-    yield* probe.barrier();
-    const second = yield* probe.snapshot();
-    if (!structurallyEqual(first, second)) {
+    yield* barrier();
+    const second = yield* sample();
+    if (second.outcome === "unreadable") {
+      return { outcome: "not-ready", reason: `provider-${second.reason}` };
+    }
+    if (second.sample.provider.openTurn) {
+      // A turn that opened during the barrier — the barrier race.
+      return { outcome: "not-ready", reason: "provider-open-turn" };
+    }
+    if (!structurallyEqual(first.sample.pane, second.sample.pane)) {
       return { outcome: "not-ready", reason: "pane-changed" };
     }
-    if (second.epoch !== first.epoch) {
+    if (second.sample.pane.epoch !== first.sample.pane.epoch) {
       return { outcome: "not-ready", reason: "intervening-event" };
     }
-    return { outcome: "converged", guard: second };
+    if (!providerUnchanged(first.sample.provider, second.sample.provider)) {
+      return { outcome: "not-ready", reason: "provider-event" };
+    }
+    return { outcome: "converged", guard: second.sample };
   })();
 }
 
@@ -127,6 +179,15 @@ function usability(snapshot: PaneSnapshot): string | undefined {
     return "pane-in-mode";
   }
   return undefined;
+}
+
+/** Whether the provider's readable state is unchanged between two samples. */
+export function providerUnchanged(left: ProviderSample, right: ProviderSample): boolean {
+  return (
+    left.cursor === right.cursor &&
+    left.eventCount === right.eventCount &&
+    left.openTurn === right.openTurn
+  );
 }
 
 /** Whether two snapshots agree on every structural fact but the event epoch. */

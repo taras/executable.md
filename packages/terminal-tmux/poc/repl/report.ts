@@ -8,9 +8,15 @@
  * path, argv, environment, tmux identifier, credential, socket, token or raw
  * native identity. An identity is carried only as a hash.
  *
- * The schema is the disclosure boundary. A report that tried to carry a
- * forbidden field would fail validation here, so the builder and the validator
- * are kept together.
+ * The schema is the disclosure boundary *and* the proof boundary. A `PASS` is
+ * only schema-valid with the full evidence its mode requires: a `live-claude` or
+ * `live-codex` report needs that provider passing with a known version, hashed
+ * native and source identities, observed acceptance and completion, a spent turn,
+ * an attempted delivery, and exact base and head commits; a `deterministic` PASS
+ * additionally needs the RP matrix with no failed or skipped row. The full POC
+ * decision is the conjunction of the offline matrix and both provider documents
+ * passing in their own authorized runs. A report that claims `PASS` without its
+ * evidence, or carries a forbidden field, fails validation here.
  */
 
 import { Ajv } from "ajv";
@@ -56,7 +62,16 @@ export interface ReportCounters {
 export interface ProviderReport {
   readonly verdict: ProviderVerdict;
   readonly versionKnown: boolean;
+  /** The observed provider version, when known. Required for a PASS. */
+  readonly version?: string;
+  /** A hash of the native identity. Required for a PASS. */
   readonly identityHash?: string;
+  /** A hash of the source-file identity. Required for a PASS. */
+  readonly sourceIdentityHash?: string;
+  /** Whether the exact user event was observed. Required for a PASS. */
+  readonly accepted?: boolean;
+  /** Whether an explicit completion boundary was observed. Required for a PASS. */
+  readonly completed?: boolean;
 }
 
 export interface DeliveryEvidence {
@@ -91,7 +106,7 @@ export interface TerminalReplReport {
   readonly runtime: string;
   readonly detail?: string;
   readonly base: { readonly sha: string; readonly parent?: string };
-  readonly head?: { readonly sha?: string };
+  readonly head?: { readonly sha: string };
   readonly providers: { readonly claude: ProviderReport; readonly codex: ProviderReport };
   readonly turnBudgets: TurnBudgets;
   readonly matrix: readonly MatrixEntry[];

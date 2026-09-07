@@ -2,22 +2,23 @@
  * Issue #774 POC — the Claude session-file parser.
  *
  * Claude Code writes one identity-bearing `.jsonl` file per session under a
- * project directory, named by the session identifier. This parser reads only the
- * record shapes the observer needs and refuses a relevant record whose required
- * members are wrong; the shared observer in `observer.ts` owns the file
- * identity, the cursor and the refusals.
+ * project directory, named by the session identifier, so identity comes from the
+ * file name and the project is the directory the caller resolved. This parser
+ * reads only the record shapes the observer needs and refuses a relevant record
+ * whose required members are wrong; the shared observer owns file identity, the
+ * cursor and the refusals.
  *
- * Identity comes from the file name, and every relevant record also carries its
- * own `sessionId`, so a record planted under another identity is caught rather
- * than inherited. Completion is an explicit closing `result` record — the one
- * unambiguous boundary this POC accepts. A build whose real format offers no
- * such record is reported `PROVIDER_EXCLUDED` rather than having completion
- * inferred from anything weaker.
+ * Assistant output and completion are grouped by an explicit turn identity — the
+ * record's `requestId` — so output from one turn is never attributed to another.
+ * Completion is an explicit closing `result` record, the one unambiguous
+ * boundary this POC accepts. A build whose real interactive format offers no
+ * such record is reported `PROVIDER_EXCLUDED` (see `live-worker.ts`) rather than
+ * having completion inferred from anything weaker.
  */
 
 import type { ParsedRecord, ProviderParser } from "./observer.ts";
 
-/** The Claude parser: filename identity, `sessionId`-tagged records. */
+/** The Claude parser: filename identity, `sessionId`-tagged, `requestId`-grouped. */
 export const claudeParser: ProviderParser = {
   provider: "claude",
   identityFromName(name) {
@@ -39,7 +40,13 @@ export const claudeParser: ProviderParser = {
   },
 };
 
-/** A `user` or `assistant` record, read for its identity and its text. */
+/** The turn a record belongs to: its `requestId`, when it carries one. */
+function turnOf(record: Record<string, unknown>): string | undefined {
+  const requestId = record["requestId"];
+  return typeof requestId === "string" && requestId.length > 0 ? requestId : undefined;
+}
+
+/** A `user` or `assistant` record, read for its identity, turn and text. */
 function classifyMessage(
   record: Record<string, unknown>,
   kind: "user-accepted" | "assistant-output",
@@ -52,19 +59,20 @@ function classifyMessage(
   if (text === undefined) {
     return { kind: "unsupported", reason: `${kind} record with no readable text` };
   }
+  const turn = turnOf(record);
   if (kind === "user-accepted") {
-    return { kind: "user-accepted", identity, text };
+    return { kind: "user-accepted", identity, text, turn };
   }
-  return { kind: "assistant-output", identity, text };
+  return { kind: "assistant-output", identity, text, turn };
 }
 
-/** The explicit closing record: `{"type":"result","sessionId":…}`. */
+/** The explicit closing record: `{"type":"result","sessionId":…,"requestId":…}`. */
 function classifyResult(record: Record<string, unknown>): ParsedRecord {
   const identity = record["sessionId"];
   if (typeof identity !== "string" || identity.length === 0) {
     return { kind: "unsupported", reason: "result record with no sessionId" };
   }
-  return { kind: "turn-completed", identity };
+  return { kind: "turn-completed", identity, turn: turnOf(record) };
 }
 
 /** Join the text parts of a Claude message, or nothing when there are none. */

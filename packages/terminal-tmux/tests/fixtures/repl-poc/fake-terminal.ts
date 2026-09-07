@@ -10,10 +10,14 @@
  * If the algorithm ever pastes while either is true, the fake records it and the
  * test fails.
  *
+ * It also models the two ways the final guard can go wrong on a real server: a
+ * command that fails outright (declined) and one that half-succeeds so bytes may
+ * have gone but the whole delivery is unproved (uncertain). A test arms either.
+ *
  * The synthetic-file helpers write append-only provider records in the exact
  * shapes the two observers accept, so a test can build acceptance, completion, a
- * partial tail, truncation, rotation, an ambiguous identity, a wrong identity and
- * an unsupported shape without a real agent.
+ * partial tail, truncation, rotation, an ambiguous identity, a wrong identity, a
+ * wrong project and an unsupported shape without a real agent.
  */
 
 import { until } from "effection";
@@ -45,6 +49,8 @@ export interface FakePane {
   readonly deliveries: readonly FakeDelivery[];
   /** How many times the guard declined a paste. */
   readonly declines: number;
+  /** How many named buffers are still loaded (a delivery removes its own). */
+  pendingBuffers(): number;
   /** Bump the event epoch: any observable pane event. */
   event(): void;
   /** A visible client acted (a person moved the cursor, scrolled, typed). */
@@ -61,10 +67,12 @@ export interface FakePane {
   replace(): void;
   /** The pane's process exited. */
   kill(): void;
-  /** Run `mutate` the next time the fake crosses a barrier. */
-  armBarrier(mutate: () => void): void;
+  /** Run `mutate` the next time the fake crosses a barrier (may do async work). */
+  armBarrier(mutate: () => Operation<void>): void;
   /** Run `mutate` the next time a buffer is loaded (just before the guarded paste). */
   armLoad(mutate: () => void): void;
+  /** Make the next guarded paste fail its server-side command with this outcome. */
+  armGuardFailure(kind: "declined" | "uncertain"): void;
 }
 
 /** Options for a fresh fake pane. */
@@ -89,8 +97,9 @@ export function createFakePane(options: FakePaneOptions = {}): FakePane {
   let declines = 0;
   const deliveries: FakeDelivery[] = [];
   const buffers = new Map<string, string>();
-  let barrierTrap: (() => void) | undefined;
+  let barrierTrap: (() => Operation<void>) | undefined;
   let loadTrap: (() => void) | undefined;
+  let guardFailure: "declined" | "uncertain" | undefined;
 
   function snapshot(): PaneSnapshot {
     return {
@@ -115,7 +124,7 @@ export function createFakePane(options: FakePaneOptions = {}): FakePane {
       const trap = barrierTrap;
       barrierTrap = undefined;
       if (trap !== undefined) {
-        trap();
+        yield* trap();
       }
       // A barrier is an acknowledged round-trip; the yield models that wait
       // without changing any structural fact by itself.
@@ -131,6 +140,10 @@ export function createFakePane(options: FakePaneOptions = {}): FakePane {
       buffers.set(buffer, bytes);
     },
     // deno-lint-ignore require-yield
+    *deleteBuffer(buffer): Operation<void> {
+      buffers.delete(buffer);
+    },
+    // deno-lint-ignore require-yield
     *guardedPaste(guard: PaneSnapshot, delivery: PasteRequest): Operation<GuardOutcome> {
       // The recheck and the paste happen with no suspension between them: the
       // current state is read and compared, and a matching guard pastes at once.
@@ -142,6 +155,16 @@ export function createFakePane(options: FakePaneOptions = {}): FakePane {
       if (!current.alive) {
         declines += 1;
         return { outcome: "declined", reason: "pane-unavailable" };
+      }
+      const failure = guardFailure;
+      guardFailure = undefined;
+      if (failure === "declined") {
+        declines += 1;
+        return { outcome: "declined", reason: "tmux-command-failed" };
+      }
+      if (failure === "uncertain") {
+        // The buffer pasted but the submit key could not be proved sent.
+        return { outcome: "uncertain", reason: "submit-unacknowledged" };
       }
       const bytes = buffers.get(delivery.buffer) ?? "";
       deliveries.push({ buffer: delivery.buffer, bytes, whileBusy: busy, whileManual: manual });
@@ -156,6 +179,9 @@ export function createFakePane(options: FakePaneOptions = {}): FakePane {
     },
     get declines() {
       return declines;
+    },
+    pendingBuffers() {
+      return buffers.size;
     },
     event() {
       epoch += 1;
@@ -194,32 +220,42 @@ export function createFakePane(options: FakePaneOptions = {}): FakePane {
     armLoad(mutate) {
       loadTrap = mutate;
     },
+    armGuardFailure(kind) {
+      guardFailure = kind;
+    },
   };
 }
 
 // --- Synthetic provider records ------------------------------------------------
 
 /** A Claude `user` record carrying the exact attempted text under `sessionId`. */
-export function claudeUser(sessionId: string, text: string): string {
+export function claudeUser(sessionId: string, text: string, turn?: string): string {
   return line({
     type: "user",
     sessionId,
+    ...(turn === undefined ? {} : { requestId: turn }),
     message: { role: "user", content: [{ type: "text", text }] },
   });
 }
 
-/** A Claude `assistant` record. */
-export function claudeAssistant(sessionId: string, text: string): string {
+/** A Claude `assistant` record, optionally grouped under a turn's `requestId`. */
+export function claudeAssistant(sessionId: string, text: string, turn?: string): string {
   return line({
     type: "assistant",
     sessionId,
+    ...(turn === undefined ? {} : { requestId: turn }),
     message: { role: "assistant", content: [{ type: "text", text }] },
   });
 }
 
-/** The explicit Claude completion boundary. */
-export function claudeResult(sessionId: string): string {
-  return line({ type: "result", sessionId, subtype: "success" });
+/** The explicit Claude completion boundary, optionally grouped under a turn. */
+export function claudeResult(sessionId: string, turn?: string): string {
+  return line({
+    type: "result",
+    sessionId,
+    subtype: "success",
+    ...(turn === undefined ? {} : { requestId: turn }),
+  });
 }
 
 /** A Claude `user` record whose message has no readable text: an unsupported shape. */
@@ -227,9 +263,12 @@ export function claudeUnsupported(sessionId: string): string {
   return line({ type: "user", sessionId, message: { role: "user" } });
 }
 
-/** The Codex `session_meta` header naming the thread identity. */
-export function codexMeta(id: string): string {
-  return line({ type: "session_meta", payload: { id } });
+/** The Codex `session_meta` header naming the thread identity and its project. */
+export function codexMeta(id: string, project?: string): string {
+  return line({
+    type: "session_meta",
+    payload: { id, ...(project === undefined ? {} : { cwd: project }) },
+  });
 }
 
 /** A Codex `user_message` event carrying the exact attempted text. */

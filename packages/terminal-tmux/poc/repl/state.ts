@@ -67,6 +67,8 @@ export interface NormalizedEvent {
   readonly identity: string;
   /** The relevant text, or the empty string for a completion boundary. */
   readonly text: string;
+  /** The provider's own turn identity, when it groups output by one. */
+  readonly turn?: string;
 }
 
 /** One REPL message and everything the store retains about it. */
@@ -248,6 +250,7 @@ function reduceOne(role: RoleState, action: RoleAction): RoleState {
           key: action.eventKey,
           identity: action.identity,
           text: action.text,
+          turn: action.turn,
         },
       );
     case "AssistantObserved":
@@ -256,13 +259,20 @@ function reduceOne(role: RoleState, action: RoleAction): RoleState {
         key: action.eventKey,
         identity: action.identity,
         text: action.text,
+        turn: action.turn,
       });
     case "AssistantCompleted":
       return recordEvent(
         mapMessage({ ...role, inFlight: undefined }, action.id, (message) =>
           message.state === "accepted" ? { ...message, state: "completed" } : message,
         ),
-        { kind: "turn-completed", key: action.eventKey, identity: action.identity, text: "" },
+        {
+          kind: "turn-completed",
+          key: action.eventKey,
+          identity: action.identity,
+          text: "",
+          turn: action.turn,
+        },
       );
     case "ObserverAdvanced":
       return { ...role, cursor: action.cursor, observerSource: action.source };
