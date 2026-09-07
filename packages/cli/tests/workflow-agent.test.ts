@@ -717,7 +717,10 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       expect(recorded).toHaveLength(1);
       const policy = JSON.stringify(recorded[0]);
       expect(policy).toContain("File:write");
-      expect(policy).toContain("@executablemd/workflow/composition#Dir@3");
+      // The identity is a structural record, so the origin, the key and the
+      // revision are read as themselves rather than as one assembled spelling.
+      expect(policy).toContain('"origin":"@executablemd/workflow/composition"');
+      expect(policy).toContain('"key":"Dir","revision":"3"');
       expect(policy).toContain('"allow":["write"]');
       // And the change is in the run's own Workspace, where an ordinary read
       // beneath the fragment's own directory finds it. Anchored on the

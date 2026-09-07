@@ -292,6 +292,19 @@ export interface ClaimedIdentity {
   readonly revision: string;
 }
 
+/**
+ * One identified answer: what a provider stated, and what core kept of it.
+ *
+ * The two travel together because a caller needs both and must not obtain them
+ * separately. The definition is core's own copy, taken when the claim was
+ * recorded; it is what the caller keeps, and it is why nothing downstream ever
+ * reads the object the public chain returned a second time.
+ */
+export interface IdentifiedAnswer {
+  readonly identity: AnswerIdentity;
+  readonly definition: ImportedDefinition;
+}
+
 /** One claim this owner recorded, with core's own copy of what was claimed. */
 interface Claim {
   readonly name: string;
@@ -414,14 +427,23 @@ export class CanonicalImports {
   }
 
   /**
-   * The identity stated for this exact answer, under this exact name.
+   * The identity stated for this exact answer, and core's own copy of it.
    *
    * Read after the whole public chain has returned, so what is asked about is
    * the final answer rather than an intermediate one. Nothing here refuses: an
    * unidentified answer is an ordinary answer, and whether that is enough is
    * the caller's question.
+   *
+   * Both halves come back together, and the copy is the one taken when the
+   * claim was recorded rather than one made now. Answering with the identity
+   * alone would leave the caller holding the chain's object and needing to copy
+   * it itself — one more read of a value the chain controls, after the read
+   * this one checked. An alternating proxy or an accessor that answers twice
+   * would pass the check and hand the second answer to the copy. So the check
+   * and the thing kept are one result of one call, and the object that
+   * travelled through the chain is never read again.
    */
-  identify(name: string, answer: unknown): AnswerIdentity | undefined {
+  identify(name: string, answer: unknown): IdentifiedAnswer | undefined {
     if (!this.#active || typeof answer !== "object" || answer === null) {
       return undefined;
     }
@@ -435,7 +457,7 @@ export class CanonicalImports {
     if (claim.canonical === undefined || !stillDescribes(claim.canonical, answer)) {
       return undefined;
     }
-    return claim.identity;
+    return Object.freeze({ identity: claim.identity, definition: claim.canonical });
   }
 
   /**
@@ -543,11 +565,19 @@ export interface ImportTier {
  * an answer decides only how a refusal reads, never whether one is authorized.
  */
 export class ExecutionImports implements ImportAuthority {
-  readonly #imports = new CanonicalImports();
+  readonly #imports: CanonicalImports;
   readonly #tiers: readonly ImportTier[];
 
-  constructor(tiers: readonly ImportTier[]) {
+  /**
+   * The owner is handed in rather than made here, because it outlives this
+   * object at both ends. Canonical execution constructs it before any
+   * installation runs — inactive, with its teardown already registered — so a
+   * provider can state identities during profile capture, long before the tiers
+   * this authority is built from exist.
+   */
+  constructor(tiers: readonly ImportTier[], imports: CanonicalImports) {
     this.#tiers = tiers;
+    this.#imports = imports;
   }
 
   /** Record that canonical execution produced this answer for this name. */

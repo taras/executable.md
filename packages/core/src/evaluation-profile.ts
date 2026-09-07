@@ -44,6 +44,8 @@ import {
   capabilityDefinition,
   capabilityProps,
   captureCapabilities,
+  FragmentCapabilityError,
+  REVOKED_CAPABILITY,
 } from "./fragment-capabilities.ts";
 import type {
   CapturedCapabilities,
@@ -51,10 +53,13 @@ import type {
   FragmentFetchAccess,
   FragmentFileAccess,
 } from "./fragment-capabilities.ts";
+import { isFormDispatcher } from "./invocation-identity.ts";
+import type { ComponentInvocation } from "./invocation-identity.ts";
 import type { FetchRequest } from "./fetch-request.ts";
 import { normalizeFetchRequest, requestRecord } from "./fetch-request.ts";
+import { CORE_REVISION } from "./generated-xmd.ts";
 import type { GeneratedRequest } from "./generated-xmd.ts";
-import type { FunctionComponentDefinition, Json, PropsSchema } from "./types.ts";
+import type { FunctionComponent, FunctionComponentDefinition, Json, PropsSchema } from "./types.ts";
 
 /** The two forms an element is actually written in. */
 export type FragmentForm = "self-closing" | "paired";
@@ -234,22 +239,6 @@ export interface FragmentEvaluationInput {
 }
 
 /**
- * The revision core's own entries state.
- *
- * One number for all of them, bumped whenever what any of these entries
- * authorizes changes. A continuation admitted under an earlier revision is
- * refused rather than silently granted the newer authority.
- *
- * Revision 2 is where the authority behind these entries changed: an admitted
- * element used to invoke the ordinary component and resolve `API.Files` or
- * `API.Fetch` wherever it happened to run, and now it invokes a body closed
- * over the operations the host handed the profile. A continuation granted under
- * revision 1 was granted something the run could still compose around, so it is
- * refused rather than silently re-granted under the narrower one.
- */
-const CORE_REVISION = "2";
-
-/**
  * Core's `<File />`, admitted to observe and not to write.
  *
  * `<File>` reads when it has no content and writes when it has some, so one
@@ -381,6 +370,19 @@ export interface CapturedEntry {
    * never something re-resolved later.
    */
   readonly definition: FunctionComponentDefinition;
+  /**
+   * The form authority underneath this entry's implementation, when the sealed
+   * definition wraps one.
+   *
+   * A component answer runs behind a lifetime guard canonical capture built, so
+   * the function on the definition is core's rather than the provider's. A
+   * provider whose own answer dispatches on the authored form would otherwise
+   * lose that dispatch, because what a selection records as the form authority
+   * is read off the definition it was handed. So the authority travels
+   * explicitly, and a capability — whose definition is core's own dispatcher —
+   * states none.
+   */
+  readonly dispatch?: unknown;
   /** This entry's own ceiling, normalized once and canonically ordered. */
   readonly requests?: readonly FetchRequest[];
 }
@@ -436,7 +438,58 @@ export class EvaluationProfileError extends Error {
 }
 
 /**
- * Capture one host's profile by value, before any installation runs.
+ * One entry this execution has copied, before it knows what is behind a
+ * provider-backed name.
+ *
+ * Everything a host stated is already settled here — the identity, the forms,
+ * the schema for a capability, the ceiling. What is missing is exactly the part
+ * a host does not state: a component answer's implementation and the contract
+ * that comes with it.
+ */
+interface PreparedEntry {
+  readonly name: string;
+  readonly identity: FragmentIdentity;
+  readonly forms: readonly FragmentForm[];
+  readonly kind: "capability" | "component-answer";
+  readonly description?: string;
+  readonly props?: PropsSchema;
+  readonly capability?: FragmentCapability;
+  readonly definition?: FunctionComponentDefinition;
+  readonly requests?: readonly FetchRequest[];
+}
+
+/**
+ * One host's profile, copied and bound, waiting only for its provider answers.
+ *
+ * Preparation is where a host stops being consulted: the tables are copied, the
+ * identities and forms are frozen, the ceilings are normalized, and every live
+ * operation is read off the host's objects once and bound behind this
+ * execution's revocation. A host that mutates its own arrays, headers or tables
+ * afterwards changes nothing.
+ *
+ * What preparation cannot do is decide what a provider-backed name resolves to:
+ * that takes the complete ordinary import chain, which does not exist until the
+ * providers have installed. So it publishes the names that need resolving and
+ * seals afterwards.
+ */
+export interface PreparedProfile {
+  /**
+   * The provider-backed names this profile admits, with what it expects of each.
+   *
+   * Empty for a capability-only profile, which performs no component-chain
+   * lookup at all — a host that offers no provider answer pays for none.
+   */
+  readonly answered: readonly { readonly name: string; readonly identity: FragmentIdentity }[];
+  /** Whether the operations this preparation bound are still usable. */
+  readonly live: () => boolean;
+  /** End them. Registered by canonical execution before any installation runs. */
+  readonly revoke: () => void;
+  /** The completed profile, from the answers this execution resolved. */
+  seal(answers: ResolvedAnswers): Operation<CapturedProfile>;
+}
+
+/**
+ * Copy and bind one host's profile, before any installation runs.
  *
  * Everything structural is copied and frozen here, so a host mutating its own
  * arrays, schemas, headers or tables afterwards changes nothing this execution
@@ -444,18 +497,9 @@ export class EvaluationProfileError extends Error {
  * thing a profile must keep by reference, and it is kept behind a revocation
  * this execution owns rather than handed onward.
  */
-export function* captureEvaluationProfile(
+export function* prepareEvaluationProfile(
   input: FragmentEvaluationInput,
-  /**
-   * The provider-backed names this execution already resolved and reconciled.
-   *
-   * Empty for a capability-only profile, which performs no component-chain
-   * lookup at all. Passed in rather than resolved here, because resolving needs
-   * the execution's own import terminal and this module holds no resolver it
-   * could be tempted to call again later.
-   */
-  answers: ResolvedAnswers = new Map(),
-): Operation<CapturedProfile> {
+): Operation<PreparedProfile> {
   // Every live operation is read off the host's objects here, once, before a
   // single installation has run. What comes back is bound and revocable, and
   // the host's own objects are never consulted again.
@@ -469,23 +513,48 @@ export function* captureEvaluationProfile(
   // so they arrive as one definition whose dispatch separates the two
   // spellings, exactly as the ordinary `<File>` does.
   const built = buildDefinitions(input, capabilities);
-  const read = yield* captureEntries(input.read ?? [], input.fetchTimeout, built, answers);
-  const write = yield* captureEntries(input.write ?? [], input.fetchTimeout, built, answers);
+  const read = yield* prepareEntries(input.read ?? [], input.fetchTimeout, built);
+  const write = yield* prepareEntries(input.write ?? [], input.fetchTimeout, built);
   if (read.length === 0 && write.length === 0) {
     throw new EvaluationProfileError(
       "an evaluation profile states no component at all. A host offering evaluation states what " +
         "a fragment may do; one that offers none states no profile.",
     );
   }
+  // One lookup per distinct name, however many entries and tables hold it: a
+  // name resolves to one implementation, and asking twice would be two chances
+  // for the chain to answer differently.
+  const answered = answeredNames([...read, ...write]);
+  const workspace = input.workspace === undefined ? undefined : bindWorkspace(input.workspace);
+  const deprecatedSourceAlias = input.deprecatedSourceAlias === true;
   return Object.freeze({
-    read,
-    write,
-    ...(input.workspace === undefined ? {} : { workspace: bindWorkspace(input.workspace) }),
-    deprecatedSourceAlias: input.deprecatedSourceAlias === true,
-    enterFragment: () => capabilities.enterFragment(),
+    answered: Object.freeze(
+      [...answered.entries()].map(([name, identity]) => Object.freeze({ name, identity })),
+    ),
     live: () => capabilities.live(),
     revoke: () => {
       capabilities.revoke();
+    },
+    // deno-lint-ignore require-yield
+    *seal(answers: ResolvedAnswers): Operation<CapturedProfile> {
+      // One sealed implementation per name, built before either table is
+      // sealed. A name that holds two entries — the self-closing spelling in
+      // `read` and the paired one in `write` — is one component seen from two
+      // sides, so both entries carry the same object: two guards over one
+      // answer would be two lifetimes for one implementation, and which of
+      // them a fragment reached would depend on which table admitted it.
+      const sealed = sealAnswers(answered, answers, capabilities);
+      return Object.freeze({
+        read: sealEntries(read, sealed),
+        write: sealEntries(write, sealed),
+        ...(workspace === undefined ? {} : { workspace }),
+        deprecatedSourceAlias,
+        enterFragment: () => capabilities.enterFragment(),
+        live: () => capabilities.live(),
+        revoke: () => {
+          capabilities.revoke();
+        },
+      });
     },
   });
 }
@@ -578,25 +647,23 @@ function normalizedCeiling(
   return requests.map((request) => normalizeFetchRequest({ ...request }, input.fetchTimeout));
 }
 
-function* captureEntries(
+function* prepareEntries(
   entries: readonly FragmentEntry[],
   fetchTimeout: number | undefined,
   built: Map<string, FunctionComponentDefinition>,
-  answers: ResolvedAnswers,
-): Operation<readonly CapturedEntry[]> {
-  const captured: CapturedEntry[] = [];
+): Operation<readonly PreparedEntry[]> {
+  const prepared: PreparedEntry[] = [];
   for (const entry of entries) {
-    captured.push(yield* captureEntry(entry, fetchTimeout, built, answers));
+    prepared.push(yield* prepareEntry(entry, fetchTimeout, built));
   }
-  return Object.freeze(captured);
+  return Object.freeze(prepared);
 }
 
-function* captureEntry(
+function* prepareEntry(
   entry: FragmentEntry,
   fetchTimeout: number | undefined,
   built: Map<string, FunctionComponentDefinition>,
-  answers: ResolvedAnswers,
-): Operation<CapturedEntry> {
+): Operation<PreparedEntry> {
   const forms = canonicalForms(entry.forms);
   if (forms.length === 0) {
     throw new EvaluationProfileError(
@@ -610,25 +677,16 @@ function* captureEntry(
       : {};
 
   if (entry.kind === "component-answer") {
-    // Resolved once, before any document code, through the complete ordinary
-    // import chain — and already reconciled against what this entry expects.
-    // Props and the callable definition come from that answer rather than from
+    // Nothing about the implementation is settled here. What this entry states
+    // is which name, and which identity a provider must have claimed for it;
+    // the chain answers later, and props come from that answer rather than from
     // the host, so a host cannot describe a contract the implementation lacks.
-    const resolved = answers.get(entry.name);
-    if (resolved === undefined) {
-      throw new EvaluationProfileError(
-        `an evaluation profile admitted "${entry.name}" as a component answer, and this ` +
-          "execution resolved none for it.",
-      );
-    }
     return Object.freeze({
       name: entry.name,
       identity,
       forms,
-      props: detach(resolved.definition.props),
       kind: "component-answer" as const,
       ...described,
-      definition: resolved.definition,
     });
   }
 
@@ -640,7 +698,7 @@ function* captureEntry(
   // fragment's props are validated against.
   const props = detach(entry.props);
   // The definition every entry under this name shares, built before any entry
-  // was captured.
+  // was prepared.
   const definition = built.get(entry.name);
   if (definition === undefined) {
     throw new EvaluationProfileError(
@@ -658,6 +716,197 @@ function* captureEntry(
     definition,
     ...(requests === undefined ? {} : { requests }),
   });
+}
+
+/**
+ * The provider-backed names this profile admits, with the one identity each of
+ * them states.
+ *
+ * A name is one component, so it has one implementation and one identity. Two
+ * entries under one name are the two spellings of that component — the
+ * self-closing one admitted to observe and the paired one to mutate — and
+ * stating a second identity for the second spelling would be stating that the
+ * name means two things, with which of them a fragment reached decided by which
+ * table admitted it. That is not a narrower grant than the host wrote down; it
+ * is an ambiguous one, so it refuses at capture rather than resolving by
+ * position.
+ *
+ * A name a host holds as both a capability and a component answer is the same
+ * ambiguity with the sharper edge: canonical core would supply one body and the
+ * import chain the other, which are different grants under one spelling.
+ */
+function answeredNames(prepared: readonly PreparedEntry[]): ReadonlyMap<string, FragmentIdentity> {
+  const answered = new Map<string, FragmentIdentity>();
+  const kinds = new Map<string, PreparedEntry["kind"]>();
+  for (const entry of prepared) {
+    const held = kinds.get(entry.name);
+    if (held !== undefined && held !== entry.kind) {
+      throw new EvaluationProfileError(
+        `an evaluation profile admitted "${entry.name}" both as an operation core supplies the ` +
+          "body for and as an implementation the import chain answers for. One name is one " +
+          "component, and those are different grants.",
+      );
+    }
+    kinds.set(entry.name, entry.kind);
+    if (entry.kind !== "component-answer") {
+      continue;
+    }
+    const stated = answered.get(entry.name);
+    if (stated === undefined) {
+      answered.set(entry.name, entry.identity);
+      continue;
+    }
+    if (
+      stated.origin !== entry.identity.origin ||
+      stated.key !== entry.identity.key ||
+      stated.revision !== entry.identity.revision
+    ) {
+      throw new EvaluationProfileError(
+        `an evaluation profile admitted "${entry.name}" as ${spelling(stated)} and as ` +
+          `${spelling(entry.identity)}. One name states one identity, however many forms and ` +
+          "tables hold it.",
+      );
+    }
+  }
+  return answered;
+}
+
+/** One identity as a reader sees it in a refusal. */
+function spelling(identity: FragmentIdentity): string {
+  return `${identity.origin}#${identity.key}@${identity.revision}`;
+}
+
+/** One provider-backed name's sealed implementation, shared by every entry. */
+interface SealedAnswer {
+  readonly props: PropsSchema;
+  readonly definition: FunctionComponentDefinition;
+  readonly dispatch?: unknown;
+}
+
+/**
+ * One sealed implementation per provider-backed name, built once per capture.
+ *
+ * Built here rather than per entry because a name has one implementation: the
+ * lifetime guard, the detached schema and the form authority are properties of
+ * that implementation, and building them twice would give one component two
+ * bodies whose only difference was which table asked for it.
+ */
+function sealAnswers(
+  answered: ReadonlyMap<string, FragmentIdentity>,
+  answers: ResolvedAnswers,
+  capabilities: CapturedCapabilities,
+): ReadonlyMap<string, SealedAnswer> {
+  const sealed = new Map<string, SealedAnswer>();
+  for (const name of answered.keys()) {
+    // Resolved once, before any document code, through the complete ordinary
+    // import chain — and already reconciled against what this entry expects.
+    const resolved = answers.get(name);
+    if (resolved === undefined) {
+      throw new EvaluationProfileError(
+        `an evaluation profile admitted "${name}" as a component answer, and this execution ` +
+          "resolved none for it.",
+      );
+    }
+    const answer = resolved.definition;
+    const inner = answer.fn;
+    sealed.set(
+      name,
+      Object.freeze({
+        props: detach(answer.props),
+        definition: Object.freeze({ ...answer, fn: bounded(inner, capabilities) }),
+        // The provider's own dispatcher, when its answer has one. The
+        // definition above runs behind core's lifetime guard, so what a
+        // selection would read off it is core's function rather than the
+        // provider's — and a form authority read off the wrong function selects
+        // no body at all.
+        ...(isFormDispatcher(inner) ? { dispatch: inner } : {}),
+      }),
+    );
+  }
+  return sealed;
+}
+
+function sealEntries(
+  prepared: readonly PreparedEntry[],
+  sealed: ReadonlyMap<string, SealedAnswer>,
+): readonly CapturedEntry[] {
+  return Object.freeze(prepared.map((entry) => sealEntry(entry, sealed)));
+}
+
+function sealEntry(entry: PreparedEntry, sealed: ReadonlyMap<string, SealedAnswer>): CapturedEntry {
+  const described = entry.description === undefined ? {} : { description: entry.description };
+  if (entry.kind === "component-answer") {
+    const answer = sealed.get(entry.name);
+    if (answer === undefined) {
+      throw new EvaluationProfileError(
+        `an evaluation profile admitted "${entry.name}" as a component answer, and this ` +
+          "execution resolved none for it.",
+      );
+    }
+    return Object.freeze({
+      name: entry.name,
+      identity: entry.identity,
+      forms: entry.forms,
+      props: answer.props,
+      kind: "component-answer" as const,
+      ...described,
+      definition: answer.definition,
+      ...(answer.dispatch === undefined ? {} : { dispatch: answer.dispatch }),
+    });
+  }
+  const definition = entry.definition;
+  const props = entry.props;
+  if (definition === undefined || props === undefined) {
+    throw new EvaluationProfileError(
+      "an evaluation profile admitted a name with no operation behind it.",
+    );
+  }
+  return Object.freeze({
+    name: entry.name,
+    identity: entry.identity,
+    forms: entry.forms,
+    props,
+    kind: "capability" as const,
+    ...(entry.capability === undefined ? {} : { capability: entry.capability }),
+    ...described,
+    definition,
+    ...(entry.requests === undefined ? {} : { requests: entry.requests }),
+  });
+}
+
+/**
+ * One provider's implementation, held to this execution's lifetime.
+ *
+ * A capability reaches the host's operations through bindings this capture
+ * already revokes, so a capability body retained past teardown refuses on its
+ * own. A provider's answer reaches whatever the provider closed over, which this
+ * execution never saw and cannot revoke — so the *entry* carries the lifetime
+ * instead, and a definition somebody kept refuses rather than running against a
+ * run that is over.
+ *
+ * The guard is what canonical capture builds the entry's definition around, not
+ * a wrapper placed over one afterwards: this function is the implementation the
+ * entry has ever had, so nothing about which body a form selects moves.
+ */
+function bounded(
+  inner: FunctionComponentDefinition["fn"],
+  capabilities: CapturedCapabilities,
+): FunctionComponent {
+  if (typeof inner !== "function") {
+    throw new EvaluationProfileError(
+      "an evaluation profile admitted a component answer with no invocable implementation.",
+    );
+  }
+  const implementation = inner;
+  return function* held(
+    props: Record<string, Json>,
+    invocation: ComponentInvocation,
+  ): Operation<unknown> {
+    if (!capabilities.live()) {
+      throw new FragmentCapabilityError(REVOKED_CAPABILITY);
+    }
+    return yield* implementation(props, invocation);
+  };
 }
 
 function captureIdentity(identity: FragmentIdentity, name: string): FragmentIdentity {

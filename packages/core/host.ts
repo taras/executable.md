@@ -215,6 +215,7 @@ export type {
   GeneratedObservationValue,
   GeneratedRequest,
   GeneratedXmdRequest,
+  RetainedFragmentIdentity,
 } from "./src/generated-xmd.ts";
 
 /**

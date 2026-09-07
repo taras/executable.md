@@ -78,6 +78,7 @@ import type {
   GeneratedObservation,
   GeneratedObservationResult,
   GeneratedXmdRequest,
+  RetainedFragmentIdentity,
 } from "../generated-xmd.ts";
 import { ComponentInvocationError, invocationForm } from "../invocation-identity.ts";
 import type {
@@ -364,6 +365,7 @@ function selectedTables(
         name: entry.name,
         identity: pinned(entry),
         definition: entry.definition,
+        ...(entry.dispatch === undefined ? {} : { dispatch: entry.dispatch }),
         // An entry admitted for one spelling admits that one; an entry admitted
         // for both is the form-insensitive component it has always been.
         ...(entry.forms.length === 1 && entry.forms[0] === "self-closing"
@@ -383,6 +385,7 @@ function selectedTables(
         name: entry.name,
         identity: pinned(entry),
         definition: entry.definition,
+        ...(entry.dispatch === undefined ? {} : { dispatch: entry.dispatch }),
         form: entry.forms.length === 2 ? "either" : (entry.forms[0] ?? "self-closing"),
       });
       admitted.push(entry);
@@ -392,14 +395,20 @@ function selectedTables(
 }
 
 /**
- * The retained identity string, assembled from the parts the host stated.
+ * The identity a run retains for one captured entry.
  *
- * One spelling, built here rather than by each host, so two hosts stating the
- * same three parts state the same identity and a continuation comparing them
- * is comparing what the host said rather than how it wrote it down.
+ * Structural rather than assembled: the four terms travel as themselves, so a
+ * continuation compares them one at a time and a reader looking at two
+ * admissions can say which of them moved. Nothing here is derived from the
+ * implementation — an implementation is not an identity — and the kind travels
+ * with the rest because an operation core supplies the body for and an answer
+ * the import chain resolved are different grants under the same three names.
  */
-function pinned(entry: CapturedEntry): string {
-  return `${entry.identity.origin}#${entry.identity.key}@${entry.identity.revision}`;
+function pinned(entry: CapturedEntry): RetainedFragmentIdentity {
+  const { origin, key, revision } = entry.identity;
+  return entry.kind === "component-answer"
+    ? { kind: "component-answer", origin, key, revision }
+    : { kind: "capability", origin, key, revision };
 }
 
 /** One captured ceiling, as the request record the evaluator compares against. */

@@ -53,6 +53,11 @@ function answer(name = "Open"): ImportedDefinition {
   };
 }
 
+/** The implementation on a definition, whichever arm of the union it is. */
+function implementationOf(definition: ImportedDefinition | undefined): unknown {
+  return definition === undefined ? undefined : (definition as { fn?: unknown }).fn;
+}
+
 /** What a call refused with, or `undefined` when it did not refuse. */
 function refusalOf(attempt: () => unknown): unknown {
   try {
@@ -71,8 +76,59 @@ describe("Tier FE15 — an identity belongs to one object in one execution", () 
       revision: "1",
     });
 
-    expect(imports.identify("Open", supplied)).toEqual(IDENTITY);
+    expect(imports.identify("Open", supplied)?.identity).toEqual(IDENTITY);
     expect(identityRecord(IDENTITY)).toBe("test://provider#Open@1");
+  });
+
+  it("FE15: identification answers with the claim-time copy, not the answer", function* () {
+    const imports = owner();
+    const supplied = answer();
+    imports.claimant(ORIGIN).claim("Open", supplied, { key: "Open", revision: "1" });
+
+    // One call answers both halves. The definition is core's own copy, taken
+    // when the claim was recorded — so a caller that keeps what identification
+    // gave it has kept the object the check was made about, and never has to
+    // read the chain's object a second time to obtain one.
+    const identified = imports.identify("Open", supplied);
+    expect(identified?.identity).toEqual(IDENTITY);
+    expect(identified?.definition).not.toBe(supplied);
+    expect(identified?.definition.name).toBe("Open");
+    // The implementation crosses by reference, because a function is not
+    // copyable and is the one thing a fragment must invoke as itself.
+    expect(implementationOf(identified?.definition)).toBe(implementationOf(supplied));
+  });
+
+  it("FE15: an alternating answer cannot launder a copy through a second read", function* () {
+    const imports = owner();
+    const honest = answer();
+    const reads: string[] = [];
+    // The check/use gap, planted. Reading a member through `[[Get]]` alternates
+    // between what was claimed and a substitution; comparing descriptors, which
+    // is how the claim is checked, does not run this at all. So a caller that
+    // checked the descriptors and then *read* the object again to keep a copy
+    // would keep the substitution, and this row is what says nothing does.
+    const alternating = new Proxy(honest, {
+      get(target, key, receiver) {
+        if (key !== "name") {
+          return Reflect.get(target, key, receiver);
+        }
+        reads.push(key);
+        return reads.length % 2 === 1 ? "Open" : "Substituted";
+      },
+    }) as ImportedDefinition;
+
+    imports.claimant(ORIGIN).claim("Open", alternating, { key: "Open", revision: "1" });
+    const identified = imports.identify("Open", alternating);
+
+    // The claim itself was recorded from the first reading, and identification
+    // answers with that recording.
+    expect(identified?.identity).toEqual(IDENTITY);
+    expect(identified?.definition.name).toBe("Open");
+    // The plant is live rather than inert: the very next read of the object the
+    // chain returned says something else, which is what a second read would
+    // have kept.
+    expect((alternating as { name: string }).name).toBe("Substituted");
+    expect(identified?.definition.name).toBe("Open");
   });
 
   it("FE15: restating exactly the same claim is idempotent", function* () {
@@ -86,7 +142,7 @@ describe("Tier FE15 — an identity belongs to one object in one execution", () 
     expect(refusalOf(() => claimant.claim("Open", supplied, { key: "Open", revision: "1" }))).toBe(
       undefined,
     );
-    expect(imports.identify("Open", supplied)).toEqual(IDENTITY);
+    expect(imports.identify("Open", supplied)?.identity).toEqual(IDENTITY);
   });
 
   it("FE15: a competing claim refuses and never overwrites the first", function* () {
@@ -108,7 +164,7 @@ describe("Tier FE15 — an identity belongs to one object in one execution", () 
       expect(refusalOf(attempt)).toBeInstanceOf(AnswerIdentityError);
       // The first statement stands after every one of them. An overwrite would
       // let a second provider rename the first's implementation.
-      expect(imports.identify("Open", held)).toEqual(IDENTITY);
+      expect(imports.identify("Open", held)?.identity).toEqual(IDENTITY);
     }
   });
 
@@ -119,7 +175,7 @@ describe("Tier FE15 — an identity belongs to one object in one execution", () 
       revision: "1",
     });
 
-    expect(imports.identify("Open", claimed)).toEqual(IDENTITY);
+    expect(imports.identify("Open", claimed)?.identity).toEqual(IDENTITY);
     // The outer-replacement case: a handler further out returns its own object,
     // so an intermediate claim does not travel with the name.
     expect(imports.identify("Open", answer())).toBe(undefined);
@@ -145,7 +201,7 @@ describe("Tier FE15 — an identity belongs to one object in one execution", () 
       key: "Open",
       revision: "1",
     });
-    expect(imports.identify("Open", claimed)).toEqual(IDENTITY);
+    expect(imports.identify("Open", claimed)?.identity).toEqual(IDENTITY);
 
     // The same object, edited after the claim by a handler further out. What
     // was claimed is no longer what is there.
@@ -158,7 +214,7 @@ describe("Tier FE15 — an identity belongs to one object in one execution", () 
     const imports = owner();
     const claimant = imports.claimant(ORIGIN);
     const before = claimant.claim("Open", answer(), { key: "Open", revision: "1" });
-    expect(imports.identify("Open", before)).toEqual(IDENTITY);
+    expect(imports.identify("Open", before)?.identity).toEqual(IDENTITY);
 
     imports.revoke();
 
@@ -199,8 +255,8 @@ describe("Tier FE15 — an identity belongs to one object in one execution", () 
     expect(second.identify("Open", shared)).toBe(undefined);
     second.claimant(ORIGIN).claim("Open", shared, { key: "Open", revision: "2" });
 
-    expect(first.identify("Open", shared)).toEqual(IDENTITY);
-    expect(second.identify("Open", shared)).toEqual({
+    expect(first.identify("Open", shared)?.identity).toEqual(IDENTITY);
+    expect(second.identify("Open", shared)?.identity).toEqual({
       origin: ORIGIN,
       key: "Open",
       revision: "2",
@@ -209,7 +265,7 @@ describe("Tier FE15 — an identity belongs to one object in one execution", () 
     // The positive control: tearing one down leaves the other working.
     first.revoke();
     expect(first.identify("Open", shared)).toBe(undefined);
-    expect(second.identify("Open", shared)?.revision).toBe("2");
+    expect(second.identify("Open", shared)?.identity.revision).toBe("2");
   });
 
   it("FE15: a provider cannot state an origin canonical execution did not give it", function* () {
@@ -221,7 +277,7 @@ describe("Tier FE15 — an identity belongs to one object in one execution", () 
       revision: "1",
     });
 
-    expect(imports.identify("Open", claimed)?.origin).toBe("test://assigned");
+    expect(imports.identify("Open", claimed)?.identity.origin).toBe("test://assigned");
   });
 
   it("FE15: a partial identity is refused rather than recorded", function* () {

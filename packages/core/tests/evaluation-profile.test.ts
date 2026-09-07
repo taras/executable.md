@@ -16,8 +16,15 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
 
-import { captureEvaluationProfile } from "../src/evaluation-profile.ts";
-import type { CapabilityEntry, FragmentEvaluationInput } from "../src/evaluation-profile.ts";
+import { prepareEvaluationProfile } from "../src/evaluation-profile.ts";
+import type {
+  CapabilityEntry,
+  CapturedProfile,
+  ComponentAnswerEntry,
+  FragmentEvaluationInput,
+  ResolvedAnswer,
+  ResolvedAnswers,
+} from "../src/evaluation-profile.ts";
 import type { Json } from "../src/types.ts";
 import { recordedFiles } from "./support/fragment-files.ts";
 
@@ -44,8 +51,16 @@ function entry(overrides: Partial<CapabilityEntry> = {}): CapabilityEntry {
  * about what capture does with a profile a host *can* state, so they all supply
  * them and none of them restates the fact.
  */
-function capture(overrides: Partial<FragmentEvaluationInput> = {}) {
-  return captureEvaluationProfile({ read: [entry()], files: recordedFiles(), ...overrides });
+function* capture(overrides: Partial<FragmentEvaluationInput> = {}): Operation<CapturedProfile> {
+  // Preparation copies and binds; sealing settles the provider-backed names.
+  // A capability-only profile resolves none, which is why every row here seals
+  // against no answers at all.
+  const prepared = yield* prepareEvaluationProfile({
+    read: [entry()],
+    files: recordedFiles(),
+    ...overrides,
+  });
+  return yield* prepared.seal(new Map());
 }
 
 /** What capturing this profile refused with, as a string. */
@@ -299,5 +314,126 @@ describe("Tier EP — a profile a host cannot state", () => {
 
     expect(one.read[0]?.forms).toEqual(other.read[0]?.forms);
     expect(one.read[0]?.forms).toEqual(["self-closing", "paired"]);
+  });
+});
+
+/**
+ * Tier EP — one name, one implementation.
+ *
+ * A provider-backed name is resolved once through the ordinary import chain and
+ * sealed. So what a profile may say about a name is settled here rather than at
+ * the lookup: two entries under one name are the two spellings of one
+ * component, and a second identity for the second spelling would make which
+ * implementation a fragment reached depend on which table admitted it.
+ */
+describe("Tier EP — a provider-backed name states one identity", () => {
+  const OPEN: ComponentAnswerEntry = {
+    kind: "component-answer",
+    name: "Open",
+    identity: { origin: "test://provider", key: "Open", revision: "1" },
+    forms: ["self-closing"],
+  };
+
+  /** One implementation, as canonical execution hands sealing its answer. */
+  function answered(): ResolvedAnswers {
+    return new Map<string, ResolvedAnswer>([
+      [
+        "Open",
+        {
+          definition: {
+            kind: "function",
+            name: "Open",
+            props: { type: "object", properties: {}, additionalProperties: false },
+            // deno-lint-ignore require-yield
+            *fn(): Operation<Json> {
+              return "opened";
+            },
+          },
+        },
+      ],
+    ]);
+  }
+
+  /** Prepare a profile holding these entries, without sealing it. */
+  function prepare(input: Partial<FragmentEvaluationInput>) {
+    return prepareEvaluationProfile({ read: [entry()], files: recordedFiles(), ...input });
+  }
+
+  /** What preparing this profile refused with. */
+  function* refused(input: Partial<FragmentEvaluationInput>): Operation<string> {
+    try {
+      yield* prepare(input);
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+    throw new Error("expected the profile to be refused");
+  }
+
+  it("EP18: one name across disjoint forms and tables is one lookup and one implementation", function* () {
+    // The self-closing spelling admitted to observe and the paired one to
+    // mutate: two entries, two forms, two tables, one component. The host says
+    // the same identity for both, because there is only one thing behind the
+    // name.
+    const prepared = yield* prepare({
+      read: [OPEN],
+      write: [{ ...OPEN, forms: ["paired"] }],
+    });
+
+    // Asked for once, however many entries hold it: a second lookup would be a
+    // second chance for the chain to answer differently.
+    expect(prepared.answered).toEqual([
+      { name: "Open", identity: { origin: "test://provider", key: "Open", revision: "1" } },
+    ]);
+
+    const profile = yield* prepared.seal(answered());
+    const observing = profile.read[0];
+    const mutating = profile.write[0];
+    expect(observing?.forms).toEqual(["self-closing"]);
+    expect(mutating?.forms).toEqual(["paired"]);
+    // One sealed implementation, shared. Two guards over one answer would be
+    // two lifetimes for one implementation, and which of them a fragment
+    // reached would depend on which table admitted it.
+    expect(observing?.definition).toBe(mutating?.definition);
+    expect(observing?.props).toBe(mutating?.props);
+  });
+
+  it("EP19: a second identity for one name refuses, naming both", function* () {
+    const cases: readonly (readonly [string, Partial<FragmentEvaluationInput>])[] = [
+      [
+        "within one table",
+        { read: [OPEN, { ...OPEN, identity: { ...OPEN.identity, revision: "2" } }] },
+      ],
+      [
+        "across the two tables",
+        {
+          read: [OPEN],
+          write: [{ ...OPEN, forms: ["paired"], identity: { ...OPEN.identity, key: "Other" } }],
+        },
+      ],
+      [
+        "under another origin",
+        { read: [OPEN, { ...OPEN, identity: { ...OPEN.identity, origin: "test://other" } }] },
+      ],
+    ];
+
+    for (const [where, input] of cases) {
+      const failed = yield* refused(input);
+      // Refused rather than resolved by position: a last-stated identity
+      // winning would be a ceiling decided by the order a host assembled its
+      // tables in.
+      expect([where, failed.includes("One name states one identity")]).toEqual([where, true]);
+      expect([where, failed.includes("test://provider#Open@1")]).toEqual([where, true]);
+    }
+  });
+
+  it("EP20: one name held as both a capability and an answer refuses", function* () {
+    // The same ambiguity with the sharper edge: canonical core would supply one
+    // body and the import chain the other, which are different grants under one
+    // spelling.
+    const failed = yield* refused({
+      read: [entry({ name: "Open", forms: ["self-closing"] }), { ...OPEN, forms: ["paired"] }],
+    });
+
+    expect(failed).toContain("different grants");
   });
 });

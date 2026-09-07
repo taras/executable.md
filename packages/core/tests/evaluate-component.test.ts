@@ -24,11 +24,13 @@ import { collect } from "../src/collect.ts";
 import { Component, content } from "../src/component-api.ts";
 import { executeInstalled } from "../host.ts";
 import { directoryEntry, fileDeleteEntry, fileReadEntry, fileWriteEntry } from "../host.ts";
-import type { ExecutionInstallation } from "../host.ts";
+import type { ExecutionInstallation, FragmentEvaluationInput } from "../host.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { recordedFiles } from "./support/fragment-files.ts";
 import type { RecordedFiles } from "./support/fragment-files.ts";
+import { answerProvider, implementation } from "./support/answer-provider.ts";
+import type { Implementation, ProviderOptions } from "./support/answer-provider.ts";
 
 const ROOT_PATH = "evaluate.md";
 
@@ -933,5 +935,425 @@ describe("Tier FE — protection settles which implementation runs, and grants n
     expect(String(output)).toContain("the retained note");
     expect(String(output)).not.toContain("forged");
     expect(files.performed).toEqual(["read notes.md"]);
+  });
+});
+
+/**
+ * Tier FE14 — an implementation the ordinary import chain answered for.
+ *
+ * A `component-answer` entry is the one arm of a profile where the host does
+ * not supply the body. It states a name and the exact structural identity a
+ * provider must have claimed, and canonical execution resolves that name once —
+ * before the root import, through the complete ordinary chain — reads the claim
+ * off the exact final answer, compares it whole, and seals what it retained.
+ *
+ * So the rows here are about the two ways that could be weaker than it looks:
+ * an answer nothing identified, and an answer that stopped being the thing that
+ * was identified. Each refusal names what did *not* happen — no admission, no
+ * body, no fragment effect — because a refusal that arrived after A ran would
+ * satisfy an error-shape assertion and none of these.
+ */
+describe("Tier FE14 — the chain answers, and the answer is held to its identity", () => {
+  const OPEN = `<Evaluate text={'<Open />\\n'} as="answer" />\n\n<Json value={answer} />\n`;
+
+  /** The entry a host states for a provider-backed name. */
+  function admits(
+    identity: { origin?: string; key?: string; revision?: string } = {},
+    files: RecordedFiles = recordedFiles(),
+  ): FragmentEvaluationInput {
+    return {
+      read: [
+        {
+          kind: "component-answer",
+          name: "Open",
+          identity: {
+            origin: identity.origin ?? "test://provider",
+            key: identity.key ?? "Open",
+            revision: identity.revision ?? "1",
+          },
+          forms: ["self-closing"],
+        },
+      ],
+      files,
+    };
+  }
+
+  /** One installation admitting `<Open />` and backing it with one provider. */
+  function backed(
+    answer: Implementation,
+    options: ProviderOptions = {},
+    identity: { origin?: string; key?: string; revision?: string } = {},
+  ): ExecutionInstallation {
+    return {
+      evaluation: admits(identity),
+      componentAnswers: [answerProvider("Open", answer.definition, options)],
+    };
+  }
+
+  /** The index of the admission record, or -1 when the run made none. */
+  function admittedAt(events: readonly DurableEvent[]): number {
+    return events.findIndex(
+      (event) => event.type === "yield" && event.description.type === "generated_xmd",
+    );
+  }
+
+  /** The identity one admission retained for the name it admitted. */
+  function retainedIdentity(event: DurableEvent): Json {
+    const result = event.type === "yield" ? event.result : undefined;
+    if (result === undefined || result.status !== "ok" || !isRecord(result.value)) {
+      throw new Error("the admission recorded no result");
+    }
+    const policy = result.value.policy;
+    if (!isRecord(policy) || !Array.isArray(policy.allowed)) {
+      throw new Error("the admission recorded no policy");
+    }
+    const entry = policy.allowed[0];
+    if (!isRecord(entry)) {
+      throw new Error("the admission admitted nothing");
+    }
+    return entry.identity ?? null;
+  }
+
+  function isRecord(value: Json | undefined): value is Record<string, Json> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+
+  it("FE14: the final chain answer is the implementation a fragment runs", function* () {
+    const A = implementation("Open", "A ran");
+    // Nothing registers `Open`, no file supplies it, and the provider answers
+    // without delegating — so the chain's final answer is this implementation
+    // or the import fails. There is no second place it could have come from.
+    const output = yield* run(OPEN, [backed(A)]);
+
+    expect(String(output)).toContain("A ran");
+    expect(A.invoked).toEqual(["A ran"]);
+  });
+
+  it("FE14: a fresh admission records the exact structural identity", function* () {
+    const A = implementation("Open", "A ran");
+    const stream = new InMemoryStream();
+    yield* run(OPEN, [backed(A)], stream);
+
+    const events = yield* stream.readAll();
+    const admission = events[admittedAt(events)];
+    if (admission === undefined) {
+      throw new Error("the run recorded no admission");
+    }
+    // The four members as themselves, and the kind among them: an answer the
+    // chain resolved is a different grant from an operation core supplies the
+    // body for, even under the same origin, key and revision.
+    expect(retainedIdentity(admission)).toEqual({
+      kind: "component-answer",
+      origin: "test://provider",
+      key: "Open",
+      revision: "1",
+    });
+    expect(A.invoked).toEqual(["A ran"]);
+  });
+
+  it("FE14: an inner claim and an outer unclaimed answer refuse before any body", function* () {
+    const A = implementation("Open", "A ran");
+    const B = implementation("Open", "B ran");
+    const files = recordedFiles({ "notes.md": NOTE });
+    const stream = new InMemoryStream();
+
+    const failed = yield* refusal(
+      scoped(function* () {
+        // A handler further out returns its own object. The inner provider's
+        // claim was about the object it returned, and this is not that object —
+        // so nothing identifies the answer the chain finally gave.
+        yield* Component.around({
+          *importComponent([name], next) {
+            const definition = yield* next(name);
+            return name === "Open" ? B.definition : definition;
+          },
+        });
+        return yield* run(OPEN, [{ ...backed(A), evaluation: admits({}, files) }], stream);
+      }),
+    );
+
+    expect(failed).toContain("carries no identity");
+    // Ahead of everything: no admission, neither body, no fragment effect.
+    expect(admissions(yield* stream.readAll())).toHaveLength(0);
+    expect(A.invoked).toEqual([]);
+    expect(B.invoked).toEqual([]);
+    expect(files.performed).toEqual([]);
+  });
+
+  it("FE14: an inner claimed A and an outer claimed B compose, and only B runs", function* () {
+    const A = implementation("Open", "A ran");
+    const B = implementation("Open", "B ran");
+    const delegated: unknown[] = [];
+
+    // The positive control for the row above, and a real chain rather than one
+    // provider. Two providers answer for one name: the one installed first
+    // composes outermost, delegates — so the inner one genuinely answers and
+    // claims A — and then returns its own claimed B. The difference from the
+    // refusal above is only that the identity travels with the object the chain
+    // finally gives back, which is what makes the substitution honest.
+    const output = yield* run(OPEN, [
+      {
+        evaluation: admits({ key: "Outer" }),
+        componentAnswers: [
+          answerProvider("Open", B.definition, {
+            key: "Outer",
+            delegatesFirst: true,
+            delegated,
+          }),
+          answerProvider("Open", A.definition, { key: "Inner" }),
+        ],
+      },
+    ]);
+
+    // The inner half really answered: what delegation returned is the exact
+    // object the inner provider claimed. So A was resolvable, and the row below
+    // it is about which of two live answers runs rather than about one.
+    expect(delegated[0]).toBe(A.definition);
+    expect(String(output)).toContain("B ran");
+    expect(B.invoked).toEqual(["B ran"]);
+    expect(A.invoked).toEqual([]);
+  });
+
+  it("FE14: an answer whose contract reads differently each time cannot substitute", function* () {
+    const reads: string[] = [];
+    // The claimed contract accepts one prop; the substitution accepts none.
+    const A = implementation("Open", "A ran", {
+      type: "object",
+      properties: { flag: { type: "string" } },
+      additionalProperties: false,
+    });
+
+    // The check/use gap, planted. Reading the answer's schema alternates, and
+    // comparing own descriptors — which is how the claim is checked — does not
+    // run the trap. So the reading the capture *keeps* decides what a fragment
+    // is validated against: the claim-time schema admits `flag`, and the
+    // substitution refuses it.
+    const output = yield* run(`<Evaluate text={'<Open flag="one" />\\n'} as="answer" />\n`, [
+      {
+        evaluation: admits(),
+        componentAnswers: [
+          answerProvider("Open", A.definition, {
+            alternating: {
+              substitute: { type: "object", properties: {}, additionalProperties: false },
+              reads,
+            },
+          }),
+        ],
+      },
+    ]);
+
+    expect(String(output)).not.toContain("Error");
+    expect(A.invoked).toEqual(["A ran"]);
+    // The plant is live rather than inert: the object the chain returned was
+    // read, and it does answer differently on the next read.
+    expect(reads.length).toBeGreaterThan(0);
+  });
+
+  it("FE14: a provider still answering when a fragment resolves is refused there", function* () {
+    const A = implementation("Open", "A ran");
+    const B = implementation("Open", "B ran");
+    const stream = new InMemoryStream();
+
+    // A provider settles at the capture: the profile sealed what it retained,
+    // and a fragment runs that snapshot. One that keeps answering is answering
+    // a *generated* import, which only canonical execution answers — so the
+    // witness refuses it rather than letting a live provider substitute into an
+    // admitted fragment.
+    const failed = yield* refusal(
+      run(
+        OPEN,
+        [
+          {
+            evaluation: admits(),
+            componentAnswers: [answerProvider("Open", A.definition, { keepsAnswering: true })],
+          },
+        ],
+        stream,
+      ),
+    );
+
+    expect(failed).toContain("canonical execution did not produce");
+    expect(B.invoked).toEqual([]);
+    // The admission committed — the refusal is at the import, not the ceiling —
+    // and no body ran.
+    expect(A.invoked).toEqual([]);
+  });
+
+  it("FE14: an unidentified, a copied and a mutated answer each refuse", function* () {
+    const cases: readonly (readonly [string, ProviderOptions])[] = [
+      ["nothing identified it", { unclaimed: true }],
+      ["the chain returned a copy of what was claimed", { copied: true }],
+      ["the claimed object was edited afterwards", { mutated: true }],
+    ];
+
+    for (const [what, options] of cases) {
+      const A = implementation("Open", "A ran");
+      const files = recordedFiles({ "notes.md": NOTE });
+      const stream = new InMemoryStream();
+      const failed = yield* refusal(
+        run(
+          OPEN,
+          [
+            {
+              evaluation: admits({}, files),
+              componentAnswers: [answerProvider("Open", A.definition, options)],
+            },
+          ],
+          stream,
+        ),
+      );
+
+      expect([what, failed.includes("carries no identity")]).toEqual([what, true]);
+      // Before the root import, so there is no admission and no body — and the
+      // document's own effects never started either.
+      expect([what, admissions(yield* stream.readAll()).length]).toEqual([what, 0]);
+      expect([what, A.invoked]).toEqual([what, []]);
+      expect([what, files.performed]).toEqual([what, []]);
+    }
+  });
+
+  it("FE14: an answer under another identity refuses before any body", function* () {
+    const A = implementation("Open", "A ran");
+    const files = recordedFiles();
+    const stream = new InMemoryStream();
+
+    const failed = yield* refusal(
+      run(
+        OPEN,
+        [
+          {
+            evaluation: admits({ revision: "1" }, files),
+            // The provider claims honestly — for a revision this host did not
+            // admit. An admitted identity is the exact implementation, and a
+            // changed revision is a changed grant.
+            componentAnswers: [answerProvider("Open", A.definition, { revision: "2" })],
+          },
+        ],
+        stream,
+      ),
+    );
+
+    expect(failed).toContain("the exact implementation");
+    expect(admissions(yield* stream.readAll())).toHaveLength(0);
+    expect(A.invoked).toEqual([]);
+  });
+
+  it("FE14: a continuation whose outer provider now answers B runs neither", function* () {
+    const A = implementation("Open", "A ran");
+    const stream = new InMemoryStream();
+    yield* run(OPEN, [backed(A)], stream);
+    const complete = yield* stream.readAll();
+    const admitted = admittedAt(complete);
+    expect(admitted).toBeGreaterThanOrEqual(0);
+    // Truncated to the admission itself: the decision committed and the body it
+    // authorized had not, which is the only state with fragment work left.
+    const partial = complete.slice(0, admitted + 1);
+
+    // The resumed run supplies both implementations, live. The inner provider
+    // answers the unchanged A under the identity the admission was made over;
+    // the outer one delegates to it and then answers with its own claimed B,
+    // under the identity this host now admits. So capture reconciles and seals
+    // B — and then the *retained* policy refuses, because the admission was
+    // made over `Open@1` and this run states `Other@1` behind the same name.
+    const resumedA = implementation("Open", "A ran");
+    const B = implementation("Open", "B ran");
+    const delegated: unknown[] = [];
+    const failed = yield* refusal(
+      run(
+        OPEN,
+        [
+          {
+            evaluation: admits({ key: "Other" }),
+            componentAnswers: [
+              answerProvider("Open", B.definition, {
+                key: "Other",
+                delegatesFirst: true,
+                delegated,
+              }),
+              answerProvider("Open", resumedA.definition, { key: "Open" }),
+            ],
+          },
+        ],
+        new InMemoryStream(partial),
+      ),
+    );
+
+    expect(failed).toContain("admitted under");
+    // Both were genuinely reachable in this run — the unchanged A answered the
+    // chain, which is what makes its silence a fact rather than an absence —
+    // and neither body ran.
+    expect(delegated[0]).toBe(resumedA.definition);
+    expect(resumedA.invoked).toEqual([]);
+    expect(B.invoked).toEqual([]);
+  });
+
+  it("FE14: an unchanged continuation resumes and invokes A once", function* () {
+    const A = implementation("Open", "A ran");
+    const stream = new InMemoryStream();
+    yield* run(OPEN, [backed(A)], stream);
+    const complete = yield* stream.readAll();
+    const partial = complete.slice(0, admittedAt(complete) + 1);
+
+    const resumed = implementation("Open", "A ran");
+    const output = yield* run(OPEN, [backed(resumed)], new InMemoryStream(partial));
+
+    // The retained admission was restored rather than made again, and the body
+    // it authorized ran on this attempt — once.
+    expect(String(output)).toContain("A ran");
+    expect(resumed.invoked).toEqual(["A ran"]);
+  });
+
+  it("FE14: two occurrences share one capture lookup and reach no chain again", function* () {
+    const A = implementation("Open", "A ran");
+    const B = implementation("Open", "B ran");
+    const lookups: string[] = [];
+    const stream = new InMemoryStream();
+
+    const asked: string[] = [];
+    const output = yield* run(
+      `<Evaluate text={'<Open />\\n'} as="one" />\n\n<Json value={one} />\n\n` +
+        `<Evaluate text={'<Open />\\n'} as="two" />\n\n<Json value={two} />\n`,
+      [
+        {
+          evaluation: admits(),
+          componentAnswers: [answerProvider("Open", A.definition, { lookups, asked })],
+        },
+      ],
+      stream,
+    );
+
+    // Answered exactly once, eagerly, during capture — and the two fragments
+    // between them asked twice more, which the provider observed and delegated.
+    // So neither fragment resolved this name through the provider; both ran the
+    // snapshot the capture sealed.
+    expect(lookups).toEqual(["Open"]);
+    expect(asked).toEqual(["Open", "Open", "Open"]);
+    expect(admissions(yield* stream.readAll())).toHaveLength(2);
+    expect(A.invoked).toEqual(["A ran", "A ran"]);
+    expect(B.invoked).toEqual([]);
+    expect(String(output)).not.toContain("B ran");
+  });
+
+  it("FE14: a capability-only profile resolves no name at all", function* () {
+    const lookups: string[] = [];
+    const files = recordedFiles({ "notes.md": NOTE });
+
+    // The negative control for the eager lookup: a host that admits no
+    // component answer pays for no component-chain resolution, and a document
+    // that never writes `<Evaluate>` still installs the provider.
+    const output = yield* run(
+      `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
+      [
+        {
+          evaluation: { read: [fileReadEntry()], files },
+          componentAnswers: [
+            answerProvider("Open", implementation("Open", "A ran").definition, { lookups }),
+          ],
+        },
+      ],
+    );
+
+    expect(lookups).toEqual([]);
+    expect(String(output)).toContain("the retained note");
   });
 });

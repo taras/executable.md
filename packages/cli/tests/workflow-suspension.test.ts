@@ -1542,8 +1542,14 @@ the retained note
 
     const suspended = retained(path);
     expect(suspended.status).toBe("suspended");
-    // The admission carries the versioned identity.
-    expect(readRecords(path).some((record) => record.includes("dir-v2#Dir"))).toBe(true);
+    // The admission carries the versioned identity. It is a structural record
+    // rather than a spelling, and the version is the `revision` member — so
+    // that is what this reads, and what the refusal below moves.
+    expect(
+      readRecords(path).some(
+        (record) => record.includes(`"key":"Dir"`) && record.includes(`"revision":"3"`),
+      ),
+    ).toBe(true);
 
     // And the generated `<Dir>` really executed before the run suspended: the
     // retained file effects hold an ensure for `/generated` ahead of the nested
@@ -1618,12 +1624,12 @@ the retained note
     // The run becomes one admitted under the former identity. Nothing else
     // changes — same source, roots and selection — so the identity is the only
     // thing the resume can disagree about.
-    rewriteRecords(path, (record) =>
-      record.replaceAll(
-        "@executablemd/workflow/composition/dir-v2#Dir",
-        "@executablemd/workflow/composition#Dir",
-      ),
-    );
+    //
+    // The version is the `revision` member, and core's own entries state `2`,
+    // so `"revision":"3"` names the Dir entry and nothing else. Moving it back
+    // is exactly "admitted under the earlier revision", which is the grant the
+    // former placement-only Dir had.
+    rewriteRecords(path, (record) => record.replaceAll(`"revision":"3"`, `"revision":"2"`));
     const beforeResume = counts(path);
     const rootsBeforeResume = workspaceRootState(path);
 
@@ -1641,7 +1647,11 @@ the retained note
     expect(workspaceRootState(path)).toEqual(rootsBeforeResume);
     // Nothing after the wait reached the document either.
     expect(rendered).toEqual([]);
-    // And the refusal does not publish which identity moved.
-    expect(resumed.written.err.join("\n")).not.toContain("dir-v2");
+    // And the refusal does not publish which identity moved. The identity is
+    // four members now, so this reads the two a refusal could carry: the origin
+    // that owns the implementation, and the member the rewrite actually moved.
+    const reported = resumed.written.err.join("\n");
+    expect(reported).not.toContain("@executablemd/workflow/composition");
+    expect(reported).not.toContain("revision");
   });
 });

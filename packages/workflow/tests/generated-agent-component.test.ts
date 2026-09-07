@@ -349,6 +349,16 @@ function* plant(database: WorkflowRunDatabase, path: string, content: string): O
   }
 }
 
+/**
+ * One capability identity, in the closed structural shape a run retains.
+ *
+ * Written out here rather than imported from the profile, so a row states what
+ * the journal must hold rather than agreeing with whatever the profile computed.
+ */
+function capability(origin: string, key: string, revision: string): Record<string, string> {
+  return { kind: "capability", origin, key, revision };
+}
+
 describe("Tier WGAC — the registered Evaluate component", () => {
   it("WGAC3: the program is stated once, and the schema is closed", function* () {
     const root = yield* useStorageRoot();
@@ -1005,15 +1015,19 @@ describe("Tier WGAC — the standard write table", () => {
       // resumed run is held to.
       const policy = policyOf(admissions(attempt.events)[0]!);
       expect(policy?.allowed).toEqual([
-        { name: "File", identity: "@executablemd/core#File:write@2", forms: ["paired"] },
+        {
+          name: "File",
+          identity: capability("@executablemd/core", "File:write", "2"),
+          forms: ["paired"],
+        },
         {
           name: "Dir",
-          identity: "@executablemd/workflow/composition#Dir@3",
+          identity: capability("@executablemd/workflow/composition", "Dir", "3"),
           forms: ["paired"],
         },
         {
           name: "File.Delete",
-          identity: "@executablemd/core#File.Delete@2",
+          identity: capability("@executablemd/core", "File.Delete", "2"),
           forms: ["self-closing"],
         },
       ]);
@@ -1064,13 +1078,13 @@ describe("Tier WGAC — the standard write table", () => {
       const admission = admissions(attempt.events)[0]!;
       expect(policyOf(admission)?.allowed).toContainEqual({
         name: "File.Delete",
-        identity: "@executablemd/core#File.Delete@2",
+        identity: capability("@executablemd/core", "File.Delete", "2"),
         forms: ["self-closing"],
       });
       expect(recordedNames(admission)).toEqual([
         {
           name: "File.Delete",
-          identity: "@executablemd/core#File.Delete@2",
+          identity: capability("@executablemd/core", "File.Delete", "2"),
           form: "self-closing",
         },
       ]);
