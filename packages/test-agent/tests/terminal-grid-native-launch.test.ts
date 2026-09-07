@@ -777,7 +777,7 @@ describe("Tier TG22 — mixed native providers", () => {
     expect(result.ok).toBe(true);
     expect(following).toBe(true);
     expect(destroyed).toBe(1);
-    expect(childrenAtDestroy.toSorted()).toEqual([0, 1]);
+    expect([...childrenAtDestroy].sort()).toEqual([0, 1]);
     expect(ownersIdleAtDestroy).toBe(2);
     expect(liveChildren).toBe(0);
     expect(log.live).toEqual({ composites: 0, attached: 0, shells: 0, launches: 0 });
