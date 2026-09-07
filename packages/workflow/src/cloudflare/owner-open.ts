@@ -26,12 +26,7 @@ import { EMPTY_WORKSPACE_MANIFEST, WORKSPACE_ROOT_DOMAIN } from "../workspace/ro
 import { WORKSPACE_ROOT_FORMAT } from "../workspace/root-manifest.ts";
 import { sha256Hex } from "./encoding.ts";
 import { CommandError } from "./commands.ts";
-import {
-  declaredObjects,
-  initializeInside,
-  initializeObject,
-  recognizeObject,
-} from "./recognition.ts";
+import { holdsNoRun, initializeInside, initializeObject, recognizeObject } from "./recognition.ts";
 import type { OwnerStorage } from "./storage.ts";
 import type { OwnerTransaction, OwnerTransactions } from "./owner-transaction.ts";
 import { readFrontier, type FrontierValue } from "./owner-reads.ts";
@@ -135,7 +130,10 @@ function insertRun(storage: OwnerStorage, creation: CreateWorkflowRunRequest, st
 
 /** Whether this object holds nothing at all yet. */
 function pristine(storage: OwnerStorage): boolean {
-  return declaredObjects(storage).length === 0;
+  // Scratch this adapter wrote is not a run. A destination that was offered a
+  // fork's parts before the fork was committed holds exactly that and nothing
+  // else, and creating its run has to be able to proceed.
+  return holdsNoRun(storage);
 }
 
 /**

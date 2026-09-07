@@ -2,7 +2,11 @@ import {
   type DocumentExecutionCompletion,
   parseDocumentExecutionCompletion,
 } from "../storage/record.ts";
-import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
+import {
+  type DurableEvent,
+  parseDurableEvent,
+  serializeDurableEvent,
+} from "@executablemd/durable-streams";
 import { SHA256 } from "../workspace/root-manifest.ts";
 import { admitLocator, locatorFingerprintOf } from "../composition/locator.ts";
 import {
@@ -64,7 +68,9 @@ export type CommandName =
   | "open"
   | "begin"
   | "cancel"
-  | "settle";
+  | "settle"
+  | "fork-stage"
+  | "fork";
 
 export type CommandRefusal =
   | "not-an-object"
@@ -95,7 +101,15 @@ export type CommandRefusal =
   /** Retained journal history this owner cannot read. */
   | "corrupt-journal"
   /** The selected prefix is not one a fork could inherit. */
-  | "not-forkable";
+  | "not-forkable"
+  /**
+   * This acquisition did not begin the execution it is asking about.
+   *
+   * The run is intact and the execution may well exist; it belongs to a
+   * different acquisition, and a live executor does not get to finish an
+   * earlier executor's work by naming its id.
+   */
+  | "wrong-execution";
 
 export class CommandError extends Error {
   override name = "CommandError";
@@ -261,6 +275,59 @@ export interface CancelCommand extends CommandEnvelope {
   readonly runId: string;
 }
 
+/** The sections a fork's parts arrive in, each in its own order. */
+export type ForkSection = "inherited" | "roots" | "checkouts";
+
+/** One part of a fork, as the runner offers it. */
+export interface ForkPart {
+  readonly section: ForkSection;
+  readonly position: number;
+  readonly part: Record<string, unknown>;
+}
+
+/** What the final command says the staged selection should add up to. */
+export interface ForkCounts {
+  readonly inherited: number;
+  readonly roots: number;
+  readonly checkouts: number;
+}
+
+/** Which committed checkpoint of which run this fork continues. */
+export interface ForkOrigin {
+  readonly sourceRunId: string;
+  readonly checkpointEventId: string;
+  readonly checkpointWorkspaceRootId: string;
+  readonly runRecordWorkspaceRootId: string;
+  readonly rootImportWorkspaceRootId: string;
+  /** The source selection's own anchor, kept with the lineage's evidence. */
+  readonly anchor: string;
+}
+
+/**
+ * Offer one part of a fork's source, before any of it is a run.
+ *
+ * Scratch belonging to this connection. A part says where it stands in its
+ * section so the final command can tell a complete transfer from a partial one.
+ */
+export interface ForkStageCommand extends CommandEnvelope {
+  readonly command: "fork-stage";
+  readonly section: ForkSection;
+  readonly position: number;
+  readonly part: Record<string, unknown>;
+}
+
+/** Commit the offered parts as one destination run and its first execution. */
+export interface ForkCommand extends CommandEnvelope {
+  readonly command: "fork";
+  readonly runId: string;
+  readonly creation: CreateWorkflowRunRequest;
+  readonly origin: ForkOrigin;
+  readonly counts: ForkCounts;
+  readonly runRecord: DurableEvent;
+  readonly rootImport: DurableEvent;
+  readonly executionId: string;
+}
+
 export interface SettleCommand extends CommandEnvelope {
   readonly command: "settle";
   readonly completion: DocumentExecutionCompletion;
@@ -280,7 +347,9 @@ export type RunnerCommand =
   | OpenCommand
   | BeginCommand
   | CancelCommand
-  | SettleCommand;
+  | SettleCommand
+  | ForkStageCommand
+  | ForkCommand;
 
 export type CommandResult =
   | { readonly id: string; readonly outcome: "performed"; readonly value: unknown }
@@ -310,6 +379,17 @@ const MEMBERS: Record<CommandName, readonly string[]> = {
   begin: [...ENVELOPE, "runId", "action", "creation", "executionId"],
   cancel: [...ENVELOPE, "runId"],
   settle: [...ENVELOPE, "completion", "expectedWorkspaceRootId"],
+  "fork-stage": [...ENVELOPE, "section", "position", "part"],
+  fork: [
+    ...ENVELOPE,
+    "runId",
+    "creation",
+    "origin",
+    "counts",
+    "runRecord",
+    "rootImport",
+    "executionId",
+  ],
 };
 
 function object(value: unknown): Map<string, unknown> {
@@ -442,7 +522,9 @@ export function parseCommand(raw: string): RunnerCommand {
     command !== "open" &&
     command !== "begin" &&
     command !== "cancel" &&
-    command !== "settle"
+    command !== "settle" &&
+    command !== "fork-stage" &&
+    command !== "fork"
   ) {
     throw new CommandError("unknown-command");
   }
@@ -550,6 +632,41 @@ export function parseCommand(raw: string): RunnerCommand {
   if (command === "cancel") {
     return { id, command, runId: text(members, "runId", MAX_RUN_ID) };
   }
+  if (command === "fork-stage") {
+    const section = members.get("section");
+    if (section !== "inherited" && section !== "roots" && section !== "checkouts") {
+      throw new CommandError("malformed-member");
+    }
+    const part = members.get("part");
+    if (part === null || typeof part !== "object" || Array.isArray(part)) {
+      throw new CommandError("malformed-member");
+    }
+    return {
+      id,
+      command,
+      section,
+      position: whole(members.get("position")),
+      part: Object.fromEntries(Object.entries(part)),
+    };
+  }
+  if (command === "fork") {
+    const runId = text(members, "runId", MAX_RUN_ID);
+    const creation = parseCreateRequest(members.get("creation"));
+    if (!creation.ok || creation.value.runId !== runId) {
+      throw new CommandError("malformed-member");
+    }
+    return {
+      id,
+      command,
+      runId,
+      creation: creation.value,
+      origin: origin(members.get("origin")),
+      counts: counts(members.get("counts")),
+      runRecord: forkEvent(members.get("runRecord")),
+      rootImport: forkEvent(members.get("rootImport")),
+      executionId: text(members, "executionId", MAX_RUN_ID),
+    };
+  }
   if (command === "executions") {
     const anchor = sequence(members, "anchor");
     const after = sequence(members, "after");
@@ -583,6 +700,61 @@ export function parseCommand(raw: string): RunnerCommand {
     mappings: mappings(members.get("mappings")),
     events: eventRecords(members.get("events")),
   };
+}
+
+/** A whole count, as a member rather than a column. */
+function whole(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new CommandError("malformed-member");
+  }
+  return value;
+}
+
+/** Where a fork came from: one source, one checkpoint, three head roots. */
+function origin(value: unknown): ForkOrigin {
+  const found = object(value);
+  closed(found, [
+    "sourceRunId",
+    "checkpointEventId",
+    "checkpointWorkspaceRootId",
+    "runRecordWorkspaceRootId",
+    "rootImportWorkspaceRootId",
+    "anchor",
+  ]);
+  return {
+    sourceRunId: text(found, "sourceRunId", MAX_RUN_ID),
+    checkpointEventId: text(found, "checkpointEventId", MAX_ID),
+    checkpointWorkspaceRootId: digest(found, "checkpointWorkspaceRootId"),
+    runRecordWorkspaceRootId: digest(found, "runRecordWorkspaceRootId"),
+    rootImportWorkspaceRootId: digest(found, "rootImportWorkspaceRootId"),
+    anchor: digest(found, "anchor"),
+  };
+}
+
+/** How many parts each section should have arrived in. */
+function counts(value: unknown): ForkCounts {
+  const found = object(value);
+  closed(found, ["inherited", "roots", "checkouts"]);
+  return {
+    inherited: whole(found.get("inherited")),
+    roots: whole(found.get("roots")),
+    checkouts: whole(found.get("checkouts")),
+  };
+}
+
+/** One of the two records a fork writes for itself. */
+function forkEvent(value: unknown): DurableEvent {
+  if (typeof value !== "string" || value === "") {
+    throw new CommandError("malformed-member");
+  }
+  if (new TextEncoder().encode(value).length > MAX_MESSAGE_BYTES) {
+    throw new CommandError("too-large");
+  }
+  const parsed = parseDurableEvent(value);
+  if (!parsed.ok) {
+    throw new CommandError("malformed-member");
+  }
+  return parsed.value;
 }
 
 /**

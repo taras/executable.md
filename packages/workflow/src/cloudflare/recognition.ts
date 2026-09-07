@@ -80,6 +80,18 @@ export function isPristine(objects: readonly SchemaObject[]): boolean {
   return objects.length === 0;
 }
 
+/**
+ * Whether this store holds a run yet, ignoring this adapter's own scratch.
+ *
+ * A destination that has been offered a fork's parts is not pristine any more —
+ * the private tables are there to hold them — but it holds no run, and the
+ * command that makes one has to be able to say so. Anything else declared here
+ * belongs to something else and is not covered by this.
+ */
+export function holdsNoRun(storage: OwnerStorage): boolean {
+  return declaredObjects(storage).every((object) => PRIVATE_OBJECT_NAMES.includes(object.name));
+}
+
 function markerRows(storage: OwnerStorage): Record<string, unknown>[] {
   return storage.sql.exec(`SELECT application_id, schema_version FROM ${MARKER_TABLE}`).toArray();
 }

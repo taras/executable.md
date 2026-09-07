@@ -45,6 +45,7 @@ import { WorkflowRecordMalformedError } from "../storage/errors.ts";
 import { discardPriorAcquisitions, PRIVATE_OBJECT_NAMES } from "./private-schema.ts";
 import {
   declaredObjects,
+  holdsNoRun,
   initializeObject,
   isPristine,
   recognizeObject,
@@ -164,7 +165,13 @@ export abstract class WorkflowOwnerObject extends DurableObject {
     return acquireExecutor(this.ctx, socket, runId, acquisitionId, () => {
       const names = new Set(declaredObjects(this.owned).map((object) => object.name));
       if (PRIVATE_OBJECT_NAMES.every((name) => names.has(name))) {
-        recognizeObject(this.owned);
+        // A store that holds nothing but this adapter's scratch holds no run
+        // to recognize — a fork was offered parts here and never committed.
+        // The scratch still goes, because it belonged to a connection that is
+        // gone.
+        if (!holdsNoRun(this.owned)) {
+          recognizeObject(this.owned);
+        }
         this.transactions.run(this.owned, () => {
           discardPriorAcquisitions(this.owned, acquisitionId);
         });

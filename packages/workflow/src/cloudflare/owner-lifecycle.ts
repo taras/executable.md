@@ -40,6 +40,7 @@ import type { OwnerStorage } from "./storage.ts";
 import type { OwnerTransaction } from "./owner-transaction.ts";
 import { establishRun } from "./owner-open.ts";
 import { readFrontier, type FrontierValue } from "./owner-reads.ts";
+import { heldExecution, holdExecution, releaseExecution } from "./private-schema.ts";
 
 const RUN_COLUMNS = `run_id, definition, base, props, status,
   stop_reason_kind, stop_reason_code, stop_reason_event_id, created_at, updated_at`;
@@ -235,6 +236,7 @@ function reconcile(
 export function beginRun(
   storage: OwnerStorage,
   transaction: OwnerTransaction,
+  acquisitionId: string,
   runId: string,
   action: "start" | "resume",
   creation: CreateWorkflowRunRequest | null,
@@ -252,6 +254,13 @@ export function beginRun(
   }
 
   return (() => {
+    if (heldExecution(storage, acquisitionId) !== undefined) {
+      // One acquisition begins one execution. Its own unfinished execution is
+      // not somebody else's leftovers, so this is refused rather than
+      // recovered. Asked once the store is known to exist, because a store
+      // that holds nothing holds no acquisition either.
+      throw new CommandError("duplicate-conflict");
+    }
     const stored = storedRun(storage);
     if (stored.runId !== runId) {
       throw new CommandError("wrong-run");
@@ -277,6 +286,10 @@ export function beginRun(
 
     const decision = beginDecision(recovered.status);
     const execution = insertExecution(storage, executionId, now);
+    // Recorded here rather than only in the runner's hold: the owner is what a
+    // settlement is checked against, and an evicted object keeps its sockets
+    // but forgets everything that was not written down.
+    holdExecution(storage, acquisitionId, executionId);
     if (decision.kind === "running") {
       publish(storage, "running", undefined, now);
     }
@@ -302,6 +315,7 @@ export function beginRun(
  */
 export function settleRun(
   storage: OwnerStorage,
+  acquisitionId: string,
   runId: string,
   completion: DocumentExecutionCompletion,
   expectedWorkspaceRootId: string,
@@ -318,6 +332,11 @@ export function settleRun(
     )[0];
     if (current === undefined || String(current["current_root_id"]) !== expectedWorkspaceRootId) {
       throw new CommandError("stale-root");
+    }
+    if (heldExecution(storage, acquisitionId) !== completion.executionId) {
+      // Either this acquisition began nothing, or it began something else.
+      // Naming an execution is not the same as having begun it.
+      throw new CommandError("wrong-execution");
     }
     const execution = readExecution(storage, completion.executionId);
     if (execution.stoppedAt !== undefined) {
@@ -338,6 +357,9 @@ export function settleRun(
     if (!terminal(stored.status)) {
       publish(storage, completion.status, completion.reason, now);
     }
+    // Finished, so this acquisition holds no execution any more. It does not
+    // get another: what it may do next is read, and let go.
+    releaseExecution(storage, acquisitionId);
     return readFrontier(storage, runId);
   })();
 }

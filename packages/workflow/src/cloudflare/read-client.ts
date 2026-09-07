@@ -579,6 +579,7 @@ function* collectForkSource(
   validateCheckouts(checkouts, roots, checkpointWorkspaceRootId);
   return Object.freeze({
     sourceRunId,
+    anchor: anchor ?? fail("it answered no page of the selection"),
     checkpointEventId,
     checkpointWorkspaceRootId,
     runRecordWorkspaceRootId,

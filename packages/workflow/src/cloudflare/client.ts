@@ -34,6 +34,7 @@ import type { DefinitionRetrieval, WorkflowRunRecord } from "../storage/record.t
 import type { CommitIntent, OwnerLink, StartingFrontier } from "../remote/collector.ts";
 import type { CommitDecision } from "../remote/publication.ts";
 import { OwnerLinkError, type OwnerAnswer, type OwnerConnection } from "../remote/client.ts";
+export type { OwnerConnection };
 import {
   parseRemoteExecution,
   parseRemoteInvocationSnapshot,
@@ -105,6 +106,7 @@ export type PrivateRefusal =
   | "command:wrong-run"
   | "command:corrupt-journal"
   | "command:not-forkable"
+  | "command:wrong-execution"
   | "storage:foreign"
   | `storage:unsupported-version-v${number}`
   | "storage:corrupt";
@@ -185,6 +187,7 @@ export function privateRefusal(value: string): PrivateRefusal {
     case "command:wrong-run":
     case "command:corrupt-journal":
     case "command:not-forkable":
+    case "command:wrong-execution":
     case "storage:foreign":
     case "storage:corrupt":
       return value;
@@ -342,6 +345,13 @@ export function cloudflareReadLink(
   nextId: () => string,
   expectedRunId: string,
 ): AnchoringReadLink {
+  const parseHeader = (value: unknown): FrontierHeader => {
+    const header = parseFrontier(value);
+    if (header.record.runId !== expectedRunId) {
+      return fail("an answer named another run");
+    }
+    return header;
+  };
   function* anchored(header: FrontierHeader): Operation<RemoteFrontierSnapshot> {
     const entries: JournalEntry[] = [];
     const seen = new Set<string>();
@@ -369,6 +379,8 @@ export function cloudflareReadLink(
   }
 
   return {
+    parseHeader,
+
     *invocationSnapshot(): Operation<RemoteInvocationSnapshot> {
       return answer(
         yield* connection.ask(
@@ -668,8 +680,10 @@ export function* stageCloudflareContent(
  * different owners. A caller holding this holds one authority.
  */
 /** The read link, plus the paging an open answer finishes its frontier with. */
-interface AnchoringReadLink extends RemoteReadLink {
+export interface AnchoringReadLink extends RemoteReadLink {
   anchored(header: FrontierHeader): Operation<RemoteFrontierSnapshot>;
+  /** One owner answer read as a frontier header, before its journal is walked. */
+  parseHeader(value: unknown): FrontierHeader;
 }
 
 /**
@@ -1020,6 +1034,13 @@ export function storageFailure(refusal: PrivateRefusal): WorkflowStorageError {
       "this run has moved since the operation read it, so the change was not applied.",
     );
   }
+  if (refusal === "command:wrong-execution") {
+    // A request about somebody else's work rather than a failure of this one:
+    // the caller named an execution its own acquisition never began.
+    return new WorkflowRequestError(
+      "this executor lock did not begin the document execution it is settling.",
+    );
+  }
   if (refusal === "command:capacity") {
     return new WorkflowRequestError("this run's owner cannot accept more work on this connection.");
   }
@@ -1042,7 +1063,7 @@ const REMOTE_STORE = "this run's remote storage";
  * read is a malformed record rather than an unreachable owner, because those
  * are different facts and a caller acts on them differently.
  */
-function translate(error: unknown): WorkflowStorageError {
+export function translate(error: unknown): WorkflowStorageError {
   if (error instanceof CloudflareOwnerRefusalError) {
     return storageFailure(error.refusal);
   }

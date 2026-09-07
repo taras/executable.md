@@ -48,6 +48,32 @@ export const COMMAND_TABLE = "_xmd_executor_commands";
 export const MUTATION_TABLE = "_xmd_run_mutations";
 export const STAGING_TABLE = "_xmd_executor_staging";
 
+/**
+ * Which execution each acquisition began, as the owner knows it.
+ *
+ * The runner remembers this too, in the hold it issued, but a runner's memory
+ * is not authority: a settlement arrives naming an execution, and what decides
+ * whether this caller may finish it is what the owner retained when that
+ * execution began. Kept here rather than in a field because an evicted Durable
+ * Object forgets fields and keeps its sockets, so the association has to be
+ * where the next message can still find it.
+ *
+ * One row per acquisition: one acquisition begins one execution. The row is
+ * this connection's, so a replacement acquisition discards it and cannot adopt
+ * the execution it named.
+ */
+export const HOLD_TABLE = "_xmd_executor_holds";
+
+/**
+ * The parts of a fork one acquisition has offered, before any of it is a run.
+ *
+ * A fork source is larger than one message may be, so it crosses in bounded
+ * parts that name where they belong in the selection, and the final command
+ * commits them together. Like staged content these are scratch: nothing reads
+ * them, nothing inherits them, and a replacement acquisition throws them away.
+ */
+export const FORK_TABLE = "_xmd_executor_fork_parts";
+
 const COMMAND_SQL = `CREATE TABLE ${COMMAND_TABLE} (
   acquisition_id TEXT NOT NULL,
   command_id TEXT NOT NULL,
@@ -70,6 +96,22 @@ const STAGING_SQL = `CREATE TABLE ${STAGING_TABLE} (
   PRIMARY KEY (acquisition_id, kind, digest)
 ) STRICT, WITHOUT ROWID`;
 
+const HOLD_SQL = `CREATE TABLE ${HOLD_TABLE} (
+  acquisition_id TEXT PRIMARY KEY,
+  execution_id TEXT NOT NULL
+) STRICT, WITHOUT ROWID`;
+
+const FORK_SQL = `CREATE TABLE ${FORK_TABLE} (
+  acquisition_id TEXT NOT NULL,
+  section TEXT NOT NULL CHECK (
+    section IN ('inherited', 'roots', 'manifests', 'blobs', 'checkouts')
+  ),
+  position INTEGER NOT NULL CHECK (position >= 0),
+  part TEXT NOT NULL CHECK (json_valid(part)),
+  part_bytes INTEGER NOT NULL CHECK (part_bytes > 0),
+  PRIMARY KEY (acquisition_id, section, position)
+) STRICT, WITHOUT ROWID`;
+
 const MUTATION_SQL = `CREATE TABLE ${MUTATION_TABLE} (
   command_id TEXT PRIMARY KEY,
   request_fingerprint TEXT NOT NULL CHECK (
@@ -83,12 +125,32 @@ const PRIVATE_OBJECTS = new Map([
   [COMMAND_TABLE, { type: "table", sql: COMMAND_SQL }],
   [STAGING_TABLE, { type: "table", sql: STAGING_SQL }],
   [MUTATION_TABLE, { type: "table", sql: MUTATION_SQL }],
+  [HOLD_TABLE, { type: "table", sql: HOLD_SQL }],
+  [FORK_TABLE, { type: "table", sql: FORK_SQL }],
 ]);
 
 export const PRIVATE_OBJECT_NAMES: readonly string[] = Object.freeze([...PRIVATE_OBJECTS.keys()]);
 
 export function initializePrivateSchema(storage: OwnerStorage): void {
-  storage.sql.exec(`${COMMAND_SQL};\n\n${STAGING_SQL};\n\n${MUTATION_SQL};`);
+  if (privateSchemaPresent(storage)) {
+    // Already here, because a transfer was offered before the run it belongs
+    // to existed. The scratch is this adapter's own and is not rewritten.
+    return;
+  }
+  storage.sql.exec(
+    `${COMMAND_SQL};\n\n${STAGING_SQL};\n\n${MUTATION_SQL};\n\n${HOLD_SQL};\n\n${FORK_SQL};`,
+  );
+}
+
+/** Whether this adapter's own scratch tables are already declared here. */
+export function privateSchemaPresent(storage: OwnerStorage): boolean {
+  const names = new Set(
+    storage.sql
+      .exec("SELECT name FROM sqlite_schema WHERE type = 'table'")
+      .toArray()
+      .map((row) => String(row["name"])),
+  );
+  return PRIVATE_OBJECT_NAMES.every((name) => names.has(name));
 }
 
 export function privateStructureFailure(
@@ -118,4 +180,43 @@ export function privateStructureFailure(
 export function discardPriorAcquisitions(storage: OwnerStorage, acquisitionId: string): void {
   storage.sql.exec(`DELETE FROM ${COMMAND_TABLE} WHERE acquisition_id <> ?`, acquisitionId);
   storage.sql.exec(`DELETE FROM ${STAGING_TABLE} WHERE acquisition_id <> ?`, acquisitionId);
+  // A previous connection's fork parts describe a transfer nobody is going to
+  // finish, and its execution association belonged to a connection that can no
+  // longer settle anything. Neither is inherited: what an earlier executor left
+  // unfinished is decided by recovery, from what the run itself retains.
+  storage.sql.exec(`DELETE FROM ${FORK_TABLE} WHERE acquisition_id <> ?`, acquisitionId);
+  storage.sql.exec(`DELETE FROM ${HOLD_TABLE} WHERE acquisition_id <> ?`, acquisitionId);
+}
+
+/** Which execution this acquisition began, when it has begun one. */
+export function heldExecution(storage: OwnerStorage, acquisitionId: string): string | undefined {
+  const row = storage.sql
+    .exec(`SELECT execution_id FROM ${HOLD_TABLE} WHERE acquisition_id = ?`, acquisitionId)
+    .toArray()[0];
+  const held = row?.["execution_id"];
+  return typeof held === "string" ? held : undefined;
+}
+
+/**
+ * Record that this acquisition began this execution.
+ *
+ * Refuses a second one. An acquisition begins one execution, and the owner is
+ * where that is decided: a runner that lost track of its own hold cannot talk
+ * this store into holding two.
+ */
+export function holdExecution(
+  storage: OwnerStorage,
+  acquisitionId: string,
+  executionId: string,
+): void {
+  storage.sql.exec(
+    `INSERT INTO ${HOLD_TABLE} (acquisition_id, execution_id) VALUES (?, ?)`,
+    acquisitionId,
+    executionId,
+  );
+}
+
+/** Let go of the execution this acquisition began, once it is finished. */
+export function releaseExecution(storage: OwnerStorage, acquisitionId: string): void {
+  storage.sql.exec(`DELETE FROM ${HOLD_TABLE} WHERE acquisition_id = ?`, acquisitionId);
 }

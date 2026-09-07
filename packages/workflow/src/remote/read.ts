@@ -195,6 +195,14 @@ export type RemoteCheckout =
 /** Everything one checkpoint hands a fork, read in one committed selection. */
 export interface RemoteForkSource {
   readonly sourceRunId: string;
+  /**
+   * The selection this snapshot was read under.
+   *
+   * Every page of it agreed on this, so it identifies the committed state the
+   * whole snapshot describes. A destination keeps it with what it copied, which
+   * is what lets a retry say whether it is the same transfer.
+   */
+  readonly anchor: string;
   readonly checkpointEventId: string;
   readonly checkpointWorkspaceRootId: string;
   readonly runRecordWorkspaceRootId: string;

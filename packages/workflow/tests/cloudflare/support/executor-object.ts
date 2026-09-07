@@ -18,7 +18,12 @@ import type { TokenVerification, VerificationKey } from "../../../src/cloudflare
 import { refusalOf } from "../../../src/cloudflare/owner.ts";
 import { sha256Hex } from "../../../src/workspace/sha256.ts";
 import { WORKSPACE_ROOT_DOMAIN } from "../../../src/workspace/root-manifest.ts";
-import { COMMAND_TABLE, STAGING_TABLE } from "../../../src/cloudflare/private-schema.ts";
+import {
+  COMMAND_TABLE,
+  FORK_TABLE,
+  HOLD_TABLE,
+  STAGING_TABLE,
+} from "../../../src/cloudflare/private-schema.ts";
 import { MARKER_TABLE } from "../../../src/cloudflare/marker.ts";
 
 /** The identities this owner is configured to admit. */
@@ -148,6 +153,8 @@ export class ExecutorObject extends WorkflowOwnerObject {
    * an admission request can name.
    */
   #keys: VerificationKey[] = [];
+  /** Client ends of the admitted pairs, held so they are not collected. */
+  readonly #clients: WebSocket[] = [];
   #now = 1_800_000_000;
   #skew = 0;
 
@@ -315,6 +322,48 @@ export class ExecutorObject extends WorkflowOwnerObject {
   /** The one run row, as it is stored, or nothing when there is none. */
   runRow(): Record<string, unknown> | null {
     return this.ctx.storage.sql.exec("SELECT * FROM workflow_run").toArray()[0] ?? null;
+  }
+
+  /** Every document execution, in the order the run recorded them. */
+  executionRows(): Record<string, unknown>[] {
+    return this.ctx.storage.sql
+      .exec("SELECT * FROM document_executions ORDER BY sequence")
+      .toArray();
+  }
+
+  /** The Workspace root this run currently stands on. */
+  currentRootId(): string {
+    const row = this.ctx.storage.sql
+      .exec("SELECT current_root_id FROM workspace_state WHERE singleton_id = 1")
+      .toArray()[0];
+    return String(row?.["current_root_id"] ?? "");
+  }
+
+  /**
+   * Which execution each acquisition began, as the owner retained it.
+   *
+   * Read from storage rather than from a field, which is the point: an evicted
+   * object keeps its sockets and forgets everything else.
+   */
+  heldExecutions(): Record<string, unknown>[] {
+    return this.ctx.storage.sql.exec(`SELECT * FROM ${HOLD_TABLE}`).toArray();
+  }
+
+  /** Every fork part this owner is holding for anyone. */
+  forkParts(): Record<string, unknown>[] {
+    return this.ctx.storage.sql
+      .exec(
+        `SELECT acquisition_id, section, position FROM ${FORK_TABLE} ORDER BY section, position`,
+      )
+      .toArray();
+  }
+
+  /** Close every admitted connection, as a lost executor leaves them. */
+  dropConnections(): void {
+    for (const socket of this.ctx.getWebSockets("executor")) {
+      socket.close(1000, "gone");
+      this.webSocketClose(socket);
+    }
   }
 
   /** How many objects this storage declares at all. */
@@ -651,6 +700,11 @@ export class ExecutorObject extends WorkflowOwnerObject {
   async admitConnection(request: Partial<AdmissionRequest>): Promise<string> {
     const pair = new WebSocketPair();
     const server = pair[1];
+    // The client end is kept for as long as this object lives. Nothing reads
+    // it, but a pair whose other end is collected closes the end the owner
+    // accepted, and a test that then sends has no connection through no fault
+    // of the code under test.
+    this.#clients.push(pair[0]);
     const presented: AdmissionRequest = {
       runId: "runId" in request ? request.runId : RUN_ID,
       release: "release" in request ? request.release : POLICY.release,
@@ -738,6 +792,22 @@ export class ExecutorObject extends WorkflowOwnerObject {
   /** Send one message as the connection admitted at `index` (1-based). */
   send(index: number, raw: string): unknown {
     const socket = this.ctx.getWebSockets("executor")[index - 1];
+    if (socket === undefined) {
+      return { id: "", outcome: "refused", refusal: "no-such-connection" };
+    }
+    return this.onRunnerMessage(socket, RUN_ID, raw);
+  }
+
+  /**
+   * Send as the connection admitted most recently.
+   *
+   * A replacement acquisition is a different socket, and the earlier one may
+   * still be listed; addressing by position would send as the connection that
+   * is gone.
+   */
+  sendLatest(raw: string): unknown {
+    const sockets = this.ctx.getWebSockets("executor");
+    const socket = sockets[sockets.length - 1];
     if (socket === undefined) {
       return { id: "", outcome: "refused", refusal: "no-such-connection" };
     }
