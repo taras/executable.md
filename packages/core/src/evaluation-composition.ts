@@ -65,11 +65,12 @@ export function* composeEvaluation(
   bounds: EvaluationBounds,
   project: EvaluationProjection,
   invocation: string,
+  component: string,
   owner: ProjectionOwner,
   enclosing?: EvaluationCaptureSession,
 ): Operation<Result<string>> {
   try {
-    const output = yield* owner.run(invocation, (bind) =>
+    const output = yield* owner.run(invocation, component, (bind) =>
       scoped(function* () {
         const capture = new EvaluationOutputCapture(bounds.outputBytes, enclosing?.capture);
         let worker: Task<void> | undefined;

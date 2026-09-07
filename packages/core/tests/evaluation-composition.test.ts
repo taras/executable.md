@@ -3,7 +3,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { ensure, Err, Ok, scoped, sleep, spawn, suspend, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { createDurableOperation, InMemoryStream } from "@executablemd/durable-streams";
-import type { DurableStream } from "@executablemd/durable-streams";
+import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
 import {
   boundedEvaluation,
   EvaluationCandidateError,
@@ -25,6 +25,32 @@ import { content } from "../src/component-api.ts";
 import { prepareEvaluationProfile } from "../src/evaluation-profile.ts";
 
 const bounds = Object.freeze({ durationMs: 1000, outputBytes: 65536 });
+
+function failureClose(events: DurableEvent[]) {
+  for (const event of events) {
+    if (
+      event.type === "close" &&
+      event.coroutineId.includes(".projection-") &&
+      event.result.status === "err"
+    ) {
+      return { ...event, result: event.result };
+    }
+  }
+  throw new Error("Expected a projection error close");
+}
+
+function attemptedCapture(...args: Parameters<typeof runCapture>): Operation<Result<string>> {
+  return scoped(function* () {
+    try {
+      return yield* runCapture(...args);
+    } catch (error) {
+      if (!(error instanceof Error)) {
+        throw error;
+      }
+      return Err(error);
+    }
+  });
+}
 
 function profile(files = recordedFiles()): ExecutionInstallation {
   return { evaluation: { composition: [jsonCompositionEntry()], read: [fileReadEntry()], files } };
@@ -137,6 +163,297 @@ function syntaxInstallation(
 }
 
 describe("ordinary generated findings", () => {
+  it("rejects malformed, renamed and unclaimed projection errors in both replay paths", function* () {
+    const source = "<NotAdmitted />";
+    const stream = new InMemoryStream();
+    yield* runCapture(source, profile(), bounds, stream);
+    const mutations: ((events: DurableEvent[]) => void)[] = [
+      (events) => {
+        const event = failureClose(events);
+        event.result.error.name = "EvaluationCandidateError";
+      },
+      (events) => {
+        failureClose(events).result.error = {
+          name: "EvaluationCandidateError",
+          message: "arbitrary ordinary error",
+          stack: "",
+        };
+      },
+      (events) => {
+        Reflect.deleteProperty(failureClose(events).result.error, "message");
+      },
+      (events) => {
+        Reflect.deleteProperty(failureClose(events).result.error, "name");
+      },
+      (events) => {
+        Reflect.deleteProperty(failureClose(events).result.error, "stack");
+      },
+      (events) => {
+        Reflect.set(failureClose(events).result.error, "message", 42);
+      },
+      (events) => {
+        Reflect.set(failureClose(events).result.error, "stack", null);
+      },
+      (events) => {
+        Reflect.set(failureClose(events).result.error, "extra", "untrusted");
+      },
+      (events) => {
+        Reflect.set(failureClose(events).result, "extra", true);
+      },
+      (events) => {
+        const error = failureClose(events).result.error;
+        const record = JSON.parse(error.message);
+        record.diagnostic = "FORGED RETAINED DIAGNOSTIC";
+        error.message = JSON.stringify(record);
+      },
+      (events) => {
+        const error = failureClose(events).result.error;
+        const record = JSON.parse(error.message);
+        delete record.code;
+        error.message = JSON.stringify(record);
+      },
+      (events) => {
+        const error = failureClose(events).result.error;
+        const record = JSON.parse(error.message);
+        record.extra = true;
+        error.message = JSON.stringify(record);
+      },
+      (events) => {
+        const error = failureClose(events).result.error;
+        const record = JSON.parse(error.message);
+        record.version = 2;
+        error.message = JSON.stringify(record);
+      },
+      (events) => {
+        const error = failureClose(events).result.error;
+        const record = JSON.parse(error.message);
+        record.code = 1;
+        error.message = JSON.stringify(record);
+      },
+      (events) => {
+        const error = failureClose(events).result.error;
+        const record = JSON.parse(error.message);
+        record.kind = "unknown";
+        error.message = JSON.stringify(record);
+      },
+      (events) => {
+        const error = failureClose(events).result.error;
+        const record = JSON.parse(error.message);
+        record.projection = "another owner";
+        error.message = JSON.stringify(record);
+      },
+      (events) => {
+        events.push(structuredClone(failureClose(events)));
+      },
+      (events) => {
+        const extra = structuredClone(failureClose(events));
+        extra.coroutineId = "root.projection-" + "a".repeat(64);
+        events.push(extra);
+      },
+      (events) => {
+        const index = events.findIndex(
+          (event) => event.type === "yield" && event.description.type === "projection_enter",
+        );
+        events.splice(index, 1);
+      },
+    ];
+    for (const mutate of mutations) {
+      for (const completed of [false, true]) {
+        const events = stream
+          .snapshot()
+          .filter((event) => completed || event.type !== "close" || event.coroutineId !== "root");
+        mutate(events);
+        const files = recordedFiles();
+        const result = yield* attemptedCapture(
+          source,
+          profile(files),
+          bounds,
+          new InMemoryStream(events),
+        );
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error).toBeInstanceOf(EvaluationStaleError);
+        }
+        expect(files.performed).toEqual([]);
+      }
+    }
+  });
+
+  it("keeps a recovered child refusal distinct from a successful completed root", function* () {
+    const stream = new InMemoryStream();
+    const files = recordedFiles();
+    let captures = 0;
+    const installation: ExecutionInstallation = {
+      ...profile(files),
+      components: [
+        {
+          name: "Recover",
+          origin: "test://recover",
+          props: { type: "object" },
+          factory(claim) {
+            const capture = boundedEvaluation(claim, bounds);
+            return function* (_props, invocation) {
+              captures += 1;
+              const result = yield* capture(invocation);
+              if (result.ok || !(result.error instanceof EvaluationCandidateError)) {
+                throw new Error("Expected a typed candidate refusal");
+              }
+              return "safe recovery";
+            };
+          },
+        },
+      ],
+    };
+    function* run(journal: DurableStream) {
+      return yield* collect(
+        yield* executeInstalled(
+          {
+            ...retainedSource(
+              "recover.md",
+              "<Recover><Evaluate text={'<File path=\"missing\" />'} /></Recover>",
+            ),
+            stream: journal,
+          },
+          [installation],
+        ),
+      );
+    }
+    const first = yield* run(stream);
+    const performed = [...files.performed];
+    for (const completed of [false, true]) {
+      const events = stream
+        .snapshot()
+        .filter((event) => completed || event.type !== "close" || event.coroutineId !== "root");
+      expect(yield* run(new InMemoryStream(events))).toBe(first);
+      expect(files.performed).toEqual(performed);
+    }
+    expect(captures).toBe(2);
+  });
+
+  it("replays canonical candidate, both limits and provider failures without repeating provider bodies", function* () {
+    for (const kind of [
+      "candidate",
+      "duration",
+      "output-bytes",
+      "stale",
+      "setup",
+      "runtime",
+      "persistence",
+      "cleanup",
+    ]) {
+      const stream = new InMemoryStream();
+      const selected = Object.freeze({
+        durationMs: kind === "duration" ? 15 : 1000,
+        outputBytes: kind === "output-bytes" ? 1 : 65536,
+      });
+      const files = recordedFiles(
+        { x: "output" },
+        {
+          *hold() {
+            if (kind === "duration") {
+              yield* suspend();
+            }
+            if (kind === "stale") {
+              throw new EvaluationStaleError("original private stale cause");
+            }
+            if (
+              kind === "setup" ||
+              kind === "runtime" ||
+              kind === "persistence" ||
+              kind === "cleanup"
+            ) {
+              throw new EvaluationInfrastructureError(kind, new Error("private provider failure"));
+            }
+          },
+        },
+      );
+      if (kind === "candidate") {
+        files.entries.delete("x");
+      }
+      const source = '<File path="x" />';
+      const first = yield* attemptedCapture(source, profile(files), selected, stream);
+      expect(first.ok).toBe(false);
+      for (const completed of [false, true]) {
+        const replayFiles = recordedFiles({ x: "must not refresh" });
+        const events = stream
+          .snapshot()
+          .filter((event) => completed || event.type !== "close" || event.coroutineId !== "root");
+        const result = yield* attemptedCapture(
+          source,
+          profile(replayFiles),
+          selected,
+          new InMemoryStream(events),
+        );
+        expect(result.ok).toBe(false);
+        if (!first.ok && !result.ok) {
+          expect(result.error.constructor).toBe(first.error.constructor);
+          if (first.error instanceof EvaluationCandidateError) {
+            expect(result.error).toMatchObject({
+              code: first.error.code,
+              message: first.error.message,
+            });
+          }
+          if (kind === "duration" || kind === "output-bytes") {
+            expect(result.error).toMatchObject({ limit: kind, message: first.error.message });
+          }
+          if (first.error instanceof EvaluationInfrastructureError) {
+            expect(result.error).toMatchObject({ phase: first.error.phase });
+          }
+        }
+        expect(replayFiles.performed).toEqual([]);
+      }
+      if (kind !== "candidate") {
+        const events = stream.snapshot();
+        failureClose(events).result.error.name = "EvaluationCandidateError";
+        const renamed = yield* attemptedCapture(
+          source,
+          profile(),
+          selected,
+          new InMemoryStream(events),
+        );
+        expect(renamed.ok).toBe(false);
+        if (!renamed.ok) {
+          expect(renamed.error).toBeInstanceOf(EvaluationStaleError);
+        }
+      }
+    }
+  });
+  it("rejects a forged retained candidate diagnostic before child or root reuse", function* () {
+    const source = "<NotAdmitted />";
+    const stream = new InMemoryStream();
+    yield* runCapture(source, profile(), bounds, stream);
+    for (const completed of [false, true]) {
+      const events = stream
+        .snapshot()
+        .filter((event) => completed || event.type !== "close" || event.coroutineId !== "root");
+      for (const event of events) {
+        if (
+          event.type === "close" &&
+          event.coroutineId.includes(".projection-") &&
+          event.result.status === "err"
+        ) {
+          event.result.error.message = "FORGED RETAINED DIAGNOSTIC";
+        }
+      }
+      const files = recordedFiles();
+      let failure: unknown;
+      try {
+        const result = yield* runCapture(
+          source,
+          profile(files),
+          bounds,
+          new InMemoryStream(events),
+        );
+        if (!result.ok) {
+          failure = result.error;
+        }
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(EvaluationStaleError);
+      expect(files.performed).toEqual([]);
+    }
+  });
   it("rejects malformed, mutable and duplicate bounds before any fragment work", function* () {
     let getterReads = 0;
     const accessor = Object.freeze({
@@ -265,21 +582,50 @@ describe("ordinary generated findings", () => {
           },
         ],
       };
-      const result = yield* runCapture(
-        "",
-        installation,
-        Object.freeze({
-          durationMs: mode === "duration" ? 20 : 1000,
-          outputBytes: mode === "overflow" ? 1 : 65536,
-        }),
-        new InMemoryStream(),
-        "",
-        "<Cleanup><Evaluate text={'<File path=\"x\" />'} /></Cleanup>",
-      );
+      const stream = new InMemoryStream();
+      const selected = Object.freeze({
+        durationMs: mode === "duration" ? 20 : 1000,
+        outputBytes: mode === "overflow" ? 1 : 65536,
+      });
+      const projection = "<Cleanup><Evaluate text={'<File path=\"x\" />'} /></Cleanup>";
+      const result = yield* runCapture("", installation, selected, stream, "", projection);
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error).toBeInstanceOf(EvaluationInfrastructureError);
         expect(result.error).toMatchObject({ phase: "cleanup" });
+      }
+      const performed = [...files.performed];
+      for (const completed of [false, true]) {
+        const events = stream
+          .snapshot()
+          .filter((event) => completed || event.type !== "close" || event.coroutineId !== "root");
+        const replay = yield* attemptedCapture(
+          "",
+          installation,
+          selected,
+          new InMemoryStream(events),
+          "",
+          projection,
+        );
+        expect(replay.ok).toBe(false);
+        if (!replay.ok) {
+          expect(replay.error).toBeInstanceOf(EvaluationInfrastructureError);
+          expect(replay.error).toMatchObject({ phase: "cleanup" });
+        }
+        expect(files.performed).toEqual(performed);
+        failureClose(events).result.error.name = "EvaluationCandidateError";
+        const renamed = yield* attemptedCapture(
+          "",
+          installation,
+          selected,
+          new InMemoryStream(events),
+          "",
+          projection,
+        );
+        expect(renamed.ok).toBe(false);
+        if (!renamed.ok) {
+          expect(renamed.error).toBeInstanceOf(EvaluationStaleError);
+        }
       }
     }
   });

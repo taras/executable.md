@@ -3224,6 +3224,7 @@ function* expandFunctionComponent(
               }
             },
             expansion.id,
+            name,
             owner,
             authority?.capture,
           );

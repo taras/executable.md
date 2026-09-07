@@ -192,7 +192,7 @@ type Construct =
  * component name, a URL, a header, or anything else the fragment carried: the
  * candidate is untrusted text, and a refusal is not a reason to publish it.
  */
-const CONSTRUCT: Record<Construct, string> = {
+export const CONSTRUCT: Readonly<Record<Construct, string>> = Object.freeze({
   block: "a generated fragment carries an executable code block, which it may not.",
   expression: "a generated fragment carries an expression prop, which it may not.",
   interpolation: "a generated fragment reads a binding through interpolation, which it may not.",
@@ -208,7 +208,7 @@ const CONSTRUCT: Record<Construct, string> = {
   request: "a generated fragment asks for a request this host did not admit.",
   props: "a generated fragment supplies invalid component props.",
   glob: "a generated fragment supplies invalid relative glob patterns.",
-};
+});
 
 /**
  * What a resumed run is refused with when its ceilings moved.

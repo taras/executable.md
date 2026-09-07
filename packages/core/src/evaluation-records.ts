@@ -11,6 +11,7 @@ import { isJsonObject, parseJson } from "./json.ts";
 import { canonicalFingerprint } from "./canonical.ts";
 import { readSymbols } from "./components/Syntax.ts";
 import { EvaluationInfrastructureError, EvaluationStaleError } from "./evaluation-errors.ts";
+import { validateProjectionHistory } from "./projection-history.ts";
 
 export interface EvaluationConfiguration {
   readonly owner: string;
@@ -130,8 +131,10 @@ function environmentRecord(
 export function admitEvaluationHistory(
   events: readonly DurableEvent[],
   environment: EvaluationEnvironment | undefined,
+  root: string,
 ): void {
   try {
+    validateProjectionHistory(events, environment, root);
     const manifests = events.filter(
       (event) => event.type === "yield" && event.description.type === ENVIRONMENT,
     );

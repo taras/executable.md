@@ -13,6 +13,7 @@
 import { Err, Ok, ensure, scoped, spawn, withResolvers, until } from "effection";
 import { captureSyntaxProvider } from "./syntax-reference.ts";
 import { projectionOwner } from "./projection-owner.ts";
+import { completedProjectionFailure, snapshotProjectionCloses } from "./projection-history.ts";
 import {
   admitEvaluationHistory,
   evaluationEnvironment,
@@ -1193,10 +1194,11 @@ function guardedJournal(
       // or empty the history in place, and every later admission, root-history
       // validation and the replay itself would consume what it left behind.
       // The events themselves are the retained graph's own, already sealed.
+      const read = yield* stream.readAll();
       const retained: readonly DurableEvent[] = Object.freeze(
-        retainEvents(yield* stream.readAll()),
+        retainEvents(evaluation === undefined ? read : snapshotProjectionCloses(read)),
       );
-      admitEvaluationHistory(retained, evaluation);
+      admitEvaluationHistory(retained, evaluation, coroutineId);
       // What the trusted host required of this history, on that exact snapshot,
       // in the order it was captured and stopping at the first refusal. Ahead of
       // root-history admission, ReplayGuard, terminal reuse, authored work and
@@ -1213,6 +1215,12 @@ function guardedJournal(
           });
         }
         throw cause;
+      }
+      if (evaluation !== undefined) {
+        const failure = completedProjectionFailure(retained, coroutineId);
+        if (failure !== undefined) {
+          throw failure;
+        }
       }
       // The same objects the admissions were held to. `readAll` is declared
       // mutable by the protocol, so this is a fresh array over the identical
@@ -2821,7 +2829,7 @@ function* executeDocument(
         {
           stream: guardedJournal(journal, root, ROOT_COROUTINE, admissions, evaluationState),
           initialize: (context) => {
-            ownedProjection.current = projectionOwner(context);
+            ownedProjection.current = projectionOwner(context, evaluationState);
           },
         },
       );
