@@ -1,0 +1,4 @@
+{"type":"session_meta","payload":{"id":"codex-fixture-1"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"Review the diff"}}
+{"type":"event_msg","payload":{"type":"agent_message","message":"Looks good."}}
+{"type":"event_msg","payload":{"type":"task_complete"}}
