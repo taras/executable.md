@@ -64,7 +64,7 @@ import { applyCommit, applyRetrieval } from "./publish.ts";
 import { holdsNoRun, recognizeObject } from "./recognition.ts";
 import { openRun } from "./owner-open.ts";
 import { beginRun, cancelRunOnOwner, settleRun } from "./owner-lifecycle.ts";
-import { commitFork, discardForkParts, stageForkPart } from "./owner-fork.ts";
+import { commitFork, continueFork, discardForkParts, stageForkPart } from "./owner-fork.ts";
 
 function requestFingerprint(command: RunnerCommand): string {
   // The command name is part of the fingerprint, so one textual id used for a
@@ -120,7 +120,8 @@ function mutating(command: RunnerCommand): boolean {
     command.command === "settle" ||
     // A committed fork creates a destination run. Its decision has to outlive
     // the connection for the same reason a begin's does.
-    command.command === "fork"
+    command.command === "fork" ||
+    command.command === "fork-continue"
   );
 }
 
@@ -402,6 +403,25 @@ function perform(
     }
     return { id: command.id, outcome: "performed", value: forked };
   }
+  if (command.command === "fork-continue") {
+    return {
+      id: command.id,
+      outcome: "performed",
+      value: continueFork(
+        ctx.storage,
+        transaction,
+        acquisitionId,
+        {
+          runId: command.runId,
+          creation: command.creation,
+          runRecord: command.runRecord,
+          rootImport: command.rootImport,
+          executionId: command.executionId,
+        },
+        ownerTime,
+      ),
+    };
+  }
   if (command.command === "cancel") {
     return {
       id: command.id,
@@ -474,12 +494,15 @@ export function dispatchCommand(
     const empty = holdsNoRun(ctx.storage);
     const creating = initializes(command) && empty;
     const offering = offersScratch(command) && empty;
+    // Asking whether a destination already holds a fork is a question a store
+    // with no run can answer: the answer is that it does not.
+    const asking = command.command === "fork-continue" && empty;
     if (offering) {
       // The scratch this command needs, and nothing else: no schema, no run, no
       // marker. What is here after it is still a store holding no run.
       initializePrivateSchema(ctx.storage);
     }
-    if (!creating && !offering) {
+    if (!creating && !offering && !asking) {
       recognizeObject(ctx.storage);
     }
 
@@ -488,7 +511,7 @@ export function dispatchCommand(
     // gone: the owner committed, the answer never arrived, and the runner
     // reconnected to ask the same question again. Pristine storage retains no
     // decision, and its private substrate does not exist yet to be asked.
-    if (mutating(command) && !creating) {
+    if (mutating(command) && !creating && !asking) {
       const decided = ctx.storage.sql
         .exec(
           `SELECT request_fingerprint, response FROM ${MUTATION_TABLE} WHERE command_id = ?`,
@@ -506,15 +529,19 @@ export function dispatchCommand(
           throw new Error("private protocol storage holds a malformed result");
         }
         // The answer was lost, not the fact. If this decision began an
-        // execution and nobody live holds it, it becomes this acquisition's —
-        // otherwise the caller would be handed a run it could not settle.
-        adoptExecution(ctx.storage, held.acquisitionId, command.id);
+        // execution and nobody live holds it, it becomes this acquisition's.
+        // If the run moved past it — recovered, settled, or held by somebody
+        // live — the decision is history rather than authority, and handing it
+        // back would hand back a database nobody may settle.
+        if (adoptExecution(ctx.storage, held.acquisitionId, command.id) === "stale") {
+          throw new CommandError("stale-journal");
+        }
         return decision;
       }
     }
 
     const previous =
-      creating && !offering
+      (creating || asking) && !offering
         ? undefined
         : ctx.storage.sql
             .exec(
@@ -536,7 +563,7 @@ export function dispatchCommand(
     // A store with no run has spent nothing this ledger knows about, and until
     // the scratch exists there is nothing to ask.
     const usage =
-      creating && !offering
+      (creating || asking) && !offering
         ? { commands: 0, bytes: 0 }
         : ledgerUsage(ctx.storage, held.acquisitionId);
     if (usage.commands >= MAX_COMMANDS || usage.bytes >= MAX_LEDGER_BYTES) {
@@ -561,9 +588,10 @@ export function dispatchCommand(
     if (mutating(command)) {
       // Recorded in this same transaction as the mutation it describes, so a
       // crash cannot leave one without the other.
-      const mutations = creating
-        ? undefined
-        : ctx.storage.sql.exec(`SELECT count(*) AS decided FROM ${MUTATION_TABLE}`).toArray()[0];
+      const mutations =
+        creating || asking
+          ? undefined
+          : ctx.storage.sql.exec(`SELECT count(*) AS decided FROM ${MUTATION_TABLE}`).toArray()[0];
       if (mutations !== undefined && integer(mutations["decided"]) >= MAX_COMMANDS) {
         throw new CommandError("capacity");
       }

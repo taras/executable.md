@@ -46,15 +46,18 @@ import {
   WorkflowRequestError,
   WorkflowRunNotFoundError,
   type WorkflowStorageError,
+  WorkflowTransactionError,
 } from "../storage/errors.ts";
 import { useRemoteRunDatabase } from "./database.ts";
 import { canonicalJson } from "../storage/record.ts";
 import { definitionToJson } from "../storage/definition.ts";
 import type { RemoteForkSource, RemoteReadPlane } from "./read.ts";
 import { forkRunRecordEvent } from "../fork.ts";
+import { serializeDurableEvent } from "@executablemd/durable-streams";
 import type {
   RemoteBegun,
   RemoteExecutorConnection,
+  RemoteForkCommit,
   RemoteForkPart,
   RemoteLifecycleLink,
 } from "./lifecycle-link.ts";
@@ -94,19 +97,28 @@ export interface RemoteLifecycleHost {
 }
 
 /**
- * One logical lifecycle invocation, as it is addressed and re-addressed.
+ * One logical lifecycle call, as this provider owns it.
  *
- * Minted once and kept by the run it belongs to rather than by the connection
- * that first sent it. A connection that died between an owner's commit and its
- * answer is exactly the case this exists for: the replacement acquisition asks
- * the same question, with the same identity and the same bytes, and the owner
- * answers with what it already decided instead of deciding again.
+ * A call is not the same call as another because their arguments compare equal:
+ * two identical `begin()` calls are two calls, and the second must be refused
+ * rather than handed the first one's execution. What may reuse an identity is
+ * one narrow thing — the continuation of a call whose answer was lost after the
+ * owner may already have committed — and that is what this records.
+ *
+ * `in flight` is held by the acquisition, so a second transition under one live
+ * lock is refused before anything is sent. `ambiguous` outlives the connection
+ * it was sent on, because the whole point is that a replacement acquisition
+ * asks the same question. A definitive answer — a decision, a conflict, an
+ * owner refusal — retires the record: it has been answered, and a later
+ * corrected request is a new call with new identities.
  */
-interface Invocation {
+interface Ambiguous {
   readonly commandId: string;
   readonly executionId: string;
-  /** What this invocation asked, so a different question gets a new identity. */
-  readonly shape: string;
+  /** The complete canonical request this identity belongs to. */
+  readonly question: string;
+  /** The exact command that was sent, resent verbatim on continuation. */
+  readonly command: RemoteForkCommit | undefined;
 }
 
 /** What one issued lock is allowed to do, and what it has already done. */
@@ -115,6 +127,14 @@ interface Hold {
   readonly connection: RemoteExecutorConnection;
   /** Which execution this acquisition began, once it has begun one. */
   execution: string | undefined;
+  /**
+   * Whether a transition is in flight on this acquisition.
+   *
+   * One acquisition begins one execution, and it has to be refused while the
+   * first call is still waiting as well as after it returns — otherwise two
+   * identical calls both pass the check and both send.
+   */
+  busy: boolean;
   /** Whether the connection this lock was issued beside is still open. */
   live: boolean;
 }
@@ -136,25 +156,38 @@ export function* useRemoteLifecycle(
   // Keyed by the run and the question asked, so the same question after a lost
   // answer is the same invocation. Not authority: what it carries is an
   // identity, and the owner decides what that identity already means.
-  const invocations = new Map<string, Invocation>();
+  const ambiguous = new Map<string, Ambiguous>();
 
-  function invocation(runId: string, shape: string): Invocation {
-    const key = `${runId}\u0000${shape}`;
-    const found = invocations.get(key);
-    if (found !== undefined) {
+  /**
+   * The identity this call carries.
+   *
+   * A fresh identity, unless this is the continuation of a call whose answer
+   * was lost and whose question is exactly this one.
+   */
+  function identify(runId: string, question: string): Ambiguous {
+    const found = ambiguous.get(runId);
+    if (found !== undefined && found.question === question) {
       return found;
     }
-    const minted: Invocation = {
+    return {
       commandId: host.ids.command(),
       executionId: host.ids.execution(),
-      shape,
+      question,
+      command: undefined,
     };
-    invocations.set(key, minted);
-    return minted;
   }
 
-  function settled(runId: string, shape: string): void {
-    invocations.delete(`${runId}\u0000${shape}`);
+  /** Remember a call whose answer never arrived, with what it sent. */
+  function unanswered(runId: string, held: Ambiguous, command?: RemoteForkCommit): void {
+    ambiguous.set(runId, { ...held, command: command ?? held.command });
+  }
+
+  /** Retire a call that was answered, whatever the answer was. */
+  function answeredNow(runId: string, held: Ambiguous): void {
+    const found = ambiguous.get(runId);
+    if (found?.commandId === held.commandId) {
+      ambiguous.delete(runId);
+    }
   }
 
   function hold(lock: ExecutorLock): Hold | undefined {
@@ -182,6 +215,7 @@ export function* useRemoteLifecycle(
       runId,
       connection,
       execution: undefined,
+      busy: false,
       live: true,
     };
     held.set(lock, record);
@@ -213,13 +247,13 @@ export function* useRemoteLifecycle(
           ),
         );
       }
-      const shape = questionOf(["cancel"]);
-      const addressed = invocation(runId, shape);
+      const question = questionOf(["cancel"]);
+      const addressed = identify(runId, question);
       const answered = yield* admitted.value.lifecycle.cancel(addressed.commandId, runId);
       if (!answered.ok) {
         return answered;
       }
-      settled(runId, shape);
+      answeredNow(runId, addressed);
       if (answered.value.kind === "refused") {
         return Err(
           new WorkflowRequestError(
@@ -248,7 +282,35 @@ export function* useRemoteLifecycle(
     { at: "min" },
   );
 
-  return transitions(host, hold, invocation, settled);
+  return transitions(host, hold, identify, unanswered, answeredNow);
+}
+
+/**
+ * Take this acquisition for one transition, or say why it cannot be taken.
+ *
+ * One acquisition begins one execution. Two identical calls are two calls, so
+ * the second is refused while the first is still in flight as well as after it
+ * has returned.
+ */
+function engage(held: Hold): WorkflowRequestError | undefined {
+  if (held.execution !== undefined || held.busy) {
+    return new WorkflowRequestError(
+      "this executor lock has already begun a document execution. One acquisition begins one.",
+    );
+  }
+  held.busy = true;
+  return undefined;
+}
+
+/**
+ * Whether a failure left the owner's decision unknown.
+ *
+ * A refusal or a conflict is an answer: the owner decided, and the question is
+ * finished. A transport that ended without answering is not, and the same
+ * question has to be asked again rather than replaced by a new one.
+ */
+function lost(error: WorkflowStorageError): boolean {
+  return error instanceof WorkflowTransactionError;
 }
 
 /** What an unrecognized lock answers, wherever one is offered. */
@@ -261,8 +323,9 @@ function unauthorized(): WorkflowRequestError {
 function transitions(
   host: RemoteLifecycleHost,
   hold: (lock: ExecutorLock) => Hold | undefined,
-  invocation: (runId: string, shape: string) => Invocation,
-  settled: (runId: string, shape: string) => void,
+  identify: (runId: string, question: string) => Ambiguous,
+  unanswered: (runId: string, held: Ambiguous, command?: RemoteForkCommit) => void,
+  answeredNow: (runId: string, held: Ambiguous) => void,
 ): WorkflowExecutionTransitions {
   return {
     *begin(
@@ -278,14 +341,12 @@ function transitions(
           new WorkflowRequestError("this executor lock was issued for a different workflow run."),
         );
       }
-      if (held.execution !== undefined) {
-        return Err(
-          new WorkflowRequestError(
-            "this executor lock has already begun a document execution. One acquisition begins one.",
-          ),
-        );
+      const busy = engage(held);
+      if (busy !== undefined) {
+        return Err(busy);
       }
       if (request.action === "resume" && request.creation !== undefined) {
+        held.busy = false;
         return Err(new WorkflowRequestError("a resume does not carry a creation."));
       }
       // Minted once for this question, outside anything that could retry: the
@@ -293,7 +354,7 @@ function transitions(
       // second execution. A later acquisition asking the same question finds
       // the same identity and re-observes the decision.
       const creation = creationOf(request.runId, request.creation);
-      const shape = questionOf([
+      const question = questionOf([
         "begin",
         request.action,
         creation === null ? null : creationShape(creation),
@@ -301,7 +362,7 @@ function transitions(
           ? null
           : canonicalJson(request.creation.retrieval),
       ]);
-      const addressed = invocation(request.runId, shape);
+      const addressed = identify(request.runId, question);
       const answered = yield* held.connection.lifecycle.begin({
         commandId: addressed.commandId,
         runId: request.runId,
@@ -310,16 +371,23 @@ function transitions(
         retrieval: request.creation?.retrieval,
         executionId: addressed.executionId,
       });
+      held.busy = false;
       if (!answered.ok) {
-        // The answer is lost, not the question. The identity stays, so the
-        // next acquisition asks the same one.
+        // Which kind of failure decides whether the question survives it. An
+        // answer that was lost leaves the identity standing, so a replacement
+        // acquisition asks the same one; anything the owner actually decided
+        // retires it.
+        if (lost(answered.error)) {
+          unanswered(request.runId, addressed);
+        } else {
+          answeredNow(request.runId, addressed);
+        }
         return answered;
       }
+      answeredNow(request.runId, addressed);
       if (answered.value.kind === "refused") {
-        settled(request.runId, shape);
         return Err(refusalError(answered.value.refusal, request.runId));
       }
-      settled(request.runId, shape);
       held.execution = answered.value.value.execution.executionId;
       return Ok(yield* begun(held, answered.value.value));
     },
@@ -345,22 +413,30 @@ function transitions(
       // The root the owner is held to comes from the same connection-owned
       // frontier the execution ran against, after the host has torn down.
       const frontier = yield* held.connection.link.frontierSnapshot();
-      const shape = questionOf([
+      const question = questionOf([
         "settle",
         completion.executionId,
         completion.status,
+        // The whole completion, stop reason included: a settlement that named
+        // a different reason is a different settlement.
+        canonicalJson(completion.reason ?? null),
         frontier.workspaceRootId,
       ]);
-      const addressed = invocation(held.runId, shape);
+      const addressed = identify(held.runId, question);
       const answered = yield* held.connection.lifecycle.settle(
         addressed.commandId,
         completion,
         frontier.workspaceRootId,
       );
       if (!answered.ok) {
+        if (lost(answered.error)) {
+          unanswered(held.runId, addressed);
+        } else {
+          answeredNow(held.runId, addressed);
+        }
         return answered;
       }
-      settled(held.runId, shape);
+      answeredNow(held.runId, addressed);
       held.execution = undefined;
       return Ok(answered.value.record);
     },
@@ -378,33 +454,83 @@ function transitions(
           new WorkflowRequestError("this executor lock was issued for a different workflow run."),
         );
       }
-      if (held.execution !== undefined) {
-        return Err(
-          new WorkflowRequestError(
-            "this executor lock has already begun a document execution. One acquisition begins one.",
-          ),
-        );
+      const busy = engage(held);
+      if (busy !== undefined) {
+        return Err(busy);
       }
+      const head = headOf(request);
+      const creation = creationRequest(request.runId, request.creation);
+      const question = questionOf([
+        "fork",
+        request.runId,
+        creationShape(creation),
+        request.creation.retrieval === undefined ? null : canonicalJson(request.creation.retrieval),
+        request.selection.sourceRunId,
+        request.selection.checkpointEventId,
+        serializeDurableEvent(head.runRecord),
+        serializeDurableEvent(request.rootImport),
+      ]);
+      const addressed = identify(request.runId, question);
+
+      // Before the source: a destination that already holds this fork can be
+      // continued from what it retains, and a decision this owner already made
+      // can be re-observed. Either way the source is not needed, and it may not
+      // be there any more.
+      const retained =
+        addressed.command === undefined
+          ? undefined
+          : yield* held.connection.lifecycle.commitFork(addressed.command);
+      if (retained !== undefined && retained.ok && retained.value.kind === "performed") {
+        held.busy = false;
+        answeredNow(request.runId, addressed);
+        held.execution = retained.value.value.execution.executionId;
+        return Ok(yield* begun(held, retained.value.value));
+      }
+      const continued = yield* held.connection.lifecycle.continueFork({
+        commandId: addressed.commandId,
+        runId: request.runId,
+        creation,
+        runRecord: head.runRecord,
+        rootImport: request.rootImport,
+        executionId: addressed.executionId,
+      });
+      if (!continued.ok) {
+        held.busy = false;
+        if (lost(continued.error)) {
+          unanswered(request.runId, addressed);
+        } else {
+          answeredNow(request.runId, addressed);
+        }
+        return continued;
+      }
+      if (continued.value !== "absent") {
+        held.busy = false;
+        answeredNow(request.runId, addressed);
+        if (continued.value.kind === "refused") {
+          return Err(refusalError(continued.value.refusal, request.runId));
+        }
+        held.execution = continued.value.value.execution.executionId;
+        return Ok(yield* begun(held, continued.value.value));
+      }
+
+      // Nothing there. Making a fork needs the whole source, staged under this
+      // acquisition and committed in one transaction.
       const source = yield* readSource(host, request);
       if (!source.ok) {
+        held.busy = false;
+        answeredNow(request.runId, addressed);
         return source;
       }
       const staged = yield* offer(host, held.connection.lifecycle, source.value);
       if (!staged.ok) {
+        held.busy = false;
         return staged;
       }
-      const shape = questionOf([
-        "fork",
-        request.runId,
-        source.value.anchor,
-        source.value.checkpointEventId,
-      ]);
-      const addressed = invocation(request.runId, shape);
-      const answered = yield* held.connection.lifecycle.commitFork({
+      const command: RemoteForkCommit = {
         commandId: addressed.commandId,
         runId: request.runId,
         retrieval: request.creation.retrieval,
-        creation: creationRequest(request.runId, request.creation),
+        creation,
         origin: {
           sourceRunId: source.value.sourceRunId,
           checkpointEventId: source.value.checkpointEventId,
@@ -420,18 +546,27 @@ function transitions(
           blobs: source.value.blobs.length,
           checkouts: source.value.checkouts.length,
         },
-        runRecord: headOf(request).runRecord,
+        runRecord: head.runRecord,
         rootImport: request.rootImport,
         executionId: addressed.executionId,
-      });
+      };
+      const answered = yield* held.connection.lifecycle.commitFork(command);
+      held.busy = false;
       if (!answered.ok) {
+        if (lost(answered.error)) {
+          // Kept with the exact bytes it was sent with, so a replacement
+          // acquisition resends this command rather than reading the source
+          // again.
+          unanswered(request.runId, addressed, command);
+        } else {
+          answeredNow(request.runId, addressed);
+        }
         return answered;
       }
+      answeredNow(request.runId, addressed);
       if (answered.value.kind === "refused") {
-        settled(request.runId, shape);
         return Err(refusalError(answered.value.refusal, request.runId));
       }
-      settled(request.runId, shape);
       held.execution = answered.value.value.execution.executionId;
       return Ok(yield* begun(held, answered.value.value));
     },

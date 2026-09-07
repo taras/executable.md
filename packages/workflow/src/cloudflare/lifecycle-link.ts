@@ -28,6 +28,7 @@ import type {
   RemoteBeginCommand,
   RemoteBegun,
   RemoteForkCommit,
+  RemoteForkContinuation,
   RemoteForkPart,
   RemoteLifecycleAnswer,
   RemoteLifecycleLink,
@@ -222,6 +223,38 @@ export function cloudflareLifecycleLink(
       }
     },
 
+    *continueFork(
+      continuation: RemoteForkContinuation,
+    ): Operation<Result<RemoteLifecycleAnswer<RemoteBegun> | "absent">> {
+      try {
+        const offered = yield* connection.ask(
+          continuation.commandId,
+          {
+            command: "fork-continue",
+            runId: continuation.runId,
+            creation: continuation.creation,
+            runRecord: record(continuation.runRecord),
+            rootImport: record(continuation.rootImport),
+            executionId: continuation.executionId,
+          },
+          (value: unknown) => value,
+          privateRefusal,
+        );
+        if (offered.outcome === "refused") {
+          const refusal = privateRefusal(offered.refusal);
+          if (refusal === "command:absent") {
+            // Nothing there to continue. Not a failure: the caller's next move
+            // is the source copy it has not needed until now.
+            return Ok("absent");
+          }
+          return Err(storageFailure(refusal));
+        }
+        return yield* forked(offered.value, continuation.runId);
+      } catch (error) {
+        return Err(translate(error));
+      }
+    },
+
     *commitFork(commit: RemoteForkCommit): Operation<Result<RemoteLifecycleAnswer<RemoteBegun>>> {
       try {
         const offered = yield* connection.ask(
@@ -243,51 +276,68 @@ export function cloudflareLifecycleLink(
         if (offered.outcome === "refused") {
           return Err(storageFailure(privateRefusal(offered.refusal)));
         }
-        const found = members(offered.value, ["conflict", "refusal", "value"]);
-        const refusal = found.get("refusal");
-        if (refusal !== null) {
-          if (refusal !== "cancelled" && refusal !== "resume-failed" && refusal !== "terminal") {
-            return Err(
-              new WorkflowRecordMalformedError(
-                "lifecycle answer this run's owner returned",
-                "it named no condition this build reads",
-              ),
-            );
-          }
-          return Ok({ kind: "refused", refusal });
-        }
-        const conflict = found.get("conflict");
-        if (conflict !== null) {
-          if (!Array.isArray(conflict) || conflict.length === 0) {
-            return Err(
-              new WorkflowRecordMalformedError(
-                "lifecycle answer this run's owner returned",
-                "it named no differing field",
-              ),
-            );
-          }
-          return Err(
-            new WorkflowRunConflictError(
-              commit.runId,
-              conflict.map((field) => (typeof field === "string" ? field : "definition")),
-            ),
-          );
-        }
-        const held = members(found.get("value"), ["frontier", "execution"]);
-        return Ok({
-          kind: "performed",
-          value: {
-            frontier: yield* frontierOf(held.get("frontier")),
-            execution: execution(held.get("execution")),
-            replay: false,
-            recovered: null,
-          },
-        });
+        return yield* forked(offered.value, commit.runId);
       } catch (error) {
         return Err(translate(error));
       }
     },
   };
+
+  /** One fork answer: a conflict, a condition, or the destination it made. */
+  function* forked(
+    value: unknown,
+    runId: string,
+  ): Operation<Result<RemoteLifecycleAnswer<RemoteBegun>>> {
+    const found = members(value, ["conflict", "refusal", "value"]);
+    const refusal = found.get("refusal");
+    if (refusal !== null) {
+      if (refusal !== "cancelled" && refusal !== "resume-failed" && refusal !== "terminal") {
+        return Err(
+          new WorkflowRecordMalformedError(
+            "lifecycle answer this run's owner returned",
+            "it named no condition this build reads",
+          ),
+        );
+      }
+      return Ok({ kind: "refused", refusal });
+    }
+    const conflict = found.get("conflict");
+    if (conflict !== null) {
+      if (!Array.isArray(conflict) || conflict.length === 0) {
+        return Err(
+          new WorkflowRecordMalformedError(
+            "lifecycle answer this run's owner returned",
+            "it named no differing field",
+          ),
+        );
+      }
+      return Err(
+        new WorkflowRunConflictError(
+          runId,
+          conflict.map((field) => (typeof field === "string" ? field : "definition")),
+        ),
+      );
+    }
+    const held = members(found.get("value"), ["frontier", "execution", "replay", "recovered"]);
+    if (typeof held.get("replay") !== "boolean") {
+      return Err(
+        new WorkflowRecordMalformedError(
+          "lifecycle answer this run's owner returned",
+          "it did not say whether the destination replayed",
+        ),
+      );
+    }
+    const recovered = held.get("recovered");
+    return Ok({
+      kind: "performed",
+      value: {
+        frontier: yield* frontierOf(held.get("frontier")),
+        execution: execution(held.get("execution")),
+        replay: held.get("replay") === true,
+        recovered: recovered === null ? null : execution(recovered),
+      },
+    });
+  }
 }
 
 /** One head record, in the canonical spelling a journal retains. */

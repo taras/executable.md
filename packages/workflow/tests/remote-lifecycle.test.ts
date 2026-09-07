@@ -12,7 +12,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { type Operation, type Result, scoped } from "effection";
+import { type Operation, type Result, scoped, spawn, withResolvers } from "effection";
 import { WorkflowLifecycle } from "../src/lifecycle/api.ts";
 import type { ExecutorLock } from "../src/lifecycle/api.ts";
 import type {
@@ -294,5 +294,55 @@ describe("a remote run's executor lifecycle", () => {
       // And the execution the caller is handed is the one that was begun.
       expect(outcome.second.value.execution.executionId).toBe("execution-1");
     }
+  });
+
+  it("refuses a second call while the first is still waiting for its answer", function* () {
+    const asked: string[] = [];
+    const entered = withResolvers<void>();
+    const release = withResolvers<void>();
+    const script: Script = {
+      asked,
+      gate: {
+        *wait(): Operation<void> {
+          entered.resolve();
+          yield* release.operation;
+        },
+      },
+    };
+    const outcome = yield* installed(script, function* (transitions) {
+      const lock = yield* acquired();
+      const request: WorkflowBeginRequest = { runId: RUN_ID, action: "resume" };
+      const first = yield* spawn(() => transitions.begin(lock, request));
+      // The first call has sent and is waiting for its answer. The second is a
+      // different call, however equal its arguments look.
+      yield* entered.operation;
+      const second = yield* transitions.begin(lock, request);
+      release.resolve();
+      return { first: yield* first, second };
+    });
+
+    expect(outcome.first.ok).toBe(true);
+    expect(outcome.second.ok).toBe(false);
+    // One owner mutation, not two.
+    expect(asked.filter((command) => command === "begin")).toHaveLength(1);
+  });
+
+  it("gives a corrected request a new identity after a definitive answer", function* () {
+    const commands: string[] = [];
+    const outcome = yield* installed({ commands, begin: "cancelled" }, function* (transitions) {
+      const lock = yield* acquired();
+      const refused = yield* transitions.begin(lock, { runId: RUN_ID, action: "resume" });
+      return { refused, commands: [...commands] };
+    });
+    // The owner answered, so that question is finished. What it is not is a
+    // claim on the next one's identity.
+    expect(outcome.refused.ok).toBe(false);
+    expect(outcome.commands).toEqual(["command-1"]);
+
+    const second = yield* installed({ commands: [] }, function* (transitions) {
+      const lock = yield* acquired();
+      return yield* transitions.begin(lock, { runId: RUN_ID, action: "start" });
+    });
+    expect(second.ok).toBe(true);
   });
 });

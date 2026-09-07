@@ -12,9 +12,9 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { call, Err, Ok, type Operation, type Result, scoped } from "effection";
+import { Err, Ok, type Operation, type Result, scoped } from "effection";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
-import { stat } from "node:fs/promises";
+import { exists } from "@effectionx/fs";
 import { useStorageRoot } from "./support/storage.ts";
 import { useWorkflowRunConnections } from "../src/deno/connections.ts";
 import { stageRemoteFork } from "../src/deno/remote-staging.ts";
@@ -147,17 +147,6 @@ function* staged<T>(
       throw built.error;
     }
     return yield* body(built.value);
-  });
-}
-
-function* exists(path: string): Operation<boolean> {
-  return yield* call(async function () {
-    try {
-      await stat(path);
-      return true;
-    } catch {
-      return false;
-    }
   });
 }
 

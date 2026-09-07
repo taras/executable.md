@@ -226,4 +226,87 @@ describe("a remote fork's destination", () => {
     expect(opened).toEqual([]);
     expect(asked).toEqual([]);
   });
+
+  it("continues a destination that already holds this fork, without its source", function* () {
+    const asked: string[] = [];
+    const sourced: string[] = [];
+    const outcome = yield* installed(
+      // No source at all: this host would fail if one were asked for.
+      { asked, sourced, continues: true },
+      function* (transitions) {
+        const lock = yield* acquired(DESTINATION);
+        return yield* transitions.fork(lock, request());
+      },
+    );
+
+    expect([outcome.ok, outcome.ok === false && String(outcome.error)]).toEqual([true, false]);
+    // The destination answered from what it retains. Nothing was read from the
+    // source, and nothing was staged.
+    expect(sourced).toEqual([]);
+    expect(asked).toEqual(["fork-continue"]);
+  });
+
+  it("asks the source only when the destination holds no fork yet", function* () {
+    const asked: string[] = [];
+    const sourced: string[] = [];
+    const outcome = yield* installed({ asked, sourced, source: source() }, function* (transitions) {
+      const lock = yield* acquired(DESTINATION);
+      return yield* transitions.fork(lock, request());
+    });
+
+    expect(outcome.ok).toBe(true);
+    // Absent, so the source was read and staged, and the commit came last.
+    expect(sourced).toEqual([SOURCE_RUN_ID]);
+    expect(asked[0]).toBe("fork-continue");
+    expect(asked.at(-1)).toBe("fork");
+  });
+
+  it("stays absent when the destination is pristine and the source cannot be read", function* () {
+    const asked: string[] = [];
+    const outcome = yield* installed({ asked }, function* (transitions) {
+      const lock = yield* acquired(DESTINATION);
+      return yield* transitions.fork(lock, request());
+    });
+
+    expect(outcome.ok).toBe(false);
+    // It asked the destination, learned there was nothing, and stopped when
+    // the source it needed was unavailable. Nothing was committed.
+    expect(asked).toEqual(["fork-continue"]);
+  });
+
+  it("resends the command it already sent when its answer was lost", function* () {
+    const asked: string[] = [];
+    const sourced: string[] = [];
+    const commands: string[] = [];
+    const loseAnswer = new Set(["command-1"]);
+    const committed = new Map();
+    const script: Script = {
+      asked,
+      sourced,
+      commands,
+      loseAnswer,
+      committed,
+      source: source(),
+    };
+    const outcome = yield* installed(script, function* (transitions) {
+      const first = yield* scoped(function* () {
+        const lock = yield* acquired(DESTINATION);
+        return yield* transitions.fork(lock, request());
+      });
+      // The source is gone by the time the retry happens.
+      const retried = yield* scoped(function* () {
+        const lock = yield* acquired(DESTINATION);
+        return yield* transitions.fork(lock, request());
+      });
+      return { first, retried, sourced: [...sourced], asked: [...asked] };
+    });
+
+    expect(outcome.first.ok).toBe(false);
+    expect(outcome.retried.ok).toBe(true);
+    // The retry resent the exact command before anything else, so the source
+    // was read once — for the first attempt — and not again.
+    expect(outcome.sourced).toEqual([SOURCE_RUN_ID]);
+    expect(outcome.asked.at(-1)).toBe("fork");
+    expect(commands.filter((id) => id === "command-1").length).toBeGreaterThan(1);
+  });
 });

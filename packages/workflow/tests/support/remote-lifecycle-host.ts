@@ -13,6 +13,7 @@ import { ensure, Err, Ok, type Operation, type Result } from "effection";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import type {
   RemoteBeginCommand,
+  RemoteForkContinuation,
   RemoteBegun,
   RemoteExecutorConnection,
   RemoteForkCommit,
@@ -67,6 +68,12 @@ export interface Script {
   readonly commands?: string[];
   /** Every retrieval value a begin carried. */
   readonly retrievals?: (unknown | null)[];
+  /** Held open until a test releases it, so a call can be caught in flight. */
+  readonly gate?: { wait(): Operation<void> };
+  /** Every run whose source was resolved. */
+  readonly sourced?: string[];
+  /** Whether a destination already holds this fork, so no source is needed. */
+  readonly continues?: boolean;
   /** Command identities whose first answer is lost after the owner commits. */
   readonly loseAnswer?: Set<string>;
   /** What an owner decided for a command identity, once it has decided. */
@@ -166,6 +173,10 @@ function lifecycle(script: Script): RemoteLifecycleLink {
     *begin(request: RemoteBeginCommand): Operation<Result<RemoteLifecycleAnswer<RemoteBegun>>> {
       script.asked?.push("begin");
       script.commands?.push(request.commandId);
+      if (script.gate !== undefined) {
+        // Caught in flight: the call has been sent and has not been answered.
+        yield* script.gate.wait();
+      }
       script.retrievals?.push(request.retrieval ?? null);
       if (script.loseAnswer?.has(request.commandId) === true) {
         // The owner committed and the answer never arrived.
@@ -206,6 +217,20 @@ function lifecycle(script: Script): RemoteLifecycleLink {
       return Ok(undefined);
     },
     // deno-lint-ignore require-yield
+    // deno-lint-ignore require-yield
+    *continueFork(
+      continuation: RemoteForkContinuation,
+    ): Operation<Result<RemoteLifecycleAnswer<RemoteBegun> | "absent">> {
+      script.asked?.push("fork-continue");
+      script.commands?.push(continuation.commandId);
+      const held = script.continues;
+      if (held === undefined) {
+        // Nothing there to continue, which sends the caller to the source.
+        return Ok("absent");
+      }
+      return Ok({ kind: "performed", value: begun(continuation.executionId, script) });
+    },
+
     *commitFork(commit: RemoteForkCommit): Operation<Result<RemoteLifecycleAnswer<RemoteBegun>>> {
       script.asked?.push("fork");
       script.commits?.push(commit);
@@ -244,6 +269,7 @@ export function installedHost(script: Script): RemoteLifecycleHost {
     },
     // deno-lint-ignore require-yield
     *source(runId: string): Operation<Result<RemoteReadPlane>> {
+      script.sourced?.push(runId);
       const held = script.source;
       if (held === undefined) {
         return Err(new WorkflowRequestError("this scripted host holds no source"));

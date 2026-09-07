@@ -72,7 +72,8 @@ export type CommandName =
   | "cancel"
   | "settle"
   | "fork-stage"
-  | "fork";
+  | "fork"
+  | "fork-continue";
 
 export type CommandRefusal =
   | "not-an-object"
@@ -342,6 +343,22 @@ export interface ForkCommand extends CommandEnvelope {
   readonly executionId: string;
 }
 
+/**
+ * Take up a destination that already holds this fork.
+ *
+ * No origin and no counts: a committed fork is independent of the run it was
+ * copied from, so continuing one asks only what the destination itself
+ * retains.
+ */
+export interface ForkContinueCommand extends CommandEnvelope {
+  readonly command: "fork-continue";
+  readonly runId: string;
+  readonly creation: CreateWorkflowRunRequest;
+  readonly runRecord: DurableEvent;
+  readonly rootImport: DurableEvent;
+  readonly executionId: string;
+}
+
 export interface SettleCommand extends CommandEnvelope {
   readonly command: "settle";
   readonly completion: DocumentExecutionCompletion;
@@ -363,7 +380,8 @@ export type RunnerCommand =
   | CancelCommand
   | SettleCommand
   | ForkStageCommand
-  | ForkCommand;
+  | ForkCommand
+  | ForkContinueCommand;
 
 export type CommandResult =
   | { readonly id: string; readonly outcome: "performed"; readonly value: unknown }
@@ -394,6 +412,7 @@ const MEMBERS: Record<CommandName, readonly string[]> = {
   cancel: [...ENVELOPE, "runId"],
   settle: [...ENVELOPE, "completion", "expectedWorkspaceRootId"],
   "fork-stage": [...ENVELOPE, "section", "position", "part"],
+  "fork-continue": [...ENVELOPE, "runId", "creation", "runRecord", "rootImport", "executionId"],
   fork: [
     ...ENVELOPE,
     "runId",
@@ -539,7 +558,8 @@ export function parseCommand(raw: string): RunnerCommand {
     command !== "cancel" &&
     command !== "settle" &&
     command !== "fork-stage" &&
-    command !== "fork"
+    command !== "fork" &&
+    command !== "fork-continue"
   ) {
     throw new CommandError("unknown-command");
   }
@@ -669,6 +689,22 @@ export function parseCommand(raw: string): RunnerCommand {
       section,
       position: whole(members.get("position")),
       part: Object.fromEntries(Object.entries(part)),
+    };
+  }
+  if (command === "fork-continue") {
+    const runId = text(members, "runId", MAX_RUN_ID);
+    const creation = parseCreateRequest(members.get("creation"));
+    if (!creation.ok || creation.value.runId !== runId) {
+      throw new CommandError("malformed-member");
+    }
+    return {
+      id,
+      command,
+      runId,
+      creation: creation.value,
+      runRecord: forkEvent(members.get("runRecord")),
+      rootImport: forkEvent(members.get("rootImport")),
+      executionId: text(members, "executionId", MAX_RUN_ID),
     };
   }
   if (command === "fork") {

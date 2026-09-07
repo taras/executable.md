@@ -24,6 +24,8 @@ import {
 } from "./support/executor-object.ts";
 import { generateKeys, signToken, type TestKeys } from "./support/tokens.ts";
 import { forkSelectionAnchor } from "../../src/cloudflare/fork-anchor.ts";
+import { sha256Hex } from "../../src/workspace/sha256.ts";
+import { WORKSPACE_ROOT_DOMAIN } from "../../src/workspace/root-manifest.ts";
 import { forkRunRecordEvent } from "../../src/journal-events.ts";
 
 let unique = 0;
@@ -499,5 +501,243 @@ describe("committing a fork on its destination owner", () => {
       kind: "git",
       remote: "origin",
     });
+  });
+});
+
+/** Take up a destination that already holds this fork, naming no source. */
+function continuation(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: "fork-continue",
+    command: "fork-continue",
+    runId: RUN_ID,
+    creation: commit()["creation"],
+    runRecord: HEAD,
+    rootImport: IMPORT,
+    executionId: "execution-2",
+    ...overrides,
+  };
+}
+
+describe("continuing a fork the destination already holds", () => {
+  it("answers absent when there is nothing here, and needs no source", async () => {
+    const stub = executor();
+    await connected(stub);
+
+    expect(await ask(stub, continuation())).toEqual({
+      id: "fork-continue",
+      outcome: "refused",
+      refusal: "command:absent",
+    });
+    expect(await on(stub, (owner) => owner.hasWorkflowSchema())).toBe(false);
+  });
+
+  it("recovers and begins one replacement, without reading any source", async () => {
+    const stub = executor();
+    await connected(stub);
+    let minted = 0;
+    await offer(stub, () => `command-${(minted += 1)}`);
+    await ask(stub, commit());
+    await on(stub, (owner) => owner.dropConnections());
+    await connected(stub);
+
+    const continued = await ask(stub, continuation());
+
+    expect(continued["outcome"]).toBe("performed");
+    const value = Object(Object(continued["value"])["value"]);
+    expect(value["replay"]).toBe(false);
+    // The lost executor's execution was closed on the way in and surfaced.
+    expect(Object(value["recovered"])["stopStatus"]).toBe("interrupted");
+    const executions = await on(stub, (owner) => owner.executionRows());
+    expect(executions.filter((row) => row["stopped_at"] === null)).toHaveLength(1);
+  });
+
+  it("reports a terminal destination as a replay, and leaves it terminal", async () => {
+    const stub = executor();
+    await connected(stub);
+    let minted = 0;
+    await offer(stub, () => `command-${(minted += 1)}`);
+    await ask(stub, commit());
+    const root = await on(stub, (owner) => owner.currentRootId());
+    await ask(stub, {
+      id: "settle-1",
+      command: "settle",
+      completion: { executionId: "execution-1", status: "completed" },
+      expectedWorkspaceRootId: root,
+    });
+    await on(stub, (owner) => owner.dropConnections());
+    await connected(stub);
+
+    const continued = await ask(stub, continuation());
+
+    expect(continued["outcome"]).toBe("performed");
+    const value = Object(Object(continued["value"])["value"]);
+    expect(value["replay"]).toBe(true);
+    // The outcome that won is not made mutable again.
+    expect((await on(stub, (owner) => owner.runRow()))?.["status"]).toBe("completed");
+  });
+
+  it("refuses a continuation whose root import is not the one it retains", async () => {
+    const stub = executor();
+    await connected(stub);
+    let minted = 0;
+    await offer(stub, () => `command-${(minted += 1)}`);
+    await ask(stub, commit());
+    await on(stub, (owner) => owner.dropConnections());
+    await connected(stub);
+
+    const refused = await ask(
+      stub,
+      continuation({
+        rootImport: serializeDurableEvent({
+          type: "yield",
+          coroutineId: "root",
+          description: { type: "import_component", name: "__root__" },
+          result: {
+            status: "ok",
+            value: { kind: "repository", path: "README.md", content: "# elsewhere" },
+          },
+        }),
+      }),
+    );
+
+    expect(refused["outcome"]).toBe("performed");
+    expect(Object(refused["value"])["conflict"]).toEqual(["lineage"]);
+    // No replacement execution began.
+    expect(await on(stub, (owner) => owner.executionRows())).toHaveLength(1);
+  });
+
+  it("refuses a continuation whose run record is not the one this fork implies", async () => {
+    const stub = executor();
+    await connected(stub);
+    let minted = 0;
+    await offer(stub, () => `command-${(minted += 1)}`);
+    await ask(stub, commit());
+    await on(stub, (owner) => owner.dropConnections());
+    await connected(stub);
+
+    const refused = await ask(
+      stub,
+      continuation({
+        runRecord: serializeDurableEvent(
+          forkRunRecordEvent({ runId: RUN_ID, base: "other", pinnedCommit: "0".repeat(40) }),
+        ),
+      }),
+    );
+
+    expect(Object(refused["value"])["conflict"]).toEqual(["lineage"]);
+    expect(await on(stub, (owner) => owner.executionRows())).toHaveLength(1);
+  });
+});
+
+describe("copying content whose digest is valid in both roles", () => {
+  it("keeps the manifest and blob watermarks apart", async () => {
+    // A Workspace whose file is the bytes of one content manifest, and whose
+    // content manifest for that file names those same bytes as its chunk. The
+    // digest is then both a manifest identity and a blob identity, with its
+    // own watermark in each table.
+    const inner = new TextEncoder().encode(DOFS_MANIFEST);
+    const shared = MANIFEST_ID;
+    const outer = JSON.stringify({
+      version: 1,
+      chunks: [{ hash: shared, size: inner.length }],
+    });
+    const outerBytes = new TextEncoder().encode(outer);
+    const outerId = sha256Hex(outerBytes);
+    const manifest = JSON.stringify({
+      format: 1,
+      entries: [
+        { path: "/", kind: "directory", mode: 493, mtime: 0 },
+        {
+          path: "/MANIFEST.json",
+          kind: "file",
+          mode: 420,
+          mtime: 0,
+          size: inner.length,
+          manifest: outerId,
+          hardlink: null,
+        },
+      ],
+    });
+    const rootId = sha256Hex(`${WORKSPACE_ROOT_DOMAIN}${manifest}`);
+    const root = {
+      rootId,
+      formatVersion: 1,
+      manifest,
+      manifestHashes: [outerId],
+      blobHashes: [shared],
+    };
+    const manifestPart = { hash: outerId, size: inner.length, lastSeen: 11 };
+    // The same digest, in the other role, with its own watermark.
+    const blobPart = { hash: shared, size: inner.length, lastSeen: 23 };
+    const inheritedPart = {
+      eventId: "event-work",
+      record: event("work"),
+      workspaceRootId: rootId,
+    };
+
+    const stub = executor();
+    await connected(stub);
+    let minted = 0;
+    const id = () => `command-${(minted += 1)}`;
+    await ask(stub, {
+      id: id(),
+      command: "stage",
+      kind: "manifest",
+      digest: outerId,
+      bytes: base64(outerBytes),
+    });
+    await ask(stub, {
+      id: id(),
+      command: "stage",
+      kind: "blob",
+      digest: shared,
+      bytes: base64(inner),
+    });
+    for (const part of [
+      { section: "roots", body: root },
+      { section: "inherited", body: inheritedPart },
+      { section: "manifests", body: manifestPart },
+      { section: "blobs", body: blobPart },
+    ]) {
+      expect(
+        (
+          await ask(stub, {
+            id: id(),
+            command: "fork-stage",
+            section: part.section,
+            position: 0,
+            part: part.body,
+          })
+        )["outcome"],
+      ).toBe("performed");
+    }
+
+    const forked = await ask(stub, {
+      ...commit(),
+      origin: {
+        sourceRunId: SOURCE_RUN_ID,
+        checkpointEventId: "event-work",
+        checkpointWorkspaceRootId: rootId,
+        runRecordWorkspaceRootId: rootId,
+        rootImportWorkspaceRootId: rootId,
+        anchor: forkSelectionAnchor({
+          checkpointEventId: "event-work",
+          checkpointWorkspaceRootId: rootId,
+          runRecordWorkspaceRootId: rootId,
+          rootImportWorkspaceRootId: rootId,
+          inherited: [inheritedPart],
+          roots: [root],
+          manifests: [{ ...manifestPart, encoded: base64(outerBytes) }],
+          blobs: [blobPart],
+          checkouts: [],
+        }),
+      },
+    });
+
+    expect(forked["outcome"]).toBe("performed");
+    const watermarks = await on(stub, (owner) => owner.contentWatermarks());
+    // Two roles, two watermarks, neither overwriting the other.
+    expect(watermarks.manifests).toEqual([11]);
+    expect(watermarks.blobs).toEqual([23]);
   });
 });

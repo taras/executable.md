@@ -83,6 +83,16 @@ export interface RemoteBeginCommand {
 }
 
 /** Everything one committed fork is decided from. */
+/** Taking up a destination that already holds this fork, without its source. */
+export interface RemoteForkContinuation {
+  readonly commandId: string;
+  readonly runId: string;
+  readonly creation: CreateWorkflowRunRequest;
+  readonly runRecord: DurableEvent;
+  readonly rootImport: DurableEvent;
+  readonly executionId: string;
+}
+
 export interface RemoteForkCommit {
   /** The identity this logical invocation keeps, retry after retry. */
   readonly commandId: string;
@@ -134,4 +144,13 @@ export interface RemoteLifecycleLink {
   stageForkPart(commandId: string, part: RemoteForkPart): Operation<Result<void>>;
   /** Commit the offered parts as one destination run and its first execution. */
   commitFork(commit: RemoteForkCommit): Operation<Result<RemoteLifecycleAnswer<RemoteBegun>>>;
+  /**
+   * Continue a destination that already holds this fork.
+   *
+   * `absent` rather than a failure when the destination holds no run: that is
+   * the answer that sends a caller to the source it has not needed yet.
+   */
+  continueFork(
+    continuation: RemoteForkContinuation,
+  ): Operation<Result<RemoteLifecycleAnswer<RemoteBegun> | "absent">>;
 }

@@ -203,13 +203,15 @@ export function adoptExecution(
   storage: OwnerStorage,
   acquisitionId: string,
   commandId: string,
-): void {
+): "adopted" | "nothing-to-adopt" | "stale" {
   const decided = storage.sql
     .exec(`SELECT execution_id FROM ${MUTATION_TABLE} WHERE command_id = ?`, commandId)
     .toArray()[0];
   const executionId = decided?.["execution_id"];
   if (typeof executionId !== "string") {
-    return;
+    // The decision began nothing, so there is nothing to hold. Answering it
+    // again is answering a question, not granting authority.
+    return "nothing-to-adopt";
   }
   const open = storage.sql
     .exec(
@@ -218,25 +220,27 @@ export function adoptExecution(
     )
     .toArray()[0];
   if (open === undefined) {
-    // Finished since. There is nothing to authorize, and the decision stands
-    // as the answer it always was.
-    return;
+    // Finished since — recovered by a later executor, or settled. The run has
+    // moved past this decision, and handing it back as current authority would
+    // hand back a database nobody may settle.
+    return "stale";
   }
   const holder = storage.sql
     .exec(`SELECT acquisition_id FROM ${HOLD_TABLE} WHERE execution_id = ?`, executionId)
     .toArray()[0];
   if (holder !== undefined) {
     if (holder["acquisition_id"] !== acquisitionId) {
-      // Somebody live began it. Two acquisitions cannot hold one execution.
-      throw new Error("private protocol storage holds a conflicting execution hold");
+      // Somebody live holds it. Two acquisitions cannot hold one execution.
+      return "stale";
     }
-    return;
+    return "adopted";
   }
   storage.sql.exec(
     `INSERT INTO ${HOLD_TABLE} (acquisition_id, execution_id) VALUES (?, ?)`,
     acquisitionId,
     executionId,
   );
+  return "adopted";
 }
 
 /** Which execution this acquisition began, when it has begun one. */

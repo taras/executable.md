@@ -42,6 +42,8 @@ import type { OwnerStorage } from "./storage.ts";
 import type { OwnerTransaction } from "./owner-transaction.ts";
 import { establishRun } from "./owner-open.ts";
 import { beginRun, type LifecycleRefusal } from "./owner-lifecycle.ts";
+import { conflictingFields } from "../storage/compatibility.ts";
+import { recognizeObject as recognize } from "./recognition.ts";
 import { readFrontier, validateRetainedRoot, type FrontierValue } from "./owner-reads.ts";
 import { FORK_TABLE, holdExecution, STAGING_TABLE } from "./private-schema.ts";
 import { checkoutKey, forkSelectionAnchor } from "./fork-anchor.ts";
@@ -54,6 +56,10 @@ import type { DocumentExecutionRecord } from "../storage/record.ts";
 export interface ForkedValue {
   readonly frontier: FrontierValue;
   readonly execution: DocumentExecutionRecord;
+  /** Whether the destination kept a terminal state instead of running. */
+  readonly replay: boolean;
+  /** What stale recovery closed on the way in, when it closed anything. */
+  readonly recovered: DocumentExecutionRecord | null;
 }
 
 /** A fork answer: the destination, or which immutable fields say it is another. */
@@ -63,6 +69,9 @@ export interface ForkValue {
   readonly refusal: LifecycleRefusal | null;
   readonly value: ForkedValue | null;
 }
+
+const RUN_COLUMNS = `run_id, definition, base, props, status,
+  stop_reason_kind, stop_reason_code, stop_reason_event_id, created_at, updated_at`;
 
 const MAX_PART_BYTES = 256 * 1024;
 const MAX_PARTS = 8192;
@@ -266,7 +275,7 @@ function retainRoot(
   storage: OwnerStorage,
   acquisitionId: string,
   root: StagedRoot,
-  watermarks: ReadonlyMap<string, number>,
+  watermarks: ContentWatermarks,
 ): void {
   const parsed = parseWorkspaceRootManifest(root.manifest, () => {
     throw new CommandError("malformed-member");
@@ -321,7 +330,7 @@ function retainRoot(
       size,
       // The watermark the source retained beside these bytes. A digest stands
       // for the bytes and for their size; it does not stand for this.
-      watermarkOf(watermarks, hash),
+      watermarkOf(watermarks.blob, hash),
     );
     storage.sql.exec(
       "INSERT INTO vfs_blob_bytes (hash, bytes) VALUES (?, ?) ON CONFLICT(hash) DO NOTHING",
@@ -338,7 +347,7 @@ function retainRoot(
         throw new CommandError("malformed-member");
       }).size,
       bytes,
-      watermarkOf(watermarks, hash),
+      watermarkOf(watermarks.manifest, hash),
     );
   }
 
@@ -518,7 +527,7 @@ function reconstruct(
   storage: OwnerStorage,
   acquisitionId: string,
   input: { readonly origin: ForkOrigin; readonly counts: ForkCounts },
-): { anchor: string; rootIds: Set<string>; watermarks: Map<string, number> } {
+): { anchor: string; rootIds: Set<string>; watermarks: ContentWatermarks } {
   const roots = section(storage, acquisitionId, "roots", input.counts.roots).map((part) =>
     parseRoot(part),
   );
@@ -549,10 +558,13 @@ function reconstruct(
     (part) => parseCheckoutPart(part),
   );
 
-  const watermarks = new Map<string, number>();
-  for (const piece of [...manifests, ...blobs]) {
-    watermarks.set(piece.hash, piece.lastSeen);
-  }
+  // Two namespaces, never one. A digest identifies bytes, and the same bytes
+  // can be one manifest's encoding and another manifest's chunk: the two tables
+  // retain their own watermarks, so one role must not answer for the other.
+  const watermarks = {
+    manifest: metadataOf(manifests),
+    blob: metadataOf(blobs),
+  };
 
   return {
     rootIds,
@@ -576,6 +588,28 @@ function reconstruct(
       checkouts,
     }),
   };
+}
+
+/** The watermarks one transfer carried, kept by the role each belongs to. */
+export interface ContentWatermarks {
+  readonly manifest: ReadonlyMap<string, number>;
+  readonly blob: ReadonlyMap<string, number>;
+}
+
+/** One section's metadata, refusing a digest it names twice. */
+function metadataOf(
+  pieces: readonly { hash: string; size: number; lastSeen: number }[],
+): Map<string, number> {
+  const held = new Map<string, number>();
+  for (const piece of pieces) {
+    if (held.has(piece.hash)) {
+      // The same identity described twice in one role. Which description is
+      // the transfer's is not a question this can answer.
+      throw new CommandError("malformed-member");
+    }
+    held.set(piece.hash, piece.lastSeen);
+  }
+  return held;
 }
 
 /** One manifest's or blob's retained metadata, as a part carries it. */
@@ -662,6 +696,124 @@ function requireHeadRecords(
 }
 
 /**
+ * Continue a destination that already holds this fork, without its source.
+ *
+ * A committed fork is independent: it holds its own prefix, its own content and
+ * its own Workspace, and nothing about continuing it needs the run it was
+ * copied from. So this asks only what the destination itself retains — its
+ * immutable identity, its lineage, and the two head records it wrote for
+ * itself — and then takes the run up through the same recovery and admission a
+ * resume uses.
+ *
+ * Absent when nothing is here. Making a fork needs a source; this is for when
+ * one was already made.
+ */
+export function continueFork(
+  storage: OwnerStorage,
+  transaction: OwnerTransaction,
+  acquisitionId: string,
+  input: {
+    readonly runId: string;
+    readonly creation: CreateWorkflowRunRequest;
+    readonly runRecord: DurableEvent;
+    readonly rootImport: DurableEvent;
+    readonly executionId: string;
+  },
+  now: () => string,
+): ForkValue {
+  if (
+    rows(storage, "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'workflow_run'")
+      .length === 0
+  ) {
+    // Nothing here to continue. Copying a source is a different command.
+    throw new CommandError("absent");
+  }
+  recognize(storage);
+  const stored = rows(storage, `SELECT ${RUN_COLUMNS} FROM workflow_run`)[0];
+  if (stored === undefined) {
+    throw new CommandError("absent");
+  }
+  const record = readRunRecord(stored);
+  if (record.runId !== input.runId) {
+    throw new CommandError("wrong-run");
+  }
+  const differing = conflictingFields(record, input.creation);
+  if (differing.length > 0) {
+    return { conflict: differing, refusal: null, value: null };
+  }
+
+  const lineage = rows(
+    storage,
+    `SELECT source_run_id, checkpoint_event_id, checkpoint_workspace_root_id, selection_anchor
+       FROM workflow_fork_lineage WHERE id = 1`,
+  )[0];
+  if (lineage === undefined) {
+    // A run, and not a fork. Continuing it as one would claim a lineage it
+    // does not have.
+    return { conflict: ["lineage"], refusal: null, value: null };
+  }
+
+  // The two records this fork wrote for itself, as it retains them. A request
+  // carrying a different root import is a different fork, whatever else agrees.
+  const heads = rows(
+    storage,
+    "SELECT record, workspace_root_id FROM journal_events ORDER BY sequence LIMIT 2",
+  );
+  const expected = serializeDurableEvent(
+    forkRunRecordEvent({
+      runId: input.runId,
+      base: input.creation.base,
+      pinnedCommit: input.creation.definition.objectId,
+    }),
+  );
+  const roots = new Set(
+    rows(storage, "SELECT root_id FROM workspace_roots").map((row) => String(row["root_id"])),
+  );
+  if (
+    heads.length !== 2 ||
+    serializeDurableEvent(input.runRecord) !== expected ||
+    heads[0]?.["record"] !== expected ||
+    heads[1]?.["record"] !== serializeDurableEvent(input.rootImport) ||
+    !roots.has(String(heads[0]?.["workspace_root_id"])) ||
+    !roots.has(String(heads[1]?.["workspace_root_id"]))
+  ) {
+    return { conflict: ["lineage"], refusal: null, value: null };
+  }
+
+  const resumed = beginRun(
+    storage,
+    transaction,
+    acquisitionId,
+    input.runId,
+    "resume",
+    null,
+    null,
+    input.executionId,
+    now,
+  );
+  if (resumed.conflict !== null) {
+    return { conflict: resumed.conflict, refusal: null, value: null };
+  }
+  if (resumed.refusal !== null) {
+    return { conflict: null, refusal: resumed.refusal, value: null };
+  }
+  const begun = resumed.value;
+  if (begun === null) {
+    throw new CommandError("malformed-member");
+  }
+  return {
+    conflict: null,
+    refusal: null,
+    value: {
+      frontier: begun.frontier,
+      execution: begun.execution,
+      replay: begun.replay,
+      recovered: begun.recovered,
+    },
+  };
+}
+
+/**
  * Commit one fork: the destination and everything it inherited, together.
  *
  * Runs inside the caller's transaction. What it writes is what the schema's own
@@ -700,7 +852,10 @@ export function commitFork(
   // A transfer that is not that selection stops here, with the destination
   // holding no run.
   const staged = fresh ? reconstruct(storage, acquisitionId, input) : undefined;
-  const watermarks = staged?.watermarks ?? new Map<string, number>();
+  const watermarks: ContentWatermarks = staged?.watermarks ?? {
+    manifest: new Map(),
+    blob: new Map(),
+  };
   if (staged !== undefined) {
     if (staged.anchor !== input.origin.anchor) {
       throw new CommandError("stale-journal");
@@ -771,7 +926,14 @@ export function commitFork(
     return {
       conflict: null,
       refusal: null,
-      value: { frontier: begun.frontier, execution: begun.execution },
+      // Exactly what the shared policy decided, including a terminal run that
+      // replays and whatever recovery closed on the way in.
+      value: {
+        frontier: begun.frontier,
+        execution: begun.execution,
+        replay: begun.replay,
+        recovered: begun.recovered,
+      },
     };
   }
 
@@ -881,6 +1043,10 @@ function begunOn(
   return {
     frontier: readFrontier(storage, input.runId),
     execution: readDocumentExecution(row),
+    // A fork this transaction just created runs; there was nothing here to
+    // replay and nothing to recover.
+    replay: false,
+    recovered: null,
   };
 }
 

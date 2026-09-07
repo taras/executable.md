@@ -398,4 +398,50 @@ describe("a run's lifecycle on its owner", () => {
     });
     expect(settled["outcome"]).toBe("performed");
   });
+
+  it("refuses a retained decision the run has already moved past", async () => {
+    const stub = executor();
+    await connected(stub);
+    // One executor begins and loses its answer.
+    expect((await started(stub, "command-1", "execution-1"))["outcome"]).toBe("performed");
+
+    // Another takes the run, recovers that execution and begins its own.
+    await on(stub, (owner) => owner.dropConnections());
+    await connected(stub);
+    const recovered = await ask(stub, {
+      id: "command-2",
+      command: "begin",
+      runId: RUN_ID,
+      action: "resume",
+      creation: null,
+      retrieval: null,
+      executionId: "execution-2",
+    });
+    expect(recovered["outcome"]).toBe("performed");
+
+    // The first executor retries its retained command under a later
+    // acquisition. Its execution is closed, so it is history rather than
+    // authority.
+    await on(stub, (owner) => owner.dropConnections());
+    await connected(stub);
+    const retried = await started(stub, "command-1", "execution-1");
+
+    expect(retried).toEqual({
+      id: "command-1",
+      outcome: "refused",
+      refusal: "command:stale-journal",
+    });
+    // And it cannot settle what it did not keep.
+    const root = await on(stub, (owner) => owner.currentRootId());
+    const settled = await ask(stub, {
+      id: "command-4",
+      command: "settle",
+      completion: { executionId: "execution-1", status: "completed" },
+      expectedWorkspaceRootId: root,
+    });
+    expect(settled["refusal"]).toBe("command:wrong-execution");
+    // Exactly one execution is open, and it is the recovering executor's.
+    const executions = await on(stub, (owner) => owner.executionRows());
+    expect(executions.filter((row) => row["stopped_at"] === null)).toHaveLength(1);
+  });
 });
