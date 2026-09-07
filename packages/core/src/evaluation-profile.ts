@@ -135,6 +135,26 @@ export interface CapabilityEntry {
    */
   readonly capability: FragmentCapability;
   /**
+   * The exact version-1 identity strings this entry is the successor of.
+   *
+   * Version-1 records retained one opaque string, chosen by whoever built the
+   * pinned entry: core wrote `@executablemd/core#File:read`, the workflow host
+   * wrote `@executablemd/workflow/composition/dir-v2#Dir`, and a host passing
+   * its own observation wrote whatever it liked. There is no rule that recovers
+   * four structural terms from one of those, and inferring one would be this
+   * module deciding on a host's behalf that two grants are the same.
+   *
+   * So it is stated rather than derived, by the party that owns the entry.
+   * Listing a string here is an assertion that this entry authorizes no more
+   * than the entry that string named — a continuation admitted under it resumes
+   * against this one. An entry that lists none is a new grant, and every
+   * version-1 record naming it refuses.
+   *
+   * Only a capability arm has this. The component-answer arm did not exist when
+   * version-1 records were written, so no such string ever described one.
+   */
+  readonly legacy?: readonly string[];
+  /**
    * The exact requests this entry may perform, for an entry that performs any.
    *
    * Stated per entry rather than per profile, because a ceiling belongs to the
@@ -164,6 +184,10 @@ export interface CapabilityEntry {
  * snapshot, and a continuation resolves once more in its own capture and
  * reconciles before any effect. Calling a retained resolver later would see
  * document-time middleware, which is the whole thing this avoids.
+ *
+ * This arm states no version-1 alias, and has nowhere to put one: version-1
+ * records predate it, so no string an older run committed ever described an
+ * implementation the import chain answered for.
  */
 export interface ComponentAnswerEntry {
   readonly kind: "component-answer";
@@ -280,7 +304,18 @@ export function fileDeleteEntry(): CapabilityEntry {
  * operation — `ensureDirectory`, from the profile — so the body a fragment
  * reaches is not the ordinary registration and cannot be composed around.
  */
-export function directoryEntry(identity: FragmentIdentity, name: string): CapabilityEntry {
+export function directoryEntry(
+  identity: FragmentIdentity,
+  name: string,
+  /**
+   * The version-1 strings this host's own directory entry succeeds.
+   *
+   * The host's to state, because the identity is: core never wrote one of
+   * these, so it has nothing to assert about which older grant this entry is
+   * the same as.
+   */
+  legacy?: readonly string[],
+): CapabilityEntry {
   return {
     kind: "capability",
     name,
@@ -289,6 +324,7 @@ export function directoryEntry(identity: FragmentIdentity, name: string): Capabi
     capability: "directory:ensure",
     props: capabilityProps("directory:ensure"),
     description: CORE_DESCRIPTIONS["directory:ensure"],
+    ...(legacy === undefined ? {} : { legacy }),
   };
 }
 
@@ -314,7 +350,27 @@ const CORE_DESCRIPTIONS: Readonly<Record<FragmentCapability, string>> = Object.f
   fetch: "Perform one admitted HTTP read. Written self-closing.",
 });
 
+/**
+ * The exact string each of core's own entries was retained as under version 1.
+ *
+ * Written out rather than assembled, because these are the values a released
+ * build actually committed: `${CORE_ORIGIN}#Fetch`, `#File:read`, `#File:write`
+ * and `#File.Delete`, with no revision in them at all. Core states them here
+ * because core owns those entries and is the party that can assert the current
+ * one authorizes no more than the old one did.
+ */
+const CORE_LEGACY: Readonly<Record<FragmentCapability, readonly string[]>> = Object.freeze({
+  "file:read": Object.freeze([`${CORE_ORIGIN}#File:read`]),
+  "file:write": Object.freeze([`${CORE_ORIGIN}#File:write`]),
+  "file:delete": Object.freeze([`${CORE_ORIGIN}#File.Delete`]),
+  // Core never pinned a directory entry under version 1; the workflow host did,
+  // and states its own alias.
+  "directory:ensure": Object.freeze([]),
+  fetch: Object.freeze([`${CORE_ORIGIN}#Fetch`]),
+});
+
 function coreEntry(name: string, key: string, capability: FragmentCapability): CapabilityEntry {
+  const legacy = CORE_LEGACY[capability];
   return {
     kind: "capability",
     name,
@@ -323,6 +379,7 @@ function coreEntry(name: string, key: string, capability: FragmentCapability): C
     capability,
     props: capabilityProps(capability),
     description: CORE_DESCRIPTIONS[capability],
+    ...(legacy.length === 0 ? {} : { legacy }),
   };
 }
 
@@ -383,6 +440,15 @@ export interface CapturedEntry {
    * states none.
    */
   readonly dispatch?: unknown;
+  /**
+   * The version-1 identity strings this entry succeeds, copied by value.
+   *
+   * Read off the host's array once at capture and frozen, like everything else
+   * here: a host that appends to its own list afterwards is appending to an
+   * object nothing is looking at, so it cannot widen which retained records
+   * reconcile to this entry from inside its own `install()`.
+   */
+  readonly legacy?: readonly string[];
   /** This entry's own ceiling, normalized once and canonically ordered. */
   readonly requests?: readonly FetchRequest[];
 }
@@ -455,6 +521,7 @@ interface PreparedEntry {
   readonly props?: PropsSchema;
   readonly capability?: FragmentCapability;
   readonly definition?: FunctionComponentDefinition;
+  readonly legacy?: readonly string[];
   readonly requests?: readonly FetchRequest[];
 }
 
@@ -705,6 +772,7 @@ function* prepareEntry(
       "an evaluation profile admitted a name with no operation behind it.",
     );
   }
+  const legacy = captureLegacy(entry.legacy, entry.name);
   return Object.freeze({
     name: entry.name,
     identity,
@@ -714,8 +782,37 @@ function* prepareEntry(
     capability: entry.capability,
     ...described,
     definition,
+    ...(legacy === undefined ? {} : { legacy }),
     ...(requests === undefined ? {} : { requests }),
   });
+}
+
+/**
+ * The version-1 aliases this entry states, copied and checked.
+ *
+ * Copied because the host's array is the host's, and checked because an alias
+ * is a comparison term: an empty string would reconcile against nothing
+ * usefully, and a duplicate would say one thing twice. A host stating an empty
+ * list has stated no alias, which is the same as stating none.
+ */
+function captureLegacy(
+  legacy: readonly string[] | undefined,
+  name: string,
+): readonly string[] | undefined {
+  if (legacy === undefined) {
+    return undefined;
+  }
+  const held = new Set<string>();
+  for (const alias of legacy) {
+    if (typeof alias !== "string" || alias.length === 0) {
+      throw new EvaluationProfileError(
+        `an evaluation profile stated an empty version-1 identity for "${name}". An alias is a ` +
+          "string an older run actually retained, and there is no such record holding nothing.",
+      );
+    }
+    held.add(alias);
+  }
+  return held.size === 0 ? undefined : Object.freeze([...held]);
 }
 
 /**
@@ -870,6 +967,7 @@ function sealEntry(entry: PreparedEntry, sealed: ReadonlyMap<string, SealedAnswe
     ...(entry.capability === undefined ? {} : { capability: entry.capability }),
     ...described,
     definition,
+    ...(entry.legacy === undefined ? {} : { legacy: entry.legacy }),
     ...(entry.requests === undefined ? {} : { requests: entry.requests }),
   });
 }

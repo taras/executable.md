@@ -808,10 +808,22 @@ function* resolveComponentAnswers(
       { at: "min" },
     );
     for (const { name, identity } of prepared.answered) {
+      // One resolution, one claim window. It opens before the chain is asked
+      // and closes however this iteration leaves — answered, refused, or
+      // cancelled partway through — so a handler that lost this decision, or
+      // one still holding its claimant while the *next* name resolves, states
+      // nothing into a decision that is already made.
+      //
       // One call, one result. The claim and core's copy of what was claimed
       // come back together, and the object the chain returned is not read
       // again — so nothing this run keeps was decided by a second read.
-      const identified = imports.identify(name, yield* importComponent(name));
+      const resolution = imports.beginResolution(name);
+      let identified;
+      try {
+        identified = imports.identify(name, yield* importComponent(name));
+      } finally {
+        resolution.close();
+      }
       if (identified === undefined) {
         throw new EvaluationProfileError(UNIDENTIFIED_ANSWER);
       }

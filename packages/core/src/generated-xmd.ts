@@ -346,44 +346,13 @@ function identityKey(identity: RetainedFragmentIdentity): string {
 }
 
 /**
- * The version-1 spelling of one structural identity.
+ * Whether two version-2 identities describe the same implementation.
  *
- * The mapping the build that wrote version-1 records used, restated here
- * because that is what an old record has to be compared under. It is not a key
- * and not a record: nothing this build writes uses it, and it exists only so a
- * string an older run committed can be checked against what this run states.
+ * Member by member, kind included: an operation canonical core supplies the
+ * body for and an implementation the ordinary import chain answered with are
+ * different grants even under one origin, key and revision.
  */
-function legacySpelling(identity: RetainedFragmentIdentity): string {
-  return `${identity.origin}#${identity.key}@${identity.revision}`;
-}
-
-/**
- * Whether two retained identities describe the same implementation.
- *
- * Two version-2 records compare member by member, kind included: an operation
- * canonical core supplies the body for and an implementation the ordinary
- * import chain answered with are different grants even under one origin, key
- * and revision.
- *
- * A version-1 record holds one opaque string, and it is reconciled rather than
- * refused: the build that wrote it spelled an identity `origin#key@revision`,
- * so a run resuming under a version-1 admission compares its own structural
- * identity under exactly that mapping. Refusing on the shape alone would make
- * every released #369 record unresumable for a reason that has nothing to do
- * with what the run was granted.
- *
- * Only a capability reconciles. The component-answer arm did not exist when
- * version-1 records were written, so no version-1 string ever described one,
- * and reading a string as though it might would compare a fragment's authority
- * equal to authority it never had.
- */
-function sameIdentity(one: RetainedIdentity, other: RetainedIdentity): boolean {
-  if ("legacy" in one) {
-    return "legacy" in other ? one.legacy === other.legacy : reconciles(one, other);
-  }
-  if ("legacy" in other) {
-    return reconciles(other, one);
-  }
+function sameStructural(one: RetainedFragmentIdentity, other: RetainedFragmentIdentity): boolean {
   return (
     one.kind === other.kind &&
     one.origin === other.origin &&
@@ -392,9 +361,41 @@ function sameIdentity(one: RetainedIdentity, other: RetainedIdentity): boolean {
   );
 }
 
-/** Whether one version-1 string is this structural identity, spelled as it was. */
-function reconciles(legacy: LegacyIdentity, identity: RetainedFragmentIdentity): boolean {
-  return identity.kind === "capability" && legacy.legacy === legacySpelling(identity);
+/**
+ * Whether the entry this run states is the one a retained record was admitted
+ * under.
+ *
+ * Two version-2 records compare structurally, and two version-1 strings compare
+ * as the strings they are.
+ *
+ * A version-1 string against a version-2 entry is the case that cannot be
+ * decided by looking at either one. Version 1 retained one opaque value chosen
+ * by whoever built the pinned entry — `@executablemd/core#File:read` from core,
+ * `@executablemd/workflow/composition/dir-v2#Dir` from the workflow host, and
+ * whatever a host passed to `pinnedComponent` from anyone else. No rule
+ * recovers four structural terms from one of those, and a rule that appeared to
+ * would only be reading the shapes core happens to use today back onto records
+ * core did not write.
+ *
+ * So it is not inferred. The *current* entry states which version-1 strings it
+ * succeeds, and a retained string reconciles only against that stated list.
+ * Listing one is an assertion by the party that owns the entry; an entry that
+ * lists none refuses every version-1 record naming it, which is the safe
+ * direction. New records state the structural identity and never a string.
+ */
+function sameIdentity(retained: RetainedIdentity, current: RetainedEntry): boolean {
+  const here = current.identity;
+  if ("legacy" in retained) {
+    if ("legacy" in here) {
+      return retained.legacy === here.legacy;
+    }
+    // Only a capability reconciles. The component-answer arm did not exist when
+    // version-1 records were written, so no such string ever described one —
+    // and the kind is checked here rather than left to the profile, because
+    // this is the comparison a continuation is actually held to.
+    return here.kind === "capability" && current.legacy?.includes(retained.legacy) === true;
+  }
+  return "legacy" in here ? false : sameStructural(retained, here);
 }
 
 /**
@@ -441,6 +442,15 @@ export interface GeneratedObservation {
    */
   readonly dispatch?: unknown;
   /**
+   * The exact version-1 identity strings this entry states it succeeds.
+   *
+   * Stated by whoever owns the entry rather than derived from the identity
+   * above, because version 1 retained one opaque value that nothing recovers
+   * four structural terms from. A retained version-1 record reconciles against
+   * this list and against nothing else.
+   */
+  readonly legacy?: readonly string[];
+  /**
    * The exact requests this observation may perform, when it performs HTTP
    * reads at all. Present only on the pinned `<Fetch>` identity.
    */
@@ -483,6 +493,18 @@ function coreIdentity(key: string): RetainedFragmentIdentity {
 }
 
 /**
+ * The exact string one of core's own entries was retained as under version 1.
+ *
+ * `${CORE_ORIGIN}#${key}` — no revision, because version 1 had none. These are
+ * the literal values released builds committed, and core states them because
+ * core owns these entries: the assertion is that the current entry authorizes
+ * no more than the one that string named.
+ */
+function coreLegacy(key: string): readonly string[] {
+  return [`${CORE_ORIGIN}#${key}`];
+}
+
+/**
  * The pinned core `<Fetch>` identity, bounded to exactly these requests.
  *
  * Core's own default definition, taken from the registry every execution and
@@ -504,6 +526,7 @@ export function pinnedFetch(requests: readonly GeneratedRequest[]): GeneratedObs
   return {
     name: "Fetch",
     identity: coreIdentity("Fetch"),
+    legacy: coreLegacy("Fetch"),
     definition,
     requests: [...requests],
   };
@@ -531,6 +554,7 @@ export function pinnedFileRead(): GeneratedObservation {
   return {
     name: "File",
     identity: coreIdentity("File:read"),
+    legacy: coreLegacy("File:read"),
     definition,
     selfClosing: true,
   };
@@ -544,8 +568,16 @@ export function pinnedComponent(
   name: string,
   identity: RetainedFragmentIdentity,
   definition: FunctionComponentDefinition,
+  /**
+   * The version-1 strings this host's own entry succeeds.
+   *
+   * The host's to state, because under version 1 this constructor took whatever
+   * string the host chose and retained it verbatim. Core has nothing to assert
+   * about which of those an entry is the successor of.
+   */
+  legacy?: readonly string[],
 ): GeneratedObservation {
-  return { name, identity, definition };
+  return { name, identity, definition, ...(legacy === undefined ? {} : { legacy }) };
 }
 
 /**
@@ -569,6 +601,8 @@ export interface GeneratedMutation {
   readonly definition: FunctionComponentDefinition;
   /** The form authority underneath this entry's implementation, when it wraps one. */
   readonly dispatch?: unknown;
+  /** The exact version-1 identity strings this entry states it succeeds. */
+  readonly legacy?: readonly string[];
   readonly form: GeneratedComponentForm;
 }
 
@@ -589,6 +623,7 @@ export function pinnedFileWrite(): GeneratedMutation {
   return {
     name: "File",
     identity: coreIdentity("File:write"),
+    legacy: coreLegacy("File:write"),
     definition,
     form: "paired",
   };
@@ -621,6 +656,7 @@ export function pinnedFileDelete(): GeneratedMutation {
   return {
     name: "File.Delete",
     identity: coreIdentity("File.Delete"),
+    legacy: coreLegacy("File.Delete"),
     definition,
     form: "self-closing",
   };
@@ -635,8 +671,10 @@ export function pinnedMutation(
   identity: RetainedFragmentIdentity,
   definition: FunctionComponentDefinition,
   form: GeneratedComponentForm,
+  /** The version-1 strings this host's own entry succeeds, as the host states them. */
+  legacy?: readonly string[],
 ): GeneratedMutation {
-  return { name, identity, definition, form };
+  return { name, identity, definition, form, ...(legacy === undefined ? {} : { legacy }) };
 }
 
 /**
@@ -723,6 +761,8 @@ interface Entry {
   readonly dispatch?: unknown;
   readonly forms: readonly AuthoredForm[];
   readonly effect: GeneratedEffectClass;
+  /** The version-1 identity strings this entry states it succeeds. */
+  readonly legacy?: readonly string[];
   readonly requests?: readonly GeneratedRequest[];
 }
 
@@ -731,6 +771,15 @@ interface RetainedEntry {
   readonly name: string;
   readonly identity: RetainedIdentity;
   readonly forms: readonly AuthoredForm[];
+  /**
+   * The version-1 strings this entry succeeds, on the *current* side only.
+   *
+   * Never read from a record and never written to one: a journal holds what was
+   * admitted, and which older grants a current entry is willing to answer for
+   * is a statement this run's host makes now. Reading it from the record would
+   * let a retained value nominate its own successor.
+   */
+  readonly legacy?: readonly string[];
 }
 
 /** One element the fragment actually named, as the run retains it. */
@@ -995,6 +1044,7 @@ function selectedEntries(
         // that one; an unconstrained one admits both, as it always has.
         forms: observation.selfClosing === true ? ["self-closing"] : AUTHORED_FORMS,
         effect: "read",
+        ...(observation.legacy === undefined ? {} : { legacy: observation.legacy }),
         ...(observation.requests === undefined ? {} : { requests: observation.requests }),
       });
     }
@@ -1014,6 +1064,7 @@ function selectedEntries(
         ...(mutation.dispatch === undefined ? {} : { dispatch: mutation.dispatch }),
         forms: authoredForms(mutation.form),
         effect: "write",
+        ...(mutation.legacy === undefined ? {} : { legacy: mutation.legacy }),
       });
     }
   }
@@ -1135,7 +1186,15 @@ function currentPolicy(
   const requests: FetchRequest[] = [];
   const allowed: RetainedEntry[] = [];
   for (const entry of entries) {
-    allowed.push({ name: entry.name, identity: entry.identity, forms: entry.forms });
+    allowed.push({
+      name: entry.name,
+      identity: entry.identity,
+      forms: entry.forms,
+      // Carried on the current policy so a version-1 record can be reconciled
+      // against it, and dropped by `policyRecord` so nothing this run writes
+      // holds it.
+      ...(entry.legacy === undefined ? {} : { legacy: entry.legacy }),
+    });
     requests.push(...(ceilings.get(identityKey(entry.identity)) ?? []));
   }
   const workspace = workspaceBasis(request);
@@ -1562,7 +1621,9 @@ function policyHolds(retained: Policy, current: Policy): boolean {
     return (
       here === undefined ||
       here.name !== entry.name ||
-      !sameIdentity(here.identity, entry.identity) ||
+      // The retained side is what was granted; the current side is the entry
+      // asking to answer for it, and only that side states version-1 aliases.
+      !sameIdentity(entry.identity, here) ||
       !sameStrings(here.forms, entry.forms)
     );
   });

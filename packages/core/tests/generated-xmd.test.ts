@@ -1251,7 +1251,8 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
   }
 
   /**
-   * The identity a version-1 record could actually have described.
+   * The identity this run states for the host observation a version-1 record
+   * named.
    *
    * A capability, because that is the only arm that existed when untagged
    * records were written: the component-answer arm came with this issue, so no
@@ -1264,21 +1265,34 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
     revision: "1",
   };
 
-  /** Its version-1 spelling, exactly as the build that wrote one spelled it. */
-  const V1_SPELLING = "test://probe#Probe@1";
+  /**
+   * The exact string a version-1 journal holds for it.
+   *
+   * Arbitrary, and that is the point. Under `bb2c1c49` this string was whatever
+   * the host passed to `pinnedComponent`, retained verbatim — there was no
+   * spelling rule at all, so nothing recovers `V1_IDENTITY` from it. The
+   * current entry states it as an alias, which is the only thing that connects
+   * the two.
+   */
+  const V1_SPELLING = "urn:host:probe/v1";
 
-  /** The same counting probe, under the identity a version-1 record names. */
+  /** The same counting probe, stating the version-1 identity it succeeds. */
   function versionOneProbe(performed: string[]): GeneratedObservation {
-    return pinnedComponent("Probe", V1_IDENTITY, {
-      kind: "function",
-      name: "Probe",
-      props: { type: "object", properties: {}, additionalProperties: false },
-      // deno-lint-ignore require-yield
-      *fn(): Operation<Json> {
-        performed.push("probed");
-        return "probed";
+    return pinnedComponent(
+      "Probe",
+      V1_IDENTITY,
+      {
+        kind: "function",
+        name: "Probe",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        // deno-lint-ignore require-yield
+        *fn(): Operation<Json> {
+          performed.push("probed");
+          return "probed";
+        },
       },
-    });
+      [V1_SPELLING],
+    );
   }
 
   /**
@@ -1403,16 +1417,115 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
     );
   }
 
-  it("FE18/GX21z: an untagged version-1 admission still resumes under its own ceilings", function* () {
+  /**
+   * The literal version-1 admission a `bb2c1c49` workflow run committed for the
+   * standard read table.
+   *
+   * Written out from what that build actually emitted rather than derived:
+   * `pinnedFileRead()` retained `@executablemd/core#File:read` — one opaque
+   * value, no revision in it, no separator convention to read back out — beside
+   * the untagged policy shape with its two top-level Workspace members.
+   */
+  const V1_STANDARD_POLICY: JsonObject = Object.freeze({
+    allow: ["read"],
+    roots: [...ROOTS],
+    selectedRoot: ROOTS[0],
+    allowed: [{ name: "File", identity: "@executablemd/core#File:read", forms: ["self-closing"] }],
+    requests: [],
+  });
+
+  /** That admission, as the event an older journal holds. */
+  function versionOneStandard(source: string): DurableEvent {
+    return {
+      type: "yield",
+      coroutineId: "root",
+      description: { type: "generated_xmd", name: "generated:turn-1", input: V1_STANDARD_POLICY },
+      result: {
+        status: "ok",
+        value: {
+          decision: "admitted",
+          source,
+          named: [{ name: "File", identity: "@executablemd/core#File:read", form: "self-closing" }],
+          policy: V1_STANDARD_POLICY,
+        },
+      },
+    };
+  }
+
+  it("FE18/GX21z: the standard core admission a released build wrote still resumes", function* () {
+    // The record is `bb2c1c49`'s own: core's read-only `<File>` retained as the
+    // string that build committed, under the untagged policy shape. What lets
+    // it resume is not a spelling rule — there is none to find — but that
+    // `pinnedFileRead()` states that exact string as the version-1 identity it
+    // succeeds.
+    const root = yield* useWorkspace();
+    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+
+    const first = yield* scoped(function* () {
+      yield* useWorkspaceFiles(root);
+      return yield* evaluate(request(`<File path="notes.md" />\n`, [pinnedFileRead()]));
+    });
+    expect(first.failure).toBe(undefined);
+
+    const again = yield* scoped(function* () {
+      const reads = yield* useWorkspaceFiles(root);
+      const evaluated = yield* evaluate(request(`<File path="notes.md" />\n`, [pinnedFileRead()]), {
+        stream: new InMemoryStream(
+          withVersionOne(
+            yield* partial(first.events).readAll(),
+            versionOneStandard(`<File path="notes.md" />\n`),
+          ),
+        ),
+      });
+      return { evaluated, reads: [...reads.performed] };
+    });
+
+    expect(again.evaluated.failure).toBe(undefined);
+    // Restored rather than decided a second time: one record, carried over from
+    // the run that wrote it in the older shape.
+    expect(admissions(again.evaluated.events)).toHaveLength(1);
+  });
+
+  it("FE18/GX21z: an entry that states no alias refuses the record that named it", function* () {
+    // The same released record, against a run whose `<File>` entry does not
+    // state that string. Reconciliation is an assertion the entry makes, so an
+    // entry that makes none is a new grant — and the safe answer to "is this
+    // the thing the record was admitted under" is the one that refuses.
+    const root = yield* useWorkspace();
+    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+    const first = yield* scoped(function* () {
+      yield* useWorkspaceFiles(root);
+      return yield* evaluate(request(`<File path="notes.md" />\n`, [pinnedFileRead()]));
+    });
+
+    const silent: GeneratedObservation = { ...pinnedFileRead(), legacy: undefined };
+    const again = yield* scoped(function* () {
+      const reads = yield* useWorkspaceFiles(root);
+      const evaluated = yield* evaluate(request(`<File path="notes.md" />\n`, [silent]), {
+        stream: new InMemoryStream(
+          withVersionOne(
+            yield* duringPreparation(first.events).readAll(),
+            versionOneStandard(`<File path="notes.md" />\n`),
+          ),
+        ),
+      });
+      return { evaluated, reads: [...reads.performed] };
+    });
+
+    expect(again.evaluated.failure).toContain("admitted under");
+    // Ahead of the first generated effect: the refusal is the ceiling's, and
+    // the admitted read never reached the provider.
+    expect(again.reads).toEqual([]);
+  });
+
+  it("FE18/GX21z: an arbitrary version-1 host identity resumes against its stated alias", function* () {
     const first = yield* evaluate(request("<Probe />\n", [versionOneProbe([])]));
     expect(first.output).toContain("probed");
 
-    // The same run, resumed against the record the previous version wrote. A
-    // version-1 identity is one opaque string, and it is reconciled rather than
-    // refused: the build that wrote it spelled an identity `origin#key@revision`,
-    // so this run compares its own structural identity under exactly that
-    // mapping. Refusing on the shape alone would make every released #369 record
-    // unresumable for a reason that has nothing to do with what it was granted.
+    // The other half of what version 1 could hold: whatever string the host
+    // passed to `pinnedComponent`, retained verbatim. `urn:host:probe/v1`
+    // resembles no structural identity at all, which is why nothing but the
+    // entry's own stated alias could connect it to what this run admits.
     //
     // This is also the version-1 positive control for the `GX21y` table below:
     // every row there is this record with one thing wrong, so without this each
@@ -1426,24 +1539,21 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
 
     expect(again.failure).toBe(undefined);
     expect(performed).toEqual(["probed"]);
-    // Restored rather than decided a second time: one record, carried over from
-    // the run that wrote it in the older shape.
     expect(admissions(again.events)).toHaveLength(1);
   });
 
-  it("FE18/GX21z: a version-1 string that spells another identity refuses", function* () {
+  it("FE18/GX21z: a version-1 string no entry lists as its own refuses", function* () {
     const first = yield* evaluate(request("<Probe />\n", [versionOneProbe([])]));
 
-    // Reconciliation is a mapping, not a waiver. The retained string spells
-    // revision 1; this run states revision 2 behind the same name, which under
-    // that same mapping is a different identity.
+    // Reconciliation is a stated alias, not a waiver. This run's entry lists a
+    // different string, so the retained one names an entry it does not have.
     //
     // The probe still counts, so this says the component was not reached rather
     // than that no counting probe was admitted.
     const performed: string[] = [];
     const moved: GeneratedObservation = {
       ...versionOneProbe(performed),
-      identity: { ...V1_IDENTITY, revision: "2" },
+      legacy: ["urn:host:probe/v0"],
     };
     const again = yield* evaluate(request("<Probe />\n", [moved]), {
       stream: new InMemoryStream(

@@ -319,6 +319,32 @@ export const REVOKED_CLAIMANT =
   "the execution that minted this identity claimant has ended, so nothing it states identifies " +
   "an implementation here";
 
+/** A claim stated outside the resolution it would have been an answer to. */
+export const SETTLED_CLAIM =
+  "this resolution has settled, so a claim stated now identifies nothing. An answer is " +
+  "identified while the import that asked for it is still being decided; a handler that lost, " +
+  "or one recording after the fact, is not supplying that answer.";
+
+/** One resolution a claim may be stated during. */
+interface ClaimWindow {
+  readonly occurrence: number;
+  readonly name: string;
+}
+
+/**
+ * One open resolution, and the only way to end it.
+ *
+ * Handed to canonical execution rather than published: the window belongs to
+ * the import that opened it, and closing somebody else's would settle a
+ * decision still being made.
+ */
+export interface ResolutionWindow {
+  /** Which resolution this is, for a reader following two of them. */
+  readonly occurrence: number;
+  /** Stop admitting claims for this resolution. Idempotent. */
+  close(): void;
+}
+
 /** An identity a provider stated in a shape this execution cannot record. */
 export class AnswerIdentityError extends Error {
   override name = "AnswerIdentityError";
@@ -348,6 +374,25 @@ export class CanonicalImports {
    * cannot leave a live claimant with no teardown behind it.
    */
   #active = false;
+  /**
+   * The one resolution a claim may be stated during, when one is open.
+   *
+   * A claimant is minted per provider installation and therefore outlives every
+   * resolution it takes part in — a provider keeps the object it was handed.
+   * What settles is not the claimant but the *occurrence*: canonical execution
+   * asks the chain for one name, reads the answer, and closes. A claim arriving
+   * outside that window is a losing or delayed handler recording into a
+   * decision that has already been made, which is exactly what an admission
+   * must not be able to acquire afterwards.
+   *
+   * So the window carries both terms. The occurrence keeps a claim from
+   * belonging to a resolution other than the live one, and the name keeps a
+   * handler settled for one name from recording under it while a different
+   * name is being resolved.
+   */
+  #window: ClaimWindow | undefined;
+  /** How many resolutions this owner has opened, so each one is its own. */
+  #occurrences = 0;
 
   /** Begin identifying. Called after teardown is registered. */
   activate(): void {
@@ -357,10 +402,41 @@ export class CanonicalImports {
   /** Stop. Called at teardown, on completion, failure or cancellation. */
   revoke(): void {
     this.#active = false;
+    this.#window = undefined;
   }
 
   get identifying(): boolean {
     return this.#active;
+  }
+
+  /**
+   * Open the claim window for one resolution of one name.
+   *
+   * Canonical execution calls this immediately before asking the ordinary chain
+   * and closes it in a `finally`, so the window ends the same way whether the
+   * resolution answered, fell back, failed or was cancelled. Nothing else opens
+   * one: there is no path from a document, a component or a provider to this
+   * method.
+   */
+  beginResolution(name: string): ResolutionWindow {
+    if (!this.#active) {
+      throw new AnswerIdentityError(REVOKED_CLAIMANT);
+    }
+    this.#occurrences += 1;
+    const occurrence = this.#occurrences;
+    this.#window = { occurrence, name };
+    const owner = this;
+    return {
+      occurrence,
+      close(): void {
+        // Only this occurrence's own window is closed. A nested resolution that
+        // already replaced it has its own close, and clearing another
+        // occurrence's window here would settle a decision still being made.
+        if (owner.#window?.occurrence === occurrence) {
+          owner.#window = undefined;
+        }
+      },
+    };
   }
 
   /**
@@ -391,6 +467,10 @@ export class CanonicalImports {
   ): ImportedDefinition {
     if (!this.#active) {
       throw new AnswerIdentityError(REVOKED_CLAIMANT);
+    }
+    const open = this.#window;
+    if (open === undefined || open.name !== name) {
+      throw new AnswerIdentityError(SETTLED_CLAIM);
     }
     const identity = complete(origin, stated);
     const held =

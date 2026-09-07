@@ -371,6 +371,10 @@ function selectedTables(
         ...(entry.forms.length === 1 && entry.forms[0] === "self-closing"
           ? { selfClosing: true }
           : {}),
+        // The version-1 strings this entry stated it succeeds, carried through
+        // so a continuation admitted under one of them reconciles against this
+        // entry. Nothing this run writes holds them.
+        ...(entry.legacy === undefined ? {} : { legacy: entry.legacy }),
         ...(entry.requests === undefined ? {} : { requests: entry.requests.map(asRequest) }),
       });
       admitted.push(entry);
@@ -386,6 +390,7 @@ function selectedTables(
         identity: pinned(entry),
         definition: entry.definition,
         ...(entry.dispatch === undefined ? {} : { dispatch: entry.dispatch }),
+        ...(entry.legacy === undefined ? {} : { legacy: entry.legacy }),
         form: entry.forms.length === 2 ? "either" : (entry.forms[0] ?? "self-closing"),
       });
       admitted.push(entry);

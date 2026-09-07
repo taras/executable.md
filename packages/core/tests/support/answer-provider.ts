@@ -74,6 +74,14 @@ export interface ProviderOptions {
    */
   readonly keepsAnswering?: boolean;
   /**
+   * Keep *claiming* after the capture, rather than settling.
+   *
+   * The other half of the same refusal, one step earlier: the resolution this
+   * provider answered has settled, so there is no open window to state an
+   * identity into and the claim refuses before the witness is ever consulted.
+   */
+  readonly reclaimsLater?: boolean;
+  /**
    * Delegate first, and answer with this provider's own claimed object.
    *
    * What an *outer* provider does. The one installed first composes outermost,
@@ -94,6 +102,14 @@ export interface ProviderOptions {
   readonly observesOnly?: boolean;
   /** What delegating answered with, for a row that has to prove it happened. */
   readonly delegated?: unknown[];
+  /**
+   * Run this inside the live resolution, just before claiming.
+   *
+   * The one place a row can reach that is *during* an open claim window for
+   * this name — which is what a race between two resolutions has to be observed
+   * from, since there is no other way to be inside one.
+   */
+  readonly whileResolving?: () => void;
   /**
    * Answer with a value whose contract reads differently each time it is read.
    *
@@ -167,7 +183,19 @@ export function answerProvider(
             return yield* next(asked, position);
           }
           options.asked?.push(asked);
-          if (settled && !options.keepsAnswering) {
+          if (settled) {
+            if (options.reclaimsLater) {
+              // Still trying to *identify* an answer after its resolution
+              // settled. There is no window open for this name, so the claim
+              // itself is what refuses.
+              return claim.claim(name, answer, { key, revision });
+            }
+            if (options.keepsAnswering) {
+              // Still answering, without claiming. Whatever this returns is not
+              // the object canonical execution issued for the import that asked,
+              // so the witness is what refuses.
+              return answer;
+            }
             return yield* next(asked, position);
           }
           settled = true;
@@ -183,6 +211,7 @@ export function answerProvider(
             // row say the inner half genuinely answered.
             options.delegated?.push(yield* next(asked, position));
           }
+          options.whileResolving?.();
           if (options.unclaimed) {
             return answer;
           }

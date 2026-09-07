@@ -1179,6 +1179,31 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
     expect(A.invoked).toEqual([]);
   });
 
+  it("FE14: a provider still claiming when a fragment resolves is refused earlier", function* () {
+    const A = implementation("Open", "A ran");
+    const stream = new InMemoryStream();
+
+    // The same substitution, one step earlier. The resolution this provider
+    // answered settled during the capture, so there is no window left to state
+    // an identity into — the claim refuses before the witness is consulted, and
+    // an answer nothing could identify never reaches the fragment.
+    const failed = yield* refusal(
+      run(
+        OPEN,
+        [
+          {
+            evaluation: admits(),
+            componentAnswers: [answerProvider("Open", A.definition, { reclaimsLater: true })],
+          },
+        ],
+        stream,
+      ),
+    );
+
+    expect(failed).toContain("this resolution has settled");
+    expect(A.invoked).toEqual([]);
+  });
+
   it("FE14: an unidentified, a copied and a mutated answer each refuse", function* () {
     const cases: readonly (readonly [string, ProviderOptions])[] = [
       ["nothing identified it", { unclaimed: true }],

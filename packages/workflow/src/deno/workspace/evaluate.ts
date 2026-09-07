@@ -185,7 +185,16 @@ export function* evaluationProfile(
       // rather than resolving a Files provider when it runs — so a continuation
       // granted under the older, composable one is refused rather than
       // re-granted.
-      directoryEntry({ origin: COMPOSITION_ORIGIN, key: "Dir", revision: "3" }, "Dir"),
+      //
+      // The version-1 alias is the exact string released builds retained for
+      // this entry — `${COMPOSITION_ORIGIN}/dir-v2#Dir`, written verbatim
+      // because that is what those journals hold. The pre-`dir-v2` spelling is
+      // deliberately absent: it named the placement-only `<Dir>`, which created
+      // nothing, and answering for it here would hand a narrower grant the
+      // wider one.
+      directoryEntry({ origin: COMPOSITION_ORIGIN, key: "Dir", revision: "3" }, "Dir", [
+        `${COMPOSITION_ORIGIN}/dir-v2#Dir`,
+      ]),
       fileDeleteEntry(),
       ...(options.writes ?? []),
     ],

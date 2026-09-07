@@ -33,7 +33,7 @@ import type {
 } from "../host.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { prepareEvaluationProfile } from "../src/evaluation-profile.ts";
-import type { ResolvedAnswer } from "../src/evaluation-profile.ts";
+import type { ComponentAnswerEntry, ResolvedAnswer } from "../src/evaluation-profile.ts";
 import { REVOKED_CAPABILITY } from "../src/fragment-capabilities.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { recordedFiles } from "./support/fragment-files.ts";
@@ -43,19 +43,39 @@ import type { ComponentInvocation } from "../src/invocation-identity.ts";
 const ROOT_PATH = "evaluate.md";
 const OPEN = `<Evaluate text={'<Open />\\n'} as="answer" />\n\n<Json value={answer} />\n`;
 
+/** What a provider states for the one name these rows admit. */
+const IDENTITY = { key: "Open", revision: "1" } as const;
+
+/** One provider-backed entry, under the identity this suite's providers claim. */
+function answerEntry(name: string): ComponentAnswerEntry {
+  return {
+    kind: "component-answer",
+    name,
+    identity: { origin: "test://provider", key: name, revision: "1" },
+    forms: ["self-closing"],
+  };
+}
+
 /** The entry a host states for a provider-backed name. */
 function admits(): FragmentEvaluationInput {
-  return {
-    read: [
-      {
-        kind: "component-answer",
-        name: "Open",
-        identity: { origin: "test://provider", key: "Open", revision: "1" },
-        forms: ["self-closing"],
-      },
-    ],
-    files: recordedFiles(),
-  };
+  return { read: [answerEntry("Open")], files: recordedFiles() };
+}
+
+/**
+ * The first sentence of what one call refused with.
+ *
+ * A row comparing whole refusal prose would be comparing wording; what these
+ * rows are about is *which* refusal happened — the settled resolution or the
+ * ended execution — so they read the clause that says so.
+ */
+function refused(attempt: () => unknown): string {
+  try {
+    attempt();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.split(",")[0]?.trim() ?? message;
+  }
+  throw new Error("expected the claim to be refused");
 }
 
 function run(
@@ -245,18 +265,15 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
             if (held === undefined) {
               throw new Error("the losing provider was never installed");
             }
-            // Recording is not authorizing: this succeeds, and reaches no
-            // sealed profile, because the capture is over.
-            held.claim("Open", A.definition, { key: "Open", revision: "1" });
-            attempted.push("recorded its own");
-            // And it cannot retag the winner's implementation, because that
-            // object already carries another claimant's statement.
-            try {
-              held.claim("Open", B.definition, { key: "Open", revision: "1" });
-              attempted.push("retagged the winner");
-            } catch {
-              attempted.push("refused to retag the winner");
-            }
+            // The resolution of `Open` settled during capture, before the root
+            // import. This claimant lost it, and the execution is still very
+            // much alive — so what refuses here is the *occurrence*, not the
+            // teardown. A claim admitted now would identify an answer nobody
+            // asked this provider for.
+            attempted.push(refused(() => held.claim("Open", A.definition, IDENTITY)));
+            // The same for the winner's own implementation: there is no window
+            // to retag it in either.
+            attempted.push(refused(() => held.claim("Open", B.definition, IDENTITY)));
             return "meddled";
           },
         },
@@ -281,13 +298,73 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
       );
     });
 
-    // The meddling really happened, while the run was live.
-    expect(attempted).toEqual(["recorded its own", "refused to retag the winner"]);
-    // And the fragment ran what the capture sealed. A was claimed during the
-    // run and still never entered.
+    // The meddling really happened, while the run was live, and neither attempt
+    // was admitted. The refusal names the settled resolution rather than a
+    // finished execution — the document was still running when it was made.
+    expect(attempted).toEqual(["this resolution has settled", "this resolution has settled"]);
+    // And the fragment ran what the capture sealed.
     expect(String(output)).toContain("B ran");
     expect(B.invoked).toEqual(["B ran"]);
     expect(A.invoked).toEqual([]);
+  });
+
+  it("FE15: a claim from one settled resolution cannot land in another name's", function* () {
+    const A = implementation("Open", "A ran");
+    const B = implementation("Other", "B ran");
+    const late = implementation("Open", "late ran");
+    const losing: ComponentAnswerClaim[] = [];
+    const attempted: string[] = [];
+
+    // Two provider-backed names, so the capture opens two resolutions in
+    // order. The first provider loses `Open` and keeps its claimant; the second
+    // answers `Other`, and from *inside* that live resolution it uses the
+    // losing claimant to record an answer for `Open`.
+    //
+    // That is the race a single execution-wide switch cannot see: the owner is
+    // active, a resolution is open, and the claim still belongs to a decision
+    // that is over.
+    const output = yield* run(
+      `<Evaluate text={'<Open />\\n<Other />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
+      [
+        {
+          evaluation: {
+            read: [answerEntry("Open"), answerEntry("Other")],
+            files: recordedFiles(),
+          },
+          componentAnswers: [
+            {
+              origin: "test://provider",
+              // deno-lint-ignore require-yield
+              *install(claim: ComponentAnswerClaim): Operation<void> {
+                losing.push(claim);
+              },
+            },
+            answerProvider("Open", A.definition),
+            answerProvider("Other", B.definition, {
+              key: "Other",
+              // Resolution two is open when this runs, and the claim it makes
+              // is resolution one's. It names the name that already settled.
+              whileResolving: () => {
+                const held = losing[0];
+                if (held === undefined) {
+                  throw new Error("the losing provider was never installed");
+                }
+                attempted.push(refused(() => held.claim("Open", late.definition, IDENTITY)));
+              },
+            }),
+          ],
+        },
+      ],
+    );
+
+    expect(attempted).toEqual(["this resolution has settled"]);
+    // Both names ran what their own resolution sealed, and the late answer
+    // reached neither of them.
+    expect(String(output)).toContain("A ran");
+    expect(String(output)).toContain("B ran");
+    expect(A.invoked).toEqual(["A ran"]);
+    expect(B.invoked).toEqual(["B ran"]);
+    expect(late.invoked).toEqual([]);
   });
 
   it("FE15: two executions live at once each run the answer it captured", function* () {

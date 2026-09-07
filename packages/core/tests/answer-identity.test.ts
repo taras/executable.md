@@ -40,6 +40,22 @@ function owner(): CanonicalImports {
   return imports;
 }
 
+/**
+ * Run one resolution of `name`, the way canonical execution runs one.
+ *
+ * A claim is only ever stated from inside the import that asked for it, so
+ * every row that states one opens the window first and closes it after —
+ * including the rows about what happens once it is closed.
+ */
+function resolving<T>(imports: CanonicalImports, name: string, work: () => T): T {
+  const window = imports.beginResolution(name);
+  try {
+    return work();
+  } finally {
+    window.close();
+  }
+}
+
 /** One answer a provider might return, fresh each time. */
 function answer(name = "Open"): ImportedDefinition {
   return {
@@ -71,10 +87,9 @@ function refusalOf(attempt: () => unknown): unknown {
 describe("Tier FE15 — an identity belongs to one object in one execution", () => {
   it("FE15: an identity is stated on the exact answer and read back", function* () {
     const imports = owner();
-    const supplied = imports.claimant(ORIGIN).claim("Open", answer(), {
-      key: "Open",
-      revision: "1",
-    });
+    const supplied = resolving(imports, "Open", () =>
+      imports.claimant(ORIGIN).claim("Open", answer(), { key: "Open", revision: "1" }),
+    );
 
     expect(imports.identify("Open", supplied)?.identity).toEqual(IDENTITY);
     expect(identityRecord(IDENTITY)).toBe("test://provider#Open@1");
@@ -83,7 +98,9 @@ describe("Tier FE15 — an identity belongs to one object in one execution", () 
   it("FE15: identification answers with the claim-time copy, not the answer", function* () {
     const imports = owner();
     const supplied = answer();
-    imports.claimant(ORIGIN).claim("Open", supplied, { key: "Open", revision: "1" });
+    resolving(imports, "Open", () =>
+      imports.claimant(ORIGIN).claim("Open", supplied, { key: "Open", revision: "1" }),
+    );
 
     // One call answers both halves. The definition is core's own copy, taken
     // when the claim was recorded — so a caller that keeps what identification
@@ -117,7 +134,9 @@ describe("Tier FE15 — an identity belongs to one object in one execution", () 
       },
     }) as ImportedDefinition;
 
-    imports.claimant(ORIGIN).claim("Open", alternating, { key: "Open", revision: "1" });
+    resolving(imports, "Open", () =>
+      imports.claimant(ORIGIN).claim("Open", alternating, { key: "Open", revision: "1" }),
+    );
     const identified = imports.identify("Open", alternating);
 
     // The claim itself was recorded from the first reading, and identification
@@ -136,12 +155,14 @@ describe("Tier FE15 — an identity belongs to one object in one execution", () 
     const claimant = imports.claimant(ORIGIN);
     const supplied = answer();
 
-    claimant.claim("Open", supplied, { key: "Open", revision: "1" });
-    // A provider installed twice states the same thing twice. That is not two
-    // providers disagreeing, and it is not a conflict.
-    expect(refusalOf(() => claimant.claim("Open", supplied, { key: "Open", revision: "1" }))).toBe(
-      undefined,
-    );
+    resolving(imports, "Open", () => {
+      claimant.claim("Open", supplied, { key: "Open", revision: "1" });
+      // A provider installed twice states the same thing twice. That is not two
+      // providers disagreeing, and it is not a conflict.
+      expect(
+        refusalOf(() => claimant.claim("Open", supplied, { key: "Open", revision: "1" })),
+      ).toBe(undefined);
+    });
     expect(imports.identify("Open", supplied)?.identity).toEqual(IDENTITY);
   });
 
@@ -150,30 +171,95 @@ describe("Tier FE15 — an identity belongs to one object in one execution", () 
     const first = imports.claimant(ORIGIN);
     const second = imports.claimant("test://other");
 
+    // Every competing attempt is made inside the same live resolution, so what
+    // refuses each of them is the disagreement rather than the window.
     const cases: Array<[string, () => unknown]> = [
       ["another claimant", () => second.claim("Open", held, { key: "Open", revision: "1" })],
-      ["another name", () => first.claim("Elsewhere", held, { key: "Open", revision: "1" })],
       ["another key", () => first.claim("Open", held, { key: "Other", revision: "1" })],
       ["another revision", () => first.claim("Open", held, { key: "Open", revision: "2" })],
     ];
 
     const held = answer();
-    first.claim("Open", held, { key: "Open", revision: "1" });
+    resolving(imports, "Open", () => {
+      first.claim("Open", held, { key: "Open", revision: "1" });
 
-    for (const [, attempt] of cases) {
-      expect(refusalOf(attempt)).toBeInstanceOf(AnswerIdentityError);
-      // The first statement stands after every one of them. An overwrite would
-      // let a second provider rename the first's implementation.
-      expect(imports.identify("Open", held)?.identity).toEqual(IDENTITY);
-    }
+      for (const [, attempt] of cases) {
+        expect(refusalOf(attempt)).toBeInstanceOf(AnswerIdentityError);
+        // The first statement stands after every one of them. An overwrite
+        // would let a second provider rename the first's implementation.
+        expect(imports.identify("Open", held)?.identity).toEqual(IDENTITY);
+      }
+    });
+
+    // Claiming the same object under another *name* is refused by the window
+    // rather than by the disagreement: this resolution is deciding `Open`, and
+    // a claim for `Elsewhere` is not an answer to it.
+    resolving(imports, "Elsewhere", () => {
+      expect(
+        refusalOf(() => first.claim("Elsewhere", held, { key: "Open", revision: "1" })),
+      ).toBeInstanceOf(AnswerIdentityError);
+    });
+    expect(imports.identify("Open", held)?.identity).toEqual(IDENTITY);
+  });
+
+  it("FE15: a claim outside the resolution that asked for it identifies nothing", function* () {
+    const imports = owner();
+    const claimant = imports.claimant(ORIGIN);
+    const held = answer();
+
+    // The losing-handler case. A provider that did not answer this resolution
+    // still holds the claimant it was minted, and the execution is still very
+    // much alive — what has ended is the decision. Recording into it now would
+    // let a handler identify an answer nobody asked it for.
+    expect(
+      refusalOf(() => claimant.claim("Open", held, { key: "Open", revision: "1" })),
+    ).toBeInstanceOf(AnswerIdentityError);
+    expect(imports.identify("Open", held)).toBe(undefined);
+    expect(imports.identifying).toBe(true);
+
+    // The same claimant, inside the window, is the ordinary honest case — so
+    // the row above is about *when* rather than about the claimant being inert.
+    resolving(imports, "Open", () => claimant.claim("Open", held, { key: "Open", revision: "1" }));
+    expect(imports.identify("Open", held)?.identity).toEqual(IDENTITY);
+  });
+
+  it("FE15: a claim from a settled resolution cannot land in the next one", function* () {
+    const imports = owner();
+    const losing = imports.claimant("test://losing");
+    const winning = imports.claimant("test://winning");
+    const late = answer();
+    const other = answer("Other");
+
+    // Resolution one decides `Open`, and this claimant loses it.
+    const first = resolving(imports, "Open", () =>
+      winning.claim("Open", answer(), { key: "Open", revision: "1" }),
+    );
+    expect(imports.identify("Open", first)?.identity.origin).toBe("test://winning");
+
+    // Resolution two decides a different name, and is live. The losing
+    // claimant from resolution one records into it — under its own name, which
+    // is the substitution that would matter, and under this resolution's name,
+    // which would be a decision it is not part of.
+    resolving(imports, "Other", () => {
+      expect(
+        refusalOf(() => losing.claim("Open", late, { key: "Open", revision: "1" })),
+      ).toBeInstanceOf(AnswerIdentityError);
+      winning.claim("Other", other, { key: "Other", revision: "1" });
+    });
+
+    // Neither resolution acquired the late answer, and resolution two kept its
+    // own.
+    expect(imports.identify("Open", late)).toBe(undefined);
+    expect(imports.identify("Other", late)).toBe(undefined);
+    expect(imports.identify("Other", other)?.identity.key).toBe("Other");
+    expect(imports.identify("Open", first)?.identity.origin).toBe("test://winning");
   });
 
   it("FE15: a different object carries no claim, however alike", function* () {
     const imports = owner();
-    const claimed = imports.claimant(ORIGIN).claim("Open", answer(), {
-      key: "Open",
-      revision: "1",
-    });
+    const claimed = resolving(imports, "Open", () =>
+      imports.claimant(ORIGIN).claim("Open", answer(), { key: "Open", revision: "1" }),
+    );
 
     expect(imports.identify("Open", claimed)?.identity).toEqual(IDENTITY);
     // The outer-replacement case: a handler further out returns its own object,
@@ -185,10 +271,9 @@ describe("Tier FE15 — an identity belongs to one object in one execution", () 
 
   it("FE15: an identity is read under the name it was claimed for", function* () {
     const imports = owner();
-    const claimed = imports.claimant(ORIGIN).claim("Open", answer(), {
-      key: "Open",
-      revision: "1",
-    });
+    const claimed = resolving(imports, "Open", () =>
+      imports.claimant(ORIGIN).claim("Open", answer(), { key: "Open", revision: "1" }),
+    );
 
     // The same object asked about under another name identifies nothing: a
     // claim is about one implementation of one component.
@@ -197,10 +282,9 @@ describe("Tier FE15 — an identity belongs to one object in one execution", () 
 
   it("FE15: editing the claimed answer invalidates the claim", function* () {
     const imports = owner();
-    const claimed = imports.claimant(ORIGIN).claim("Open", answer(), {
-      key: "Open",
-      revision: "1",
-    });
+    const claimed = resolving(imports, "Open", () =>
+      imports.claimant(ORIGIN).claim("Open", answer(), { key: "Open", revision: "1" }),
+    );
     expect(imports.identify("Open", claimed)?.identity).toEqual(IDENTITY);
 
     // The same object, edited after the claim by a handler further out. What
@@ -213,13 +297,17 @@ describe("Tier FE15 — an identity belongs to one object in one execution", () 
   it("FE15: a claimant retained past its execution states nothing", function* () {
     const imports = owner();
     const claimant = imports.claimant(ORIGIN);
-    const before = claimant.claim("Open", answer(), { key: "Open", revision: "1" });
+    const before = resolving(imports, "Open", () =>
+      claimant.claim("Open", answer(), { key: "Open", revision: "1" }),
+    );
     expect(imports.identify("Open", before)?.identity).toEqual(IDENTITY);
 
     imports.revoke();
 
     // The claimant is the object a provider kept. It refuses rather than
-    // recording into an execution that has ended.
+    // recording into an execution that has ended — and the window it would
+    // have needed cannot be opened either.
+    expect(refusalOf(() => imports.beginResolution("Open"))).toBeInstanceOf(AnswerIdentityError);
     expect(
       refusalOf(() => claimant.claim("Open", answer(), { key: "Open", revision: "1" })),
     ).toBeInstanceOf(AnswerIdentityError);
@@ -235,6 +323,7 @@ describe("Tier FE15 — an identity belongs to one object in one execution", () 
     // claimants. A claim that landed before activation would be a claim with no
     // teardown behind it.
     expect(imports.identifying).toBe(false);
+    expect(refusalOf(() => imports.beginResolution("Open"))).toBeInstanceOf(AnswerIdentityError);
     expect(
       refusalOf(() =>
         imports.claimant(ORIGIN).claim("Open", answer(), {
@@ -250,10 +339,16 @@ describe("Tier FE15 — an identity belongs to one object in one execution", () 
     const second = owner();
     const shared = answer();
 
-    first.claimant(ORIGIN).claim("Open", shared, { key: "Open", revision: "1" });
-    // Live at the same time, and each answers only for what it recorded.
+    resolving(first, "Open", () =>
+      first.claimant(ORIGIN).claim("Open", shared, { key: "Open", revision: "1" }),
+    );
+    // Live at the same time, and each answers only for what it recorded. Each
+    // owner keeps its own window too, so the second's resolution is open while
+    // the first's has already settled.
     expect(second.identify("Open", shared)).toBe(undefined);
-    second.claimant(ORIGIN).claim("Open", shared, { key: "Open", revision: "2" });
+    resolving(second, "Open", () =>
+      second.claimant(ORIGIN).claim("Open", shared, { key: "Open", revision: "2" }),
+    );
 
     expect(first.identify("Open", shared)?.identity).toEqual(IDENTITY);
     expect(second.identify("Open", shared)?.identity).toEqual({
@@ -272,10 +367,9 @@ describe("Tier FE15 — an identity belongs to one object in one execution", () 
     const imports = owner();
     // The claimant carries the origin; the provider states only key and
     // revision. There is no member on the claim call to put another origin in.
-    const claimed = imports.claimant("test://assigned").claim("Open", answer(), {
-      key: "Open",
-      revision: "1",
-    });
+    const claimed = resolving(imports, "Open", () =>
+      imports.claimant("test://assigned").claim("Open", answer(), { key: "Open", revision: "1" }),
+    );
 
     expect(imports.identify("Open", claimed)?.identity.origin).toBe("test://assigned");
   });
@@ -290,9 +384,11 @@ describe("Tier FE15 — an identity belongs to one object in one execution", () 
 
     for (const attempt of attempts) {
       const supplied = answer();
-      expect(refusalOf(() => claimant.claim("Open", supplied, attempt))).toBeInstanceOf(
-        AnswerIdentityError,
-      );
+      resolving(imports, "Open", () => {
+        expect(refusalOf(() => claimant.claim("Open", supplied, attempt))).toBeInstanceOf(
+          AnswerIdentityError,
+        );
+      });
       // Refused rather than partially recorded: a half identity would compare
       // equal to a different half identity.
       expect(imports.identify("Open", supplied)).toBe(undefined);
