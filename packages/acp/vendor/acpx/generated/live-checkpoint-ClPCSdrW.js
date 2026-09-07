@@ -5744,7 +5744,7 @@ function restoreOriginalSessionState(params) {
 async function connectAndLoadSession(options) {
 	const record = options.record;
 	const client = options.client;
-	const sameSessionOnly = requiresSameSession(options.resumePolicy) || Boolean(record.importedFrom);
+	const sameSessionOnly = options.expectedAgentSessionId !== void 0 || requiresSameSession(options.resumePolicy) || Boolean(record.importedFrom);
 	const originalSessionId = record.acpSessionId;
 	const originalAgentSessionId = record.agentSessionId;
 	const originalAcpx = cloneSessionAcpxState(record.acpx);
@@ -5753,7 +5753,7 @@ async function connectAndLoadSession(options) {
 	const desiredConfigOptions = getDesiredConfigOptions(record.acpx);
 	const storedProcessAlive = isProcessAlive(record.pid);
 	logReconnectAttempt(record, storedProcessAlive, Boolean(record.pid) && !storedProcessAlive, options.verbose);
-	const reusingLoadedSession = client.hasReusableSession(record.acpSessionId);
+	const reusingLoadedSession = options.expectedAgentSessionId === void 0 && client.hasReusableSession(record.acpSessionId);
 	if (reusingLoadedSession) incrementPerfCounter("runtime.connect_and_load.reused_session");
 	else await withTimeout(client.start(), options.timeoutMs);
 	options.onClientAvailable?.(options.activeController);
@@ -5770,6 +5770,7 @@ async function connectAndLoadSession(options) {
 	const loadState = await loadOrCreateRuntimeSession({
 		client,
 		record,
+		expectedAgentSessionId: options.expectedAgentSessionId,
 		reusingLoadedSession,
 		sameSessionOnly,
 		timeoutMs: options.timeoutMs
@@ -5911,6 +5912,7 @@ async function loadOrCreateRuntimeSession(params) {
 async function resumeRuntimeSession(params) {
 	try {
 		const resumeResult = await withTimeout(params.client.resumeSession(params.record.acpSessionId, params.record.cwd), params.timeoutMs);
+		assertExpectedAgentSessionId(params.expectedAgentSessionId, resumeResult.agentSessionId);
 		reconcileAgentSessionId(params.record, resumeResult.agentSessionId);
 		applyConfigOptionsToRecord(params.record, resumeResult);
 		return {
@@ -5929,6 +5931,7 @@ async function resumeRuntimeSession(params) {
 async function loadRuntimeSession(params) {
 	try {
 		const loadResult = await withTimeout(params.client.loadSessionWithOptions(params.record.acpSessionId, params.record.cwd, { suppressReplayUpdates: true }), params.timeoutMs);
+		assertExpectedAgentSessionId(params.expectedAgentSessionId, loadResult.agentSessionId);
 		reconcileAgentSessionId(params.record, loadResult.agentSessionId);
 		applyConfigOptionsToRecord(params.record, loadResult);
 		return {
@@ -5944,7 +5947,14 @@ async function loadRuntimeSession(params) {
 		return await recoverRuntimeSessionLoadFailure(params, error);
 	}
 }
+function assertExpectedAgentSessionId(expectedAgentSessionId, actual) {
+	if (expectedAgentSessionId === void 0) return;
+	if (typeof actual !== "string" || actual.trim() === "" || actual !== expectedAgentSessionId) {
+		throw Object.assign(new Error("the provider did not confirm the retained native identity"), { code: "identity-unavailable" });
+	}
+}
 async function recoverRuntimeSessionLoadFailure(params, error) {
+	if (params.expectedAgentSessionId !== void 0) throw error;
 	const loadError = formatErrorMessage(error);
 	if (params.sameSessionOnly) throw makeSessionResumeRequiredError({
 		record: params.record,
@@ -6182,4 +6192,3 @@ var LiveSessionCheckpoint = class {
 };
 //#endregion
 export { SESSION_MATERIALIZATION_CONTRACT, getPerfMetricsSnapshot as $, REQUESTED_MODEL_UNSUPPORTED_ERROR_CODE as A, listBuiltInAgents as At, absolutePath as B, AUTH_POLICIES as Bt, mergeSessionOptions as C, promptToDisplayText as Ct, applyLifecycleSnapshotToRecord as D, withInterrupt as Dt, applyConversation as E, TimeoutError as Et, modelStateFromConfigOptions as F, isRetryablePromptError as Ft, listSessions as G, OUTPUT_FORMATS as Gt, findSession as H, NON_INTERACTIVE_PERMISSION_POLICIES as Ht, splitCommandLine as I, normalizeOutputError as It, pruneSessions as J, SESSION_RECORD_SCHEMA as Jt, listSessionsForAgent as K, PERMISSION_MODES as Kt, getAcpxVersion as L, extractAcpError as Lt, RequestedModelUnsupportedError as M, resolveAgentCommand as Mt, assertRequestedModelSupported as N, exitCodeForOutputErrorCode as Nt, reconcileAgentSessionId as O, withTimeout as Ot, isRequestedModelUnsupportedError as P, formatErrorMessage as Pt, formatPerfMetric as Q, QueueProtocolError as Qt, permissionModeSatisfies as R, isAcpResourceNotFoundError as Rt, advertisedModelState as S, parsePromptSource as St, sessionOptionsFromRecord as T, InterruptedError as Tt, findSessionByDirectoryWalk as U, OUTPUT_ERROR_CODES as Ut, findGitRepositoryRoot as V, EXIT_CODES as Vt, isoNow$2 as W, OUTPUT_ERROR_ORIGINS as Wt, writeSessionRecord as X, AgentSpawnError as Xt, resolveSessionRecord as Y, AcpxOperationalError as Yt, assertPersistedKeyPolicy as Z, QueueConnectionError as Zt, createSessionConversation as _, parseJsonRpcErrorMessage as _t, applyRequestedModelIfAdvertised as a, startPerfTimer as at, recordSessionUpdate as b, isPromptInput as bt, setCurrentModelId as c, normalizeRuntimeSessionId as ct, setDesiredModelId as d, sessionBaseDir$1 as dt, incrementPerfCounter as et, syncAdvertisedModelState as f, sessionEventActivePath as ft, cloneSessionConversation as g, isAcpJsonRpcMessage as gt, cloneSessionAcpxState as h, extractSessionUpdateNotification as ht, connectAndLoadSession as i, setPerfGauge as it, REQUESTED_MODEL_UNSUPPORTED_REASONS as j, normalizeAgentName$1 as jt, AcpClient as k, DEFAULT_AGENT_NAME as kt, setDesiredConfigOption as l, DEFAULT_EVENT_SEGMENT_MAX_BYTES as lt, applyConfigOptionsToState as m, sessionEventSegmentPath as mt, runPromptTurn as n, recordPerfDuration as nt, currentModelIdFromSetModelResponse as o, parseSessionRecord as ot, applyConfigOptionsToRecord as p, sessionEventLockPath as pt, normalizeName as q, PERMISSION_POLICY_ACTIONS as qt, withConnectedSession as r, resetPerfMetrics as rt, clearDesiredConfigOption as s, serializeSessionRecordForDisk as st, LiveSessionCheckpoint as t, measurePerf as tt, setDesiredModeId as u, defaultSessionEventLog as ut, recordClientOperation as v, parsePromptStopReason as vt, persistSessionOptions as w, textPrompt as wt, trimConversationForRuntime as x, mergePromptSourceWithText as xt, recordPromptSubmission as y, PromptInputValidationError as yt, DEFAULT_HISTORY_LIMIT as z, toAcpErrorPayload as zt };
-

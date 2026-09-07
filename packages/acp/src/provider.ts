@@ -2098,7 +2098,9 @@ function* useAcpxProviderState(
   function* constructRoute(
     agentName: string,
     prepared: Prepared,
-  ): Operation<{ build: BoundBuild; resumeSessionId?: string } | undefined> {
+  ): Operation<
+    { build: BoundBuild; resumeSessionId?: string; expectedAgentSessionId?: string } | undefined
+  > {
     const adapter = adapterFor(agentName);
     if (!ownable(agentName) || adapter === undefined) {
       return undefined;
@@ -2124,7 +2126,18 @@ function* useAcpxProviderState(
         constructed,
         "provider-native-continuation",
       );
-      return { build };
+      const record = yield* until(store.load(prepared.sessionKey));
+      if (record === undefined || record.sessionMaterialization?.state === "pending") {
+        return { build };
+      }
+      const expectedAgentSessionId = record.agentSessionId;
+      if (typeof expectedAgentSessionId !== "string" || expectedAgentSessionId.trim() === "") {
+        throw new AttachmentRefused({
+          class: "identity-unavailable",
+          message: "this session retains no provider identity, so there is nothing to continue",
+        });
+      }
+      return { build, expectedAgentSessionId };
     }
     const route = yield* reconcileRoute(
       agentCommand,
@@ -2500,6 +2513,9 @@ function* useAcpxProviderState(
             mode: "prompt",
             requestId: randomUUID(),
             timeoutMs,
+            ...(construction?.expectedAgentSessionId === undefined
+              ? {}
+              : { expectedAgentSessionId: construction.expectedAgentSessionId }),
           });
           activeTurns.add(turn);
           let completed = false;
@@ -2549,6 +2565,14 @@ function* useAcpxProviderState(
               authority === undefined
                 ? undefined
                 : (terminal, token) => authority.checkpoint(terminal, token),
+              (failure) =>
+                failure.detailCode === "identity-unavailable"
+                  ? new AttachmentRefused({
+                      class: "identity-unavailable",
+                      message:
+                        "the provider did not confirm this session's retained identity, so no turn was sent",
+                    })
+                  : new Error(failure.message),
             ),
           );
           return subscription;

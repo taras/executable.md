@@ -2,7 +2,7 @@
 
 `generated/` is the ACP runtime `@executablemd/acp` executes. It is a source
 snapshot of npm `acpx@0.12.0`, carried in this package rather than resolved as a
-dependency, with three behavioral patches.
+dependency, with four behavioral patches.
 
 - Package: `acpx@0.12.0` from npm
 - Repository: `https://github.com/openclaw/acpx`
@@ -140,6 +140,35 @@ diagnostic promotes a record, and the marker is never appended to a
 conversation, emitted as an event, exposed as prompt text, or retained as a
 checkpoint token.
 
+## Behavioral patch: `expectedAgentSessionId`
+
+A Codex conversation opened in its native UI is continued only after the ACP
+provider confirms the same canonical native identity. ACPX's persistent ensure
+returns a cached record; its later resume/load previously replaced that record's
+identity with any returned value, or retained it when the provider asserted
+nothing. Checking the ensure result therefore checked only the cache.
+
+`AcpRuntimeTurnInput.expectedAgentSessionId` carries the owner's retained
+identity through the live reconnect. It is neither a resume request ID nor a
+session-record field. The runtime asks for a live resume/load even when it has a
+reusable client, and compares the returned canonical assertion before
+`reconcileAgentSessionId`, configuration reconciliation, checkpoint publication
+or the prompt. Missing and different assertions report the stable
+`identity-unavailable` detail code. A failed reconnect never falls back to a new
+session.
+
+| File | Change |
+| --- | --- |
+| `generated/runtime.d.ts` | declares the optional transient expected identity on turn inputs. |
+| `generated/runtime.js` | threads it to reconnect; stages turn changes on a copy without saving or exposing reconnect updates before confirmation; preserves the original record on refusal; retains the acquired client for its owner's `close(handle)`. A failed pending-client close propagates and keeps that client owned for retry. |
+| `generated/live-checkpoint-ClPCSdrW.js` | requires a live assertion equal to the expectation before reconciling either resume or load; refuses fallback when an expected identity exists. |
+
+The provider supplies this input only for established V3 continuations. Fresh
+materialization and Claude's continuation policy are unchanged. No expected
+identity is persisted, no executable version becomes an admission requirement,
+and no refusal publishes a different conversation. `native-reconnect.test.ts`
+crosses the real ACPX reconnect against a controlled ACP backend.
+
 ## Packaging adaptations
 
 These change no runtime behavior and exist because the snapshot is five files
@@ -174,14 +203,17 @@ Issue #648 carries `materialization`. A released ACPX version that defers a
 session's assertion to an explicit backend acceptance, and offers a barrier a
 consumer can wait on, replaces it.
 
-The three patches are removed independently. This snapshot goes when all of them
+Issue #755 carries `expectedAgentSessionId`. A released ACPX version that
+validates a live canonical assertion against the owner's retained expectation
+before reconnect publication or a prompt replaces it.
+
+The four patches are removed independently. This snapshot goes when all of them
 have been, not when any one has.
 
-## Three patches, one snapshot
+## Four patches, one snapshot
 
-They are independent and share no code. Each introduces one identifier that
-occurs nowhere upstream — `agentProcessEnv`, `checkpointMeta` and
-`materialization` — which is what lets the vendor regression hold every
+Each introduces an identifier that occurs nowhere upstream — `agentProcessEnv`,
+`checkpointMeta`, `materialization` and `expectedAgentSessionId` — which is what lets the vendor regression hold every
 introduced line to the neighbourhood of a patch instead of to a keyword upstream
 already uses.
 
@@ -197,4 +229,5 @@ dropped rather than maintained once upstream has it: `agentProcessEnv` when
 ACPX gains a transient agent-environment input of its own, `checkpointMeta` when
 it carries the completing turn's response metadata out on its own, and
 `materialization` when it defers a session's assertion to backend acceptance on
-its own.
+its own; `expectedAgentSessionId` when it confirms the retained native identity
+at the live reconnect boundary on its own.
