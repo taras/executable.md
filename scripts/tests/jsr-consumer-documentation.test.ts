@@ -33,7 +33,7 @@ const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const TIMEOUT = 180_000;
 
 /** The workspace members a consumer of core has to resolve. */
-const MEMBERS = ["core", "runtime", "durable-streams", "acp"] as const;
+const MEMBERS: readonly string[] = ["core", "runtime", "durable-streams", "terminal", "acp"];
 
 /** Every documentation asset the product ships, by package-relative path. */
 const ASSETS: Record<string, readonly string[]> = {
@@ -125,6 +125,9 @@ describe("Tier SYN — a staged JSR consumer", () => {
     yield* ensureDir(consumer);
     yield* writeTextFile(path.join(consumer, "document.md"), CONSUMER_DOCUMENT);
     const imports = yield* consumerImports(staging);
+    const lifecycle = path.join(staged, "terminal/lifecycle.ts");
+    expect(imports["@executablemd/terminal/lifecycle"]).toBe(lifecycle);
+    expect(yield* exists(lifecycle)).toBe(true);
     yield* writeTextFile(path.join(consumer, "deno.json"), JSON.stringify({ imports }, null, 2));
     yield* writeTextFile(
       path.join(consumer, "main.ts"),
