@@ -163,6 +163,28 @@ describe("a remote fork's destination", () => {
     });
   });
 
+  it("names every question of one fork distinctly, under the one identity", function* () {
+    const commands: string[] = [];
+    const parts: string[] = [];
+    yield* installed({ commands, parts, source: source() }, function* (transitions) {
+      const lock = yield* acquired(DESTINATION);
+      return yield* transitions.fork(lock, request());
+    });
+
+    // One fork asks the destination eight questions: whether it already holds
+    // this fork, six offers of the snapshot, and the commit.
+    const asked = [...commands, ...parts];
+    expect(asked).toHaveLength(8);
+    // Each is its own command. An owner keys a retained decision by the
+    // identity it was asked under, so two different requests sharing one
+    // identity would meet each other's fingerprint and be refused as repeats
+    // of something they are not.
+    expect(new Set(asked).size).toBe(asked.length);
+    // And all of them belong to the one call, so a retry spells each of them
+    // exactly the way the first attempt did.
+    expect(new Set(asked.map((command) => command.split(":")[0])).size).toBe(1);
+  });
+
   it("carries the inherited records exactly as the source retained them", function* () {
     const staged: RemoteForkPart[] = [];
     yield* installed({ staged, source: source() }, function* (transitions) {
@@ -278,7 +300,7 @@ describe("a remote fork's destination", () => {
     const asked: string[] = [];
     const sourced: string[] = [];
     const commands: string[] = [];
-    const loseAnswer = new Set(["command-1"]);
+    const loseAnswer = new Set(["command-1:commit"]);
     const committed = new Map();
     const script: Script = {
       asked,
@@ -307,7 +329,7 @@ describe("a remote fork's destination", () => {
     // was read once — for the first attempt — and not again.
     expect(outcome.sourced).toEqual([SOURCE_RUN_ID]);
     expect(outcome.asked.at(-1)).toBe("fork");
-    expect(commands.filter((id) => id === "command-1").length).toBeGreaterThan(1);
+    expect(commands.filter((id) => id === "command-1:commit").length).toBeGreaterThan(1);
   });
 
   it("sends only the command it already sent when its answer is lost twice", function* () {
@@ -316,7 +338,7 @@ describe("a remote fork's destination", () => {
     const script: Script = {
       asked,
       sourced,
-      loseAnswer: new Set(["command-1"]),
+      loseAnswer: new Set(["command-1:commit"]),
       committed: new Map(),
       source: source(),
     };
@@ -326,7 +348,7 @@ describe("a remote fork's destination", () => {
         return yield* transitions.fork(lock, request());
       });
       // Lost again on the resend.
-      script.loseAnswer?.add("command-1");
+      script.loseAnswer?.add("command-1:commit");
       const asking = asked.length;
       const second = yield* scoped(function* () {
         const lock = yield* acquired(DESTINATION);
@@ -348,7 +370,7 @@ describe("a remote fork's destination", () => {
     const script: Script = {
       asked,
       forkRefuses: true,
-      loseAnswer: new Set(["command-1"]),
+      loseAnswer: new Set(["command-1:commit"]),
       committed: new Map(),
       source: source(),
     };
@@ -372,10 +394,12 @@ describe("a remote fork's destination", () => {
 
   it("restages the same snapshot when the destination says it needs one", function* () {
     const asked: string[] = [];
+    const parts: string[] = [];
     const script: Script = {
       asked,
-      loseAnswer: new Set(["command-1"]),
-      needsTransfer: new Set(["command-1"]),
+      parts,
+      loseAnswer: new Set(["command-1:commit"]),
+      needsTransfer: new Set(["command-1:commit"]),
       committed: new Map(),
       source: source(),
     };
@@ -385,11 +409,18 @@ describe("a remote fork's destination", () => {
         return yield* transitions.fork(lock, request());
       });
       const asking = asked.length;
+      const staging = parts.length;
       const second = yield* scoped(function* () {
         const lock = yield* acquired(DESTINATION);
         return yield* transitions.fork(lock, request());
       });
-      return { first, second, sent: asked.slice(asking) };
+      return {
+        first,
+        second,
+        sent: asked.slice(asking),
+        offered: parts.slice(0, staging),
+        reoffered: parts.slice(staging),
+      };
     });
 
     expect(outcome.first.ok).toBe(false);
@@ -397,6 +428,14 @@ describe("a remote fork's destination", () => {
     // The resend was told its transfer is not there, so the same logical fork
     // staged the snapshot again and committed once.
     expect(outcome.sent[0]).toBe("fork");
+    // Each part of one offer is its own command, so no part meets another
+    // part's fingerprint at the owner.
+    expect(new Set(outcome.offered).size).toBe(outcome.offered.length);
+    // And the parts are named by the call and their place in it, so the same
+    // logical fork restages under exactly the identities it used before: a
+    // part the owner already holds is recognized as that part, not as a new
+    // one.
+    expect(outcome.reoffered).toEqual(outcome.offered);
     expect(outcome.sent.filter((command) => command === "fork-stage")).toHaveLength(6);
     expect(outcome.sent.at(-1)).toBe("fork");
   });

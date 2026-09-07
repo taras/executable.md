@@ -110,6 +110,15 @@ export interface OwnerConnection {
     parse: AnswerParser<T>,
     parseRefusal?: (refusal: string) => string,
   ): Operation<OwnerAnswer<T>>;
+  /**
+   * End this connection now, ahead of the scope that owns it.
+   *
+   * The same teardown scope exit reaches, and it still runs once: whoever is
+   * waiting is told the connection closed, the listeners come off, and the
+   * socket goes. A caller that has given up on an acquisition uses this to
+   * stop being the run's executor without waiting for its scope to end.
+   */
+  close(): void;
 }
 
 /** The most bytes one answer may carry. */
@@ -315,6 +324,9 @@ export function useOwnerConnection(socket: OwnerSocket): Operation<OwnerConnecti
     });
 
     yield* provide({
+      close(): void {
+        teardown("closed");
+      },
       *ask<T>(
         id: string,
         command: Record<string, unknown>,

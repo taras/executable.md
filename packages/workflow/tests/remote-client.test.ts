@@ -252,6 +252,43 @@ describe("a connection to a run's owner", () => {
     expect(wire.listening).toBe(0);
   });
 
+  it("ends on request, once, ahead of the scope that owns it", function* () {
+    const wire = fakeSocket();
+    const raised: unknown[] = [];
+    yield* scoped(function* () {
+      const owner = yield* useOwnerConnection(wire.socket);
+      yield* sleep(0);
+      const asking = yield* spawn(function* () {
+        try {
+          yield* owner.ask("a1", { command: "frontier" }, readString);
+        } catch (error) {
+          raised.push(error);
+        }
+      });
+      yield* sleep(0);
+
+      // A caller that has given up on this acquisition ends the connection
+      // rather than waiting for its scope: the socket is the acquisition, and
+      // one still open still holds the run.
+      owner.close();
+      yield* asking;
+      expect(raised.map(refusalOf)).toEqual(["closed"]);
+      expect(wire.closes).toBe(1);
+      expect(wire.listening).toBe(0);
+
+      // Nothing new goes out on it afterwards.
+      try {
+        yield* owner.ask("a2", { command: "frontier" }, readString);
+      } catch (error) {
+        raised.push(error);
+      }
+      expect(raised.map(refusalOf)).toEqual(["closed", "closed"]);
+    });
+    // And the scope ending finds the teardown already done rather than
+    // closing a second time.
+    expect(wire.closes).toBe(1);
+  });
+
   it("fails closed on an answer naming a request nobody made", function* () {
     const wire = fakeSocket();
     let raised: unknown;

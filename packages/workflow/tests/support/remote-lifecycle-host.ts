@@ -50,8 +50,10 @@ export interface Script {
   readonly asked?: string[];
   /** Every run an acquisition was opened for. */
   readonly opened?: string[];
-  /** Every run an acquisition was given back for. */
+  /** Every run an acquisition was given back for at scope exit. */
   readonly closed?: string[];
+  /** Every run whose connection was ended early, before its scope did. */
+  readonly retired?: string[];
   /** Answer admission with a live executor rather than a connection. */
   readonly admit?: "already-running";
   /** Answer a begin with one of the run's own conditions. */
@@ -70,6 +72,8 @@ export interface Script {
   readonly commits?: RemoteForkCommit[];
   /** Every command identity the provider addressed, in order. */
   readonly commands?: string[];
+  /** Every command identity one staged fork part was offered under. */
+  readonly parts?: string[];
   /** Every retrieval value a begin carried. */
   readonly retrievals?: (unknown | null)[];
   /** Answer every fork commit with a definitive conflict. */
@@ -223,9 +227,10 @@ function lifecycle(script: Script): RemoteLifecycleLink {
       return Ok({ kind: "performed", value: record() });
     },
     // deno-lint-ignore require-yield
-    *stageForkPart(_commandId: string, part: RemoteForkPart): Operation<Result<void>> {
+    *stageForkPart(commandId: string, part: RemoteForkPart): Operation<Result<void>> {
       script.asked?.push("fork-stage");
       script.staged?.push(part);
+      script.parts?.push(commandId);
       return Ok(undefined);
     },
     // deno-lint-ignore require-yield
@@ -287,7 +292,14 @@ export function installedHost(script: Script): RemoteLifecycleHost {
         return Ok("already-running");
       }
       script.opened?.push(runId);
-      const connection: RemoteExecutorConnection = { link: link(), lifecycle: lifecycle(script) };
+      const connection: RemoteExecutorConnection = {
+        link: link(),
+        lifecycle: lifecycle(script),
+        // deno-lint-ignore require-yield
+        *close(): Operation<void> {
+          script.retired?.push(runId);
+        },
+      };
       yield* ensureClosed(script, runId);
       return Ok(connection);
     },

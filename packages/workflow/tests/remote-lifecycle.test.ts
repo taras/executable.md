@@ -273,7 +273,7 @@ describe("a remote run's executor lifecycle", () => {
       const first = yield* scoped(function* () {
         const lock = yield* acquired();
         // The owner will commit and the answer will be lost.
-        loseAnswer.add("command-1");
+        loseAnswer.add("command-1:begin");
         return yield* transitions.begin(lock, { runId: RUN_ID, action: "resume" });
       });
       // The connection is gone with its answer. A replacement acquisition asks
@@ -289,7 +289,7 @@ describe("a remote run's executor lifecycle", () => {
     expect(outcome.second.ok).toBe(true);
     // The same command identity both times, so the owner answered with the
     // decision it had already made rather than making a second one.
-    expect(commands).toEqual(["command-1", "command-1"]);
+    expect(commands).toEqual(["command-1:begin", "command-1:begin"]);
     if (outcome.second.ok) {
       // And the execution the caller is handed is the one that was begun.
       expect(outcome.second.value.execution.executionId).toBe("execution-1");
@@ -337,7 +337,7 @@ describe("a remote run's executor lifecycle", () => {
     // The owner answered, so that question is finished. What it is not is a
     // claim on the next one's identity.
     expect(outcome.refused.ok).toBe(false);
-    expect(outcome.commands).toEqual(["command-1"]);
+    expect(outcome.commands).toEqual(["command-1:begin"]);
 
     const second = yield* installed({ commands: [] }, function* (transitions) {
       const lock = yield* acquired();
@@ -349,7 +349,7 @@ describe("a remote run's executor lifecycle", () => {
   it("asks the same cancellation again when its answer was lost", function* () {
     const commands: string[] = [];
     const outcome = yield* installed(
-      { commands, loseAnswer: new Set(["command-1"]) },
+      { commands, loseAnswer: new Set(["command-1:cancel"]) },
       function* () {
         const first = yield* WorkflowLifecycle.operations.cancel(RUN_ID);
         // The connection that asked is gone; the question is not.
@@ -361,7 +361,7 @@ describe("a remote run's executor lifecycle", () => {
     expect(outcome.first.ok).toBe(false);
     expect(outcome.second.ok).toBe(true);
     // One identity, asked twice, so the owner answers with what it decided.
-    expect(outcome.commands).toEqual(["command-1", "command-1"]);
+    expect(outcome.commands).toEqual(["command-1:cancel", "command-1:cancel"]);
   });
 
   it("gives a later cancellation a fresh identity once one was answered", function* () {
@@ -375,7 +375,7 @@ describe("a remote run's executor lifecycle", () => {
     expect(outcome.first.ok).toBe(true);
     expect(outcome.second.ok).toBe(true);
     // Answered, so the claim was retired and the next call is its own.
-    expect(outcome.commands).toEqual(["command-1", "command-2"]);
+    expect(outcome.commands).toEqual(["command-1:cancel", "command-2:cancel"]);
   });
 
   it("frees the acquisition when a call is cancelled before it sends", function* () {
@@ -411,9 +411,11 @@ describe("a remote run's executor lifecycle", () => {
 
   it("retires an acquisition cancelled after its command went out", function* () {
     const asked: string[] = [];
+    const retired: string[] = [];
     const entered = withResolvers<void>();
     const script: Script = {
       asked,
+      retired,
       gate: {
         *wait(): Operation<void> {
           entered.resolve();
@@ -435,5 +437,9 @@ describe("a remote run's executor lifecycle", () => {
 
     expect(outcome.ok).toBe(false);
     expect(asked.filter((command) => command === "begin")).toHaveLength(1);
+    // The connection went with the lock, before its scope ended. A socket
+    // still holding the run for a lock nobody may use would leave the run
+    // unreachable by anybody.
+    expect(retired).toEqual([RUN_ID]);
   });
 });

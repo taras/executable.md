@@ -124,6 +124,15 @@ export interface RemoteForkCommit {
 export interface RemoteExecutorConnection {
   readonly link: RemoteWorkspaceLink;
   readonly lifecycle: RemoteLifecycleLink;
+  /**
+   * End this connection now, before the scope that owns it ends.
+   *
+   * An acquisition retired while a command's outcome is unknown must stop
+   * being the owner's live executor: a lock the runner has given up on while
+   * its socket still holds the run would leave the run unreachable by anybody,
+   * including whoever wants to ask the same question again.
+   */
+  close(): Operation<void>;
 }
 
 /**

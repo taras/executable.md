@@ -249,7 +249,10 @@ export function* useRemoteLifecycle(
       }
       const question = questionOf(["cancel"]);
       const addressed = identify(runId, question);
-      const answered = yield* admitted.value.lifecycle.cancel(addressed.commandId, runId);
+      const answered = yield* admitted.value.lifecycle.cancel(
+        commandOf(addressed, "cancel"),
+        runId,
+      );
       if (!answered.ok) {
         // The same distinction the other mutations make. A cancellation may
         // have committed before its answer was lost, and the next attempt has
@@ -344,8 +347,11 @@ function* gripped(held: Hold): Operation<Grip> {
     if (sent) {
       // A command went out and nothing came back. This acquisition is retired
       // rather than released: its authority ends with it, and nothing new can
-      // be sent on it while the first outcome is unknown.
+      // be sent on it while the first outcome is unknown. The connection goes
+      // with it, because a lock nobody may use whose socket still holds the
+      // run would leave the run unreachable by anyone at all.
       held.live = false;
+      yield* held.connection.close();
       return;
     }
     held.busy = false;
@@ -425,7 +431,7 @@ function transitions(
       const addressed = identify(request.runId, question);
       grip.sending();
       const answered = yield* held.connection.lifecycle.begin({
-        commandId: addressed.commandId,
+        commandId: commandOf(addressed, "begin"),
         runId: request.runId,
         action: request.action,
         creation,
@@ -485,7 +491,7 @@ function transitions(
       ]);
       const addressed = identify(held.runId, question);
       const answered = yield* held.connection.lifecycle.settle(
-        addressed.commandId,
+        commandOf(addressed, "settle"),
         completion,
         frontier.workspaceRootId,
       );
@@ -568,7 +574,7 @@ function transitions(
       }
       grip.sending();
       const continued = yield* held.connection.lifecycle.continueFork({
-        commandId: addressed.commandId,
+        commandId: commandOf(addressed, "continue"),
         runId: request.runId,
         creation,
         // What this request names, which the destination proves against what
@@ -608,12 +614,12 @@ function transitions(
         answeredNow(request.runId, addressed);
         return source;
       }
-      const staged = yield* offer(host, held.connection.lifecycle, source.value);
+      const staged = yield* offer(addressed, held.connection.lifecycle, source.value);
       if (!staged.ok) {
         return staged;
       }
       const command: RemoteForkCommit = {
-        commandId: addressed.commandId,
+        commandId: commandOf(addressed, "commit"),
         runId: request.runId,
         retrieval: request.creation.retrieval,
         creation,
@@ -719,6 +725,20 @@ function creationShape(creation: CreateWorkflowRunRequest): string {
 }
 
 /**
+ * One internal command's own identity within a logical call.
+ *
+ * A fork asks the destination more than one question — whether it already
+ * holds this fork, and then to commit the transfer — and the owner keys a
+ * retained decision by the identity it was asked under. One identity naming
+ * two different requests would meet its own earlier fingerprint and be refused
+ * as a repeat of something else, so each kind gets its own, derived from the
+ * call so that a retry spells it the same way.
+ */
+function commandOf(invocation: Ambiguous, kind: string): string {
+  return `${invocation.commandId}:${kind}`;
+}
+
+/**
  * What one invocation is asking, as text two calls can be compared by.
  *
  * Canonical, so the same question always spells the same way, and a different
@@ -756,7 +776,7 @@ function* readSource(
  * whether these add up to one.
  */
 function* offer(
-  host: RemoteLifecycleHost,
+  invocation: Ambiguous,
   lifecycle: RemoteLifecycleLink,
   source: RemoteForkSource,
 ): Operation<Result<void>> {
@@ -802,7 +822,12 @@ function* offer(
     parts.push({ section: "checkouts", position, part: { ...checkout } });
   });
   for (const part of parts) {
-    const staged = yield* lifecycle.stageForkPart(host.ids.command(), part);
+    // Named by the call and the place in it, so restaging the same logical
+    // fork offers the same parts under the same identities.
+    const staged = yield* lifecycle.stageForkPart(
+      commandOf(invocation, `part:${part.section}:${part.position}`),
+      part,
+    );
     if (!staged.ok) {
       return staged;
     }

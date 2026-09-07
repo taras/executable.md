@@ -52,6 +52,14 @@ export function* useExecutorConnection(
     return Ok({
       link: cloudflareRunLink(connection, nextId, runId),
       lifecycle: cloudflareLifecycleLink(connection, reads, nextId),
+      // deno-lint-ignore require-yield
+      *close(): Operation<void> {
+        // The socket is the acquisition. Ending the connection is how this
+        // runner stops being the run's executor before its scope ends, and it
+        // is the same teardown scope exit would reach, so the scope ending
+        // afterwards finds nothing left to do.
+        connection.close();
+      },
     });
   } catch (error) {
     // Whatever went wrong reaching or building the connection, a caller learns
