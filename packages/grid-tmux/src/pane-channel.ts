@@ -126,6 +126,8 @@ export function usePaneChannels(
     const slots = new Map<number, Slot>();
     const servers: Server[] = [];
     const live = new Set<Socket>();
+    /** Every socket ever accepted, with the `close` listener this scope put on it. */
+    const watching = new Map<Socket, () => void>();
     const refusals: string[] = [];
     const arrivals = createSignal<{ ordinal: number; socket: Socket }, never>();
     /** Closures that have actually happened, by their own events. */
@@ -209,6 +211,14 @@ export function usePaneChannels(
     }
 
     yield* ensure(function* () {
+      // One accepted connection cannot be named at teardown, so each is
+      // remembered with the handler it carries and removed from the socket it
+      // was recorded against. Every socket ever accepted, not just the ones
+      // still open: a socket that closed on its own is off `live` and still
+      // carries what this scope put on it.
+      for (const [socket, onSocketClose] of watching) {
+        socket.off("close", onSocketClose);
+      }
       yield* closeAll();
     });
 
@@ -225,24 +235,28 @@ export function usePaneChannels(
       // Named, every one of them. `createServer(cb)` and `listen(cb)` both
       // register anonymous listeners that nothing can take off again.
       const server = net.createServer();
+      servers.push(server);
+      options.onServer?.(server);
+      closable++;
       const onConnection = (socket: Socket): void => {
-        live.add(socket);
-        closable++;
         const onSocketClose = (): void => {
+          // A socket that closed is nobody's to close again.
           live.delete(socket);
-          socket.off("close", onSocketClose);
         };
+        live.add(socket);
+        watching.set(socket, onSocketClose);
+        closable++;
         socket.on("close", onSocketClose);
         options.onSocket?.(socket);
         arrivals.send({ ordinal, socket });
       };
-      server.on("connection", onConnection);
-      servers.push(server);
-      options.onServer?.(server);
-      closable++;
+      // Established before the subscription, because entering an ensure() is
+      // itself a suspension: a scope halted while it registers unwinds with
+      // nothing on it at all.
       yield* ensure(() => {
         server.off("connection", onConnection);
       });
+      server.on("connection", onConnection);
 
       const listening = withResolvers<void>();
       const onListening = (): void => listening.resolve();

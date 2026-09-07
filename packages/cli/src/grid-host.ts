@@ -167,12 +167,14 @@ export function useHangup(): Operation<Operation<void>> {
   return resource<Operation<void>>(function* (provide) {
     const hung = withResolvers<void>();
     const onHangup = (): void => hung.resolve();
-    process.on("SIGHUP", onHangup);
+    // Removed with the run that installed it. A listener that outlived its
+    // grid would answer for a terminal the next one is using — and the removal
+    // is established before the subscription, because entering an ensure() is
+    // itself a suspension.
     yield* ensure(() => {
-      // Removed with the run that installed it. A listener that outlived its
-      // grid would answer for a terminal the next one is using.
       process.off("SIGHUP", onHangup);
     });
+    process.on("SIGHUP", onHangup);
     yield* provide(hung.operation);
   });
 }

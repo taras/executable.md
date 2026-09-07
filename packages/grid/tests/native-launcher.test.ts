@@ -23,6 +23,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import process from "node:process";
 import { spawn as spawnChild } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import {
   flushOutput,
   nativeLaunch,
@@ -280,6 +281,92 @@ describe("Tier FL — the foreground native launcher", () => {
     const before = yield* beats(heartbeat);
     yield* sleep(200);
     expect(yield* beats(heartbeat)).toBe(before);
+  });
+
+  /**
+   * Counted on the child itself, after each launch has ended, which is when the
+   * removal is supposed to have happened — and then the start event is replayed
+   * on it, because a handler left attached is one that would report a start for
+   * a launch nobody is waiting on any more.
+   */
+  it("FL10: a launch leaves nothing on its child, and none of them reports a late start", function* () {
+    const dir = yield* useTempDir();
+    const children: ChildProcess[] = [];
+    const order: string[] = [];
+    const listeners = (): number =>
+      children.reduce(
+        (total, child) =>
+          total +
+          (["spawn", "error", "exit"] as const).reduce(
+            (count, name) => count + child.listenerCount(name),
+            0,
+          ),
+        0,
+      );
+    const watch = (child: ChildProcess): void => {
+      children.push(child);
+    };
+
+    // Delivery: a child that starts and exits.
+    const fake = yield* useFake(dir, "claude", { exitCode: 0 });
+    yield* scoped(function* () {
+      yield* installForegroundLauncher({ isTerminal: () => true, observe: watch });
+      yield* reserveTerminal();
+      yield* NativeLauncher.operations.launch({ command: [fake.command], cwd: dir }, () =>
+        order.push("started"),
+      );
+    });
+    expect(children.length).toBe(1);
+    expect(listeners()).toBe(0);
+    expect(order).toEqual(["started"]);
+
+    // Startup failure: `error` arrives and `spawn` never will, so the handler
+    // that would report a start is one only the launch's own end takes off.
+    children.length = 0;
+    order.length = 0;
+    yield* scoped(function* () {
+      yield* installForegroundLauncher({ isTerminal: () => true, observe: watch });
+      yield* reserveTerminal();
+      try {
+        yield* NativeLauncher.operations.launch(
+          { command: [path.join(dir, "not-a-program")], cwd: dir },
+          () => order.push("started"),
+        );
+      } catch {
+        // That it refuses is FL9's claim; this row reads what it left behind.
+      }
+    });
+    expect(children.length).toBe(1);
+    expect(listeners()).toBe(0);
+    // A child that never ran does not become one that started, however late
+    // the event arrives.
+    children[0]?.emit("spawn");
+    expect(order).toEqual([]);
+
+    // Cancellation, while the child is live and may not yet have been reported.
+    children.length = 0;
+    order.length = 0;
+    const hanging = yield* useFake(dir, "hangs", { hang: true });
+    yield* scoped(function* () {
+      yield* installForegroundLauncher({ isTerminal: () => true, observe: watch });
+      yield* reserveTerminal();
+      const running = yield* spawn(function* () {
+        yield* NativeLauncher.operations.launch({ command: [hanging.command], cwd: dir }, () =>
+          order.push("started"),
+        );
+      });
+      // Coordinated by the child existing, never by a duration.
+      while (children.length === 0) {
+        yield* sleep(15);
+      }
+      yield* running.halt();
+    });
+    expect(children.length).toBe(1);
+    expect(listeners()).toBe(0);
+    // Whatever this launch reported before it was cancelled, it reports no more.
+    const reported = [...order];
+    children[0]?.emit("spawn");
+    expect(order).toEqual(reported);
   });
 });
 

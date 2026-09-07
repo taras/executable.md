@@ -295,12 +295,19 @@ export function readFrames<T>(
       socket.destroy();
     }
 
+    // Still the resource's, for the paths that terminate nothing: a cancelled
+    // scope, and a socket that simply never says anything. Established before
+    // the subscriptions, because entering an ensure() is itself a suspension,
+    // and naming each pair at the teardown that makes it good rather than
+    // behind `detach`.
+    yield* ensure(() => {
+      socket.off("data", onData);
+      socket.off("close", onClose);
+      socket.off("error", onError);
+    });
     socket.on("data", onData);
     socket.on("close", onClose);
     socket.on("error", onError);
-    // Still the resource's, for the paths that terminate nothing: a cancelled
-    // scope, and a socket that simply never says anything.
-    yield* ensure(detach);
 
     yield* provide(queue);
   });
