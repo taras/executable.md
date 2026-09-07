@@ -20,6 +20,7 @@ import type { ParsedRecord, ProviderParser } from "./observer.ts";
 /** The Codex parser: `session_meta` identity and project, `event_msg` events. */
 export const codexParser: ProviderParser = {
   provider: "codex",
+  supportsCompletion: true,
   identityFromName() {
     // Codex names its rollout files by timestamp, not by identity, so the
     // identity is only ever read from the `session_meta` record inside.

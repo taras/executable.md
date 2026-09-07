@@ -45,16 +45,24 @@ tmux identifier, and no raw native identity.
 ```json
 {
   "type": "object",
-  "required": ["schema", "verdict", "mode", "turnBudgets", "counters"],
+  "required": ["report", "schemaValid"],
   "properties": {
-    "schema": { "const": "terminal-repl-poc-report.v1" },
-    "verdict": {
-      "enum": ["PASS", "VIEW_ONLY", "PROVIDER_EXCLUDED", "ENVIRONMENT_BLOCKED", "HARNESS_FAILED", "NOT_AUTHORIZED"]
+    "report": {
+      "type": "object",
+      "required": ["schema", "verdict", "mode", "turnBudgets", "counters"],
+      "properties": {
+        "schema": { "const": "terminal-repl-poc-report.v1" },
+        "verdict": {
+          "enum": ["PASS", "VIEW_ONLY", "PROVIDER_EXCLUDED", "ENVIRONMENT_BLOCKED", "HARNESS_FAILED", "NOT_AUTHORIZED"]
+        },
+        "mode": { "type": "string" },
+        "detail": { "type": "string" },
+        "turnBudgets": { "type": "object" },
+        "counters": { "type": "object" }
+      }
     },
-    "mode": { "type": "string" },
-    "detail": { "type": "string" },
-    "turnBudgets": { "type": "object" },
-    "counters": { "type": "object" }
+    "schemaValid": { "type": "boolean" },
+    "errors": { "type": "array" }
   }
 }
 ```
@@ -77,21 +85,27 @@ answered.
 {run.stdout}
 </Parse>
 
+The supervisor validated the report against the checked-in
+`report.schema.json` — the full validator — before printing it, so an invalid
+report fails here rather than being read past.
+
+<Assert expr={proof.schemaValid} />
+
 The whole report is shown before anything is judged.
 
 ```json
 {run.stdout}
 ```
 
-<Switch value={proof.verdict}>
+<Switch value={proof.report.verdict}>
 <Case value="PASS">
 
 The exact marked message was accepted under the intended native identity and the
 turn completed, observed from Codex's own rollout file and never from the screen.
 
-<AssertEquals actual={proof.counters.wrongPaneDeliveries} expected={0} />
-<AssertEquals actual={proof.counters.busyAdmissions} expected={0} />
-<AssertEquals actual={proof.counters.manualActivityAdmissions} expected={0} />
+<AssertEquals actual={proof.report.counters.wrongPaneDeliveries} expected={0} />
+<AssertEquals actual={proof.report.counters.busyAdmissions} expected={0} />
+<AssertEquals actual={proof.report.counters.manualActivityAdmissions} expected={0} />
 
 </Case>
 <Case value="NOT_AUTHORIZED">
@@ -99,12 +113,12 @@ turn completed, observed from Codex's own rollout file and never from the screen
 The ordinary path: without both gates nothing started and no turn was spent. This
 is the pass on a developer machine and in CI.
 
-<AssertEquals actual={proof.turnBudgets.codexSpent} expected={0} />
+<AssertEquals actual={proof.report.turnBudgets.codexSpent} expected={0} />
 
 </Case>
 <Case default>
 
-<Fail message={`The Codex live journey did not pass: ${proof.verdict} — ${proof.detail}`} />
+<Fail message={`The Codex live journey did not pass: ${proof.report.verdict} — ${proof.report.detail}`} />
 
 </Case>
 </Switch>

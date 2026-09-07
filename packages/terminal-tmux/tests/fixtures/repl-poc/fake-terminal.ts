@@ -70,7 +70,7 @@ export interface FakePane {
   /** Run `mutate` the next time the fake crosses a barrier (may do async work). */
   armBarrier(mutate: () => Operation<void>): void;
   /** Run `mutate` the next time a buffer is loaded (just before the guarded paste). */
-  armLoad(mutate: () => void): void;
+  armLoad(mutate: () => Operation<void>): void;
   /** Make the next guarded paste fail its server-side command with this outcome. */
   armGuardFailure(kind: "declined" | "uncertain"): void;
 }
@@ -98,7 +98,7 @@ export function createFakePane(options: FakePaneOptions = {}): FakePane {
   const deliveries: FakeDelivery[] = [];
   const buffers = new Map<string, string>();
   let barrierTrap: (() => Operation<void>) | undefined;
-  let loadTrap: (() => void) | undefined;
+  let loadTrap: (() => Operation<void>) | undefined;
   let guardFailure: "declined" | "uncertain" | undefined;
 
   function snapshot(): PaneSnapshot {
@@ -134,7 +134,7 @@ export function createFakePane(options: FakePaneOptions = {}): FakePane {
       const trap = loadTrap;
       loadTrap = undefined;
       if (trap !== undefined) {
-        trap();
+        yield* trap();
       }
       const bytes = new TextDecoder().decode(yield* until(readFile(path)));
       buffers.set(buffer, bytes);

@@ -55,6 +55,13 @@ export interface ProviderSample {
   readonly cursor: number;
   /** The number of relevant records observed, so a new turn is a new event. */
   readonly eventCount: number;
+  /**
+   * The file's physical byte length, including a partial tail no cursor covers.
+   * A record being written — even one still missing its newline — grows this,
+   * so a turn opening during the barrier or during buffer preparation is seen
+   * even before it parses as a complete event.
+   */
+  readonly physicalSize: number;
 }
 
 /** One combined sample of the pane and the provider it hosts. */
@@ -186,7 +193,8 @@ export function providerUnchanged(left: ProviderSample, right: ProviderSample): 
   return (
     left.cursor === right.cursor &&
     left.eventCount === right.eventCount &&
-    left.openTurn === right.openTurn
+    left.openTurn === right.openTurn &&
+    left.physicalSize === right.physicalSize
   );
 }
 

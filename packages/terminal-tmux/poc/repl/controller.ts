@@ -7,15 +7,18 @@
  * - `attemptStep` takes one role's queue head from `queued` to a pasted attempt.
  *   It composes convergence's combined sample from the pane probe and the
  *   provider observer, so a turn that opens during the acknowledged barrier fails
- *   convergence exactly as a pane change does. It records `AttemptStarted`
- *   durably, re-samples once more between convergence and the guard, and only then
- *   pastes under the final guard. A pane that is unavailable, replaced, busy or
- *   moving keeps the message queued; an observer that cannot map the source
- *   refuses; a paste whose whole delivery could not be proved becomes uncertain
- *   and is never retried.
+ *   convergence exactly as a pane change does. It then prepares the private
+ *   message file and tmux buffer, takes one final combined sample *after* that
+ *   preparation — catching a turn that opened or a record that grew while the
+ *   buffer loaded, including a partial tail — records `AttemptStarted` durably,
+ *   and only then enters the single guarded paste. A pane that is unavailable,
+ *   replaced, busy or moving keeps the message queued; an observer that cannot
+ *   map the source refuses; a paste whose whole delivery could not be proved
+ *   becomes uncertain and is never retried.
  * - `observeStep` reads the provider session file forward from the durable
  *   cursor and turns exact matching records into acceptance and completion,
- *   grouped by the provider's own turn identity. A refusal advances no cursor.
+ *   grouped by the provider's own turn identity, deduplicating an event a restart
+ *   already recorded. A refusal advances no cursor.
  * - `reconcileRestart` turns any attempt a restart left in flight into an
  *   `uncertain` outcome that is never pasted again.
  *
@@ -26,8 +29,8 @@
 import type { Operation } from "effection";
 import { converge, providerUnchanged, structurallyEqual } from "./convergence.ts";
 import type { PaneProbe, SampleResult } from "./convergence.ts";
-import { deliver } from "./delivery.ts";
-import { hasOpenTurn, locate, read } from "./observer.ts";
+import { withPreparedDelivery } from "./delivery.ts";
+import { hasOpenTurn, locate, physicalSizeOf, read } from "./observer.ts";
 import type { ObservationRefusal, ProviderParser } from "./observer.ts";
 import { queueHead } from "./state.ts";
 import type { NormalizedEvent, RoleState } from "./state.ts";
@@ -104,13 +107,14 @@ function turnMatches(left: string | undefined, right: string | undefined): boole
   return left === right;
 }
 
-/** How the provider file reads now: idle/open, its length, its event count. */
+/** How the provider file reads now: idle/open, its cursor, events, physical size. */
 type ProviderReadResult =
   | {
       readonly outcome: "read";
       readonly openTurn: boolean;
       readonly cursor: number;
       readonly eventCount: number;
+      readonly physicalSize: number;
     }
   | { readonly outcome: "refused"; readonly refusal: ObservationRefusal };
 
@@ -125,11 +129,15 @@ function readProvider(observer: ObserverSource, identity: string): Operation<Pro
     if (readOut.outcome === "refused") {
       return { outcome: "refused", refusal: readOut.refusal };
     }
+    // The physical size, including a partial tail no cursor covers, so a record
+    // being written is visible before it parses as a complete event.
+    const physicalSize = yield* physicalSizeOf(located.source.path);
     return {
       outcome: "read",
       openTurn: hasOpenTurn(readOut.events),
       cursor: readOut.cursor,
       eventCount: readOut.events.length,
+      physicalSize,
     };
   })();
 }
@@ -154,6 +162,7 @@ function makeSampler(
           openTurn: provider.openTurn,
           cursor: provider.cursor,
           eventCount: provider.eventCount,
+          physicalSize: provider.physicalSize,
         },
       },
     };
@@ -163,10 +172,11 @@ function makeSampler(
 /**
  * Try to deliver one role's queue head.
  *
- * The order is the contract: prove the pane usable and the same across a
- * barrier, prove the provider idle and unchanged across it, record the intent,
- * re-sample once more, then paste under a final guard. Anything unproved leaves
- * the message queued; a paste that cannot be fully proved leaves it uncertain.
+ * The order is the contract: prove the pane usable and the provider idle and
+ * unchanged across a barrier; prepare the private file and buffer; take one final
+ * combined sample after that preparation; record the intent; then paste under a
+ * single guarded operation. Anything unproved before the intent leaves the
+ * message queued; a paste that cannot be fully proved leaves it uncertain.
  */
 export function attemptStep(
   store: ReplStore,
@@ -202,26 +212,17 @@ export function attemptStep(
     const sampler = makeSampler(probe, observer, role.identity.id);
     const converged = yield* converge(sampler, () => probe.barrier());
     if (converged.outcome === "not-ready") {
-      // An observer that could not map the source is a refusal, distinct from a
-      // pane that was merely busy or moving.
       const refusal = asRefusal(converged.reason);
-      if (refusal !== undefined) {
-        // Reset the queue head from `converging` before reporting the refusal.
-        yield* store.dispatch({
-          type: "ConvergenceInvalidated",
-          key,
-          id: head.id,
-          reason: converged.reason,
-        });
-        yield* store.dispatch({ type: "ObserverRefused", key, reason: refusal });
-        return { outcome: "refused", refusal };
-      }
       yield* store.dispatch({
         type: "ConvergenceInvalidated",
         key,
         id: head.id,
         reason: converged.reason,
       });
+      if (refusal !== undefined) {
+        yield* store.dispatch({ type: "ObserverRefused", key, reason: refusal });
+        return { outcome: "refused", refusal };
+      }
       if (converged.reason === "provider-open-turn") {
         yield* store.dispatch({ type: "ProviderBusy", key });
       }
@@ -236,60 +237,68 @@ export function attemptStep(
     }
 
     yield* store.dispatch({ type: "TerminalObserved", key, readiness: "ready" });
-    // The durable intent, before any byte reaches the terminal.
-    yield* store.dispatch({ type: "AttemptStarted", key, id: head.id });
 
-    // One more combined read between convergence and the guard. A turn that
-    // opened, a record that appeared, an identity that changed, or a pane that
-    // moved in this window declines the attempt with nothing sent.
-    const recheck = yield* sampler();
-    if (
-      recheck.outcome === "unreadable" ||
-      recheck.sample.provider.openTurn ||
-      !providerUnchanged(recheck.sample.provider, converged.guard.provider) ||
-      !structurallyEqual(recheck.sample.pane, converged.guard.pane) ||
-      recheck.sample.pane.epoch !== converged.guard.pane.epoch
-    ) {
-      const reason =
-        recheck.outcome === "unreadable" ? recheck.reason : "provider-or-pane-changed-before-guard";
-      yield* store.dispatch({ type: "AttemptDeclined", key, id: head.id, reason });
-      return { outcome: "declined", id: head.id, reason };
-    }
+    // Prepare the private file and the buffer first, then take the final sample.
+    // A turn opening or a record growing while the buffer loads is caught here,
+    // before any intent is recorded or any byte is sent.
+    return yield* withPreparedDelivery(
+      probe,
+      {
+        dir: options.messageDir,
+        id: head.id,
+        bytes: head.text,
+        bracketedPaste: options.bracketedPaste,
+        submitKey: options.submitKey,
+      },
+      function* (prepared): Operation<AttemptResult> {
+        const recheck = yield* sampler();
+        if (
+          recheck.outcome === "unreadable" ||
+          recheck.sample.provider.openTurn ||
+          !providerUnchanged(recheck.sample.provider, converged.guard.provider) ||
+          !structurallyEqual(recheck.sample.pane, converged.guard.pane) ||
+          recheck.sample.pane.epoch !== converged.guard.pane.epoch
+        ) {
+          const reason =
+            recheck.outcome === "unreadable"
+              ? recheck.reason
+              : "provider-or-pane-changed-before-guard";
+          // Nothing was recorded and nothing sent: reset the head to queued.
+          yield* store.dispatch({ type: "ConvergenceInvalidated", key, id: head.id, reason });
+          return { outcome: "declined", id: head.id, reason };
+        }
 
-    const delivered = yield* deliver(probe, {
-      dir: options.messageDir,
-      id: head.id,
-      bytes: head.text,
-      bracketedPaste: options.bracketedPaste,
-      submitKey: options.submitKey,
-      guard: converged.guard.pane,
-    });
-    if (delivered.outcome === "declined") {
-      yield* store.dispatch({
-        type: "AttemptDeclined",
-        key,
-        id: head.id,
-        reason: delivered.reason,
-      });
-      return { outcome: "declined", id: head.id, reason: delivered.reason };
-    }
-    if (delivered.outcome === "uncertain") {
-      // Bytes may have reached the terminal but the whole delivery is unproved:
-      // uncertain, and never pasted again.
-      yield* store.dispatch({
-        type: "AttemptUncertain",
-        key,
-        id: head.id,
-        reason: delivered.reason,
-      });
-      return { outcome: "uncertain", id: head.id, reason: delivered.reason };
-    }
-    return {
-      outcome: "pasted",
-      id: head.id,
-      byteCount: delivered.byteCount,
-      hash: delivered.hash,
-    };
+        // The durable intent, before the single guarded paste.
+        yield* store.dispatch({ type: "AttemptStarted", key, id: head.id });
+        const delivered = yield* prepared.paste(converged.guard.pane);
+        if (delivered.outcome === "declined") {
+          yield* store.dispatch({
+            type: "AttemptDeclined",
+            key,
+            id: head.id,
+            reason: delivered.reason,
+          });
+          return { outcome: "declined", id: head.id, reason: delivered.reason };
+        }
+        if (delivered.outcome === "uncertain") {
+          // Bytes may have reached the terminal but the whole delivery is
+          // unproved: uncertain, and never pasted again.
+          yield* store.dispatch({
+            type: "AttemptUncertain",
+            key,
+            id: head.id,
+            reason: delivered.reason,
+          });
+          return { outcome: "uncertain", id: head.id, reason: delivered.reason };
+        }
+        return {
+          outcome: "pasted",
+          id: head.id,
+          byteCount: delivered.byteCount,
+          hash: delivered.hash,
+        };
+      },
+    );
   })();
 }
 
@@ -304,8 +313,9 @@ function asRefusal(reason: string): ObservationRefusal | undefined {
  *
  * A located file is read from the durable cursor. Exact matching user records
  * settle an attempt as accepted; assistant output and the completion boundary
- * that follow — grouped by the same provider turn — settle it as completed. A
- * refusal advances no cursor and leaves every message where it was.
+ * that follow — grouped by the same provider turn — settle it as completed. An
+ * event a restart already recorded is not dispatched again. A refusal advances no
+ * cursor and leaves every message where it was.
  */
 export function observeStep(
   store: ReplStore,
@@ -356,6 +366,12 @@ function applyEvent(store: ReplStore, key: string, event: NormalizedEvent): Oper
   return (function* (): Operation<void> {
     const role = store.state().roles[key];
     if (role === undefined) {
+      return;
+    }
+    // An event a restart already recorded is not dispatched again: the durable
+    // event carries its own file-and-byte-range key, so re-reading the same
+    // record after an interruption produces no duplicate action or event.
+    if (role.events.some((existing) => existing.key === event.key)) {
       return;
     }
     if (event.kind === "user-accepted") {

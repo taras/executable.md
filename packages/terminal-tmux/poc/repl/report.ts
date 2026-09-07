@@ -39,7 +39,7 @@ export type ReportVerdict =
 
 export type ProviderVerdict = "PASS" | "VIEW_ONLY" | "PROVIDER_EXCLUDED" | "NOT_AUTHORIZED" | "n/a";
 
-export type ReportMode = "deterministic" | "live-claude" | "live-codex";
+export type ReportMode = "deterministic" | "live-claude" | "live-codex" | "overall";
 
 export interface MatrixEntry {
   readonly id: string;
@@ -166,6 +166,146 @@ export function notAuthorizedReport(
     counters: zeroCounters(),
     restart: { queuedRestored: 0, uncertainAfterRestart: 0, completedRestored: 0, reExecutions: 0 },
     cleanup: { storeRemoved: true, messageFilesRemoved: true, providerFilesUntouched: true },
+  };
+}
+
+/** Whether a counters block admits nothing unsafe. */
+export function countersSafe(counters: ReportCounters): boolean {
+  return (
+    counters.busyAdmissions === 0 &&
+    counters.manualActivityAdmissions === 0 &&
+    counters.wrongPaneDeliveries === 0 &&
+    counters.duplicateDeliveries === 0
+  );
+}
+
+/**
+ * Decide one provider's verdict from evidence alone.
+ *
+ * `PROVIDER_EXCLUDED` is reached only from the explicit capability fact that the
+ * build has no completion record — never from a deadline. An unsafe admission is
+ * `VIEW_ONLY` regardless of acceptance.
+ */
+export function decideProviderVerdict(inputs: {
+  readonly accepted: boolean;
+  readonly completed: boolean;
+  readonly safe: boolean;
+  readonly supportsCompletion: boolean;
+}): ProviderVerdict {
+  if (!inputs.safe) {
+    return "VIEW_ONLY";
+  }
+  if (inputs.accepted && inputs.completed) {
+    return "PASS";
+  }
+  if (inputs.accepted && !inputs.completed && !inputs.supportsCompletion) {
+    return "PROVIDER_EXCLUDED";
+  }
+  return "VIEW_ONLY";
+}
+
+/**
+ * Aggregate the offline matrix and both live provider journeys into one overall
+ * report.
+ *
+ * The overall `PASS` is the conjunction the POC decision requires: RP1–RP18 all
+ * passing, both providers passing their own authorized journey, every unsafe
+ * counter zero, no restart re-execution, and verified cleanup. Anything short of
+ * that is not a `PASS` — a single provider can never make the whole POC pass.
+ */
+export function aggregateReport(
+  base: { readonly sha: string; readonly parent?: string },
+  head: { readonly sha: string },
+  runtime: string,
+  deterministic: {
+    readonly matrix: readonly MatrixEntry[];
+    readonly counters: ReportCounters;
+    readonly restart: RestartEvidence;
+    readonly cleanup: CleanupEvidence;
+    readonly deliveries: readonly DeliveryEvidence[];
+  },
+  claude: TerminalReplReport,
+  codex: TerminalReplReport,
+): TerminalReplReport {
+  const matrixComplete =
+    deterministic.matrix.length >= 18 &&
+    deterministic.matrix.every((entry) => entry.result === "pass");
+  const counters = mergeCounters(deterministic.counters, claude.counters, codex.counters);
+  const cleanup: CleanupEvidence = {
+    storeRemoved:
+      deterministic.cleanup.storeRemoved &&
+      claude.cleanup.storeRemoved &&
+      codex.cleanup.storeRemoved,
+    messageFilesRemoved:
+      deterministic.cleanup.messageFilesRemoved &&
+      claude.cleanup.messageFilesRemoved &&
+      codex.cleanup.messageFilesRemoved,
+    providerFilesUntouched:
+      deterministic.cleanup.providerFilesUntouched &&
+      claude.cleanup.providerFilesUntouched &&
+      codex.cleanup.providerFilesUntouched,
+  };
+  const restart: RestartEvidence = {
+    queuedRestored: deterministic.restart.queuedRestored,
+    uncertainAfterRestart: deterministic.restart.uncertainAfterRestart,
+    completedRestored: deterministic.restart.completedRestored,
+    reExecutions:
+      deterministic.restart.reExecutions + claude.restart.reExecutions + codex.restart.reExecutions,
+  };
+  const cleanupOk =
+    cleanup.storeRemoved && cleanup.messageFilesRemoved && cleanup.providerFilesUntouched;
+  const pass =
+    matrixComplete &&
+    claude.verdict === "PASS" &&
+    codex.verdict === "PASS" &&
+    countersSafe(counters) &&
+    restart.reExecutions === 0 &&
+    cleanupOk;
+  const verdict: ReportVerdict = pass
+    ? "PASS"
+    : claude.verdict === "PROVIDER_EXCLUDED" || codex.verdict === "PROVIDER_EXCLUDED"
+      ? "PROVIDER_EXCLUDED"
+      : "VIEW_ONLY";
+  return {
+    schema: REPORT_SCHEMA,
+    verdict,
+    mode: "overall",
+    runtime,
+    base,
+    head,
+    providers: { claude: claude.providers.claude, codex: codex.providers.codex },
+    turnBudgets: {
+      claudeAuthorized: claude.turnBudgets.claudeAuthorized,
+      claudeSpent: claude.turnBudgets.claudeSpent,
+      codexAuthorized: codex.turnBudgets.codexAuthorized,
+      codexSpent: codex.turnBudgets.codexSpent,
+    },
+    matrix: [...deterministic.matrix],
+    counters,
+    deliveries: [
+      ...deterministic.deliveries,
+      ...(claude.deliveries ?? []),
+      ...(codex.deliveries ?? []),
+    ],
+    restart,
+    cleanup,
+  };
+}
+
+/** Sum every counter across the offline matrix and the two live journeys. */
+function mergeCounters(...blocks: readonly ReportCounters[]): ReportCounters {
+  const sum = (pick: (c: ReportCounters) => number) =>
+    blocks.reduce((total, c) => total + pick(c), 0);
+  return {
+    convergenceAttempts: sum((c) => c.convergenceAttempts),
+    admittedDeliveries: sum((c) => c.admittedDeliveries),
+    refusals: sum((c) => c.refusals),
+    uncertain: sum((c) => c.uncertain),
+    duplicateDeliveries: sum((c) => c.duplicateDeliveries),
+    wrongPaneDeliveries: sum((c) => c.wrongPaneDeliveries),
+    busyAdmissions: sum((c) => c.busyAdmissions),
+    manualActivityAdmissions: sum((c) => c.manualActivityAdmissions),
+    replays: sum((c) => c.replays),
   };
 }
 

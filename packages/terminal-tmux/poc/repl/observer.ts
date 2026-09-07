@@ -28,7 +28,7 @@
 
 import { until } from "effection";
 import type { Operation } from "effection";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { open, readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { NormalizedEvent, Provider } from "./state.ts";
 
@@ -53,6 +53,14 @@ export interface ObservedSource {
 /** How one provider reads its own records. The shared observer owns the rest. */
 export interface ProviderParser {
   readonly provider: Provider;
+  /**
+   * Whether this build's format has an unambiguous completion record at all.
+   *
+   * A capability, not a timing observation: when it is false, the observer never
+   * yields a completion and the caller reports `PROVIDER_EXCLUDED` from this
+   * explicit fact rather than from a deadline elapsing.
+   */
+  readonly supportsCompletion: boolean;
   /** The identity a file name declares, when the provider encodes it there. */
   identityFromName(name: string): string | undefined;
   /** Read one already-parsed JSON record into a normalized classification. */
@@ -185,14 +193,20 @@ function headerMatches(
   expectedProject: string | undefined,
 ): Operation<boolean> {
   return (function* (): Operation<boolean> {
-    let bytes: Uint8Array;
+    // A bounded prefix read: only the header is inspected, never the whole
+    // transcript body. A file whose identity record does not fall inside this
+    // prefix is not treated as a header-identified match.
+    let text: string;
     try {
-      bytes = yield* until(readFile(path));
+      text = yield* readPrefix(path, HEADER_PREFIX_BYTES);
     } catch {
       return false;
     }
-    const text = new TextDecoder().decode(bytes);
-    for (const line of text.split("\n")) {
+    // Drop a trailing partial line so a record split by the prefix boundary is
+    // never parsed half-read.
+    const newline = text.lastIndexOf("\n");
+    const complete = newline < 0 ? "" : text.slice(0, newline);
+    for (const line of complete.split("\n")) {
       if (line.trim().length === 0) {
         continue;
       }
@@ -214,11 +228,10 @@ function headerMatches(
       if (parsed.identity !== expected) {
         return false;
       }
-      if (
-        expectedProject !== undefined &&
-        parsed.project !== undefined &&
-        parsed.project !== expectedProject
-      ) {
+      // Fail closed on the project: a required project the header does not
+      // declare, or declares differently, is not a match. Missing project
+      // metadata refuses rather than being accepted.
+      if (expectedProject !== undefined && parsed.project !== expectedProject) {
         return false;
       }
       return true;
@@ -347,6 +360,42 @@ function classifyStep(parsed: ParsedRecord, identity: string, key: string): Step
         },
       };
   }
+}
+
+/** How many bytes of a file's head are read to find its identity record. */
+const HEADER_PREFIX_BYTES = 65_536;
+
+/** Read at most `limit` bytes from the start of a file, as UTF-8. */
+function readPrefix(path: string, limit: number): Operation<string> {
+  return (function* (): Operation<string> {
+    const handle = yield* until(open(path, "r"));
+    const buffer = new Uint8Array(limit);
+    let bytesRead = 0;
+    let failure: unknown;
+    try {
+      ({ bytesRead } = yield* until(handle.read(buffer, 0, limit, 0)));
+    } catch (error) {
+      failure = error;
+    }
+    // Closed unconditionally after the read, never inside a finally that yields.
+    yield* until(handle.close());
+    if (failure !== undefined) {
+      throw failure instanceof Error ? failure : new Error(String(failure));
+    }
+    return new TextDecoder().decode(buffer.subarray(0, bytesRead));
+  })();
+}
+
+/** The file's physical byte length, including any partial tail. */
+export function physicalSizeOf(path: string): Operation<number> {
+  return (function* (): Operation<number> {
+    try {
+      const info = yield* until(stat(path));
+      return info.size;
+    } catch {
+      return 0;
+    }
+  })();
 }
 
 /** A stable file-identity token; a change means the file was replaced. */

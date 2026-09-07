@@ -32,7 +32,7 @@
       ]
     },
     "mode": {
-      "enum": ["deterministic", "live-claude", "live-codex"]
+      "enum": ["deterministic", "live-claude", "live-codex", "overall"]
     },
     "runtime": {
       "type": "string"
@@ -296,6 +296,56 @@
         "properties": {
           "verdict": {
             "const": "PASS"
+          }
+        },
+        "required": ["verdict"]
+      },
+      "then": {
+        "properties": {
+          "counters": {
+            "properties": {
+              "busyAdmissions": {
+                "const": 0
+              },
+              "manualActivityAdmissions": {
+                "const": 0
+              },
+              "wrongPaneDeliveries": {
+                "const": 0
+              },
+              "duplicateDeliveries": {
+                "const": 0
+              }
+            }
+          },
+          "restart": {
+            "properties": {
+              "reExecutions": {
+                "const": 0
+              }
+            }
+          },
+          "cleanup": {
+            "properties": {
+              "storeRemoved": {
+                "const": true
+              },
+              "messageFilesRemoved": {
+                "const": true
+              },
+              "providerFilesUntouched": {
+                "const": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "PASS"
           },
           "mode": {
             "const": "live-claude"
@@ -402,6 +452,67 @@
           "turnBudgets": {
             "properties": {
               "claudeSpent": {
+                "minimum": 1
+              },
+              "codexSpent": {
+                "minimum": 1
+              }
+            }
+          },
+          "providers": {
+            "properties": {
+              "claude": {
+                "$ref": "#/definitions/passProvider"
+              },
+              "codex": {
+                "$ref": "#/definitions/passProvider"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "PASS"
+          },
+          "mode": {
+            "const": "overall"
+          }
+        },
+        "required": ["verdict", "mode"]
+      },
+      "then": {
+        "required": ["head", "deliveries"],
+        "properties": {
+          "matrix": {
+            "minItems": 18,
+            "not": {
+              "contains": {
+                "type": "object",
+                "required": ["result"],
+                "properties": {
+                  "result": {
+                    "enum": ["fail", "n/a"]
+                  }
+                }
+              }
+            }
+          },
+          "deliveries": {
+            "minItems": 1
+          },
+          "turnBudgets": {
+            "properties": {
+              "claudeAuthorized": {
+                "minimum": 1
+              },
+              "claudeSpent": {
+                "minimum": 1
+              },
+              "codexAuthorized": {
                 "minimum": 1
               },
               "codexSpent": {

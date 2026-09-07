@@ -147,6 +147,85 @@ const EntrySchema = z.object({
 // read off it: a change to either the schema stops compiling here.
 const _actionSchema: z.ZodType<ReplAction> = ActionSchema;
 
+/**
+ * Whether an action is a legal transition from `state`, or the reason it is not.
+ *
+ * Shape is parsed elsewhere; this is the *transition* check the Architect's
+ * re-review requires: an `AttemptStarted` for a message that was never queued, a
+ * `UserAccepted` for one no attempt was started for, a duplicate role or message,
+ * and the like are refused rather than restored into an impossible state.
+ */
+export function illegalTransition(state: ReplState, action: ReplAction): string | undefined {
+  if (action.type === "ReplOpened" || action.type === "ReplClosed") {
+    return undefined;
+  }
+  if (action.type === "RoleBound") {
+    return state.roles[action.key] === undefined
+      ? undefined
+      : `RoleBound for an already-bound role ${action.key}`;
+  }
+  const role = state.roles[action.key];
+  if (role === undefined) {
+    return `${action.type} for an unbound role ${action.key}`;
+  }
+  const message = (id: string) => role.messages.find((entry) => entry.id === id);
+  switch (action.type) {
+    case "MessageQueued":
+      return message(action.id) === undefined
+        ? undefined
+        : `MessageQueued for an existing message ${action.id}`;
+    case "ConvergenceStarted": {
+      const found = message(action.id);
+      return found !== undefined && found.state === "queued"
+        ? undefined
+        : `ConvergenceStarted for a message not queued (${action.id})`;
+    }
+    case "ConvergenceInvalidated": {
+      const found = message(action.id);
+      return found !== undefined &&
+        (found.state === "converging" || found.state === "attempt-started")
+        ? undefined
+        : `ConvergenceInvalidated for a message not converging (${action.id})`;
+    }
+    case "AttemptStarted": {
+      const found = message(action.id);
+      return found !== undefined && (found.state === "queued" || found.state === "converging")
+        ? undefined
+        : `AttemptStarted for a message that was never queued (${action.id})`;
+    }
+    case "AttemptDeclined": {
+      const found = message(action.id);
+      return found !== undefined &&
+        (found.state === "converging" || found.state === "attempt-started")
+        ? undefined
+        : `AttemptDeclined for a message not in flight (${action.id})`;
+    }
+    case "AttemptUncertain": {
+      const found = message(action.id);
+      return found !== undefined && found.state === "attempt-started"
+        ? undefined
+        : `AttemptUncertain for a message not attempted (${action.id})`;
+    }
+    case "UserAccepted": {
+      const found = message(action.id);
+      return found !== undefined &&
+        (found.state === "attempt-started" || found.state === "uncertain")
+        ? undefined
+        : `UserAccepted for a message no attempt was started for (${action.id})`;
+    }
+    case "AssistantCompleted": {
+      const found = message(action.id);
+      return found !== undefined && found.state === "accepted"
+        ? undefined
+        : `AssistantCompleted for a message not accepted (${action.id})`;
+    }
+    default:
+      // TerminalObserved, ProviderBusy/Idle, AssistantObserved, ObserverAdvanced,
+      // PaneUnavailable and ObserverRefused only need the role to exist.
+      return undefined;
+  }
+}
+
 /** A stored entry's file name: zero-padded so a lexical sort is numeric. */
 function recordName(seq: number): string {
   return `${String(seq).padStart(6, "0")}.json`;
@@ -180,6 +259,10 @@ export function useReplStore(dir: string): Operation<ReplStore> {
     yield* ensure(() => published.close());
 
     function* dispatch(action: ReplAction): Operation<ReplState> {
+      const illegal = illegalTransition(current, action);
+      if (illegal !== undefined) {
+        throw new ReplStoreError(`an illegal transition: ${illegal}`);
+      }
       const seq = current.nextAction;
       const entry: StoredAction = { seq, action };
       yield* persist(dir, entry);
@@ -210,6 +293,7 @@ function* loadLog(dir: string): Operation<StoredAction[]> {
     entries.push(parseEntry(text, name));
   }
   entries.sort((left, right) => left.seq - right.seq);
+  let running = emptyState();
   for (const [index, entry] of entries.entries()) {
     if (entry.seq !== index) {
       throw new ReplStoreError(
@@ -218,6 +302,11 @@ function* loadLog(dir: string): Operation<StoredAction[]> {
           : `a gap before sequence ${entry.seq}`,
       );
     }
+    const illegal = illegalTransition(running, entry.action);
+    if (illegal !== undefined) {
+      throw new ReplStoreError(`a conflicting history at sequence ${entry.seq}: ${illegal}`);
+    }
+    running = reduce(running, entry.action);
   }
   return entries;
 }

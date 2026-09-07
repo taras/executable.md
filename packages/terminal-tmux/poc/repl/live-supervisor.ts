@@ -20,7 +20,7 @@
 import { main } from "effection";
 import type { Operation } from "effection";
 import process from "node:process";
-import { notAuthorizedReport } from "./report.ts";
+import { notAuthorizedReport, validateReport } from "./report.ts";
 import type { ReportMode, TerminalReplReport } from "./report.ts";
 import { runLiveJourney } from "./live-worker.ts";
 
@@ -128,6 +128,17 @@ if (import.meta.main) {
       return;
     }
     const report = yield* runLiveProof(provider, process.env, BASE_SHA);
-    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    // The report is validated against the checked-in schema — the full validator,
+    // not a weaker inline subset — before it is printed. The document proof reads
+    // both the report and this verdict, so a report that failed the schema fails
+    // the document.
+    const validation = yield* validateReport(report);
+    const schemaValid = validation.valid;
+    process.stdout.write(
+      `${JSON.stringify({ report, schemaValid, errors: validation.valid ? [] : validation.errors }, null, 2)}\n`,
+    );
+    if (!schemaValid) {
+      process.exitCode = 1;
+    }
   });
 }

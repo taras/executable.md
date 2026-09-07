@@ -18,27 +18,41 @@
 
 import type { ParsedRecord, ProviderParser } from "./observer.ts";
 
+/**
+ * Build a Claude parser.
+ *
+ * `supportsCompletion` is the build's declared capability. When it is false, a
+ * `result` record is ignored rather than treated as a completion boundary, and
+ * the caller reports `PROVIDER_EXCLUDED` from that explicit fact — never from a
+ * deadline. The default is a build whose interactive format does carry the
+ * closing record.
+ */
+export function createClaudeParser(supportsCompletion: boolean): ProviderParser {
+  return {
+    provider: "claude",
+    supportsCompletion,
+    identityFromName(name) {
+      return name.endsWith(".jsonl") ? name.slice(0, -".jsonl".length) : undefined;
+    },
+    classify(record) {
+      const type = record["type"];
+      if (type === "user") {
+        return classifyMessage(record, "user-accepted");
+      }
+      if (type === "assistant") {
+        return classifyMessage(record, "assistant-output");
+      }
+      if (type === "result") {
+        return supportsCompletion ? classifyResult(record) : { kind: "ignore" };
+      }
+      // Summaries, system notices and anything else bear on nothing here.
+      return { kind: "ignore" };
+    },
+  };
+}
+
 /** The Claude parser: filename identity, `sessionId`-tagged, `requestId`-grouped. */
-export const claudeParser: ProviderParser = {
-  provider: "claude",
-  identityFromName(name) {
-    return name.endsWith(".jsonl") ? name.slice(0, -".jsonl".length) : undefined;
-  },
-  classify(record) {
-    const type = record["type"];
-    if (type === "user") {
-      return classifyMessage(record, "user-accepted");
-    }
-    if (type === "assistant") {
-      return classifyMessage(record, "assistant-output");
-    }
-    if (type === "result") {
-      return classifyResult(record);
-    }
-    // Summaries, system notices and anything else bear on nothing here.
-    return { kind: "ignore" };
-  },
-};
+export const claudeParser: ProviderParser = createClaudeParser(true);
 
 /** The turn a record belongs to: its `requestId`, when it carries one. */
 function turnOf(record: Record<string, unknown>): string | undefined {
@@ -60,6 +74,9 @@ function classifyMessage(
     return { kind: "unsupported", reason: `${kind} record with no readable text` };
   }
   const turn = turnOf(record);
+  if (turn === undefined) {
+    return { kind: "unsupported", reason: `${kind} record with no requestId turn identity` };
+  }
   if (kind === "user-accepted") {
     return { kind: "user-accepted", identity, text, turn };
   }
@@ -72,7 +89,11 @@ function classifyResult(record: Record<string, unknown>): ParsedRecord {
   if (typeof identity !== "string" || identity.length === 0) {
     return { kind: "unsupported", reason: "result record with no sessionId" };
   }
-  return { kind: "turn-completed", identity, turn: turnOf(record) };
+  const turn = turnOf(record);
+  if (turn === undefined) {
+    return { kind: "unsupported", reason: "result record with no requestId turn identity" };
+  }
+  return { kind: "turn-completed", identity, turn };
 }
 
 /** Join the text parts of a Claude message, or nothing when there are none. */

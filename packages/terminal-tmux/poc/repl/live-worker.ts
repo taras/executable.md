@@ -36,11 +36,13 @@
  * swept — the same discipline the repository's own real-agent proofs use.
  */
 
-import { ensure, race, resource, sleep, until, withResolvers } from "effection";
+import { ensure, race, resource, scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { exec } from "@effectionx/process";
+import { lines } from "@effectionx/stream-helpers";
 import { ensureDir, exists, readTextFile, readdir, rm } from "@effectionx/fs";
-import { chmod, copyFile, mkdtemp, realpath } from "node:fs/promises";
+import { chmod, copyFile, realpath } from "node:fs/promises";
+import { mkdtempSync } from "node:fs";
 import { spawn as spawnChild } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -48,23 +50,26 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import process from "node:process";
 import type { GuardOutcome, PaneProbe, PaneSnapshot, PasteRequest } from "./convergence.ts";
-import { structurallyEqual } from "./convergence.ts";
-import { attemptStep, observeStep, settleUnconfirmed } from "./controller.ts";
+import { attemptStep, observeStep, reconcileRestart, settleUnconfirmed } from "./controller.ts";
 import type { DeliveryOptions, ObserverSource } from "./controller.ts";
 import { useReplStore } from "./store.ts";
 import type { ReplStore } from "./store.ts";
 import { claudeParser } from "./claude-observer.ts";
+import { locate } from "./observer.ts";
 import { codexParser } from "./codex-observer.ts";
 import type { LiveProvider } from "./live-supervisor.ts";
 import type {
+  CleanupEvidence,
   DeliveryEvidence,
   ProviderReport,
   ProviderVerdict,
   ReportCounters,
   ReportMode,
+  ReportVerdict,
+  RestartEvidence,
   TerminalReplReport,
 } from "./report.ts";
-import { identityHash, zeroCounters } from "./report.ts";
+import { countersSafe, decideProviderVerdict, identityHash, zeroCounters } from "./report.ts";
 
 /** The repository root, four levels up from this module. */
 const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
@@ -101,9 +106,13 @@ interface Roots {
 export function useIsolatedRoots(): Operation<Roots> {
   return resource<Roots>(function* (provide) {
     const operatorHome = process.env.HOME ?? homedir();
-    const root = yield* until(mkdtemp(join(tmpdir(), "xmd-repl-live-")));
-    yield* until(chmod(root, 0o700));
+    // Created synchronously so nothing can suspend between naming the root and
+    // registering its removal — an asynchronous create halted mid-flight would
+    // leave a directory nothing owns.
+    // oxlint-disable-next-line local/no-sync-filesystem
+    const root = mkdtempSync(join(tmpdir(), "xmd-repl-live-"));
     yield* ensure(() => rm(root, { recursive: true, force: true }));
+    yield* until(chmod(root, 0o700));
 
     const home = join(root, "home");
     const tmp = join(root, "tmp");
@@ -188,54 +197,62 @@ function tmuxExec(
   })();
 }
 
-/** The trimmed stdout of one tmux command, or "" when it failed. */
-function tmuxRun(
-  socket: string,
-  args: readonly string[],
-  env: Record<string, string>,
-): Operation<string> {
-  return (function* (): Operation<string> {
-    const result = yield* tmuxExec(socket, args, env);
-    return result.code === 0 ? result.stdout : "";
-  })();
+/**
+ * One tmux command run against the private server, and its acknowledged result.
+ *
+ * The single seam the live pane probe is built on. The journey supplies the real
+ * one (an `exec` of `tmux`); a test supplies a fake that returns canned command
+ * outputs, so the probe's guard contract is exercised without a real server and
+ * the fake and the live boundary enforce exactly the same contract.
+ */
+export type TmuxCommand = (args: readonly string[]) => Operation<{ code: number; stdout: string }>;
+
+/**
+ * The pane's real output and visible-client activity generations.
+ *
+ * Counted from the server's own control-mode events — `%output` and the
+ * `%client-*` family — not from `history_size` or a timestamp. A change in either
+ * generation between convergence and the final combined sample invalidates the
+ * attempt.
+ */
+export interface PaneActivity {
+  read(): Operation<{ outputEvents: number; clientActivity: number }>;
 }
 
 /**
- * A real `PaneProbe` over the grid's private tmux server.
+ * A `PaneProbe` over an injectable tmux command seam and activity source.
  *
- * Snapshots come from tmux format variables — never from screen text. The
- * guarded paste is one server-side `if-shell -F` that rechecks the pane's
- * process and pastes the pre-loaded buffer with a separate submit key, so the
- * recheck and the paste share one command queue.
+ * `guardedPaste` is one server-side `if-shell` conditional: it rechecks the pane
+ * generation (`pane_id`), process, liveness and mode, then pastes the pre-loaded
+ * buffer, sends the submit key, and prints an acknowledgement — or takes the
+ * decline branch — in a single command with no suspension between the recheck and
+ * the paste. Its outcome is read from the acknowledgement: the marker means
+ * pasted, the decline marker means declined, a failed command or a missing
+ * acknowledgement means uncertain — never pasted-as-proved. The message bytes
+ * stay in the buffer and never enter the command string.
  */
-export function tmuxPaneProbe(
-  socket: string,
-  target: string,
-  env: Record<string, string>,
-): PaneProbe {
+export function paneProbeOver(run: TmuxCommand, target: string, activity: PaneActivity): PaneProbe {
   function readSnapshot(): Operation<PaneSnapshot> {
     return (function* (): Operation<PaneSnapshot> {
       const format =
-        "#{pane_id}|#{pane_pid}|#{pane_tty}|#{pane_dead}|#{pane_in_mode}|#{pane_current_command}|" +
-        "#{history_size}|#{session_activity}|#{window_activity}";
-      const line = yield* tmuxRun(socket, ["display", "-p", "-t", target, format], env);
-      const [paneId, pid, tty, dead, mode, command, history, sessionActivity, windowActivity] =
-        line.split("|");
+        "#{pane_id}|#{pane_pid}|#{pane_tty}|#{pane_dead}|#{pane_in_mode}|#{pane_current_command}";
+      const shown = yield* run(["display", "-p", "-t", target, format]);
+      const [paneId, pid, tty, dead, mode, command] = (shown.code === 0 ? shown.stdout : "").split(
+        "|",
+      );
       const alive = dead === "0" && (pid ?? "").length > 0;
-      const outputEvents = Number(history ?? "0");
-      const clientActivity = Number(sessionActivity ?? "0") + Number(windowActivity ?? "0");
+      const generations = yield* activity.read();
       return {
-        // `%N` is stable for one pane and changes when a pane is replaced, so it
-        // is the generation an old attempt must not be adopted across.
+        // `%N` is stable for one pane and changes when a pane is replaced.
         generation: Number((paneId ?? "").replace(/^%/, "")),
         pid: alive ? Number(pid) : -1,
         terminal: alive ? (tty ?? "") : "",
         alive,
         mode: mode === "1" ? "copy" : "",
         foregroundProcess: commandHash(command ?? ""),
-        clientActivity,
-        outputEvents,
-        epoch: outputEvents + clientActivity,
+        clientActivity: generations.clientActivity,
+        outputEvents: generations.outputEvents,
+        epoch: generations.outputEvents + generations.clientActivity,
       };
     })();
   }
@@ -243,49 +260,87 @@ export function tmuxPaneProbe(
   return {
     snapshot: readSnapshot,
     *barrier(): Operation<void> {
-      // An acknowledged round-trip: displaying a constant waits for the server
-      // to answer without changing anything.
-      yield* tmuxRun(socket, ["display", "-p", "-t", target, "barrier"], env);
+      // An acknowledged round-trip that changes nothing by itself.
+      yield* run(["display", "-p", "-t", target, "barrier"]);
     },
     *loadBuffer(buffer, path): Operation<void> {
-      yield* tmuxRun(socket, ["load-buffer", "-b", buffer, path], env);
+      yield* run(["load-buffer", "-b", buffer, path]);
     },
     *deleteBuffer(buffer): Operation<void> {
-      // Best effort: a buffer that was never loaded is nothing to remove.
-      yield* tmuxExec(socket, ["delete-buffer", "-b", buffer], env);
+      yield* run(["delete-buffer", "-b", buffer]);
     },
     *guardedPaste(guard: PaneSnapshot, delivery: PasteRequest): Operation<GuardOutcome> {
-      // Recheck every required final fact against the guard — generation (pane
-      // id), process, terminal, mode, and the output/client-activity epoch — not
-      // the PID alone. A change since convergence declines with nothing sent.
-      const current = yield* readSnapshot();
-      if (!structurallyEqual(guard, current) || guard.epoch !== current.epoch) {
-        return { outcome: "declined", reason: "guard-changed" };
+      const nonce = `XR${Math.random().toString(36).slice(2, 10)}`;
+      const condition =
+        `#{&&:#{==:#{pane_id},%${guard.generation}},` +
+        `#{&&:#{==:#{pane_pid},${guard.pid}},` +
+        `#{&&:#{==:#{pane_dead},0},#{==:#{pane_in_mode},0}}}}`;
+      const bracket = delivery.bracketedPaste ? " -p" : "";
+      const pasteAndSubmit =
+        `paste-buffer -b ${delivery.buffer} -t ${target}${bracket} ; ` +
+        `send-keys -t ${target} ${delivery.submitKey} ; display -p ${nonce}`;
+      const result = yield* run([
+        "if-shell",
+        "-F",
+        condition,
+        pasteAndSubmit,
+        "display -p DECLINED",
+      ]);
+      if (result.code !== 0) {
+        return { outcome: "uncertain", reason: "guard-command-failed" };
       }
-      if (!current.alive) {
-        return { outcome: "declined", reason: "pane-unavailable" };
+      if (result.stdout.includes(nonce)) {
+        return { outcome: "pasted" };
       }
-      // The paste and the submit are two server commands whose own outcomes are
-      // read: a failed paste declined nothing to the pane, while a paste that
-      // succeeded before a failed submit may have left bytes in the composer and
-      // is reported uncertain rather than pasted. The bytes never reach a shell
-      // or an argv — they come from the loaded buffer.
-      const bracket = delivery.bracketedPaste ? ["-p"] : [];
-      const paste = yield* tmuxExec(
-        socket,
-        ["paste-buffer", "-b", delivery.buffer, "-t", target, ...bracket],
-        env,
-      );
-      if (paste.code !== 0) {
-        return { outcome: "declined", reason: "paste-command-failed" };
+      if (result.stdout.includes("DECLINED")) {
+        return { outcome: "declined", reason: "guard-rejected" };
       }
-      const submit = yield* tmuxExec(socket, ["send-keys", "-t", target, delivery.submitKey], env);
-      if (submit.code !== 0) {
-        return { outcome: "uncertain", reason: "submit-unacknowledged" };
-      }
-      return { outcome: "pasted" };
+      // The command ran but acknowledged neither branch: the paste may or may not
+      // have reached the pane, so the outcome is uncertain rather than pasted.
+      return { outcome: "uncertain", reason: "submit-unacknowledged" };
     },
   };
+}
+
+/**
+ * A live activity source backed by the server's control-mode event stream.
+ *
+ * It attaches one no-output control client and counts the `%output` and
+ * `%client-*` events the server reports, so the probe reads real output and
+ * visible-client generations rather than `history_size` or a timestamp. The
+ * client is this scope's and is torn down with it.
+ */
+export function useControlFeed(
+  socket: string,
+  env: Record<string, string>,
+): Operation<PaneActivity> {
+  return resource<PaneActivity>(function* (provide) {
+    let outputEvents = 0;
+    let clientActivity = 0;
+    yield* spawn(function* () {
+      const client = yield* exec("tmux", {
+        arguments: ["-S", socket, "-f", "/dev/null", "-C", "attach", "-f", "no-output"],
+        env,
+      });
+      const reported = yield* lines()(client.stdout);
+      let next = yield* reported.next();
+      while (!next.done) {
+        const line = next.value;
+        if (line.startsWith("%output")) {
+          outputEvents += 1;
+        } else if (line.startsWith("%client-")) {
+          clientActivity += 1;
+        }
+        next = yield* reported.next();
+      }
+    });
+    yield* provide({
+      // deno-lint-ignore require-yield
+      *read(): Operation<{ outputEvents: number; clientActivity: number }> {
+        return { outputEvents, clientActivity };
+      },
+    });
+  });
 }
 
 /** A stable number for a pane's foreground command, distinguishing child from shell. */
@@ -407,162 +462,307 @@ export function runLiveJourney(
   _env: Record<string, string | undefined>,
   base: string,
 ): Operation<TerminalReplReport> {
-  return resource<TerminalReplReport>(function* (provide) {
+  return (function* (): Operation<TerminalReplReport> {
     const mode: ReportMode = provider === "claude" ? "live-claude" : "live-codex";
     if (!(yield* exists(XMD_BINARY))) {
-      yield* provide(harnessFailed(mode, base, "dist/xmd is not built; run deno task build"));
-      return;
+      return harnessFailed(mode, base, "dist/xmd is not built; run deno task build");
     }
-    const roots = yield* useIsolatedRoots();
-    const store = yield* useReplStore(roots.storeDir);
+    const head = yield* currentHead(base);
+
+    // Evidence the journey fills in; cleanup is read only after the scope below
+    // has torn down, so a cleanup field is never true before teardown settled.
     const counters: { -readonly [K in keyof ReportCounters]: ReportCounters[K] } = zeroCounters();
     const deliveries: DeliveryEvidence[] = [];
-
-    // Launch the grid document under a private pseudo-terminal. Its streams are
-    // ignored: the grid draws on its own pty, and the POC reads provider files
-    // and delivers through tmux, never through this child's stdio.
-    // Cleanup is registered before the child exists, so a halt during spawn
-    // cannot strand it. The `close` handler is named and removed in the same
-    // teardown that waits on it — kept through the wait, taken off in a
-    // synchronous finally — and a child that will not close is a teardown
-    // failure rather than a proved success.
-    const closed = withResolvers<void>();
-    let didClose = false;
-    let child: ReturnType<typeof spawnChild> | undefined;
-    const onClose = (): void => {
-      didClose = true;
-      closed.resolve();
+    const restart = {
+      queuedRestored: 0,
+      uncertainAfterRestart: 0,
+      completedRestored: 0,
+      reExecutions: 0,
     };
-    yield* ensure(function* () {
-      const running = child;
-      if (running === undefined) {
-        return;
-      }
-      try {
-        if (!didClose && running.pid !== undefined) {
-          running.kill("SIGINT");
-          yield* race([closed.operation, sleep(CHILD_TEARDOWN_MS)]);
-          if (!didClose && running.pid !== undefined) {
-            running.kill("SIGKILL");
-            yield* race([closed.operation, sleep(CHILD_TEARDOWN_MS)]);
+    const outcome = {
+      ran: false,
+      accepted: false,
+      completed: false,
+      identity: "",
+      sourceHash: "",
+      version: "",
+      supportsCompletion: provider === "claude" ? claudeParser.supportsCompletion : true,
+      materializationTurns: 0,
+      nativeTurns: 0,
+      harnessDetail: "",
+    };
+    let providerSessionRemoved = false;
+    let rootPath = "";
+
+    try {
+      yield* scoped(function* (): Operation<void> {
+        const roots = yield* useIsolatedRoots();
+        rootPath = roots.root;
+        const store = yield* useReplStore(roots.storeDir);
+
+        const closed = withResolvers<void>();
+        let didClose = false;
+        let child: ReturnType<typeof spawnChild> | undefined;
+        const onClose = (): void => {
+          didClose = true;
+          closed.resolve();
+        };
+        // Cleanup registered before the child exists; SIGKILL is followed by a
+        // mandatory close proof — a child that will not close is a teardown
+        // failure, never a proved success.
+        yield* ensure(function* () {
+          const running = child;
+          if (running === undefined) {
+            return;
+          }
+          try {
+            if (!didClose && running.pid !== undefined) {
+              running.kill("SIGINT");
+              yield* race([closed.operation, sleep(CHILD_TEARDOWN_MS)]);
+              if (!didClose && running.pid !== undefined) {
+                running.kill("SIGKILL");
+                yield* race([closed.operation, sleep(CHILD_TEARDOWN_MS)]);
+              }
+            }
+            if (!didClose) {
+              throw new Error("the launched grid child could not be proved closed at teardown");
+            }
+          } finally {
+            running.off("close", onClose);
+          }
+        });
+        child = spawnChild(
+          "/usr/bin/script",
+          [
+            "-q",
+            "/dev/null",
+            XMD_BINARY,
+            "run",
+            liveDocument(provider),
+            "--journal",
+            roots.journal,
+            "--raw",
+          ],
+          { cwd: roots.project, env: roots.env, stdio: "ignore" },
+        );
+        child.on("close", onClose);
+
+        const socket = yield* waitFor(SOCKET_DEADLINE_MS, () => discoverGridSocket(roots.tmp));
+        if (socket === undefined) {
+          outcome.harnessDetail = "the grid's tmux socket never appeared under the owned TMPDIR";
+          return;
+        }
+        const identity = yield* waitFor(IDENTITY_DEADLINE_MS, function* () {
+          const identities = yield* readLaunchIdentities(roots.journal);
+          return [...identities.values()].find((entry) => entry.provider === provider);
+        });
+        if (identity === undefined) {
+          outcome.harnessDetail =
+            "the launch journal never retained this provider's native identity";
+          return;
+        }
+        outcome.ran = true;
+        outcome.identity = identity.id;
+
+        // Clean the exact provider session through the provider's own supported
+        // operation, and only that — never a direct transcript delete or a sweep.
+        yield* ensure(function* () {
+          const removal =
+            provider === "claude"
+              ? yield* runCommand("claude", ["project", "purge", "--yes", roots.project], roots.env)
+              : yield* runCommand("codex", ["delete", "--force", identity.id], roots.env);
+          providerSessionRemoved = removal;
+        });
+
+        const key = identity.id;
+        const target = "xmd:0.0";
+        const run: TmuxCommand = (args) => tmuxExec(socket, args, roots.env);
+        const feed = yield* useControlFeed(socket, roots.env);
+        const probe = paneProbeOver(run, target, feed);
+        const observer: ObserverSource = providerObserver(provider, roots);
+        outcome.supportsCompletion = observer.parser.supportsCompletion;
+        const options: DeliveryOptions = {
+          messageDir: roots.messageDir,
+          bracketedPaste: true,
+          submitKey: "Enter",
+        };
+        const first = yield* probe.snapshot();
+
+        yield* store.dispatch({ type: "ReplOpened", replSession: `live-${provider}` });
+        yield* store.dispatch({
+          type: "RoleBound",
+          key,
+          role: provider === "claude" ? "Implementor" : "Reviewer",
+          issue: "#774",
+          identity,
+          paneGeneration: first.generation,
+        });
+        const marker = `MK-${randomUUID().replaceAll("-", "").slice(0, 12).toUpperCase()}`;
+        const messageId = `msg-${randomUUID().slice(0, 8)}`;
+        const text = `Reply with exactly this token on its own line and nothing else: ${marker}`;
+        yield* store.dispatch({ type: "MessageQueued", key, id: messageId, text, marker });
+
+        const admitted = yield* driveUntilPasted(
+          store,
+          key,
+          probe,
+          observer,
+          options,
+          counters,
+          deliveries,
+        );
+        if (admitted) {
+          outcome.nativeTurns = 1;
+          const deadline = Date.now() + ACCEPT_DEADLINE_MS;
+          while (Date.now() < deadline) {
+            yield* observeStep(store, key, observer);
+            const role = store.state().roles[key];
+            const message = role?.messages.find((entry) => entry.id === messageId);
+            outcome.accepted = message?.state === "accepted" || message?.state === "completed";
+            outcome.completed = message?.state === "completed";
+            if (outcome.completed) {
+              break;
+            }
+            yield* sleep(POLL_MS);
+          }
+          if (!outcome.accepted) {
+            yield* settleUnconfirmed(store, key, "no-acceptance-before-deadline");
+            counters.uncertain += 1;
           }
         }
-      } finally {
-        running.off("close", onClose);
-      }
-    });
-    child = spawnChild(
-      "/usr/bin/script",
-      [
-        "-q",
-        "/dev/null",
-        XMD_BINARY,
-        "run",
-        liveDocument(provider),
-        "--journal",
-        roots.journal,
-        "--raw",
-      ],
-      { cwd: roots.project, env: roots.env, stdio: "ignore" },
-    );
-    child.on("close", onClose);
 
-    const socket = yield* waitFor(SOCKET_DEADLINE_MS, () => discoverGridSocket(roots.tmp));
-    if (socket === undefined) {
-      yield* provide(
-        harnessFailed(mode, base, "the grid's tmux socket never appeared under the owned TMPDIR"),
-      );
-      return;
-    }
-    const identity = yield* waitFor(IDENTITY_DEADLINE_MS, function* () {
-      const identities = yield* readLaunchIdentities(roots.journal);
-      return [...identities.values()].find((entry) => entry.provider === provider);
-    });
-    if (identity === undefined) {
-      yield* provide(
-        harnessFailed(
-          mode,
-          base,
-          "the launch journal never retained this provider's native identity",
-        ),
-      );
-      return;
+        // The exact located source's file identity, hashed for the report.
+        const located = yield* locate(observer.parser, observer.directory, key, observer.project);
+        if (located.outcome === "located") {
+          outcome.sourceHash = identityHash(located.source.fileKey);
+        }
+        // The materialization turn XMD spent, counted from the journal, not guessed.
+        outcome.materializationTurns = yield* materializationTurns(roots.journal, key);
+        outcome.version = yield* providerVersion(provider, roots.env);
+
+        // A live restart proof: a fresh store over the same log must restore the
+        // outcome and re-execute nothing.
+        const restarted = yield* useReplStore(roots.storeDir);
+        const settled = yield* reconcileRestart(restarted);
+        restart.uncertainAfterRestart = settled;
+        const restoredMessage = restarted
+          .state()
+          .roles[key]?.messages.find((m) => m.id === messageId);
+        if (restoredMessage?.state === "completed") {
+          restart.completedRestored = 1;
+        } else if (restoredMessage?.state === "queued") {
+          restart.queuedRestored = 1;
+        }
+        const replay = yield* attemptStep(restarted, key, probe, observer, options);
+        if (replay.outcome === "pasted") {
+          // Re-execution after restart is a defect the report must surface.
+          restart.reExecutions = 1;
+        }
+      });
+    } catch (error) {
+      outcome.harnessDetail = classifyError(error);
     }
 
-    const key = identity.id;
-    // A provider-specific document launches exactly one pane, so the target is
-    // always pane 0 of the grid.
-    const target = "xmd:0.0";
-    const probe = tmuxPaneProbe(socket, target, roots.env);
-    const observer: ObserverSource = providerObserver(provider, roots);
-    const options: DeliveryOptions = {
-      messageDir: roots.messageDir,
-      bracketedPaste: true,
-      submitKey: "Enter",
+    // Read only now, after the scope's finalizers ran: the root is removed, its
+    // message directory with it, and the provider session was cleaned.
+    const rootGone = rootPath === "" ? true : !(yield* exists(rootPath));
+    const cleanup: CleanupEvidence & { providerSessionRemoved: boolean } = {
+      storeRemoved: rootGone,
+      messageFilesRemoved: rootGone,
+      providerFilesUntouched: true,
+      providerSessionRemoved,
     };
-    const first = yield* probe.snapshot();
 
-    yield* store.dispatch({ type: "ReplOpened", replSession: `live-${provider}` });
-    yield* store.dispatch({
-      type: "RoleBound",
-      key,
-      role: provider === "claude" ? "Implementor" : "Reviewer",
-      issue: "#774",
-      identity,
-      paneGeneration: first.generation,
-    });
-    const marker = `MK-${randomUUID().replaceAll("-", "").slice(0, 12).toUpperCase()}`;
-    const messageId = `msg-${randomUUID().slice(0, 8)}`;
-    const text = `Reply with exactly this token on its own line and nothing else: ${marker}`;
-    yield* store.dispatch({ type: "MessageQueued", key, id: messageId, text, marker });
-
-    // Attempt until admitted, then observe until the exact user event and its
-    // completion appear, or a deadline diagnoses a hang and marks it uncertain.
-    const attempt = yield* driveUntilPasted(
-      store,
-      key,
-      probe,
-      observer,
-      options,
+    if (outcome.harnessDetail.length > 0 && !outcome.ran) {
+      return harnessFailed(mode, base, outcome.harnessDetail);
+    }
+    return liveReport({
+      provider,
+      mode,
+      base,
+      head,
+      identity: outcome.identity,
+      sourceHash: outcome.sourceHash,
+      version: outcome.version,
+      accepted: outcome.accepted,
+      completed: outcome.completed,
+      supportsCompletion: outcome.supportsCompletion,
+      materializationTurns: outcome.materializationTurns,
+      nativeTurns: outcome.nativeTurns,
       counters,
       deliveries,
-    );
-    let accepted = false;
-    let completed = false;
-    if (attempt) {
-      const deadline = Date.now() + ACCEPT_DEADLINE_MS;
-      while (Date.now() < deadline) {
-        yield* observeStep(store, key, observer);
-        const role = store.state().roles[key];
-        const message = role?.messages.find((entry) => entry.id === messageId);
-        accepted = message?.state === "accepted" || message?.state === "completed";
-        completed = message?.state === "completed";
-        if (completed) {
-          break;
-        }
-        yield* sleep(POLL_MS);
+      restart,
+      cleanup: {
+        storeRemoved: cleanup.storeRemoved,
+        messageFilesRemoved: cleanup.messageFilesRemoved,
+        providerFilesUntouched: cleanup.providerFilesUntouched,
+      },
+    });
+  })();
+}
+
+/** The current commit, for the report's head, or the base when git is unavailable. */
+function currentHead(base: string): Operation<{ sha: string }> {
+  return (function* (): Operation<{ sha: string }> {
+    try {
+      const result = yield* exec("git", { arguments: ["rev-parse", "HEAD"] }).join();
+      const sha = result.stdout.trim();
+      return { sha: result.code === 0 && /^[0-9a-f]{40}$/.test(sha) ? sha : base };
+    } catch {
+      return { sha: base };
+    }
+  })();
+}
+
+/** Run one provider cleanup command and report whether it succeeded. */
+function runCommand(
+  command: string,
+  args: readonly string[],
+  env: Record<string, string>,
+): Operation<boolean> {
+  return (function* (): Operation<boolean> {
+    try {
+      const result = yield* exec(command, { arguments: [...args], env }).join();
+      return result.code === 0;
+    } catch {
+      return false;
+    }
+  })();
+}
+
+/** Count the materialization turns the launch journal retained for one session. */
+function materializationTurns(journalPath: string, identity: string): Operation<number> {
+  return (function* (): Operation<number> {
+    if (!(yield* exists(journalPath))) {
+      return 0;
+    }
+    const text = yield* readTextFile(journalPath);
+    let count = 0;
+    for (const raw of text.split("\n")) {
+      if (raw.trim().length === 0) {
+        continue;
       }
-      if (!accepted) {
-        yield* settleUnconfirmed(store, key, "no-acceptance-before-deadline");
-        counters.uncertain += 1;
+      let event: unknown;
+      try {
+        event = JSON.parse(raw);
+      } catch {
+        continue;
+      }
+      if (!isRecord(event) || !isRecord(event.result) || !isRecord(event.result.value)) {
+        continue;
+      }
+      const value = event.result.value;
+      if (value.phase === "materialized" && value.nativeSessionId === identity) {
+        count += 1;
       }
     }
+    return count;
+  })();
+}
 
-    const version = yield* providerVersion(provider, roots.env);
-    yield* provide(
-      liveReport({
-        provider,
-        mode,
-        base,
-        identity: key,
-        version,
-        accepted,
-        completed,
-        counters,
-        deliveries,
-      }),
-    );
-  });
+/** A fixed-category description of a harness error, carrying no private detail. */
+function classifyError(error: unknown): string {
+  return error instanceof Error ? error.name : "unknown-harness-error";
 }
 
 /** The provider's reported version, or "" when it will not say. */
@@ -636,42 +836,53 @@ function liveReport(inputs: {
   provider: LiveProvider;
   mode: ReportMode;
   base: string;
+  head: { sha: string };
   identity: string;
+  sourceHash: string;
   version: string;
   accepted: boolean;
   completed: boolean;
+  supportsCompletion: boolean;
+  materializationTurns: number;
+  nativeTurns: number;
   counters: ReportCounters;
   deliveries: readonly DeliveryEvidence[];
+  restart: RestartEvidence;
+  cleanup: CleanupEvidence;
 }): TerminalReplReport {
-  const safe =
-    inputs.counters.wrongPaneDeliveries === 0 &&
-    inputs.counters.busyAdmissions === 0 &&
-    inputs.counters.manualActivityAdmissions === 0;
-  const providerVerdict: ProviderVerdict = !safe
-    ? "VIEW_ONLY"
-    : inputs.accepted && inputs.completed
-      ? "PASS"
-      : inputs.accepted && inputs.provider === "claude"
-        ? "PROVIDER_EXCLUDED"
-        : "VIEW_ONLY";
-  const spent = inputs.counters.admittedDeliveries;
+  const safe = countersSafe(inputs.counters);
+  const providerVerdict: ProviderVerdict = decideProviderVerdict({
+    accepted: inputs.accepted,
+    completed: inputs.completed,
+    safe,
+    supportsCompletion: inputs.supportsCompletion,
+  });
+  // Codex spends a materialization turn plus the marker turn; Claude spends only
+  // the marker turn. Both are counted from evidence, never assumed.
+  const spent =
+    inputs.provider === "codex"
+      ? inputs.materializationTurns + inputs.nativeTurns
+      : inputs.nativeTurns;
   const provider: ProviderReport = {
     verdict: providerVerdict,
     versionKnown: inputs.version.length > 0,
     ...(inputs.version.length > 0 ? { version: inputs.version } : {}),
     identityHash: identityHash(inputs.identity),
-    sourceIdentityHash: identityHash(`${inputs.provider}:${inputs.identity}:source`),
+    ...(inputs.sourceHash.length > 0 ? { sourceIdentityHash: inputs.sourceHash } : {}),
     accepted: inputs.accepted,
     completed: inputs.completed,
   };
   const absent: ProviderReport = { verdict: "n/a", versionKnown: false };
+  // The single-provider journey's overall verdict is its provider verdict, which
+  // is never "n/a" here (this provider ran).
+  const overall: ReportVerdict = providerVerdict === "n/a" ? "VIEW_ONLY" : providerVerdict;
   return {
     schema: "terminal-repl-poc-report.v1",
-    verdict: providerVerdict,
+    verdict: overall,
     mode: inputs.mode,
     runtime: "deno",
     base: { sha: inputs.base },
-    head: { sha: inputs.base },
+    head: inputs.head,
     providers: {
       claude: inputs.provider === "claude" ? provider : absent,
       codex: inputs.provider === "codex" ? provider : absent,
@@ -685,8 +896,8 @@ function liveReport(inputs: {
     matrix: [],
     counters: inputs.counters,
     deliveries: [...inputs.deliveries],
-    restart: { queuedRestored: 0, uncertainAfterRestart: 0, completedRestored: 0, reExecutions: 0 },
-    cleanup: { storeRemoved: true, messageFilesRemoved: true, providerFilesUntouched: true },
+    restart: inputs.restart,
+    cleanup: inputs.cleanup,
   };
 }
 

@@ -26,7 +26,7 @@ import { ensureDir, exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { until } from "effection";
+import { race, spawn, suspend, until } from "effection";
 import type { Operation } from "effection";
 import {
   attemptStep,
@@ -35,14 +35,25 @@ import {
   settleUnconfirmed,
 } from "../poc/repl/controller.ts";
 import type { DeliveryOptions, ObserverSource } from "../poc/repl/controller.ts";
+import { withPreparedDelivery } from "../poc/repl/delivery.ts";
 import { purgeStore, ReplStoreError, useReplStore } from "../poc/repl/store.ts";
 import type { ReplStore } from "../poc/repl/store.ts";
-import { claudeParser } from "../poc/repl/claude-observer.ts";
+import { claudeParser, createClaudeParser } from "../poc/repl/claude-observer.ts";
 import { codexParser } from "../poc/repl/codex-observer.ts";
 import { gatesSatisfied, runLiveProof } from "../poc/repl/live-supervisor.ts";
+import { paneProbeOver } from "../poc/repl/live-worker.ts";
+import type { PaneActivity, TmuxCommand } from "../poc/repl/live-worker.ts";
 import type { Provider, ReplState } from "../poc/repl/state.ts";
 import type { ProviderParser } from "../poc/repl/observer.ts";
-import { identityHash, REPORT_SCHEMA, validateReport, zeroCounters } from "../poc/repl/report.ts";
+import {
+  aggregateReport,
+  countersSafe,
+  decideProviderVerdict,
+  identityHash,
+  REPORT_SCHEMA,
+  validateReport,
+  zeroCounters,
+} from "../poc/repl/report.ts";
 import type {
   DeliveryEvidence,
   MatrixEntry,
@@ -642,6 +653,7 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     bag.pane.armLoad(() => {
       bag.pane.setManual(true);
       bag.pane.clientActivity();
+      return until(Promise.resolve());
     });
     const attempt = yield* attemptStep(
       bag.store,
@@ -652,14 +664,17 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     );
     tally.convergenceAttempts += 1;
     expect(attempt.outcome).toEqual("declined");
+    // The final combined sample runs after the buffer is prepared, so activity
+    // during preparation is caught before AttemptStarted and before the guard —
+    // nothing was pasted, and the guarded paste was never even reached.
     expect(bag.pane.deliveries.length).toEqual(0);
-    expect(bag.pane.declines).toEqual(1);
+    expect(bag.pane.declines).toEqual(0);
     expect(messageState(bag.store, bag.identity.id, message.id)).toEqual("queued");
     expect(
       record(
         "RP10",
         true,
-        "same-PID manual activity between convergence and the guard declined the paste; zero bytes sent",
+        "same-PID manual activity while the buffer loaded declined the attempt before the guard; zero bytes sent",
       ),
     ).toEqual(true);
   });
@@ -1165,6 +1180,379 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     expect(report.verdict).toEqual("NOT_AUTHORIZED");
   });
 
+  it("a provider turn opening while the buffer loads refuses before the guard", function* () {
+    const root = yield* useTempDirectory("xmd-repl-loadseam-");
+    const bag = yield* scaffold(CODEX_KIT, root);
+    yield* bind(bag);
+    const message = yield* queue(bag);
+    // A complete provider turn is appended from the buffer-load seam — during
+    // preparation, after convergence. The final combined sample taken after
+    // preparation must catch it, so nothing is pasted.
+    bag.pane.armLoad(() =>
+      appendRecords(bag.path, [codexUser("an interleaved turn"), codexAgent("busy")]),
+    );
+    const attempt = yield* attemptStep(
+      bag.store,
+      bag.identity.id,
+      bag.pane.probe,
+      bag.observer,
+      bag.options,
+    );
+    expect(attempt.outcome).toEqual("declined");
+    expect(bag.pane.deliveries.length).toEqual(0);
+    expect(bag.pane.deliveries.every((delivery) => !delivery.whileBusy)).toEqual(true);
+    expect(messageState(bag.store, bag.identity.id, message.id)).toEqual("queued");
+  });
+
+  it("a partial provider record during the barrier refuses", function* () {
+    const root = yield* useTempDirectory("xmd-repl-partialbarrier-");
+    const bag = yield* scaffold(CODEX_KIT, root);
+    yield* bind(bag);
+    const message = yield* queue(bag);
+    // A record still being written — no newline yet — grows the file physically
+    // without changing the cursor or the event count. Physical growth is part of
+    // the sample, so convergence refuses rather than pasting into a turn opening.
+    const fragment = codexUser("half a turn").slice(0, 12);
+    bag.pane.armBarrier(() => appendPartial(bag.path, fragment));
+    const attempt = yield* attemptStep(
+      bag.store,
+      bag.identity.id,
+      bag.pane.probe,
+      bag.observer,
+      bag.options,
+    );
+    expect(attempt.outcome).toEqual("not-ready");
+    expect(bag.pane.deliveries.length).toEqual(0);
+    expect(messageState(bag.store, bag.identity.id, message.id)).toEqual("queued");
+  });
+
+  it("a Codex header without a project is refused, not accepted", function* () {
+    const root = yield* useTempDirectory("xmd-repl-nocwd-");
+    const bag = yield* scaffold(CODEX_KIT, root);
+    yield* bind(bag);
+    yield* queue(bag);
+    // The only file for this identity declares no project. A required project the
+    // header does not carry fails closed rather than being accepted.
+    yield* writeRecords(bag.path, [codexMeta(bag.identity.id)]);
+    const attempt = yield* attemptStep(
+      bag.store,
+      bag.identity.id,
+      bag.pane.probe,
+      bag.observer,
+      bag.options,
+    );
+    expect(attempt.outcome).toEqual("refused");
+    if (attempt.outcome === "refused") {
+      expect(attempt.refusal).toEqual("not-found");
+    }
+    expect(bag.pane.deliveries.length).toEqual(0);
+  });
+
+  it("a Claude record without a turn identity refuses observation", function* () {
+    const root = yield* useTempDirectory("xmd-repl-noturn-");
+    const bag = yield* scaffold(CLAUDE_KIT, root);
+    yield* bind(bag);
+    const message = yield* queue(bag);
+    const attempt = yield* attemptStep(
+      bag.store,
+      bag.identity.id,
+      bag.pane.probe,
+      bag.observer,
+      bag.options,
+    );
+    expect(attempt.outcome).toEqual("pasted");
+    // A user record carrying no requestId turn identity cannot be grouped, so it
+    // is an unsupported shape rather than a silent match.
+    yield* appendRecords(bag.path, [claudeUser(bag.identity.id, message.text)]);
+    const observed = yield* observeStep(bag.store, bag.identity.id, bag.observer);
+    expect(observed.outcome).toEqual("refused");
+    if (observed.outcome === "refused") {
+      expect(observed.refusal).toEqual("unsupported-shape");
+    }
+    expect(messageState(bag.store, bag.identity.id, message.id)).toEqual("attempt-started");
+  });
+
+  it("a missing Claude completion record is PROVIDER_EXCLUDED from capability, not a deadline", function* () {
+    // The decision is made from the explicit capability, never from elapsed time.
+    expect(
+      decideProviderVerdict({
+        accepted: true,
+        completed: false,
+        safe: true,
+        supportsCompletion: false,
+      }),
+    ).toEqual("PROVIDER_EXCLUDED");
+    expect(
+      decideProviderVerdict({
+        accepted: true,
+        completed: false,
+        safe: true,
+        supportsCompletion: true,
+      }),
+    ).toEqual("VIEW_ONLY");
+    expect(
+      decideProviderVerdict({
+        accepted: true,
+        completed: true,
+        safe: true,
+        supportsCompletion: true,
+      }),
+    ).toEqual("PASS");
+    expect(
+      decideProviderVerdict({
+        accepted: true,
+        completed: true,
+        safe: false,
+        supportsCompletion: true,
+      }),
+    ).toEqual("VIEW_ONLY");
+
+    // And a build whose format lacks the closing record never yields a
+    // completion: an accepted turn stays accepted, never spuriously completed.
+    const root = yield* useTempDirectory("xmd-repl-excluded-");
+    const bag = yield* scaffold(CLAUDE_KIT, root);
+    yield* bind(bag);
+    const message = yield* queue(bag);
+    const attempt = yield* attemptStep(
+      bag.store,
+      bag.identity.id,
+      bag.pane.probe,
+      bag.observer,
+      bag.options,
+    );
+    expect(attempt.outcome).toEqual("pasted");
+    const noCompletion: ObserverSource = {
+      parser: createClaudeParser(false),
+      directory: bag.providerDir,
+      project: bag.project,
+    };
+    yield* appendRecords(bag.path, [
+      claudeUser(bag.identity.id, message.text, "t1"),
+      claudeAssistant(bag.identity.id, "the answer", "t1"),
+      claudeResult(bag.identity.id, "t1"),
+    ]);
+    yield* observeStep(bag.store, bag.identity.id, noCompletion);
+    expect(messageState(bag.store, bag.identity.id, message.id)).toEqual("accepted");
+    expect(noCompletion.parser.supportsCompletion).toEqual(false);
+  });
+
+  it("a cancelled delivery removes its private file and buffer", function* () {
+    const root = yield* useTempDirectory("xmd-repl-cancel-");
+    const bag = yield* scaffold(CODEX_KIT, root);
+    const id = "cancel-msg";
+    const path = join(bag.messageDir, `${id}.msg`);
+    // The delivery prepares its file and buffer, then suspends before pasting.
+    // Halting the scope must run its finalizers: the file and the buffer go.
+    yield* race([
+      withPreparedDelivery(
+        bag.pane.probe,
+        { dir: bag.messageDir, id, bytes: "cancel me", bracketedPaste: true, submitKey: "Enter" },
+        function* (): Operation<void> {
+          yield* suspend();
+        },
+      ),
+      (function* (): Operation<void> {
+        return;
+      })(),
+    ]);
+    expect(yield* exists(path)).toEqual(false);
+    expect(bag.pane.pendingBuffers()).toEqual(0);
+    expect(bag.pane.deliveries.length).toEqual(0);
+  });
+
+  it("the report schema rejects an unsafe, uncleaned or re-executed PASS", function* () {
+    const claudePass = livePassReport("claude", "2.1.263");
+    expect((yield* validateReport(claudePass)).valid).toEqual(true);
+
+    const unsafe: TerminalReplReport = {
+      ...claudePass,
+      counters: { ...zeroCounters(), busyAdmissions: 1 },
+    };
+    expect((yield* validateReport(unsafe)).valid).toEqual(false);
+
+    const dirty: TerminalReplReport = {
+      ...claudePass,
+      cleanup: { storeRemoved: false, messageFilesRemoved: true, providerFilesUntouched: true },
+    };
+    expect((yield* validateReport(dirty)).valid).toEqual(false);
+
+    const reexecuted: TerminalReplReport = {
+      ...claudePass,
+      restart: {
+        queuedRestored: 0,
+        uncertainAfterRestart: 0,
+        completedRestored: 0,
+        reExecutions: 1,
+      },
+    };
+    expect((yield* validateReport(reexecuted)).valid).toEqual(false);
+  });
+
+  it("an overall PASS requires the full matrix and both provider journeys", function* () {
+    const fullMatrix: MatrixEntry[] = Array.from({ length: 18 }, (_, index) => ({
+      id: `RP${index + 1}`,
+      result: "pass" as const,
+      evidence: "aggregated",
+    }));
+    const cleanCleanup = {
+      storeRemoved: true,
+      messageFilesRemoved: true,
+      providerFilesUntouched: true,
+    };
+    const noRestart = {
+      queuedRestored: 0,
+      uncertainAfterRestart: 0,
+      completedRestored: 0,
+      reExecutions: 0,
+    };
+    const deterministic = {
+      matrix: fullMatrix,
+      counters: zeroCounters(),
+      restart: noRestart,
+      cleanup: cleanCleanup,
+      deliveries: [{ messageHash: identityHash("m"), byteCount: 4 }],
+    };
+    const overall = aggregateReport(
+      { sha: BASE_SHA },
+      { sha: HEAD_SHA },
+      "deno",
+      deterministic,
+      livePassReport("claude", "2.1.263"),
+      livePassReport("codex", "codex-cli 0.153.4"),
+    );
+    expect(overall.verdict).toEqual("PASS");
+    expect(overall.mode).toEqual("overall");
+    expect(countersSafe(overall.counters)).toEqual(true);
+    expect((yield* validateReport(overall)).valid).toEqual(true);
+
+    // One provider short of PASS can never make the whole POC pass.
+    const viewOnlyCodex: TerminalReplReport = {
+      ...livePassReport("codex", "codex-cli 0.153.4"),
+      verdict: "VIEW_ONLY",
+      providers: {
+        claude: { verdict: "n/a", versionKnown: false },
+        codex: { verdict: "VIEW_ONLY", versionKnown: true, version: "codex-cli 0.153.4" },
+      },
+    };
+    const partial = aggregateReport(
+      { sha: BASE_SHA },
+      { sha: HEAD_SHA },
+      "deno",
+      deterministic,
+      livePassReport("claude", "2.1.263"),
+      viewOnlyCodex,
+    );
+    expect(partial.verdict).not.toEqual("PASS");
+
+    // An incomplete matrix can never make it pass either.
+    const shortMatrix = aggregateReport(
+      { sha: BASE_SHA },
+      { sha: HEAD_SHA },
+      "deno",
+      { ...deterministic, matrix: fullMatrix.slice(0, 17) },
+      livePassReport("claude", "2.1.263"),
+      livePassReport("codex", "codex-cli 0.153.4"),
+    );
+    expect(shortMatrix.verdict).not.toEqual("PASS");
+  });
+
+  it("the live tmux probe reads real activity generations and honors one conditional guard", function* () {
+    // A fake tmux command seam and a fake activity source drive the *live* probe,
+    // so the boundary the live worker uses is held to the same guard contract as
+    // the fake pane — without a real server.
+    const issued: string[][] = [];
+    const activity: PaneActivity = {
+      // deno-lint-ignore require-yield
+      *read() {
+        return { outputEvents: 5, clientActivity: 3 };
+      },
+    };
+    const makeRun =
+      (mode: "pass" | "decline" | "fail" | "unack"): TmuxCommand =>
+      (args) =>
+        (function* () {
+          issued.push([...args]);
+          if (args[0] === "display") {
+            // A pane snapshot: alive, generation %7, pid 4321, ordinary mode.
+            return { code: 0, stdout: "%7|4321|ttys7|0|0|node" };
+          }
+          if (args[0] === "if-shell") {
+            const success = args[3] ?? "";
+            const nonce = success.slice(success.lastIndexOf(" ") + 1);
+            if (mode === "pass") {
+              return { code: 0, stdout: nonce };
+            }
+            if (mode === "decline") {
+              return { code: 0, stdout: "DECLINED" };
+            }
+            if (mode === "fail") {
+              return { code: 1, stdout: "" };
+            }
+            return { code: 0, stdout: "ran-but-no-marker" };
+          }
+          return { code: 0, stdout: "" };
+        })();
+
+    const guardOf = () => ({
+      generation: 7,
+      pid: 4321,
+      terminal: "ttys7",
+      alive: true,
+      mode: "",
+      foregroundProcess: 0,
+      clientActivity: 3,
+      outputEvents: 5,
+      epoch: 8,
+    });
+
+    // The snapshot's activity comes from the source, not a history size, and the
+    // epoch is their sum.
+    const passProbe = paneProbeOver(makeRun("pass"), "xmd:0.0", activity);
+    const snap = yield* passProbe.snapshot();
+    expect(snap.outputEvents).toEqual(5);
+    expect(snap.clientActivity).toEqual(3);
+    expect(snap.epoch).toEqual(8);
+    expect(snap.generation).toEqual(7);
+
+    // A matching, acknowledged conditional pastes.
+    yield* passProbe.loadBuffer("buf", "/dev/null");
+    const pasted = yield* passProbe.guardedPaste(guardOf(), {
+      buffer: "buf",
+      bracketedPaste: true,
+      submitKey: "Enter",
+    });
+    expect(pasted.outcome).toEqual("pasted");
+
+    // The single conditional carries every required fact, not the PID alone.
+    const conditional = issued.find((command) => command[0] === "if-shell");
+    const condition = conditional?.[2] ?? "";
+    for (const fact of ["pane_id", "pane_pid", "pane_dead", "pane_in_mode"]) {
+      expect(condition.includes(fact)).toEqual(true);
+    }
+
+    // The server rejecting the condition declines; a failed command and an
+    // unacknowledged submit are both uncertain, never pasted-as-proved.
+    const declined = yield* paneProbeOver(makeRun("decline"), "xmd:0.0", activity).guardedPaste(
+      guardOf(),
+      { buffer: "buf", bracketedPaste: true, submitKey: "Enter" },
+    );
+    expect(declined.outcome).toEqual("declined");
+    const failed = yield* paneProbeOver(makeRun("fail"), "xmd:0.0", activity).guardedPaste(
+      guardOf(),
+      {
+        buffer: "buf",
+        bracketedPaste: true,
+        submitKey: "Enter",
+      },
+    );
+    expect(failed.outcome).toEqual("uncertain");
+    const unacked = yield* paneProbeOver(makeRun("unack"), "xmd:0.0", activity).guardedPaste(
+      guardOf(),
+      { buffer: "buf", bracketedPaste: true, submitKey: "Enter" },
+    );
+    expect(unacked.outcome).toEqual("uncertain");
+  });
+
   it("the store refuses malformed, mislabeled, gapped, duplicated and conflicting histories", function* () {
     const root = yield* useTempDirectory("xmd-repl-store-");
     const write = (dir: string, name: string, body: unknown): Operation<void> =>
@@ -1202,6 +1590,25 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     const unknown = join(root, "unknown");
     yield* write(unknown, "000000.json", { seq: 0, action: { type: "NotARealAction" } });
     expect(yield* refuses(unknown)).toEqual(true);
+
+    // A conflicting transition: an AttemptStarted for a message never queued.
+    const conflicting = join(root, "conflicting");
+    yield* write(conflicting, "000000.json", {
+      seq: 0,
+      action: {
+        type: "RoleBound",
+        key: "k",
+        role: "Implementor",
+        issue: "#774",
+        identity: { provider: "codex", id: "x" },
+        paneGeneration: 1,
+      },
+    });
+    yield* write(conflicting, "000001.json", {
+      seq: 1,
+      action: { type: "AttemptStarted", key: "k", id: "never-queued" },
+    });
+    expect(yield* refuses(conflicting)).toEqual(true);
   });
 
   it("a restart interleaved between the user event and its completion resolves once", function* () {
@@ -1372,4 +1779,41 @@ function runtimeName(): string {
     return "bun";
   }
   return "node";
+}
+
+/** A valid single-provider live PASS report, for schema and aggregator rows. */
+function livePassReport(provider: "claude" | "codex", version: string): TerminalReplReport {
+  const pass = {
+    verdict: "PASS" as const,
+    versionKnown: true,
+    version,
+    identityHash: identityHash(`${provider}-identity`),
+    sourceIdentityHash: identityHash(`${provider}-source`),
+    accepted: true,
+    completed: true,
+  };
+  const absent = { verdict: "n/a" as const, versionKnown: false };
+  return {
+    schema: REPORT_SCHEMA,
+    verdict: "PASS",
+    mode: provider === "claude" ? "live-claude" : "live-codex",
+    runtime: "deno",
+    base: { sha: BASE_SHA },
+    head: { sha: HEAD_SHA },
+    providers: {
+      claude: provider === "claude" ? pass : absent,
+      codex: provider === "codex" ? pass : absent,
+    },
+    turnBudgets: {
+      claudeAuthorized: provider === "claude" ? 1 : 0,
+      claudeSpent: provider === "claude" ? 1 : 0,
+      codexAuthorized: provider === "codex" ? 2 : 0,
+      codexSpent: provider === "codex" ? 2 : 0,
+    },
+    matrix: [],
+    counters: zeroCounters(),
+    deliveries: [{ messageHash: identityHash("delivery"), byteCount: 4 }],
+    restart: { queuedRestored: 0, uncertainAfterRestart: 0, completedRestored: 0, reExecutions: 0 },
+    cleanup: { storeRemoved: true, messageFilesRemoved: true, providerFilesUntouched: true },
+  };
 }
