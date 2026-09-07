@@ -82,12 +82,19 @@ export interface RemoteBeginCommand {
   readonly executionId: string;
 }
 
+/** Which fork a continuation claims, as the destination retains it. */
+export interface RemoteContinuationOrigin {
+  readonly sourceRunId: string;
+  readonly checkpointEventId: string;
+}
+
 /** Everything one committed fork is decided from. */
 /** Taking up a destination that already holds this fork, without its source. */
 export interface RemoteForkContinuation {
   readonly commandId: string;
   readonly runId: string;
   readonly creation: CreateWorkflowRunRequest;
+  readonly origin: RemoteContinuationOrigin;
   readonly runRecord: DurableEvent;
   readonly rootImport: DurableEvent;
   readonly executionId: string;
@@ -143,7 +150,16 @@ export interface RemoteLifecycleLink {
   /** Offer one part of a fork's source to this acquisition's scratch. */
   stageForkPart(commandId: string, part: RemoteForkPart): Operation<Result<void>>;
   /** Commit the offered parts as one destination run and its first execution. */
-  commitFork(commit: RemoteForkCommit): Operation<Result<RemoteLifecycleAnswer<RemoteBegun>>>;
+  /**
+   * Commit the offered parts as one destination run and its first execution.
+   *
+   * `needs-transfer` is the one failure a caller answers by copying the source
+   * again: the destination holds nothing and the parts this command names were
+   * never offered on this connection.
+   */
+  commitFork(
+    commit: RemoteForkCommit,
+  ): Operation<Result<RemoteLifecycleAnswer<RemoteBegun> | "needs-transfer">>;
   /**
    * Continue a destination that already holds this fork.
    *

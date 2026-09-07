@@ -34,7 +34,11 @@ import type {
   DocumentExecutionRecord,
   WorkflowRunRecord,
 } from "../../src/storage/record.ts";
-import { WorkflowRequestError, WorkflowTransactionError } from "../../src/storage/errors.ts";
+import {
+  WorkflowRequestError,
+  WorkflowRunConflictError,
+  WorkflowTransactionError,
+} from "../../src/storage/errors.ts";
 import type { RemoteWorkspaceLink } from "../../src/remote/database.ts";
 
 export const RUN_ID = "5cktgrv2zyutngh7bbddr2tyg2b5a567cg725hu5e7u42orerxaa";
@@ -68,6 +72,10 @@ export interface Script {
   readonly commands?: string[];
   /** Every retrieval value a begin carried. */
   readonly retrievals?: (unknown | null)[];
+  /** Answer every fork commit with a definitive conflict. */
+  readonly forkRefuses?: boolean;
+  /** Answer the first fork commit by saying its transfer is not here. */
+  readonly needsTransfer?: Set<string>;
   /** Held open until a test releases it, so a call can be caught in flight. */
   readonly gate?: { wait(): Operation<void> };
   /** Every run whose source was resolved. */
@@ -208,6 +216,10 @@ function lifecycle(script: Script): RemoteLifecycleLink {
     *cancel(commandId: string): Operation<Result<RemoteLifecycleAnswer<WorkflowRunRecord>>> {
       script.asked?.push("cancel");
       script.commands?.push(commandId);
+      if (script.loseAnswer?.has(commandId) === true) {
+        script.loseAnswer.delete(commandId);
+        return Err(new WorkflowTransactionError("the connection ended before it answered."));
+      }
       return Ok({ kind: "performed", value: record() });
     },
     // deno-lint-ignore require-yield
@@ -231,7 +243,9 @@ function lifecycle(script: Script): RemoteLifecycleLink {
       return Ok({ kind: "performed", value: begun(continuation.executionId, script) });
     },
 
-    *commitFork(commit: RemoteForkCommit): Operation<Result<RemoteLifecycleAnswer<RemoteBegun>>> {
+    *commitFork(
+      commit: RemoteForkCommit,
+    ): Operation<Result<RemoteLifecycleAnswer<RemoteBegun> | "needs-transfer">> {
       script.asked?.push("fork");
       script.commits?.push(commit);
       if (script.forkConflict !== undefined) {
@@ -241,8 +255,18 @@ function lifecycle(script: Script): RemoteLifecycleLink {
       script.commands?.push(commit.commandId);
       if (script.loseAnswer?.has(commit.commandId) === true) {
         script.loseAnswer.delete(commit.commandId);
-        script.committed?.set(commit.commandId, begun(commit.executionId, script));
+        // The mutation committed unless this scenario says it never did.
+        if (script.needsTransfer?.has(commit.commandId) !== true) {
+          script.committed?.set(commit.commandId, begun(commit.executionId, script));
+        }
         return Err(new WorkflowTransactionError("the connection ended before it answered."));
+      }
+      if (script.needsTransfer?.has(commit.commandId) === true) {
+        script.needsTransfer.delete(commit.commandId);
+        return Ok<RemoteLifecycleAnswer<RemoteBegun> | "needs-transfer">("needs-transfer");
+      }
+      if (script.forkRefuses === true) {
+        return Err(new WorkflowRunConflictError(commit.runId, ["definition"]));
       }
       const already = script.committed?.get(commit.commandId);
       if (already !== undefined) {

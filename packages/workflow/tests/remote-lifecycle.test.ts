@@ -345,4 +345,95 @@ describe("a remote run's executor lifecycle", () => {
     });
     expect(second.ok).toBe(true);
   });
+
+  it("asks the same cancellation again when its answer was lost", function* () {
+    const commands: string[] = [];
+    const outcome = yield* installed(
+      { commands, loseAnswer: new Set(["command-1"]) },
+      function* () {
+        const first = yield* WorkflowLifecycle.operations.cancel(RUN_ID);
+        // The connection that asked is gone; the question is not.
+        const second = yield* WorkflowLifecycle.operations.cancel(RUN_ID);
+        return { first, second, commands: [...commands] };
+      },
+    );
+
+    expect(outcome.first.ok).toBe(false);
+    expect(outcome.second.ok).toBe(true);
+    // One identity, asked twice, so the owner answers with what it decided.
+    expect(outcome.commands).toEqual(["command-1", "command-1"]);
+  });
+
+  it("gives a later cancellation a fresh identity once one was answered", function* () {
+    const commands: string[] = [];
+    const outcome = yield* installed({ commands }, function* () {
+      const first = yield* WorkflowLifecycle.operations.cancel(RUN_ID);
+      const second = yield* WorkflowLifecycle.operations.cancel(RUN_ID);
+      return { first, second, commands: [...commands] };
+    });
+
+    expect(outcome.first.ok).toBe(true);
+    expect(outcome.second.ok).toBe(true);
+    // Answered, so the claim was retired and the next call is its own.
+    expect(outcome.commands).toEqual(["command-1", "command-2"]);
+  });
+
+  it("frees the acquisition when a call is cancelled before it sends", function* () {
+    const asked: string[] = [];
+    const outcome = yield* installed({ asked }, function* (transitions) {
+      const lock = yield* acquired();
+      // Cancelled while it is still deciding it may not proceed: nothing was
+      // sent, so the acquisition is free to try again.
+      const refused = yield* transitions.begin(lock, {
+        runId: RUN_ID,
+        action: "resume",
+        creation: {
+          definition: {
+            version: 1,
+            kind: "git",
+            objectFormat: "sha1",
+            objectId: "0".repeat(40),
+            rootDocumentPath: "README.md",
+          },
+          base: "main",
+          props: {},
+        },
+      });
+      const after = yield* transitions.begin(lock, { runId: RUN_ID, action: "resume" });
+      return { refused, after, asked: [...asked] };
+    });
+
+    expect(outcome.refused.ok).toBe(false);
+    // The guard lifted, so the corrected call went through.
+    expect(outcome.after.ok).toBe(true);
+    expect(outcome.asked).toEqual(["begin"]);
+  });
+
+  it("retires an acquisition cancelled after its command went out", function* () {
+    const asked: string[] = [];
+    const entered = withResolvers<void>();
+    const script: Script = {
+      asked,
+      gate: {
+        *wait(): Operation<void> {
+          entered.resolve();
+          // Never resolved: this call is cancelled while it waits.
+          yield* withResolvers<void>().operation;
+        },
+      },
+    };
+    const outcome = yield* installed(script, function* (transitions) {
+      const lock = yield* acquired();
+      const sent = yield* spawn(() => transitions.begin(lock, { runId: RUN_ID, action: "resume" }));
+      yield* entered.operation;
+      // The call is interrupted with its answer outstanding.
+      yield* sent.halt();
+      // The lock cannot start anything else: whether the owner committed is
+      // unknown, and a fresh mutation must not race that.
+      return yield* transitions.begin(lock, { runId: RUN_ID, action: "resume" });
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(asked.filter((command) => command === "begin")).toHaveLength(1);
+  });
 });

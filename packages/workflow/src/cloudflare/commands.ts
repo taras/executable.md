@@ -112,7 +112,15 @@ export type CommandRefusal =
    * different acquisition, and a live executor does not get to finish an
    * earlier executor's work by naming its id.
    */
-  | "wrong-execution";
+  | "wrong-execution"
+  /**
+   * A fork was asked to commit a transfer this connection never offered.
+   *
+   * Distinct from a malformed request: the request is well formed, the
+   * destination holds nothing, and the parts it names are not here — so the
+   * caller's next move is to copy the source again rather than to give up.
+   */
+  | "needs-transfer";
 
 export class CommandError extends Error {
   override name = "CommandError";
@@ -354,9 +362,23 @@ export interface ForkContinueCommand extends CommandEnvelope {
   readonly command: "fork-continue";
   readonly runId: string;
   readonly creation: CreateWorkflowRunRequest;
+  /** Which fork this claims to be, as the destination retains it. */
+  readonly origin: ForkContinuationOrigin;
   readonly runRecord: DurableEvent;
   readonly rootImport: DurableEvent;
   readonly executionId: string;
+}
+
+/**
+ * The identity a continuation claims, compared against retained state.
+ *
+ * No anchor and no counts: those describe a copy in flight. What a destination
+ * that already holds the fork can be held to is where it came from and what it
+ * wrote for itself.
+ */
+export interface ForkContinuationOrigin {
+  readonly sourceRunId: string;
+  readonly checkpointEventId: string;
 }
 
 export interface SettleCommand extends CommandEnvelope {
@@ -412,7 +434,15 @@ const MEMBERS: Record<CommandName, readonly string[]> = {
   cancel: [...ENVELOPE, "runId"],
   settle: [...ENVELOPE, "completion", "expectedWorkspaceRootId"],
   "fork-stage": [...ENVELOPE, "section", "position", "part"],
-  "fork-continue": [...ENVELOPE, "runId", "creation", "runRecord", "rootImport", "executionId"],
+  "fork-continue": [
+    ...ENVELOPE,
+    "runId",
+    "creation",
+    "origin",
+    "runRecord",
+    "rootImport",
+    "executionId",
+  ],
   fork: [
     ...ENVELOPE,
     "runId",
@@ -702,6 +732,7 @@ export function parseCommand(raw: string): RunnerCommand {
       command,
       runId,
       creation: creation.value,
+      origin: continuationOrigin(members.get("origin")),
       runRecord: forkEvent(members.get("runRecord")),
       rootImport: forkEvent(members.get("rootImport")),
       executionId: text(members, "executionId", MAX_RUN_ID),
@@ -810,6 +841,16 @@ function origin(value: unknown): ForkOrigin {
     runRecordWorkspaceRootId: digest(found, "runRecordWorkspaceRootId"),
     rootImportWorkspaceRootId: digest(found, "rootImportWorkspaceRootId"),
     anchor: digest(found, "anchor"),
+  };
+}
+
+/** Which fork a continuation claims to be continuing. */
+function continuationOrigin(value: unknown): ForkContinuationOrigin {
+  const found = object(value);
+  closed(found, ["sourceRunId", "checkpointEventId"]);
+  return {
+    sourceRunId: text(found, "sourceRunId", MAX_RUN_ID),
+    checkpointEventId: text(found, "checkpointEventId", MAX_ID),
   };
 }
 

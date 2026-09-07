@@ -142,10 +142,21 @@ function begunExecution(command: RunnerCommand, result: CommandResult): string |
   if (result.outcome !== "performed") {
     return null;
   }
-  if (command.command === "begin" || command.command === "fork") {
-    return command.executionId;
+  if (
+    command.command !== "begin" &&
+    command.command !== "fork" &&
+    command.command !== "fork-continue"
+  ) {
+    return null;
   }
-  return null;
+  // Performed is not the same as begun: a conflict and a lifecycle refusal are
+  // both answers this command performed, and neither began anything. What
+  // decides is whether the answer carries a value.
+  const value = result.value;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return Reflect.get(value, "value") === null ? null : command.executionId;
 }
 
 /** What this acquisition has already spent of its own ledger. */
@@ -414,6 +425,7 @@ function perform(
         {
           runId: command.runId,
           creation: command.creation,
+          origin: command.origin,
           runRecord: command.runRecord,
           rootImport: command.rootImport,
           executionId: command.executionId,
@@ -533,6 +545,10 @@ export function dispatchCommand(
         // If the run moved past it — recovered, settled, or held by somebody
         // live — the decision is history rather than authority, and handing it
         // back would hand back a database nobody may settle.
+        // A decision that granted execution authority is only re-observable
+        // once that exact execution is this acquisition's. Anything else — it
+        // was recovered, settled, or somebody live holds it — is history, and
+        // returning it would hand back a database nobody may settle.
         if (adoptExecution(ctx.storage, held.acquisitionId, command.id) === "stale") {
           throw new CommandError("stale-journal");
         }

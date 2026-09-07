@@ -511,6 +511,7 @@ function continuation(overrides: Record<string, unknown> = {}): Record<string, u
     command: "fork-continue",
     runId: RUN_ID,
     creation: commit()["creation"],
+    origin: { sourceRunId: SOURCE_RUN_ID, checkpointEventId: "event-work" },
     runRecord: HEAD,
     rootImport: IMPORT,
     executionId: "execution-2",
@@ -739,5 +740,108 @@ describe("copying content whose digest is valid in both roles", () => {
     // Two roles, two watermarks, neither overwriting the other.
     expect(watermarks.manifests).toEqual([11]);
     expect(watermarks.blobs).toEqual([23]);
+  });
+  it("refuses a continuation naming another source or another checkpoint", async () => {
+    for (const changed of [
+      { sourceRunId: "8fktgrv2zyutngh7bbddr2tyg2b5a567cg725hu5e7u42orerxaa" },
+      { checkpointEventId: "event-elsewhere" },
+    ]) {
+      const stub = executor();
+      await connected(stub);
+      let minted = 0;
+      await offer(stub, () => `command-${(minted += 1)}`);
+      await ask(stub, commit());
+      await on(stub, (owner) => owner.dropConnections());
+      await connected(stub);
+
+      const refused = await ask(
+        stub,
+        continuation({
+          origin: {
+            sourceRunId: SOURCE_RUN_ID,
+            checkpointEventId: "event-work",
+            ...changed,
+          },
+        }),
+      );
+
+      expect(Object(refused["value"])["conflict"]).toEqual(["lineage"]);
+      // No recovery and no replacement: the first execution is still open.
+      const executions = await on(stub, (owner) => owner.executionRows());
+      expect(executions).toHaveLength(1);
+      expect(executions[0]?.["stopped_at"]).toBe(null);
+    }
+  });
+
+  it("refuses a head reassociated to another root this store retains", async () => {
+    for (const head of ["run_record", "root_import"]) {
+      const stub = executor();
+      await connected(stub);
+      let minted = 0;
+      await offer(stub, () => `command-${(minted += 1)}`);
+      await ask(stub, commit());
+      // Another valid retained root, and the head now names it. Membership is
+      // not identity: this is not the association the fork committed.
+      await on(stub, (owner) => owner.reassociateHead(head));
+      await on(stub, (owner) => owner.dropConnections());
+      await connected(stub);
+
+      const refused = await ask(stub, continuation());
+
+      expect([head, Object(refused["value"])["conflict"]]).toEqual([head, ["lineage"]]);
+      expect(await on(stub, (owner) => owner.executionRows())).toHaveLength(1);
+    }
+  });
+
+  it("adopts the execution a lost continuation began, and settles once", async () => {
+    const stub = executor();
+    await connected(stub);
+    let minted = 0;
+    await offer(stub, () => `command-${(minted += 1)}`);
+    await ask(stub, commit());
+    await on(stub, (owner) => owner.dropConnections());
+    await connected(stub);
+    const first = await ask(stub, continuation());
+    expect(first["outcome"]).toBe("performed");
+
+    // Its answer never arrived and the connection died.
+    await on(stub, (owner) => owner.dropConnections());
+    await connected(stub);
+    const again = await ask(stub, continuation());
+
+    expect(again).toEqual(first);
+    // The decision came back only because its execution became this
+    // acquisition's, so this acquisition can settle it.
+    const held = await on(stub, (owner) => owner.heldExecutions());
+    expect(held.map((row) => row["execution_id"])).toEqual(["execution-2"]);
+    const root = await on(stub, (owner) => owner.currentRootId());
+    const settled = await ask(stub, {
+      id: "settle-2",
+      command: "settle",
+      completion: { executionId: "execution-2", status: "completed" },
+      expectedWorkspaceRootId: root,
+    });
+    expect(settled["outcome"]).toBe("performed");
+
+    // And once settled, the same continuation is history rather than authority.
+    await on(stub, (owner) => owner.dropConnections());
+    await connected(stub);
+    expect((await ask(stub, continuation()))["refusal"]).toBe("command:stale-journal");
+  });
+
+  it("says a transfer it never received is one it needs", async () => {
+    const stub = executor();
+    await connected(stub);
+
+    // The destination is empty and this connection offered nothing: the final
+    // command's own answer, not a malformed request.
+    const refused = await ask(stub, commit());
+
+    expect(refused).toEqual({
+      id: "fork-commit",
+      outcome: "refused",
+      refusal: "command:needs-transfer",
+    });
+    expect(await on(stub, (owner) => owner.hasWorkflowSchema())).toBe(false);
   });
 });

@@ -309,4 +309,95 @@ describe("a remote fork's destination", () => {
     expect(outcome.asked.at(-1)).toBe("fork");
     expect(commands.filter((id) => id === "command-1").length).toBeGreaterThan(1);
   });
+
+  it("sends only the command it already sent when its answer is lost twice", function* () {
+    const asked: string[] = [];
+    const sourced: string[] = [];
+    const script: Script = {
+      asked,
+      sourced,
+      loseAnswer: new Set(["command-1"]),
+      committed: new Map(),
+      source: source(),
+    };
+    const outcome = yield* installed(script, function* (transitions) {
+      const first = yield* scoped(function* () {
+        const lock = yield* acquired(DESTINATION);
+        return yield* transitions.fork(lock, request());
+      });
+      // Lost again on the resend.
+      script.loseAnswer?.add("command-1");
+      const asking = asked.length;
+      const second = yield* scoped(function* () {
+        const lock = yield* acquired(DESTINATION);
+        return yield* transitions.fork(lock, request());
+      });
+      return { first, second, sent: asked.slice(asking), sourced: [...sourced] };
+    });
+
+    expect(outcome.first.ok).toBe(false);
+    expect(outcome.second.ok).toBe(false);
+    // The second attempt sent the finalized command and nothing else: no
+    // continuation, and no second source read.
+    expect(outcome.sent).toEqual(["fork"]);
+    expect(outcome.sourced).toEqual([SOURCE_RUN_ID]);
+  });
+
+  it("retires an invocation the owner definitively refused", function* () {
+    const asked: string[] = [];
+    const script: Script = {
+      asked,
+      forkRefuses: true,
+      loseAnswer: new Set(["command-1"]),
+      committed: new Map(),
+      source: source(),
+    };
+    const outcome = yield* installed(script, function* (transitions) {
+      const first = yield* scoped(function* () {
+        const lock = yield* acquired(DESTINATION);
+        return yield* transitions.fork(lock, request());
+      });
+      const asking = asked.length;
+      const second = yield* scoped(function* () {
+        const lock = yield* acquired(DESTINATION);
+        return yield* transitions.fork(lock, request());
+      });
+      return { first, second, sent: asked.slice(asking) };
+    });
+
+    expect(outcome.second.ok).toBe(false);
+    // The resend was answered — with a conflict — so nothing followed it.
+    expect(outcome.sent).toEqual(["fork"]);
+  });
+
+  it("restages the same snapshot when the destination says it needs one", function* () {
+    const asked: string[] = [];
+    const script: Script = {
+      asked,
+      loseAnswer: new Set(["command-1"]),
+      needsTransfer: new Set(["command-1"]),
+      committed: new Map(),
+      source: source(),
+    };
+    const outcome = yield* installed(script, function* (transitions) {
+      const first = yield* scoped(function* () {
+        const lock = yield* acquired(DESTINATION);
+        return yield* transitions.fork(lock, request());
+      });
+      const asking = asked.length;
+      const second = yield* scoped(function* () {
+        const lock = yield* acquired(DESTINATION);
+        return yield* transitions.fork(lock, request());
+      });
+      return { first, second, sent: asked.slice(asking) };
+    });
+
+    expect(outcome.first.ok).toBe(false);
+    expect(outcome.second.ok).toBe(true);
+    // The resend was told its transfer is not there, so the same logical fork
+    // staged the snapshot again and committed once.
+    expect(outcome.sent[0]).toBe("fork");
+    expect(outcome.sent.filter((command) => command === "fork-stage")).toHaveLength(6);
+    expect(outcome.sent.at(-1)).toBe("fork");
+  });
 });

@@ -368,6 +368,29 @@ export class ExecutorObject extends WorkflowOwnerObject {
       .toArray();
   }
 
+  /**
+   * Point one head row at a different root this store already retains.
+   *
+   * A root that is here and valid, and not the one the fork committed against.
+   * What this makes is a destination whose head association is no longer its
+   * own — which a continuation has to notice.
+   */
+  reassociateHead(head: string): void {
+    const other = sha256Hex(`${WORKSPACE_ROOT_DOMAIN}${NEXT_ROOT_MANIFEST}`);
+    this.ctx.storage.sql.exec(
+      "INSERT INTO workspace_roots (root_id, format_version, manifest) VALUES (?, 1, ?) " +
+        "ON CONFLICT(root_id) DO NOTHING",
+      other,
+      NEXT_ROOT_MANIFEST,
+    );
+    const sequence = head === "run_record" ? 1 : 2;
+    this.ctx.storage.sql.exec(
+      "UPDATE journal_events SET workspace_root_id = ? WHERE sequence = ?",
+      other,
+      sequence,
+    );
+  }
+
   /** Close every admitted connection, as a lost executor leaves them. */
   dropConnections(): void {
     for (const socket of this.ctx.getWebSockets("executor")) {

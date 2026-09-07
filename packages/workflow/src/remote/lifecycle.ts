@@ -251,6 +251,14 @@ export function* useRemoteLifecycle(
       const addressed = identify(runId, question);
       const answered = yield* admitted.value.lifecycle.cancel(addressed.commandId, runId);
       if (!answered.ok) {
+        // The same distinction the other mutations make. A cancellation may
+        // have committed before its answer was lost, and the next attempt has
+        // to ask that question rather than a new one.
+        if (lost(answered.error)) {
+          unanswered(runId, addressed);
+        } else {
+          answeredNow(runId, addressed);
+        }
         return answered;
       }
       answeredNow(runId, addressed);
@@ -286,6 +294,23 @@ export function* useRemoteLifecycle(
 }
 
 /**
+ * One transition's grip on its acquisition, ended however the transition ends.
+ *
+ * `sent` is the line between two very different cancellations. Before a command
+ * has gone out, nothing can have happened, so the guard simply lifts. After one
+ * has gone out and no answer came back, the owner's decision is unknown — and
+ * the acquisition is retired rather than freed, because a fresh mutation racing
+ * an unknown decision is the one thing that must not happen. Whoever wants to
+ * continue takes a new acquisition and asks the same question again.
+ */
+interface Grip {
+  /** Say that a command has gone out and its answer is not yet known. */
+  sending(): void;
+  /** Say that this transition reached an answer, whatever the answer was. */
+  done(): void;
+}
+
+/**
  * Take this acquisition for one transition, or say why it cannot be taken.
  *
  * One acquisition begins one execution. Two identical calls are two calls, so
@@ -300,6 +325,40 @@ function engage(held: Hold): WorkflowRequestError | undefined {
   }
   held.busy = true;
   return undefined;
+}
+
+/**
+ * Register how this transition lets go, before it can be interrupted.
+ *
+ * `ensure` runs on every exit — a return, a raise, or cancellation while an
+ * owner answer is still outstanding — so no path can leave the guard held or
+ * leave a sent command unaccounted for.
+ */
+function* gripped(held: Hold): Operation<Grip> {
+  let sent = false;
+  let finished = false;
+  yield* ensure(function* () {
+    if (finished) {
+      return;
+    }
+    if (sent) {
+      // A command went out and nothing came back. This acquisition is retired
+      // rather than released: its authority ends with it, and nothing new can
+      // be sent on it while the first outcome is unknown.
+      held.live = false;
+      return;
+    }
+    held.busy = false;
+  });
+  return {
+    sending() {
+      sent = true;
+    },
+    done() {
+      finished = true;
+      held.busy = false;
+    },
+  };
 }
 
 /**
@@ -345,8 +404,9 @@ function transitions(
       if (busy !== undefined) {
         return Err(busy);
       }
+      const grip = yield* gripped(held);
       if (request.action === "resume" && request.creation !== undefined) {
-        held.busy = false;
+        grip.done();
         return Err(new WorkflowRequestError("a resume does not carry a creation."));
       }
       // Minted once for this question, outside anything that could retry: the
@@ -363,6 +423,7 @@ function transitions(
           : canonicalJson(request.creation.retrieval),
       ]);
       const addressed = identify(request.runId, question);
+      grip.sending();
       const answered = yield* held.connection.lifecycle.begin({
         commandId: addressed.commandId,
         runId: request.runId,
@@ -371,7 +432,7 @@ function transitions(
         retrieval: request.creation?.retrieval,
         executionId: addressed.executionId,
       });
-      held.busy = false;
+      grip.done();
       if (!answered.ok) {
         // Which kind of failure decides whether the question survives it. An
         // answer that was lost leaves the identity standing, so a replacement
@@ -458,6 +519,7 @@ function transitions(
       if (busy !== undefined) {
         return Err(busy);
       }
+      const grip = yield* gripped(held);
       const head = headOf(request);
       const creation = creationRequest(request.runId, request.creation);
       const question = questionOf([
@@ -476,26 +538,51 @@ function transitions(
       // continued from what it retains, and a decision this owner already made
       // can be re-observed. Either way the source is not needed, and it may not
       // be there any more.
-      const retained =
-        addressed.command === undefined
-          ? undefined
-          : yield* held.connection.lifecycle.commitFork(addressed.command);
-      if (retained !== undefined && retained.ok && retained.value.kind === "performed") {
-        held.busy = false;
-        answeredNow(request.runId, addressed);
-        held.execution = retained.value.value.execution.executionId;
-        return Ok(yield* begun(held, retained.value.value));
+      if (addressed.command !== undefined) {
+        // An exact command was sent once and never answered. It is resent
+        // verbatim, and every outcome is classified here: nothing else is
+        // tried until this one's is known.
+        grip.sending();
+        const retained = yield* held.connection.lifecycle.commitFork(addressed.command);
+        grip.done();
+        if (!retained.ok) {
+          if (lost(retained.error)) {
+            // Ambiguous again. The claim stands, and no other command is sent.
+            unanswered(request.runId, addressed, addressed.command);
+          } else {
+            answeredNow(request.runId, addressed);
+          }
+          return retained;
+        }
+        if (retained.value !== "needs-transfer") {
+          answeredNow(request.runId, addressed);
+          if (retained.value.kind === "refused") {
+            return Err(refusalError(retained.value.refusal, request.runId));
+          }
+          held.execution = retained.value.value.execution.executionId;
+          return Ok(yield* begun(held, retained.value.value));
+        }
+        // The one outcome that sends this same logical fork back to its
+        // source: the destination holds nothing, and the parts this command
+        // names went with the connection that offered them.
       }
+      grip.sending();
       const continued = yield* held.connection.lifecycle.continueFork({
         commandId: addressed.commandId,
         runId: request.runId,
         creation,
+        // What this request names, which the destination proves against what
+        // it retained. Nothing here was read from the source.
+        origin: {
+          sourceRunId: request.selection.sourceRunId,
+          checkpointEventId: request.selection.checkpointEventId,
+        },
         runRecord: head.runRecord,
         rootImport: request.rootImport,
         executionId: addressed.executionId,
       });
+      grip.done();
       if (!continued.ok) {
-        held.busy = false;
         if (lost(continued.error)) {
           unanswered(request.runId, addressed);
         } else {
@@ -504,7 +591,6 @@ function transitions(
         return continued;
       }
       if (continued.value !== "absent") {
-        held.busy = false;
         answeredNow(request.runId, addressed);
         if (continued.value.kind === "refused") {
           return Err(refusalError(continued.value.refusal, request.runId));
@@ -515,15 +601,15 @@ function transitions(
 
       // Nothing there. Making a fork needs the whole source, staged under this
       // acquisition and committed in one transaction.
+      // Nothing has been mutated yet, so the guard is simply held across the
+      // source read and the staging: a cancellation here leaves no unknown.
       const source = yield* readSource(host, request);
       if (!source.ok) {
-        held.busy = false;
         answeredNow(request.runId, addressed);
         return source;
       }
       const staged = yield* offer(host, held.connection.lifecycle, source.value);
       if (!staged.ok) {
-        held.busy = false;
         return staged;
       }
       const command: RemoteForkCommit = {
@@ -550,8 +636,9 @@ function transitions(
         rootImport: request.rootImport,
         executionId: addressed.executionId,
       };
+      grip.sending();
       const answered = yield* held.connection.lifecycle.commitFork(command);
-      held.busy = false;
+      grip.done();
       if (!answered.ok) {
         if (lost(answered.error)) {
           // Kept with the exact bytes it was sent with, so a replacement
@@ -564,6 +651,11 @@ function transitions(
         return answered;
       }
       answeredNow(request.runId, addressed);
+      if (answered.value === "needs-transfer") {
+        // Offered and still not there. Repeating the same transfer would meet
+        // the same answer.
+        return Err(new WorkflowRequestError("this fork's transfer did not reach its destination."));
+      }
       if (answered.value.kind === "refused") {
         return Err(refusalError(answered.value.refusal, request.runId));
       }

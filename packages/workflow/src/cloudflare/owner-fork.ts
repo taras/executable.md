@@ -33,6 +33,7 @@ import { bytesOf } from "./encoding.ts";
 import type { CreateWorkflowRunRequest } from "../storage/api.ts";
 import {
   CommandError,
+  type ForkContinuationOrigin,
   type ForkCounts,
   type ForkOrigin,
   type ForkPart,
@@ -168,6 +169,30 @@ export function stageForkPart(
     size,
   );
   return { staged: count(held?.["parts"]) + 1 };
+}
+
+/** Whether this transfer describes anything at all. */
+function expectsTransfer(counts: ForkCounts): boolean {
+  return counts.inherited + counts.roots + counts.manifests + counts.blobs + counts.checkouts > 0;
+}
+
+/** Whether this acquisition has offered any part of a fork. */
+function offered(storage: OwnerStorage, acquisitionId: string): boolean {
+  // A store with no scratch table at all has been offered nothing, which is
+  // the same answer: that table is created by the command that offers a part.
+  if (
+    rows(storage, "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?", FORK_TABLE)
+      .length === 0
+  ) {
+    return false;
+  }
+  return (
+    rows(
+      storage,
+      `SELECT 1 AS held FROM ${FORK_TABLE} WHERE acquisition_id = ? LIMIT 1`,
+      acquisitionId,
+    ).length > 0
+  );
 }
 
 /** Every part of one section, in the order it was offered, with no gaps. */
@@ -715,6 +740,7 @@ export function continueFork(
   input: {
     readonly runId: string;
     readonly creation: CreateWorkflowRunRequest;
+    readonly origin: ForkContinuationOrigin;
     readonly runRecord: DurableEvent;
     readonly rootImport: DurableEvent;
     readonly executionId: string;
@@ -744,12 +770,17 @@ export function continueFork(
 
   const lineage = rows(
     storage,
-    `SELECT source_run_id, checkpoint_event_id, checkpoint_workspace_root_id, selection_anchor
+    `SELECT source_run_id, checkpoint_event_id, checkpoint_workspace_root_id,
+            selection_anchor, run_record_root_id, root_import_root_id
        FROM workflow_fork_lineage WHERE id = 1`,
   )[0];
-  if (lineage === undefined) {
-    // A run, and not a fork. Continuing it as one would claim a lineage it
-    // does not have.
+  if (
+    lineage === undefined ||
+    lineage["source_run_id"] !== input.origin.sourceRunId ||
+    lineage["checkpoint_event_id"] !== input.origin.checkpointEventId
+  ) {
+    // Not a fork at all, or a fork of somewhere else. Either way this request
+    // is not describing the run that is here.
     return { conflict: ["lineage"], refusal: null, value: null };
   }
 
@@ -766,16 +797,18 @@ export function continueFork(
       pinnedCommit: input.creation.definition.objectId,
     }),
   );
-  const roots = new Set(
-    rows(storage, "SELECT root_id FROM workspace_roots").map((row) => String(row["root_id"])),
-  );
   if (
     heads.length !== 2 ||
     serializeDurableEvent(input.runRecord) !== expected ||
     heads[0]?.["record"] !== expected ||
     heads[1]?.["record"] !== serializeDurableEvent(input.rootImport) ||
-    !roots.has(String(heads[0]?.["workspace_root_id"])) ||
-    !roots.has(String(heads[1]?.["workspace_root_id"]))
+    // The exact roots these rows were committed against, as this fork's own
+    // lineage retained them — not merely roots this store happens to hold. A
+    // head reassociated to another valid root is a different fork's head.
+    lineage["run_record_root_id"] === null ||
+    lineage["root_import_root_id"] === null ||
+    heads[0]?.["workspace_root_id"] !== lineage["run_record_root_id"] ||
+    heads[1]?.["workspace_root_id"] !== lineage["root_import_root_id"]
   ) {
     return { conflict: ["lineage"], refusal: null, value: null };
   }
@@ -851,6 +884,13 @@ export function commitFork(
   // described in the shared shape and hashed by the shared rule, then compared.
   // A transfer that is not that selection stops here, with the destination
   // holding no run.
+  if (fresh && expectsTransfer(input.counts) && !offered(storage, acquisitionId)) {
+    // Nothing here, and nothing offered: the commit this command names never
+    // happened, and the staging it would have used went with the connection
+    // that made it. Said as its own answer, because it is the one failure a
+    // caller responds to by copying the source again.
+    throw new CommandError("needs-transfer");
+  }
   const staged = fresh ? reconstruct(storage, acquisitionId, input) : undefined;
   const watermarks: ContentWatermarks = staged?.watermarks ?? {
     manifest: new Map(),
@@ -882,7 +922,8 @@ export function commitFork(
     // lineage.
     const lineage = rows(
       storage,
-      `SELECT source_run_id, checkpoint_event_id, checkpoint_workspace_root_id, selection_anchor
+      `SELECT source_run_id, checkpoint_event_id, checkpoint_workspace_root_id,
+              selection_anchor, run_record_root_id, root_import_root_id
          FROM workflow_fork_lineage WHERE id = 1`,
     )[0];
     if (
@@ -999,14 +1040,17 @@ export function commitFork(
   storage.sql.exec(
     `INSERT INTO workflow_fork_lineage
       (id, source_run_id, checkpoint_event_id, checkpoint_workspace_root_id,
-       selection_anchor, created_at)
-      VALUES (1, ?, ?, ?, ?, ?)`,
+       selection_anchor, run_record_root_id, root_import_root_id, created_at)
+      VALUES (1, ?, ?, ?, ?, ?, ?, ?)`,
     input.origin.sourceRunId,
     input.origin.checkpointEventId,
     input.origin.checkpointWorkspaceRootId,
-    // The copy identity, retained with the lineage: a later fork of the same
-    // checkpoint is checkable here without reading the source at all.
+    // The copy identity and the two head associations, retained with the
+    // lineage: continuing this fork later is then checkable here, without
+    // reading the source at all.
     input.origin.anchor,
+    input.origin.runRecordWorkspaceRootId,
+    input.origin.rootImportWorkspaceRootId,
     now(),
   );
 

@@ -233,6 +233,7 @@ export function cloudflareLifecycleLink(
             command: "fork-continue",
             runId: continuation.runId,
             creation: continuation.creation,
+            origin: continuation.origin,
             runRecord: record(continuation.runRecord),
             rootImport: record(continuation.rootImport),
             executionId: continuation.executionId,
@@ -245,17 +246,21 @@ export function cloudflareLifecycleLink(
           if (refusal === "command:absent") {
             // Nothing there to continue. Not a failure: the caller's next move
             // is the source copy it has not needed until now.
-            return Ok("absent");
+            return Ok<RemoteLifecycleAnswer<RemoteBegun> | "absent">("absent");
           }
           return Err(storageFailure(refusal));
         }
-        return yield* forked(offered.value, continuation.runId);
+        const decided = yield* forked(offered.value, continuation.runId);
+        return decided.ok
+          ? Ok<RemoteLifecycleAnswer<RemoteBegun> | "absent">(decided.value)
+          : decided;
       } catch (error) {
         return Err(translate(error));
       }
     },
-
-    *commitFork(commit: RemoteForkCommit): Operation<Result<RemoteLifecycleAnswer<RemoteBegun>>> {
+    *commitFork(
+      commit: RemoteForkCommit,
+    ): Operation<Result<RemoteLifecycleAnswer<RemoteBegun> | "needs-transfer">> {
       try {
         const offered = yield* connection.ask(
           commit.commandId,
@@ -274,9 +279,19 @@ export function cloudflareLifecycleLink(
           privateRefusal,
         );
         if (offered.outcome === "refused") {
-          return Err(storageFailure(privateRefusal(offered.refusal)));
+          const refusal = privateRefusal(offered.refusal);
+          if (refusal === "command:needs-transfer") {
+            // The destination is empty and this connection offered it nothing.
+            // A closed outcome, not a failure: the caller copies the source.
+            const outcome: RemoteLifecycleAnswer<RemoteBegun> | "needs-transfer" = "needs-transfer";
+            return Ok(outcome);
+          }
+          return Err(storageFailure(refusal));
         }
-        return yield* forked(offered.value, commit.runId);
+        const decided = yield* forked(offered.value, commit.runId);
+        return decided.ok
+          ? Ok<RemoteLifecycleAnswer<RemoteBegun> | "needs-transfer">(decided.value)
+          : decided;
       } catch (error) {
         return Err(translate(error));
       }

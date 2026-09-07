@@ -107,6 +107,7 @@ export type PrivateRefusal =
   | "command:corrupt-journal"
   | "command:not-forkable"
   | "command:wrong-execution"
+  | "command:needs-transfer"
   | "storage:foreign"
   | `storage:unsupported-version-v${number}`
   | "storage:corrupt";
@@ -188,6 +189,7 @@ export function privateRefusal(value: string): PrivateRefusal {
     case "command:corrupt-journal":
     case "command:not-forkable":
     case "command:wrong-execution":
+    case "command:needs-transfer":
     case "storage:foreign":
     case "storage:corrupt":
       return value;

@@ -462,6 +462,8 @@ export const OBJECTS: ReadonlyMap<string, DeclaredObject> = new Map([
     selection_anchor IS NULL
     OR (length(selection_anchor) = 64 AND selection_anchor NOT GLOB '*[^0-9a-f]*')
   ),
+  run_record_root_id TEXT REFERENCES workspace_roots(root_id) ON DELETE RESTRICT,
+  root_import_root_id TEXT REFERENCES workspace_roots(root_id) ON DELETE RESTRICT,
   created_at TEXT NOT NULL
 ) STRICT`,
     },
