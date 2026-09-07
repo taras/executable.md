@@ -16,13 +16,18 @@ import process from "node:process";
 import { Agent } from "@executablemd/core";
 import type { AgentProviderAuthority, ExecutableBuildBindingV1 } from "@executablemd/core";
 import { createAcpxProvider } from "../src/provider.ts";
+import type { AcpxSessionIdentity, AcpxSessionPlacement } from "../src/provider.ts";
 import { createAcpRuntime } from "../src/acpx-runtime.ts";
 import { k as AcpClient } from "../vendor/acpx/generated/live-checkpoint-ClPCSdrW.js";
 import type { AcpRuntimeOptions, AcpSessionRecord, AcpSessionStore } from "../src/acpx-runtime.ts";
 import { bindsBuild, nativeAdapterFor, nativeCapabilityPolicy } from "../src/native-launch.ts";
 import { createMemorySessionRouteStore } from "../src/session-route.ts";
-import type { AgentSessionRouteStore, AgentSessionRouteV3 } from "../src/session-route.ts";
-import { deriveSessionKey } from "../src/session-key.ts";
+import type {
+  AgentSessionRoute,
+  AgentSessionRouteStore,
+  AgentSessionRouteV3,
+} from "../src/session-route.ts";
+import { deriveSessionKey, resolveSessionPlacement } from "../src/session-key.ts";
 import {
   answered,
   createFakeObserver,
@@ -69,6 +74,8 @@ interface World {
   coordinator: CoordinatorHarness;
   observer: FakeObserverHarness;
   runtimeOptions: AcpRuntimeOptions[];
+  routePublications: AgentSessionRoute[];
+  establishments: { placement: AcpxSessionPlacement; identity: AcpxSessionIdentity }[];
 }
 
 function codex() {
@@ -115,8 +122,16 @@ function* world(method: "resume" | "load", identity: string): Operation<World> {
     sessionKey: key,
     executableBinding: HISTORICAL_BINDING,
   };
-  const routes = createMemorySessionRouteStore();
-  yield* routes.publish(route);
+  const retainedRoutes = createMemorySessionRouteStore();
+  yield* retainedRoutes.publish(route);
+  const routePublications: AgentSessionRoute[] = [];
+  const routes: AgentSessionRouteStore = {
+    read: retainedRoutes.read,
+    *publish(candidate) {
+      routePublications.push(structuredClone(candidate));
+      return yield* retainedRoutes.publish(candidate);
+    },
+  };
   return {
     dir,
     command,
@@ -129,6 +144,8 @@ function* world(method: "resume" | "load", identity: string): Operation<World> {
     saves,
     coordinator: makeCoordinator(),
     runtimeOptions: [],
+    routePublications,
+    establishments: [],
     observer: createFakeObserver({
       path: "/live/codex-9.2.1",
       digest: "b".repeat(64),
@@ -145,7 +162,7 @@ function* world(method: "resume" | "load", identity: string): Operation<World> {
   };
 }
 
-function* install(space: World): Operation<void> {
+function* install(space: World, observeEstablishment = false): Operation<void> {
   yield* useFlatWorld(space.dir);
   const adapter = codex();
   const factory = createAcpxProvider({
@@ -165,6 +182,16 @@ function* install(space: World): Operation<void> {
     executableObserver: space.observer.observer,
     coordinator: space.coordinator.coordinator,
     routeStore: space.routes,
+    ...(observeEstablishment
+      ? {
+          sessions: {
+            place: () => resolveSessionPlacement(space.store, space.command, space.dir),
+            *established(placement: AcpxSessionPlacement, identity: AcpxSessionIdentity) {
+              space.establishments.push(structuredClone({ placement, identity }));
+            },
+          },
+        }
+      : {}),
   });
   yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, AUTHORITY);
 }
@@ -302,6 +329,77 @@ describe(
       expect(yield* requests(space)).toEqual(received);
     });
 
+    it("NR6: eager Session refusal with failed client cleanup retains recovery ownership", function* () {
+      const space = yield* world("resume", "native-conversation-B");
+      const close = AcpClient.prototype.close;
+      const held = new Set<InstanceType<typeof AcpClient>>();
+      let closeAttempts = 0;
+      let returned = false;
+      let refusal: unknown;
+      let cleanupFailure: unknown;
+      yield* ensure(function* () {
+        AcpClient.prototype.close = close;
+        for (const client of held) {
+          yield* until(close.call(client));
+        }
+      });
+      AcpClient.prototype.close = function (this: InstanceType<typeof AcpClient>) {
+        closeAttempts += 1;
+        held.add(this);
+        throw new Error("controlled eager client cleanup could not prove quiescence");
+      };
+      try {
+        yield* scoped(function* () {
+          yield* install(space, true);
+          try {
+            yield* Agent.operations.session();
+            returned = true;
+          } catch (error) {
+            refusal = error;
+          }
+        });
+      } catch (error) {
+        cleanupFailure = error;
+      }
+      expect(returned).toBe(false);
+      expect(refusal).toBeDefined();
+      expect(cleanupFailure).toBeDefined();
+      expect(closeAttempts).toBeGreaterThan(0);
+      expect(held.size).toBe(1);
+      expect(space.coordinator.events).toEqual(["owned", "released-active"]);
+      expect(space.establishments).toEqual([]);
+      expect(space.routePublications).toEqual([]);
+      const received = yield* requests(space);
+      expect(received.map((request) => request.method)).toEqual(["initialize", "session/resume"]);
+      expect(received[1]?.params).toMatchObject({ sessionId: ACP_ID });
+      expect(received.every((request) => !gone(request.pid))).toBe(true);
+      expect(space.records.get(space.key)?.messages).toEqual([]);
+      yield* unchanged(space);
+      AcpClient.prototype.close = close;
+      for (const client of held) {
+        yield* until(close.call(client));
+      }
+      held.clear();
+      expect(received.every((request) => gone(request.pid))).toBe(true);
+      let nextOwner: unknown;
+      try {
+        yield* scoped(function* () {
+          yield* install(space, true);
+          yield* Agent.operations.session();
+        });
+      } catch (error) {
+        nextOwner = error;
+      }
+      expect(nextOwner).toMatchObject({ name: "AgentSessionRecoveryRequired" });
+      expect(space.coordinator.acquisitions.map((entry) => entry.outcome)).toEqual([
+        "granted",
+        "recovery-required",
+      ]);
+      expect(space.establishments).toEqual([]);
+      expect(space.routePublications).toEqual([]);
+      expect(yield* requests(space)).toEqual(received);
+    });
+
     for (const method of ["resume", "load"]) {
       if (method !== "resume" && method !== "load") {
         throw new Error("unexpected fixture method");
@@ -333,7 +431,72 @@ describe(
           expect(space.records.get(space.key)?.messages).toEqual([]);
           yield* unchanged(space);
         });
+
+        it(`NR4: eager Session ${method} returning ${identity} refuses before returning or publishing`, function* () {
+          const space = yield* world(method, identity);
+          let returned = false;
+          let refusal: unknown;
+          yield* scoped(function* () {
+            yield* install(space, true);
+            try {
+              yield* Agent.operations.session();
+              returned = true;
+            } catch (error) {
+              refusal = error;
+            }
+          });
+          expect(returned).toBe(false);
+          expect(refusal).toMatchObject({
+            name: "AttachmentRefused",
+            failure: { class: "identity-unavailable" },
+          });
+          const received = yield* requests(space);
+          expect(received.map((request) => request.method)).toEqual([
+            "initialize",
+            `session/${method}`,
+          ]);
+          expect(received[1]?.params).toMatchObject({ sessionId: ACP_ID });
+          expect(received.every((request) => gone(request.pid))).toBe(true);
+          expect(space.coordinator.events).toEqual(["owned", "quiesced", "released-idle"]);
+          expect(space.establishments).toEqual([]);
+          expect(space.routePublications).toEqual([]);
+          expect(space.records.get(space.key)?.messages).toEqual([]);
+          yield* unchanged(space);
+        });
       }
+
+      it(`NR5: eager Session ${method} confirms A with a newer compatible executable without prompting`, function* () {
+        const space = yield* world(method, NATIVE_ID);
+        yield* scoped(function* () {
+          yield* install(space, true);
+          const session = yield* Agent.operations.session();
+          expect(session).toMatchObject({
+            sessionKey: space.key,
+            cwd: space.dir,
+            agentSessionId: NATIVE_ID,
+          });
+          expect(space.establishments).toEqual([
+            {
+              placement: { sessionKey: space.key, cwd: space.dir, state: "established" },
+              identity: { acpxRecordId: space.key, agentSessionId: NATIVE_ID },
+            },
+          ]);
+        });
+        const received = yield* requests(space);
+        expect(received.map((request) => request.method)).toEqual([
+          "initialize",
+          `session/${method}`,
+        ]);
+        expect(received[1]?.params).toMatchObject({ sessionId: ACP_ID });
+        expect(received.every((request) => gone(request.pid))).toBe(true);
+        expect(space.runtimeOptions.map((options) => options.agentProcessEnv?.CODEX_PATH)).toEqual([
+          "/live/codex-9.2.1",
+        ]);
+        expect(space.coordinator.events).toEqual(["owned", "quiesced", "released-idle"]);
+        expect(space.routePublications).toEqual([]);
+        expect(space.records.get(space.key)?.messages).toEqual([]);
+        yield* unchanged(space);
+      });
 
       it(`NR2: ${method} preserves A across a compatible executable change without creating or materializing`, function* () {
         const space = yield* world(method, NATIVE_ID);

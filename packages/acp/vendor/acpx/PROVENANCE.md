@@ -157,10 +157,18 @@ or the prompt. Missing and different assertions report the stable
 `identity-unavailable` detail code. A failed reconnect never falls back to a new
 session.
 
+Eager Session resolution passes the same expectation to `ensureSession` and
+waits for live resume/load without sending a prompt. Before opening that client,
+the runtime reports its provisional handle through the transient `onHandle`
+callback. The provider owns that handle even if confirmation rejects or its
+caller is cancelled; establishment is published only after confirmation. A
+refusal leaves the original identity and conversation intact and closes through
+the owning runtime, retaining recovery ownership when cleanup fails.
+
 | File | Change |
 | --- | --- |
-| `generated/runtime.d.ts` | declares the optional transient expected identity on turn inputs. |
-| `generated/runtime.js` | threads it to reconnect; stages turn changes on a copy without saving or exposing reconnect updates before confirmation; preserves the original record on refusal; retains the acquired client for its owner's `close(handle)`. A failed pending-client close propagates and keeps that client owned for retry. |
+| `generated/runtime.d.ts` | declares the optional transient expected identity on turn and ensure inputs, and ensure's handle-acquisition callback. |
+| `generated/runtime.js` | threads it to turn and eager ensure reconnect; stages changes on a copy without saving or exposing reconnect updates before confirmation; preserves the original record on refusal; retains the acquired client for its owner's `close(handle)`. A failed pending-client close propagates and keeps that client owned for retry. |
 | `generated/live-checkpoint-ClPCSdrW.js` | requires a live assertion equal to the expectation before reconciling either resume or load; refuses fallback when an expected identity exists. |
 
 The provider supplies this input only for established V3 continuations. Fresh
