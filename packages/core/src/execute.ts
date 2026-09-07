@@ -12,6 +12,7 @@
 
 import { Err, Ok, ensure, scoped, spawn, withResolvers, until } from "effection";
 import { captureSyntaxProvider } from "./syntax-reference.ts";
+import { projectionOwner } from "./projection-owner.ts";
 import {
   admitEvaluationHistory,
   evaluationEnvironment,
@@ -2650,8 +2651,15 @@ function* executeDocument(
           props,
         }),
       );
-      const staging: { factory?: import("@executablemd/durable-streams").DurableStageFactory } = {};
-      const boundedAuthority = { ...authority, evaluationEnvironment: evaluationState, staging };
+      const ownedProjection: { current?: import("./projection-owner.ts").ProjectionOwner } = {};
+      yield* ensure(() => {
+        ownedProjection.current?.close();
+      });
+      const boundedAuthority = {
+        ...authority,
+        evaluationEnvironment: evaluationState,
+        projectionOwner: ownedProjection,
+      };
 
       // Install the document's runtime Component providers before durableRun
       // so the workflow inherits them: component import, modifier execution,
@@ -2812,8 +2820,8 @@ function* executeDocument(
         },
         {
           stream: guardedJournal(journal, root, ROOT_COROUTINE, admissions, evaluationState),
-          staging: (factory) => {
-            staging.factory = factory;
+          initialize: (context) => {
+            ownedProjection.current = projectionOwner(context);
           },
         },
       );

@@ -100,9 +100,7 @@ export type {
 export { durableAction, durableCall, durableSleep, versionCheck } from "./operations.ts";
 
 // Structured concurrency combinators
-export { durableAll, durableRace, durableSpawn } from "./combinators.ts";
-export { createDurableStage } from "./staging.ts";
-export type { DurableStage, DurableStageFactory } from "./staging.ts";
+export { durableAll, durableRace, durableSpawn, runDurableChild } from "./combinators.ts";
 
 // Durable iteration
 export { durableEach } from "./each.ts";

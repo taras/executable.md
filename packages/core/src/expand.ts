@@ -1,3 +1,4 @@
+import { evaluateGeneratedData } from "./generated-data.ts";
 /**
  * Expansion engine (spec §5).
  *
@@ -109,7 +110,7 @@ import { protectedContentLease } from "./protected-content.ts";
 import type { SyntaxReference } from "./syntax-reference.ts";
 import { withInvocation } from "./invocation.ts";
 import { composeEvaluation } from "./evaluation-composition.ts";
-import { EvaluationInfrastructureError } from "./evaluation-errors.ts";
+import { EvaluationCandidateError, EvaluationInfrastructureError } from "./evaluation-errors.ts";
 import type { Invocation } from "./invocation.ts";
 import { ActiveProjection } from "./projection.ts";
 import type { ProjectionHandle, ProjectionRequest } from "./projection.ts";
@@ -265,7 +266,7 @@ function expandChildrenScoped(
 }
 
 interface ProjectionState {
-  stage?: import("@executablemd/durable-streams").DurableStage;
+  capture?: import("./evaluation-composition.ts").EvaluationCaptureSession;
   invocation: Invocation;
   /**
    * Raised for the whole of one projection of this invocation's own content.
@@ -435,9 +436,12 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       // Shared with the expansion below, so a failure still leaves behind what it
       // rendered before stopping. When the caller owns a region, that array is
       // the region itself and the prefix is already where the document needs it.
-      const rendered: Segment[] = options.owner ?? [];
+      const rendered: Segment[] = options.owner ?? state.capture?.capture.segments() ?? [];
       const work = function* () {
         try {
+          if (state.capture !== undefined) {
+            yield* state.capture.bind();
+          }
           yield* ErrorMode.set(options.mode);
           if (options.segments.length === 0) {
             outcome.resolve({ segments: [] });
@@ -467,18 +471,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
           outcome.resolve({ segments: rendered, failure: error });
         }
       };
-      const stage = state.stage;
-      const task = contentScope.scope.run(
-        stage === undefined
-          ? work
-          : function* () {
-              try {
-                yield* stage.run(work);
-              } catch (error) {
-                outcome.resolve({ segments: rendered, failure: error });
-              }
-            },
-      );
+      const task = contentScope.scope.run(work);
       yield* ensure(() => task.halt());
       const result = yield* outcome.operation;
       if (result.failure !== undefined) {
@@ -541,13 +534,16 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
         const outcome = withResolvers<{ segments: Segment[]; failure?: unknown }>();
         // Shared with the expansion below, so a failure still leaves behind what it
         // rendered before stopping.
-        const rendered: Segment[] = [];
+        const rendered: Segment[] = state.capture?.capture.segments() ?? [];
         // Slot errors are reported inside the mode-bound task, so an empty
         // selection cannot settle them under the invocation's baseline. Held out
         // here so a failure still reports them alongside what rendered.
         const errors: Segment[] = [];
         const work = function* () {
           try {
+            if (state.capture !== undefined) {
+              yield* state.capture.bind();
+            }
             yield* ErrorMode.set(mode);
             if (!slotErrorsEmitted && slots.errors.length > 0) {
               slotErrorsEmitted = true;
@@ -588,18 +584,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             outcome.resolve({ segments: [...errors, ...rendered], failure: error });
           }
         };
-        const stage = state.stage;
-        const task = contentScope.scope.run(
-          stage === undefined
-            ? work
-            : function* () {
-                try {
-                  yield* stage.run(work);
-                } catch (error) {
-                  outcome.resolve({ segments: [...errors, ...rendered], failure: error });
-                }
-              },
-        );
+        const task = contentScope.scope.run(work);
         yield* ensure(() => task.halt());
         return yield* outcome.operation;
       });
@@ -1004,7 +989,14 @@ function* expandListSegments(
           const declared = returnBody.claim();
           // What the value is validated against comes from the engine's own
           // record of this body, never from the carrier the context held.
-          returnBody.select(yield* resolveReturnValue(declared.owner, declared.returns, segment));
+          returnBody.select(
+            yield* resolveReturnValue(
+              declared.owner,
+              declared.returns,
+              segment,
+              authority?.generated,
+            ),
+          );
           break;
         }
 
@@ -1155,7 +1147,9 @@ function* expandListSegments(
           }
           // No raise() here, like the branches above: expandAnswers reports the
           // errors it creates, and the selected answer settled its own (§6.9).
-          result.push(...(yield* expandAnswers(segment, expandWithin, result)));
+          result.push(
+            ...(yield* expandAnswers(segment, expandWithin, result, authority?.generated)),
+          );
           break;
         }
 
@@ -1563,7 +1557,7 @@ function* expandLet(
   const hasValue = "value" in segment.props || "value" in segment.expressions;
 
   if (hasValue) {
-    return yield* letValue(segment, bindingName);
+    return yield* letValue(segment, bindingName, authority?.generated);
   }
 
   // The region's foreground commands write their stdout into this binding
@@ -1631,6 +1625,7 @@ function* expandLet(
 function* letValue(
   segment: Extract<Segment, { type: "component" }>,
   bindingName: string,
+  generated = false,
 ): Operation<ErrorSegment[]> {
   let value: unknown;
   if ("value" in segment.props) {
@@ -1642,6 +1637,7 @@ function* letValue(
         "Let",
         "value",
         segment.projectedEnv,
+        generated,
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1714,6 +1710,7 @@ function* expandEach(
         { in: segment.expressions.in },
         "Each",
         segment.projectedEnv,
+        authority?.generated,
       );
       items = resolved.in;
     } catch (error) {
@@ -1878,6 +1875,7 @@ function* expandIf(
         "If",
         "condition",
         segment.projectedEnv,
+        authority?.generated,
       );
     } catch (error) {
       owner.push(
@@ -1940,10 +1938,14 @@ function caseError(segment: ComponentElement, message: string): ErrorSegment {
  * A prop the scanner could not read at all is an ordinary expression, and a
  * quoted attribute is the string the author typed.
  */
-function* structuralOperand(segment: ComponentElement, construct: string): Operation<unknown> {
+function* structuralOperand(
+  segment: ComponentElement,
+  construct: string,
+  generated = false,
+): Operation<unknown> {
   const authored = segment.authoredExpressions?.value;
   if (authored !== undefined) {
-    return yield* evaluateExpression(authored, construct, "value", segment.projectedEnv);
+    return yield* evaluateExpression(authored, construct, "value", segment.projectedEnv, generated);
   }
   if ("value" in segment.expressions) {
     return yield* evaluateExpression(
@@ -1951,6 +1953,7 @@ function* structuralOperand(segment: ComponentElement, construct: string): Opera
       construct,
       "value",
       segment.projectedEnv,
+      generated,
     );
   }
   return segment.props.value;
@@ -1999,7 +2002,7 @@ function* expandSwitch(
 
   let selector: unknown;
   try {
-    selector = yield* structuralOperand(segment, "Switch");
+    selector = yield* structuralOperand(segment, "Switch", authority?.generated);
   } catch (error) {
     owner.push(
       yield* raise(switchError(segment, error instanceof Error ? error.message : String(error))),
@@ -2011,7 +2014,7 @@ function* expandSwitch(
   for (const candidate of structure.matching) {
     let matcher: unknown;
     try {
-      matcher = yield* structuralOperand(candidate.element, "Case");
+      matcher = yield* structuralOperand(candidate.element, "Case", authority?.generated);
     } catch (error) {
       owner.push(
         yield* raise(
@@ -2067,7 +2070,10 @@ function breakError(segment: ComponentElement, message: string): ErrorSegment {
  * The bound a `<Loop>` runs to, or why the prop rejects it. The caller turns
  * the failure into a positioned printed error, because it is the one that raises.
  */
-function* resolveLoopBound(segment: ComponentElement): Operation<Result<number>> {
+function* resolveLoopBound(
+  segment: ComponentElement,
+  generated = false,
+): Operation<Result<number>> {
   let max: Json;
   if ("max" in segment.props) {
     max = segment.props.max;
@@ -2078,6 +2084,7 @@ function* resolveLoopBound(segment: ComponentElement): Operation<Result<number>>
         { max: segment.expressions.max },
         "Loop",
         segment.projectedEnv,
+        generated,
       );
       max = resolved.max;
     } catch (error) {
@@ -2148,7 +2155,7 @@ function* expandLoop(
     return;
   }
 
-  const bound = yield* resolveLoopBound(segment);
+  const bound = yield* resolveLoopBound(segment, authority?.generated);
   if (!bound.ok) {
     owner.push(yield* raise(loopError(segment, bound.error.message)));
     return;
@@ -2535,7 +2542,13 @@ function* expandComponent(
   // values can be type-checked. See spec §5.1 (expression prop evaluation).
   let resolvedProps: Record<string, Json>;
   try {
-    resolvedProps = yield* resolveExpressionProps(props, expressions, name, projectedEnv);
+    resolvedProps = yield* resolveExpressionProps(
+      props,
+      expressions,
+      name,
+      projectedEnv,
+      authority?.generated,
+    );
   } catch (error) {
     return [
       yield* raise({
@@ -3014,8 +3027,25 @@ function* expandFunctionComponent(
   // Resolve expression props
   let resolvedProps: Record<string, Json>;
   try {
-    resolvedProps = yield* resolveExpressionProps(openProps, openExpressions, name, projectedEnv);
+    resolvedProps = yield* resolveExpressionProps(
+      openProps,
+      openExpressions,
+      name,
+      projectedEnv,
+      authority?.generated,
+    );
+    if (authority?.generated) {
+      for (const [key, expression] of Object.entries(expressionCaptures)) {
+        literalCaptures[key] = parseJson(
+          yield* evaluateExpression(expression, name, key, projectedEnv, true),
+        );
+        delete expressionCaptures[key];
+      }
+    }
   } catch (error) {
+    if (error instanceof EvaluationCandidateError) {
+      throw error;
+    }
     return [
       yield* raise({
         type: "error",
@@ -3039,6 +3069,13 @@ function* expandFunctionComponent(
   try {
     validatedProps = yield* validateProps(name, propsForValidation, definition.props);
   } catch (error) {
+    if (authority?.generated && error instanceof SchemaValidationError) {
+      throw new EvaluationCandidateError(
+        "props",
+        "The generated component props are not admitted.",
+        { cause: error },
+      );
+    }
     return [yield* raise(schemaValidationErrorSegment(error, name))];
   }
 
@@ -3096,7 +3133,7 @@ function* expandFunctionComponent(
     try {
       const output: unknown = yield* withInvocation(function* (invocation) {
         if (authority?.capture !== undefined) {
-          yield* authority.capture.stage.bind();
+          yield* authority.capture.bind();
         }
         const enclosing = yield* ActiveProjection.get();
         // Minted before the handle, because the handle is what raises it: an
@@ -3166,9 +3203,8 @@ function* expandFunctionComponent(
         // context — obtains or influences it.
         const handle = createProjectionHandle(projectionState);
         issued.bindEvaluation(function* (bounds) {
-          const environment = authority?.evaluationEnvironment;
-          const staging = authority?.capture?.stage.children ?? authority?.staging?.factory;
-          if (environment === undefined || staging === undefined) {
+          const owner = authority?.projectionOwner?.current;
+          if (owner === undefined) {
             throw new EvaluationInfrastructureError(
               "setup",
               new Error("This invocation has no evaluation installation."),
@@ -3176,10 +3212,10 @@ function* expandFunctionComponent(
           }
           return yield* composeEvaluation(
             bounds,
-            function* (capture, stage) {
+            function* (capture) {
               const bounded = createProjectionHandle({
                 ...projectionState,
-                stage,
+                capture,
                 authority: { ...authority, capture },
               });
               const outcome = yield* bounded.tryProject({ kind: "children", mode: "throw" });
@@ -3187,10 +3223,8 @@ function* expandFunctionComponent(
                 throw outcome.failure;
               }
             },
-            environment,
-            name,
             expansion.id,
-            staging,
+            owner,
             authority?.capture,
           );
         });
@@ -3260,9 +3294,15 @@ function* expandFunctionComponent(
               // Evaluated here, not during prop resolution: the component asked
               // for it, and owns whatever the expression does. Against the site
               // environment resolved before the invocation began.
-              return yield* evaluateExpression(expression, name, captureName, {
-                values: captureEnv,
-              });
+              return yield* evaluateExpression(
+                expression,
+                name,
+                captureName,
+                {
+                  values: captureEnv,
+                },
+                authority?.generated,
+              );
             },
             *tryContent([slotName], _next) {
               const outcome = yield* handle.tryProject({
@@ -3344,7 +3384,7 @@ function* expandFunctionComponent(
                 guarded(validatedProps, issued.invocation, {
                   syntax: authority?.syntax,
                   evaluation: authority?.evaluation,
-                  capture: authority?.capture,
+                  capture: asBinding === undefined ? authority?.capture : undefined,
                   generated: authority?.generated,
                   projectContent: lease?.project,
                   narrowProtectedBodies: (implementations: Iterable<unknown>) =>
@@ -3577,6 +3617,7 @@ function* resolveExpressionProps(
   expressions: Record<string, string>,
   componentName: string,
   explicitEnv?: EvalEnv,
+  generated = false,
 ): Operation<Record<string, Json>> {
   // Start with already-resolved props
   const resolved = { ...props };
@@ -3589,7 +3630,9 @@ function* resolveExpressionProps(
   const evalEnv = yield* expressionEnv(componentName, Object.keys(expressions), explicitEnv);
 
   for (const [propName, expression] of Object.entries(expressions)) {
-    const result = evaluateIn(evalEnv, expression, componentName, propName);
+    const result = generated
+      ? evaluateGeneratedData(expression, evalEnv.values)
+      : evaluateIn(evalEnv, expression, componentName, propName);
 
     // A successful `undefined` is the absence of a value, and absence is
     // written by leaving the prop out (§6.5). It happens here, before
@@ -3642,9 +3685,12 @@ export function* evaluateExpression(
   componentName: string,
   propName: string,
   explicitEnv?: EvalEnv,
+  generated = false,
 ): Operation<unknown> {
   const evalEnv = yield* expressionEnv(componentName, [propName], explicitEnv);
-  return evaluateIn(evalEnv, expression, componentName, propName);
+  return generated
+    ? evaluateGeneratedData(expression, evalEnv.values)
+    : evaluateIn(evalEnv, expression, componentName, propName);
 }
 
 function* expressionEnv(
@@ -4163,6 +4209,7 @@ export function* resolveReturnValue(
   componentName: string,
   returns: ReturnsSchema,
   segment: ComponentElement,
+  generated = false,
 ): Operation<Json> {
   const raw =
     "value" in segment.expressions
@@ -4171,6 +4218,7 @@ export function* resolveReturnValue(
           componentName,
           "value",
           segment.projectedEnv,
+          generated,
         )
       : segment.props.value;
   return yield* validateReturnValue(componentName, raw, returns);

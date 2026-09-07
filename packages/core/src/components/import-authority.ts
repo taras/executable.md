@@ -69,7 +69,7 @@ export interface ImportAuthority {
  */
 export interface ExpansionAuthority {
   readonly generated?: boolean;
-  readonly staging?: { factory?: import("@executablemd/durable-streams").DurableStageFactory };
+  readonly projectionOwner?: { current?: import("../projection-owner.ts").ProjectionOwner };
   readonly evaluationEnvironment?: import("../evaluation-records.ts").EvaluationEnvironment;
   readonly capture?: import("../evaluation-composition.ts").EvaluationCaptureSession;
   /** What a closed execution may invoke for a name. Absent for an open one. */

@@ -22,12 +22,17 @@ export class EvaluationLimitError extends Error {
   readonly type = "executablemd.core.evaluation-failure/v1";
   readonly kind = "limit";
   override name = "EvaluationLimitError";
-  constructor(readonly limit: "duration" | "result-bytes") {
+  constructor(
+    readonly limit: "duration" | "output-bytes",
+    options?: ErrorOptions,
+  ) {
     super(
       limit === "duration"
         ? "The evaluation exceeded its duration limit."
-        : "The complete evaluation result exceeded its encoded byte limit.",
+        : "The rendered output exceeded its UTF-8 byte limit.",
+      options,
     );
+    this.name = limit === "duration" ? "EvaluationDurationError" : "EvaluationOutputLimitError";
   }
 }
 
@@ -48,6 +53,7 @@ export class EvaluationInfrastructureError extends Error {
     cause: unknown,
   ) {
     super(`Evaluation ${phase} failed.`, { cause });
+    this.name = `EvaluationInfrastructureError:${phase}`;
   }
 }
 

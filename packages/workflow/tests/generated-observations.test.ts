@@ -23,10 +23,6 @@ import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { retainedSource, SOURCE_POSITION_FIELD } from "@executablemd/core";
 import type { SourcePosition } from "@executablemd/core";
 import { executeInstalled, pinnedFileRead } from "@executablemd/core/host";
-import type {
-  GeneratedObservationResult,
-  GeneratedObservationValue,
-} from "@executablemd/core/host";
 import type { DurablePreparation, ExecutionInstallation } from "@executablemd/core/host";
 import { evaluateGeneratedFragment } from "../src/generated-observations.ts";
 import type { GeneratedEvaluationPolicy } from "../src/generated-observations.ts";
@@ -68,7 +64,6 @@ function* useTransport(): Operation<Transport> {
 /** What one run under one policy produced. */
 interface Attempt {
   output?: string;
-  values?: readonly GeneratedObservationValue[];
   failure?: string;
   events: DurableEvent[];
 }
@@ -102,7 +97,7 @@ function evaluate(
 ): Operation<Attempt> {
   return scoped(function* () {
     const stream = new InMemoryStream(options.events ?? []);
-    const captured: { result?: GeneratedObservationResult } = {};
+    const captured: { result?: string } = {};
     const installation = driven(function* () {
       captured.result = yield* evaluateGeneratedFragment(
         "turn-1",
@@ -119,8 +114,7 @@ function evaluate(
     const events = yield* stream.readAll();
     if (result.ok) {
       return {
-        output: captured.result?.output ?? "",
-        values: captured.result?.observations ?? [],
+        output: captured.result ?? "",
         events,
       };
     }
@@ -299,7 +293,6 @@ describe("Tier WGX — the authored site an admission retains", () => {
     });
 
     expect(continuation.failure).toBe(undefined);
-    expect(continuation.values).toEqual(first.values);
     expect(admissions(continuation.events)).toHaveLength(1);
     expect(transport.performed).toHaveLength(1);
 

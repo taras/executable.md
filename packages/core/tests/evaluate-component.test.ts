@@ -29,6 +29,7 @@ import {
   fileReadEntry,
   fileWriteEntry,
   globReadEntry,
+  jsonCompositionEntry,
 } from "../host.ts";
 import type { ExecutionInstallation, FragmentEvaluationInput } from "../host.ts";
 import { registerComponents } from "../src/components/registration.ts";
@@ -99,7 +100,7 @@ function syntaxProfile(
 }
 
 describe("protected generated component answers", () => {
-  it("captures Glob, File and protected Syntax together, rather than losing non-rendered reads", function* () {
+  it("explicitly renders Glob, File and protected Syntax bindings through Json", function* () {
     const files = recordedFiles({ "README.md": "overview" });
     const searches: unknown[] = [];
     const syntax = syntaxProfile();
@@ -110,6 +111,7 @@ describe("protected generated component answers", () => {
       ...syntax,
       evaluation: {
         ...syntax.evaluation,
+        composition: [jsonCompositionEntry()],
         read: [globReadEntry(), fileReadEntry(), ...syntax.evaluation.read],
         files: {
           ...files,
@@ -128,18 +130,15 @@ describe("protected generated component answers", () => {
       },
     };
     const fragment =
-      '<Glob include={["*.md"]} as="paths" />\n<File path="README.md" as="note" />\n<Glob include={["empty"]} as="emptyPaths" />\n<Syntax names={["File"]} />';
+      '<Glob include={["*.md"]} as="paths" />\n<File path="README.md" as="note" />\n<Glob include={["empty"]} as="emptyPaths" />\n<Syntax names={["File"]} as="syntax" />\n<Json value={{ paths, note, emptyPaths, syntax }} />';
     const result = yield* run(
-      `---\nreturns:\n  type: object\n---\n<Evaluate text={${JSON.stringify(fragment)}} as="answer" />\n<Return value={answer} />`,
+      `---\nreturns:\n  type: string\n---\n<Evaluate text={${JSON.stringify(fragment)}} as="answer" />\n<Return value={answer} />`,
       [installation],
     );
-    expect(result).toMatchObject({
-      observations: [
-        { name: "Glob", value: ["a.md", "z.md"] },
-        { name: "File", value: "overview" },
-        { name: "Glob", value: [] },
-        { name: "Syntax" },
-      ],
+    expect(JSON.parse(String(result))).toMatchObject({
+      paths: ["a.md", "z.md"],
+      note: "overview",
+      emptyPaths: [],
     });
     expect(files.performed).toEqual(["read README.md"]);
     expect(searches).toEqual([
@@ -188,7 +187,7 @@ describe("protected generated component answers", () => {
     }
   });
 
-  it("routes delegated Syntax through both wrappers and collects its actual read value", function* () {
+  it("routes delegated Syntax through both wrappers and renders its ordinary text", function* () {
     const profile = syntaxProfile();
     if (profile.evaluation === undefined) {
       throw new Error("expected a Syntax evaluation profile");
@@ -221,23 +220,18 @@ describe("protected generated component answers", () => {
     const stream = new InMemoryStream();
     const source = '<Syntax names={["Syntax", "File"]} />';
     const result = yield* run(
-      `---\nreturns:\n  type: object\n---\n<Evaluate text={${JSON.stringify(source)}} as="answer" />\n<Return value={answer} />`,
+      `---\nreturns:\n  type: string\n---\n<Evaluate text={${JSON.stringify(source)}} as="answer" />\n<Return value={answer} />`,
       [profile],
       stream,
     );
-    expect(result).toMatchObject({ observations: [{ name: "Syntax" }] });
-    if (typeof result !== "object" || result === null || Array.isArray(result)) {
-      throw new Error("expected an evaluation result");
-    }
-    expect(result.output).toContain("**Available in this evaluation:** yes");
-    expect(result.output).toContain("**Available in this evaluation:** no");
-    expect(result.observations).toEqual([{ name: "Syntax", value: result.output }]);
+    expect(result).toContain("**Available in this evaluation:** yes");
+    expect(result).toContain("**Available in this evaluation:** no");
     const retained = (yield* stream.readAll()).filter(
       (event) => event.type === "yield" && event.description.type === "syntax_symbols",
     );
     expect(retained).toHaveLength(1);
     expect(retained[0]).toMatchObject({
-      result: { status: "ok", value: { symbols: result.output } },
+      result: { status: "ok", value: { symbols: result } },
     });
   });
 
@@ -453,7 +447,7 @@ function admissions(events: readonly DurableEvent[]): DurableEvent[] {
 }
 
 describe("Tier FE — a program the document holds", () => {
-  it("FE1: `text` runs, and its observations bind by name and order", function* () {
+  it("FE1: `text` runs and renders reads in authored order", function* () {
     const files = recordedFiles({ "notes.md": NOTE, "other.md": "the other note\n" });
     const output = yield* run(
       `<Evaluate text={'<File path="notes.md" />\\n\\n<File path="other.md" />\\n'} as="answer" />` +
@@ -965,8 +959,7 @@ describe("Tier FE — allow selects, and never adds", () => {
       "write nested/out.md",
     ]);
     expect(files.entries.get("nested/out.md")).toBe("made");
-    // A mutation contributes no observation.
-    expect(String(output)).toContain('"observations": []');
+    expect(JSON.parse(String(output)).trim()).toBe("");
   });
 
   it("FE4: an admitted deletion runs, and reads are not admitted with it", function* () {
@@ -1029,7 +1022,6 @@ describe("Tier FE — what the element itself may say", () => {
       ["an expression prop", `<File path={somewhere} />\\n`],
       ["an interpolated binding", `<File path="a.md" />\\n{binding}\\n`],
       ["an invalid `as` binding", `<File path="a.md" as="not a binding" />\\n`],
-      ["a structural construct", `<If condition={true}>\\n<File path="a.md" />\\n</If>\\n`],
     ];
     const outcomes: Array<[string, string[]]> = [];
     for (const [what, fragment] of refused) {
@@ -1042,7 +1034,7 @@ describe("Tier FE — what the element itself may say", () => {
     expect(outcomes).toEqual(refused.map(([what]) => [what, []]));
   });
 
-  it("FE7: `as` captures the result and emits nothing; without it nothing is emitted either", function* () {
+  it("FE7: `as` captures ordinary text; an unbound Evaluate renders that text", function* () {
     const captured = recordedFiles({ "notes.md": NOTE });
     const bound = yield* run(
       `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\nbetween\n`,
@@ -1056,10 +1048,8 @@ describe("Tier FE — what the element itself may say", () => {
     const unbound = yield* run(`<Evaluate text={'<File path="notes.md" />\\n'} />\n\nbetween\n`, [
       reading(loose),
     ]);
-    // And an unbound occurrence emits nothing either: the result is a value,
-    // and a value has nowhere to render. The read still happened.
     expect(String(unbound)).toContain("between");
-    expect(String(unbound)).not.toContain("the retained note");
+    expect(String(unbound)).toContain("the retained note");
     expect(loose.performed).toEqual(["read notes.md"]);
   });
 });

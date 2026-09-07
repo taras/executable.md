@@ -221,8 +221,7 @@ export type {
   GeneratedEffectClass,
   GeneratedMutation,
   GeneratedObservation,
-  GeneratedObservationResult,
-  GeneratedObservationValue,
+  GeneratedComposition,
   GeneratedRequest,
   GeneratedXmdRequest,
   RetainedFragmentIdentity,
@@ -296,7 +295,8 @@ export { boundedEvaluation } from "./src/evaluation-operation.ts";
 export { evaluationFailure } from "./src/evaluation-composition.ts";
 export type { EvaluationCaptureOperation } from "./src/evaluation-composition.ts";
 export type { EvaluationBounds } from "./src/evaluation-result.ts";
-export { encodeEvaluationResult } from "./src/evaluation-result.ts";
+export { jsonCompositionEntry } from "./src/evaluation-profile.ts";
+export type { CompositionEntry } from "./src/evaluation-profile.ts";
 export type { EvaluationFailureKind } from "./src/evaluation-errors.ts";
 export {
   evaluationFailureKind,

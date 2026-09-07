@@ -77,7 +77,6 @@ import type {
   GeneratedEffectClass,
   GeneratedMutation,
   GeneratedObservation,
-  GeneratedObservationResult,
   GeneratedXmdRequest,
   RetainedFragmentIdentity,
 } from "../generated-xmd.ts";
@@ -188,7 +187,7 @@ export const EVALUATE_PROTECTED: ProtectedComponent = {
   forms: ["self-closing", "paired"],
   ...documented({
     description: 'Evaluate program text. `<Evaluate text={program} allow={["read"]} />` runs it.',
-    as: "Optional. Captures the observations and rendered output instead of emitting them.",
+    as: "Optional. Captures the rendered output instead of emitting it.",
     context: null,
   }),
   build: (claim: IdentityClaimant) => evaluate(claim),
@@ -200,7 +199,6 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
     invocation: ComponentInvocation,
     site: ProtectedSite,
   ): Operation<unknown> {
-    site.capture?.begin();
     // The engine's own account of how the element was written, not a method on
     // the object this was handed: a wrapper can mint an object carrying
     // `hasContent`, and it cannot mint an issuance.
@@ -217,12 +215,6 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
       throw new ComponentInvocationError(NO_PROFILE);
     }
     const allow = requestedClasses(elementProps.allow) ?? ["read"];
-    if (site.capture !== undefined && allow.includes("write")) {
-      throw new EvaluationCandidateError(
-        "authority",
-        "A staged evaluation capture accepts read-only requests.",
-      );
-    }
     const stated = statedText(elementProps, profile, form);
     const entries = selectedTables(profile, allow);
 
@@ -234,7 +226,6 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
     // the authoring documentation the site already had.
     const narrowedSyntax = narrow(site.syntax, entries);
     const source = stated === undefined ? yield* project(site, narrowedSyntax) : stated;
-    site.capture?.source(source);
 
     // Read after the producer has rendered, and exactly once per occurrence: a
     // producer may itself commit mutations, and the basis this admission is
@@ -253,6 +244,12 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
       id,
       source,
       allow,
+      composition: profile.composition.map((entry) => ({
+        name: entry.name,
+        identity: pinned(entry),
+        definition: entry.definition,
+        forms: entry.forms,
+      })),
       observations: entries.observations,
       ...(entries.mutations.length === 0 ? {} : { mutations: entries.mutations }),
       ...(basis === undefined ? {} : { workspaceRoots: basis.roots, selectedRoot: basis.current }),
@@ -273,8 +270,7 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
         narrowedSyntax,
         site.capture,
       );
-      site.capture?.complete();
-      return answer(result);
+      return result;
     } finally {
       narrowedBodies?.close();
       leave();
@@ -375,7 +371,7 @@ function selectedTables(
 ): SelectedTables {
   const observations: GeneratedObservation[] = [];
   const mutations: GeneratedMutation[] = [];
-  const admitted: CapturedEntry[] = [];
+  const admitted: CapturedEntry[] = [...profile.composition];
   if (allow.includes("read")) {
     if (profile.read.length === 0) {
       throw new ComponentInvocationError(NO_READ_TABLE);
@@ -431,9 +427,7 @@ function selectedTables(
  */
 function pinned(entry: CapturedEntry): RetainedFragmentIdentity {
   const { origin, key, revision } = entry.identity;
-  return entry.kind === "component-answer"
-    ? { kind: "component-answer", origin, key, revision }
-    : { kind: "capability", origin, key, revision };
+  return { kind: entry.kind, origin, key, revision };
 }
 
 /** One captured ceiling, as the request record the evaluator compares against. */
@@ -480,20 +474,4 @@ function* project(site: ProtectedSite, narrowed: SyntaxReference | undefined): O
     throw new ComponentInvocationError(NO_PROJECTION);
   }
   return yield* site.projectContent(narrowed);
-}
-
-/**
- * What the document reads back: a detached value, not text.
- *
- * Copied out of the evaluator's own result rather than handed on, so the object
- * a document binds shares nothing with the evaluation that produced it.
- */
-function answer(result: GeneratedObservationResult): Json {
-  return {
-    observations: result.observations.map((observation) => ({
-      name: observation.name,
-      value: observation.value,
-    })),
-    output: result.output,
-  };
 }

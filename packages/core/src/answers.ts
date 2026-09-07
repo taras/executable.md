@@ -205,12 +205,13 @@ function isMalformed(value: object): value is Malformed {
 function* partition(
   element: ComponentElement,
   expand: ExpandSegments,
+  generated = false,
 ): Operation<Partitioned | Malformed> {
   const body: Segment[] = [];
   const matchers: AnswerMatcher[] = [];
   for (const [index, child] of element.children.entries()) {
     if (isAnswer(child)) {
-      const parsed = yield* readAnswer(child, expand, index);
+      const parsed = yield* readAnswer(child, expand, index, generated);
       if (isMalformed(parsed)) {
         return parsed;
       }
@@ -227,17 +228,18 @@ export function* expandAnswers(
   expand: ExpandSegments,
   /** The region the answered body renders into. */
   owner: Segment[],
+  generated = false,
 ): Operation<Segment[]> {
   const propRefusal = answersPropNameViolations(element)[0];
   if (propRefusal !== undefined) {
     return [yield* raise(violationError(propRefusal.message, ANSWERS, element))];
   }
-  const delegate = yield* readDelegate(element);
+  const delegate = yield* readDelegate(element, generated);
   if (delegate.error) {
     return [yield* raise(violationError(delegate.error, ANSWERS, element))];
   }
 
-  const partitioned = yield* partition(element, expand);
+  const partitioned = yield* partition(element, expand, generated);
   if (isMalformed(partitioned)) {
     // The region cannot be trusted to answer anything, so it does not expand a
     // body that would ask. The printed error is returned rather than only
@@ -510,6 +512,7 @@ function* readAnswer(
   element: ComponentElement,
   expand: ExpandSegments,
   index: number,
+  generated = false,
 ): Operation<AnswerMatcher | Malformed> {
   // Everything about the matcher's *shape* is decided from what was written:
   // which props it carries, and whether its template was written as an
@@ -549,7 +552,7 @@ function* readAnswer(
   if (valueRefusal !== undefined) {
     return refuseAnswer(element, valueRefusal.message);
   }
-  const value = yield* readValue(element);
+  const value = yield* readValue(element, generated);
   if (value.error) {
     return refuse(element, value.error);
   }
@@ -572,12 +575,21 @@ function refuse(element: ComponentElement, message: string): Malformed {
  * Read here rather than where it is consumed, so a malformed one is reported at
  * the matcher that wrote it instead of surfacing later as a provider failure.
  */
-function* readValue(element: ComponentElement): Operation<{ parsed: Json; error?: string }> {
+function* readValue(
+  element: ComponentElement,
+  generated = false,
+): Operation<{ parsed: Json; error?: string }> {
   const expression = element.expressions.value;
   if (expression !== undefined) {
     let evaluated: unknown;
     try {
-      evaluated = yield* evaluateExpression(expression, ANSWER, "value", element.projectedEnv);
+      evaluated = yield* evaluateExpression(
+        expression,
+        ANSWER,
+        "value",
+        element.projectedEnv,
+        generated,
+      );
     } catch (error) {
       return { parsed: null, error: error instanceof Error ? error.message : String(error) };
     }
@@ -621,12 +633,21 @@ function read(value: unknown): { parsed: Json; error?: string } {
  * only an identifier or member expression reaches `expressions` and needs
  * evaluating here.
  */
-function* readDelegate(element: ComponentElement): Operation<{ value: boolean; error?: string }> {
+function* readDelegate(
+  element: ComponentElement,
+  generated = false,
+): Operation<{ value: boolean; error?: string }> {
   const expression = element.expressions.delegate;
   if (expression !== undefined) {
     let evaluated: unknown;
     try {
-      evaluated = yield* evaluateExpression(expression, ANSWERS, "delegate", element.projectedEnv);
+      evaluated = yield* evaluateExpression(
+        expression,
+        ANSWERS,
+        "delegate",
+        element.projectedEnv,
+        generated,
+      );
     } catch (error) {
       return {
         value: false,

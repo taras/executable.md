@@ -38,7 +38,8 @@
 
 import type { Operation } from "effection";
 
-import { CORE_ORIGIN } from "./components/registry.ts";
+import { CORE_ORIGIN, CORE_REGISTRY } from "./components/registry.ts";
+import { retain } from "./components/import-authority.ts";
 import {
   CAPABILITY_FORMS,
   capabilityDefinition,
@@ -63,6 +64,27 @@ import type { FunctionComponent, FunctionComponentDefinition, Json, PropsSchema 
 
 /** The two forms an element is actually written in. */
 export type FragmentForm = "self-closing" | "paired";
+
+/** Pure composition is an explicit trusted definition, never a name-based inference. */
+export interface CompositionEntry {
+  readonly name: string;
+  readonly identity: FragmentIdentity;
+  readonly forms: readonly FragmentForm[];
+  readonly definition: FunctionComponentDefinition;
+}
+
+export function jsonCompositionEntry(): CompositionEntry {
+  const definition = CORE_REGISTRY.get("Json")?.default?.definition;
+  if (definition?.kind !== "function") {
+    throw new EvaluationProfileError("Core's Json definition is unavailable.");
+  }
+  return {
+    name: "Json",
+    identity: { origin: CORE_ORIGIN, key: "Json", revision: CORE_REVISION },
+    forms: ["self-closing"],
+    definition,
+  };
+}
 
 /**
  * What a run retains about which implementation an entry runs.
@@ -215,6 +237,7 @@ export interface FragmentWorkspaceAccess {
 
 /** One host's complete statement of what a fragment may do. */
 export interface FragmentEvaluationInput {
+  readonly composition?: readonly CompositionEntry[];
   /**
    * The entries the `read` class resolves to.
    *
@@ -425,7 +448,7 @@ export interface CapturedEntry {
   readonly identity: FragmentIdentity;
   readonly forms: readonly FragmentForm[];
   readonly props: PropsSchema;
-  readonly kind: "capability" | "component-answer";
+  readonly kind: "capability" | "component-answer" | "composition";
   /** Which operation this runs, for a capability entry. */
   readonly capability?: FragmentCapability;
   /** What the admitted vocabulary says this entry does, when the host said. */
@@ -467,6 +490,7 @@ export interface CapturedEntry {
 
 /** What canonical execution keeps, and what canonical `<Evaluate>` reads. */
 export interface CapturedProfile {
+  readonly composition: readonly CapturedEntry[];
   readonly filesIdentity?: Readonly<{ scope: string; policy: string }>;
   readonly read: readonly CapturedEntry[];
   readonly write: readonly CapturedEntry[];
@@ -615,6 +639,46 @@ export function* prepareEvaluationProfile(
   const built = buildDefinitions(input, capabilities);
   const read = yield* prepareEntries(input.read ?? [], input.fetchTimeout, built);
   const write = yield* prepareEntries(input.write ?? [], input.fetchTimeout, built);
+  const answered = answeredNames([...read, ...write]);
+  const composition: CapturedEntry[] = (input.composition ?? []).map((entry) => {
+    const definition = retain(entry.definition);
+    if (definition?.kind !== "function" || typeof definition.fn !== "function") {
+      throw new EvaluationProfileError(
+        "A composition entry requires an exact function definition.",
+      );
+    }
+    const forms = canonicalForms(entry.forms);
+    if (
+      entry.name.length === 0 ||
+      forms.length === 0 ||
+      forms.length !== new Set(entry.forms).size
+    ) {
+      throw new EvaluationProfileError("A composition entry requires a name and admitted forms.");
+    }
+    return Object.freeze({
+      name: entry.name,
+      kind: "composition",
+      identity: captureIdentity(entry.identity, entry.name),
+      forms,
+      props: detach(definition.props),
+      definition: Object.freeze({ ...definition, fn: bounded(definition.fn, capabilities) }),
+    });
+  });
+  const entries = [...composition, ...read, ...write];
+  for (const [index, entry] of entries.entries()) {
+    for (const other of entries.slice(0, index)) {
+      if (
+        entry.name === other.name &&
+        (entry.kind === "composition" ||
+          entry.kind !== other.kind ||
+          entry.forms.some((form) => other.forms.includes(form)))
+      ) {
+        throw new EvaluationProfileError(
+          "An evaluation profile contains conflicting names or forms.",
+        );
+      }
+    }
+  }
   if (read.length === 0 && write.length === 0) {
     throw new EvaluationProfileError(
       "an evaluation profile states no component at all. A host offering evaluation states what " +
@@ -624,7 +688,6 @@ export function* prepareEvaluationProfile(
   // One lookup per distinct name, however many entries and tables hold it: a
   // name resolves to one implementation, and asking twice would be two chances
   // for the chain to answer differently.
-  const answered = answeredNames([...read, ...write]);
   const workspace = input.workspace === undefined ? undefined : bindWorkspace(input.workspace);
   const deprecatedSourceAlias = input.deprecatedSourceAlias === true;
   return Object.freeze({
@@ -649,6 +712,7 @@ export function* prepareEvaluationProfile(
       const sealed = sealAnswers(answered, answers, capabilities, project);
       return Object.freeze({
         ...(filesIdentity === undefined ? {} : { filesIdentity }),
+        composition: Object.freeze(composition),
         read: sealEntries(read, sealed),
         write: sealEntries(write, sealed),
         ...(workspace === undefined ? {} : { workspace }),

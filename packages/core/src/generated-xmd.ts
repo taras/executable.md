@@ -16,8 +16,8 @@
  * the difference between an allowlist and a filter that runs while the document
  * does.
  *
- * What is refused is a construct *class*: executable code blocks, expression
- * props, interpolation that reads a binding, a result binding, a component the
+ * What is refused is a construct *class*: executable code blocks, executable
+ * expressions, unavailable bindings, a component the
  * host did not admit, and a request that is malformed or outside the admitted
  * set. The record and the diagnostic name the class and nothing else. Generated
  * source is exactly the text a refusal must not echo — which is why a candidate
@@ -26,8 +26,8 @@
  * thrown out of it: a thrown one is serialized into the journal with its
  * message and its stack.
  *
- * The line is admission. Before it, nothing of the candidate is retained, so a
- * refusal carries none of it. After it the exact source is retained on purpose,
+ * Before admission only a source digest is retained, so a refusal discloses no
+ * candidate text. After it the exact source is retained on purpose,
  * so an ordinary expansion diagnostic quoting the fragment discloses nothing
  * the journal does not already hold.
  *
@@ -52,10 +52,9 @@
  * first effect — not inside the component after earlier elements have already
  * run, and never by whichever entry the host happened to list first.
  *
- * What a read produced is collected into the result. A write contributes
- * nothing to it: what it did is retained by its own ordinary durable effect,
- * and a second account of it on the result would be a second thing to keep
- * true.
+ * Components render ordinary text or bind their results locally with `as`.
+ * Always-on trusted composition renders those bindings explicitly. Durable
+ * effects retain their ordinary records independently of rendered output.
  *
  * The form holds where the component runs, too. `<File>` learns which spelling
  * it is from the invocation the engine issued (executable-mdx-spec §5.6), and
@@ -128,6 +127,7 @@ import { isJsonObject, parseJson } from "./json.ts";
 import { renderSegments } from "./render.ts";
 import { scanSegments } from "./scanner.ts";
 import { sourceDescription } from "./source-position.ts";
+import { canonicalFingerprint } from "./canonical.ts";
 import { RESERVED_STRUCTURAL } from "./structural.ts";
 import { installFormSelections, invocationForm } from "./invocation-identity.ts";
 import type { FormSelections, ProtectedBodies } from "./invocation-identity.ts";
@@ -148,10 +148,28 @@ import {
   EvaluationCandidateError,
   EvaluationStaleError,
 } from "./evaluation-errors.ts";
-import type { EvaluationResultCapture } from "./evaluation-result.ts";
+import {
+  evaluateGeneratedData,
+  generatedDataBindings,
+  parseGeneratedData,
+} from "./generated-data.ts";
 import type { EvaluationCaptureSession } from "./evaluation-composition.ts";
 import { PropValidationError, validateProps } from "./validate.ts";
 import { GlobError, patterns } from "./components/Glob.ts";
+import {
+  eachViolations,
+  letViolations,
+  ifPropsViolation,
+  ifConditionViolation,
+  ifStructure,
+  switchStructure,
+  loopViolations,
+  printErrorsViolations,
+  answersViolations,
+  answerViolations,
+} from "./structural-rules.ts";
+import { ActiveProjection } from "./projection.ts";
+import { ActiveLoop } from "./loop.ts";
 
 /** The construct classes a fragment can be refused for. */
 type Construct =
@@ -312,7 +330,7 @@ export type RetainedFragmentIdentity =
       readonly revision: string;
     }
   | {
-      readonly kind: "component-answer";
+      readonly kind: "component-answer" | "composition";
       readonly origin: string;
       readonly key: string;
       readonly revision: string;
@@ -322,6 +340,7 @@ export type RetainedFragmentIdentity =
 const IDENTITY_KINDS: readonly RetainedFragmentIdentity["kind"][] = [
   "capability",
   "component-answer",
+  "composition",
 ];
 
 /**
@@ -612,9 +631,8 @@ export function pinnedComponent(
  * how the element was written, rather than by whichever entry the host listed
  * first.
  *
- * A mutation contributes nothing to the evaluator's result. What it did is
- * retained by its own ordinary durable effect, which is the authoritative
- * account of it.
+ * Effects keep their ordinary durable records; the evaluator renders only
+ * what the component ordinarily renders.
  */
 export interface GeneratedMutation {
   readonly name: string;
@@ -698,42 +716,16 @@ export function pinnedMutation(
   return { name, identity, definition, form, ...(legacy === undefined ? {} : { legacy }) };
 }
 
-/**
- * What one admitted observation produced.
- *
- * The value is the component's own return, kept whatever the fragment rendered.
- * Which pinned identity produced it is not here: the admission record already
- * retains the identities the fragment named, and a second copy on the result
- * would be a second thing to keep true.
- * An admitted `<Fetch>` written without `as` renders nothing at all — a
- * component returning a non-string has nowhere to render — so a result taken
- * from the rendered text would hand the Agent an empty answer to the question it
- * asked.
- */
-export interface GeneratedObservationValue {
+export interface GeneratedComposition {
   readonly name: string;
-  readonly value: Json;
-}
-
-/**
- * What one admitted fragment produced, detached from its expansion.
- *
- * Deterministic: the observations appear in the order the fragment invoked them,
- * each under the name the fragment invoked it by. Which pinned identity produced
- * one is not here — the admission record retains that — so the value a document
- * binds is the name and the return, and nothing else. The rendered text is kept
- * beside them rather than instead of them: a fragment whose elements render
- * prose still has prose, and a fragment whose elements render nothing still has
- * its values.
- */
-export interface GeneratedObservationResult {
-  readonly observations: readonly GeneratedObservationValue[];
-  /** What the fragment rendered, beside the values rather than instead of them. */
-  readonly output: string;
+  readonly identity: RetainedFragmentIdentity;
+  readonly definition: FunctionComponentDefinition;
+  readonly forms: readonly GeneratedComponentForm[];
 }
 
 /** What a trusted host asks this evaluator to admit. */
 export interface GeneratedXmdRequest {
+  readonly composition?: readonly GeneratedComposition[];
   /** Which fragment this is. It names the durable admission record. */
   readonly id: string;
   /** The candidate source, exactly as it was generated. */
@@ -781,7 +773,7 @@ interface Entry {
   /** The form authority under this entry's definition, when a host stated one. */
   readonly dispatch?: unknown;
   readonly forms: readonly AuthoredForm[];
-  readonly effect: GeneratedEffectClass;
+  readonly effect: GeneratedEffectClass | "composition";
   /** The version-1 identity strings this entry states it succeeds. */
   readonly legacy?: readonly string[];
   readonly requests?: readonly GeneratedRequest[];
@@ -845,32 +837,6 @@ type RetainedAdmission =
   | { readonly decision: "refused"; readonly construct: Construct };
 
 /**
- * Refuse this invocation unless it is the form its identity was admitted for.
- *
- * Preflight decided the identity from the scan; this reads the engine's own
- * account of the same element, so the two agree unless something built the
- * invocation rather than receiving it — which is what this refuses.
- *
- * Neither `Component.hasContent()` nor the method on the invocation takes part.
- * The chain is answered by whoever installed a handler outside this expansion,
- * and the method belongs to whatever object a caller passed; both are answers
- * about something other than the element (executable-mdx-spec §5.6).
- */
-function holdForm(form: AuthoredForm, invocation: ComponentInvocation): void {
-  // The engine's own account of the element, not the method on the object this
-  // was handed. A wrapper can mint an object carrying that method; it cannot
-  // mint an issuance, and this reads the issuance
-  // (`invocation-identity.ts`). A component whose form the engine-owned
-  // dispatcher already enforces is held to the same fact twice, which is
-  // harmless; one whose definition carries no dispatcher — a form-insensitive
-  // pinned identity — is held to it here and nowhere else.
-  const written = invocationForm(invocation);
-  if (written === undefined || written !== form) {
-    throw new GeneratedXmdError(SHAPE);
-  }
-}
-
-/**
  * The authority a generated fragment imports through.
  *
  * Resolution is closed over what preflight decided and consults nothing else —
@@ -882,14 +848,12 @@ function holdForm(form: AuthoredForm, invocation: ComponentInvocation): void {
  * two identities in two classes. `<File />` observes and `<File>…</File>`
  * writes, and only preflight — which read how each element was written — knows
  * which of them an import is for. Every entry for a name shares one definition,
- * so what the import answers with is the same either way; what differs is
- * whether the value it produced is collected, and that is a property of the
- * entry preflight selected rather than of what the component returned.
+ * so what the import answers with is the same either way. Invocation form
+ * authority chooses the admitted body independently of public middleware.
  */
 class GeneratedImportAuthority implements ImportAuthority {
   readonly #planned: Map<string, Planned[]>;
   readonly #imports = new CanonicalImports();
-  readonly #values: GeneratedObservationValue[] = [];
   /**
    * This fragment's own selection frames.
    *
@@ -901,7 +865,7 @@ class GeneratedImportAuthority implements ImportAuthority {
   /** The form authority under each admitted name's wrapper. */
   readonly #dispatchers = new Map<string, unknown>();
   readonly #protectedBodies: ProtectedBodies | undefined;
-  readonly #invocations = new WeakMap<object, Planned>();
+  readonly #invocations = new WeakMap<object, Planned[]>();
 
   /**
    * A generated fragment may invoke only what the host admitted for it, so
@@ -913,11 +877,7 @@ class GeneratedImportAuthority implements ImportAuthority {
     return true;
   }
 
-  constructor(
-    named: readonly Planned[],
-    protectedBodies?: ProtectedBodies,
-    readonly capture?: EvaluationResultCapture,
-  ) {
+  constructor(named: readonly Planned[], protectedBodies?: ProtectedBodies) {
     const planned = new Map<string, Planned[]>();
     for (const invocation of named) {
       const queue = planned.get(invocation.name);
@@ -931,22 +891,16 @@ class GeneratedImportAuthority implements ImportAuthority {
     this.#protectedBodies = protectedBodies;
   }
 
-  /** What each admitted read returned, in invocation order. */
-  get values(): GeneratedObservationValue[] {
-    return this.#values;
-  }
-
   /** The answer canonical execution produces for this name. */
   issue(name: string): ImportedDefinition {
-    // Imports happen once per element and in the order the walk read them, so
-    // the head of this name's queue is the entry preflight selected for the
-    // element being expanded. An import the plan does not account for is an
-    // element preflight never saw, and it is refused rather than resolved.
-    const planned = this.#planned.get(name)?.shift();
-    if (planned === undefined) {
+    // Branches may skip entries and loops may repeat them. Every form for a
+    // name shares one definition, so selection never consumes a lexical queue.
+    const selections = this.#planned.get(name);
+    const planned = selections?.[0];
+    if (planned === undefined || selections === undefined) {
       throw new GeneratedXmdError(CONSTRUCT.component);
     }
-    const { entry, form } = planned;
+    const { entry } = planned;
     const copy = retain(entry.definition);
     if (copy === undefined || copy.kind !== "function" || typeof copy.fn !== "function") {
       throw new GeneratedXmdError(CONSTRUCT.component);
@@ -960,11 +914,14 @@ class GeneratedImportAuthority implements ImportAuthority {
     const admitted: FunctionComponentDefinition = {
       ...copy,
       *fn(props, invocation) {
-        holdForm(form, invocation);
+        const form = invocationForm(invocation);
+        if (!selections.some((selection) => selection.form === form)) {
+          throw new EvaluationCandidateError("form", SHAPE);
+        }
         return yield* implementation(props, invocation);
       },
     };
-    this.#invocations.set(admitted.fn, planned);
+    this.#invocations.set(admitted.fn, selections);
     // The wrapper above is the answer to the import; the dispatcher underneath
     // it is the form authority. Remembered by name so `authorize` can record it
     // against core's own copy — the object expansion actually invokes — because
@@ -978,8 +935,7 @@ class GeneratedImportAuthority implements ImportAuthority {
     return this.#imports.issue(name, admitted);
   }
 
-  // Protected dispatch bypasses the public wrapper function, so collection and
-  // form checking surround canonical dispatch rather than that function alone.
+  // Protected dispatch bypasses the public wrapper, so its form check surrounds dispatch.
   *invoke(
     fn: unknown,
     invocation: ComponentInvocation,
@@ -989,17 +945,10 @@ class GeneratedImportAuthority implements ImportAuthority {
     if (planned === undefined) {
       throw new GeneratedXmdError(CONSTRUCT.component);
     }
-    holdForm(planned.form, invocation);
-    const value = yield* body;
-    if (planned.entry.effect === "read") {
-      const observation = {
-        name: planned.entry.name,
-        value: value === undefined ? null : parseJson(value),
-      };
-      this.capture?.observation(observation);
-      this.#values.push(observation);
+    if (!planned.some((selection) => selection.form === invocationForm(invocation))) {
+      throw new EvaluationCandidateError("form", SHAPE);
     }
-    return value;
+    return yield* body;
   }
 
   /** The frames this fragment's own imports record into. */
@@ -1066,7 +1015,11 @@ function selectedEntries(
   request: GeneratedXmdRequest,
   allow: readonly GeneratedEffectClass[],
 ): Entry[] {
-  const entries: Entry[] = [];
+  const entries: Entry[] = (request.composition ?? []).map((entry) => ({
+    ...entry,
+    forms: entry.forms.flatMap(authoredForms),
+    effect: "composition",
+  }));
   if (allow.includes("read")) {
     if (request.observations.length === 0) {
       throw new GeneratedXmdError("a generated-XMD allowlist selected `read` with no read table.");
@@ -1173,9 +1126,14 @@ const ESCAPED_BRACE_PLACEHOLDER = "\uE000";
 const FRONTMATTER_REFERENCE = /\{(meta|props)\.[^}]+\}/;
 const BINDING_REFERENCE = /\{[a-zA-Z_$][a-zA-Z0-9_$]*(?:\.[a-zA-Z_$][a-zA-Z0-9_$]*)*\}/;
 
-function reads(content: string): boolean {
+function reads(content: string, captures: ReadonlySet<string>): boolean {
   const protectedEscapes = content.replaceAll("\\{", ESCAPED_BRACE_PLACEHOLDER);
-  return FRONTMATTER_REFERENCE.test(protectedEscapes) || BINDING_REFERENCE.test(protectedEscapes);
+  return (
+    FRONTMATTER_REFERENCE.test(protectedEscapes) ||
+    [...protectedEscapes.matchAll(new RegExp(BINDING_REFERENCE, "g"))].some(
+      ([match]) => !captures.has(match.slice(1, -1)),
+    )
+  );
 }
 
 /** Two normalized requests describing the same read. */
@@ -1762,11 +1720,13 @@ function* walk(
   ceilings: ReadonlyMap<string, FetchRequest[]>,
   named: Planned[],
   captures: Set<string> = new Set(),
+  parent?: string,
+  inLoop = false,
 ): Operation<void> {
   for (const segment of segments) {
     switch (segment.type) {
       case "text": {
-        if (reads(segment.content)) {
+        if (reads(segment.content, captures)) {
           throw new Refusal("interpolation");
         }
         break;
@@ -1775,12 +1735,77 @@ function* walk(
         throw new Refusal("block");
       }
       case "component": {
+        const expressions = { ...segment.authoredExpressions, ...segment.expressions };
+        for (const expression of Object.values(expressions)) {
+          try {
+            const data = parseGeneratedData(expression);
+            if (generatedDataBindings(data).some((name) => !captures.has(name))) {
+              throw new Refusal("binding");
+            }
+          } catch (error) {
+            if (error instanceof EvaluationCandidateError) {
+              throw new Refusal("expression");
+            }
+            throw error;
+          }
+        }
+        if (RESERVED_STRUCTURAL.has(segment.name)) {
+          if (
+            ["Content", "Output", "Return"].includes(segment.name) ||
+            (segment.name === "Else" && parent !== "If") ||
+            (segment.name === "Case" && parent !== "Switch") ||
+            (segment.name === "Answer" && parent !== "Answers") ||
+            (segment.name === "Break" && !inLoop)
+          ) {
+            throw new Refusal("construct");
+          }
+          const violations =
+            segment.name === "Let"
+              ? letViolations(segment)
+              : segment.name === "Each"
+                ? eachViolations(segment)
+                : segment.name === "If"
+                  ? [
+                      ifPropsViolation(segment),
+                      ifConditionViolation(segment),
+                      ...ifStructure(segment).violations,
+                    ].filter((value) => value !== undefined)
+                  : segment.name === "Switch"
+                    ? switchStructure(segment).violations
+                    : segment.name === "Loop"
+                      ? loopViolations(segment)
+                      : segment.name === "PrintErrors"
+                        ? printErrorsViolations(segment)
+                        : segment.name === "Answers"
+                          ? answersViolations(segment)
+                          : segment.name === "Answer"
+                            ? answerViolations(segment)
+                            : [];
+          if (violations.length > 0) {
+            throw new Refusal("construct");
+          }
+          const children = segment.name === "Each" ? new Set(captures) : captures;
+          if (segment.name === "Each" && typeof segment.props.let === "string") {
+            children.add(segment.props.let);
+          }
+          yield* walk(
+            segment.children,
+            table,
+            ceilings,
+            named,
+            children,
+            segment.name,
+            inLoop || segment.name === "Loop",
+          );
+          const binding = capturedBinding(segment.props.as);
+          if (binding !== undefined) {
+            captures.add(binding);
+          }
+          break;
+        }
         const entries = table.get(segment.name);
         if (entries === undefined) {
           throw new Refusal("component");
-        }
-        if (Object.keys(segment.expressions).length > 0) {
-          throw new Refusal("expression");
         }
         // How the element was written, read from the scan rather than from
         // anything the run could answer differently later. This is what
@@ -1796,23 +1821,39 @@ function* walk(
           asBindingViolation(segment.name, segment.props.as) !== undefined ||
           returnCaptureViolation(segment.name, entry.definition.returns !== undefined, capture) !==
             undefined ||
-          (capture !== undefined && (entry.effect !== "read" || captures.has(capture)))
+          (capture !== undefined && captures.has(capture))
         ) {
           throw new Refusal("binding");
         }
-        if (capture !== undefined) {
-          captures.add(capture);
-        }
         const { as: _as, slot: _slot, ...props } = segment.props;
+        const dynamic = Object.values(expressions).some(
+          (expression) => generatedDataBindings(parseGeneratedData(expression)).length > 0,
+        );
+        for (const [key, expression] of Object.entries(expressions)) {
+          if (generatedDataBindings(parseGeneratedData(expression)).length === 0) {
+            props[key] = evaluateGeneratedData(expression, {});
+          }
+        }
         try {
-          yield* validateProps(segment.name, props, entry.definition.props);
+          if (!dynamic) {
+            const validationProps = Object.fromEntries(
+              Object.entries(props).filter(
+                ([key]) => !(entry.definition.captures ?? []).includes(key),
+              ),
+            );
+            yield* validateProps(segment.name, validationProps, entry.definition.props);
+          }
         } catch (error) {
           if (error instanceof PropValidationError) {
             throw new Refusal(entry.requests === undefined ? "props" : "request");
           }
           throw error;
         }
-        if (entry.identity.kind === "capability" && entry.identity.key === "Glob:read") {
+        if (
+          !dynamic &&
+          entry.identity.kind === "capability" &&
+          entry.identity.key === "Glob:read"
+        ) {
           try {
             patterns("include", props.include);
             patterns("exclude", props.exclude);
@@ -1831,7 +1872,10 @@ function* walk(
           }
         }
         named.push({ name: entry.name, identity: entry.identity, form, entry });
-        yield* walk(segment.children, table, ceilings, named, captures);
+        yield* walk(segment.children, table, ceilings, named, captures, segment.name, inLoop);
+        if (capture !== undefined) {
+          captures.add(capture);
+        }
         break;
       }
       default: {
@@ -1912,6 +1956,12 @@ function* persistAdmission(
       type: GENERATED_XMD,
       name: `generated:${id}`,
       input: policyRecord(policy),
+      candidate: {
+        sourceHash: canonicalFingerprint(source),
+        fingerprint: canonicalFingerprint(
+          parseJson({ sourceHash: canonicalFingerprint(source), policy: policyRecord(policy) }),
+        ),
+      },
       ...sourceDescription(position),
     },
     () => admitSource(source, table, ceilings, policy),
@@ -2008,6 +2058,12 @@ export function assertCapturedAdmission(
   }
 }
 
+export function assertRetainedGeneratedDecision(value: unknown): void {
+  if (readAdmission(parseJson(value)) === undefined) {
+    throw new EvaluationStaleError(UNREADABLE);
+  }
+}
+
 /**
  * Expand the admitted fragment through ordinary durable XMD effects.
  *
@@ -2028,11 +2084,13 @@ function expand(
   protectedBodies: ProtectedBodies | undefined,
   syntax: SyntaxReference | undefined,
   session?: EvaluationCaptureSession,
-): Operation<GeneratedObservationResult> {
+): Operation<string> {
   return scoped(function* () {
-    const capture = session?.capture;
+    const capture = session?.capture.meter();
+    yield* ActiveProjection.set(undefined);
+    yield* ActiveLoop.set(undefined);
     yield* ErrorMode.set("throw");
-    const authority = new GeneratedImportAuthority(named, protectedBodies, capture);
+    const authority = new GeneratedImportAuthority(named, protectedBodies);
     const fragmentEnv = { values: {} };
     yield* Component.around(
       {
@@ -2055,7 +2113,7 @@ function expand(
         {},
         hideSet,
         counter,
-        undefined,
+        capture?.segments(),
         extendPath("", { f: "gen", id }),
         index,
         undefined,
@@ -2076,15 +2134,9 @@ function expand(
         undefined,
       );
       const chunk = renderSegments(expanded);
-      if (capture === undefined) {
-        chunks.push(chunk);
-      } else {
-        capture.output(chunk);
-      }
+      chunks.push(chunk);
     }
-    return capture === undefined
-      ? { observations: authority.values, output: chunks.join("") }
-      : capture.result();
+    return chunks.join("");
   });
 }
 
@@ -2099,9 +2151,7 @@ function expand(
  * the same sequence and restores the admission and every observation that
  * already committed rather than performing them again.
  */
-export function evaluateGeneratedXmd(
-  request: GeneratedXmdRequest,
-): Operation<GeneratedObservationResult> {
+export function evaluateGeneratedXmd(request: GeneratedXmdRequest): Operation<string> {
   return evaluateProtectedGeneratedXmd(request, undefined, undefined);
 }
 
@@ -2111,7 +2161,7 @@ export function* evaluateProtectedGeneratedXmd(
   protectedBodies: ProtectedBodies | undefined,
   syntax: SyntaxReference | undefined,
   session?: EvaluationCaptureSession,
-): Operation<GeneratedObservationResult> {
+): Operation<string> {
   const allow = selection(request.allow);
   const entries = selectedEntries(request, allow);
   const table = admitted(entries);

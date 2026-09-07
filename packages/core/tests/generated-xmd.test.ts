@@ -65,8 +65,6 @@ import type {
   GeneratedEffectClass,
   GeneratedMutation,
   GeneratedObservation,
-  GeneratedObservationResult,
-  GeneratedObservationValue,
   GeneratedXmdRequest,
   RetainedFragmentIdentity,
 } from "../host.ts";
@@ -120,7 +118,6 @@ describe("generated authority stays internal", () => {
     const result = yield* evaluate(candidate);
     expect(result.failure).toBeUndefined();
     expect(result.output).toBe("probed");
-    expect(result.values).toEqual([{ name: "Probe", value: "probed" }]);
   });
 });
 
@@ -201,8 +198,6 @@ function request(
 interface Attempt {
   /** What the fragment rendered, when it was admitted. */
   output?: string;
-  /** What each admitted observation returned, in invocation order. */
-  values?: readonly GeneratedObservationValue[];
   /** What the root document execution settled to, when it settled. */
   rendered?: Json;
   /** Why it was refused, when it was not. */
@@ -244,7 +239,7 @@ function evaluate(
 ): Operation<Attempt> {
   return scoped(function* () {
     const stream = options.stream ?? new InMemoryStream();
-    const captured: { result?: GeneratedObservationResult } = {};
+    const captured: { result?: string } = {};
     const installation = driven(function* () {
       captured.result = yield* evaluateGeneratedXmd(candidate);
       if (options.after) {
@@ -263,8 +258,7 @@ function evaluate(
     const events = yield* stream.readAll();
     if (result.ok) {
       return {
-        output: captured.result?.output ?? "",
-        values: captured.result?.observations ?? [],
+        output: captured.result ?? "",
         rendered: result.value,
         events,
       };
@@ -410,7 +404,7 @@ describe("Tier GX — the complete fragment is read first", () => {
       "read capture",
     ],
     ["an unknown component", "<Unknown />\n", "did not admit"],
-    ["a structural construct", "<If test={true}>x</If>\n", "did not admit"],
+    ["a malformed structural construct", "<If test={true}>x</If>\n", "construct"],
     ["an unadmitted root component", '<Dir path="/etc" />\n', "did not admit"],
     ["an unadmitted repository component", '<Repository name="api" />\n', "did not admit"],
     ["an unadmitted worktree component", '<Worktree name="fix" />\n', "did not admit"],
@@ -1025,7 +1019,6 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
     // The mutation performed, then the marker — and the mutation contributed
     // no observation and no receipt to the value the host reads back.
     expect(executed).toEqual(["write:proposed", "parent-marker"]);
-    expect(first.values).toEqual([]);
     expect(offered(first.events)).toEqual([
       "generated_xmd",
       "generated_write",
@@ -1075,7 +1068,6 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
 
     expect(again.failure).toBe(undefined);
     expect(again.output).toBe(first.output);
-    expect(again.values).toEqual(first.values);
     expect(executed).toEqual(["parent-marker"]);
     expect(offered(again.events)).toEqual([
       "generated_xmd",
@@ -1105,7 +1097,6 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
 
     expect(again.failure).toBe(undefined);
     expect(again.output).toBe(first.output);
-    expect(again.values).toEqual(first.values);
     expect(executed).toEqual(["parent-marker"]);
     expect(offered(again.events)).toEqual([
       "generated_xmd",
@@ -2611,9 +2602,6 @@ describe("Tier WGAC — the pinned read-only File", () => {
     expect(attempt.failure).toBe(undefined);
     expect(transport.performed.map((call) => call.url)).toEqual([URL_ONE]);
 
-    const values = attempt.values ?? [];
-    // Invocation order, and the exact field names a host reads.
-    expect(values.map((observation) => observation.name)).toEqual(["File", "Fetch"]);
     // The identities live in the retained admission, which is where a run is
     // held to them — not on the result, which would be a second copy of the
     // same fact.
@@ -2626,12 +2614,6 @@ describe("Tier WGAC — the pinned read-only File", () => {
     expect(JSON.stringify(named)).toContain(
       JSON.stringify(pinnedFetch([ADMITTED_REQUEST]).identity),
     );
-    expect(values[0]?.value).toBe("the retained note\n");
-    const response = values[1]?.value;
-    expect(isRecord(response)).toBe(true);
-    expect(isRecord(response) ? response.status : undefined).toBe(200);
-    expect(isRecord(response) ? response.body : undefined).toBe("answered");
-
     // And the rendering, kept separately rather than standing in for them: the
     // File read renders its text, the Fetch renders nothing.
     expect(attempt.output).toContain("the retained note");
@@ -2775,7 +2757,6 @@ describe("Tier GXC — a selection is not a grant", () => {
     expect(omitted.failure).toBe(undefined);
     expect(explicit.failure).toBe(undefined);
     expect(explicit.output).toBe(omitted.output);
-    expect(explicit.values).toEqual(omitted.values);
     // The same retained policy, down to the class it normalized to: a document
     // that says nothing and one that says `read` are held to one grant.
     expect(recordedPolicy(admittedFragments(explicit.events)[0])).toEqual(
@@ -3049,11 +3030,10 @@ describe("Tier GXC — a write is not an observation", () => {
     // The exact shape a document binds: no synthetic receipt for the write, and
     // no text, because neither of these components renders any. What is left is
     // the fragment's own line break, which is what the source had in it.
-    expect(attempt.evaluated.values).toEqual([]);
     expect(attempt.evaluated.output?.trim()).toBe("");
   });
 
-  it("GXC7: a mixed fragment collects the read and not the write", function* () {
+  it("GXC7: a mixed fragment renders its ordinary read output", function* () {
     const root = yield* useWorkspace();
     yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
 
@@ -3070,7 +3050,7 @@ describe("Tier GXC — a write is not an observation", () => {
 
     expect(attempt.failure).toBe(undefined);
     // One entry, under the read identity's name, holding what the read returned.
-    expect(attempt.values).toEqual([{ name: "File", value: "the retained note\n" }]);
+    expect(attempt.output).toContain("the retained note");
   });
 
   const PARTIAL: Array<[string, string]> = [
@@ -3298,10 +3278,8 @@ describe("Tier GXC — the authored form survives the public content chain", () 
       // One read, no write, and the file it was admitted to read is unchanged.
       expect(attempt.files).toEqual(["notes.md"]);
       expect(yield* readTextFile(join(root, "notes.md"))).toBe("the retained note\n");
-      expect(attempt.evaluated.values).toEqual([
-        { name: "Says", value: `says:${script[0]}` },
-        { name: "File", value: "the retained note\n" },
-      ]);
+      expect(attempt.evaluated.output).toContain(`says:${script[0]}`);
+      expect(attempt.evaluated.output).toContain("the retained note");
       // And the admission still names the identity and form it was granted for.
       expect(recordedNames(admittedFragments(attempt.evaluated.events)[0])).toEqual([
         { name: "Says", identity: hostIdentity("test://says", "Says"), form: "self-closing" },
@@ -3339,7 +3317,7 @@ describe("Tier GXC — the authored form survives the public content chain", () 
       // that queried the chain would take the second scripted answer — which
       // denies content — and read instead of writing, failing below.
       expect(answered).toEqual([script[0]]);
-      expect(attempt.evaluated.values).toEqual([{ name: "Says", value: `says:${script[0]}` }]);
+      expect(attempt.evaluated.output).toContain(`says:${script[0]}`);
       // One write of the admitted bytes, and no read of a path the fragment
       // never asked to read.
       expect(attempt.files).toEqual(["write:proposed.md"]);

@@ -419,6 +419,7 @@ function body(
         throw new EvaluationCandidateError(
           "glob",
           "an admitted fragment could not search the working directory.",
+          { cause: found.error },
         );
       }
       if (
@@ -462,7 +463,9 @@ function readBody(files: FragmentFileAccess, cursor: DirectoryCursor) {
       if (!(text.error instanceof Error) || filesFatalFailure(text.error) !== undefined) {
         throw new EvaluationInfrastructureError("runtime", text.error);
       }
-      throw new EvaluationCandidateError("read", "An admitted file could not be read.");
+      throw new EvaluationCandidateError("read", "An admitted file could not be read.", {
+        cause: text.error,
+      });
     }
     if (typeof text.value !== "string") {
       throw new EvaluationInfrastructureError(

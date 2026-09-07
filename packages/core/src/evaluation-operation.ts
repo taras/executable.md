@@ -1,13 +1,12 @@
 import type { Operation, Result } from "effection";
 import type { ComponentInvocation, IdentityClaimant } from "./invocation-identity.ts";
-import type { GeneratedObservationResult } from "./generated-xmd.ts";
 import { EvaluationInfrastructureError } from "./evaluation-errors.ts";
 import { captureEvaluationBounds } from "./evaluation-result.ts";
 import type { EvaluationBounds } from "./evaluation-result.ts";
 
 export type EvaluationCaptureOperation = (
   invocation: ComponentInvocation,
-) => Operation<Result<GeneratedObservationResult>>;
+) => Operation<Result<string>>;
 
 /** Prepare bounded composition in the trusted identity-component factory. */
 export function boundedEvaluation(

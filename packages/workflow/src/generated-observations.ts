@@ -37,7 +37,6 @@ import type {
   GeneratedEffectClass,
   GeneratedMutation,
   GeneratedObservation,
-  GeneratedObservationResult,
   GeneratedRequest,
 } from "@executablemd/core/host";
 import type { SourcePosition } from "@executablemd/core";
@@ -92,7 +91,7 @@ export function* evaluateGeneratedFragment(
   source: string,
   policy: GeneratedEvaluationPolicy,
   position?: Readonly<SourcePosition>,
-): Operation<GeneratedObservationResult> {
+): Operation<string> {
   const retained = new Set(policy.workspaceRoots);
   if (retained.size !== policy.workspaceRoots.length) {
     throw new GeneratedEvaluationPolicyError(

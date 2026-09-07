@@ -43,6 +43,20 @@ function* useWorkspace<T>(
 }
 
 describe("Tier FE — the ordinary run profile", () => {
+  it("renders authored Json composition under either effect selection", function* () {
+    for (const selection of ["read", "write"]) {
+      yield* useWorkspace(
+        {
+          "doc.md": `<Evaluate allow={["${selection}"]} text={'<Json value={{ explicit: [1, true, null] }} />'} />`,
+        },
+        function* (dir) {
+          const result = yield* runCli(["run", join(dir, "doc.md")], { cwd: dir }).join();
+          expect(result.code).toBe(0);
+          expect(JSON.parse(result.stdout)).toEqual({ explicit: [1, true, null] });
+        },
+      );
+    }
+  });
   it("FE21: `xmd run` states a profile, and a fragment reads the caller's files", function* () {
     yield* useWorkspace(
       {

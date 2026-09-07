@@ -184,7 +184,7 @@ function* refusal(operation: Operation<unknown>): Operation<string> {
 }
 
 describe("Tier SYN — a separately loaded protected implementation", () => {
-  it("routes the public composition helper across copies without minting a claim or replacing the stage owner", function* () {
+  it("routes the public composition helper across copies without minting a claim or replacing the durable child owner", function* () {
     const copy = yield* useSeparateCopy();
     expect(copy.boundedEvaluation).not.toBe(boundedEvaluation);
     expect(copy.EvaluationLimitError).not.toBe(EvaluationLimitError);
@@ -205,7 +205,7 @@ describe("Tier SYN — a separately loaded protected implementation", () => {
               factory(claim) {
                 const capture = copy.boundedEvaluation(
                   claim,
-                  Object.freeze({ durationMs: 1000, resultBytes: 65536 }),
+                  Object.freeze({ durationMs: 1000, outputBytes: 65536 }),
                 );
                 return function* (_props, invocation) {
                   let forged: unknown;
@@ -229,7 +229,7 @@ describe("Tier SYN — a separately loaded protected implementation", () => {
                     classified = copy.evaluationFailureKind(result.error);
                     return "refused";
                   }
-                  return result.value.output;
+                  return result.value;
                 };
               },
             },
@@ -250,7 +250,7 @@ describe("Tier SYN — a separately loaded protected implementation", () => {
           factory(claim: IdentityClaimant) {
             return copy.boundedEvaluation(
               claim,
-              Object.freeze({ durationMs: 1000, resultBytes: 65536 }),
+              Object.freeze({ durationMs: 1000, outputBytes: 65536 }),
             );
           },
         },

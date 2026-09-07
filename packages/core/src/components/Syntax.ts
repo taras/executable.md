@@ -246,7 +246,7 @@ function* persistSymbols(
  * version cannot read — not one to fill a default in for, because every default
  * here is a guess about what an earlier run actually showed somebody.
  */
-function readSymbols(value: unknown): string | undefined {
+export function readSymbols(value: unknown): string | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }

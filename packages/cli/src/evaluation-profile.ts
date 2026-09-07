@@ -6,9 +6,10 @@
  * part a host owns. It is stated here, at the assembly this command already
  * does, before any document exists to ask for it.
  *
- * ## The two tables
+ * ## Composition and effect tables
  *
- * `read` is core's self-closing `<File />` and nothing else. `write` is core's
+ * Pure composition always includes exact core `<Json />`. `read` is core's
+ * self-closing `<File />`. `write` is core's
  * paired `<File>…</File>` and self-closing `<File.Delete />`. A fragment run by
  * `xmd run` therefore reaches the caller's own filesystem through the Files
  * provider this command installed, and reaches nothing else at all: no network
@@ -32,7 +33,12 @@
  * spelling, so there is no document written against it to keep working.
  */
 
-import { fileDeleteEntry, fileReadEntry, fileWriteEntry } from "@executablemd/core/host";
+import {
+  fileDeleteEntry,
+  fileReadEntry,
+  fileWriteEntry,
+  jsonCompositionEntry,
+} from "@executablemd/core/host";
 import type {
   ExecutionInstallation,
   FragmentEvaluationInput,
@@ -72,6 +78,7 @@ function ordinaryFiles(): FragmentFileAccess {
 /** The ceiling `xmd run` and its run children state. */
 export function ordinaryEvaluationProfile(): FragmentEvaluationInput {
   return {
+    composition: [jsonCompositionEntry()],
     read: [fileReadEntry()],
     write: [fileWriteEntry(), fileDeleteEntry()],
     files: ordinaryFiles(),

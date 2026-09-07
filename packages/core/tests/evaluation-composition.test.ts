@@ -2,228 +2,93 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, Err, Ok, scoped, sleep, spawn, suspend, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import { createDurableOperation, InMemoryStream } from "@executablemd/durable-streams";
+import type { DurableStream } from "@executablemd/durable-streams";
 import {
   boundedEvaluation,
   EvaluationCandidateError,
   EvaluationInfrastructureError,
   EvaluationLimitError,
   EvaluationStaleError,
-  encodeEvaluationResult,
-  evaluationFailure,
   executeInstalled,
   fileReadEntry,
+  fileWriteEntry,
   globReadEntry,
+  jsonCompositionEntry,
 } from "../host.ts";
 import type { EvaluationBounds, ExecutionInstallation } from "../host.ts";
-import type { GeneratedObservationResult } from "../src/generated-xmd.ts";
-import { GeneratedXmdError } from "../src/generated-xmd.ts";
 import { collect } from "../src/collect.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { recordedFiles } from "./support/fragment-files.ts";
-import { isJsonObject } from "../src/json.ts";
 import { inspectSyntax } from "../src/inspect.ts";
-import { Component } from "../src/component-api.ts";
-import { FilesProviderUnavailableError } from "@executablemd/runtime/files";
+import { content } from "../src/component-api.ts";
+import { prepareEvaluationProfile } from "../src/evaluation-profile.ts";
+
+const bounds = Object.freeze({ durationMs: 1000, outputBytes: 65536 });
+
+function profile(files = recordedFiles()): ExecutionInstallation {
+  return { evaluation: { composition: [jsonCompositionEntry()], read: [fileReadEntry()], files } };
+}
 
 function runCapture(
   source: string,
-  profile: ExecutionInstallation,
-  bounds: EvaluationBounds = Object.freeze({ durationMs: 1000, resultBytes: 65536 }),
-  stream = new InMemoryStream(),
-): Operation<Result<GeneratedObservationResult>> {
+  installation = profile(),
+  selected: EvaluationBounds = bounds,
+  stream: DurableStream = new InMemoryStream(),
+  tail = "",
+  projection?: string,
+): Operation<Result<string>> {
   return scoped(function* () {
-    let outcome: Result<GeneratedObservationResult> | undefined;
-    const component: ExecutionInstallation = {
-      components: [
-        {
-          name: "Capture",
-          origin: "test://capture",
-          props: { type: "object", properties: {}, additionalProperties: false },
-          factory(claim) {
-            const capture = boundedEvaluation(claim, bounds);
-            return function* (_props, invocation) {
-              outcome = yield* capture(invocation);
-              return outcome.ok
-                ? outcome.value
-                : {
-                    refusal:
-                      outcome.error instanceof EvaluationLimitError
-                        ? outcome.error.limit
-                        : "candidate",
-                  };
-            };
+    let outcome: Result<string> | undefined;
+    try {
+      const rendered = yield* collect(
+        yield* executeInstalled(
+          {
+            ...retainedSource(
+              "capture.md",
+              `<Capture>${projection ?? `<Evaluate text={${JSON.stringify(source)}} />${tail}`}</Capture>`,
+            ),
+            stream,
           },
-        },
-      ],
-    };
-    const returned = yield* collect(
-      yield* executeInstalled(
-        {
-          ...retainedSource(
-            "capture.md",
-            `---\nreturns:\n  type: object\n---\n<Capture as="answer"><Evaluate text={${JSON.stringify(source)}} /></Capture>\n<Return value={answer} />`,
-          ),
-          stream,
-        },
-        [profile, component],
-      ),
-    );
-    if (outcome === undefined) {
-      if (
-        isJsonObject(returned) &&
-        Array.isArray(returned.observations) &&
-        typeof returned.output === "string"
-      ) {
-        const observations = returned.observations.map((observation) => {
-          if (!isJsonObject(observation) || typeof observation.name !== "string") {
-            throw new Error("Invalid historical observation.");
-          }
-          return { name: observation.name, value: observation.value };
-        });
-        return Ok({ observations, output: returned.output });
+          [
+            installation,
+            {
+              components: [
+                {
+                  name: "Capture",
+                  origin: "test://capture",
+                  props: { type: "object" },
+                  factory(claim) {
+                    const capture = boundedEvaluation(claim, selected);
+                    return function* (_props, invocation) {
+                      outcome = yield* capture(invocation);
+                      if (!outcome.ok) {
+                        throw outcome.error;
+                      }
+                      return outcome.value;
+                    };
+                  },
+                },
+              ],
+            },
+          ],
+        ),
+      );
+      if (outcome !== undefined) {
+        return outcome;
       }
-      if (
-        isJsonObject(returned) &&
-        (returned.refusal === "duration" || returned.refusal === "result-bytes")
-      ) {
-        return Err(new EvaluationLimitError(returned.refusal));
+      if (typeof rendered !== "string") {
+        throw new Error("Expected historical text.");
       }
-      if (isJsonObject(returned) && returned.refusal === "candidate") {
-        return Err(new EvaluationCandidateError("candidate", "historical refusal"));
+      return Ok(rendered);
+    } catch (error) {
+      if (outcome !== undefined) {
+        return outcome;
       }
-      throw new Error("No historical capture outcome.");
+      throw error;
     }
-    return outcome;
   });
 }
-
-describe("bounded ordinary Evaluate composition", () => {
-  it("accepts a complete result below the deadline through the actual content projection", function* () {
-    const stream = new InMemoryStream();
-    const result = yield* runCapture(
-      "hello",
-      { evaluation: { read: [fileReadEntry()], files: recordedFiles() } },
-      undefined,
-      stream,
-    );
-    expect(result).toEqual(Ok({ observations: [], output: "hello" }));
-    const admission = stream
-      .snapshot()
-      .find((event) => event.type === "yield" && event.description.type === "generated_xmd");
-    expect(admission?.coroutineId).toBe("root.0");
-    const long = yield* runCapture(
-      '<File path="x" />',
-      {
-        evaluation: {
-          read: [fileReadEntry()],
-          files: recordedFiles(
-            { x: "long deadline" },
-            {
-              *hold() {
-                yield* sleep(5);
-              },
-            },
-          ),
-        },
-      },
-      Object.freeze({ durationMs: 2147483648, resultBytes: 65536 }),
-    );
-    expect(long.ok).toBe(true);
-  });
-
-  it("counts the complete JSON envelope, not only rendered ASCII or JavaScript code units", function* () {
-    const profile = { evaluation: { read: [fileReadEntry()], files: recordedFiles() } };
-    for (const [source, accepted] of [
-      ["x".repeat(65536 - 31), true],
-      ["x".repeat(65537 - 31), false],
-      ["é".repeat(32752) + "x", true],
-      ["é".repeat(32753), false],
-    ]) {
-      if (typeof source !== "string") {
-        throw new Error("invalid test source");
-      }
-      const outcome = yield* runCapture(source, profile);
-      expect(outcome.ok).toBe(accepted);
-      if (!outcome.ok) {
-        expect(outcome.error).toBeInstanceOf(EvaluationLimitError);
-        expect(outcome).not.toHaveProperty("value");
-      }
-    }
-  });
-
-  it("cancels a live read and awaits delayed teardown before reporting the local deadline", function* () {
-    const order: string[] = [];
-    const result = yield* runCapture(
-      '<File path="x" />',
-      {
-        evaluation: {
-          read: [fileReadEntry()],
-          files: {
-            ...recordedFiles(),
-            *readTextFile() {
-              yield* ensure(function* () {
-                yield* sleep(10);
-                order.push("cleanup complete");
-              });
-              order.push("read started");
-              yield* suspend();
-              return Ok("");
-            },
-          },
-        },
-      },
-      Object.freeze({ durationMs: 30, resultBytes: 65536 }),
-    );
-    order.push("outcome");
-    expect(order).toEqual(["read started", "cleanup complete", "outcome"]);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toBeInstanceOf(EvaluationLimitError);
-    }
-  });
-
-  it("keeps cleanup failure terminal after overflow instead of returning the first recoverable error", function* () {
-    const cleanup = new Error("cleanup sentinel");
-    const result = yield* runCapture('<File path="x" />', {
-      evaluation: {
-        read: [fileReadEntry()],
-        files: {
-          ...recordedFiles(),
-          *readTextFile() {
-            yield* ensure(function* () {
-              throw cleanup;
-            });
-            return Ok("x".repeat(65536));
-          },
-        },
-      },
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toBeInstanceOf(EvaluationInfrastructureError);
-    }
-  });
-
-  it("reports candidate admission by exported type and drops its staged admission", function* () {
-    const stream = new InMemoryStream();
-    const result = yield* runCapture(
-      "<Agent />",
-      { evaluation: { read: [fileReadEntry()], files: recordedFiles() } },
-      undefined,
-      stream,
-    );
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toBeInstanceOf(EvaluationCandidateError);
-    }
-    expect(
-      stream
-        .snapshot()
-        .filter((event) => event.type === "yield" && event.description.type === "generated_xmd"),
-    ).toEqual([]);
-  });
-});
 
 function syntaxInstallation(
   counters: { installs: number; claims: number; reads: number },
@@ -271,880 +136,867 @@ function syntaxInstallation(
   };
 }
 
-describe("bounded capture replay and authority", () => {
-  it("freshly attests authority but restores a completed capture without fragment or Syntax lookups", function* () {
-    const counts = { installs: 0, claims: 0, reads: 0 };
-    const stream = new InMemoryStream();
-    const source = '<Syntax names={["File"]} />';
-    const first = yield* runCapture(source, syntaxInstallation(counts), undefined, stream);
-    expect(first.ok).toBe(true);
-    const history = stream.snapshot();
-    const partial = new InMemoryStream(
-      history.filter((event) => event.type !== "close" || event.coroutineId !== "root"),
-    );
-    const second = yield* runCapture(source, syntaxInstallation(counts), undefined, partial);
-    expect(second).toEqual(first);
-    expect(counts).toEqual({ installs: 2, claims: 2, reads: 1 });
-    const third = yield* runCapture(
-      source,
-      syntaxInstallation(counts),
-      undefined,
-      new InMemoryStream(history),
-    );
-    expect(third).toEqual(first);
-    expect(counts).toEqual({ installs: 3, claims: 3, reads: 1 });
-    expect(
-      history
-        .filter((event) => event.type === "yield" && event.description.type === "syntax_symbols")
-        .map((event) => event.coroutineId),
-    ).toEqual(["root.0"]);
-  });
-
-  it("refuses changed bounds, reference and admitted identity before completed-root reuse", function* () {
-    const counts = { installs: 0, claims: 0, reads: 0 };
-    const source = '<Syntax names={["File"]} />';
-    const stream = new InMemoryStream();
-    yield* runCapture(source, syntaxInstallation(counts), undefined, stream);
-    for (const variant of [
-      { durationMs: 1001, resultBytes: 65536, reference: "reference-v1", revision: "1", source },
-      { durationMs: 1000, resultBytes: 65537, reference: "reference-v1", revision: "1", source },
-      { durationMs: 1000, resultBytes: 65536, reference: "reference-v2", revision: "1", source },
-      { durationMs: 1000, resultBytes: 65536, reference: "reference-v1", revision: "2", source },
-      {
-        durationMs: 1000,
-        resultBytes: 65536,
-        reference: "reference-v1",
-        revision: "1",
-        source: "different",
+describe("ordinary generated findings", () => {
+  it("rejects malformed, mutable and duplicate bounds before any fragment work", function* () {
+    let getterReads = 0;
+    const accessor = Object.freeze({
+      get durationMs() {
+        getterReads++;
+        return 1;
       },
-    ]) {
-      let failure: unknown;
-      try {
-        yield* runCapture(
-          variant.source,
-          syntaxInstallation(counts, variant.reference, variant.revision),
-          Object.freeze({ durationMs: variant.durationMs, resultBytes: variant.resultBytes }),
-          new InMemoryStream(stream.snapshot()),
-        );
-      } catch (error) {
-        failure = error;
-      }
-      if (failure === undefined) {
-        throw new Error(`Replay accepted changed input: ${JSON.stringify(variant)}`);
-      }
-      expect(failure).toBeInstanceOf(EvaluationStaleError);
-    }
-    expect(counts.reads).toBe(1);
-  });
-
-  it("keeps an oversized Syntax value out of persistence, including Syntax's internal record", function* () {
-    const stream = new InMemoryStream();
-    const counts = { installs: 0, claims: 0, reads: 0 };
-    const source = '<Syntax names={["File"]} />';
-    const result = yield* runCapture(
-      source,
-      syntaxInstallation(counts),
-      Object.freeze({ durationMs: 1000, resultBytes: 128 }),
-      stream,
-    );
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toBeInstanceOf(EvaluationLimitError);
-    }
-    expect(counts.reads).toBe(1);
-    expect(
-      stream
-        .snapshot()
-        .filter(
-          (event) =>
-            event.type === "yield" &&
-            ["syntax_symbols", "generated_xmd"].includes(event.description.type),
-        ),
-    ).toEqual([]);
-    const replay = yield* runCapture(
-      source,
-      syntaxInstallation(counts),
-      Object.freeze({ durationMs: 1000, resultBytes: 128 }),
-      new InMemoryStream(
-        stream.snapshot().filter((event) => event.type !== "close" || event.coroutineId !== "root"),
-      ),
-    );
-    expect(replay.ok).toBe(false);
-    expect(counts.reads).toBe(1);
-    let stale: unknown;
-    try {
-      yield* runCapture(
-        source,
-        syntaxInstallation(counts),
-        Object.freeze({ durationMs: 1001, resultBytes: 128 }),
-        new InMemoryStream(stream.snapshot()),
-      );
-    } catch (error) {
-      stale = error;
-    }
-    expect(stale).toBeInstanceOf(EvaluationStaleError);
-    expect(counts.reads).toBe(1);
-  });
-
-  it("restores captured File and Glob values as history, not as fresh provider information", function* () {
-    const files = recordedFiles({ x: "old" });
-    let searches = 0;
-    const profile: ExecutionInstallation = {
-      evaluation: {
-        read: [fileReadEntry(), globReadEntry()],
-        files: {
-          ...files,
-          *globFiles() {
-            searches += 1;
-            return Ok(["x"]);
-          },
-        },
-      },
-    };
-    const stream = new InMemoryStream();
-    const source = '<Glob include={["*"]} as="paths" /><File path="x" as="note" />';
-    const first = yield* runCapture(source, profile, undefined, stream);
-    files.entries.set("x", "new");
-    const second = yield* runCapture(
-      source,
-      profile,
-      undefined,
-      new InMemoryStream(
-        stream.snapshot().filter((event) => event.type !== "close" || event.coroutineId !== "root"),
-      ),
-    );
-    expect(second).toEqual(first);
-    expect(searches).toBe(1);
-    expect(files.performed).toEqual(["read x"]);
-    for (const replayIdentity of [
-      Object.freeze({ scope: "other", policy: "read-write-v1" }),
-      Object.freeze({ scope: "test://workspace", policy: "changed" }),
-    ]) {
-      let failure: unknown;
-      try {
-        yield* runCapture(
-          source,
-          {
-            evaluation: {
-              ...profile.evaluation!,
-              files: { ...profile.evaluation!.files!, replayIdentity },
-            },
-          },
-          undefined,
-          new InMemoryStream(stream.snapshot()),
-        );
-      } catch (error) {
-        failure = error;
-      }
-      expect(failure).toBeInstanceOf(EvaluationStaleError);
-    }
-    expect(searches).toBe(1);
-  });
-
-  it("does not let public content middleware author completion", function* () {
-    let fabricated = 0;
-    const result = yield* runCapture("canonical", {
-      evaluation: { read: [fileReadEntry()], files: recordedFiles() },
-      *install() {
-        yield* Component.around({
-          *content() {
-            fabricated += 1;
-            return "forged";
-          },
-        });
-      },
+      outputBytes: 1,
     });
-    expect(result).toEqual(Ok({ observations: [], output: "canonical" }));
-    expect(fabricated).toBe(0);
-  });
-
-  it("requires fresh protected attestation and rejects changed forms and table order before reuse", function* () {
-    const counts = { installs: 0, claims: 0, reads: 0 };
-    const original = syntaxInstallation(counts);
-    const files = recordedFiles({ x: "old" });
-    const profile: ExecutionInstallation = {
-      ...original,
-      evaluation: {
-        ...original.evaluation,
-        read: [...original.evaluation!.read!, fileReadEntry()],
-        files,
-      },
-    };
-    const stream = new InMemoryStream();
-    yield* runCapture('<Syntax names={["File"]} />', profile, undefined, stream);
-    const variants: ExecutionInstallation[] = [
-      { ...profile, componentAnswers: [] },
-      {
-        ...profile,
-        evaluation: { ...profile.evaluation, read: [...profile.evaluation!.read!].reverse() },
-      },
-      {
-        ...profile,
-        evaluation: {
-          ...profile.evaluation,
-          read: profile.evaluation!.read!.map((entry) =>
-            entry.name === "Syntax" ? { ...entry, forms: ["paired"] } : entry,
-          ),
-        },
-      },
-    ];
-    for (const variant of variants) {
-      let failure: unknown;
-      try {
-        yield* runCapture(
-          '<Syntax names={["File"]} />',
-          variant,
-          undefined,
-          new InMemoryStream(stream.snapshot()),
-        );
-      } catch (error) {
-        failure = evaluationFailure(error);
-      }
-      expect(failure).toBeInstanceOf(EvaluationStaleError);
-    }
-    expect(counts.reads).toBe(1);
-    expect(files.performed).toEqual([]);
-  });
-
-  it("treats a partially published accepted flush as child history, never a completed answer", function* () {
-    const counts = { installs: 0, claims: 0, reads: 0 };
-    const stream = new InMemoryStream();
-    const source = '<Syntax names={["File"]} />';
-    const accepted = yield* runCapture(source, syntaxInstallation(counts), undefined, stream);
-    const events = stream.snapshot();
-    const childClose = events.findIndex(
-      (event) => event.type === "close" && event.coroutineId === "root.0",
-    );
-    expect(childClose).toBeGreaterThan(0);
-    const partial = new InMemoryStream(events.slice(0, childClose));
-    expect(yield* runCapture(source, syntaxInstallation(counts), undefined, partial)).toEqual(
-      accepted,
-    );
-    expect(counts.reads).toBe(1);
-    expect(
-      partial
-        .snapshot()
-        .filter((event) => event.type === "yield" && event.description.type === "syntax_symbols"),
-    ).toHaveLength(1);
-    function inspect(value: unknown): void {
-      expect(typeof value).not.toBe("function");
-      if (typeof value === "object" && value !== null) {
-        for (const key of Reflect.ownKeys(value)) {
-          expect([
-            "stage",
-            "staging",
-            "route",
-            "protectedBodies",
-            "profile",
-            "provider",
-            "projectContent",
-          ]).not.toContain(String(key));
-          inspect(Reflect.get(value, key));
-        }
-      }
-    }
-    inspect(partial.snapshot());
-  });
-});
-
-describe("bounded capture hostile controls", () => {
-  it("leaves an ordinary unwrapped Evaluate unbounded", function* () {
-    const text = "x".repeat(70000);
-    const returned = yield* scoped(function* () {
-      return yield* collect(
-        yield* executeInstalled(
-          {
-            ...retainedSource(
-              "unbounded.md",
-              `---\nreturns:\n  type: object\n---\n<Evaluate text={${JSON.stringify(text)}} as="answer" />\n<Return value={answer} />`,
-            ),
-            stream: new InMemoryStream(),
-          },
-          [{ evaluation: { read: [fileReadEntry()], files: recordedFiles() } }],
-        ),
-      );
-    });
-    expect(returned).toEqual({ observations: [], output: text });
-  });
-
-  it("rejects malformed or mutable bounds at factory preparation, before fragment or provider work", function* () {
-    const bad: unknown[] = [
+    for (const input of [
+      undefined,
+      null,
       {},
-      Object.freeze({ durationMs: 1000 }),
-      Object.freeze({ resultBytes: 65536 }),
-      { durationMs: 1000, resultBytes: 65536 },
-      ...[NaN, Infinity, -1, 0, 1.5].map((durationMs) =>
-        Object.freeze({ durationMs, resultBytes: 65536 }),
+      { durationMs: 1, outputBytes: 1 },
+      Object.freeze({ durationMs: 1 }),
+      Object.freeze({ outputBytes: 1 }),
+      Object.freeze({ ...bounds, extra: true }),
+      accessor,
+      ...[0, -1, NaN, Infinity, 1.5, Number.MAX_SAFE_INTEGER + 1].map((durationMs) =>
+        Object.freeze({ ...bounds, durationMs }),
       ),
-      ...[NaN, Infinity, -1, 1.5].map((resultBytes) =>
-        Object.freeze({ durationMs: 1000, resultBytes }),
+      ...[-1, NaN, Infinity, 1.5, Number.MAX_SAFE_INTEGER + 1].map((outputBytes) =>
+        Object.freeze({ ...bounds, outputBytes }),
       ),
-      Object.freeze({ durationMs: 1000, resultBytes: 65536, extra: true }),
-      Object.freeze({
-        get durationMs() {
-          throw new Error("getter must not run");
-        },
-        resultBytes: 65536,
-      }),
-    ];
-    for (const bounds of bad) {
-      let ran = false;
+    ]) {
+      const files = recordedFiles({ x: "unused" });
       let failure: unknown;
       try {
-        yield* scoped(function* () {
-          yield* collect(
-            yield* executeInstalled(
-              { ...retainedSource("bad.md", "<Capture />"), stream: new InMemoryStream() },
-              [
-                {
-                  components: [
-                    {
-                      name: "Capture",
-                      origin: "test://invalid",
-                      props: { type: "object" },
-                      factory(claim) {
-                        Reflect.apply(boundedEvaluation, undefined, [claim, bounds]);
-                        return function* () {
-                          ran = true;
-                          return "";
-                        };
-                      },
-                    },
-                  ],
-                },
-              ],
-            ),
-          );
-        });
-      } catch (error) {
-        failure = error;
-      }
-      expect(failure).toBeInstanceOf(EvaluationInfrastructureError);
-      expect(ran).toBe(false);
-    }
-  });
-
-  it("charges captured File and Glob values, escaping and multibyte data before acceptance", function* () {
-    const encoder = new TextEncoder();
-    for (const text of ["a", "é", "😀", '"\\\n']) {
-      const value = text.repeat(50);
-      const files = recordedFiles({ x: value });
-      const profile = {
-        evaluation: {
-          read: [fileReadEntry(), globReadEntry()],
-          files: {
-            ...files,
-            *globFiles() {
-              return Ok([value]);
+        yield* collect(
+          yield* executeInstalled(
+            {
+              ...retainedSource("bad-bounds.md", "<Evaluate text={'<File path=\"x\" />'} />"),
+              stream: new InMemoryStream(),
             },
-          },
-        },
-      };
-      const source = '<File path="x" as="file" /><Glob include={["*"]} as="paths" />';
-      const expected = {
-        observations: [
-          { name: "File", value },
-          { name: "Glob", value: [value] },
-        ],
-        output: "",
-      };
-      const bytes = encoder.encode(encodeEvaluationResult(expected)).byteLength;
-      expect(
-        yield* runCapture(source, profile, Object.freeze({ durationMs: 1000, resultBytes: bytes })),
-      ).toEqual(Ok(expected));
-      const refused = yield* runCapture(
-        source,
-        profile,
-        Object.freeze({ durationMs: 1000, resultBytes: bytes - 1 }),
-      );
-      expect(refused.ok).toBe(false);
-      if (!refused.ok) {
-        expect(refused.error).toBeInstanceOf(EvaluationLimitError);
-      }
-    }
-    expect(
-      encodeEvaluationResult({
-        observations: [{ name: "value", value: { z: 1, "2": 2, "10": 10, a: [true] } }],
-        output: "",
-      }),
-    ).toBe(
-      '{"observations":[{"name":"value","value":{"10":10,"2":2,"a":[true],"z":1}}],"output":""}',
-    );
-    const split = {
-      observations: [
-        { name: "File", value: "\ud83d" },
-        { name: "File", value: "\ude00" },
-      ],
-      output: "😀",
-    };
-    const splitBytes = encoder.encode(encodeEvaluationResult(split)).byteLength;
-    expect(
-      yield* runCapture(
-        '<File path="high" /><File path="low" />',
-        {
-          evaluation: {
-            read: [fileReadEntry()],
-            files: recordedFiles({ high: "\ud83d", low: "\ude00" }),
-          },
-        },
-        Object.freeze({ durationMs: 1000, resultBytes: splitBytes }),
-      ),
-    ).toEqual(Ok(split));
-  });
-
-  it("rejects duplicate or late preparation instead of silently replacing retained bounds", function* () {
-    for (const mode of ["duplicate", "late"]) {
-      const files = recordedFiles({ x: "must not read" });
-      let failure: unknown;
-      try {
-        yield* scoped(function* () {
-          yield* collect(
-            yield* executeInstalled(
+            [
+              profile(files),
               {
-                ...retainedSource(
-                  "duplicate.md",
-                  "<Capture><Evaluate text={'<File path=\"x\" />'} /></Capture>",
-                ),
-                stream: new InMemoryStream(),
-              },
-              [
-                {
-                  evaluation: { read: [fileReadEntry()], files },
-                  components: [
-                    {
-                      name: "Capture",
-                      origin: "test://duplicate",
-                      props: { type: "object" },
-                      factory(claim) {
-                        const bounds = Object.freeze({ durationMs: 1000, resultBytes: 65536 });
-                        const capture = boundedEvaluation(claim, bounds);
-                        if (mode === "duplicate") {
-                          boundedEvaluation(claim, bounds);
-                        }
-                        return function* (_props, invocation) {
-                          boundedEvaluation(claim, bounds);
-                          return yield* capture(invocation);
-                        };
-                      },
+                components: [
+                  {
+                    name: "Capture",
+                    origin: "test://capture",
+                    props: { type: "object" },
+                    factory(claim) {
+                      Reflect.apply(boundedEvaluation, undefined, [claim, input]);
+                      return function* () {
+                        return "";
+                      };
                     },
-                  ],
-                },
-              ],
-            ),
-          );
-        });
+                  },
+                ],
+              },
+            ],
+          ),
+        );
       } catch (error) {
         failure = error;
       }
       expect(failure).toBeInstanceOf(EvaluationInfrastructureError);
       expect(files.performed).toEqual([]);
     }
-  });
-
-  it("accepts exactly 65536 bytes of captured File or Glob JSON and refuses byte 65537", function* () {
-    const encoder = new TextEncoder();
-    for (const name of ["File", "Glob"]) {
-      for (const prefix of ["a", 'é😀"\\\n']) {
-        const seed = prefix.repeat(40);
-        const result = (text: string) => ({
-          observations: [{ name, value: name === "File" ? text : [text] }],
-          output: "",
-        });
-        const bytes = encoder.encode(encodeEvaluationResult(result(seed))).byteLength;
-        const value = seed + "x".repeat(65536 - bytes);
-        const source =
-          name === "File" ? '<File path="x" as="file" />' : '<Glob include={["*"]} as="paths" />';
-        for (const extra of ["", "x"]) {
-          const files = recordedFiles({ x: value + extra });
-          const stream = new InMemoryStream();
-          const expected = result(value + extra);
-          expect(encoder.encode(encodeEvaluationResult(expected)).byteLength).toBe(
-            65536 + extra.length,
-          );
-          const outcome = yield* runCapture(
-            source,
+    expect(getterReads).toBe(0);
+    let duplicate: unknown;
+    try {
+      yield* collect(
+        yield* executeInstalled(
+          { ...retainedSource("duplicate.md", "unused"), stream: new InMemoryStream() },
+          [
+            profile(),
             {
-              evaluation: {
-                read: [fileReadEntry(), globReadEntry()],
-                files: {
-                  ...files,
-                  *globFiles() {
-                    return Ok([value + extra]);
-                  },
-                },
-              },
-            },
-            undefined,
-            stream,
-          );
-          if (extra === "") {
-            expect(outcome).toEqual(Ok(expected));
-          } else {
-            expect(outcome.ok).toBe(false);
-            if (!outcome.ok) {
-              expect(outcome.error).toBeInstanceOf(EvaluationLimitError);
-            }
-            expect(outcome).not.toHaveProperty("value");
-            expect(JSON.stringify(stream.snapshot())).not.toContain(value);
-          }
-        }
-      }
-    }
-  });
-
-  it("does not let nested captures extend an enclosing deadline or byte ceiling", function* () {
-    for (const mode of ["bytes", "duration"]) {
-      let outcome: Result<GeneratedObservationResult> | undefined;
-      let cleaned = false;
-      const stream = new InMemoryStream();
-      yield* scoped(function* () {
-        yield* collect(
-          yield* executeInstalled(
-            {
-              ...retainedSource(
-                "nested.md",
-                "<Outer><Inner><Evaluate text={'<File path=\"x\" />'} /></Inner></Outer>",
-              ),
-              stream,
-            },
-            [
-              {
-                evaluation: {
-                  read: [fileReadEntry()],
-                  files: {
-                    ...recordedFiles(),
-                    *readTextFile() {
-                      yield* ensure(function* () {
-                        yield* sleep(5);
-                        cleaned = true;
-                      });
-                      if (mode === "duration") {
-                        yield* suspend();
-                      }
-                      return Ok("x".repeat(500));
-                    },
-                  },
-                },
-                components: ["Outer", "Inner"].map((name) => ({
-                  name,
-                  origin: "test://nested",
+              components: [
+                {
+                  name: "Capture",
+                  origin: "test://capture",
                   props: { type: "object" },
                   factory(claim) {
-                    const capture = boundedEvaluation(
-                      claim,
-                      Object.freeze({
-                        durationMs: name === "Outer" ? 40 : 1000,
-                        resultBytes: name === "Outer" ? 128 : 65536,
-                      }),
-                    );
-                    return function* (_props, invocation) {
-                      const result = yield* capture(invocation);
-                      if (name === "Outer") {
-                        outcome = result;
-                      }
+                    boundedEvaluation(claim, bounds);
+                    boundedEvaluation(claim, bounds);
+                    return function* () {
                       return "";
                     };
                   },
-                })),
-              },
-            ],
-          ),
-        );
-      });
-      expect(cleaned).toBe(true);
-      expect(outcome?.ok).toBe(false);
-      if (outcome !== undefined && !outcome.ok) {
-        expect(outcome.error).toBeInstanceOf(EvaluationLimitError);
-      }
-      expect(
-        stream
-          .snapshot()
-          .filter((event) => event.type === "yield" && event.description.type === "generated_xmd"),
-      ).toEqual([]);
-    }
-  });
-
-  it("keeps publication failure terminal and never exposes the accepted result", function* () {
-    const stream = new InMemoryStream();
-    const broken = new Error("append sentinel");
-    stream.onAppend = (event) => {
-      if (event.type === "yield" && event.description.type === "generated_xmd") {
-        throw broken;
-      }
-    };
-    let failure: unknown;
-    try {
-      const outcome = yield* runCapture(
-        "small",
-        { evaluation: { read: [fileReadEntry()], files: recordedFiles() } },
-        undefined,
-        stream,
-      );
-      if (!outcome.ok) {
-        failure = outcome.error;
-      }
-    } catch (error) {
-      failure = evaluationFailure(error);
-    }
-    expect(failure).toBeInstanceOf(EvaluationInfrastructureError);
-    expect(stream.snapshot().filter((event) => event.type === "close")).toEqual([]);
-  });
-
-  it("does not accept a nested wrapper's edited public result as canonical completion", function* () {
-    let outer: Result<GeneratedObservationResult> | undefined;
-    yield* scoped(function* () {
-      yield* collect(
-        yield* executeInstalled(
-          {
-            ...retainedSource(
-              "edited.md",
-              "<Outer><Inner><Evaluate text={'<File path=\"x\" />'} /></Inner></Outer>",
-            ),
-            stream: new InMemoryStream(),
-          },
-          [
-            {
-              evaluation: { read: [fileReadEntry()], files: recordedFiles({ x: "historical" }) },
-              components: ["Outer", "Inner"].map((name) => ({
-                name,
-                origin: "test://edited",
-                props: { type: "object" },
-                factory(claim) {
-                  const capture = boundedEvaluation(
-                    claim,
-                    Object.freeze({ durationMs: 1000, resultBytes: 65536 }),
-                  );
-                  return function* (_props, invocation) {
-                    const result = yield* capture(invocation);
-                    if (name === "Outer") {
-                      outer = result;
-                    } else if (result.ok) {
-                      Reflect.set(result.value, "output", "forged");
-                      Reflect.set(result.value.observations[0]!, "value", "forged");
-                    }
-                    return "";
-                  };
                 },
-              })),
+              ],
             },
           ],
         ),
       );
-    });
-    expect(outer).toEqual(
-      Ok({ observations: [{ name: "File", value: "historical" }], output: "historical" }),
-    );
+    } catch (error) {
+      duplicate = error;
+    }
+    expect(duplicate).toBeInstanceOf(Error);
   });
 
-  for (const mode of ["success", "refused", "deadline"]) {
-    it(`keeps teardown terminal after ${mode}`, function* () {
+  it("keeps cleanup terminal after success, read refusal, overflow and deadline expiry", function* () {
+    for (const mode of ["success", "refusal", "overflow", "duration"]) {
       const cleanup = new Error(`cleanup ${mode}`);
-      const result = yield* runCapture(
-        '<File path="x" />',
+      const files = recordedFiles(
+        { x: mode === "overflow" ? "too much" : "x" },
         {
-          evaluation: {
-            read: [fileReadEntry()],
-            files: {
-              ...recordedFiles(),
-              *readTextFile() {
-                yield* ensure(function* () {
-                  yield* sleep(5);
-                  throw cleanup;
-                });
-                if (mode === "deadline") {
-                  yield* suspend();
-                }
-                return mode === "refused" ? Err(new Error("private file error")) : Ok("small");
-              },
-            },
+          *hold() {
+            if (mode === "duration") {
+              yield* suspend();
+            }
           },
         },
-        Object.freeze({ durationMs: 30, resultBytes: 65536 }),
+      );
+      if (mode === "refusal") {
+        files.entries.delete("x");
+      }
+      const installation: ExecutionInstallation = {
+        ...profile(files),
+        components: [
+          {
+            name: "Cleanup",
+            origin: "test://cleanup",
+            props: { type: "object" },
+            factory() {
+              return function* () {
+                yield* ensure(function* () {
+                  yield* sleep(3);
+                  throw cleanup;
+                });
+                return yield* content();
+              };
+            },
+          },
+        ],
+      };
+      const result = yield* runCapture(
+        "",
+        installation,
+        Object.freeze({
+          durationMs: mode === "duration" ? 20 : 1000,
+          outputBytes: mode === "overflow" ? 1 : 65536,
+        }),
+        new InMemoryStream(),
+        "",
+        "<Cleanup><Evaluate text={'<File path=\"x\" />'} /></Cleanup>",
       );
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error).toBeInstanceOf(EvaluationInfrastructureError);
+        expect(result.error).toMatchObject({ phase: "cleanup" });
       }
-    });
-  }
+    }
+  });
 
-  it("does not convert caller cancellation into a local refusal or publish a closed child", function* () {
-    const started = withResolvers<void>();
-    let cleaned = false;
-    let escaped = false;
-    const stream = new InMemoryStream();
-    yield* scoped(function* () {
-      const task = yield* spawn(function* () {
-        yield* runCapture(
-          '<File path="x" />',
+  it("replays a settled refusal as the same typed failure without redoing a fragment", function* () {
+    for (const source of ["<NoSuchComponent />", "x".repeat(3)]) {
+      const stream = new InMemoryStream();
+      const selected = Object.freeze({ durationMs: 1000, outputBytes: 2 });
+      const first = yield* runCapture(source, profile(), selected, stream);
+      const childOnly = new InMemoryStream(
+        stream.snapshot().filter((event) => event.type !== "close" || event.coroutineId !== "root"),
+      );
+      const second = yield* runCapture(source, profile(), selected, childOnly);
+      expect(second.ok).toBe(false);
+      if (!first.ok && !second.ok) {
+        expect(second.error.constructor).toBe(first.error.constructor);
+      }
+    }
+  });
+
+  it("rejects composition conflicts at capture, not after an earlier read", function* () {
+    const json = jsonCompositionEntry();
+    for (const entries of [
+      [json, json],
+      [json, { ...json, forms: ["paired"], identity: { ...json.identity, revision: "changed" } }],
+      [{ ...json, forms: [] }],
+      [{ ...json, name: "File" }],
+      [{ ...json, identity: { origin: "", key: "Json", revision: "1" } }],
+    ]) {
+      let failure: unknown;
+      try {
+        // Invalid host forms deliberately cross the same runtime boundary as a JavaScript host.
+        const prepare = Reflect.apply(prepareEvaluationProfile, undefined, [
+          { composition: entries, read: [fileReadEntry()], files: recordedFiles() },
+        ]);
+        yield* prepare;
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(Error);
+    }
+  });
+
+  it("interprets local data in structural constructs and refuses runtime-unbound data before the consumer body", function* () {
+    const files = recordedFiles({ x: "data" });
+    const source =
+      '<Let value={["one", "two"]} as="items" /><Each in={items} let="item"><Json value={{ item }} /></Each><File path="x" as="readme" />{readme}';
+    const result = yield* runCapture(source, profile(files));
+    if (!result.ok) {
+      throw result.error;
+    }
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toContain('"item": "one"');
+      expect(result.value).toContain('"item": "two"');
+      expect(result.value).toContain("data");
+    }
+    let consumed = 0;
+    const json = jsonCompositionEntry();
+    const installation: ExecutionInstallation = {
+      evaluation: {
+        ...profile().evaluation!,
+        composition: [
           {
-            evaluation: {
-              read: [fileReadEntry()],
-              files: {
-                ...recordedFiles(),
-                *readTextFile() {
-                  yield* ensure(function* () {
-                    yield* sleep(5);
-                    cleaned = true;
-                  });
-                  started.resolve();
-                  yield* suspend();
-                  return Ok("");
-                },
+            ...json,
+            name: "Consume",
+            identity: { ...json.identity, key: "Consume" },
+            definition: {
+              ...json.definition,
+              fn: function* () {
+                consumed++;
+                return "";
               },
             },
           },
-          undefined,
-          stream,
-        );
-        escaped = true;
-      });
-      yield* started.operation;
-      yield* task.halt();
-    });
-    expect(cleaned).toBe(true);
-    expect(escaped).toBe(false);
-    expect(stream.snapshot().filter((event) => event.type === "close")).toEqual([]);
-  });
-
-  it("distinguishes ordinary read and Syntax refusals from unexpected provider exceptions", function* () {
-    const missing = yield* runCapture('<File path="missing" />', {
-      evaluation: { read: [fileReadEntry()], files: recordedFiles() },
-    });
-    expect(missing.ok).toBe(false);
-    if (!missing.ok) {
-      expect(missing.error).toBeInstanceOf(EvaluationCandidateError);
-    }
-    const syntax = yield* runCapture(
-      '<Syntax names={["NotAComponent"]} />',
-      syntaxInstallation({ installs: 0, claims: 0, reads: 0 }),
+        ],
+      },
+    };
+    const unbound = yield* runCapture(
+      '<If condition={false}><Let value="absent" as="value" /></If><Consume value={{ value }} />',
+      installation,
     );
-    expect(syntax.ok).toBe(false);
-    if (!syntax.ok) {
-      expect(syntax.error).toBeInstanceOf(EvaluationCandidateError);
+    expect(unbound.ok).toBe(false);
+    if (!unbound.ok) {
+      expect(unbound.error).toBeInstanceOf(EvaluationCandidateError);
     }
-    const provider = new Error("private provider sentinel");
-    const broken = yield* runCapture('<File path="x" />', {
-      evaluation: {
-        read: [fileReadEntry()],
-        files: {
-          ...recordedFiles(),
-          *readTextFile() {
-            throw provider;
-          },
-        },
-      },
-    });
-    expect(broken.ok).toBe(false);
-    if (!broken.ok) {
-      expect(broken.error).toBeInstanceOf(EvaluationInfrastructureError);
-      expect(broken.error.cause).toBe(provider);
-    }
-    const unavailable = new FilesProviderUnavailableError();
-    const absent = yield* runCapture('<File path="x" />', {
-      evaluation: {
-        read: [fileReadEntry()],
-        files: {
-          ...recordedFiles(),
-          *readTextFile() {
-            return Err(unavailable);
-          },
-        },
-      },
-    });
-    expect(absent.ok).toBe(false);
-    if (!absent.ok) {
-      expect(absent.error).toBeInstanceOf(EvaluationInfrastructureError);
-    }
-    const cyclic = new Error("cycle");
-    cyclic.cause = cyclic;
-    expect(evaluationFailure(cyclic)).toBeInstanceOf(EvaluationInfrastructureError);
-    expect(
-      evaluationFailure(new GeneratedXmdError("The generated request was refused.")),
-    ).toBeInstanceOf(EvaluationInfrastructureError);
+    expect(consumed).toBe(0);
   });
 
-  it("refuses corrupt closed records and missing child outcomes before another read", function* () {
-    const files = recordedFiles({ x: "historical" });
-    const profile = { evaluation: { read: [fileReadEntry()], files } };
+  it("does not let nested work extend the enclosing deadline and awaits caller cancellation cleanup", function* () {
+    for (const cancel of [false, true]) {
+      const started = withResolvers<void>();
+      let cleaned = false;
+      const files = recordedFiles(
+        { x: "waiting" },
+        {
+          *hold() {
+            yield* ensure(function* () {
+              yield* sleep(5);
+              cleaned = true;
+            });
+            started.resolve();
+            yield* suspend();
+          },
+        },
+      );
+      const installation: ExecutionInstallation = {
+        ...profile(files),
+        components: [
+          {
+            name: "Inner",
+            origin: "test://inner",
+            props: { type: "object" },
+            factory(claim) {
+              const capture = boundedEvaluation(
+                claim,
+                Object.freeze({ durationMs: 100000, outputBytes: 100000 }),
+              );
+              return function* (_props, invocation) {
+                const result = yield* capture(invocation);
+                if (!result.ok) {
+                  throw result.error;
+                }
+                return result.value;
+              };
+            },
+          },
+        ],
+      };
+      const task = yield* spawn(() =>
+        runCapture(
+          "",
+          installation,
+          Object.freeze({ durationMs: cancel ? 100000 : 25, outputBytes: 65536 }),
+          new InMemoryStream(),
+          "",
+          "<Inner><Evaluate text={'<File path=\"x\" />'} /></Inner>tail",
+        ),
+      );
+      yield* started.operation;
+      if (cancel) {
+        yield* task.halt();
+      } else {
+        const result = yield* task;
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error).toBeInstanceOf(EvaluationLimitError);
+        }
+      }
+      expect(cleaned).toBe(true);
+    }
+  });
+
+  it("checks current identities and malformed history before either child or root reuse", function* () {
+    const counts = { installs: 0, claims: 0, reads: 0 };
     const stream = new InMemoryStream();
-    const source = '<File path="x" />';
-    yield* runCapture(source, profile, undefined, stream);
-    for (const change of [
-      "missing-close",
-      "missing-header",
-      "version",
+    const source = '<Syntax names={["File"]} />';
+    expect((yield* runCapture(source, syntaxInstallation(counts), bounds, stream)).ok).toBe(true);
+    for (const mutation of [
       "source",
-      "extra",
-      "bad-result",
-      "admission",
-      "retained-identity",
-      "retained-form",
+      "reference",
+      "identity",
+      "form",
+      "duration",
+      "bytes",
+      "missing",
+      "malformed",
+      "retained-source",
+      "syntax-record",
     ]) {
-      const events = stream
+      const current = { installs: 0, claims: 0, reads: 0 };
+      const configured = syntaxInstallation(
+        current,
+        mutation === "reference" ? "reference-v2" : "reference-v1",
+        mutation === "identity" ? "2" : "1",
+      );
+      const installation: ExecutionInstallation =
+        mutation === "form" && configured.evaluation !== undefined
+          ? {
+              ...configured,
+              evaluation: {
+                ...configured.evaluation,
+                read: configured.evaluation.read.map((entry) => ({ ...entry, forms: ["paired"] })),
+              },
+            }
+          : configured;
+      const history = stream
         .snapshot()
         .filter(
           (event) =>
-            !(
-              change === "missing-close" &&
-              event.type === "close" &&
-              event.coroutineId === "root.0"
-            ) &&
-            !(
-              change === "missing-header" &&
-              event.type === "yield" &&
-              event.description.type === "evaluation_stage"
-            ),
+            mutation !== "missing" ||
+            event.type !== "yield" ||
+            event.description.type !== "evaluation_environment",
         );
-      for (const event of events) {
-        if (event.result.status !== "ok" || !isJsonObject(event.result.value)) {
-          continue;
-        }
-        if (event.type === "close" && event.coroutineId === "root.0") {
-          if (change === "version") {
-            event.result.value.version = 2;
-          }
-          if (change === "source") {
-            event.result.value.source = "changed";
-          }
-          if (change === "extra") {
-            event.result.value.extra = true;
-          }
-          if (change === "bad-result") {
-            event.result.value.outcome = { status: "accepted", result: { output: "partial" } };
-          }
-        }
+      for (const event of history) {
         if (
-          change === "admission" &&
+          mutation === "syntax-record" &&
           event.type === "yield" &&
-          event.description.type === "generated_xmd"
+          event.description.type === "syntax_symbols"
         ) {
-          event.result.value.source = "changed";
+          event.result = { status: "ok", value: { symbols: 1 } };
         }
         if (
           event.type === "yield" &&
           event.description.type === "generated_xmd" &&
-          isJsonObject(event.result.value.policy)
+          event.result.status === "ok"
         ) {
-          const allowed = event.result.value.policy.allowed;
-          if (Array.isArray(allowed) && isJsonObject(allowed[0])) {
-            if (change === "retained-form") {
-              allowed[0].forms = ["paired"];
-            }
-            if (change === "retained-identity" && isJsonObject(allowed[0].identity)) {
-              allowed[0].identity.revision = "changed";
-            }
+          if (mutation === "malformed") {
+            event.result.value = null;
+          }
+          if (
+            mutation === "retained-source" &&
+            typeof event.result.value === "object" &&
+            event.result.value !== null &&
+            !Array.isArray(event.result.value)
+          ) {
+            event.result.value.source = "changed";
           }
         }
       }
       let failure: unknown;
       try {
-        yield* runCapture(source, profile, undefined, new InMemoryStream(events));
+        const result = yield* runCapture(
+          mutation === "source" ? "changed" : source,
+          installation,
+          Object.freeze({
+            durationMs: mutation === "duration" ? 999 : 1000,
+            outputBytes: mutation === "bytes" ? 65535 : 65536,
+          }),
+          new InMemoryStream(history),
+        );
+        if (!result.ok) {
+          failure = result.error;
+        }
       } catch (error) {
         failure = error;
       }
       expect(failure).toBeInstanceOf(EvaluationStaleError);
+      expect(current.reads).toBe(0);
     }
-    expect(files.performed).toEqual(["read x"]);
+  });
+
+  it("reports persistence and unexpected provider failures as terminal infrastructure", function* () {
+    for (const persistence of [true, false]) {
+      const failure = new Error("private host failure");
+      const stream = new InMemoryStream();
+      if (persistence) {
+        stream.onAppend = (event) => {
+          if (event.type === "yield" && event.description.type === "generated_xmd") {
+            throw failure;
+          }
+        };
+      }
+      const files = recordedFiles(
+        { x: "unused" },
+        {
+          *hold() {
+            throw failure;
+          },
+        },
+      );
+      const result = yield* runCapture('<File path="x" />', profile(files), bounds, stream);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toBeInstanceOf(EvaluationInfrastructureError);
+        expect(result.error).toMatchObject({ phase: persistence ? "persistence" : "runtime" });
+      }
+    }
+  });
+
+  it("normalizes runtime data-prop refusals before invoking their consumer", function* () {
+    const files = recordedFiles();
+    const result = yield* runCapture(
+      '<Let value={2} as="path" /><File path={path} />',
+      profile(files),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(EvaluationCandidateError);
+      expect(result.error.cause).toBeInstanceOf(Error);
+    }
+    expect(files.performed).toEqual([]);
+  });
+  it("settles nested projections before taking either snapshot, live and on closed-child replay", function* () {
+    let innerBodies = 0;
+    const installation: ExecutionInstallation = {
+      ...profile(),
+      components: [
+        {
+          name: "Inner",
+          origin: "test://inner",
+          props: { type: "object" },
+          factory(claim) {
+            const capture = boundedEvaluation(
+              claim,
+              Object.freeze({ durationMs: 2000, outputBytes: 100000 }),
+            );
+            return function* (_props, invocation) {
+              innerBodies++;
+              const result = yield* capture(invocation);
+              if (!result.ok) {
+                throw result.error;
+              }
+              return result.value;
+            };
+          },
+        },
+      ],
+    };
+    const projection = '<Inner><Evaluate text="inner" /></Inner>tail';
+    const stream = new InMemoryStream();
+    expect(yield* runCapture("", installation, bounds, stream, "", projection)).toEqual(
+      Ok("innertail"),
+    );
+    const resumed = new InMemoryStream(
+      stream.snapshot().filter((event) => event.type !== "close" || event.coroutineId !== "root"),
+    );
+    expect(yield* runCapture("", installation, bounds, resumed, "", projection)).toEqual(
+      Ok("innertail"),
+    );
+    expect(innerBodies).toBe(1);
+    const overflow = yield* runCapture(
+      "",
+      installation,
+      Object.freeze({ durationMs: 1000, outputBytes: 8 }),
+      new InMemoryStream(),
+      "",
+      projection,
+    );
+    expect(overflow.ok).toBe(false);
+    if (!overflow.ok) {
+      expect(overflow.error).toBeInstanceOf(EvaluationLimitError);
+    }
+  });
+
+  it("retains ordinary effects after runtime refusal and overflow instead of rolling them back", function* () {
+    for (const tail of ['<File path="missing" />', "x".repeat(9)]) {
+      const stream = new InMemoryStream();
+      const performed: string[] = [];
+      const files = {
+        ...recordedFiles(),
+        *readTextFile(input: { path: string }): Operation<Result<string>> {
+          if (input.path === "missing") {
+            return Err(new Error("missing"));
+          }
+          const value: unknown = yield createDurableOperation(
+            { type: "test_read", name: input.path },
+            function* () {
+              performed.push(input.path);
+              return "retained";
+            },
+          );
+          if (typeof value !== "string") {
+            throw new Error("Invalid retained read");
+          }
+          return Ok(value);
+        },
+      };
+      const result = yield* runCapture(
+        `<File path="first" as="first" />${tail}`,
+        profile(files),
+        Object.freeze({ durationMs: 1000, outputBytes: 8 }),
+        stream,
+      );
+      expect(result.ok).toBe(false);
+      expect(performed).toEqual(["first"]);
+      const effects = stream
+        .snapshot()
+        .filter((event) => event.type === "yield" && event.description.type === "test_read");
+      expect(effects).toHaveLength(1);
+      expect(effects[0]?.coroutineId).toContain(".projection-");
+      expect(
+        stream
+          .snapshot()
+          .some((event) => event.type === "close" && event.coroutineId.includes(".projection-")),
+      ).toBe(true);
+    }
+  });
+
+  it("waits for ordinary persistence, retains cancellation history, and resumes the first unrecorded child effect", function* () {
+    const persisted = new InMemoryStream();
+    const appending = withResolvers<void>();
+    const ack = withResolvers<void>();
+    const second = withResolvers<void>();
+    const performed: string[] = [];
+    let resumedFirst = false;
+    const stream: DurableStream = {
+      readAll: () => persisted.readAll(),
+      *append(event) {
+        if (
+          event.type === "yield" &&
+          event.description.type === "test_read" &&
+          event.description.name === "first"
+        ) {
+          appending.resolve();
+          yield* ack.operation;
+        }
+        yield* persisted.append(event);
+      },
+    };
+    const files = {
+      ...recordedFiles(),
+      *readTextFile(input: { path: string }) {
+        const value: unknown = yield createDurableOperation(
+          { type: "test_read", name: input.path },
+          function* () {
+            performed.push(input.path);
+            if (input.path === "second") {
+              second.resolve();
+              yield* suspend();
+            }
+            return input.path;
+          },
+        );
+        resumedFirst = true;
+        if (typeof value !== "string") {
+          throw new Error("Invalid retained read");
+        }
+        return Ok(value);
+      },
+    };
+    const source = '<File path="first" /><File path="second" />';
+    const task = yield* spawn(() => runCapture(source, profile(files), bounds, stream));
+    yield* appending.operation;
+    expect(resumedFirst).toBe(false);
+    expect(
+      persisted
+        .snapshot()
+        .filter((event) => event.type === "yield" && event.description.type === "test_read"),
+    ).toHaveLength(0);
+    ack.resolve();
+    yield* second.operation;
+    expect(resumedFirst).toBe(true);
+    const interrupted = persisted.snapshot();
+    yield* task.halt();
+    expect(
+      persisted
+        .snapshot()
+        .filter((event) => event.type === "yield" && event.description.type === "test_read"),
+    ).toHaveLength(1);
+    const continuationFiles = {
+      ...recordedFiles(),
+      *readTextFile(input: { path: string }) {
+        const value: unknown = yield createDurableOperation(
+          { type: "test_read", name: input.path },
+          function* () {
+            performed.push(`resume ${input.path}`);
+            return input.path;
+          },
+        );
+        if (typeof value !== "string") {
+          throw new Error("Invalid retained read");
+        }
+        return Ok(value);
+      },
+    };
+    expect(
+      yield* runCapture(
+        source,
+        profile(continuationFiles),
+        bounds,
+        new InMemoryStream(interrupted),
+      ),
+    ).toEqual(Ok("firstsecond"));
+    expect(performed).toEqual(["first", "second", "resume second"]);
+  });
+  it("renders ordinary Evaluate output and lets Let capture it without a result envelope", function* () {
+    const source =
+      '<File path="readme" as="readme" /><Json value={{ readme, nested: [null, true, { count: 2 }] }} />';
+    const files = recordedFiles({ readme: "contents" });
+    const document = `<Let as="findings"><Evaluate text={${JSON.stringify(source)}} /></Let>\n<Json value={findings} />`;
+    const result = yield* collect(
+      yield* executeInstalled(
+        { ...retainedSource("ordinary.md", document), stream: new InMemoryStream() },
+        [profile(files)],
+      ),
+    );
+    expect(JSON.parse(String(result))).toBe(
+      JSON.stringify({ readme: "contents", nested: [null, true, { count: 2 }] }, null, 2),
+    );
+    expect(files.performed).toEqual(["read readme"]);
+  });
+
+  it("keeps Json available under write selection without granting a read effect", function* () {
+    const files = recordedFiles();
+    const installation = {
+      evaluation: {
+        composition: [jsonCompositionEntry()],
+        read: [fileReadEntry()],
+        write: [fileWriteEntry()],
+        files,
+      },
+    };
+    const text = '<Json value={{ only: ["composition"] }} />';
+    const result = yield* collect(
+      yield* executeInstalled(
+        {
+          stream: new InMemoryStream(),
+          ...retainedSource(
+            "write.md",
+            `<Evaluate allow={["write"]} text={${JSON.stringify(text)}} />`,
+          ),
+        },
+        [installation],
+      ),
+    );
+    expect(JSON.parse(String(result))).toEqual({ only: ["composition"] });
+  });
+
+  it("composes Glob, File and protected Syntax bindings only through authored Json", function* () {
+    const counts = { installs: 0, claims: 0, reads: 0 };
+    const installation = syntaxInstallation(counts);
+    const files = {
+      ...recordedFiles({ "README.md": "readme" }),
+      *globFiles() {
+        return Ok([]);
+      },
+    };
+    const configured: ExecutionInstallation = {
+      ...installation,
+      evaluation: {
+        ...installation.evaluation!,
+        composition: [jsonCompositionEntry()],
+        read: [globReadEntry(), fileReadEntry(), ...installation.evaluation!.read],
+        files,
+      },
+    };
+    const source =
+      '<Glob include={["**/AGENTS.md"]} as="paths" /><File path="README.md" as="readme" /><Syntax names={["Elicit", "File"]} as="syntax" /><Json value={{ paths, readme, syntax }} />';
+    const result = yield* runCapture(source, configured);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const rendered = JSON.parse(result.value);
+      expect(rendered.paths).toEqual([]);
+      expect(rendered.readme).toBe("readme");
+      expect(rendered.syntax).toContain("File");
+      expect(Object.keys(rendered)).toEqual(["paths", "readme", "syntax"]);
+    }
+    expect(counts.reads).toBe(1);
+  });
+
+  it("rejects every executable expression form before an earlier read, not just at Json", function* () {
+    for (const expression of [
+      "globalThis",
+      "missing",
+      "readme()",
+      "new Date()",
+      "-1",
+      "1 + 2",
+      "readme = 1",
+      "readme++",
+      "[...readme]",
+      "{...readme}",
+      "{[readme]: 1}",
+      "`template`",
+      "globalThis.process",
+      "readme.constructor",
+      "() => 1",
+    ]) {
+      const files = recordedFiles({ x: "data" });
+      const result = yield* runCapture(
+        `<File path="x" as="readme" /><Json value={${expression}} />`,
+        profile(files),
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toBeInstanceOf(EvaluationCandidateError);
+      }
+      expect(files.performed).toEqual([]);
+    }
+  });
+
+  it("counts rendered UTF-8 bytes, not an envelope, escaping, or hidden bound values", function* () {
+    for (const [text, accepted] of [
+      ["x".repeat(65536), true],
+      ["x".repeat(65537), false],
+      ["é".repeat(32768), true],
+      ["é".repeat(32769), false],
+      ["😀".repeat(16384), true],
+      ["😀".repeat(16385), false],
+    ]) {
+      if (typeof text !== "string") {
+        throw new Error("Bad fixture");
+      }
+      const result = yield* runCapture(text);
+      expect(result.ok).toBe(accepted);
+      if (!result.ok) {
+        expect(result.error).toBeInstanceOf(EvaluationLimitError);
+        expect(result).not.toHaveProperty("value");
+      }
+    }
+    const hidden = yield* runCapture(
+      '<File path="huge" as="unused" />ok',
+      profile(recordedFiles({ huge: "x".repeat(100000) })),
+      Object.freeze({ durationMs: 1000, outputBytes: 2 }),
+    );
+    expect(hidden).toEqual(Ok("ok"));
+    const unwrapped = yield* collect(
+      yield* executeInstalled(
+        {
+          ...retainedSource(
+            "unbounded.md",
+            `<Evaluate text={${JSON.stringify("x".repeat(65537))}} />`,
+          ),
+          stream: new InMemoryStream(),
+        },
+        [profile()],
+      ),
+    );
+    expect(unwrapped).toBe("x".repeat(65537));
+    for (const length of [65534, 65535]) {
+      const json = yield* runCapture(`<Json value={${JSON.stringify("x".repeat(length))}} />`);
+      expect(json.ok).toBe(length === 65534);
+    }
+    const files = recordedFiles({ late: "must not read" });
+    const loop = yield* runCapture(
+      '<Each in={[1, 2]} let="item">12345<File path="late" as="ignored" /></Each>',
+      profile(files),
+      Object.freeze({ durationMs: 1000, outputBytes: 4 }),
+    );
+    expect(loop.ok).toBe(false);
+    expect(files.performed).toEqual([]);
+  });
+
+  it("rejects a changed filesystem identity and stores only structural durable data", function* () {
+    const stream = new InMemoryStream();
+    const source = '<File path="x" />';
+    expect(
+      yield* runCapture(source, profile(recordedFiles({ x: "historical" })), bounds, stream),
+    ).toEqual(Ok("historical"));
+    const files = {
+      ...recordedFiles({ x: "current" }),
+      replayIdentity: Object.freeze({ scope: "test://other-workspace", policy: "read-write-v1" }),
+    };
+    let failure: unknown;
+    try {
+      yield* runCapture(source, profile(files), bounds, new InMemoryStream(stream.snapshot()));
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(EvaluationStaleError);
+    expect(files.performed).toEqual([]);
+    function inspect(value: unknown): void {
+      expect(typeof value).not.toBe("function");
+      if (value !== null && typeof value === "object") {
+        expect([Object.prototype, Array.prototype]).toContain(Object.getPrototypeOf(value));
+        for (const member of Object.values(value)) {
+          inspect(member);
+        }
+      }
+    }
+    inspect(stream.snapshot());
+    expect(
+      stream
+        .snapshot()
+        .some(
+          (event) =>
+            event.type === "yield" &&
+            ["evaluation_stage", "evaluation_result"].includes(event.description.type),
+        ),
+    ).toBe(false);
+  });
+
+  it("includes trailing projection output instead of freezing at Evaluate completion", function* () {
+    const stream = new InMemoryStream();
+    const first = yield* runCapture("inner", profile(), bounds, stream, "tail");
+    expect(first).toEqual(Ok("innertail"));
+    const resumed = new InMemoryStream(
+      stream.snapshot().filter((event) => event.type !== "close" || event.coroutineId !== "root"),
+    );
+    expect(yield* runCapture("inner", profile(), bounds, resumed, "tail")).toEqual(first);
+  });
+
+  it("waits for delayed cleanup before a typed deadline refusal", function* () {
+    let cleaned = false;
+    const files = recordedFiles(
+      { x: "never" },
+      {
+        *hold() {
+          yield* ensure(function* () {
+            yield* sleep(5);
+            cleaned = true;
+          });
+          yield* suspend();
+        },
+      },
+    );
+    const result = yield* runCapture(
+      '<File path="x" />',
+      profile(files),
+      Object.freeze({ durationMs: 30, outputBytes: 65536 }),
+    );
+    expect(cleaned).toBe(true);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(EvaluationLimitError);
+    }
+  });
+
+  it("freshly attests completed history without reading Syntax again", function* () {
+    const counts = { installs: 0, claims: 0, reads: 0 };
+    const stream = new InMemoryStream();
+    const source = '<Syntax names={["File"]} />';
+    const first = yield* runCapture(source, syntaxInstallation(counts), bounds, stream);
+    expect(first.ok).toBe(true);
+    const resumed = new InMemoryStream(
+      stream.snapshot().filter((event) => event.type !== "close" || event.coroutineId !== "root"),
+    );
+    expect(yield* runCapture(source, syntaxInstallation(counts), bounds, resumed)).toEqual(first);
+    expect(
+      yield* runCapture(
+        source,
+        syntaxInstallation(counts),
+        bounds,
+        new InMemoryStream(stream.snapshot()),
+      ),
+    ).toEqual(first);
+    expect(counts).toEqual({ installs: 3, claims: 3, reads: 1 });
   });
 });
