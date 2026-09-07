@@ -220,6 +220,8 @@ export interface ProtectedSite {
   readonly evaluation: CapturedProfile | undefined;
   /** How this body renders its own paired content, when it has any. */
   readonly projectContent: ProjectProtectedContent | undefined;
+  /** Derive a child route from this site's exact admitted implementations. */
+  narrowProtectedBodies(implementations: Iterable<unknown>): ProtectedBodies | undefined;
 }
 
 /**
@@ -236,6 +238,21 @@ export interface ProtectedSite {
 export interface ProtectedBodies {
   /** The body canonical expansion may enter for this exact implementation. */
   body(fn: unknown): ProtectedBody | undefined;
+  /** Project an already routed source; report its documentation origin, never its body. */
+  project(source: unknown, wrapper: unknown): string | undefined;
+  /** A fresh route seeded only with exact implementations this route holds. */
+  narrow(implementations: Iterable<unknown>): ProtectedBodies;
+  /** Issue in the routed body's domain without publishing that domain. */
+  issue(
+    fn: unknown,
+    id: string,
+    component: string,
+    frame: Scope,
+    content: boolean,
+    selection?: FunctionComponent,
+  ): IssuedInvocation | undefined;
+  /** Close this route and its descendants. */
+  close(): void;
 }
 
 interface ProtectedInstallation extends ProtectedBodies {
@@ -250,13 +267,87 @@ interface ProtectedInstallation extends ProtectedBodies {
     name: string,
     build: (claim: IdentityClaimant) => ProtectedBody,
     claim: IdentityClaimant,
+    domain: IdentityDomain,
+    origin: string,
   ): FunctionComponent;
+  /**
+   * End the route, and every route narrowed from it.
+   *
+   * Called at the execution's teardown. A route or a projection callback kept
+   * past the execution answers for nothing afterwards even though the WeakMap it
+   * closed over is still reachable, and a route from one execution can never
+   * authorize another.
+   */
+  revoke(): void;
 }
 
 function createProtectedBodies(): ProtectedInstallation {
-  const bodies = new WeakMap<object, ProtectedBody>();
+  // One liveness flag for the execution's whole route and every route narrowed
+  // from it: teardown revokes the lot at once. A retained route still holds its
+  // WeakMap, so liveness rather than reachability is what invalidates it.
+  let live = true;
+  interface Entry {
+    readonly body: ProtectedBody;
+    readonly domain: IdentityDomain;
+    readonly origin: string;
+  }
+  function route(bodies: WeakMap<object, Entry>, parent: () => boolean): ProtectedBodies {
+    let open = true;
+    const active = () => open && parent();
+    return {
+      body(fn): ProtectedBody | undefined {
+        const entry = active() && typeof fn === "function" ? bodies.get(fn) : undefined;
+        if (entry === undefined) {
+          return undefined;
+        }
+        return function* (props, invocation, site) {
+          if (!active()) {
+            throw new ComponentInvocationError("this protected-body route has closed");
+          }
+          return yield* entry.body(props, invocation, site);
+        };
+      },
+      project(source, wrapper): string | undefined {
+        if (!active() || typeof source !== "function" || typeof wrapper !== "function") {
+          return;
+        }
+        const body = bodies.get(source);
+        if (body !== undefined) {
+          bodies.set(wrapper, body);
+        }
+        return body?.origin;
+      },
+      narrow(implementations): ProtectedBodies {
+        const narrowed = new WeakMap<object, Entry>();
+        if (active()) {
+          for (const implementation of implementations) {
+            if (typeof implementation !== "function") {
+              continue;
+            }
+            const body = bodies.get(implementation);
+            if (body !== undefined) {
+              narrowed.set(implementation, body);
+            }
+          }
+        }
+        return route(narrowed, active);
+      },
+      issue(fn, id, component, frame, content, selection): IssuedInvocation | undefined {
+        const entry = active() && typeof fn === "function" ? bodies.get(fn) : undefined;
+        return entry === undefined || entry.domain.component !== component
+          ? undefined
+          : issueInvocation(id, component, entry.domain, frame, content, selection);
+      },
+      close(): void {
+        open = false;
+      },
+    };
+  }
+  const bodies = new WeakMap<object, Entry>();
+  const base = route(bodies, () => live);
   return {
-    implementation(name, build, claim): FunctionComponent {
+    ...base,
+    implementation(name, build, claim, domain, origin): FunctionComponent {
       // deno-lint-ignore require-yield
       function* unreachable(): Operation<never> {
         throw new ComponentInvocationError(
@@ -264,11 +355,11 @@ function createProtectedBodies(): ProtectedInstallation {
             "observes nothing",
         );
       }
-      bodies.set(unreachable, build(claim));
+      bodies.set(unreachable, { body: build(claim), domain, origin });
       return unreachable;
     },
-    body(fn): ProtectedBody | undefined {
-      return typeof fn === "function" ? bodies.get(fn) : undefined;
+    revoke(): void {
+      live = false;
     },
   };
 }
@@ -990,6 +1081,8 @@ export function installIdentities(
       component.name,
       component.build,
       domain.claim,
+      domain.domain,
+      component.origin,
     );
     domain.implementation = implementation;
     // Not marked private: a protected implementation is resolved by canonical
@@ -1092,6 +1185,10 @@ export function installIdentities(
         for (const domain of minted.values()) {
           domain.revoke();
         }
+        // The route goes with the domains: a wrapper projected into it, or a
+        // route narrowed from it, answers for nothing once the execution that
+        // minted the bodies is gone.
+        protectedBodies.revoke();
       },
     },
     registrations,

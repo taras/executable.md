@@ -54,7 +54,7 @@ import type {
   FragmentFileAccess,
 } from "./fragment-capabilities.ts";
 import { isFormDispatcher } from "./invocation-identity.ts";
-import type { ComponentInvocation } from "./invocation-identity.ts";
+import type { ComponentInvocation, ProtectedBodies } from "./invocation-identity.ts";
 import type { FetchRequest } from "./fetch-request.ts";
 import { normalizeFetchRequest, requestRecord } from "./fetch-request.ts";
 import { CORE_REVISION } from "./generated-xmd.ts";
@@ -411,6 +411,8 @@ export type ResolvedAnswers = ReadonlyMap<string, ResolvedAnswer>;
  * own operation or a provider's answer, and the two are different grants.
  */
 export interface CapturedEntry {
+  /** Documentation provenance of an exact routed answer; grants no callable authority. */
+  readonly protectedOrigin?: string;
   readonly name: string;
   readonly identity: FragmentIdentity;
   readonly forms: readonly FragmentForm[];
@@ -553,8 +555,8 @@ export interface PreparedProfile {
   readonly live: () => boolean;
   /** End them. Registered by canonical execution before any installation runs. */
   readonly revoke: () => void;
-  /** The completed profile, from the answers this execution resolved. */
-  seal(answers: ResolvedAnswers): Operation<CapturedProfile>;
+  /** Seal answers, projecting lifetime wrappers through the execution's private operation. */
+  seal(answers: ResolvedAnswers, project?: ProtectedBodies["project"]): Operation<CapturedProfile>;
 }
 
 /**
@@ -605,14 +607,17 @@ export function* prepareEvaluationProfile(
       capabilities.revoke();
     },
     // deno-lint-ignore require-yield
-    *seal(answers: ResolvedAnswers): Operation<CapturedProfile> {
+    *seal(
+      answers: ResolvedAnswers,
+      project?: ProtectedBodies["project"],
+    ): Operation<CapturedProfile> {
       // One sealed implementation per name, built before either table is
       // sealed. A name that holds two entries — the self-closing spelling in
       // `read` and the paired one in `write` — is one component seen from two
       // sides, so both entries carry the same object: two guards over one
       // answer would be two lifetimes for one implementation, and which of
       // them a fragment reached would depend on which table admitted it.
-      const sealed = sealAnswers(answered, answers, capabilities);
+      const sealed = sealAnswers(answered, answers, capabilities, project);
       return Object.freeze({
         read: sealEntries(read, sealed),
         write: sealEntries(write, sealed),
@@ -877,6 +882,7 @@ function spelling(identity: FragmentIdentity): string {
 
 /** One provider-backed name's sealed implementation, shared by every entry. */
 interface SealedAnswer {
+  readonly protectedOrigin?: string;
   readonly props: PropsSchema;
   readonly definition: FunctionComponentDefinition;
   readonly dispatch?: unknown;
@@ -894,6 +900,7 @@ function sealAnswers(
   answered: ReadonlyMap<string, FragmentIdentity>,
   answers: ResolvedAnswers,
   capabilities: CapturedCapabilities,
+  project: ProtectedBodies["project"] | undefined,
 ): ReadonlyMap<string, SealedAnswer> {
   const sealed = new Map<string, SealedAnswer>();
   for (const name of answered.keys()) {
@@ -908,11 +915,14 @@ function sealAnswers(
     }
     const answer = resolved.definition;
     const inner = answer.fn;
+    const guard = bounded(inner, capabilities);
+    const protectedOrigin = project?.(inner, guard);
     sealed.set(
       name,
       Object.freeze({
         props: detach(answer.props),
-        definition: Object.freeze({ ...answer, fn: bounded(inner, capabilities) }),
+        definition: Object.freeze({ ...answer, fn: guard }),
+        ...(protectedOrigin === undefined ? {} : { protectedOrigin }),
         // The provider's own dispatcher, when its answer has one. The
         // definition above runs behind core's lifetime guard, so what a
         // selection would read off it is core's function rather than the
@@ -950,6 +960,7 @@ function sealEntry(entry: PreparedEntry, sealed: ReadonlyMap<string, SealedAnswe
       kind: "component-answer" as const,
       ...described,
       definition: answer.definition,
+      ...(answer.protectedOrigin === undefined ? {} : { protectedOrigin: answer.protectedOrigin }),
       ...(answer.dispatch === undefined ? {} : { dispatch: answer.dispatch }),
     });
   }

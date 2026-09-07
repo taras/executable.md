@@ -2572,6 +2572,7 @@ function* executeDocument(
                 declared: declaredImports,
                 guarded: identity.protected,
               }),
+              identity.protectedBodies.project,
             );
 
       const authority: ExpansionAuthority = {

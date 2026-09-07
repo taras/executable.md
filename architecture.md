@@ -3714,7 +3714,7 @@ assembled the run. Above them sits the engine's own, and a name in it means the
 same thing in every execution: whichever host built it, whichever package
 registered what, and whatever the repository holds.
 
-One component is in it. `<Syntax />` describes the vocabulary of the site it is
+`<Syntax />` and `<Evaluate>` are in it. `<Syntax />` describes the vocabulary of the site it is
 written at, and a description of a run's vocabulary that anything in the run
 could answer for is a description of nothing — the value of the answer is
 exactly that nobody but core produced it.
@@ -3743,14 +3743,40 @@ and verified where the component is invoked, and core's own copy is what runs.
 Every other name in the execution stays the ordinary open import it has always
 been.
 
-**Protection is about the answer, not about power.** A protected implementation
-is handed the lexical syntax reference for its site and nothing else: no
-component definitions, no import witness, no invocation capability, no policy
-table, no provider and no registration handle. The body itself is kept in a table
-private to the copy of core that built the implementation and reached only by
-canonical expansion, so an implementation another loaded copy created — which is
-an ordinary arrangement, because a component can be loaded from disk beside its
-own copy — has no body here and no answer to give.
+**Protection is about the answer, not about power.** Canonical expansion hands a
+protected body its lexical syntax reference and the internal operations its
+site owns. `<Evaluate>` receives the captured evaluation profile, its paired
+content projection and an operation that derives a child protected route for
+exact admitted definitions. None is published through a context, component API,
+import answer or public host input.
+
+Protected lookup uses exact function identity. The execution's route projects
+an already routed source onto a wrapper without exposing the body; an
+unprotected source projects nothing. Profile sealing projects the first wrapper
+onto the full execution route. `<Evaluate>` derives a fresh child route seeded
+only with its selected sealed definitions, and passes that route and its narrowed
+lexical `SyntaxReference` internally to generated expansion. Generated import
+projects its form/result wrapper only within the child route. Canonical dispatch
+issues the invocation in the routed body's original domain and applies generated
+form checks and read-result collection around either kind of body. Authored
+imports still require their own settled selection frame; a routed function
+cannot repair a missing or multiply selected domain. Paired producers retain
+their lexical site route and operational authority.
+
+A trusted provider may therefore delegate and claim canonical self-closing
+`<Syntax>` as a component answer. Its bare form reports the admitted vocabulary;
+its named form renders the enclosing authoring documentation with narrowed
+availability. Verified protected documentation provenance survives sealing even
+when the delegating provider has a different origin. That provenance is
+descriptive data and never a callable lookup key.
+
+Routes, projection edges, bodies, domains, callable sets and site operations
+belong to one live execution. Child closure and execution teardown invalidate
+retained operations. A same-name function, structural clone, independent wrapper,
+unadmitted definition or implementation another loaded copy built gains no
+route. Durable records keep their existing structural identities, forms, source,
+profile inputs and results; they contain no callable authority. Continuation
+rebuilds routes from the resuming execution's own verified answers.
 
 **The named form is a second question.** Bare `<Syntax />` answers *what may I
 write here*. `<Syntax names={["Elicit"]} />` answers *how do I use this one*, and

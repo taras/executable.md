@@ -19,6 +19,8 @@
  */
 
 import type { ComponentDefinition, FunctionComponentDefinition, SourcePosition } from "../types.ts";
+import type { Operation } from "effection";
+import type { ComponentInvocation } from "../invocation-identity.ts";
 import type {
   FormSelections,
   InvocationIdentities,
@@ -147,6 +149,12 @@ export interface ExpansionAuthority {
    * kept past this execution's teardown reaches a table that is gone.
    */
   readonly protectedBodies?: ProtectedBodies;
+  /** The generated import's form check and result collection, around either body kind. */
+  readonly invoke?: (
+    fn: unknown,
+    invocation: ComponentInvocation,
+    body: Operation<unknown>,
+  ) => Operation<unknown>;
 }
 
 /** Why an answer is not the one canonical execution produced for this name. */

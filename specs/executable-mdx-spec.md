@@ -3920,6 +3920,35 @@ keeps its own imports, declarations, bindings, providers, working directory and
 error mode; and it is not published through `ActiveProjection`, so nothing else
 in the execution can obtain or influence it.
 
+**Protected answers survive only canonical wrapping.** A trusted provider may
+delegate canonical self-closing `<Syntax>` and claim that exact answer for a
+component-answer profile entry. Profile sealing projects its lifetime wrapper
+from the exact protected function. `<Evaluate>` derives a fresh child route
+containing only the protected bodies among its selected sealed definitions and
+passes it, with the already narrowed lexical `SyntaxReference`, internally to
+generated evaluation. Generated import projects its form/result wrapper within
+that child route. Dispatch preserves the protected body's invocation domain,
+checks the admitted form and collects the read's value just as for an ordinary
+generated component.
+
+The producer's authored children retain the lexical site route. The generated
+fragment receives the child route, so a component the producer can invoke is not
+thereby admitted to the fragment. Generated `<Syntax />` lists only the admitted
+vocabulary; its named form reads the enclosing documentation and reports
+narrowed availability. The exact protected answer retains its canonical
+documentation origin across provider delegation; this descriptive provenance
+authorizes nothing.
+
+Projection succeeds only from an exact function already in the live route and
+exposes no body. Names, structural copies and independent wrappers confer no
+authority. Neither route nor projection operations appear on public host,
+profile, document, middleware or generated-request inputs. Another loaded copy
+cannot observe or inject them. Routes and descendants close with their owner;
+retained operations fail after closure, and one execution cannot authorize
+another. Durable admission retains existing stable identities, forms, source,
+profile inputs and results only. Replay reconstructs callable routing from the
+current execution's verified answers, never from a retained function or route.
+
 **`allow` narrows; it never grants.** It names an effect *class* — `read` or
 `write` — and the class resolves to a table the host already installed. Omitting
 it asks for `read`. A class the host installed nothing for is refused before the
@@ -11076,7 +11105,7 @@ through the captured capability because there is no other way to reach it.
 | FE5 | `write` permits only the named host-profile write forms and never creates authority from text. |
 | FE6 | Root frontmatter, root props, `returns`, and independent `<Output>` selection refuse before effects. |
 | FE7 | With `as`, the result object is captured; without `as`, it is discarded; neither form emits fragment output. |
-| FE8 | Public `<Syntax>` and a directly nested Plan see the enclosing Evaluate vocabulary for the selected `allow`; generated text is validated against that same vocabulary. No private Syntax implementation is involved. **Receives #758's SY19**, which #759 cannot prove: it installs no narrower syntax reference, and `<Syntax>` is not in the generated-XMD pinned identity table until this issue admits it. |
+| FE8 | Public `<Syntax>` and a directly nested Plan see the enclosing Evaluate vocabulary for the selected `allow`; generated text is validated against that same vocabulary. A trusted provider's delegated canonical `<Syntax>` component answer also renders inside generated XMD, through both canonical wrappers and the narrowed lexical reference. Bare output lists only admitted entries; named documentation retains the enclosing reference and reports narrowed availability. |
 | FE9 | A deferred Plan's public `<Syntax>` sees its own ordinary vocabulary; a later narrower Evaluate rejects incompatible text before effects. **Receives #758's SY20**, for the same reason. |
 | FE10 | Exact text and policy survive journal/continuation; changed text or policy refuses before effects. |
 | FE11 | Completed Plan work and completed fragment effects replay without repetition. |
