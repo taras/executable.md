@@ -69,6 +69,85 @@
 export { executeInstalled } from "./src/execute.ts";
 export type { ExecutionInstallation, JournalAdmission } from "./src/execute.ts";
 /**
+ * What a trusted host states about generated-fragment evaluation.
+ *
+ * Only the input a host writes, and only here, because this is the trusted
+ * surface `ExecutionInstallation` already lives on. What canonical execution
+ * captures from it — the bound operations and their revocation — is unexported:
+ * ordinary core publishes no getter for active authority and no way to install
+ * a provider.
+ */
+export type {
+  CapabilityEntry,
+  ComponentAnswerEntry,
+  FragmentEntry,
+  FragmentEvaluationInput,
+  FragmentForm,
+  FragmentIdentity,
+  FragmentWorkspaceAccess,
+} from "./src/evaluation-profile.ts";
+/**
+ * How a trusted host supplies the implementation behind a `component-answer`
+ * entry.
+ *
+ * An installer, not a definition: canonical execution runs it during profile
+ * capture and hands it a registrar fixed to this installation's origin. The
+ * registrar composes import middleware, and every invocation of that middleware
+ * receives its own request — fixed to the name and position it was asked, and
+ * closed when that invocation ends — which is the only thing that states what
+ * the provider is returning. Canonical execution then decides whether that is
+ * what the profile admitted, and resolves the name itself through the ordinary
+ * import chain.
+ */
+export type {
+  ComponentAnswerHandler,
+  ComponentAnswerInstallation,
+  ComponentAnswerRegistrar,
+  ComponentAnswerRequest,
+} from "./src/component-answers.ts";
+/**
+ * The private operations an admitted fragment performs, and the only ones it
+ * can reach.
+ *
+ * A host hands its own provider methods here; canonical capture reads each one
+ * off once and closes core's own fragment bodies over the bound result. There
+ * is no ordinary-core export for these, no getter for a live one, and no way to
+ * install one from a document — see `src/fragment-capabilities.ts`.
+ */
+export type {
+  FragmentCapability,
+  FragmentFetchAccess,
+  FragmentFileAccess,
+  FragmentPath,
+  FragmentWrite,
+} from "./src/fragment-capabilities.ts";
+/**
+ * The response shape a fragment transport answers with, and the detaching a
+ * host needs to build one.
+ *
+ * The same record an authored `<Fetch>` retains, through the same code, so a
+ * fragment's observation and a document's are the same shape and a continuation
+ * restores either.
+ */
+export type { FetchResponseRecord } from "./src/fetch-response.ts";
+export { detachHeaders, detachStatus } from "./src/fetch-response.ts";
+/**
+ * Core's own entries, for the hosts that admit them.
+ *
+ * Constructors rather than a table a host assembles from `CORE_REGISTRY`,
+ * because each of them states a constraint the registry does not hold: which
+ * spelling of `<File>` is being admitted, and that admitting `<Fetch>` requires
+ * the exact requests it may perform.
+ */
+export {
+  directoryEntry,
+  EvaluationProfileError,
+  fetchEntry,
+  fileDeleteEntry,
+  fileReadEntry,
+  fileWriteEntry,
+} from "./src/evaluation-profile.ts";
+/**
  * The symbols a host's profile describes, when they are not the ones the
  * execution would derive from its own captured inputs — see
  * `src/syntax-reference.ts`.
@@ -144,6 +223,7 @@ export type {
   GeneratedObservationValue,
   GeneratedRequest,
   GeneratedXmdRequest,
+  RetainedFragmentIdentity,
 } from "./src/generated-xmd.ts";
 
 /**

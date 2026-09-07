@@ -31,7 +31,7 @@ import { fileURLToPath } from "node:url";
 import type { FetchInit, RuntimeFetchResponse } from "@executablemd/runtime";
 import type { WorkflowRunDatabase } from "../mod.ts";
 import { withWorkflowWorkspace } from "../src/deno/workspace/host.ts";
-import { evaluationComponents } from "../src/deno/workspace/evaluate.ts";
+import { evaluationProfile } from "../src/deno/workspace/evaluate.ts";
 import type { GeneratedEvaluationOptions } from "../src/deno/workspace/evaluate.ts";
 import { transactWorkspaceRoots } from "../src/deno/workspace/private.ts";
 import { createRun, useStorageRoot, withStorage } from "./support/storage.ts";
@@ -123,10 +123,10 @@ function runDocument(
           return yield* collect(
             yield* executeInstalled(
               { ...inlineSource(source), stream: database.journal },
-              // `<Evaluate>` names durable work after its own invocation, so
-              // this run declares it to the execution and canonical execution
-              // builds it from the claimant it minted for this attachment.
-              [{ components: evaluationComponents(database, evaluation) }],
+              // `<Evaluate>` is canonical core's. What this run states is the
+              // ceiling, captured by canonical execution before any document
+              // code exists.
+              [{ evaluation: yield* evaluationProfile(database, evaluation) }],
             ),
           );
         }),
@@ -214,6 +214,20 @@ function policyOf(event: DurableEvent): Record<string, Json> | undefined {
     return undefined;
   }
   return input;
+}
+
+/**
+ * The Workspace basis one admission was recorded under.
+ *
+ * A version-2 policy carries it as one member, because a host that evaluates
+ * against no Workspace states none at all.
+ */
+function basisOf(event: DurableEvent): Record<string, Json> | undefined {
+  const workspace = policyOf(event)?.workspace;
+  if (typeof workspace !== "object" || workspace === null || Array.isArray(workspace)) {
+    return undefined;
+  }
+  return workspace;
 }
 
 /**
@@ -335,19 +349,30 @@ function* plant(database: WorkflowRunDatabase, path: string, content: string): O
   }
 }
 
+/**
+ * One capability identity, in the closed structural shape a run retains.
+ *
+ * Written out here rather than imported from the profile, so a row states what
+ * the journal must hold rather than agreeing with whatever the profile computed.
+ */
+function capability(origin: string, key: string, revision: string): Record<string, string> {
+  return { kind: "capability", origin, key, revision };
+}
+
 describe("Tier WGAC — the registered Evaluate component", () => {
-  it("WGAC3: it takes only `source`, and refuses content", function* () {
+  it("WGAC3: the program is stated once, and the schema is closed", function* () {
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {
       const database = yield* createRun();
 
-      // Paired content: a `source` this element rendered is not a fragment
-      // anybody handed it.
+      // The two input forms are disjoint. Content produces the program, so an
+      // element that also states one is stating it twice — and which of them
+      // ran would be a matter of precedence rather than of what was written.
       const paired = yield* runDocument(
         database,
         `<Evaluate source="text">\n<File path="notes.md" />\n</Evaluate>\n`,
       );
-      expect(reported(paired)).toContain("renders no content of its own");
+      expect(reported(paired)).toContain("does not also carry `text`");
       expect(admissions(paired.events)).toHaveLength(0);
     });
 
@@ -368,7 +393,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
     yield* withStorage(third, function* () {
       const database = yield* createRun();
       const missing = yield* runDocument(database, `<Evaluate />\n`);
-      expect(reported(missing)).toMatch(/source/i);
+      expect(reported(missing)).toMatch(/requires the program/i);
       expect(admissions(missing.events)).toHaveLength(0);
     });
   });
@@ -401,8 +426,8 @@ describe("Tier WGAC — the registered Evaluate component", () => {
 
       const recorded = admissions(attempt.events);
       expect(recorded).toHaveLength(2);
-      const first = policyOf(recorded[0]!);
-      const second = policyOf(recorded[1]!);
+      const first = basisOf(recorded[0]!);
+      const second = basisOf(recorded[1]!);
 
       // The run moved between them, and the stated ceiling moved with it.
       expect(typeof first?.selectedRoot).toBe("string");
@@ -505,7 +530,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
   });
 
   describe("WGAC7: the durable name survives the import boundary", () => {
-    it("refuses an invocation the wrapper built", function* () {
+    it("refuses any definition a wrapper answers the import with", function* () {
       const root = yield* useStorageRoot();
       const source = yield* fixture();
       yield* withStorage(root, function* () {
@@ -513,62 +538,48 @@ describe("Tier WGAC — the registered Evaluate component", () => {
         yield* plant(database, "alpha.md", ADMITTED_NOTE);
 
         const attempt = yield* scoped(function* () {
-          // A structural stand-in — which is what the identity used to be, and
-          // what a wrapper would mint to give both sites one durable name. It
-          // answers the authored form too: implementing the whole public shape
-          // is exactly what a forger would do, and identity is the private
-          // field rather than the shape.
-          yield* interpose(() => ({ hasContent: () => false }));
-          return yield* runDocument(database, source, CEILING);
-        });
-
-        expect(reported(attempt)).toContain("not an invocation the engine issued");
-        // Refused before any admission: nothing was named, so nothing collapsed.
-        expect(admissions(attempt.events)).toHaveLength(0);
-      });
-    });
-
-    it("refuses the first site's invocation routed at the second", function* () {
-      const root = yield* useStorageRoot();
-      const source = yield* fixture();
-      yield* withStorage(root, function* () {
-        const database = yield* createRun();
-        yield* plant(database, "alpha.md", ADMITTED_NOTE);
-
-        const attempt = yield* scoped(function* () {
-          // Ordinary delegation at the first site, then the first site's own
-          // invocation handed to the second — the substitution that would make
-          // both sites replay one admitted fragment.
-          let kept: ComponentInvocation | undefined;
-          yield* interpose((invocation) => {
-            kept ??= invocation;
-            return kept;
-          });
-          return yield* runDocument(database, source, CEILING);
-        });
-
-        expect(reported(attempt)).toMatch(/already been taken|has finished/);
-        // The first site was admitted under its own name. The second was
-        // refused rather than admitted under the first site's.
-        expect(admissions(attempt.events)).toHaveLength(1);
-      });
-    });
-
-    it("admits each site under its own name when the wrapper delegates", function* () {
-      const root = yield* useStorageRoot();
-      const source = yield* fixture();
-      yield* withStorage(root, function* () {
-        const database = yield* createRun();
-        yield* plant(database, "alpha.md", ADMITTED_NOTE);
-
-        const attempt = yield* scoped(function* () {
-          // Forwarding the genuine issuance: ordinary delegation, and it stays
-          // supported.
+          // A wrapper that forwards the genuine issuance and changes nothing
+          // else. It is refused anyway, and that is the point: `<Evaluate>` is
+          // a name canonical core owns, so the only definition that may reach
+          // the call site is the one canonical execution produced. A handler
+          // that answered an import here — however honestly — would be
+          // deciding what an unaudited fragment is allowed to do.
           yield* interpose((invocation) => invocation);
           return yield* runDocument(database, source, CEILING);
         });
 
+        expect(reported(attempt)).toContain("canonical core owns");
+        expect(reported(attempt)).toContain("only canonical execution answers one");
+        // Refused before any admission: nothing was named, so nothing ran.
+        expect(admissions(attempt.events)).toHaveLength(0);
+        expect(attempt.performed).toEqual([]);
+      });
+    });
+
+    it("admits each site under its own name across a handler that only observes", function* () {
+      const root = yield* useStorageRoot();
+      const source = yield* fixture();
+      yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        yield* plant(database, "alpha.md", ADMITTED_NOTE);
+
+        const observed: string[] = [];
+        const attempt = yield* scoped(function* () {
+          // Observing the import and handing back exactly what came out of the
+          // chain: the one thing a handler may still do at a protected name,
+          // and it stays supported.
+          yield* Component.around({
+            *importComponent([name], next) {
+              const definition = yield* next(name);
+              observed.push(name);
+              return definition;
+            },
+          });
+          return yield* runDocument(database, source, CEILING);
+        });
+
         expect(attempt.failure).toBe(undefined);
+        expect(observed).toContain("Evaluate");
         const recorded = admissions(attempt.events);
         expect(recorded).toHaveLength(2);
         expect(new Set(recorded.map(nameOf)).size).toBe(2);
@@ -577,44 +588,6 @@ describe("Tier WGAC — the registered Evaluate component", () => {
         // name between them would print one of these twice.
         expect(reported(attempt)).toContain(ADMITTED_NOTE.trim());
         expect(reported(attempt)).toContain("answered");
-      });
-    });
-
-    it("refuses a live parent's invocation routed into the sites inside it", function* () {
-      const root = yield* useStorageRoot();
-      const source = yield* fixture("nested-observations");
-      yield* withStorage(root, function* () {
-        const database = yield* createRun();
-        yield* plant(database, "alpha.md", ADMITTED_NOTE);
-
-        const attempt = yield* scoped(function* () {
-          yield* useFrame();
-          // `<Frame>` is still running — it has not returned, and it never
-          // claimed anything — so its issuance is genuine, live and unspent
-          // while the sites in its content run. Routing it there is the
-          // substitution a spent or finished sibling's does not reach. Two
-          // things refuse it, and the first reached is that `<Frame>` is not
-          // `<Evaluate>`; Tier CIV nests one component inside itself to hold
-          // the projection on its own.
-          let parent: ComponentInvocation | undefined;
-          yield* interpose(
-            (invocation, name) => {
-              if (name === "Frame") {
-                parent = invocation;
-                return invocation;
-              }
-              return parent ?? invocation;
-            },
-            ["Frame", "Evaluate"],
-          );
-          return yield* runDocument(database, source, CEILING);
-        });
-
-        expect(reported(attempt)).toContain("invocation of <Frame />");
-        // Refused before admission: no record was written under the parent's
-        // identity, so nothing can replay under its retained history.
-        expect(admissions(attempt.events)).toHaveLength(0);
-        expect(attempt.performed).toEqual([]);
       });
     });
 
@@ -627,9 +600,13 @@ describe("Tier WGAC — the registered Evaluate component", () => {
 
         const attempt = yield* scoped(function* () {
           yield* useFrame();
-          // The same document and the same parent, forwarding honestly. Being
-          // nested changes nothing about what each site is named.
-          yield* interpose((invocation) => invocation, ["Frame", "Evaluate"]);
+          // `<Frame>` is still running while the sites in its content run, so
+          // its issuance is genuine, live and unspent — the substitution a
+          // spent or finished sibling's does not reach. It is routed at the
+          // ordinary component it wraps, and the `<Evaluate>` sites inside it
+          // are left to canonical execution. Being nested changes nothing about
+          // what each site is named.
+          yield* interpose((invocation) => invocation, ["Frame"]);
           return yield* runDocument(database, source, CEILING);
         });
 
@@ -694,7 +671,13 @@ describe("Tier WGAC — the registered Evaluate component", () => {
           return yield* runDocument(database, source, CEILING);
         });
 
-        expect(reported(attempt)).toContain("invocation of <Elsewhere />");
+        // The claimant, not the import tier: the definition handed out at the
+        // real `<Evaluate>` site was passed through untouched, so the import
+        // was answered by canonical execution and the refusal happens where the
+        // borrowed implementation tries to name durable work at somebody else's
+        // element.
+        expect(reported(attempt)).toContain("invoked by canonical core");
+        expect(reported(attempt)).toContain("observes nothing");
         // The real site was admitted, and nothing else was: no second record,
         // and no request under an identity the author wrote no observation at.
         const recorded = admissions(attempt.events);
@@ -784,7 +767,12 @@ describe("Tier WGAC — the registered Evaluate component", () => {
         // committed, and the request it is holding not yet performed.
         const heldRecords = admissions(yield* owner.journal.readAll());
         expect(heldRecords).toHaveLength(2);
-        expect(record).not.toBe(undefined);
+        // There is no registration to carry across. A protected name is the
+        // resolver's own table rather than an answer a registry gives, so the
+        // record a handler would have kept from the first attachment does not
+        // exist — and the implementation it did keep came out of the first
+        // attachment's own execution.
+        expect(record).toBe(undefined);
         expect(kept).not.toBe(undefined);
 
         const second = yield* scoped(function* () {
@@ -794,10 +782,13 @@ describe("Tier WGAC — the registered Evaluate component", () => {
 
         // Refused because this invocation belongs to another installation —
         // not because the first attachment had gone. It is still running: its
-        // claimant is active, and the refusal says so by naming the domain
-        // rather than the execution.
-        expect(reported(second)).toContain("as this execution installed it");
-        expect(reported(second)).not.toContain("is not running this");
+        // Refused one layer earlier than the claimant would have refused it:
+        // the second attachment's handler answered a protected import with a
+        // definition that attachment's execution did not produce, and the first
+        // attachment's implementation never reaches the call site to be asked
+        // whose invocation this is.
+        expect(reported(second)).toContain("canonical core owns");
+        expect(reported(second)).toContain("did not produce");
         // Neither attachment admitted anything the other's expansion named, and
         // the borrowed implementation performed no request.
         expect(admissions(second.events)).toHaveLength(0);
@@ -1024,15 +1015,19 @@ describe("Tier WGAC — the standard write table", () => {
       // resumed run is held to.
       const policy = policyOf(admissions(attempt.events)[0]!);
       expect(policy?.allowed).toEqual([
-        { name: "File", identity: "@executablemd/core#File:write", forms: ["paired"] },
+        {
+          name: "File",
+          identity: capability("@executablemd/core", "File:write", "2"),
+          forms: ["paired"],
+        },
         {
           name: "Dir",
-          identity: "@executablemd/workflow/composition/dir-v2#Dir",
+          identity: capability("@executablemd/workflow/composition", "Dir", "3"),
           forms: ["paired"],
         },
         {
           name: "File.Delete",
-          identity: "@executablemd/core#File.Delete",
+          identity: capability("@executablemd/core", "File.Delete", "2"),
           forms: ["self-closing"],
         },
       ]);
@@ -1083,13 +1078,13 @@ describe("Tier WGAC — the standard write table", () => {
       const admission = admissions(attempt.events)[0]!;
       expect(policyOf(admission)?.allowed).toContainEqual({
         name: "File.Delete",
-        identity: "@executablemd/core#File.Delete",
+        identity: capability("@executablemd/core", "File.Delete", "2"),
         forms: ["self-closing"],
       });
       expect(recordedNames(admission)).toEqual([
         {
           name: "File.Delete",
-          identity: "@executablemd/core#File.Delete",
+          identity: capability("@executablemd/core", "File.Delete", "2"),
           form: "self-closing",
         },
       ]);

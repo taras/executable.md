@@ -96,6 +96,15 @@
  * effects themselves are retained by their own durable records — `fetch` for
  * `<Fetch>`, the Workspace file effect for `<File>` — so a replay restores both
  * without asking anyone anything a second time.
+ *
+ * An identity in that record is a closed tagged structural record: what kind of
+ * thing is behind the name, the origin that owns it, the component key, and the
+ * revision. Four terms rather than one spelling, so a reader comparing two
+ * admissions can say which of them moved and no two hosts have to agree on a
+ * separator. Version 1 — the untagged #369 record — wrote one opaque string
+ * instead, and stays both readable *and* resumable: a version-1 string is
+ * reconciled against a current capability identity under the spelling that
+ * build used. Nothing this build writes uses that spelling.
  */
 
 import { createDurableOperation } from "@executablemd/durable-streams";
@@ -111,7 +120,7 @@ import { isComponentName } from "./components/registration.ts";
 import { CORE_ORIGIN, CORE_REGISTRY } from "./components/registry.ts";
 import { createBlockCounter, expandSegmentsWithin } from "./expand.ts";
 import { extendPath } from "./expansion.ts";
-import { parseRequestRecord, prepareFetchRequest, requestRecord } from "./fetch-request.ts";
+import { prepareFetchRequest, requestRecord } from "./fetch-request.ts";
 import { timeoutFetch } from "@executablemd/runtime";
 import type { FetchRequest } from "./fetch-request.ts";
 import { isJsonObject, parseJson } from "./json.ts";
@@ -185,6 +194,20 @@ const CEILING =
 const UNREADABLE = "the retained generated-XMD admission record cannot be read as one.";
 
 /**
+ * What a resumed run is refused with when the text it now offers is not the
+ * text that was admitted.
+ *
+ * The admission is a decision about one exact fragment. Expanding the retained
+ * copy while the caller holds a different one would run something nobody
+ * admitted *this* run for — the earlier behavior, which silently preferred the
+ * retained text and let a changed candidate pass unnoticed. Naming neither
+ * fragment, because both are generated text.
+ */
+const STALE_TEXT =
+  "a generated fragment was admitted for text this run no longer offers. A retained admission " +
+  "resumes only for the exact text it was made about.";
+
+/**
  * What an admitted invocation is refused with when its form is not the one its
  * identity was admitted for.
  *
@@ -250,6 +273,132 @@ export type GeneratedRequest = Record<string, Json>;
 export type GeneratedEffectClass = "read" | "write";
 
 /**
+ * Which implementation one admitted entry runs, as the run retains it.
+ *
+ * A closed tagged record rather than a string, and structural rather than
+ * assembled, because this is what a continuation compares. Four terms, each
+ * with one meaning: a reader looking at two admissions can say *which* of them
+ * moved, and no host has to agree with another about how to spell a separator.
+ *
+ * `kind` is part of the identity rather than beside it. An operation canonical
+ * core supplies the body for and an implementation the ordinary import chain
+ * answered with are different grants even under one origin, key and revision —
+ * the first cannot be composed around and the second was resolved through
+ * middleware — so a record that confused them would compare a fragment's
+ * authority equal to authority it never had.
+ *
+ * Never derived from a function. An implementation is not an identity, and
+ * serializing or inspecting one would make the retained policy depend on how a
+ * host happened to write its code. Functions never enter the journal.
+ */
+export type RetainedFragmentIdentity =
+  | {
+      readonly kind: "capability";
+      readonly origin: string;
+      readonly key: string;
+      readonly revision: string;
+    }
+  | {
+      readonly kind: "component-answer";
+      readonly origin: string;
+      readonly key: string;
+      readonly revision: string;
+    };
+
+/** The two ways a host can say what is behind an admitted name. */
+const IDENTITY_KINDS: readonly RetainedFragmentIdentity["kind"][] = [
+  "capability",
+  "component-answer",
+];
+
+/**
+ * What a record retains for one entry: this version's identity, or version 1's.
+ *
+ * Version 1 retained one opaque string. It is kept as the string it is rather
+ * than parsed into a shape it never had, and reconciled against a version-2
+ * identity under the spelling the build that wrote it used — so an older record
+ * stays readable *and* stays a grant, instead of being readable and useless.
+ */
+type RetainedIdentity = RetainedFragmentIdentity | LegacyIdentity;
+
+/** One version-1 identity: the exact string an older build wrote. */
+interface LegacyIdentity {
+  readonly legacy: string;
+}
+
+/**
+ * One identity as a map key, for the run's own tables.
+ *
+ * Never retained and never compared: what a continuation is held to is the
+ * record's four members, read one at a time. This exists because a `Map` needs
+ * a primitive, and it carries the kind so two grants that differ only in how
+ * they were resolved do not share a ceiling.
+ *
+ * The encoding is JSON rather than the four terms joined by a separator,
+ * because a joined key is only as unique as the separator is illegal. A host
+ * may state an origin or a key holding any character at all — a URL with a
+ * space in it, a component key with a `#` — and two identities that differ only
+ * in where the separator falls would key one entry's request ceiling under
+ * another's. JSON escapes what it encodes, so distinct terms encode distinctly.
+ */
+function identityKey(identity: RetainedFragmentIdentity): string {
+  return JSON.stringify([identity.kind, identity.origin, identity.key, identity.revision]);
+}
+
+/**
+ * Whether two version-2 identities describe the same implementation.
+ *
+ * Member by member, kind included: an operation canonical core supplies the
+ * body for and an implementation the ordinary import chain answered with are
+ * different grants even under one origin, key and revision.
+ */
+function sameStructural(one: RetainedFragmentIdentity, other: RetainedFragmentIdentity): boolean {
+  return (
+    one.kind === other.kind &&
+    one.origin === other.origin &&
+    one.key === other.key &&
+    one.revision === other.revision
+  );
+}
+
+/**
+ * Whether the entry this run states is the one a retained record was admitted
+ * under.
+ *
+ * Two version-2 records compare structurally, and two version-1 strings compare
+ * as the strings they are.
+ *
+ * A version-1 string against a version-2 entry is the case that cannot be
+ * decided by looking at either one. Version 1 retained one opaque value chosen
+ * by whoever built the pinned entry — `@executablemd/core#File:read` from core,
+ * `@executablemd/workflow/composition/dir-v2#Dir` from the workflow host, and
+ * whatever a host passed to `pinnedComponent` from anyone else. No rule
+ * recovers four structural terms from one of those, and a rule that appeared to
+ * would only be reading the shapes core happens to use today back onto records
+ * core did not write.
+ *
+ * So it is not inferred. The *current* entry states which version-1 strings it
+ * succeeds, and a retained string reconciles only against that stated list.
+ * Listing one is an assertion by the party that owns the entry; an entry that
+ * lists none refuses every version-1 record naming it, which is the safe
+ * direction. New records state the structural identity and never a string.
+ */
+function sameIdentity(retained: RetainedIdentity, current: RetainedEntry): boolean {
+  const here = current.identity;
+  if ("legacy" in retained) {
+    if ("legacy" in here) {
+      return retained.legacy === here.legacy;
+    }
+    // Only a capability reconciles. The component-answer arm did not exist when
+    // version-1 records were written, so no such string ever described one —
+    // and the kind is checked here rather than left to the profile, because
+    // this is the comparison a continuation is actually held to.
+    return here.kind === "capability" && current.legacy?.includes(retained.legacy) === true;
+  }
+  return "legacy" in here ? false : sameStructural(retained, here);
+}
+
+/**
  * The authored forms one pinned identity runs in.
  *
  * A component whose two spellings do different things has two identities, so
@@ -280,8 +429,27 @@ function authoredForms(form: GeneratedComponentForm): readonly AuthoredForm[] {
  */
 export interface GeneratedObservation {
   readonly name: string;
-  readonly identity: string;
+  readonly identity: RetainedFragmentIdentity;
   readonly definition: FunctionComponentDefinition;
+  /**
+   * The form authority underneath this entry's implementation, when the
+   * definition wraps one.
+   *
+   * A host whose admitted definition is core's own guard around somebody else's
+   * implementation still has to say which function decides the authored form,
+   * because a selection reads that off the definition it was handed. Absent is
+   * the ordinary case: the definition's own `fn` is the authority.
+   */
+  readonly dispatch?: unknown;
+  /**
+   * The exact version-1 identity strings this entry states it succeeds.
+   *
+   * Stated by whoever owns the entry rather than derived from the identity
+   * above, because version 1 retained one opaque value that nothing recovers
+   * four structural terms from. A retained version-1 record reconciles against
+   * this list and against nothing else.
+   */
+  readonly legacy?: readonly string[];
   /**
    * The exact requests this observation may perform, when it performs HTTP
    * reads at all. Present only on the pinned `<Fetch>` identity.
@@ -299,6 +467,50 @@ export interface GeneratedObservation {
    */
   readonly selfClosing?: boolean;
 }
+
+/**
+ * The revision core's own entries state, wherever they are admitted from.
+ *
+ * One number for all of them, bumped whenever what any of these entries
+ * authorizes changes, so a continuation admitted under an earlier revision is
+ * refused rather than silently granted the newer authority.
+ *
+ * One constant rather than one per table. The pinned constructors here and the
+ * evaluation profile's entries describe the same operations, and a reader
+ * comparing two admissions has to be able to trust that they say so — two
+ * numbers that had to be moved together would eventually not be.
+ *
+ * Revision 2 is where the authority behind these entries changed: an admitted
+ * element used to invoke the ordinary component and resolve `API.Files` or
+ * `API.Fetch` wherever it happened to run, and now it invokes a body closed over
+ * the operations the host handed the profile.
+ */
+export const CORE_REVISION = "2";
+
+/** One of core's own pinned identities, under core's origin and revision. */
+function coreIdentity(key: string): RetainedFragmentIdentity {
+  return { kind: "capability", origin: CORE_ORIGIN, key, revision: CORE_REVISION };
+}
+
+/**
+ * The exact strings core's own entries were retained as under version 1.
+ *
+ * Written out one by one, and deliberately not assembled from the origin and
+ * the key. There was never a rule producing these — `pinnedFetch` wrote its
+ * string, `pinnedFileRead` wrote its own, and a host writing a fourth was under
+ * no obligation to resemble either — so a function that built them would be
+ * inventing the rule this module exists to say does not exist. Enumerating them
+ * is also what makes the set reviewable: adding an alias is adding a line, and
+ * every line is an assertion that the current entry authorizes no more than the
+ * one that string named.
+ *
+ * Frozen and read by value at each call site. Nothing derives one, and a fifth
+ * released alias would be a fifth literal here rather than a broader pattern.
+ */
+const CORE_V1_FETCH = Object.freeze(["@executablemd/core#Fetch"]);
+const CORE_V1_FILE_READ = Object.freeze(["@executablemd/core#File:read"]);
+const CORE_V1_FILE_WRITE = Object.freeze(["@executablemd/core#File:write"]);
+const CORE_V1_FILE_DELETE = Object.freeze(["@executablemd/core#File.Delete"]);
 
 /**
  * The pinned core `<Fetch>` identity, bounded to exactly these requests.
@@ -321,7 +533,8 @@ export function pinnedFetch(requests: readonly GeneratedRequest[]): GeneratedObs
   }
   return {
     name: "Fetch",
-    identity: `${CORE_ORIGIN}#Fetch`,
+    identity: coreIdentity("Fetch"),
+    legacy: CORE_V1_FETCH,
     definition,
     requests: [...requests],
   };
@@ -348,7 +561,8 @@ export function pinnedFileRead(): GeneratedObservation {
   }
   return {
     name: "File",
-    identity: `${CORE_ORIGIN}#File:read`,
+    identity: coreIdentity("File:read"),
+    legacy: CORE_V1_FILE_READ,
     definition,
     selfClosing: true,
   };
@@ -360,10 +574,18 @@ export function pinnedFileRead(): GeneratedObservation {
  */
 export function pinnedComponent(
   name: string,
-  identity: string,
+  identity: RetainedFragmentIdentity,
   definition: FunctionComponentDefinition,
+  /**
+   * The version-1 strings this host's own entry succeeds.
+   *
+   * The host's to state, because under version 1 this constructor took whatever
+   * string the host chose and retained it verbatim. Core has nothing to assert
+   * about which of those an entry is the successor of.
+   */
+  legacy?: readonly string[],
 ): GeneratedObservation {
-  return { name, identity, definition };
+  return { name, identity, definition, ...(legacy === undefined ? {} : { legacy }) };
 }
 
 /**
@@ -383,8 +605,12 @@ export function pinnedComponent(
  */
 export interface GeneratedMutation {
   readonly name: string;
-  readonly identity: string;
+  readonly identity: RetainedFragmentIdentity;
   readonly definition: FunctionComponentDefinition;
+  /** The form authority underneath this entry's implementation, when it wraps one. */
+  readonly dispatch?: unknown;
+  /** The exact version-1 identity strings this entry states it succeeds. */
+  readonly legacy?: readonly string[];
   readonly form: GeneratedComponentForm;
 }
 
@@ -404,7 +630,8 @@ export function pinnedFileWrite(): GeneratedMutation {
   }
   return {
     name: "File",
-    identity: `${CORE_ORIGIN}#File:write`,
+    identity: coreIdentity("File:write"),
+    legacy: CORE_V1_FILE_WRITE,
     definition,
     form: "paired",
   };
@@ -436,7 +663,8 @@ export function pinnedFileDelete(): GeneratedMutation {
   }
   return {
     name: "File.Delete",
-    identity: `${CORE_ORIGIN}#File.Delete`,
+    identity: coreIdentity("File.Delete"),
+    legacy: CORE_V1_FILE_DELETE,
     definition,
     form: "self-closing",
   };
@@ -448,11 +676,13 @@ export function pinnedFileDelete(): GeneratedMutation {
  */
 export function pinnedMutation(
   name: string,
-  identity: string,
+  identity: RetainedFragmentIdentity,
   definition: FunctionComponentDefinition,
   form: GeneratedComponentForm,
+  /** The version-1 strings this host's own entry succeeds, as the host states them. */
+  legacy?: readonly string[],
 ): GeneratedMutation {
-  return { name, identity, definition, form };
+  return { name, identity, definition, form, ...(legacy === undefined ? {} : { legacy }) };
 }
 
 /**
@@ -495,10 +725,18 @@ export interface GeneratedXmdRequest {
   readonly id: string;
   /** The candidate source, exactly as it was generated. */
   readonly source: string;
-  /** The retained Workspace roots the host is willing to expose. */
-  readonly workspaceRoots: readonly string[];
-  /** The one root admitted effects address. */
-  readonly selectedRoot: string;
+  /**
+   * The retained Workspace roots the host is willing to expose.
+   *
+   * Absent for a host that evaluates against no Workspace. An ordinary run is
+   * one: its admitted effects address the Files provider its own execution
+   * installed, and there is no immutable root history for a continuation to be
+   * held to. A workflow run states both, and a continuation is then held to
+   * that basis by membership.
+   */
+  readonly workspaceRoots?: readonly string[];
+  /** The one root admitted effects address, for a host that has one. */
+  readonly selectedRoot?: string;
   /** The pinned observation identities the `read` class resolves to. */
   readonly observations: readonly GeneratedObservation[];
   /** The pinned mutation identities the `write` class resolves to. */
@@ -525,24 +763,37 @@ export interface GeneratedXmdRequest {
  */
 interface Entry {
   readonly name: string;
-  readonly identity: string;
+  readonly identity: RetainedFragmentIdentity;
   readonly definition: FunctionComponentDefinition;
+  /** The form authority under this entry's definition, when a host stated one. */
+  readonly dispatch?: unknown;
   readonly forms: readonly AuthoredForm[];
   readonly effect: GeneratedEffectClass;
+  /** The version-1 identity strings this entry states it succeeds. */
+  readonly legacy?: readonly string[];
   readonly requests?: readonly GeneratedRequest[];
 }
 
 /** The pinned identity of one admitted entry, as the run retains it. */
 interface RetainedEntry {
   readonly name: string;
-  readonly identity: string;
+  readonly identity: RetainedIdentity;
   readonly forms: readonly AuthoredForm[];
+  /**
+   * The version-1 strings this entry succeeds, on the *current* side only.
+   *
+   * Never read from a record and never written to one: a journal holds what was
+   * admitted, and which older grants a current entry is willing to answer for
+   * is a statement this run's host makes now. Reading it from the record would
+   * let a retained value nominate its own successor.
+   */
+  readonly legacy?: readonly string[];
 }
 
 /** One element the fragment actually named, as the run retains it. */
 interface RetainedInvocation {
   readonly name: string;
-  readonly identity: string;
+  readonly identity: RetainedIdentity;
   readonly form: AuthoredForm;
 }
 
@@ -557,8 +808,15 @@ interface RetainedInvocation {
  */
 interface Policy {
   readonly allow: readonly GeneratedEffectClass[];
-  readonly roots: readonly string[];
-  readonly selectedRoot: string;
+  /**
+   * The Workspace basis, or nothing for a host that evaluates against none.
+   *
+   * The distinction is itself a ceiling. A run admitted with no Workspace and
+   * one admitted against a Workspace were granted different things, so a
+   * continuation that acquired or lost one is asking for a different grant
+   * rather than restating the same one.
+   */
+  readonly workspace?: { readonly roots: readonly string[]; readonly selectedRoot: string };
   readonly allowed: readonly RetainedEntry[];
   readonly requests: readonly FetchRequest[];
 }
@@ -707,8 +965,11 @@ class GeneratedImportAuthority implements ImportAuthority {
     // it is the form authority. Remembered by name so `authorize` can record it
     // against core's own copy — the object expansion actually invokes — because
     // a trusted collection wrapper takes no part in deciding which
-    // form-specific body runs.
-    this.#dispatchers.set(name, implementation);
+    // form-specific body runs. A host that admitted a definition of its own
+    // states that authority explicitly, because an entry whose implementation
+    // is core's guard around somebody else's would otherwise offer the guard,
+    // and a form authority read off the guard selects no body at all.
+    this.#dispatchers.set(name, entry.dispatch ?? implementation);
     return this.#imports.issue(name, admitted);
   }
 
@@ -786,10 +1047,12 @@ function selectedEntries(
         name: observation.name,
         identity: observation.identity,
         definition: observation.definition,
+        ...(observation.dispatch === undefined ? {} : { dispatch: observation.dispatch }),
         // An entry the host constrained to its self-closing spelling admits
         // that one; an unconstrained one admits both, as it always has.
         forms: observation.selfClosing === true ? ["self-closing"] : AUTHORED_FORMS,
         effect: "read",
+        ...(observation.legacy === undefined ? {} : { legacy: observation.legacy }),
         ...(observation.requests === undefined ? {} : { requests: observation.requests }),
       });
     }
@@ -806,8 +1069,10 @@ function selectedEntries(
         name: mutation.name,
         identity: mutation.identity,
         definition: mutation.definition,
+        ...(mutation.dispatch === undefined ? {} : { dispatch: mutation.dispatch }),
         forms: authoredForms(mutation.form),
         effect: "write",
+        ...(mutation.legacy === undefined ? {} : { legacy: mutation.legacy }),
       });
     }
   }
@@ -914,7 +1179,7 @@ function* normalizedCeilings(entries: readonly Entry[]): Operation<Map<string, F
     }
     // Keyed by identity rather than by name, because a name can hold two of
     // them and only one of the two may perform a request.
-    ceilings.set(entry.identity, normalized);
+    ceilings.set(identityKey(entry.identity), normalized);
   }
   return ceilings;
 }
@@ -929,30 +1194,118 @@ function currentPolicy(
   const requests: FetchRequest[] = [];
   const allowed: RetainedEntry[] = [];
   for (const entry of entries) {
-    allowed.push({ name: entry.name, identity: entry.identity, forms: entry.forms });
-    requests.push(...(ceilings.get(entry.identity) ?? []));
+    allowed.push({
+      name: entry.name,
+      identity: entry.identity,
+      forms: entry.forms,
+      // Carried on the current policy so a version-1 record can be reconciled
+      // against it, and dropped by `policyRecord` so nothing this run writes
+      // holds it.
+      ...(entry.legacy === undefined ? {} : { legacy: entry.legacy }),
+    });
+    requests.push(...(ceilings.get(identityKey(entry.identity)) ?? []));
   }
+  const workspace = workspaceBasis(request);
   return {
     allow: [...allow],
-    roots: [...request.workspaceRoots],
-    selectedRoot: request.selectedRoot,
+    ...(workspace === undefined ? {} : { workspace }),
     allowed,
     requests,
   };
 }
 
-/** The policy as journal data. */
+/**
+ * The Workspace basis this request states, or nothing.
+ *
+ * Both terms or neither: a host stating roots without the root its effects
+ * address, or the reverse, has stated half a basis, and half a ceiling is not
+ * one to admit a fragment under.
+ */
+function workspaceBasis(
+  request: GeneratedXmdRequest,
+): { roots: readonly string[]; selectedRoot: string } | undefined {
+  const { workspaceRoots, selectedRoot } = request;
+  if (workspaceRoots === undefined && selectedRoot === undefined) {
+    return undefined;
+  }
+  if (workspaceRoots === undefined || selectedRoot === undefined) {
+    throw new GeneratedXmdError(
+      "a generated-XMD host stated half a Workspace basis. A host evaluates against a Workspace " +
+        "or against none, and the roots and the selected root are one statement.",
+    );
+  }
+  // Validated here, as the host's own error, rather than compared later against
+  // a live basis and appearing to hold: a basis with no roots, a repeated root,
+  // or a selected root nothing retains is not a stricter grant than a coherent
+  // one — there is nothing for a continuation to be held to at all.
+  const roots = [...workspaceRoots];
+  if (roots.length === 0 || roots.some((root) => root.length === 0)) {
+    throw new GeneratedXmdError("a generated-XMD host stated a Workspace basis retaining no root.");
+  }
+  if (new Set(roots).size !== roots.length) {
+    throw new GeneratedXmdError("a generated-XMD host stated one retained Workspace root twice.");
+  }
+  if (!roots.includes(selectedRoot)) {
+    throw new GeneratedXmdError(
+      "a generated-XMD host selected a Workspace root it does not retain.",
+    );
+  }
+  return { roots, selectedRoot };
+}
+
+/**
+ * The policy as journal data, in the closed version-2 shape.
+ *
+ * Version 1 is the untagged #369 record, whose `roots` and `selectedRoot` sat
+ * at the top level and were mandatory. Version 2 tags itself and carries the
+ * Workspace basis as one optional member, because an ordinary host has none —
+ * and telling the two apart matters: a reader that treated a missing basis as
+ * an empty one would compare a Workspace-less admission equal to a Workspace
+ * admission that had lost every root.
+ */
 function policyRecord(policy: Policy): JsonObject {
   return {
+    version: RECORD_VERSION,
     allow: [...policy.allow],
-    roots: [...policy.roots],
-    selectedRoot: policy.selectedRoot,
+    ...(policy.workspace === undefined
+      ? {}
+      : {
+          workspace: {
+            roots: [...policy.workspace.roots],
+            selectedRoot: policy.workspace.selectedRoot,
+          },
+        }),
     allowed: policy.allowed.map((entry) => ({
       name: entry.name,
-      identity: entry.identity,
+      identity: retainedIdentityRecord(entry.identity),
       forms: [...entry.forms],
     })),
     requests: policy.requests.map(requestRecord),
+  };
+}
+
+/**
+ * One identity as journal data.
+ *
+ * Total over both retained shapes, so a policy read back is written back as the
+ * shape it was read as. What this run *states* is always the version-2 record —
+ * the version-1 arm exists because a record read from an older journal is still
+ * a policy, not because this build writes one.
+ *
+ * Distinct from the one-line spelling a *diagnostic* uses
+ * (`components/import-authority.ts`): that one is for a reader, and this one is
+ * what a continuation compares, so they are named apart rather than allowed to
+ * drift into each other.
+ */
+function retainedIdentityRecord(identity: RetainedIdentity): Json {
+  if ("legacy" in identity) {
+    return identity.legacy;
+  }
+  return {
+    kind: identity.kind,
+    origin: identity.origin,
+    key: identity.key,
+    revision: identity.revision,
   };
 }
 
@@ -963,94 +1316,254 @@ function policyRecord(policy: Policy): JsonObject {
  * because it happens to have the right keys, and a policy this version cannot
  * read is refused rather than treated as matching.
  */
+/**
+ * Whether an object carries exactly these members and nothing else.
+ *
+ * Every retained shape below is closed, which is a stronger claim than "the
+ * members it needs are present and well-typed". A record carrying an extra
+ * member was written by something this build does not know the rules of, and
+ * reading the members it recognizes would be admitting a grant on terms it
+ * never saw. Destructuring alone cannot say that, because a destructure is
+ * blind to what it did not name.
+ */
+function exactly(
+  value: JsonObject,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): boolean {
+  if (!required.every((member) => Object.hasOwn(value, member))) {
+    return false;
+  }
+  const known = new Set([...required, ...optional]);
+  return Object.keys(value).every((member) => known.has(member));
+}
+
+/**
+ * The policy a record holds, in whichever closed shape its version defines.
+ *
+ * The two versions are exact and disjoint. Version 1 is the untagged #369
+ * record: no version member, the Workspace basis as two mandatory top-level
+ * ones. Version 2 tags itself, carries the basis as one optional member, and
+ * has no legacy root fields at all — so a record mixing the two, or tagging
+ * itself with a version this build does not have, is refused rather than read
+ * as whichever it most resembles.
+ */
 function readPolicy(value: Json): Policy | undefined {
   if (!isJsonObject(value)) {
     return undefined;
   }
-  const { allow, roots, selectedRoot, allowed, requests } = value;
-  if (!Array.isArray(roots) || typeof selectedRoot !== "string") {
-    return undefined;
-  }
-  if (!Array.isArray(allow) || !Array.isArray(allowed) || !Array.isArray(requests)) {
-    return undefined;
-  }
-  const classes = readClasses(allow);
-  if (classes === undefined) {
-    return undefined;
-  }
-  const retainedRoots: string[] = [];
-  for (const root of roots) {
-    if (typeof root !== "string") {
+  const tagged = Object.hasOwn(value, "version");
+  if (tagged) {
+    if (value.version !== RECORD_VERSION) {
       return undefined;
     }
-    retainedRoots.push(root);
-  }
-  const identities = readAllowed(allowed);
-  if (identities === undefined) {
-    return undefined;
-  }
-  const retainedRequests: FetchRequest[] = [];
-  for (const request of requests) {
-    const parsed = readRequest(request);
-    if (parsed === undefined) {
+    if (!exactly(value, ["version", "allow", "allowed", "requests"], ["workspace"])) {
       return undefined;
     }
-    retainedRequests.push(parsed);
+    const workspace = Object.hasOwn(value, "workspace")
+      ? readWorkspace(value.workspace)
+      : undefined;
+    if (workspace === MALFORMED) {
+      return undefined;
+    }
+    return readPolicyTerms(value, workspace, 2);
+  }
+  if (!exactly(value, ["allow", "roots", "selectedRoot", "allowed", "requests"])) {
+    return undefined;
+  }
+  // A version-1 record always evaluated against a Workspace, so its basis is
+  // mandatory and reads through the same validation a version-2 basis does.
+  const workspace = readWorkspace({ roots: value.roots, selectedRoot: value.selectedRoot });
+  if (workspace === MALFORMED || workspace === undefined) {
+    return undefined;
+  }
+  return readPolicyTerms(value, workspace, 1);
+}
+
+/** The terms both versions share, read closed. */
+function readPolicyTerms(
+  value: JsonObject,
+  workspace: { roots: readonly string[]; selectedRoot: string } | undefined,
+  version: 1 | 2,
+): Policy | undefined {
+  const classes = readClasses(value.allow);
+  const identities = readAllowed(value.allowed, version);
+  const requests = readRequests(value.requests);
+  if (classes === undefined || identities === undefined || requests === undefined) {
+    return undefined;
   }
   return {
     allow: classes,
-    roots: retainedRoots,
-    selectedRoot,
+    ...(workspace === undefined ? {} : { workspace }),
     allowed: identities,
-    requests: retainedRequests,
+    requests,
   };
 }
 
-/** One retained request, or nothing when this version cannot read it. */
-function readRequest(value: Json): FetchRequest | undefined {
-  try {
-    return parseRequestRecord(value);
-  } catch {
-    return undefined;
+/** A record this version cannot read, told apart from one that holds nothing. */
+const MALFORMED = Symbol("malformed");
+
+/**
+ * One Workspace basis, validated rather than merely well-typed.
+ *
+ * A basis with no roots, a repeated root, or a selected root the run does not
+ * retain is not a stricter grant than one without those faults — it is not a
+ * grant at all, because there is nothing coherent for a continuation to be held
+ * to. So it is refused here, before the admission, rather than compared later
+ * against a live basis and appearing to hold.
+ */
+function readWorkspace(
+  value: Json | undefined,
+): { roots: readonly string[]; selectedRoot: string } | undefined | typeof MALFORMED {
+  if (!isJsonObject(value) || !exactly(value, ["roots", "selectedRoot"])) {
+    return MALFORMED;
   }
+  const roots = readRoots(value.roots);
+  const { selectedRoot } = value;
+  if (roots === undefined || typeof selectedRoot !== "string") {
+    return MALFORMED;
+  }
+  return roots.includes(selectedRoot) ? { roots, selectedRoot } : MALFORMED;
 }
 
-function readClasses(value: readonly Json[]): GeneratedEffectClass[] | undefined {
+/** The retained roots, which are a non-empty set rather than a list. */
+function readRoots(value: Json | undefined): readonly string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  const roots: string[] = [];
+  for (const root of value) {
+    if (typeof root !== "string" || root.length === 0 || roots.includes(root)) {
+      return undefined;
+    }
+    roots.push(root);
+  }
+  return roots;
+}
+
+/**
+ * The retained requests, read closed.
+ *
+ * `parseRequestRecord()` is the wrong reader here: it ignores members it does
+ * not know and treats a malformed `timeout` as an absent one, so a retained
+ * ceiling could compare equal to a live one it does not describe.
+ */
+function readRequests(value: Json): FetchRequest[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const requests: FetchRequest[] = [];
+  for (const entry of value) {
+    if (!isJsonObject(entry) || !exactly(entry, ["url", "method", "headers"], ["timeout"])) {
+      return undefined;
+    }
+    const { url, method, headers, timeout } = entry;
+    if (typeof url !== "string" || typeof method !== "string" || !isJsonObject(headers)) {
+      return undefined;
+    }
+    if (Object.hasOwn(entry, "timeout") && typeof timeout !== "number") {
+      return undefined;
+    }
+    const named: Record<string, string> = {};
+    for (const [header, value] of Object.entries(headers)) {
+      if (typeof value !== "string") {
+        return undefined;
+      }
+      named[header] = value;
+    }
+    requests.push({
+      url,
+      method,
+      headers: named,
+      ...(typeof timeout === "number" ? { timeout } : {}),
+    });
+  }
+  return requests;
+}
+
+/** The selected classes, which are a non-empty set in canonical order. */
+function readClasses(value: Json): GeneratedEffectClass[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
   const classes: GeneratedEffectClass[] = [];
   for (const effect of value) {
     const parsed = EFFECT_CLASSES.find((known) => known === effect);
-    if (parsed === undefined) {
+    if (parsed === undefined || classes.includes(parsed)) {
       return undefined;
     }
     classes.push(parsed);
   }
-  return classes;
+  return sameStrings(
+    classes,
+    EFFECT_CLASSES.filter((known) => classes.includes(known)),
+  )
+    ? classes
+    : undefined;
 }
 
+/** The forms one entry is admitted for: a non-empty set, canonically ordered. */
 function readForms(value: Json): AuthoredForm[] | undefined {
-  if (!Array.isArray(value)) {
+  if (!Array.isArray(value) || value.length === 0) {
     return undefined;
   }
   const forms: AuthoredForm[] = [];
   for (const form of value) {
     const parsed = AUTHORED_FORMS.find((known) => known === form);
-    if (parsed === undefined) {
+    if (parsed === undefined || forms.includes(parsed)) {
       return undefined;
     }
     forms.push(parsed);
   }
-  return forms;
+  return sameStrings(
+    forms,
+    AUTHORED_FORMS.filter((known) => forms.includes(known)),
+  )
+    ? forms
+    : undefined;
 }
 
-function readAllowed(value: readonly Json[]): RetainedEntry[] | undefined {
+/**
+ * One retained identity, in whichever shape its version defines.
+ *
+ * The two are exact and disjoint. Version 1 is a string and nothing else.
+ * Version 2 is the closed tagged record and nothing else: a string, a missing
+ * member, an extra member, an unknown kind and a non-string member are each
+ * refused rather than read as whichever shape the value most resembles.
+ */
+function readIdentity(value: Json | undefined, version: 1 | 2): RetainedIdentity | undefined {
+  if (version === 1) {
+    return typeof value === "string" ? { legacy: value } : undefined;
+  }
+  if (!isJsonObject(value) || !exactly(value, ["kind", "origin", "key", "revision"])) {
+    return undefined;
+  }
+  const { origin, key, revision } = value;
+  const kind = IDENTITY_KINDS.find((known) => known === value.kind);
+  if (
+    kind === undefined ||
+    typeof origin !== "string" ||
+    typeof key !== "string" ||
+    typeof revision !== "string"
+  ) {
+    return undefined;
+  }
+  return { kind, origin, key, revision };
+}
+
+function readAllowed(value: Json, version: 1 | 2): RetainedEntry[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
   const identities: RetainedEntry[] = [];
   for (const entry of value) {
-    if (!isJsonObject(entry)) {
+    if (!isJsonObject(entry) || !exactly(entry, ["name", "identity", "forms"])) {
       return undefined;
     }
-    const { name, identity } = entry;
+    const { name } = entry;
+    const identity = readIdentity(entry.identity, version);
     const forms = readForms(entry.forms);
-    if (typeof name !== "string" || typeof identity !== "string" || forms === undefined) {
+    if (typeof name !== "string" || identity === undefined || forms === undefined) {
       return undefined;
     }
     identities.push({ name, identity, forms });
@@ -1058,15 +1571,19 @@ function readAllowed(value: readonly Json[]): RetainedEntry[] | undefined {
   return identities;
 }
 
-function readNamed(value: readonly Json[]): RetainedInvocation[] | undefined {
+function readNamed(value: Json, version: 1 | 2): RetainedInvocation[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
   const named: RetainedInvocation[] = [];
   for (const entry of value) {
-    if (!isJsonObject(entry)) {
+    if (!isJsonObject(entry) || !exactly(entry, ["name", "identity", "form"])) {
       return undefined;
     }
-    const { name, identity } = entry;
+    const { name } = entry;
+    const identity = readIdentity(entry.identity, version);
     const form = AUTHORED_FORMS.find((known) => known === entry.form);
-    if (typeof name !== "string" || typeof identity !== "string" || form === undefined) {
+    if (typeof name !== "string" || identity === undefined || form === undefined) {
       return undefined;
     }
     named.push({ name, identity, form });
@@ -1098,11 +1615,7 @@ function readNamed(value: readonly Json[]): RetainedInvocation[] | undefined {
  * the *current* policy would wave through.
  */
 function policyHolds(retained: Policy, current: Policy): boolean {
-  const held = new Set(current.roots);
-  if (!retained.roots.every((root) => held.has(root))) {
-    return false;
-  }
-  if (!held.has(retained.selectedRoot) || !held.has(current.selectedRoot)) {
+  if (!workspaceHolds(retained.workspace, current.workspace)) {
     return false;
   }
   if (!sameStrings(retained.allow, current.allow)) {
@@ -1116,7 +1629,9 @@ function policyHolds(retained: Policy, current: Policy): boolean {
     return (
       here === undefined ||
       here.name !== entry.name ||
-      here.identity !== entry.identity ||
+      // The retained side is what was granted; the current side is the entry
+      // asking to answer for it, and only that side states version-1 aliases.
+      !sameIdentity(entry.identity, here) ||
       !sameStrings(here.forms, entry.forms)
     );
   });
@@ -1130,6 +1645,32 @@ function policyHolds(retained: Policy, current: Policy): boolean {
     const here = current.requests[index];
     return here !== undefined && sameRequest(request, here);
   });
+}
+
+/**
+ * Whether a resumed run still holds the Workspace basis it was admitted over.
+ *
+ * Absent on both sides is a host that evaluates against no Workspace, and two
+ * of those hold each other. Present on one side only is a run that acquired or
+ * lost a Workspace between the admission and the resume, which is a different
+ * grant rather than the same one restated.
+ *
+ * Present on both compares by membership, because the set legitimately grows:
+ * every committed mutation retains another immutable root and advances the
+ * authoritative current one. So each admission root and the admission's
+ * selected root must still be retained, and the root the run now stands on must
+ * be a retained one — while additional roots change nothing this admission was
+ * granted under.
+ */
+function workspaceHolds(retained: Policy["workspace"], current: Policy["workspace"]): boolean {
+  if (retained === undefined || current === undefined) {
+    return retained === current;
+  }
+  const held = new Set(current.roots);
+  if (!retained.roots.every((root) => held.has(root))) {
+    return false;
+  }
+  return held.has(retained.selectedRoot) && held.has(current.selectedRoot);
 }
 
 /** One element the fragment named, and the entry preflight selected for it. */
@@ -1224,7 +1765,7 @@ function* walk(
           throw new Refusal(form === "paired" ? "content" : "form");
         }
         if (entry.requests !== undefined) {
-          const ceiling = ceilings.get(entry.identity) ?? [];
+          const ceiling = ceilings.get(identityKey(entry.identity)) ?? [];
           const candidate = yield* admitCandidateRequest(segment.props);
           if (!ceiling.some((allowed) => sameRequest(allowed, candidate))) {
             throw new Refusal("request");
@@ -1244,6 +1785,17 @@ function* walk(
 const GENERATED_XMD = "generated_xmd";
 
 /**
+ * The record shape new executions write.
+ *
+ * Version 1 is the untagged #369 record and stays readable: a run suspended
+ * before this build resumes under exactly the ceilings it was admitted with.
+ * Version 2 tags itself, which is what lets an untagged record be recognized as
+ * the older shape rather than guessed at, and carries the Workspace basis as
+ * one optional member because an ordinary host has none.
+ */
+const RECORD_VERSION = 2;
+
+/**
  * What the durable admission records for this source.
  *
  * A refusal is a value rather than a failure. Throwing out of a durable
@@ -1260,18 +1812,23 @@ function* admitSource(
   try {
     const { named } = yield* preflight(source, table, ceilings);
     return parseJson({
+      version: RECORD_VERSION,
       decision: "admitted",
       source,
       named: named.map((entry) => ({
         name: entry.name,
-        identity: entry.identity,
+        identity: retainedIdentityRecord(entry.identity),
         form: entry.form,
       })),
       policy: policyRecord(policy),
     });
   } catch (error) {
     if (error instanceof Refusal) {
-      return parseJson({ decision: "refused", construct: error.construct });
+      return parseJson({
+        version: RECORD_VERSION,
+        decision: "refused",
+        construct: error.construct,
+      });
     }
     throw error;
   }
@@ -1314,8 +1871,19 @@ function readAdmission(value: Json): RetainedAdmission | undefined {
   if (!isJsonObject(value)) {
     return undefined;
   }
+  // Tagged at the result level as well as inside the policy, and the two must
+  // agree: a record whose result claims one version and whose policy claims
+  // another describes no shape this build has.
+  const tagged = Object.hasOwn(value, "version");
+  if (tagged && value.version !== RECORD_VERSION) {
+    return undefined;
+  }
+  const version = tagged ? ["version"] : [];
   const { decision } = value;
   if (decision === "refused") {
+    if (!exactly(value, [...version, "decision", "construct"])) {
+      return undefined;
+    }
     const { construct } = value;
     return typeof construct === "string" && isConstruct(construct)
       ? { decision, construct }
@@ -1324,13 +1892,22 @@ function readAdmission(value: Json): RetainedAdmission | undefined {
   if (decision !== "admitted") {
     return undefined;
   }
-  const { source, named, policy } = value;
-  if (typeof source !== "string" || !Array.isArray(named) || policy === undefined) {
+  if (!exactly(value, [...version, "decision", "source", "named", "policy"])) {
     return undefined;
   }
-  const invocations = readNamed(named);
-  const retained = readPolicy(policy);
+  const { source } = value;
+  if (typeof source !== "string") {
+    return undefined;
+  }
+  const invocations = readNamed(value.named, tagged ? 2 : 1);
+  const retained = readPolicy(value.policy);
   if (invocations === undefined || retained === undefined) {
+    return undefined;
+  }
+  // The policy's own version has to be the one the result claimed. A tagged
+  // result holding an untagged policy, or the reverse, is two shapes at once.
+  const policyTagged = isJsonObject(value.policy) && Object.hasOwn(value.policy, "version");
+  if (policyTagged !== tagged) {
     return undefined;
   }
   return { decision, source, named: invocations, policy: retained };
@@ -1439,9 +2016,16 @@ export function* evaluateGeneratedXmd(
   if (!policyHolds(decided.policy, policy)) {
     throw new GeneratedXmdError(CEILING);
   }
+  // And for the exact text, on the same terms as the ceilings. An admission is
+  // a decision about one fragment; a caller now holding a different one is
+  // asking for a decision that was never made, so it refuses here rather than
+  // quietly expanding the retained copy in its place.
+  if (decided.source !== request.source) {
+    throw new GeneratedXmdError(STALE_TEXT);
+  }
 
-  // The retained source is what expands, so a continuation runs the fragment
-  // this run admitted rather than whatever a later caller happens to hold.
+  // The retained source is what expands, so a continuation runs exactly the
+  // bytes this run admitted rather than a caller's copy of them.
   const restored = yield* preflight(decided.source, table, ceilings);
   return yield* expand(request.id, restored.segments, restored.named);
 }

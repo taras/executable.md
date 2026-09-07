@@ -71,6 +71,64 @@ Seeing a component named here is not permission to run it. The symbols and
 this documentation are text; what a name means is still resolution's decision,
 and what may run is still the execution's.
 
+## Evaluate
+
+Runs program text this document did not author.
+
+```mdx
+<Evaluate text={program} allow={["read"]} />
+```
+
+An agent proposes a fragment of Executable Markdown; this is where that fragment
+is admitted and performed. The self-closing form takes the program as `text` — a
+value the document already holds. The paired form makes the content the
+producer, and what it renders is the program:
+
+```mdx
+<Evaluate allow={["read"]}>
+  <Plan>Read the changelog and report the version.</Plan>
+</Evaluate>
+```
+
+The two are disjoint. An element that states `text` *and* renders content is
+stating the program twice, and is refused rather than resolved by precedence.
+
+It returns each admitted observation's own value, in the order the fragment
+invoked them, with whatever the fragment rendered kept beside them under
+`output`. That is a value rather than text: render it where you want text, with
+`<Json>`.
+
+### `allow` narrows; it never grants
+
+Writing `<Evaluate>` grants nothing. Every ceiling was stated by the host that
+assembled this run, before any document existed — which components a fragment
+may name, which spelling of each, and the exact requests any of them may
+perform. `allow` names an effect *class* and selects among the tables that
+already exist: `read` observes, `write` mutates. Omitting it asks for `read`. A
+class the host installed nothing for is refused before the program is read.
+
+An execution whose host stated no evaluation profile has no evaluation at all,
+and says so when the element is written rather than at startup.
+
+### What a fragment may contain
+
+Much less than a document. The evaluator admits the host's pinned components and
+plain text, and refuses the whole fragment — before its first effect — for an
+executable code block, an expression prop, an interpolated binding, an `as`
+binding, any structural construct, a component the host did not admit, a
+spelling the host did not admit that component for, or a request outside the
+stated ceiling.
+
+A producer written as content is told exactly this: it renders under the
+narrowed symbols, so `<Syntax />` inside it lists what a fragment may write
+rather than what the surrounding document may write.
+
+### Resuming
+
+One occurrence is one durable admission. A continuation restores the decision
+that was made rather than making it again, and refuses if the run now offers
+different text, or states ceilings the admission was not granted under.
+
 ## Elicit
 
 Asks a person a structured question and returns their answer.

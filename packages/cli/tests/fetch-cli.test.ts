@@ -1,5 +1,5 @@
 /**
- * Tier FE — what a host retains of a `<Fetch>` (spec §6.18).
+ * Tier FT — what a host retains of a `<Fetch>` (spec §6.18).
  *
  * Retention is the host's choice and nothing else's. The same document, the
  * same request, and the same rendered text produce a trace or no trace
@@ -112,8 +112,8 @@ function document(origin: string): string {
   ].join("\n");
 }
 
-describe("Tier FE — diagnostic retention of a Fetch", () => {
-  it("FEC1: a run without --journal performs the request and keeps nothing", function* () {
+describe("Tier FT — diagnostic retention of a Fetch", () => {
+  it("FTC1: a run without --journal performs the request and keeps nothing", function* () {
     const server = yield* useLoopback();
     const dir = yield* useTempDirectory("xmd-fetch-cli-");
     const path = join(dir, "doc.md");
@@ -130,7 +130,7 @@ describe("Tier FE — diagnostic retention of a Fetch", () => {
     expect(result.stdout).not.toContain("greeting");
   });
 
-  it("FEC2: a run with --journal retains the normalized request and the response", function* () {
+  it("FTC2: a run with --journal retains the normalized request and the response", function* () {
     const server = yield* useLoopback();
     const dir = yield* useTempDirectory("xmd-fetch-cli-");
     const path = join(dir, "doc.md");

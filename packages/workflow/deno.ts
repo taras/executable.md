@@ -83,7 +83,7 @@ export { withWorkflowWorkspace } from "./src/deno/workspace/published.ts";
  * `<Evaluate>`: its implementation names durable work after its own invocation,
  * so canonical execution builds it from the claimant it minted.
  */
-export { evaluationComponents } from "./src/deno/workspace/evaluate.ts";
+export { evaluationProfile } from "./src/deno/workspace/evaluate.ts";
 export type { GeneratedEvaluationOptions } from "./src/deno/workspace/evaluate.ts";
 export type { WorkflowWorkspaceOptions } from "./src/deno/workspace/published.ts";
 export type { WorkflowAgentAttachment, WorkflowAgentInstaller } from "./src/deno/workspace/host.ts";

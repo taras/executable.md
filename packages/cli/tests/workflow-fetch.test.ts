@@ -1,5 +1,5 @@
 /**
- * Tier FE — what a workflow run retains of a `<Fetch>` (spec §6.18).
+ * Tier FT — what a workflow run retains of a `<Fetch>` (spec §6.18).
  *
  * A workflow's journal is the run's own, and this is where the same event that
  * a diagnostic trace holds has to survive losing the host. The run is killed
@@ -143,7 +143,7 @@ function useFixture<T>(origin: string, body: (fixture: Fixture) => Operation<T>)
 
     yield* git(fixture.repository, ["init", "-q", "--initial-branch=main", "."]);
     yield* git(fixture.repository, ["config", "user.email", "tier-fe@example.test"]);
-    yield* git(fixture.repository, ["config", "user.name", "Tier FE"]);
+    yield* git(fixture.repository, ["config", "user.name", "Tier FT"]);
     yield* git(fixture.repository, ["add", "-A"]);
     yield* git(fixture.repository, [
       "-c",
@@ -201,8 +201,8 @@ function* rootCloses(path: string): Operation<number> {
     .length;
 }
 
-describe("Tier FE — a workflow run's Fetch", () => {
-  it("FEW1: commits one response, and a resume restores it without asking again", function* () {
+describe("Tier FT — a workflow run's Fetch", () => {
+  it("FTW1: commits one response, and a resume restores it without asking again", function* () {
     const server = yield* useLoopback();
 
     yield* useFixture(server.origin, function* (fixture) {

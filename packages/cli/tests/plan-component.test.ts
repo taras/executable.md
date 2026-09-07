@@ -31,8 +31,11 @@ import {
   useNormalizedOutput,
 } from "@executablemd/core";
 import type { Json, SyntaxSymbols } from "@executablemd/core";
-import { validateDocument } from "@executablemd/core";
-import { executeInstalled, sourceDigest } from "@executablemd/core/host";
+import { registerComponents, validateDocument } from "@executablemd/core";
+import { executeInstalled, fileReadEntry, sourceDigest } from "@executablemd/core/host";
+import type { FragmentEvaluationInput } from "@executablemd/core/host";
+import { recordedFiles } from "../../core/tests/support/fragment-files.ts";
+import type { RecordedFiles } from "../../core/tests/support/fragment-files.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 
@@ -104,6 +107,12 @@ function* runDocument(options: {
   session?: string;
   props?: Record<string, Json>;
   /**
+   * The ceiling a generated fragment runs under, for the rows that write
+   * `<Evaluate>` beside or around a `<Plan>`. Absent for every other row, which
+   * is what makes "this execution offers no evaluation" the default.
+   */
+  evaluation?: FragmentEvaluationInput;
+  /**
    * Install the output middleware an ordinary `xmd run` installs.
    *
    * Off by default, because most cases are about what a document rendered
@@ -158,6 +167,7 @@ function* runDocument(options: {
             // `<Syntax />` the packaged Plan writes is canonical core's public
             // component, and what it answers with is this execution's.
             symbols: harness.symbols,
+            ...(options.evaluation === undefined ? {} : { evaluation: options.evaluation }),
           },
         ],
       );
@@ -417,8 +427,8 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       expect(Reflect.get(Object(plan?.origin), "origin")).toBe(PLAN_ORIGIN);
       // The description a document author reads is the packaged Component's own
       // frontmatter, so the asset and the entry describing it are one text.
-      expect(plan?.description).toContain("Create an XMD program from a prompt.");
-      expect(plan?.description).toContain("emits the approved program source.");
+      expect(plan?.description).toContain("Generate program text from a prompt.");
+      expect(plan?.description).toContain("emits the approved program text");
 
       for (const category of catalog.categories) {
         const names = category.entries.map((entry) => entry.name);
@@ -1192,6 +1202,316 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       // No output file, no journal, no scratch: the durable work belongs to the
       // enclosing document and the approved source exists only as the binding.
       expect((yield* until(readdir(dir))).sort()).toEqual([]);
+    });
+  });
+});
+
+/**
+ * Tier FE — `<Plan>` beside `<Evaluate>`.
+ *
+ * The two are complements and neither is the other. `<Plan>` produces text and
+ * runs none of it; `<Evaluate>` runs text and produces none of it. What these
+ * rows fix is the seam between them: which vocabulary each is told about, and
+ * that passing one to the other is an ordinary string binding rather than a
+ * type either of them shares.
+ */
+describe("Tier FE — Plan produces text, Evaluate runs it", () => {
+  /** A profile admitting one read, over a recorder these rows can count. */
+  function profile(files: RecordedFiles): FragmentEvaluationInput {
+    return { read: [fileReadEntry()], files };
+  }
+
+  /**
+   * Two component names invented for these rows, and two markers that occur
+   * nowhere else.
+   *
+   * `<File>`, `<Evaluate>` and `<Loop>` are all unusable as discriminators
+   * here: Plan's own fixed instructions name components, so a row asserting on
+   * one of them can pass on prose rather than on the catalog. These two exist
+   * only in this suite, so the marker appearing at all means the catalog
+   * described the entry.
+   */
+  const READ_MARKER = "FE713_READ_MARKER";
+  const WIDE_MARKER = "FE713_WIDE_MARKER";
+
+  /** The admitted read: available inside an evaluation and at the wide site. */
+  const READ_COMPONENT = {
+    name: "FE713.Read",
+    origin: "test://fe713/read",
+    props: {
+      type: "object",
+      properties: { path: { type: "string" } },
+      required: ["path"],
+      additionalProperties: false,
+    },
+    description: `Reads one path. ${READ_MARKER}`,
+  };
+
+  /** Available at the ordinary authored site, and in no evaluation profile. */
+  const WIDE_COMPONENT = {
+    name: "FE713.WideOnly",
+    origin: "test://fe713/wide",
+    props: { type: "object", properties: {}, additionalProperties: false },
+    description: `Does nothing an evaluation may do. ${WIDE_MARKER}`,
+  };
+
+  /**
+   * The profile these rows evaluate under: the read entry, and never the wide
+   * one.
+   *
+   * The entry's identity is the fixture's own, so the catalog an agent is shown
+   * inside an evaluation names `test://fe713/read` and the admitted capability
+   * is core's file read behind it.
+   */
+  function fixtureProfile(files: RecordedFiles): FragmentEvaluationInput {
+    return {
+      read: [
+        {
+          ...fileReadEntry(),
+          name: READ_COMPONENT.name,
+          identity: { origin: READ_COMPONENT.origin, key: "FE713.Read", revision: "1" },
+          description: READ_COMPONENT.description,
+        },
+      ],
+      files,
+    };
+  }
+
+  /** Register both fixture components at the ordinary authored site. */
+  function* useFixtureComponents(seen: string[]): Operation<void> {
+    yield* registerComponents([
+      {
+        ...READ_COMPONENT,
+        // deno-lint-ignore require-yield
+        *fn(): Operation<string> {
+          return "";
+        },
+      },
+      {
+        ...WIDE_COMPONENT,
+        // deno-lint-ignore require-yield
+        *fn(): Operation<string> {
+          return "";
+        },
+      },
+      {
+        // An ordinary producer-site component that records what `<Syntax />`
+        // rendered and emits nothing, so the catalog can be asserted on without
+        // it becoming part of the program.
+        name: "RememberSyntax",
+        origin: "test://fe713/remember",
+        props: {
+          type: "object",
+          properties: { text: { type: "string" } },
+          required: ["text"],
+          additionalProperties: false,
+        },
+        // deno-lint-ignore require-yield
+        *fn(props: Record<string, Json>): Operation<string> {
+          seen.push(String(props.text));
+          return "";
+        },
+      },
+    ]);
+  }
+
+  it("FE22: the approved bytes are inert text `<Evaluate>` then runs", function* () {
+    yield* useWorkingDirectory(function* (dir) {
+      yield* writeTextFile(join(dir, "notes.md"), "the retained note");
+      const files = recordedFiles({ "notes.md": "the retained note" });
+      // What the agent approves is a program. `<Plan>` hands it back as a
+      // string and performs none of it.
+      const PROGRAM = `<File path="notes.md" />\n`;
+
+      const run = yield* runDocument({
+        source: [
+          '<Plan as="approved">Write a program.</Plan>',
+          "",
+          '<Evaluate text={approved} as="answer" />',
+          "",
+          "<Json value={answer} />",
+          "",
+        ].join("\n"),
+        reply: PROGRAM,
+        evaluation: profile(files),
+      });
+
+      expect(run.failure).toBe(undefined);
+      // `<Plan>` ran no fragment operation of its own. If it had evaluated what
+      // it approved, the recorder would show a read before `<Evaluate>` ever
+      // reached it — and there would be two.
+      expect(files.performed).toEqual(["read notes.md"]);
+      // And `<Evaluate>` did run it, so the row is not passing because nothing
+      // happened at all.
+      expect(run.output).toContain("the retained note");
+    });
+  });
+
+  it("FE22: an approved program is not run when no `<Evaluate>` is written", function* () {
+    yield* useWorkingDirectory(function* () {
+      const files = recordedFiles({ "notes.md": "the retained note" });
+      const run = yield* runDocument({
+        source: ['<Plan as="approved">Write a program.</Plan>', "", "done", ""].join("\n"),
+        reply: `<File path="notes.md" />\n`,
+        evaluation: profile(files),
+      });
+
+      expect(run.failure).toBe(undefined);
+      expect(run.output).toContain("done");
+      // The negative control for the row above: the same approved bytes, the
+      // same live profile, and nothing performed — because inertness is a
+      // property of `<Plan>` rather than of whether a profile existed.
+      expect(files.performed).toEqual([]);
+    });
+  });
+
+  it("FE8: a Plan inside `<Evaluate>` is told the admitted vocabulary alone", function* () {
+    yield* useWorkingDirectory(function* () {
+      const files = recordedFiles({ "notes.md": "the retained note" });
+      const seen: string[] = [];
+
+      const run = yield* scoped(function* () {
+        yield* useFixtureComponents(seen);
+        return yield* runDocument({
+          source: [
+            '<Evaluate allow={["read"]} as="answer">',
+            '<Syntax as="seen" />',
+            "<RememberSyntax text={seen} />",
+            "<Plan>Generate the requested fragment.</Plan>",
+            "</Evaluate>",
+            "",
+          ].join("\n"),
+          reply: `<FE713.Read path="notes.md" />\n`,
+          evaluation: fixtureProfile(files),
+        });
+      });
+
+      expect(run.failure).toBe(undefined);
+      // The public `<Syntax />` rendered inside the producer saw the narrowed
+      // reference. Its marker is the admitted entry's own description, which
+      // occurs nowhere in Plan's fixed prose.
+      expect(seen).toHaveLength(1);
+      const catalog = seen[0] ?? "";
+      expect(catalog).toContain(READ_MARKER);
+      expect(catalog).toContain(READ_COMPONENT.origin);
+      // The wide-only component exists in this scope and is not in the profile,
+      // so its absence here is the narrowing rather than the fixture.
+      expect(catalog).not.toContain(WIDE_MARKER);
+      // And this is a narrowed catalog rather than the site's: the authored
+      // site has built-in components, and a fragment has none — FE9 asserts the
+      // other side of exactly this sentence.
+      expect(catalog).toContain("No components are registered in this profile.");
+      expect(catalog).not.toContain("### `<File>`");
+
+      // Plan's own first turn was built from the same narrowed reference: the
+      // packaged Component writes `<Syntax />` too, and both must agree about
+      // what a fragment may contain.
+      const prompt = run.harness.fake.prompts[0] ?? "";
+      expect(prompt.split(READ_MARKER).length - 1).toBe(1);
+      expect(prompt).not.toContain(WIDE_MARKER);
+
+      // And the program the agent wrote against it ran, exactly once, through
+      // the captured operation.
+      expect(files.performed).toEqual(["read notes.md"]);
+    });
+  });
+
+  it("FE8: a fragment naming the wide-only component refuses with no operation", function* () {
+    yield* useWorkingDirectory(function* () {
+      const files = recordedFiles({ "notes.md": "the retained note" });
+      const seen: string[] = [];
+
+      const run = yield* scoped(function* () {
+        yield* useFixtureComponents(seen);
+        return yield* runDocument({
+          source: [
+            '<Evaluate allow={["read"]}>',
+            "<Plan>Generate the requested fragment.</Plan>",
+            "</Evaluate>",
+            "",
+          ].join("\n"),
+          // The agent writes the component it was *not* told about. It resolves
+          // at the ordinary site and is not in the profile.
+          reply: `<FE713.WideOnly />\n`,
+          evaluation: fixtureProfile(files),
+        });
+      });
+
+      // The negative control for the row above: refused whole, before any
+      // effect, and the recorder shows the evaluation reached no operation.
+      expect(run.failure).not.toBe(undefined);
+      expect(String(run.failure)).toContain("did not admit");
+      expect(files.performed).toEqual([]);
+    });
+  });
+
+  it("FE9: a deferred Plan keeps its own site's wider vocabulary", function* () {
+    yield* useWorkingDirectory(function* () {
+      const files = recordedFiles({ "notes.md": "the retained note" });
+      const seen: string[] = [];
+
+      const run = yield* scoped(function* () {
+        yield* useFixtureComponents(seen);
+        return yield* runDocument({
+          source: [
+            '<Syntax as="seen" />',
+            "<RememberSyntax text={seen} />",
+            '<Plan as="program">Generate the requested fragment.</Plan>',
+            '<Evaluate text={program} allow={["read"]} />',
+            "",
+          ].join("\n"),
+          // Written against the wider catalog: the admitted read first, then
+          // the component only the authored site has.
+          reply: `<FE713.Read path="notes.md" />\n<FE713.WideOnly />\n`,
+          evaluation: fixtureProfile(files),
+        });
+      });
+
+      // The Plan ran at the document's own site, so its catalog is the host
+      // profile's rather than an evaluation's. The discriminating fact against
+      // FE8, in the same rendered structure: this site *has* built-in
+      // components, and a narrowed one reports none.
+      expect(seen).toHaveLength(1);
+      const catalog = seen[0] ?? "";
+      expect(catalog).toContain("## Built-in components");
+      expect(catalog).toContain("### `<File>`");
+      expect(catalog).not.toContain("No components are registered in this profile.");
+      // And it is not the admitted vocabulary: the fragment's own entry is not
+      // something the authored site describes.
+      expect(catalog).not.toContain(READ_MARKER);
+      const prompt = run.harness.fake.prompts[0] ?? "";
+      expect(prompt).toContain("### `<File>`");
+      expect(prompt).not.toContain(READ_MARKER);
+
+      // The later, narrower `<Evaluate>` refuses the whole fragment. The
+      // admitted read is written *first*, so a refusal that happened
+      // element-by-element would already have performed it — the empty
+      // recorder is what proves preflight decided the whole fragment.
+      expect(run.failure).not.toBe(undefined);
+      expect(String(run.failure)).toContain("did not admit");
+      expect(files.performed).toEqual([]);
+    });
+  });
+
+  it("FE9: a later narrower Evaluate refuses text the wider site allowed", function* () {
+    yield* useWorkingDirectory(function* () {
+      const files = recordedFiles({ "notes.md": "the retained note" });
+      // The agent, told the document's own vocabulary, writes something a
+      // fragment may not contain. The narrower `<Evaluate>` refuses it before
+      // any effect rather than running part of it.
+      const run = yield* runDocument({
+        source: [
+          '<Plan as="approved">Write a program.</Plan>',
+          "",
+          "<Evaluate text={approved} />",
+          "",
+        ].join("\n"),
+        reply: `<Loop max={2}>\n<File path="notes.md" />\n</Loop>\n`,
+        evaluation: profile(files),
+      });
+
+      expect(run.failure).not.toBe(undefined);
+      expect(files.performed).toEqual([]);
     });
   });
 });

@@ -1,5 +1,5 @@
 /**
- * Tier FE — `<Fetch>` (spec §6.18).
+ * Tier FT — `<Fetch>` (spec §6.18).
  *
  * The component is a boundary between three things that must not blur: what a
  * document is allowed to ask for, who performs the request, and what is kept
@@ -215,7 +215,7 @@ function partial(events: DurableEvent[]): InMemoryStream {
   );
 }
 
-describe("Tier FE — what a request has to be before it is sent", () => {
+describe("Tier FT — what a request has to be before it is sent", () => {
   beforeAll(() => useTempFileCompiler());
 
   const REFUSED: Array<[string, string]> = [
@@ -239,7 +239,7 @@ describe("Tier FE — what a request has to be before it is sent", () => {
   ];
 
   for (const [what, element] of REFUSED) {
-    it(`FE1: refuses ${what} before any request`, function* () {
+    it(`FT1: refuses ${what} before any request`, function* () {
       const workspace = yield* useWorkspace();
       const probe = yield* useAnswer({ status: 200 });
 
@@ -251,7 +251,7 @@ describe("Tier FE — what a request has to be before it is sent", () => {
     });
   }
 
-  it("FE2: defaults to GET and sends exactly the normalized request", function* () {
+  it("FT2: defaults to GET and sends exactly the normalized request", function* () {
     const workspace = yield* useWorkspace();
     const probe = yield* useAnswer({ status: 200, body: "ok" });
 
@@ -268,7 +268,7 @@ describe("Tier FE — what a request has to be before it is sent", () => {
     ]);
   });
 
-  it("FE3: accepts HEAD and sends it verbatim", function* () {
+  it("FT3: accepts HEAD and sends it verbatim", function* () {
     const workspace = yield* useWorkspace();
     const probe = yield* useAnswer({ status: 200 });
 
@@ -277,7 +277,7 @@ describe("Tier FE — what a request has to be before it is sent", () => {
     expect(probe.performed[0]?.init?.method).toBe("HEAD");
   });
 
-  it("FE4: orders header names lexicographically and leaves values alone", function* () {
+  it("FT4: orders header names lexicographically and leaves values alone", function* () {
     const workspace = yield* useWorkspace();
     const probe = yield* useAnswer({ status: 200 });
 
@@ -296,7 +296,7 @@ describe("Tier FE — what a request has to be before it is sent", () => {
   });
 });
 
-describe("Tier FE — what bounds the request", () => {
+describe("Tier FT — what bounds the request", () => {
   beforeAll(() => useTempFileCompiler());
 
   const ACCEPTED: Array<[string, number]> = [
@@ -307,7 +307,7 @@ describe("Tier FE — what bounds the request", () => {
   ];
 
   for (const [spelling, ms] of ACCEPTED) {
-    it(`FE5: sends ${spelling} as ${ms}ms`, function* () {
+    it(`FT5: sends ${spelling} as ${ms}ms`, function* () {
       const workspace = yield* useWorkspace();
       const probe = yield* useAnswer({ status: 200 });
 
@@ -323,7 +323,7 @@ describe("Tier FE — what bounds the request", () => {
   const REJECTED = ["", "   ", "0", "0s", "-1", "1.5s", "Infinity", "NaN", "abc", "5x", "1e3"];
 
   for (const spelling of REJECTED) {
-    it(`FE6: refuses the timeout ${JSON.stringify(spelling)} before any request`, function* () {
+    it(`FT6: refuses the timeout ${JSON.stringify(spelling)} before any request`, function* () {
       const workspace = yield* useWorkspace();
       const probe = yield* useAnswer({ status: 200 });
 
@@ -337,7 +337,7 @@ describe("Tier FE — what bounds the request", () => {
     });
   }
 
-  it("FE7: an explicit timeout outranks the contextual Fetch default", function* () {
+  it("FT7: an explicit timeout outranks the contextual Fetch default", function* () {
     const workspace = yield* useWorkspace();
 
     const probe = yield* scoped(function* () {
@@ -350,7 +350,7 @@ describe("Tier FE — what bounds the request", () => {
     expect(probe.performed[0]?.init?.timeout).toBe(1_000);
   });
 
-  it("FE8: the contextual Fetch default is what an unbounded element carries", function* () {
+  it("FT8: the contextual Fetch default is what an unbounded element carries", function* () {
     const workspace = yield* useWorkspace();
 
     const probe = yield* scoped(function* () {
@@ -363,7 +363,7 @@ describe("Tier FE — what bounds the request", () => {
     expect(probe.performed[0]?.init?.timeout).toBe(9_000);
   });
 
-  it("FE9: no bound at all is an absent field rather than a number", function* () {
+  it("FT9: no bound at all is an absent field rather than a number", function* () {
     const workspace = yield* useWorkspace();
     const probe = yield* useAnswer({ status: 200 });
 
@@ -379,7 +379,7 @@ describe("Tier FE — what bounds the request", () => {
   });
 });
 
-describe("Tier FE — the response a document keeps", () => {
+describe("Tier FT — the response a document keeps", () => {
   beforeAll(() => useTempFileCompiler());
 
   const MIXED: Answer = {
@@ -403,7 +403,7 @@ describe("Tier FE — the response a document keeps", () => {
     "BINDING {shape}",
   );
 
-  it("FE10: binds one canonical JSON value", function* () {
+  it("FT10: binds one canonical JSON value", function* () {
     const workspace = yield* useWorkspace();
     yield* useAnswer(MIXED);
 
@@ -415,7 +415,7 @@ describe("Tier FE — the response a document keeps", () => {
     );
   });
 
-  it("FE11: retains the same value it bound", function* () {
+  it("FT11: retains the same value it bound", function* () {
     const workspace = yield* useWorkspace();
     yield* useAnswer(MIXED);
 
@@ -430,7 +430,7 @@ describe("Tier FE — the response a document keeps", () => {
     });
   });
 
-  it("FE12: a provider that rewrites its headers afterwards changes nothing", function* () {
+  it("FT12: a provider that rewrites its headers afterwards changes nothing", function* () {
     const workspace = yield* useWorkspace();
     yield* useAnswer({ ...MIXED, mutatesAfterRead: true });
 
@@ -441,7 +441,7 @@ describe("Tier FE — the response a document keeps", () => {
     expect(JSON.stringify(result.events)).not.toContain("x-rewritten");
   });
 
-  it("FE13: refuses a provider that cannot enumerate its headers", function* () {
+  it("FT13: refuses a provider that cannot enumerate its headers", function* () {
     const workspace = yield* useWorkspace();
     yield* useAnswer({ status: 200, opaqueHeaders: true, body: "ignored" });
 
@@ -451,7 +451,7 @@ describe("Tier FE — the response a document keeps", () => {
     expect(committed(result.events)).toHaveLength(0);
   });
 
-  it("FE14: GET reads the body exactly once; HEAD does not read it at all", function* () {
+  it("FT14: GET reads the body exactly once; HEAD does not read it at all", function* () {
     const workspace = yield* useWorkspace();
 
     const reading = yield* scoped(function* () {
@@ -484,10 +484,10 @@ describe("Tier FE — the response a document keeps", () => {
   });
 });
 
-describe("Tier FE — what a status means", () => {
+describe("Tier FT — what a status means", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("FE15: a captured non-2xx binds the same shape as a captured 2xx", function* () {
+  it("FT15: a captured non-2xx binds the same shape as a captured 2xx", function* () {
     const workspace = yield* useWorkspace();
     yield* useAnswer({ status: 404, headers: [["content-type", "text/plain"]], body: "missing" });
 
@@ -512,7 +512,7 @@ describe("Tier FE — what a status means", () => {
     expect(result.output).toContain("AFTER");
   });
 
-  it("FE16: an uncaptured 2xx succeeds and renders nothing of its own", function* () {
+  it("FT16: an uncaptured 2xx succeeds and renders nothing of its own", function* () {
     const workspace = yield* useWorkspace();
     yield* useAnswer({ status: 204, headers: [["x-marker", "hidden"]], body: "not rendered" });
 
@@ -525,7 +525,7 @@ describe("Tier FE — what a status means", () => {
     expect(result.output).not.toContain("204");
   });
 
-  it("FE17: an uncaptured non-2xx records the response and stops the document", function* () {
+  it("FT17: an uncaptured non-2xx records the response and stops the document", function* () {
     const workspace = yield* useWorkspace();
     const marker = join(workspace, "ran.txt");
     yield* useAnswer({ status: 500, headers: [["x-mark", "kept"]], body: "server error" });
@@ -552,7 +552,7 @@ describe("Tier FE — what a status means", () => {
   });
 });
 
-describe("Tier FE — the binding-mode seam", () => {
+describe("Tier FT — the binding-mode seam", () => {
   /**
    * The engine's answer to "will what I return be captured?" and nothing else.
    * Driven through `expandSegments` rather than a document, because what is
@@ -584,7 +584,7 @@ describe("Tier FE — the binding-mode seam", () => {
     return { Report: definition };
   }
 
-  it("FE18: reports true only where `as` was written", function* () {
+  it("FT18: reports true only where `as` was written", function* () {
     const reported: string[] = [];
     const segments: Segment[] = yield* expandAll(
       '<Report />\n<Report as="kept" />\n',
@@ -600,7 +600,7 @@ describe("Tier FE — the binding-mode seam", () => {
     expect(rendered).not.toContain("[sibling:true]");
   });
 
-  it("FE19: a nested invocation answers for itself, not for its caller", function* () {
+  it("FT19: a nested invocation answers for itself, not for its caller", function* () {
     const reported: string[] = [];
     yield* expandAll(
       '<Report as="outer"><Report /></Report>\n',
@@ -613,7 +613,7 @@ describe("Tier FE — the binding-mode seam", () => {
     expect(reported).toEqual(["nested:false", "nested:true"]);
   });
 
-  it("FE20: two invocations that are live at once answer independently", function* () {
+  it("FT20: two invocations that are live at once answer independently", function* () {
     const reported: string[] = [];
     const arrived: string[] = [];
     const both = withResolvers<void>();
@@ -649,10 +649,10 @@ describe("Tier FE — the binding-mode seam", () => {
   });
 });
 
-describe("Tier FE — a failure never becomes data", () => {
+describe("Tier FT — a failure never becomes data", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("FE21: a transport failure binds nothing and records no result", function* () {
+  it("FT21: a transport failure binds nothing and records no result", function* () {
     const workspace = yield* useWorkspace();
     yield* API.Fetch.around(
       {
@@ -671,7 +671,7 @@ describe("Tier FE — a failure never becomes data", () => {
     expect(committed(result.events)).toHaveLength(0);
   });
 
-  it("FE22: a body-read failure binds nothing, even though a status arrived", function* () {
+  it("FT22: a body-read failure binds nothing, even though a status arrived", function* () {
     const workspace = yield* useWorkspace();
     yield* useAnswer({ status: 200, headers: [["x-mark", "seen"]], bodyFails: true });
 
@@ -684,7 +684,7 @@ describe("Tier FE — a failure never becomes data", () => {
     expect(committed(result.events)).toHaveLength(0);
   });
 
-  it("FE23: a timeout binds nothing", function* () {
+  it("FT23: a timeout binds nothing", function* () {
     const workspace = yield* useWorkspace();
     yield* API.Fetch.around(
       {
@@ -706,7 +706,7 @@ describe("Tier FE — a failure never becomes data", () => {
     expect(committed(result.events)).toHaveLength(0);
   });
 
-  it("FE24: cancelling the owner tears the provider down in both phases", function* () {
+  it("FT24: cancelling the owner tears the provider down in both phases", function* () {
     for (const phase of ["request", "body"]) {
       const workspace = yield* useWorkspace();
       const timeline: string[] = [];
@@ -758,7 +758,7 @@ describe("Tier FE — a failure never becomes data", () => {
   });
 });
 
-describe("Tier FE — who is allowed to perform the request", () => {
+describe("Tier FT — who is allowed to perform the request", () => {
   beforeAll(() => useTempFileCompiler());
 
   /** A trusted host that refuses one destination and performs nothing. */
@@ -775,7 +775,7 @@ describe("Tier FE — who is allowed to perform the request", () => {
     );
   }
 
-  it("FE25: ordinary middleware may observe and delegate, and still cannot widen", function* () {
+  it("FT25: ordinary middleware may observe and delegate, and still cannot widen", function* () {
     const workspace = yield* useWorkspace();
     const performed: string[] = [];
     const observed: string[] = [];
@@ -796,7 +796,7 @@ describe("Tier FE — who is allowed to perform the request", () => {
     expect(committed(result.events)).toHaveLength(0);
   });
 
-  it("FE26: a synthetic answer is substitution, not a request the host performed", function* () {
+  it("FT26: a synthetic answer is substitution, not a request the host performed", function* () {
     const workspace = yield* useWorkspace();
     const performed: string[] = [];
 
@@ -830,7 +830,7 @@ describe("Tier FE — who is allowed to perform the request", () => {
     expect(performed).toEqual([]);
   });
 
-  it("FE27: eval's own fetch crosses the same ceiling", function* () {
+  it("FT27: eval's own fetch crosses the same ceiling", function* () {
     const workspace = yield* useWorkspace();
     const performed: string[] = [];
 
@@ -851,7 +851,7 @@ describe("Tier FE — who is allowed to perform the request", () => {
     expect(result.failure?.message).toContain("does not reach that destination");
   });
 
-  it("FE28: a repository Fetch shadows core and acquires no authority from the name", function* () {
+  it("FT28: a repository Fetch shadows core and acquires no authority from the name", function* () {
     const workspace = yield* useWorkspace();
     const components = join(workspace, "components");
     yield* ensureDir(components);
@@ -902,7 +902,7 @@ describe("Tier FE — who is allowed to perform the request", () => {
   });
 });
 
-describe("Tier FE — what a later run finds", () => {
+describe("Tier FT — what a later run finds", () => {
   beforeAll(() => useTempFileCompiler());
 
   const REPLAYED = doc(
@@ -915,7 +915,7 @@ describe("Tier FE — what a later run finds", () => {
     "BINDING {shape}",
   );
 
-  it("FE29: a partial replay restores the response and performs no second request", function* () {
+  it("FT29: a partial replay restores the response and performs no second request", function* () {
     const workspace = yield* useWorkspace();
     const probe = yield* useAnswer({
       status: 200,
@@ -937,7 +937,7 @@ describe("Tier FE — what a later run finds", () => {
     expect(restored).toEqual(committed);
   });
 
-  it("FE30: the committed event names the expansion and where it was written", function* () {
+  it("FT30: the committed event names the expansion and where it was written", function* () {
     const workspace = yield* useWorkspace();
     yield* useAnswer({ status: 200, body: "" });
 
@@ -954,7 +954,7 @@ describe("Tier FE — what a later run finds", () => {
     });
   });
 
-  it("FE31: an interruption before the commit leaves no record, and one retry commits one", function* () {
+  it("FT31: an interruption before the commit leaves no record, and one retry commits one", function* () {
     const workspace = yield* useWorkspace();
     const probe = yield* useAnswer({ status: 200, body: "once" });
     const blocked = new InMemoryStream();
@@ -996,7 +996,7 @@ describe("Tier FE — what a later run finds", () => {
   });
 });
 
-describe("Tier FE — the secret gate covers the whole event", () => {
+describe("Tier FT — the secret gate covers the whole event", () => {
   beforeAll(() => useTempFileCompiler());
 
   const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -1016,7 +1016,7 @@ describe("Tier FE — the secret gate covers the whole event", () => {
     });
   }
 
-  it("FE32: the scanner sees the request and the response in one event", function* () {
+  it("FT32: the scanner sees the request and the response in one event", function* () {
     const workspace = yield* useWorkspace();
     const scanned: string[] = [];
 
@@ -1111,7 +1111,7 @@ describe("Tier FE — the secret gate covers the whole event", () => {
     return `${outcome.run.output}${outcome.run.failure?.message ?? ""}`;
   }
 
-  it("FE33: a credential in the request refuses the append and binds nothing", function* () {
+  it("FT33: a credential in the request refuses the append and binds nothing", function* () {
     const outcome = yield* refused(
       `<Fetch url="${URL_ONE}" headers={{ authorization: props.token }} as="r" />`,
       { status: 200, body: "" },
@@ -1123,7 +1123,7 @@ describe("Tier FE — the secret gate covers the whole event", () => {
     expect(outcome.run.output).not.toContain(CANARY);
   });
 
-  it("FE34: a credential in the response refuses the append and binds nothing", function* () {
+  it("FT34: a credential in the response refuses the append and binds nothing", function* () {
     const outcome = yield* refused(`<Fetch url="${URL_ONE}" as="r" />`, {
       status: 200,
       body: `token ${CANARY}`,
@@ -1140,10 +1140,10 @@ describe("Tier FE — the secret gate covers the whole event", () => {
   }
 });
 
-describe("Tier FE — invocations stay independent", () => {
+describe("Tier FT — invocations stay independent", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("FE35: cancelling one request leaves the other's response untouched", function* () {
+  it("FT35: cancelling one request leaves the other's response untouched", function* () {
     const first = yield* useWorkspace();
     const second = yield* useWorkspace();
     const timeline: string[] = [];

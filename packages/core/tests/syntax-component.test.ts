@@ -41,7 +41,12 @@ import { Component, content } from "../src/component-api.ts";
 import { collect } from "../src/collect.ts";
 import { execute } from "../src/execute.ts";
 import { executeInstalled, sourceDigest } from "../host.ts";
-import type { DeclaredMarkdownComponent, ExecutionInstallation } from "../host.ts";
+import type {
+  ComponentAnswerRequest,
+  DeclaredMarkdownComponent,
+  ExecutionInstallation,
+  FragmentEvaluationInput,
+} from "../host.ts";
 import { inspectComponent, inspectSyntax } from "../src/inspect.ts";
 import { validateDocumentStructure } from "../src/document-validation.ts";
 import { registerComponents } from "../src/components/registration.ts";
@@ -62,6 +67,7 @@ import type { DocumentationContribution } from "../src/component-documentation.t
 import { SYNTAX_COMPONENT } from "../src/components/Syntax.ts";
 import type { ImportedDefinition } from "../src/components/import-authority.ts";
 import type { ComponentOrigin, FunctionComponent, SyntaxSymbols } from "../mod.ts";
+import { answerProvider, implementation } from "./support/answer-provider.ts";
 
 /** An origin a *component* symbol entry can carry — everything but structural. */
 type NamedOrigin = Exclude<ComponentOrigin, { kind: "structural" }>;
@@ -958,6 +964,267 @@ describe("Tier SYN — the named form", () => {
     // And the documentation is there exactly once, from one coalesced value.
     expect(rendered).toContain("MARKER PROSE.");
     expect(rendered.match(/MARKER PROSE\./g)).toHaveLength(1);
+  });
+
+  /**
+   * FE30 — one package bootstrap entered through an inherited layer and a
+   * local one, where the bootstrap includes a component-answer provider.
+   *
+   * SYN25l.5's harness, asked the question `<Evaluate>` adds to it: a trusted
+   * layering control's bootstrap is not only documentation and registrations.
+   * It also installs the provider that answers for a name the host's evaluation
+   * profile admits, and *that* is the part `allow` decides about.
+   *
+   * The layering is the same shape as SYN25l.5 — the inner scope descends from
+   * the outer, and both enter the same bootstrap. What the repeat means for a
+   * provider is that the outer entry observes and delegates rather than
+   * claiming again: one implementation states what it is once, so an additive
+   * layering has exactly one claim behind the name.
+   *
+   * These rows reuse #765's collector rather than adding one. The
+   * documentation halves here are the same asks SYN25l.1/.2/.5 make, and what
+   * is new is only the provider and the profile beside them.
+   */
+  const PROBE_LABEL = "probe ran";
+
+  /** The provider-backed entry a layered host admits, at the identity it admits. */
+  function layeredEntry(revision = "1"): FragmentEvaluationInput {
+    return {
+      read: [
+        {
+          kind: "component-answer",
+          name: "Open",
+          identity: { origin: "test://layer", key: "Open", revision },
+          forms: ["self-closing"],
+        },
+      ],
+    };
+  }
+
+  /** The registration the inner layer adds beside the bootstrap's own. */
+  function probeRegistration(probed: string[]): ComponentRegistration {
+    return {
+      name: "Probe",
+      origin: "@executablemd/test",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      // deno-lint-ignore require-yield
+      *fn(): Operation<string> {
+        probed.push("probed");
+        return PROBE_LABEL;
+      },
+    };
+  }
+
+  it("FE30: an inherited and a local provider bootstrap keep every half", function* () {
+    const probed: string[] = [];
+    const answer = implementation("Open", "the layered answer ran");
+    const inheritedLookups: string[] = [];
+    const localLookups: string[] = [];
+    const observed: unknown[] = [];
+    const retained: ComponentAnswerRequest[] = [];
+
+    // The inherited layer's entry into the bootstrap: documentation, a
+    // registration, and the package's provider — which observes and delegates,
+    // because the local entry below is the one that states the identity.
+    const inherited: ExecutionInstallation = {
+      componentAnswers: [
+        answerProvider("Open", answer.definition, {
+          origin: "test://layer",
+          lookups: inheritedLookups,
+          observesOnly: true,
+          delegated: observed,
+        }),
+      ],
+    };
+
+    const rendered = String(
+      yield* scoped(function* () {
+        yield* useMarkerDocumentation();
+        yield* registerComponents([layeredComponent("outer")]);
+        return yield* scoped(function* () {
+          // The inner layer enters the same package bootstrap again, and adds
+          // its own registration and its own entry into the same provider.
+          yield* useMarkerDocumentation();
+          yield* registerComponents([layeredComponent("inner"), probeRegistration(probed)]);
+          const local: ExecutionInstallation = {
+            evaluation: layeredEntry(),
+            componentAnswers: [
+              answerProvider("Open", answer.definition, {
+                origin: "test://layer",
+                lookups: localLookups,
+                retain: retained,
+              }),
+            ],
+          };
+          return yield* run(
+            '<Outer />\n\n<Inner />\n\n<Probe />\n\n<Syntax names={["Marker"]} />\n\n' +
+              `<Evaluate text={'<Open />\\n'} allow={["read"]} as="answer" />\n\n` +
+              "<Json value={answer} />\n",
+            [stating(symbolsOf("Marker")).installation, inherited, local],
+          );
+        });
+      }),
+    );
+
+    // The bootstrap survived being entered twice. Both registrations resolve,
+    // the ordinary `<Probe />` runs, and the named documentation is there once
+    // — SYN25l.5's evidence, unchanged.
+    expect(rendered).toContain("outer component ran");
+    expect(rendered).toContain("inner component ran");
+    expect(rendered).toContain(PROBE_LABEL);
+    expect(rendered.match(/MARKER PROSE\./g)).toHaveLength(1);
+    expect(probed).toEqual(["probed"]);
+
+    // And the provider half survived too. Both layers were in the chain — the
+    // inherited one observed the lookup and passed the answer through — and the
+    // locally claimed identity is what the capture admitted and the fragment
+    // ran.
+    expect(inheritedLookups).toEqual(["Open"]);
+    expect(localLookups).toEqual(["Open"]);
+    expect(observed[0]).toBe(answer.definition);
+    expect(rendered).toContain("the layered answer ran");
+    expect(answer.invoked).toEqual(["the layered answer ran"]);
+
+    // Teardown is the execution's, not the layer's: the request the local
+    // bootstrap's handler was given states nothing once the child run is over,
+    // and the enclosing layers are still standing.
+    const held = retained[0];
+    if (held === undefined) {
+      throw new Error("the local provider was never asked");
+    }
+    let refused: unknown;
+    try {
+      held.claim(implementation("Open", "late").definition, { key: "Open", revision: "1" });
+    } catch (error) {
+      refused = error;
+    }
+    expect(String(refused)).toContain("has ended");
+  });
+
+  it("FE30: the bootstrap's own names are still not admitted ones", function* () {
+    // The negative half. `<Probe />` is registered by the inner layer and its
+    // package is documented, and the provider's answer is admitted — and none
+    // of the first two is authority. The profile admits exactly `<Open />`, and
+    // the fragment naming `<Probe />` is refused before the component is
+    // reached.
+    const probed: string[] = [];
+    const answer = implementation("Open", "the layered answer ran");
+
+    const failed = yield* refusal(
+      scoped(function* () {
+        yield* useMarkerDocumentation();
+        yield* registerComponents([layeredComponent("outer")]);
+        return yield* scoped(function* () {
+          yield* useMarkerDocumentation();
+          yield* registerComponents([layeredComponent("inner"), probeRegistration(probed)]);
+          return yield* run(`<Evaluate text={'<Probe />\\n'} allow={["read"]} />\n`, [
+            stating(symbolsOf("Marker")).installation,
+            {
+              evaluation: layeredEntry(),
+              componentAnswers: [
+                answerProvider("Open", answer.definition, { origin: "test://layer" }),
+              ],
+            },
+          ]);
+        });
+      }),
+    );
+
+    expect(failed).toContain("did not admit");
+    // Before the component: the registration a layer kept is still not an
+    // admission, and neither the registered name nor the admitted one ran.
+    expect(probed).toEqual([]);
+    expect(answer.invoked).toEqual([]);
+  });
+
+  it("FE30: a provider identity the layered host did not admit refuses", function* () {
+    // The other refusal the provider half adds. The layering is honest and the
+    // bootstrap's documentation and registrations are intact; what moved is the
+    // revision the local provider claims. An admitted identity is the exact
+    // implementation, so this refuses at capture — before the root import, and
+    // therefore before any registration resolves or any fragment work happens.
+    const probed: string[] = [];
+    const answer = implementation("Open", "the layered answer ran");
+
+    const failed = yield* refusal(
+      scoped(function* () {
+        yield* useMarkerDocumentation();
+        yield* registerComponents([layeredComponent("outer")]);
+        return yield* scoped(function* () {
+          yield* useMarkerDocumentation();
+          yield* registerComponents([layeredComponent("inner"), probeRegistration(probed)]);
+          return yield* run(`<Outer />\n\n<Evaluate text={'<Open />\\n'} allow={["read"]} />\n`, [
+            stating(symbolsOf("Marker")).installation,
+            {
+              evaluation: layeredEntry("1"),
+              componentAnswers: [
+                answerProvider("Open", answer.definition, {
+                  origin: "test://layer",
+                  revision: "2",
+                }),
+              ],
+            },
+          ]);
+        });
+      }),
+    );
+
+    expect(failed).toContain("the exact implementation");
+    expect(answer.invoked).toEqual([]);
+    expect(probed).toEqual([]);
+  });
+
+  it("FE30: a non-identical overlap refuses before the child root or any fragment work", function* () {
+    // #765's own conflict, in this harness. One owner and one overlapping
+    // component documented differently by the two layers is a bootstrap nobody
+    // validated, and it refuses at the child collection boundary — which is
+    // before the root import, so the provider is never asked and the fragment
+    // never exists.
+    const probed: string[] = [];
+    const answer = implementation("Open", "the layered answer ran");
+    const conflicts: [string, Parameters<typeof useMarkerDocumentation>[0]][] = [
+      ["a changed asset", { asset: "packages/other/src/components.md" }],
+      ["changed text", { text: "## Marker\n\nSUBSTITUTED PROSE.\n" }],
+      ["an overlapping but different set", { supplies: ["Marker", "Extra"] }],
+    ];
+
+    for (const [what, changed] of conflicts) {
+      for (const reversed of [false, true]) {
+        const lookups: string[] = [];
+        const failed = yield* refusal(
+          scoped(function* () {
+            yield* useMarkerDocumentation(reversed ? changed : {});
+            yield* registerComponents([layeredComponent("outer")]);
+            return yield* scoped(function* () {
+              yield* useMarkerDocumentation(reversed ? {} : changed);
+              yield* registerComponents([layeredComponent("inner"), probeRegistration(probed)]);
+              return yield* run(
+                `<Outer />\n\n<Evaluate text={'<Open />\\n'} allow={["read"]} />\n`,
+                [
+                  stating(symbolsOf("Marker")).installation,
+                  {
+                    evaluation: layeredEntry(),
+                    componentAnswers: [
+                      answerProvider("Open", answer.definition, {
+                        origin: "test://layer",
+                        lookups,
+                      }),
+                    ],
+                  },
+                ],
+              );
+            });
+          }),
+        );
+
+        expect([what, reversed, failed.includes("Marker twice")]).toEqual([what, reversed, true]);
+        // Before the child root: the provider was never asked, so no answer was
+        // resolved, no profile was sealed and no fragment ran.
+        expect([what, reversed, lookups]).toEqual([what, reversed, []]);
+      }
+    }
+    expect(answer.invoked).toEqual([]);
+    expect(probed).toEqual([]);
   });
 
   it("SYN25j: two scopes each read their own contributions", function* () {

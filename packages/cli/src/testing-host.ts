@@ -58,6 +58,7 @@ import type {
   TestAgentChildConfiguration,
 } from "@executablemd/testing";
 import { installDocumentComponents } from "./cli.ts";
+import { ordinaryEvaluationProfile } from "./evaluation-profile.ts";
 import type { HostServiceInstaller } from "./cli.ts";
 import type { RepositoryInstaller } from "./run-repositories.ts";
 
@@ -314,6 +315,11 @@ function* runProfileChild(
   // this child settled above, rather than taken from a declaration the
   // entrypoint built before this child's configuration had been read.
   installations.push({
+    // The run profile's own evaluation ceiling. A `host="run"` child is an
+    // ordinary run whatever command is hosting it, so a child of `xmd test` —
+    // whose own document is a different profile — still evaluates a generated
+    // fragment under exactly what `xmd run` states.
+    evaluation: ordinaryEvaluationProfile(),
     declarations: [
       yield* settings.planDeclaration({
         context,

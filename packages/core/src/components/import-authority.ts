@@ -18,7 +18,7 @@
  * nothing a handler still holds decides what is *invoked*.
  */
 
-import type { ComponentDefinition, FunctionComponentDefinition } from "../types.ts";
+import type { ComponentDefinition, FunctionComponentDefinition, SourcePosition } from "../types.ts";
 import type {
   FormSelections,
   InvocationIdentities,
@@ -27,6 +27,7 @@ import type {
 import type { DeclaredImports, PrivateClosure } from "./declared-markdown.ts";
 import type { ExactSource } from "../output/exact-source.ts";
 import type { SyntaxReference } from "../syntax-reference.ts";
+import type { CapturedProfile } from "../evaluation-profile.ts";
 
 /** A definition an import may answer with. */
 export type ImportedDefinition = ComponentDefinition | FunctionComponentDefinition;
@@ -121,6 +122,21 @@ export interface ExpansionAuthority {
    * projected and an imported definition each carry what the site carried.
    */
   readonly syntax?: SyntaxReference;
+  /**
+   * The maximum authority a generated fragment may be evaluated under.
+   *
+   * Stated by the trusted host at the installation boundary, before the root
+   * import and before any document, component or middleware code exists, and
+   * handed here by value like everything else on this object. It is on the
+   * private authority rather than in a context for the reason the rest are, and
+   * one more: `<Evaluate>` is a *public* component, so any author may write it,
+   * and what keeps that from being a capability is that the ceiling it narrows
+   * from was settled by somebody the document cannot reach.
+   *
+   * Absent for a host that offers no evaluation. That is not an unrestricted
+   * evaluation — it is no evaluation, and `<Evaluate>` refuses.
+   */
+  readonly evaluation?: CapturedProfile;
   /**
    * The bodies this execution will enter for the components canonical core
    * protects.
@@ -250,8 +266,413 @@ function read<T>(inspect: () => T): T | undefined {
  * authorized because it *is* the object the terminal minted, not because it
  * resembles one.
  */
+/**
+ * A provider's stable statement about the implementation it supplied.
+ *
+ * `origin` is canonical execution's to fix, not the provider's: each provider
+ * installation carries its origin into every request it opens, so one provider
+ * cannot state an identity under another's name.
+ */
+export interface AnswerIdentity {
+  readonly origin: string;
+  readonly key: string;
+  readonly revision: string;
+}
+
+/** What a provider states, minus the part it does not get to choose. */
+export interface ClaimedIdentity {
+  readonly key: string;
+  readonly revision: string;
+}
+
+/**
+ * One identified answer: what a provider stated, and what core kept of it.
+ *
+ * The two travel together because a caller needs both and must not obtain them
+ * separately. The definition is core's own copy, taken when the claim was
+ * recorded; it is what the caller keeps, and it is why nothing downstream ever
+ * reads the object the public chain returned a second time.
+ */
+export interface IdentifiedAnswer {
+  readonly identity: AnswerIdentity;
+  readonly definition: ImportedDefinition;
+}
+
+/** One claim this owner recorded, with core's own copy of what was claimed. */
+interface Claim {
+  readonly name: string;
+  readonly identity: AnswerIdentity;
+  /** Which provider installation stated it, so a second cannot overwrite. */
+  readonly installation: object;
+  /**
+   * The exact resolution this was an answer to.
+   *
+   * The window *object*, not a number describing one. Provenance is a question
+   * about which import a statement answered, and a caller asking it presents
+   * the window it is holding — so the comparison is between two references to
+   * one thing rather than between a record and whatever the owner's mutable
+   * current state happens to say. A number would have to be trusted against
+   * that mutable state; an object cannot be forged into being the one the
+   * caller opened.
+   */
+  readonly window: ResolutionWindow;
+  readonly canonical: ImportedDefinition | undefined;
+}
+
+/** A provider request used after its execution ended. */
+export const REVOKED_ANSWER_AUTHORITY =
+  "the execution that installed this answer provider has ended, so nothing it states identifies " +
+  "an implementation here";
+
+/** A claim stated outside the handler invocation it would have been an answer to. */
+export const SETTLED_CLAIM =
+  "this resolution has settled, so a claim stated now identifies nothing. An answer is " +
+  "identified by the handler invocation the import asked, while that invocation is still " +
+  "deciding; a handler that has returned, or one recording after the fact, is not supplying it.";
+
+/** A second, different statement from one installation about one resolution. */
+export const SPENT_OPPORTUNITY =
+  "this provider already stated which implementation answers this import, and one import is one " +
+  "implementation. The next resolution offers a fresh request; this one is decided.";
+
+/**
+ * One open resolution, and the only way to end it.
+ *
+ * Handed to canonical execution rather than published: the window belongs to
+ * the import that opened it, and closing somebody else's would settle a
+ * decision still being made. It is also the value a caller presents to
+ * `identify`, so what proves an answer belongs to this import is holding the
+ * object rather than describing it.
+ */
+export interface ResolutionWindow {
+  /** The component this resolution is deciding. */
+  readonly name: string;
+  /** Which resolution this is, for a reader following two of them. */
+  readonly occurrence: number;
+  /** Stop admitting claims for this resolution. Idempotent. */
+  close(): void;
+}
+
+/**
+ * What one handler invocation may state about the import it was asked.
+ *
+ * Minted per invocation, and closed the moment that invocation returns, throws
+ * or is cancelled. This is the authority a provider actually claims through:
+ * the installation gives a provider the right to *be asked*, and the request
+ * gives it the right to answer this one asking. Separating them is what makes a
+ * claim provable — a stable installation handle can only say "some provider",
+ * while a request says "this handler, deciding this import, right now".
+ *
+ * There is no `name` parameter on `claim`. The name is fixed when the request
+ * is minted, from what the chain asked, so a handler cannot state an answer for
+ * a component it was not asked about.
+ */
+export interface ComponentAnswerRequest {
+  /** The component this invocation was asked to resolve. */
+  readonly name: string;
+  /** Where the element that asked was written, when the chain knew. */
+  readonly position?: Readonly<SourcePosition>;
+  /** State which implementation answers this import, as this provider. */
+  claim(answer: ImportedDefinition, identity: ClaimedIdentity): ImportedDefinition;
+}
+
+/** One minted request, and the caller's own handle for ending it. */
+export interface OpenAnswerRequest {
+  readonly request: ComponentAnswerRequest;
+  /**
+   * End it, synchronously.
+   *
+   * Called from the `finally` of the invocation that opened it, so it runs
+   * whether the handler returned, threw or was cancelled. Nothing yields here:
+   * a lease that needed a suspension point to close would still be open across
+   * one.
+   */
+  close(): void;
+}
+
+/**
+ * One provider installation's private authority.
+ *
+ * Holding this is the right to be asked, fixed to one origin. It is not the
+ * right to answer: every statement goes through a request this mints for one
+ * invocation, so a retained installation handle can open a *new* request but
+ * cannot revive a settled one or reach another provider's.
+ */
+export interface ProviderInstallation {
+  /** Begin one handler invocation's request for one asked name. */
+  open(name: string, position?: Readonly<SourcePosition>): OpenAnswerRequest;
+}
+
+/** An identity a provider stated in a shape this execution cannot record. */
+export class AnswerIdentityError extends Error {
+  override name = "AnswerIdentityError";
+}
+
+/** The retained spelling of one identity, for a reader. */
+export function identityRecord(identity: AnswerIdentity): string {
+  return `${identity.origin}#${identity.key}@${identity.revision}`;
+}
+
 export class CanonicalImports {
   readonly #issued = new WeakMap<object, Witness>();
+  /**
+   * The identities providers stated, in the same owner that holds issuance.
+   *
+   * One owner rather than two registries: retention, exact-object lookup, the
+   * `stillDescribes` comparison and the lifecycle are one question asked about
+   * one table, and a parallel WeakMap would be a second place for an answer to
+   * be authorized from.
+   */
+  readonly #claims = new WeakMap<object, Claim>();
+  /**
+   * Whether this owner identifies anything yet.
+   *
+   * Starts inactive. Canonical execution registers teardown, then activates,
+   * then creates provider installations — so a failure between construction
+   * and activation cannot leave live answer authority with no teardown behind
+   * it.
+   */
+  #active = false;
+  /**
+   * The one resolution a claim may be stated during, when one is open.
+   *
+   * A provider installation outlives every resolution it takes part in, while a
+   * fresh request belongs to one handler invocation. Canonical execution asks
+   * the chain for one name, reads the answer, and closes the occurrence. A
+   * claim arriving outside that window is a losing or delayed handler recording
+   * into a decision already made, which is exactly what an admission must not
+   * acquire afterwards.
+   *
+   * So the window carries both terms. The occurrence keeps a claim from
+   * belonging to a resolution other than the live one, and the name keeps a
+   * handler settled for one name from recording under it while a different
+   * name is being resolved.
+   */
+  #window: ResolutionWindow | undefined;
+  /** How many resolutions this owner has opened, so each one is its own. */
+  #occurrences = 0;
+  /**
+   * The resolution each installation last stated an answer for.
+   *
+   * Secondary. What proves a statement belongs to an import is the request's
+   * captured window, not this; this only keeps one provider from naming two
+   * different implementations for one import, where only one of them could be
+   * what it resolved to.
+   *
+   * Keyed by the installation's own frozen token and holding the window object,
+   * so an installation stays reusable: it answers several admitted names and
+   * the same name resolved more than once, because each of those is a different
+   * window. Spending the installation itself would break a valid multi-name
+   * provider, which the contract does not ask a host to split up.
+   */
+  readonly #spent = new WeakMap<object, ResolutionWindow>();
+
+  /** Begin identifying. Called after teardown is registered. */
+  activate(): void {
+    this.#active = true;
+  }
+
+  /** Stop. Called at teardown, on completion, failure or cancellation. */
+  revoke(): void {
+    this.#active = false;
+    this.#window = undefined;
+  }
+
+  get identifying(): boolean {
+    return this.#active;
+  }
+
+  /**
+   * Open the claim window for one resolution of one name.
+   *
+   * Canonical execution calls this immediately before asking the ordinary chain
+   * and closes it in a `finally`, so the window ends the same way whether the
+   * resolution answered, fell back, failed or was cancelled. Nothing else opens
+   * one: there is no path from a document, a component or a provider to this
+   * method.
+   */
+  beginResolution(name: string): ResolutionWindow {
+    if (!this.#active) {
+      throw new AnswerIdentityError(REVOKED_ANSWER_AUTHORITY);
+    }
+    this.#occurrences += 1;
+    const occurrence = this.#occurrences;
+    const owner = this;
+    const window: ResolutionWindow = {
+      name,
+      occurrence,
+      close(): void {
+        // Only this window is closed. A nested resolution that already replaced
+        // it has its own close, and clearing another one here would settle a
+        // decision still being made. Compared by identity, so no bookkeeping
+        // value has to be trusted to say which window this is.
+        if (owner.#window === window) {
+          owner.#window = undefined;
+        }
+      },
+    };
+    this.#window = window;
+    return window;
+  }
+
+  /**
+   * One provider installation's authority, fixed to that origin.
+   *
+   * Holding this is the right to be *asked*. It states nothing on its own:
+   * every answer goes through a request this mints for one handler invocation,
+   * so a retained installation handle can be asked again — which a multi-name
+   * provider needs — and can never revive a settled request or reach another
+   * provider's.
+   *
+   * Ordinary closures throughout. A separately loaded copy of core receives
+   * this object and can answer with it; what it cannot do is state an origin
+   * canonical execution did not give it, or reach the table any other way —
+   * there is no shared symbol, module registry or context name behind this.
+   */
+  provider(origin: string): ProviderInstallation {
+    const installation = Object.freeze({});
+    const owner = this;
+    return {
+      open(name: string, position?: Readonly<SourcePosition>): OpenAnswerRequest {
+        // Captured by identity, here, at the moment this invocation begins. A
+        // request minted while resolution N is open answers resolution N or
+        // nothing: it holds the object, so it cannot be made to describe
+        // whichever window is open later.
+        const opened = owner.#window;
+        let live = true;
+        const request: ComponentAnswerRequest = Object.freeze({
+          name,
+          // Copied, like everything else a provider is shown. The scanner's
+          // position is the engine's own mutable object, and handing it over
+          // would let a provider edit what a *later* reader of that element
+          // sees — a diagnostic seam turned into a write.
+          ...(position === undefined ? {} : { position: capturePosition(position) }),
+          claim(answer: ImportedDefinition, stated: ClaimedIdentity): ImportedDefinition {
+            return owner.#record(
+              installation,
+              origin,
+              { name, window: opened, live: () => live },
+              answer,
+              stated,
+            );
+          },
+        });
+        return Object.freeze({
+          request,
+          close(): void {
+            live = false;
+          },
+        });
+      },
+    };
+  }
+
+  #record(
+    installation: object,
+    origin: string,
+    asked: { name: string; window: ResolutionWindow | undefined; live: () => boolean },
+    answer: ImportedDefinition,
+    stated: ClaimedIdentity,
+  ): ImportedDefinition {
+    if (!this.#active) {
+      throw new AnswerIdentityError(REVOKED_ANSWER_AUTHORITY);
+    }
+    // Four questions, and each of them is about the invocation rather than
+    // about the provider: is this handler still deciding; is the resolution it
+    // was asked in the one still open, by identity; and is the name it was
+    // asked the name that resolution is deciding. A stable installation handle
+    // answers none of them, which is why it does not claim.
+    const open = asked.window;
+    if (!asked.live() || open === undefined || open !== this.#window || open.name !== asked.name) {
+      throw new AnswerIdentityError(SETTLED_CLAIM);
+    }
+    const identity = complete(origin, stated);
+    const held =
+      typeof answer === "object" && answer !== null ? this.#claims.get(answer) : undefined;
+    if (held !== undefined) {
+      // Restating exactly what is already there is what a provider installed
+      // twice does, and it is not a conflict. Anything else is two providers
+      // disagreeing about one object, and the first statement stands: a later
+      // claim that overwrote it would let a second provider rename the first's
+      // implementation.
+      if (
+        held.installation !== installation ||
+        held.window !== open ||
+        held.name !== asked.name ||
+        held.identity.origin !== identity.origin ||
+        held.identity.key !== identity.key ||
+        held.identity.revision !== identity.revision
+      ) {
+        throw new AnswerIdentityError(
+          "this answer already carries an identity, and a second claim does not replace it. One " +
+            "implementation states what it is once.",
+        );
+      }
+      return answer;
+    }
+    // Secondary, and about the provider rather than the invocation: naming a
+    // *different* implementation for an import this provider already answered
+    // is two answers where only one could be what it resolved to.
+    if (this.#spent.get(installation) === open) {
+      throw new AnswerIdentityError(SPENT_OPPORTUNITY);
+    }
+    // Copied on the way in, so a later edit of the claimed object is visible as
+    // the change it is.
+    this.#claims.set(answer, {
+      name: asked.name,
+      identity,
+      installation,
+      window: open,
+      canonical: retain(answer),
+    });
+    // Spent for this window and no other: the next import is a different
+    // window, which is what lets one installation answer several admitted
+    // names and the same name resolved twice.
+    this.#spent.set(installation, open);
+    return answer;
+  }
+
+  /**
+   * The identity stated for this exact answer, and core's own copy of it.
+   *
+   * Read after the whole public chain has returned, so what is asked about is
+   * the final answer rather than an intermediate one. Nothing here refuses: an
+   * unidentified answer is an ordinary answer, and whether that is enough is
+   * the caller's question.
+   *
+   * Both halves come back together, and the copy is the one taken when the
+   * claim was recorded rather than one made now. Answering with the identity
+   * alone would leave the caller holding the chain's object and needing to copy
+   * it itself — one more read of a value the chain controls, after the read
+   * this one checked. An alternating proxy or an accessor that answers twice
+   * would pass the check and hand the second answer to the copy. So the check
+   * and the thing kept are one result of one call, and the object that
+   * travelled through the chain is never read again.
+   */
+  identify(resolution: ResolutionWindow, answer: unknown): IdentifiedAnswer | undefined {
+    if (!this.#active || typeof answer !== "object" || answer === null) {
+      return undefined;
+    }
+    const claim = this.#claims.get(answer);
+    if (claim === undefined) {
+      return undefined;
+    }
+    // The caller presents the resolution it opened, and the claim has to be an
+    // answer to *that* one, by object identity and under the name it decides.
+    // Nothing here consults the owner's current window: provenance read out of
+    // mutable state would be a claim about whenever the question was asked
+    // rather than about which import the statement answered.
+    if (claim.window !== resolution || claim.name !== resolution.name) {
+      return undefined;
+    }
+    // A claimed object the chain went on to edit is not the thing that was
+    // claimed. Reading it runs whatever it is made of, and a value that refuses
+    // to be compared has failed the comparison.
+    if (claim.canonical === undefined || !stillDescribes(claim.canonical, answer)) {
+      return undefined;
+    }
+    return Object.freeze({ identity: claim.identity, definition: claim.canonical });
+  }
 
   /**
    * Record that canonical execution produced this answer for this name, and
@@ -298,6 +719,50 @@ export class CanonicalImports {
 }
 
 /**
+ * One authored position, copied and frozen for a provider to read.
+ *
+ * The scanner's object belongs to the engine and is read again after any
+ * handler has seen it, so it crosses this boundary by value like every other
+ * thing a provider is shown. Four members, written out: a spread would carry
+ * whatever a future member turned out to be, and this is a surface a host's
+ * code holds.
+ */
+function capturePosition(position: Readonly<SourcePosition>): Readonly<SourcePosition> {
+  return Object.freeze({
+    ...(position.path === undefined ? {} : { path: position.path }),
+    offset: position.offset,
+    line: position.line,
+    column: position.column,
+  });
+}
+
+/**
+ * The identity as this owner records it, or the reason it cannot.
+ *
+ * Three non-empty strings, checked here rather than trusted: what a
+ * continuation is compared against must be a value a reader can look at and say
+ * which part moved, and a partial identity would compare equal to a different
+ * partial one. `origin` is canonical execution's, so only the two the provider
+ * states are read off its object.
+ */
+function complete(origin: string, stated: ClaimedIdentity): AnswerIdentity {
+  const { key, revision } = stated;
+  if (
+    typeof key !== "string" ||
+    key.length === 0 ||
+    typeof revision !== "string" ||
+    revision.length === 0
+  ) {
+    throw new AnswerIdentityError(
+      "an identity states a non-empty key and revision. A continuation is compared against both " +
+        "and the origin canonical execution fixed, so a partial one would compare equal to a " +
+        "different partial one.",
+    );
+  }
+  return Object.freeze({ origin, key, revision });
+}
+
+/**
  * How one closed tier words a refusal of an answer it did not produce.
  *
  * The tiers share retention because an execution has one answer per import, and
@@ -332,11 +797,19 @@ export interface ImportTier {
  * an answer decides only how a refusal reads, never whether one is authorized.
  */
 export class ExecutionImports implements ImportAuthority {
-  readonly #imports = new CanonicalImports();
+  readonly #imports: CanonicalImports;
   readonly #tiers: readonly ImportTier[];
 
-  constructor(tiers: readonly ImportTier[]) {
+  /**
+   * The owner is handed in rather than made here, because it outlives this
+   * object at both ends. Canonical execution constructs it before any
+   * installation runs — inactive, with its teardown already registered — so a
+   * provider can state identities during profile capture, long before the tiers
+   * this authority is built from exist.
+   */
+  constructor(tiers: readonly ImportTier[], imports: CanonicalImports) {
     this.#tiers = tiers;
+    this.#imports = imports;
   }
 
   /** Record that canonical execution produced this answer for this name. */

@@ -123,6 +123,7 @@ import {
   scanPlanArgs,
 } from "./plan-args.ts";
 import type { PlanScan } from "./plan-args.ts";
+import { ordinaryEvaluationProfile, statesEvaluation } from "./evaluation-profile.ts";
 import { runPlan } from "./plan.ts";
 import { runUpgrade } from "./upgrade.ts";
 import type { UpgradeAssembly } from "./upgrade.ts";
@@ -1170,6 +1171,13 @@ function* runDocument(
         // and does not gain `<Plan>` at its root — but the production run child
         // it can launch is the run profile, and gets it below.
         ...(mode.testing ? {} : { declarations: [plan] }),
+        // The ceiling a generated fragment runs under, stated only where the
+        // host that attached this execution stated none: a workflow attachment
+        // states its own Workspace-bound profile, and one execution offers one
+        // maximum authority.
+        ...(statesEvaluation(mode.installations)
+          ? {}
+          : { evaluation: ordinaryEvaluationProfile() }),
       },
       // The declarations a nested execution may configure a child with, named
       // by the exact definitions this command installed. Recognizing one is

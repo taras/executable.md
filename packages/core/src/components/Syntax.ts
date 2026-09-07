@@ -42,9 +42,9 @@ import type {
   ComponentInvocation,
   IdentityClaimant,
   ProtectedBody,
+  ProtectedSite,
 } from "../invocation-identity.ts";
 import { sourceDescription } from "../source-position.ts";
-import type { SyntaxReference } from "../syntax-reference.ts";
 import type { ProtectedComponent } from "./protected.ts";
 import { CORE_ORIGIN } from "./registry.ts";
 import { documented } from "./documentation.ts";
@@ -128,8 +128,9 @@ function syntax(claim: IdentityClaimant): ProtectedBody {
   return function* renderSyntax(
     props: Record<string, Json>,
     invocation: ComponentInvocation,
-    reference: SyntaxReference | undefined,
+    site: ProtectedSite,
   ): Operation<string> {
+    const reference = site.syntax;
     // Read off the issuance the engine holds rather than off a method the
     // caller could have written, and answered before anything is claimed or
     // rendered: a paired spelling is a document asking for something this

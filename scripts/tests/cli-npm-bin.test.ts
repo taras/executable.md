@@ -244,6 +244,23 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
         'symbols available here; `<Syntax names={["Elicit"]} />` renders selected documentation.',
     );
 
+    // FE28. `<Evaluate>` is the tier's second member and is public in every
+    // build for the same reason: a package that shipped the protected tier
+    // without it would leave a document able to write the name and no
+    // implementation able to answer it. This boundary is asserted explicitly
+    // because `--changed` cannot discover it: nothing in the emitted package
+    // shares a path with the core sources this name is defined in.
+    const evaluate = entries.filter((entry: { name?: string }) => entry?.name === "Evaluate");
+    expect(evaluate).toHaveLength(1);
+    expect(evaluate[0].origin).toEqual({ kind: "protected", origin: "@executablemd/core" });
+    expect(evaluate[0].sourceKind).toBe("protected");
+    // Both spellings, because the two input forms are two ways of stating one
+    // argument.
+    expect(evaluate[0].forms).toEqual(["self-closing", "paired"]);
+    expect(evaluate[0].description).toBe(
+      'Evaluate program text. `<Evaluate text={program} allow={["read"]} />` runs it.',
+    );
+
     // The documentation assets travel with the package, and the emitted binary
     // resolves them from its own tree rather than from a checkout. `Prompt`
     // lives in core's *agent* boundary rather than in its own `components.md`,

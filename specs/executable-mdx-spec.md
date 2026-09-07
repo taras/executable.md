@@ -3879,6 +3879,72 @@ function isTypedDefinition(value: unknown): boolean {
 }
 ```
 
+#### 5.3.2 `<Evaluate>`, the protected evaluation component
+
+`<Evaluate>` runs program text the document did not author. It is **public** —
+any author may write it — and canonical core owns what it means, on the same
+terms `<Syntax />` is owned: no registration, repository file, bundle member,
+declared Markdown component, import-handler answer or second loaded copy
+replaces it, and claiming the name is refused where the claim is made.
+
+**Protection settles which implementation runs, and grants nothing.** Everything
+the component can reach was stated by a trusted host at the installation
+boundary, as one `ExecutionInstallation.evaluation` profile captured by value
+before any installation runs. An execution accepts one profile and refuses two —
+even two identical ones, because a host that stated it twice has an assembly
+nobody validated. An execution offered none has no evaluation at all, and says
+so when the element is written rather than at startup: a document that never
+writes `<Evaluate>` is not asking for a ceiling.
+
+**Two disjoint input forms.**
+
+```mdx
+<Evaluate text={program} allow={["read"]} />
+
+<Evaluate allow={["read"]}>
+  <Plan>Read the changelog and report the version.</Plan>
+</Evaluate>
+```
+
+Self-closing takes the program as `text`. Paired makes the content the producer,
+and what it renders is the program. An element stating both is stating the
+program twice and is **refused** rather than resolved by precedence. The
+workflow host additionally accepts the released `source` spelling, silently; the
+ordinary profile refuses it, and no profile has ever accepted `program`.
+
+The producer renders through an **execution-owned, one-shot projection**
+delivered directly to the protected body. It bypasses the public
+`Component.content()` and `Component.tryContent()` chain, so a handler cannot
+decide what program ran; it narrows only the `SyntaxReference`, so the producer
+keeps its own imports, declarations, bindings, providers, working directory and
+error mode; and it is not published through `ActiveProjection`, so nothing else
+in the execution can obtain or influence it.
+
+**`allow` narrows; it never grants.** It names an effect *class* — `read` or
+`write` — and the class resolves to a table the host already installed. Omitting
+it asks for `read`. A class the host installed nothing for is refused before the
+program is read.
+
+**Entries name capabilities, not definitions.** A host states which operation an
+admitted name runs; canonical capture reads that operation off the host's object
+exactly once, binds it behind a revocation the execution owns, and closes core's
+own body over the bound result. An admitted element therefore reaches those
+operations and never `API.Files`, `API.Fetch` or `API.Env` — so what a fragment
+may do is not a property of what the document, a repository component or
+middleware installed. A directory an admitted fragment creates scopes its
+content through the evaluation's own cursor rather than the contextual
+environment.
+
+**What it answers with** is each admitted observation's own value in invocation
+order, with whatever the fragment rendered kept beside them under `output`. It
+declares no `returns`, so the value binds by reference under `as`. An admitted
+mutation contributes nothing to it. It is deliberately not a printing boundary.
+
+**One occurrence is one durable decision.** A continuation restores the
+admission rather than making it again, and refuses before any effect if the run
+now offers different text, or states ceilings — effect classes, Workspace roots,
+pinned identities, forms or requests — the admission was not granted under.
+
 ### 5.4 The root document is a component
 
 The entry point treats the root document through the same import
@@ -10994,6 +11060,52 @@ component that observes one at an authored site.
 | SYN25k | Document-time middleware reaches nothing | A component that composes around the `Documentation` Api and renders `<Syntax names={…}>` inside its own scope is shown what the host bootstrapped, not what it installed |
 | SX17 | One index, two surfaces | `xmd syntax NAME` and `<Syntax names={[NAME]} />` return the same text for a component outside core's own file |
 
+### Tier FE — The public `<Evaluate>` component
+
+Defined in §5.3.2. The rows drive the real component through a real execution
+against a real captured profile; the filesystem operations are a recorder that
+is never installed as a provider, so an operation appearing in its log went
+through the captured capability because there is no other way to reach it.
+
+| ID | Evidence |
+| --- | --- |
+| FE1 | `text` evaluates a fragment in an ordinary run and returns `{ observations, output }`. |
+| FE2 | Paired content privately renders to the same exact text and result as the `text` form. |
+| FE3 | `text` plus children, `source` plus either new form, missing input, and invalid `allow` refuse before producer or fragment effects. |
+| FE4 | Omitted `allow` is `read`; read permits self-closing File and refuses every write form before effects. |
+| FE5 | `write` permits only the named host-profile write forms and never creates authority from text. |
+| FE6 | Root frontmatter, root props, `returns`, and independent `<Output>` selection refuse before effects. |
+| FE7 | With `as`, the result object is captured; without `as`, it is discarded; neither form emits fragment output. |
+| FE8 | Public `<Syntax>` and a directly nested Plan see the enclosing Evaluate vocabulary for the selected `allow`; generated text is validated against that same vocabulary. No private Syntax implementation is involved. **Receives #758's SY19**, which #759 cannot prove: it installs no narrower syntax reference, and `<Syntax>` is not in the generated-XMD pinned identity table until this issue admits it. |
+| FE9 | A deferred Plan's public `<Syntax>` sees its own ordinary vocabulary; a later narrower Evaluate rejects incompatible text before effects. **Receives #758's SY20**, for the same reason. |
+| FE10 | Exact text and policy survive journal/continuation; changed text or policy refuses before effects. |
+| FE11 | Completed Plan work and completed fragment effects replay without repetition. |
+| FE12 | Hostile or malformed durable records fail closed before effects. |
+| FE13 | Declared-component private closures and producer-private authority remain unavailable. |
+| FE14 | Middleware answer A is retained by stable provider identity; continuation with B refuses before A or B runs; unchanged A resumes. |
+| FE15 | Provider registrations disappear at teardown; losing or cancelled resolution claims cannot later execute. |
+| FE16 | Repeated Evaluate occurrences cannot consume one another's records. |
+| FE17 | Actual cancellation stops active work, waits for cleanup, and records no false success. |
+| FE18 | Existing untagged #369 records remain readable; new records use the closed version-2 shape. |
+| FE19 | Workflow `source` and canonical `text` have identical behavior without a warning; the ordinary profile rejects `source`, and every profile rejects `program`. |
+| FE20 | Exact trusted Fetch limits are retained and narrowed; missing or changed limits refuse before requests. |
+| FE21 | Ordinary and workflow hosts exercise the same fragment evaluator rather than separate semantic implementations. |
+| FE22 | `xmd plan` output remains ordinary text usable at the command boundary and acquires no special complete-root type. |
+| FE23 | An evaluation lacking write authority refuses the write before effects, including when the write component appears in trusted symbols. **Receives the Evaluate clause of #758's SY21**; the half that stays in #759 is that symbols text alone registers, resolves and authorizes nothing. |
+| FE24 | Repository files, workflow bundle members, declared Markdown, ordinary and reserved registrations, middleware answers or mutations, document context, and another loaded package copy each fail to replace `<Evaluate>`; honest middleware delegation reaches canonical core and a deliberate middleware refusal remains a refusal. |
+| FE25 | A replacement whose body deliberately ignores `allow={["read"]}` and writes through wider ambient authority is never invoked; canonical `<Evaluate>` refuses the write before any provider call or mutation. |
+| FE26 | Protection itself grants nothing: a profile with no write table stays unable to write, and adding `<Evaluate>` to the protected table does not add a class or component identity to `allow`. |
+| FE27 | Structural constructs remain selected by structural dispatch, while repository replacements for ordinary `<File>`, `<Fetch>`, and `<Elicit>` still win at ordinary authored sites. Their replaceability does not let them enter a generated fragment unless the trusted profile admitted that exact identity and form. |
+| FE28 | Source, npm, and compiled symbols report `<Evaluate>` with protected origin and the approved description, and no host bootstrap is needed to make the name available. |
+| FE29 | Each execution accepts one private fragment-evaluation profile; a missing or duplicate profile refuses before paired-content production or fragment effects, and document-controlled state cannot read, replace, or widen it. |
+| FE30 | A trusted nested-run or evaluation-host layering control enters the same declarative package bootstrap through inherited and local layers. The child keeps the package registration and renders the same named documentation as the single-bootstrap control; Evaluate still admits only the identity selected by `allow`. A non-identical owner/component overlap refuses before child root or fragment effects. This receives #765's SYN25l.5 rather than creating a second collector in Evaluate. |
+
+Each refusal case needs a negative control proving no producer, middleware
+answer, request, file mutation, or other program effect occurred. The
+implementation tiers carrying the elaborated evidence are `GX` for the durable
+protocol, the ceiling table and the profile's entry rules, `CIV` for what a
+provider's stated identity is bound to, and `FT` for `<Fetch>` itself.
+
 ### Tier SX — The `xmd syntax` command
 
 | # | Test | Verify |
@@ -11734,6 +11846,10 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §§8.4 and 9.
 | GX18c–GX18d | Controls | An empty and a rendered-only fragment preserve output across partial replay and invent no nested durable effect |
 | GX22, GX22b | Progression | The run's own root addition with the added root current, and standing on another root it already retained, each resume and reach the generated component |
 | GX22c–GX22d | Root loss | Losing a non-selected admission root and losing the admission's selected root each refuse with the fixed diagnostic before the component runs, the live component count unchanged |
+| GX14b–GX14c | One ceiling per identity | Two admitted identities whose four terms differ only in where a space falls each perform exactly their own admitted request, and neither entry's limit admits the other's: the run's ceiling table is keyed by the terms encoded rather than joined, because nothing makes a separator illegal in an origin or a key |
+| FE18/GX21z | Version-1 reconciliation is stated, not inferred | The standard core admission a released build wrote — `@executablemd/core#File:read` under the untagged policy shape, with no revision in it — resumes because `pinnedFileRead()` states that exact string as the version-1 identity it succeeds; an arbitrary host string a released build retained verbatim resumes the same way against its entry's stated alias. An entry that states no alias refuses the record that named it, with the admitted read never reaching the provider; a string no entry lists refuses; and a string never reconciles to a component answer, whose arm did not exist when version-1 records were written |
+| FE18/GX21x, FE18/GX21y | The closed version-2 shape | A literal version-1 refusal replays as the refusal it recorded. A version-2 identity written as a string, with no kind, an unknown kind, a missing or extra member, a non-string member, as an array or as null each refuse, as do a tagged result holding an untagged policy, a mixed or unknown version, a duplicate or empty class or form list, and a malformed request field. Each version has a positive control resuming on the unmodified record, so no row passes because a forged record never resumes at all |
+| EP18–EP20 | One name, one implementation | A provider-backed name held by two entries across disjoint forms and both tables is resolved by one lookup and sealed as one shared definition and schema; a second identity for that name — within one table, across the two, or under another origin — refuses at capture naming both spellings rather than letting assembly order decide; and one name held as both a capability and a component answer refuses, because core supplying the body and the chain answering for it are different grants. In `evaluation-profile.test.ts` |
 
 ### Tier WGAC — Generated `<File>` effects and the `<Evaluate>` boundary
 
@@ -12309,28 +12425,33 @@ Runs against a loopback server, so what is asserted is what a real host reports.
 | FR11 | One transport | Every form of the call crosses `API.Fetch`, so a host refusal covers all of them |
 | FR12 | The contextual default | A call that names no timeout resolves `Config.timeoutFetch` |
 
-### Tier FE — `<Fetch>` (§6.18)
+### Tier FT — `<Fetch>` (§6.18)
 
 Every case substitutes a provider at `API.Fetch` and counts what it was asked to
 perform, separately from the binding, the rendered output, and the journal.
 
+Named `FT` rather than `FE`, which names the public `<Evaluate>` component. One
+prefix cannot mean two components: a reader following `FE14` has to reach one
+row, and a fragment's admitted identity and a Fetch body read are not the same
+subject.
+
 | # | Test | Verify |
 |---|------|--------|
-| FE1 | Refusal before transport | Mutating and unknown methods, a lowercase `get`, a relative or non-HTTP URL, a body, an unknown prop, a missing URL, a non-string header value, and two spellings of one name each refuse with request count zero |
-| FE2–FE4 | The normalized request | GET by default, HEAD verbatim, lowercase header names in lexicographic order with values untouched |
-| FE5–FE9 | The bound | Accepted spellings reach the provider as milliseconds; every rejected class costs no request; an explicit prop outranks `Config.timeoutFetch`; no bound at all is an absent field |
-| FE10–FE13 | The retained response | One canonical JSON value, identical in the binding and the journal; a provider that rewrites its headers afterwards changes neither; a provider that cannot enumerate them is refused |
-| FE14 | Bodies | GET reads once, HEAD not at all — including when a body read would fail |
-| FE15–FE17 | What a status means | A captured non-2xx is data and the document carries on; an uncaptured 2xx renders nothing; an uncaptured non-2xx records the response and stops later executable work |
-| FE18–FE20 | The binding seam | `hasBinding()` answers for the invocation that asked — siblings, a nested invocation inside its caller, and two invocations live at once |
-| FE21–FE24 | Failures | Transport, body read, timeout and cancellation bind nothing and commit no response; a halt tears the provider down in both phases with no late work |
-| FE25–FE28 | Authority | Middleware may observe and delegate but cannot widen; a synthetic answer performs no request; eval's own `fetch` and a same-name repository component cross the same ceiling |
+| FT1 | Refusal before transport | Mutating and unknown methods, a lowercase `get`, a relative or non-HTTP URL, a body, an unknown prop, a missing URL, a non-string header value, and two spellings of one name each refuse with request count zero |
+| FT2–FT4 | The normalized request | GET by default, HEAD verbatim, lowercase header names in lexicographic order with values untouched |
+| FT5–FT9 | The bound | Accepted spellings reach the provider as milliseconds; every rejected class costs no request; an explicit prop outranks `Config.timeoutFetch`; no bound at all is an absent field |
+| FT10–FT13 | The retained response | One canonical JSON value, identical in the binding and the journal; a provider that rewrites its headers afterwards changes neither; a provider that cannot enumerate them is refused |
+| FT14 | Bodies | GET reads once, HEAD not at all — including when a body read would fail |
+| FT15–FT17 | What a status means | A captured non-2xx is data and the document carries on; an uncaptured 2xx renders nothing; an uncaptured non-2xx records the response and stops later executable work |
+| FT18–FT20 | The binding seam | `hasBinding()` answers for the invocation that asked — siblings, a nested invocation inside its caller, and two invocations live at once |
+| FT21–FT24 | Failures | Transport, body read, timeout and cancellation bind nothing and commit no response; a halt tears the provider down in both phases with no late work |
+| FT25–FT28 | Authority | Middleware may observe and delegate but cannot widen; a synthetic answer performs no request; eval's own `fetch` and a same-name repository component cross the same ceiling |
 | GX11–GX14 | Generated admission | The pinned identity in the host's `read` table performs the exact admitted request once; a scheme, host, path, method, header or timeout mismatch performs none; admitting `<Fetch>` with no stated request is refused outright |
-| FE29–FE31 | History | A partial replay restores the response with no second request; the event names the expansion and its source position; an interruption before the commit leaves no record and one continuation commits one |
-| FE32–FE34 | The secret gate | The scanner sees URL, request headers, status, response headers and body in one event; a canary in the request or the response refuses the append, binds nothing, and stops the document |
-| FE35 | Independence | Cancelling one invocation tears down only its own request |
-| FEC1–FEC2 | Diagnostic retention | A run without `--journal` performs the request and writes nothing; with one, exactly one Fetch Yield holds the normalized request and the complete response |
-| FEW1 | Workflow retention | A killed run holds one committed response, and a resume restores it without asking the server again |
+| FT29–FT31 | History | A partial replay restores the response with no second request; the event names the expansion and its source position; an interruption before the commit leaves no record and one continuation commits one |
+| FT32–FT34 | The secret gate | The scanner sees URL, request headers, status, response headers and body in one event; a canary in the request or the response refuses the append, binds nothing, and stops the document |
+| FT35 | Independence | Cancelling one invocation tears down only its own request |
+| FTC1–FTC2 | Diagnostic retention | A run without `--journal` performs the request and writes nothing; with one, exactly one Fetch Yield holds the normalized request and the complete response |
+| FTW1 | Workflow retention | A killed run holds one committed response, and a resume restores it without asking the server again |
 
 ### Tier CIV — The identity a host's component names its work after
 
@@ -12360,6 +12481,9 @@ Defined in §5.6, with the selection rule in §5.3.
 | CIV20 | Reading costs nothing | Reading the form, twice, leaves the durable identity unspent — the claim after it still succeeds |
 | CIV21 | Owner-kept | A repository component that imports nothing reads the canonical form from the object it received, for both authored forms; the fact appears on no definition a handler holding one can read |
 | CIV22 | Only the engine's own invocation enters a body | The dispatcher enters a form-specific body for a genuine, live, selected invocation of the form it answers, and refuses every other call before the body: a structural look-alike implementing `hasContent()`, a descriptor-for-descriptor clone, an object built on the prototype, an issuance canonical resolution selected nothing for, one selected for another dispatcher, and a closed one. Each look-alike's own `hasContent()` answers plausibly, which is why none of them is asked |
+| CIV23 | The identity a provider states for its answer | A request states a claim on the exact object its handler returns, under the name and provider origin canonical execution fixed when it minted that request. A different object, a copy, an object edited after the claim, a competing provider installation, another key and another revision each identify nothing, and the first statement stands after every one of them. The provider states only key and revision, and a partial identity is refused rather than half-recorded. Backs FE14 |
+| CIV24 | Identification is one atomic answer | The claim and core's own claim-time copy of what was claimed come back from one call, so nothing downstream reads the chain's object again: an answer whose member alternates between the claimed value and a substitution is sealed as the claimed one, with the plant proven live by the next read. At execution scale, an answer whose props schema alternates validates the fragment against the claimed contract. Backs FE14 |
+| CIV25 | A request belongs to one resolution occurrence | Provider installation and occurrence authority are separate. An installation receives a registrar and installs import middleware once; every middleware invocation receives a fresh request with readonly name and position, plus `next`. The request captures the exact resolution-window object, provider-installation token, origin and name, and `claim` accepts only the answer plus key and revision. Its handler closes the request synchronously in `finally` on return, failure or cancellation, while an outer request stays live across `yield* next()` and may claim its replacement after the delegated handler returns. The enclosing resolution closes in its existing `finally`. A claim succeeds only during active execution, through an open request whose captured window is the exact current object and whose fixed name matches it, with no different statement by that provider in the window. Identification takes the expected window explicitly and accepts only that exact window and name. Thus a stale request from resolution N refuses during N+1 of the same name, a stale `Open` request cannot retag while `Other` is live, and a losing inner request refuses after its handler returns while the still-live outer request may claim after delegation. One installation answers several names and repeated same-name resolutions through distinct requests; unidentified replacements remain ordinary valid middleware answers outside fragment evaluation. Two owners live at once each answer only for what they recorded, and tearing one down leaves the other working. No Context, shared symbol, public brand or module-global registry participates. Backs FE15 |
 
 ### Tier NEX — Nested document executions (`specs/testing-spec.md`)
 

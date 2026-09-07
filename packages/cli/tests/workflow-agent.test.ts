@@ -28,7 +28,7 @@ import { API, useHostFiles } from "@executablemd/runtime";
 import { DatabaseSync } from "node:sqlite";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import {
-  evaluationComponents,
+  evaluationProfile,
   transactAgentPromptCheckpoints,
   withWorkflowWorkspace,
   workflowRunPath,
@@ -256,15 +256,13 @@ function runFixture(
                 stream: database.journal,
                 ...(options.props === undefined ? {} : { props: options.props }),
               },
-              // Both words this document writes name durable work after their
-              // own invocations, so the host declares them to the execution and
-              // canonical execution builds each from the claimant it minted.
+              // The Agent words name durable work after their own invocations,
+              // so the host declares them to the execution. `<Evaluate>` is
+              // canonical core's: what the host states for it is the ceiling.
               [
                 {
-                  components: [
-                    ...evaluationComponents(database, options.evaluation ?? {}),
-                    ...agentIdentityComponents(),
-                  ],
+                  components: [...agentIdentityComponents()],
+                  evaluation: yield* evaluationProfile(database, options.evaluation ?? {}),
                 },
               ],
             ),
@@ -719,7 +717,10 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       expect(recorded).toHaveLength(1);
       const policy = JSON.stringify(recorded[0]);
       expect(policy).toContain("File:write");
-      expect(policy).toContain("@executablemd/workflow/composition/dir-v2#Dir");
+      // The identity is a structural record, so the origin, the key and the
+      // revision are read as themselves rather than as one assembled spelling.
+      expect(policy).toContain('"origin":"@executablemd/workflow/composition"');
+      expect(policy).toContain('"key":"Dir","revision":"3"');
       expect(policy).toContain('"allow":["write"]');
       // And the change is in the run's own Workspace, where an ordinary read
       // beneath the fragment's own directory finds it. Anchored on the
