@@ -102,6 +102,12 @@ importers:
       '@executablemd/durable-streams':
         specifier: workspace:*
         version: link:packages/durable-streams
+      '@executablemd/grid':
+        specifier: workspace:*
+        version: link:packages/grid
+      '@executablemd/grid-tmux':
+        specifier: workspace:*
+        version: link:packages/grid-tmux
       '@executablemd/runtime':
         specifier: workspace:*
         version: link:packages/runtime

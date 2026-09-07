@@ -56,6 +56,8 @@
     "@executablemd/code-review-agent": "workspace:*",
     "@executablemd/core": "workspace:*",
     "@executablemd/durable-streams": "workspace:*",
+    "@executablemd/grid": "workspace:*",
+    "@executablemd/grid-tmux": "workspace:*",
     "@executablemd/runtime": "workspace:*",
     "@executablemd/test-agent": "workspace:*",
     "@executablemd/test-support": "workspace:*",

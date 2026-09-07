@@ -425,6 +425,18 @@ describe("Tier TG21 — the replaced paths and packages are absent", () => {
     expect((yield* declaredState()).length).toBeGreaterThan(10);
   });
 
+  it("TG21s: the repository supplies test dependencies without reversing the domain boundary", function* () {
+    // The extracted packages are declared in the private root test host alone,
+    // so a provider dependency never enters the neutral domain's own manifest.
+    const root = JSON.parse(yield* readTextFile(path.resolve("package.json")));
+    expect(root.private).toBe(true);
+    for (const name of ["@executablemd/grid", "@executablemd/grid-tmux"]) {
+      expect([name, root.devDependencies[name]]).toEqual([name, "workspace:*"]);
+    }
+    const domain = JSON.parse(yield* readTextFile(path.resolve("packages/grid/package.json")));
+    expect(domain.dependencies).not.toHaveProperty("@executablemd/grid-tmux");
+  });
+
   it("TG21n: no repository source names either old package", function* () {
     const here = path.resolve("packages/grid/tests/package-boundary.test.ts");
     const offenders: string[] = [];
