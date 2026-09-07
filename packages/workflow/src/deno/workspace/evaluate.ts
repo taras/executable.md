@@ -187,13 +187,13 @@ export function* evaluationProfile(
       // re-granted.
       //
       // The version-1 alias is the exact string released builds retained for
-      // this entry — `${COMPOSITION_ORIGIN}/dir-v2#Dir`, written verbatim
-      // because that is what those journals hold. The pre-`dir-v2` spelling is
-      // deliberately absent: it named the placement-only `<Dir>`, which created
-      // nothing, and answering for it here would hand a narrower grant the
-      // wider one.
+      // this entry, written out rather than assembled: that is what those
+      // journals hold, and nothing derives it. The pre-`dir-v2` spelling is
+      // deliberately absent — it named the placement-only `<Dir>`, which
+      // created nothing, so answering for it here would hand a narrower grant
+      // the wider one.
       directoryEntry({ origin: COMPOSITION_ORIGIN, key: "Dir", revision: "3" }, "Dir", [
-        `${COMPOSITION_ORIGIN}/dir-v2#Dir`,
+        "@executablemd/workflow/composition/dir-v2#Dir",
       ]),
       fileDeleteEntry(),
       ...(options.writes ?? []),

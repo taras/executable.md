@@ -1452,6 +1452,223 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
     };
   }
 
+  /**
+   * One literal version-1 admission, in the untagged shape and holding whatever
+   * a released build retained for the entry the case is about.
+   */
+  function versionOneRecord(
+    source: string,
+    allow: readonly string[],
+    allowed: readonly JsonObject[],
+    requests: readonly JsonObject[] = [],
+  ): DurableEvent {
+    const policy: JsonObject = {
+      allow: [...allow],
+      roots: [...ROOTS],
+      selectedRoot: ROOTS[0],
+      allowed: allowed.map((entry) => ({ ...entry })),
+      requests: requests.map((request) => ({ ...request })),
+    };
+    return {
+      type: "yield",
+      coroutineId: "root",
+      description: { type: "generated_xmd", name: "generated:turn-1", input: policy },
+      result: {
+        status: "ok",
+        value: {
+          decision: "admitted",
+          source,
+          named: allowed.map((entry) => ({
+            name: entry.name,
+            identity: entry.identity,
+            form: Array.isArray(entry.forms) ? entry.forms[0] : "self-closing",
+          })),
+          policy,
+        },
+      },
+    };
+  }
+
+  /**
+   * The workflow host's own `<Dir>`, at the identity and alias it states.
+   *
+   * Built here rather than imported, because what is under test is the seam a
+   * host reaches: `pinnedMutation` takes the structural identity and the exact
+   * version-1 string, and this is the string a released workflow run retained.
+   */
+  function dirEntry(executed: string[]): GeneratedMutation {
+    return pinnedMutation(
+      "Dir",
+      {
+        kind: "capability",
+        origin: "@executablemd/workflow/composition",
+        key: "Dir",
+        revision: "3",
+      },
+      {
+        kind: "function",
+        name: "Dir",
+        props: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+          additionalProperties: false,
+        },
+        // deno-lint-ignore require-yield
+        *fn(props: Record<string, Json>): Operation<Json> {
+          executed.push(`dir:${String(props.path)}`);
+          return "";
+        },
+      },
+      "paired",
+      ["@executablemd/workflow/composition/dir-v2#Dir"],
+    );
+  }
+
+  /**
+   * Every version-1 identity a released build actually retained, and the entry
+   * that states it as the one it succeeds.
+   *
+   * One row per alias rather than one row for the mechanism, because each of
+   * these is a separate literal assertion: the alias is written out at the
+   * entry, and a journal holding that exact string has to reconcile to it.
+   * `<Dir>` is here too — it is the workflow host's string, not core's, and the
+   * host-supplied path has to work for the same reason core's does.
+   */
+  const RELEASED_ALIASES: readonly (readonly [
+    string,
+    string,
+    () => GeneratedXmdRequest,
+    readonly string[],
+    readonly JsonObject[],
+    readonly JsonObject[],
+  ])[] = [
+    [
+      "core's Fetch",
+      `<Fetch url="${URL_ONE}" />\n`,
+      () => request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([ADMITTED_REQUEST])]),
+      ["read"],
+      [
+        {
+          name: "Fetch",
+          identity: "@executablemd/core#Fetch",
+          forms: ["self-closing", "paired"],
+        },
+      ],
+      [{ url: URL_ONE, method: "GET", headers: {} }],
+    ],
+    [
+      "core's read-only File",
+      `<File path="notes.md" />\n`,
+      () => request(`<File path="notes.md" />\n`, [pinnedFileRead()]),
+      ["read"],
+      [{ name: "File", identity: "@executablemd/core#File:read", forms: ["self-closing"] }],
+      [],
+    ],
+    [
+      "core's paired File",
+      `<File path="written.md">from the fragment</File>\n`,
+      () =>
+        selecting(`<File path="written.md">from the fragment</File>\n`, [], {
+          allow: ["write"],
+          mutations: [pinnedFileWrite()],
+        }),
+      ["write"],
+      [{ name: "File", identity: "@executablemd/core#File:write", forms: ["paired"] }],
+      [],
+    ],
+    [
+      "core's File.Delete",
+      `<File.Delete path="notes.md" />\n`,
+      () =>
+        selecting(`<File.Delete path="notes.md" />\n`, [], {
+          allow: ["write"],
+          mutations: [pinnedFileDelete()],
+        }),
+      ["write"],
+      [
+        {
+          name: "File.Delete",
+          identity: "@executablemd/core#File.Delete",
+          forms: ["self-closing"],
+        },
+      ],
+      [],
+    ],
+  ];
+
+  for (const [what, source, candidate, allow, allowed, requests] of RELEASED_ALIASES) {
+    it(`FE18/GX21z: a version-1 record naming ${what} resumes against its stated alias`, function* () {
+      const root = yield* useWorkspace();
+      yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+      const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
+
+      const first = yield* scoped(function* () {
+        yield* useWorkspaceFiles(root);
+        return yield* evaluate(candidate());
+      });
+      expect([what, first.failure]).toEqual([what, undefined]);
+
+      // The same run, resumed against the record a released build wrote for
+      // this entry: the opaque string, no revision, the untagged policy shape.
+      const again = yield* scoped(function* () {
+        yield* useWorkspaceFiles(root);
+        return yield* evaluate(candidate(), {
+          stream: new InMemoryStream(
+            withVersionOne(
+              yield* partial(first.events).readAll(),
+              versionOneRecord(source, allow, allowed, requests),
+            ),
+          ),
+        });
+      });
+
+      expect([what, again.failure]).toEqual([what, undefined]);
+      // Restored rather than decided a second time.
+      expect([what, admissions(again.events).length]).toEqual([what, 1]);
+      expect(transport.performed.length).toBeGreaterThanOrEqual(0);
+    });
+  }
+
+  it("FE18/GX21z: a version-1 record naming the workflow Dir resumes against its stated alias", function* () {
+    // The host-supplied half of the same contract. `@executablemd/workflow/
+    // composition/dir-v2#Dir` is the workflow run's string, stated by the
+    // workflow entry rather than by core — and a journal holding it reconciles
+    // for exactly the same reason core's do.
+    const executed: string[] = [];
+    const candidate = () =>
+      selecting(`<Dir path="generated">held</Dir>\n`, [], {
+        allow: ["write"],
+        mutations: [dirEntry(executed)],
+      });
+
+    const first = yield* evaluate(candidate());
+    expect(first.failure).toBe(undefined);
+    expect(executed).toEqual(["dir:generated"]);
+
+    const again = yield* evaluate(candidate(), {
+      stream: new InMemoryStream(
+        withVersionOne(
+          yield* partial(first.events).readAll(),
+          versionOneRecord(
+            `<Dir path="generated">held</Dir>\n`,
+            ["write"],
+            [
+              {
+                name: "Dir",
+                identity: "@executablemd/workflow/composition/dir-v2#Dir",
+                forms: ["paired"],
+              },
+            ],
+          ),
+        ),
+      ),
+    });
+
+    expect(again.failure).toBe(undefined);
+    expect(admissions(again.events)).toHaveLength(1);
+  });
+
   it("FE18/GX21z: the standard core admission a released build wrote still resumes", function* () {
     // The record is `bb2c1c49`'s own: core's read-only `<File>` retained as the
     // string that build committed, under the untagged policy shape. What lets

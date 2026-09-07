@@ -38,6 +38,7 @@ import { REVOKED_CAPABILITY } from "../src/fragment-capabilities.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { recordedFiles } from "./support/fragment-files.ts";
 import { answerProvider, implementation } from "./support/answer-provider.ts";
+import type { Implementation } from "./support/answer-provider.ts";
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
 
 const ROOT_PATH = "evaluate.md";
@@ -308,21 +309,71 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     expect(A.invoked).toEqual([]);
   });
 
-  it("FE15: a claim from one settled resolution cannot land in another name's", function* () {
+  it("FE15: a claimant from one settled resolution cannot restate that name", function* () {
     const A = implementation("Open", "A ran");
     const B = implementation("Other", "B ran");
     const late = implementation("Open", "late ran");
-    const losing: ComponentAnswerClaim[] = [];
+    const stale: ComponentAnswerClaim[] = [];
     const attempted: string[] = [];
+    const carried: unknown[] = [];
 
-    // Two provider-backed names, so the capture opens two resolutions in
-    // order. The first provider loses `Open` and keeps its claimant; the second
-    // answers `Other`, and from *inside* that live resolution it uses the
-    // losing claimant to record an answer for `Open`.
-    //
-    // That is the race a single execution-wide switch cannot see: the owner is
-    // active, a resolution is open, and the claim still belongs to a decision
-    // that is over.
+    // Two provider-backed names, so the capture opens two resolutions in order.
+    // The stale claimant is the one that *answered* the first, used from inside
+    // the second resolution's live handler.
+    const output = yield* run(
+      `<Evaluate text={'<Open />\\n<Other />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
+      [
+        {
+          evaluation: {
+            read: [answerEntry("Open"), answerEntry("Other")],
+            files: recordedFiles(),
+          },
+          componentAnswers: [
+            answerProvider("Open", A.definition, { retain: stale }),
+            answerProvider("Other", B.definition, {
+              key: "Other",
+              whileResolving: () => {
+                const held = stale[0];
+                if (held === undefined) {
+                  throw new Error("the first provider was never installed");
+                }
+                // The name it already answered is not the name being decided,
+                // so this states nothing into the live resolution.
+                attempted.push(refused(() => held.claim("Open", late.definition, IDENTITY)));
+                // And what the first resolution recorded does not answer this
+                // one: the claim on `A` names `Open` and belongs to an import
+                // already settled, so it identifies nothing here.
+                carried.push(A.definition);
+              },
+            }),
+          ],
+        },
+      ],
+    );
+
+    expect(attempted).toEqual(["this resolution has settled"]);
+    expect(carried).toEqual([A.definition]);
+    // Both names ran what their own resolution sealed — which is also the
+    // positive control that the second provider's own claim, made in the same
+    // window as the refusal, was admitted.
+    expect(String(output)).toContain("A ran");
+    expect(String(output)).toContain("B ran");
+    expect(A.invoked).toEqual(["A ran"]);
+    expect(B.invoked).toEqual(["B ran"]);
+    // The substitution reached no fragment.
+    expect(late.invoked).toEqual([]);
+  });
+
+  it("FE15: one provider installation answers two admitted names", function* () {
+    const A = implementation("Open", "A ran");
+    const B = implementation("Other", "B ran");
+    const answered: string[] = [];
+
+    // The positive control the opportunity rule exists to keep working. One
+    // installation owns one origin and composes middleware for both admitted
+    // names; the capture opens a resolution per name and each takes one
+    // statement from the same claimant. A claimant spent on its first answer
+    // would fail here, on the second name.
     const output = yield* run(
       `<Evaluate text={'<Open />\\n<Other />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
       [
@@ -334,37 +385,35 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
           componentAnswers: [
             {
               origin: "test://provider",
-              // deno-lint-ignore require-yield
               *install(claim: ComponentAnswerClaim): Operation<void> {
-                losing.push(claim);
+                const supplied: Record<string, Implementation> = { Open: A, Other: B };
+                yield* Component.around({
+                  *importComponent([asked, position], next) {
+                    const held = supplied[asked];
+                    if (held === undefined || answered.includes(asked)) {
+                      return yield* next(asked, position);
+                    }
+                    answered.push(asked);
+                    return claim.claim(asked, held.definition, {
+                      key: asked,
+                      revision: "1",
+                    });
+                  },
+                });
               },
             },
-            answerProvider("Open", A.definition),
-            answerProvider("Other", B.definition, {
-              key: "Other",
-              // Resolution two is open when this runs, and the claim it makes
-              // is resolution one's. It names the name that already settled.
-              whileResolving: () => {
-                const held = losing[0];
-                if (held === undefined) {
-                  throw new Error("the losing provider was never installed");
-                }
-                attempted.push(refused(() => held.claim("Open", late.definition, IDENTITY)));
-              },
-            }),
           ],
         },
       ],
     );
 
-    expect(attempted).toEqual(["this resolution has settled"]);
-    // Both names ran what their own resolution sealed, and the late answer
-    // reached neither of them.
+    // Both resolutions were answered by the one claimant, and both admitted
+    // implementations ran.
+    expect(answered).toEqual(["Open", "Other"]);
     expect(String(output)).toContain("A ran");
     expect(String(output)).toContain("B ran");
     expect(A.invoked).toEqual(["A ran"]);
     expect(B.invoked).toEqual(["B ran"]);
-    expect(late.invoked).toEqual([]);
   });
 
   it("FE15: two executions live at once each run the answer it captured", function* () {

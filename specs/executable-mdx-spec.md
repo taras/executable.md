@@ -11067,38 +11067,44 @@ against a real captured profile; the filesystem operations are a recorder that
 is never installed as a provider, so an operation appearing in its log went
 through the captured capability because there is no other way to reach it.
 
-| # | Test | Verify |
-|---|------|--------|
-| FE1 | `text` evaluates | The program runs in an ordinary run, returns `{ observations, output }` with each observation bound by name in invocation order, and every operation went through the captured capability |
-| FE2 | The paired producer | Content renders exactly once and privately, to the same exact text and result as the `text` form; the producer keeps its own document-site authority while the fragment reaches only the captured operations; a producer that fails leaves no admission |
-| FE3 | Disjoint inputs | `text` plus children, `source` plus either new form, missing input, and invalid `allow` each refuse before producer or fragment effects; hostile `content`, `tryContent` and `hasContent` handlers do not reach the projection, with an ordinary component in the same run as the live-handler control |
-| FE4 | Omitted `allow` is `read` | Read permits the self-closing `<File>` and refuses every write form before effects; a class the host installed nothing for refuses before the program is read; an unknown class refuses |
-| FE5 | `write` permits only the named write forms | The admitted write reaches the captured write operations in order, contributes no observation, and never creates authority from text |
-| FE6 | Root-only constructs refuse | Root frontmatter, root props, `returns` and an independent `<Output>` selection each refuse the whole fragment before its first effect, as do an executable block, an expression prop, an interpolation, an `as` binding and a structural construct |
-| FE7 | `as` and its absence | With `as` the result object is captured; without `as` it is discarded; neither form emits the fragment's output |
-| FE8 | The enclosing vocabulary | A public `<Syntax>` and a directly nested `<Plan>` see the Evaluate vocabulary for the selected `allow`, and the generated text is validated against that same vocabulary; no private Syntax implementation is involved. Receives #758's SY19 |
-| FE9 | The deferred vocabulary | A deferred `<Plan>`'s public `<Syntax>` sees its own ordinary vocabulary, and a later narrower `<Evaluate>` rejects the incompatible text before effects. Receives #758's SY20 |
-| FE10 | Exact text and policy survive | A continuation restores the admission and performs the work it authorized; changed text or changed policy refuses before effects, and neither performs anything |
-| FE11 | Replay without repetition | Completed Plan work and completed fragment effects replay without being performed again |
-| FE12 | Hostile records fail closed | A hostile or malformed durable record refuses before any effect |
-| FE13 | Private closures stay unavailable | Declared-component private closures and producer-private authority remain unreachable; a Files provider installed nearer than the host's is never consulted; a fragment cannot name an operation the profile withheld; operations do not outlive the execution |
-| FE14 | The middleware answer is held to its identity | The answer is retained by stable provider identity; a continuation whose answer is B refuses before A or B runs; unchanged A resumes. Implementation coverage — composing providers, the claim-time snapshot, and the alternating-answer control — is Tier CIV's `answer-identity.test.ts` and the `FE14` rows in `evaluate-component.test.ts` |
-| FE15 | Registrations and claims settle | Provider registrations disappear at teardown, and losing or cancelled resolution claims cannot later execute. Implementation coverage — the occurrence-settled claim window, the multi-name race, and overlapping-execution isolation — is Tier CIV's `answer-identity.test.ts` and `evaluate-provider-lifetime.test.ts` |
-| FE16 | One occurrence, one record | Two occurrences take two durable names and neither consumes the other's |
-| FE17 | Cancellation records no false success | Actual cancellation stops the active producer or fragment work, waits for cleanup, and records no terminal result; cancellation before the producer enters is the negative control |
-| FE18 | Version 1 stays readable, version 2 is closed | Existing untagged #369 records remain readable and resume under their own ceilings, and new records use the closed version-2 shape. Implementation coverage — the explicit legacy-alias reconciliation and the closed version-2 parsing table — is Tier GX's `FE18/GX21z`, `FE18/GX21x` and `FE18/GX21y` rows in `generated-xmd.test.ts` |
-| FE19 | The spellings | Workflow `source` and canonical `text` behave identically with no warning; the ordinary profile rejects `source`, and every profile rejects `program` |
-| FE20 | Request ceilings | Exact trusted Fetch limits are retained and narrowed; missing or changed limits refuse before requests, and a profile stating none admits `<Fetch>` not at all |
-| FE21 | One evaluator, two hosts | The ordinary run reads the caller's files and the workflow run reads the run's Workspace, through the same component and the same fragment evaluator rather than separate semantic implementations |
-| FE22 | `xmd plan` output stays text | The approved bytes remain ordinary text usable at the command boundary, acquire no complete-root type, and are not run when no `<Evaluate>` is written |
-| FE23 | Symbols authorize nothing | An evaluation lacking write authority refuses the write before effects, including when the write component appears in trusted symbols. Receives the Evaluate clause of #758's SY21 |
-| FE24 | Nothing replaces the implementation | Repository files, workflow bundle members, declared Markdown, ordinary and reserved registrations, middleware answers or mutations, document context, and another loaded package copy each fail to replace `<Evaluate>`; honest middleware delegation reaches canonical core and a deliberate middleware refusal remains a refusal |
-| FE25 | A replacement that ignores `allow` | A body that deliberately ignores `allow={["read"]}` and writes through wider ambient authority is never invoked; canonical `<Evaluate>` refuses the write before any provider call or mutation |
-| FE26 | Protection grants nothing | A profile with no write table stays unable to write, and adding `<Evaluate>` to the protected table adds no class or component identity to `allow` |
-| FE27 | Replaceable elsewhere, not here | Structural constructs stay selected by structural dispatch while repository replacements for `<File>`, `<Fetch>` and `<Elicit>` still win at ordinary authored sites; their replaceability does not let them enter a generated fragment unless the trusted profile admitted that exact identity and form |
-| FE28 | Distribution surfaces | Source, npm and compiled symbols report `<Evaluate>` with protected origin and the approved description, and no host bootstrap is needed to make the name available |
-| FE29 | One profile, and nothing reads it | Each execution accepts one private fragment-evaluation profile; a missing or duplicate profile refuses before paired-content production or fragment effects, and document-controlled state cannot read, replace or widen it |
-| FE30 | A layered bootstrap grants nothing | A trusted nested-run or evaluation-host layering control enters the same declarative package bootstrap through inherited and local layers. The child keeps the package registration and renders the same named documentation as the single-bootstrap control; Evaluate still admits only the identity selected by `allow`. A non-identical owner/component overlap refuses before child root or fragment effects. Receives #765's `SYN25l.5` rather than creating a second collector in Evaluate |
+| ID | Evidence |
+| --- | --- |
+| FE1 | `text` evaluates a fragment in an ordinary run and returns `{ observations, output }`. |
+| FE2 | Paired content privately renders to the same exact text and result as the `text` form. |
+| FE3 | `text` plus children, `source` plus either new form, missing input, and invalid `allow` refuse before producer or fragment effects. |
+| FE4 | Omitted `allow` is `read`; read permits self-closing File and refuses every write form before effects. |
+| FE5 | `write` permits only the named host-profile write forms and never creates authority from text. |
+| FE6 | Root frontmatter, root props, `returns`, and independent `<Output>` selection refuse before effects. |
+| FE7 | With `as`, the result object is captured; without `as`, it is discarded; neither form emits fragment output. |
+| FE8 | Public `<Syntax>` and a directly nested Plan see the enclosing Evaluate vocabulary for the selected `allow`; generated text is validated against that same vocabulary. No private Syntax implementation is involved. **Receives #758's SY19**, which #759 cannot prove: it installs no narrower syntax reference, and `<Syntax>` is not in the generated-XMD pinned identity table until this issue admits it. |
+| FE9 | A deferred Plan's public `<Syntax>` sees its own ordinary vocabulary; a later narrower Evaluate rejects incompatible text before effects. **Receives #758's SY20**, for the same reason. |
+| FE10 | Exact text and policy survive journal/continuation; changed text or policy refuses before effects. |
+| FE11 | Completed Plan work and completed fragment effects replay without repetition. |
+| FE12 | Hostile or malformed durable records fail closed before effects. |
+| FE13 | Declared-component private closures and producer-private authority remain unavailable. |
+| FE14 | Middleware answer A is retained by stable provider identity; continuation with B refuses before A or B runs; unchanged A resumes. |
+| FE15 | Provider registrations disappear at teardown; losing or cancelled resolution claims cannot later execute. |
+| FE16 | Repeated Evaluate occurrences cannot consume one another's records. |
+| FE17 | Actual cancellation stops active work, waits for cleanup, and records no false success. |
+| FE18 | Existing untagged #369 records remain readable; new records use the closed version-2 shape. |
+| FE19 | Workflow `source` and canonical `text` have identical behavior without a warning; the ordinary profile rejects `source`, and every profile rejects `program`. |
+| FE20 | Exact trusted Fetch limits are retained and narrowed; missing or changed limits refuse before requests. |
+| FE21 | Ordinary and workflow hosts exercise the same fragment evaluator rather than separate semantic implementations. |
+| FE22 | `xmd plan` output remains ordinary text usable at the command boundary and acquires no special complete-root type. |
+| FE23 | An evaluation lacking write authority refuses the write before effects, including when the write component appears in trusted symbols. **Receives the Evaluate clause of #758's SY21**; the half that stays in #759 is that symbols text alone registers, resolves and authorizes nothing. |
+| FE24 | Repository files, workflow bundle members, declared Markdown, ordinary and reserved registrations, middleware answers or mutations, document context, and another loaded package copy each fail to replace `<Evaluate>`; honest middleware delegation reaches canonical core and a deliberate middleware refusal remains a refusal. |
+| FE25 | A replacement whose body deliberately ignores `allow={["read"]}` and writes through wider ambient authority is never invoked; canonical `<Evaluate>` refuses the write before any provider call or mutation. |
+| FE26 | Protection itself grants nothing: a profile with no write table stays unable to write, and adding `<Evaluate>` to the protected table does not add a class or component identity to `allow`. |
+| FE27 | Structural constructs remain selected by structural dispatch, while repository replacements for ordinary `<File>`, `<Fetch>`, and `<Elicit>` still win at ordinary authored sites. Their replaceability does not let them enter a generated fragment unless the trusted profile admitted that exact identity and form. |
+| FE28 | Source, npm, and compiled symbols report `<Evaluate>` with protected origin and the approved description, and no host bootstrap is needed to make the name available. |
+| FE29 | Each execution accepts one private fragment-evaluation profile; a missing or duplicate profile refuses before paired-content production or fragment effects, and document-controlled state cannot read, replace, or widen it. |
+| FE30 | A trusted nested-run or evaluation-host layering control enters the same declarative package bootstrap through inherited and local layers. The child keeps the package registration and renders the same named documentation as the single-bootstrap control; Evaluate still admits only the identity selected by `allow`. A non-identical owner/component overlap refuses before child root or fragment effects. This receives #765's SYN25l.5 rather than creating a second collector in Evaluate. |
+
+Each refusal case needs a negative control proving no producer, middleware
+answer, request, file mutation, or other program effect occurred. The
+implementation tiers carrying the elaborated evidence are `GX` for the durable
+protocol, the ceiling table and the profile's entry rules, `CIV` for what a
+provider's stated identity is bound to, and `FT` for `<Fetch>` itself.
 
 ### Tier SX — The `xmd syntax` command
 
@@ -12477,7 +12483,7 @@ Defined in §5.6, with the selection rule in §5.3.
 | CIV22 | Only the engine's own invocation enters a body | The dispatcher enters a form-specific body for a genuine, live, selected invocation of the form it answers, and refuses every other call before the body: a structural look-alike implementing `hasContent()`, a descriptor-for-descriptor clone, an object built on the prototype, an issuance canonical resolution selected nothing for, one selected for another dispatcher, and a closed one. Each look-alike's own `hasContent()` answers plausibly, which is why none of them is asked |
 | CIV23 | The identity a provider states for its answer | A claim is stated on the exact object a handler returns and read back under the name it was claimed for; a different object, a copy, an object edited after the claim, another name, another claimant, another key and another revision each identify nothing, and the first statement stands after every one of them. A provider states key and revision while canonical execution fixes the origin, and a partial identity is refused rather than half-recorded. Backs FE14 |
 | CIV24 | Identification is one atomic answer | The claim and core's own claim-time copy of what was claimed come back from one call, so nothing downstream reads the chain's object again: an answer whose member alternates between the claimed value and a substitution is sealed as the claimed one, with the plant proven live by the next read. At execution scale, an answer whose props schema alternates validates the fragment against the claimed contract. Backs FE14 |
-| CIV25 | A claim belongs to one resolution occurrence | The claim window opens for the exact name being resolved and closes on success, fallback, failure or cancellation. A claimant used outside it identifies nothing *while the execution continues* — the refusal names the settled resolution rather than an ended run — and a claim held from one settled resolution cannot land in the next one, under its own name or the live one. Two owners live at once each answer only for what they recorded, and tearing one down leaves the other working. Backs FE15 |
+| CIV25 | A claim belongs to one resolution occurrence | The claim window opens for the exact name being resolved and closes on success, fallback, failure or cancellation. A claimant used outside it identifies nothing *while the execution continues* — the refusal names the settled resolution rather than an ended run — and a claim recorded by one resolution does not answer a later resolution of the same name, with that resolution's own claim from the same claimant as the positive control. A resolution takes one statement per claimant: restating the same claim is a provider installed twice, naming a different implementation for a decided import refuses. The claimant itself is not spent — one installation answers two admitted names, at unit and execution scale, which is what keeps the opportunity bound to the import rather than to the provider. Two owners live at once each answer only for what they recorded, and tearing one down leaves the other working. Backs FE15 |
 
 ### Tier NEX — Nested document executions (`specs/testing-spec.md`)
 

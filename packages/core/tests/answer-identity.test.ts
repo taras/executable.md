@@ -223,36 +223,75 @@ describe("Tier FE15 — an identity belongs to one object in one execution", () 
     expect(imports.identify("Open", held)?.identity).toEqual(IDENTITY);
   });
 
-  it("FE15: a claim from a settled resolution cannot land in the next one", function* () {
+  it("FE15: a claim carried from one resolution does not answer the next", function* () {
     const imports = owner();
-    const losing = imports.claimant("test://losing");
-    const winning = imports.claimant("test://winning");
-    const late = answer();
+    const claimant = imports.claimant(ORIGIN);
+    const carried = answer();
+
+    // The same name, resolved twice — which a run does whenever two admitted
+    // entries share it, or a continuation resolves again. The first resolution
+    // records this object.
+    resolving(imports, "Open", () =>
+      claimant.claim("Open", carried, { key: "Open", revision: "1" }),
+    );
+    expect(imports.identify("Open", carried)?.identity).toEqual(IDENTITY);
+
+    // Inside the *second* resolution of that name, the object the first one
+    // recorded identifies nothing. The claim names the right component and
+    // still belongs to an import that was already decided, which is what the
+    // occurrence on the claim is for: without it, a handler returning a value
+    // left over from an earlier decision would answer this one.
+    resolving(imports, "Open", () => {
+      expect(imports.identify("Open", carried)).toBe(undefined);
+      // The positive control in the same window: this resolution's own claim,
+      // from the same claimant, is recorded and identified. So the line above
+      // is about *which resolution*, not about the claimant being spent.
+      const fresh = claimant.claim("Open", answer(), { key: "Open", revision: "1" });
+      expect(imports.identify("Open", fresh)?.identity).toEqual(IDENTITY);
+    });
+  });
+
+  it("FE15: one claimant answers several names, one statement each", function* () {
+    const imports = owner();
+    // One installation owns one origin and may answer more than one admitted
+    // name. Spending the claimant on its first answer would break exactly this,
+    // so what a resolution offers is one statement rather than the claimant's
+    // only one.
+    const claimant = imports.claimant(ORIGIN);
+    const open = answer();
     const other = answer("Other");
 
-    // Resolution one decides `Open`, and this claimant loses it.
-    const first = resolving(imports, "Open", () =>
-      winning.claim("Open", answer(), { key: "Open", revision: "1" }),
+    resolving(imports, "Open", () => claimant.claim("Open", open, { key: "Open", revision: "1" }));
+    resolving(imports, "Other", () =>
+      claimant.claim("Other", other, { key: "Other", revision: "1" }),
     );
-    expect(imports.identify("Open", first)?.identity.origin).toBe("test://winning");
 
-    // Resolution two decides a different name, and is live. The losing
-    // claimant from resolution one records into it — under its own name, which
-    // is the substitution that would matter, and under this resolution's name,
-    // which would be a decision it is not part of.
-    resolving(imports, "Other", () => {
+    expect(imports.identify("Open", open)?.identity.key).toBe("Open");
+    expect(imports.identify("Other", other)?.identity.key).toBe("Other");
+  });
+
+  it("FE15: one resolution takes one statement from a claimant", function* () {
+    const imports = owner();
+    const claimant = imports.claimant(ORIGIN);
+    const held = answer();
+    const second = answer();
+
+    resolving(imports, "Open", () => {
+      claimant.claim("Open", held, { key: "Open", revision: "1" });
+      // Restating exactly what it already said is a provider installed twice,
+      // not a second statement.
+      expect(refusalOf(() => claimant.claim("Open", held, { key: "Open", revision: "1" }))).toBe(
+        undefined,
+      );
+      // Naming a *different* implementation for the import it has already
+      // answered is. Only one of the two could be what this import resolved to.
       expect(
-        refusalOf(() => losing.claim("Open", late, { key: "Open", revision: "1" })),
+        refusalOf(() => claimant.claim("Open", second, { key: "Open", revision: "1" })),
       ).toBeInstanceOf(AnswerIdentityError);
-      winning.claim("Other", other, { key: "Other", revision: "1" });
     });
 
-    // Neither resolution acquired the late answer, and resolution two kept its
-    // own.
-    expect(imports.identify("Open", late)).toBe(undefined);
-    expect(imports.identify("Other", late)).toBe(undefined);
-    expect(imports.identify("Other", other)?.identity.key).toBe("Other");
-    expect(imports.identify("Open", first)?.identity.origin).toBe("test://winning");
+    expect(imports.identify("Open", held)?.identity).toEqual(IDENTITY);
+    expect(imports.identify("Open", second)).toBe(undefined);
   });
 
   it("FE15: a different object carries no claim, however alike", function* () {

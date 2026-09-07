@@ -493,16 +493,24 @@ function coreIdentity(key: string): RetainedFragmentIdentity {
 }
 
 /**
- * The exact string one of core's own entries was retained as under version 1.
+ * The exact strings core's own entries were retained as under version 1.
  *
- * `${CORE_ORIGIN}#${key}` — no revision, because version 1 had none. These are
- * the literal values released builds committed, and core states them because
- * core owns these entries: the assertion is that the current entry authorizes
- * no more than the one that string named.
+ * Written out one by one, and deliberately not assembled from the origin and
+ * the key. There was never a rule producing these — `pinnedFetch` wrote its
+ * string, `pinnedFileRead` wrote its own, and a host writing a fourth was under
+ * no obligation to resemble either — so a function that built them would be
+ * inventing the rule this module exists to say does not exist. Enumerating them
+ * is also what makes the set reviewable: adding an alias is adding a line, and
+ * every line is an assertion that the current entry authorizes no more than the
+ * one that string named.
+ *
+ * Frozen and read by value at each call site. Nothing derives one, and a fifth
+ * released alias would be a fifth literal here rather than a broader pattern.
  */
-function coreLegacy(key: string): readonly string[] {
-  return [`${CORE_ORIGIN}#${key}`];
-}
+const CORE_V1_FETCH = Object.freeze(["@executablemd/core#Fetch"]);
+const CORE_V1_FILE_READ = Object.freeze(["@executablemd/core#File:read"]);
+const CORE_V1_FILE_WRITE = Object.freeze(["@executablemd/core#File:write"]);
+const CORE_V1_FILE_DELETE = Object.freeze(["@executablemd/core#File.Delete"]);
 
 /**
  * The pinned core `<Fetch>` identity, bounded to exactly these requests.
@@ -526,7 +534,7 @@ export function pinnedFetch(requests: readonly GeneratedRequest[]): GeneratedObs
   return {
     name: "Fetch",
     identity: coreIdentity("Fetch"),
-    legacy: coreLegacy("Fetch"),
+    legacy: CORE_V1_FETCH,
     definition,
     requests: [...requests],
   };
@@ -554,7 +562,7 @@ export function pinnedFileRead(): GeneratedObservation {
   return {
     name: "File",
     identity: coreIdentity("File:read"),
-    legacy: coreLegacy("File:read"),
+    legacy: CORE_V1_FILE_READ,
     definition,
     selfClosing: true,
   };
@@ -623,7 +631,7 @@ export function pinnedFileWrite(): GeneratedMutation {
   return {
     name: "File",
     identity: coreIdentity("File:write"),
-    legacy: coreLegacy("File:write"),
+    legacy: CORE_V1_FILE_WRITE,
     definition,
     form: "paired",
   };
@@ -656,7 +664,7 @@ export function pinnedFileDelete(): GeneratedMutation {
   return {
     name: "File.Delete",
     identity: coreIdentity("File.Delete"),
-    legacy: coreLegacy("File.Delete"),
+    legacy: CORE_V1_FILE_DELETE,
     definition,
     form: "self-closing",
   };

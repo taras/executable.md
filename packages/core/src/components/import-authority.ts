@@ -311,6 +311,16 @@ interface Claim {
   readonly identity: AnswerIdentity;
   /** Which claimant stated it, so a second provider cannot overwrite. */
   readonly claimant: object;
+  /**
+   * Which resolution it was stated during.
+   *
+   * Recorded rather than inferred from whichever window happens to be open when
+   * somebody asks: a claim is an answer to one import, and the occurrence is
+   * half of what identifies that import. Without it a claim made during a later
+   * resolution would be indistinguishable from one made during the resolution it
+   * was supposed to answer.
+   */
+  readonly occurrence: number;
   readonly canonical: ImportedDefinition | undefined;
 }
 
@@ -324,6 +334,11 @@ export const SETTLED_CLAIM =
   "this resolution has settled, so a claim stated now identifies nothing. An answer is " +
   "identified while the import that asked for it is still being decided; a handler that lost, " +
   "or one recording after the fact, is not supplying that answer.";
+
+/** A second, different statement from one claimant about one resolution. */
+export const SPENT_OPPORTUNITY =
+  "this claimant already stated which implementation answers this import, and one import is one " +
+  "implementation. The next resolution offers a fresh opportunity; this one is decided.";
 
 /** One resolution a claim may be stated during. */
 interface ClaimWindow {
@@ -393,6 +408,26 @@ export class CanonicalImports {
   #window: ClaimWindow | undefined;
   /** How many resolutions this owner has opened, so each one is its own. */
   #occurrences = 0;
+  /**
+   * The occurrence in which each claimant last took its claim opportunity.
+   *
+   * What settles is the opportunity, not the claimant. One installation owns
+   * one origin and may legitimately answer several admitted names and the same
+   * name resolved more than once — the provider contract does not ask a host to
+   * install once per component — so spending the claimant permanently would
+   * make a valid multi-name provider fail the moment it answered anything.
+   *
+   * What one resolution offers a claimant is one statement: the import is
+   * deciding one implementation, so a handler that has already said which one
+   * has nothing further to say about *this* import. The next resolution offers
+   * the same claimant a fresh opportunity.
+   *
+   * Keyed by the claimant's own frozen token, which exists nowhere else: there
+   * is no context name, module registry or shared symbol behind this, so
+   * holding a claimant is the only way to reach its opportunity and nothing can
+   * mint one it was not given.
+   */
+  readonly #spent = new WeakMap<object, number>();
 
   /** Begin identifying. Called after teardown is registered. */
   activate(): void {
@@ -495,14 +530,25 @@ export class CanonicalImports {
       }
       return answer;
     }
+    // One statement per claimant per resolution. Restating the same claim above
+    // is not a second statement; naming a *different* object for the import
+    // already decided is, and only one of them could be the answer.
+    if (this.#spent.get(claimant) === open.occurrence) {
+      throw new AnswerIdentityError(SPENT_OPPORTUNITY);
+    }
     // Copied on the way in, so a later edit of the claimed object is visible as
     // the change it is.
     this.#claims.set(answer, {
       name,
       identity,
       claimant,
+      occurrence: open.occurrence,
       canonical: retain(answer),
     });
+    // Spent for this resolution and no other: the next import offers this
+    // claimant a fresh opportunity, which is what lets one installation answer
+    // several admitted names.
+    this.#spent.set(claimant, open.occurrence);
     return answer;
   }
 
@@ -529,6 +575,13 @@ export class CanonicalImports {
     }
     const claim = this.#claims.get(answer);
     if (claim === undefined || claim.name !== name) {
+      return undefined;
+    }
+    // Asked from inside a resolution, the claim has to be that resolution's. A
+    // claim carried over from an earlier import is not an answer to this one,
+    // however well it matches the name.
+    const open = this.#window;
+    if (open !== undefined && claim.occurrence !== open.occurrence) {
       return undefined;
     }
     // A claimed object the chain went on to edit is not the thing that was

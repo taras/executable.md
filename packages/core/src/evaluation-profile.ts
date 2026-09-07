@@ -351,22 +351,24 @@ const CORE_DESCRIPTIONS: Readonly<Record<FragmentCapability, string>> = Object.f
 });
 
 /**
- * The exact string each of core's own entries was retained as under version 1.
+ * The exact strings each of core's own entries was retained as under version 1.
  *
- * Written out rather than assembled, because these are the values a released
- * build actually committed: `${CORE_ORIGIN}#Fetch`, `#File:read`, `#File:write`
- * and `#File.Delete`, with no revision in them at all. Core states them here
- * because core owns those entries and is the party that can assert the current
- * one authorizes no more than the old one did.
+ * Enumerated literally rather than assembled from the origin and the key.
+ * There was never a rule that produced these — a released build wrote each one
+ * where it built the pinned entry — so a template here would be this module
+ * inventing the convention the whole design says does not exist, and a later
+ * change to `CORE_ORIGIN` would silently rewrite what an old journal is
+ * compared against. Core states them because core owns these entries and is the
+ * party that can assert the current one authorizes no more than the old did.
  */
 const CORE_LEGACY: Readonly<Record<FragmentCapability, readonly string[]>> = Object.freeze({
-  "file:read": Object.freeze([`${CORE_ORIGIN}#File:read`]),
-  "file:write": Object.freeze([`${CORE_ORIGIN}#File:write`]),
-  "file:delete": Object.freeze([`${CORE_ORIGIN}#File.Delete`]),
+  "file:read": Object.freeze(["@executablemd/core#File:read"]),
+  "file:write": Object.freeze(["@executablemd/core#File:write"]),
+  "file:delete": Object.freeze(["@executablemd/core#File.Delete"]),
   // Core never pinned a directory entry under version 1; the workflow host did,
   // and states its own alias.
   "directory:ensure": Object.freeze([]),
-  fetch: Object.freeze([`${CORE_ORIGIN}#Fetch`]),
+  fetch: Object.freeze(["@executablemd/core#Fetch"]),
 });
 
 function coreEntry(name: string, key: string, capability: FragmentCapability): CapabilityEntry {
