@@ -13,7 +13,7 @@
   "dependencies": {
     "@effectionx/context-api": "0.6.0",
     "@effectionx/fs": "0.3.0",
-    "@effectionx/node": "0.2.4",
+    "@effectionx/node": "0.2.5",
     "@effectionx/process": "0.8.1",
     "@executablemd/durable-streams": "workspace:*",
     "effection": "4.1.0"
