@@ -2511,7 +2511,6 @@ function* dispatch(
       const authorship = yield* resolveAuthorshipStack(
         { agentProvider: config.agentProvider, defaultAgent: config.defaultAgent },
         sessions,
-        installTerminalGrid,
       );
       if (!authorship.ok) {
         console.error(authorship.error.message);

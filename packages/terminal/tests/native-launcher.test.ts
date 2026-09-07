@@ -28,10 +28,9 @@ import {
   nativeLaunch,
   NativeLauncher,
   NO_TERMINAL,
-  reap,
   reserveTerminal,
 } from "../src/native-launcher.ts";
-import { installForegroundLauncher } from "../src/posix-launcher.ts";
+import { installForegroundLauncher, reap } from "../src/posix-launcher.ts";
 
 const SENTINEL = "SENTINEL-PREPARED-CONTEXT-4b17";
 
