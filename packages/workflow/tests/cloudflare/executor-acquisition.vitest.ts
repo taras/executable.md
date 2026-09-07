@@ -314,6 +314,41 @@ describe("holding an acquisition", () => {
     expect(await admitted(stub)).toBe("admitted");
   });
 
+  it("owns nothing once the runner closes its own end", async () => {
+    const stub = executor();
+    await on(stub, (o) => o.configure([{ kid: keys.kid, jwk: keys.publicJwk }], NOW));
+    const token = await signToken(keys, claims());
+    // Admitted the way a runner is really admitted: an upgrade, answered with
+    // the runner's own end of the socket, on the other side of the object.
+    const upgraded = await stub.fetch("https://executor.invalid/", {
+      headers: {
+        Upgrade: "websocket",
+        "x-run-id": RUN_ID,
+        "x-release": POLICY.release,
+        authorization: `Bearer ${token}`,
+      },
+    });
+    const runner = upgraded.webSocket;
+    expect(upgraded.status).toBe(101);
+    expect(runner).not.toBe(null);
+    runner?.accept();
+    expect(await on(stub, (o) => o.holders())).toBe(1);
+
+    // The runner closes its socket and tells the owner nothing else — all a
+    // client that has given up an acquisition can do. The release has to come
+    // from the platform delivering that close.
+    runner?.close(1000, "done");
+    let holders = await on(stub, (o) => o.holders());
+    for (let attempt = 0; holders !== 0 && attempt < 200; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      holders = await on(stub, (o) => o.holders());
+    }
+
+    expect(holders).toBe(0);
+    // And the replacement admission a retired acquisition depends on succeeds.
+    expect(await admitted(stub)).toBe("admitted");
+  });
+
   it("proves the acquisition before it reads a command", async () => {
     const stub = executor();
     // Nothing is admitted, so even a well-formed command is refused for

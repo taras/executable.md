@@ -80,8 +80,22 @@ export interface Script {
   readonly forkRefuses?: boolean;
   /** Answer the first fork commit by saying its transfer is not here. */
   readonly needsTransfer?: Set<string>;
-  /** Held open until a test releases it, so a call can be caught in flight. */
+  /**
+   * Held open until a test releases it, so a begin can be caught in flight.
+   *
+   * The owner has already decided by the time this is reached: what is caught
+   * is the answer on its way back, which is the only moment an interrupted
+   * mutation is genuinely ambiguous.
+   */
   readonly gate?: { wait(): Operation<void> };
+  /** The same, for a fork's final mutation: decided, and answer in flight. */
+  readonly commitGate?: { wait(): Operation<void> };
+  /** The same, for reading the source — where nothing has been mutated yet. */
+  readonly sourceGate?: { wait(): Operation<void> };
+  /** The same, for offering a staged part. */
+  readonly stageGate?: { wait(): Operation<void> };
+  /** Every execution this owner actually began, as opposed to re-answered. */
+  readonly decided?: string[];
   /** Every run whose source was resolved. */
   readonly sourced?: string[];
   /** Whether a destination already holds this fork, so no source is needed. */
@@ -90,6 +104,15 @@ export interface Script {
   readonly loseAnswer?: Set<string>;
   /** What an owner decided for a command identity, once it has decided. */
   readonly committed?: Map<string, RemoteBegun>;
+  /**
+   * Every identity this host was asked to carry twice on one connection.
+   *
+   * The real client refuses that before the owner sees it, so a provider that
+   * reuses an answered name gets a channel failure instead of a decision. This
+   * host holds the same rule, and records every violation so a test can say
+   * that none happened rather than only that the call came out right.
+   */
+  readonly reused?: string[];
 }
 
 export function record(): WorkflowRunRecord {
@@ -180,19 +203,36 @@ function link(): RemoteWorkspaceLink {
 
 function lifecycle(script: Script): RemoteLifecycleLink {
   let minted = 0;
+  // One connection's own correlation ids. The real client keeps exactly this
+  // set — the ids it is waiting on and the ids it has already settled — and
+  // refuses to send either again, so an identity that has been answered can
+  // never carry another question on this connection.
+  const spoken = new Set<string>();
+  function reused<T>(commandId: string): Result<T> | undefined {
+    if (!spoken.has(commandId)) {
+      spoken.add(commandId);
+      return undefined;
+    }
+    script.reused?.push(commandId);
+    // What `OwnerConnection.ask()` raises for a duplicate id, as the adapter
+    // translates it: the command never reaches an owner, and the caller is
+    // told only that the channel could not carry it.
+    return Err(new WorkflowTransactionError("this run's owner could not be reached."));
+  }
   return {
     // deno-lint-ignore require-yield
     *begin(request: RemoteBeginCommand): Operation<Result<RemoteLifecycleAnswer<RemoteBegun>>> {
+      const again = reused<RemoteLifecycleAnswer<RemoteBegun>>(request.commandId);
+      if (again !== undefined) {
+        return again;
+      }
       script.asked?.push("begin");
       script.commands?.push(request.commandId);
-      if (script.gate !== undefined) {
-        // Caught in flight: the call has been sent and has not been answered.
-        yield* script.gate.wait();
-      }
       script.retrievals?.push(request.retrieval ?? null);
       if (script.loseAnswer?.has(request.commandId) === true) {
         // The owner committed and the answer never arrived.
         script.loseAnswer.delete(request.commandId);
+        script.decided?.push(request.executionId);
         script.committed?.set(request.commandId, begun(request.executionId, script));
         return Err(new WorkflowTransactionError("the connection ended before it answered."));
       }
@@ -205,19 +245,36 @@ function lifecycle(script: Script): RemoteLifecycleLink {
         return Ok({ kind: "refused", refusal: script.begin });
       }
       minted += 1;
-      return Ok({ kind: "performed", value: begun(request.executionId, script) });
+      const decided = begun(request.executionId, script);
+      script.decided?.push(request.executionId);
+      // Decided, and retained under the identity it was asked by, before the
+      // answer starts back. A gate here catches the one moment that matters:
+      // the owner has committed and the caller does not know it yet.
+      script.committed?.set(request.commandId, decided);
+      if (script.gate !== undefined) {
+        yield* script.gate.wait();
+      }
+      return Ok({ kind: "performed", value: decided });
     },
     // deno-lint-ignore require-yield
     *settle(
       commandId: string,
       _completion: DocumentExecutionCompletion,
     ): Operation<Result<RemoteFrontierSnapshot>> {
+      const again = reused<RemoteFrontierSnapshot>(commandId);
+      if (again !== undefined) {
+        return again;
+      }
       script.asked?.push("settle");
       script.commands?.push(commandId);
       return Ok(frontier());
     },
     // deno-lint-ignore require-yield
     *cancel(commandId: string): Operation<Result<RemoteLifecycleAnswer<WorkflowRunRecord>>> {
+      const again = reused<RemoteLifecycleAnswer<WorkflowRunRecord>>(commandId);
+      if (again !== undefined) {
+        return again;
+      }
       script.asked?.push("cancel");
       script.commands?.push(commandId);
       if (script.loseAnswer?.has(commandId) === true) {
@@ -226,11 +283,17 @@ function lifecycle(script: Script): RemoteLifecycleLink {
       }
       return Ok({ kind: "performed", value: record() });
     },
-    // deno-lint-ignore require-yield
     *stageForkPart(commandId: string, part: RemoteForkPart): Operation<Result<void>> {
+      const again = reused<void>(commandId);
+      if (again !== undefined) {
+        return again;
+      }
       script.asked?.push("fork-stage");
       script.staged?.push(part);
       script.parts?.push(commandId);
+      if (script.stageGate !== undefined) {
+        yield* script.stageGate.wait();
+      }
       return Ok(undefined);
     },
     // deno-lint-ignore require-yield
@@ -238,6 +301,10 @@ function lifecycle(script: Script): RemoteLifecycleLink {
     *continueFork(
       continuation: RemoteForkContinuation,
     ): Operation<Result<RemoteLifecycleAnswer<RemoteBegun> | "absent">> {
+      const again = reused<RemoteLifecycleAnswer<RemoteBegun> | "absent">(continuation.commandId);
+      if (again !== undefined) {
+        return again;
+      }
       script.asked?.push("fork-continue");
       script.commands?.push(continuation.commandId);
       const held = script.continues;
@@ -251,6 +318,10 @@ function lifecycle(script: Script): RemoteLifecycleLink {
     *commitFork(
       commit: RemoteForkCommit,
     ): Operation<Result<RemoteLifecycleAnswer<RemoteBegun> | "needs-transfer">> {
+      const again = reused<RemoteLifecycleAnswer<RemoteBegun> | "needs-transfer">(commit.commandId);
+      if (again !== undefined) {
+        return again;
+      }
       script.asked?.push("fork");
       script.commits?.push(commit);
       if (script.forkConflict !== undefined) {
@@ -258,10 +329,26 @@ function lifecycle(script: Script): RemoteLifecycleLink {
       }
       void minted;
       script.commands?.push(commit.commandId);
+      if (script.loseAnswer?.has(commit.commandId) !== true) {
+        // Everything below either re-answers a decision this owner already
+        // made or makes one now. A gate belongs after that, for the same
+        // reason a begin's does.
+        const already = script.committed?.get(commit.commandId);
+        const answering =
+          script.needsTransfer?.has(commit.commandId) === true || script.forkRefuses === true;
+        if (already === undefined && !answering) {
+          script.decided?.push(commit.executionId);
+          script.committed?.set(commit.commandId, begun(commit.executionId, script));
+        }
+        if (script.commitGate !== undefined) {
+          yield* script.commitGate.wait();
+        }
+      }
       if (script.loseAnswer?.has(commit.commandId) === true) {
         script.loseAnswer.delete(commit.commandId);
         // The mutation committed unless this scenario says it never did.
         if (script.needsTransfer?.has(commit.commandId) !== true) {
+          script.decided?.push(commit.executionId);
           script.committed?.set(commit.commandId, begun(commit.executionId, script));
         }
         return Err(new WorkflowTransactionError("the connection ended before it answered."));
@@ -320,8 +407,10 @@ export function installedHost(script: Script): RemoteLifecycleHost {
         *history(): Operation<Result<never>> {
           throw new WorkflowRequestError("this scripted plane answers no history");
         },
-        // deno-lint-ignore require-yield
         *forkSource(): Operation<Result<RemoteForkSource>> {
+          if (script.sourceGate !== undefined) {
+            yield* script.sourceGate.wait();
+          }
           return Ok(held);
         },
       });

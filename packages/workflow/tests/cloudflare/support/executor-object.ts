@@ -22,6 +22,7 @@ import {
   COMMAND_TABLE,
   FORK_TABLE,
   HOLD_TABLE,
+  MUTATION_TABLE,
   STAGING_TABLE,
 } from "../../../src/cloudflare/private-schema.ts";
 import { MARKER_TABLE } from "../../../src/cloudflare/marker.ts";
@@ -347,6 +348,27 @@ export class ExecutorObject extends WorkflowOwnerObject {
    */
   heldExecutions(): Record<string, unknown>[] {
     return this.ctx.storage.sql.exec(`SELECT * FROM ${HOLD_TABLE}`).toArray();
+  }
+
+  /**
+   * Forget which execution one retained decision began.
+   *
+   * The ledger row and the answer it retains are written together, so this is
+   * a store they cannot both be right about: an answer that granted execution
+   * authority beside a row that names no execution to grant.
+   */
+  forgetRecordedExecution(commandId: string): void {
+    this.ctx.storage.sql.exec(
+      `UPDATE ${MUTATION_TABLE} SET execution_id = NULL WHERE command_id = ?`,
+      commandId,
+    );
+  }
+
+  /** What the mutation ledger recorded for one decision. */
+  mutationRow(commandId: string): Record<string, unknown> | undefined {
+    return this.ctx.storage.sql
+      .exec(`SELECT * FROM ${MUTATION_TABLE} WHERE command_id = ?`, commandId)
+      .toArray()[0];
   }
 
   /** The watermarks retained beside this run's copied content. */

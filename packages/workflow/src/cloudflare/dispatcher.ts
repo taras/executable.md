@@ -55,6 +55,7 @@ import {
 import type { OwnerTransaction, OwnerTransactions } from "./owner-transaction.ts";
 import {
   adoptExecution,
+  recordedExecution,
   COMMAND_TABLE,
   initializePrivateSchema,
   MUTATION_TABLE,
@@ -540,16 +541,23 @@ export function dispatchCommand(
           // would mean applying it again.
           throw new Error("private protocol storage holds a malformed result");
         }
-        // The answer was lost, not the fact. If this decision began an
-        // execution and nobody live holds it, it becomes this acquisition's.
-        // If the run moved past it — recovered, settled, or held by somebody
-        // live — the decision is history rather than authority, and handing it
-        // back would hand back a database nobody may settle.
-        // A decision that granted execution authority is only re-observable
-        // once that exact execution is this acquisition's. Anything else — it
-        // was recovered, settled, or somebody live holds it — is history, and
-        // returning it would hand back a database nobody may settle.
-        if (adoptExecution(ctx.storage, held.acquisitionId, command.id) === "stale") {
+        // The answer was lost, not the fact. What the answer *is* decides
+        // what re-observing it means, and the retained answer is the thing
+        // that says so: an answer carrying a begun value grants execution
+        // authority, and a conflict or a lifecycle refusal grants none.
+        if (begunExecution(command, decision) !== null) {
+          // Authority is only re-observable once that exact execution is this
+          // acquisition's. Anything else — it was recovered, settled, held by
+          // somebody live, or the ledger never recorded it at all — is history
+          // rather than authority, and returning it would hand back a database
+          // nobody may settle.
+          if (adoptExecution(ctx.storage, held.acquisitionId, command.id) !== "adopted") {
+            throw new CommandError("stale-journal");
+          }
+        } else if (recordedExecution(ctx.storage, command.id) !== undefined) {
+          // The ledger says this decision began an execution and the decision
+          // itself grants none. They cannot both be right, and neither is
+          // authority to hand back.
           throw new CommandError("stale-journal");
         }
         return decision;

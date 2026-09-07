@@ -243,6 +243,21 @@ export function adoptExecution(
   return "adopted";
 }
 
+/**
+ * Which execution one retained decision began, as the ledger recorded it.
+ *
+ * Read without adopting anything. The mutation row and the answer it retains
+ * have to agree about whether a decision granted execution authority, and
+ * establishing that is not the same act as taking the authority.
+ */
+export function recordedExecution(storage: OwnerStorage, commandId: string): string | undefined {
+  const row = storage.sql
+    .exec(`SELECT execution_id FROM ${MUTATION_TABLE} WHERE command_id = ?`, commandId)
+    .toArray()[0];
+  const recorded = row?.["execution_id"];
+  return typeof recorded === "string" ? recorded : undefined;
+}
+
 /** Which execution this acquisition began, when it has begun one. */
 export function heldExecution(storage: OwnerStorage, acquisitionId: string): string | undefined {
   const row = storage.sql

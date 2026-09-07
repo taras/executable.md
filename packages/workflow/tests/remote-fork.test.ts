@@ -11,7 +11,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { type Operation, scoped } from "effection";
+import { type Operation, scoped, spawn, withResolvers } from "effection";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
 import { WorkflowLifecycle } from "../src/lifecycle/api.ts";
 import type { ExecutorLock } from "../src/lifecycle/api.ts";
@@ -392,12 +392,18 @@ describe("a remote fork's destination", () => {
     expect(outcome.sent).toEqual(["fork"]);
   });
 
-  it("restages the same snapshot when the destination says it needs one", function* () {
+  it("restages under a second transfer's own identity when the destination needs one", function* () {
     const asked: string[] = [];
     const parts: string[] = [];
+    const commits: RemoteForkCommit[] = [];
+    const reused: string[] = [];
+    const decided: string[] = [];
     const script: Script = {
       asked,
       parts,
+      commits,
+      reused,
+      decided,
       loseAnswer: new Set(["command-1:commit"]),
       needsTransfer: new Set(["command-1:commit"]),
       committed: new Map(),
@@ -424,19 +430,270 @@ describe("a remote fork's destination", () => {
     });
 
     expect(outcome.first.ok).toBe(false);
-    expect(outcome.second.ok).toBe(true);
+    expect([
+      outcome.second.ok,
+      outcome.second.ok === false && String(outcome.second.error),
+    ]).toEqual([true, false]);
     // The resend was told its transfer is not there, so the same logical fork
-    // staged the snapshot again and committed once.
-    expect(outcome.sent[0]).toBe("fork");
-    // Each part of one offer is its own command, so no part meets another
-    // part's fingerprint at the owner.
+    // staged the snapshot again and committed. It never asked whether the
+    // destination already holds the fork: the destination just said it holds
+    // nothing and was offered nothing.
+    expect(outcome.sent).toEqual([
+      "fork",
+      "fork-stage",
+      "fork-stage",
+      "fork-stage",
+      "fork-stage",
+      "fork-stage",
+      "fork-stage",
+      "fork",
+    ]);
+    // `needs-transfer` is an answer, so the identity it answered is finished.
+    // Every command of the second transfer carries a name that has never been
+    // answered — which is exactly what the link enforces.
+    expect(commits.map((commit) => commit.commandId)).toEqual([
+      "command-1:commit",
+      "command-1:commit",
+      "command-2:commit",
+    ]);
     expect(new Set(outcome.offered).size).toBe(outcome.offered.length);
-    // And the parts are named by the call and their place in it, so the same
-    // logical fork restages under exactly the identities it used before: a
-    // part the owner already holds is recognized as that part, not as a new
-    // one.
-    expect(outcome.reoffered).toEqual(outcome.offered);
+    expect(new Set(outcome.reoffered).size).toBe(outcome.reoffered.length);
+    for (const offered of outcome.reoffered) {
+      expect(outcome.offered).not.toContain(offered);
+    }
+    expect(reused).toEqual([]);
+    // And exactly one destination execution was ever begun.
+    expect(decided).toHaveLength(1);
+    expect(outcome.second.ok && outcome.second.value.execution.executionId).toBe(decided[0]);
+  });
+
+  it("keeps the fork it was committing when it is cancelled, and commits it once", function* () {
+    const asked: string[] = [];
+    const commits: RemoteForkCommit[] = [];
+    const decided: string[] = [];
+    const retired: string[] = [];
+    const reused: string[] = [];
+    const sourced: string[] = [];
+    const entered = withResolvers<void>();
+    let held = 0;
+    const script: Script = {
+      asked,
+      commits,
+      decided,
+      retired,
+      reused,
+      sourced,
+      committed: new Map(),
+      source: source(),
+      commitGate: {
+        *wait(): Operation<void> {
+          held += 1;
+          if (held > 1) {
+            return;
+          }
+          entered.resolve();
+          yield* withResolvers<void>().operation;
+        },
+      },
+    };
+    const outcome = yield* installed(script, function* (transitions) {
+      yield* scoped(function* () {
+        const lock = yield* acquired(DESTINATION);
+        const sent = yield* spawn(() => transitions.fork(lock, request()));
+        yield* entered.operation;
+        // Interrupted with the destination's decision made and its answer in
+        // flight — the one moment a fork is genuinely ambiguous.
+        yield* sent.halt();
+      });
+      const asking = asked.length;
+      const reads = sourced.length;
+      const second = yield* scoped(function* () {
+        const lock = yield* acquired(DESTINATION);
+        return yield* transitions.fork(lock, request());
+      });
+      return { second, sent: asked.slice(asking), reads: sourced.length - reads };
+    });
+
+    // The interrupted acquisition gave up its connection rather than holding a
+    // run nobody could reach.
+    expect(retired).toEqual([DESTINATION]);
+    // The replacement resent that exact command and nothing else, without
+    // reading the source again.
+    expect(outcome.sent).toEqual(["fork"]);
+    expect(outcome.reads).toBe(0);
+    expect(commits.map((commit) => commit.commandId)).toEqual([
+      "command-1:commit",
+      "command-1:commit",
+    ]);
+    // One fork was committed, and the replacement was handed that one.
+    expect(decided).toHaveLength(1);
+    expect([
+      outcome.second.ok,
+      outcome.second.ok === false && String(outcome.second.error),
+    ]).toEqual([true, false]);
+    expect(outcome.second.ok && outcome.second.value.execution.executionId).toBe(decided[0]);
+    expect(reused).toEqual([]);
+  });
+
+  it("keeps no question when it is cancelled reading the source, and stays usable", function* () {
+    const asked: string[] = [];
+    const commands: string[] = [];
+    const retired: string[] = [];
+    const reused: string[] = [];
+    const entered = withResolvers<void>();
+    let held = 0;
+    const script: Script = {
+      asked,
+      commands,
+      retired,
+      reused,
+      committed: new Map(),
+      source: source(),
+      sourceGate: {
+        *wait(): Operation<void> {
+          held += 1;
+          if (held > 1) {
+            return;
+          }
+          entered.resolve();
+          yield* withResolvers<void>().operation;
+        },
+      },
+    };
+    const outcome = yield* installed(script, function* (transitions) {
+      return yield* scoped(function* () {
+        const lock = yield* acquired(DESTINATION);
+        const sent = yield* spawn(() => transitions.fork(lock, request()));
+        yield* entered.operation;
+        // The continuation was answered and nothing has been mutated. Reading
+        // a source is not a mutation however it is interrupted.
+        yield* sent.halt();
+        const asking = asked.length;
+        // The same acquisition, which was released rather than retired.
+        const again = yield* transitions.fork(lock, request());
+        return { again, sent: asked.slice(asking) };
+      });
+    });
+
+    // Nothing was retired, because nothing was outstanding.
+    expect(retired).toEqual([]);
+    expect([outcome.again.ok, outcome.again.ok === false && String(outcome.again.error)]).toEqual([
+      true,
+      false,
+    ]);
+    // The second call is a new question under a new identity — no ambiguity
+    // was retained for a mutation that never happened — and it asks the
+    // destination the whole thing again.
+    expect(outcome.sent[0]).toBe("fork-continue");
+    expect(commands).toEqual(["command-1:continue", "command-2:continue", "command-2:commit"]);
+    expect(reused).toEqual([]);
+  });
+
+  it("keeps no question when it is cancelled offering the snapshot", function* () {
+    const asked: string[] = [];
+    const commands: string[] = [];
+    const parts: string[] = [];
+    const retired: string[] = [];
+    const reused: string[] = [];
+    const entered = withResolvers<void>();
+    let held = 0;
+    const script: Script = {
+      asked,
+      commands,
+      parts,
+      retired,
+      reused,
+      committed: new Map(),
+      source: source(),
+      stageGate: {
+        *wait(): Operation<void> {
+          held += 1;
+          if (held > 1) {
+            return;
+          }
+          entered.resolve();
+          yield* withResolvers<void>().operation;
+        },
+      },
+    };
+    const outcome = yield* installed(script, function* (transitions) {
+      return yield* scoped(function* () {
+        const lock = yield* acquired(DESTINATION);
+        const sent = yield* spawn(() => transitions.fork(lock, request()));
+        yield* entered.operation;
+        // Offered parts are scratch until a final command claims them. An
+        // offer interrupted halfway has mutated nothing.
+        yield* sent.halt();
+        const asking = asked.length;
+        const again = yield* transitions.fork(lock, request());
+        return { again, sent: asked.slice(asking) };
+      });
+    });
+
+    expect(retired).toEqual([]);
+    expect([outcome.again.ok, outcome.again.ok === false && String(outcome.again.error)]).toEqual([
+      true,
+      false,
+    ]);
+    // A whole second offer, under a second identity: no part and no commit
+    // reaches for a name the first attempt already used.
     expect(outcome.sent.filter((command) => command === "fork-stage")).toHaveLength(6);
-    expect(outcome.sent.at(-1)).toBe("fork");
+    expect(commands.at(-1)).toBe("command-2:commit");
+    expect(new Set(parts).size).toBe(parts.length);
+    expect(reused).toEqual([]);
+  });
+
+  it("resends only the second transfer's own command when its answer is lost", function* () {
+    const asked: string[] = [];
+    const sourced: string[] = [];
+    const reused: string[] = [];
+    const decided: string[] = [];
+    const commits: RemoteForkCommit[] = [];
+    const script: Script = {
+      asked,
+      sourced,
+      reused,
+      decided,
+      commits,
+      // The first transfer's commit is lost and never happened; the second
+      // transfer's commit is lost after the owner made it.
+      loseAnswer: new Set(["command-1:commit", "command-2:commit"]),
+      needsTransfer: new Set(["command-1:commit"]),
+      committed: new Map(),
+      source: source(),
+    };
+    const outcome = yield* installed(script, function* (transitions) {
+      const attempts = [];
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const asking = asked.length;
+        const reads = sourced.length;
+        const attempted = yield* scoped(function* () {
+          const lock = yield* acquired(DESTINATION);
+          return yield* transitions.fork(lock, request());
+        });
+        attempts.push({
+          outcome: attempted,
+          sent: asked.slice(asking),
+          reads: sourced.length - reads,
+        });
+      }
+      return attempts;
+    });
+
+    expect(outcome.map((attempt) => attempt.outcome.ok)).toEqual([false, false, true]);
+    // The third attempt resent one command — the second transfer's own final
+    // command, verbatim — and read no source to build it.
+    expect(outcome[2]?.sent).toEqual(["fork"]);
+    expect(outcome[2]?.reads).toBe(0);
+    expect(commits.map((commit) => commit.commandId)).toEqual([
+      "command-1:commit",
+      "command-1:commit",
+      "command-2:commit",
+      "command-2:commit",
+    ]);
+    // A retry reaches for the identity the second transfer already used rather
+    // than for the answered one, and never for a fresh one.
+    expect(reused).toEqual([]);
+    expect(decided).toHaveLength(1);
   });
 });

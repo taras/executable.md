@@ -409,6 +409,79 @@ describe("a remote run's executor lifecycle", () => {
     expect(outcome.asked).toEqual(["begin"]);
   });
 
+  it("keeps the question a cancelled begin was asking, and lets a replacement finish it", function* () {
+    const asked: string[] = [];
+    const commands: string[] = [];
+    const decided: string[] = [];
+    const retired: string[] = [];
+    const reused: string[] = [];
+    const entered = withResolvers<void>();
+    let held = 0;
+    const script: Script = {
+      asked,
+      commands,
+      decided,
+      retired,
+      reused,
+      committed: new Map(),
+      gate: {
+        *wait(): Operation<void> {
+          held += 1;
+          if (held > 1) {
+            // Only the first answer is caught in flight. The replacement's is
+            // delivered, which is the whole point of taking one.
+            return;
+          }
+          entered.resolve();
+          yield* withResolvers<void>().operation;
+        },
+      },
+    };
+    const outcome = yield* installed(script, function* (transitions) {
+      yield* scoped(function* () {
+        const lock = yield* acquired();
+        const sent = yield* spawn(() =>
+          transitions.begin(lock, { runId: RUN_ID, action: "resume" }),
+        );
+        yield* entered.operation;
+        // Interrupted with the owner's decision made and its answer in flight.
+        yield* sent.halt();
+      });
+      // A replacement acquisition, asking the same question.
+      return yield* scoped(function* () {
+        const lock = yield* acquired();
+        const begun = yield* transitions.begin(lock, { runId: RUN_ID, action: "resume" });
+        if (!begun.ok) {
+          return { begun, settled: undefined, again: undefined };
+        }
+        const settled = yield* transitions.settle(lock, {
+          executionId: begun.value.execution.executionId,
+          status: "completed",
+        });
+        // The same execution cannot be settled twice through this lock.
+        const again = yield* transitions.settle(lock, {
+          executionId: begun.value.execution.executionId,
+          status: "completed",
+        });
+        return { begun, settled, again };
+      });
+    });
+
+    // The interrupted acquisition gave up its connection, and the replacement
+    // asked under the exact identity the interrupted call was asking under.
+    expect(retired).toEqual([RUN_ID]);
+    expect(commands.slice(0, 2)).toEqual(["command-1:begin", "command-1:begin"]);
+    expect(outcome.begun.ok).toBe(true);
+    // One execution was ever begun, and the replacement adopted that one.
+    expect(decided).toEqual(["execution-1"]);
+    expect(outcome.begun.ok && outcome.begun.value.execution.executionId).toBe("execution-1");
+    // It settles exactly once through the lock that adopted it.
+    expect(outcome.settled?.ok).toBe(true);
+    expect(outcome.again?.ok).toBe(false);
+    expect(asked.filter((command) => command === "settle")).toHaveLength(1);
+    expect(reused).toEqual([]);
+  });
+
   it("retires an acquisition cancelled after its command went out", function* () {
     const asked: string[] = [];
     const retired: string[] = [];

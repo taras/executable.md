@@ -399,6 +399,74 @@ describe("a run's lifecycle on its owner", () => {
     expect(settled["outcome"]).toBe("performed");
   });
 
+  it("refuses a retained decision its ledger row no longer says began anything", async () => {
+    const stub = executor();
+    await connected(stub);
+    expect((await started(stub, "command-1", "execution-1"))["outcome"]).toBe("performed");
+
+    // The retained answer grants execution authority and the row beside it
+    // names no execution to grant. They cannot both be right.
+    await on(stub, (owner) => owner.forgetRecordedExecution("command-1"));
+    await on(stub, (owner) => owner.dropConnections());
+    await connected(stub);
+    const retried = await started(stub, "command-1", "execution-1");
+
+    expect(retried).toEqual({
+      id: "command-1",
+      outcome: "refused",
+      refusal: "command:stale-journal",
+    });
+    // Nothing was handed back and nothing was taken: no database authority,
+    // and no hold invented to go with it.
+    expect(await on(stub, (owner) => owner.heldExecutions())).toEqual([]);
+  });
+
+  it("replays a decision that began nothing without granting anything to hold", async () => {
+    const stub = executor();
+    await connected(stub);
+    await started(stub, "command-1", "execution-1");
+    await on(stub, (owner) => owner.dropConnections());
+    await connected(stub);
+    expect(
+      (await ask(stub, { id: "command-2", command: "cancel", runId: RUN_ID }))["outcome"],
+    ).toBe("performed");
+
+    // A begin the run's own state refuses. It is an answer the owner
+    // performed, and it began nothing.
+    await on(stub, (owner) => owner.dropConnections());
+    await connected(stub);
+    const refused = await ask(stub, {
+      id: "command-3",
+      command: "begin",
+      runId: RUN_ID,
+      action: "resume",
+      creation: null,
+      retrieval: null,
+      executionId: "execution-3",
+    });
+    expect(refused["outcome"]).toBe("performed");
+    expect(
+      await on(stub, (owner) => owner.mutationRow("command-3")?.["execution_id"] ?? null),
+    ).toBe(null);
+
+    // Asked again after the answer was lost, it comes back unchanged — and
+    // still without a hold, because there is nothing to hold.
+    await on(stub, (owner) => owner.dropConnections());
+    await connected(stub);
+    const again = await ask(stub, {
+      id: "command-3",
+      command: "begin",
+      runId: RUN_ID,
+      action: "resume",
+      creation: null,
+      retrieval: null,
+      executionId: "execution-3",
+    });
+
+    expect(again).toEqual(refused);
+    expect(await on(stub, (owner) => owner.heldExecutions())).toEqual([]);
+  });
+
   it("refuses a retained decision the run has already moved past", async () => {
     const stub = executor();
     await connected(stub);
