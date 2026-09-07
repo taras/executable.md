@@ -404,8 +404,8 @@ interface RuntimeEntry {
    * Work that has claimed this runtime and has not yet produced a handle.
    *
    * Counted apart from `handles` because the two are true at different times
-   * and both keep the partition alive. An ensure in flight owns no handle yet,
-   * and a partition evicted underneath it would let a concurrent operation
+   * and both keep the partition alive. Before an ensure delivers a handle,
+   * evicting its partition would let a concurrent operation
    * build a second child for the same build while the first is still talking.
    */
   active: number;
@@ -1149,6 +1149,7 @@ function* useAcpxProviderState(
       const options = yield* runtimeBlueprint(build);
       let claimed: RuntimeEntry | undefined;
       let pending: Promise<AcpRuntimeHandle> | undefined;
+      let acquired: ManagedSession | undefined;
       let settled = false;
 
       // Registered before anything is claimed or published, and before the
@@ -1182,15 +1183,21 @@ function* useAcpxProviderState(
           ),
         );
         if (answered === undefined) {
-          releaseReservation(entry);
+          if (acquired === undefined) {
+            releaseReservation(entry);
+          } else {
+            yield* abandonHandle(acquired, "session confirmation did not finish");
+          }
           return;
         }
         // It answered. The handle is this provider's, so it goes into the
         // ledger before it is given up — a close that fails then leaves it
         // owned, the session unquiesced and the partition standing, exactly as
         // a close that fails anywhere else does.
-        const late = toSession(answered, entry);
-        adoptHandle(late);
+        const late = acquired ?? toSession(answered, entry);
+        if (acquired === undefined) {
+          adoptHandle(late);
+        }
         yield* abandonHandle(late, "cancelled before the session was established");
       });
 
@@ -1200,7 +1207,20 @@ function* useAcpxProviderState(
       // publication and the claim that keeps it alive.
       const entry = electRuntime(partition, options);
       claimed = entry;
-      pending = entry.runtime.ensureSession(input);
+      pending = entry.runtime.ensureSession(
+        input.expectedAgentSessionId === undefined
+          ? input
+          : {
+              ...input,
+              onHandle(handle) {
+                if (acquired !== undefined) {
+                  throw new Error("a session confirmation acquired more than one handle");
+                }
+                acquired = toSession(handle, entry);
+                adoptHandle(acquired);
+              },
+            },
+      );
 
       let handle: AcpRuntimeHandle;
       try {
@@ -1210,11 +1230,17 @@ function* useAcpxProviderState(
         // partition this one is no longer standing on. The cleanup above would
         // reach the same answer; this reaches it now.
         settled = true;
-        releaseReservation(entry);
+        if (acquired === undefined) {
+          releaseReservation(entry);
+        } else {
+          yield* abandonHandle(acquired, "session confirmation refused");
+        }
         throw error;
       }
-      const session = toSession(handle, entry);
-      adoptHandle(session);
+      const session = acquired ?? toSession(handle, entry);
+      if (acquired === undefined) {
+        adoptHandle(session);
+      }
       settled = true;
       return session;
     });
@@ -1447,6 +1473,7 @@ function* useAcpxProviderState(
      */
     build?: BoundBuild;
     attachment?: { resumeSessionId: string };
+    expectedAgentSessionId?: string;
     /** The placement's state, as the caller resolved it. */
     state: "pending" | "established";
     /**
@@ -1467,6 +1494,42 @@ function* useAcpxProviderState(
     intent: EnsureIntent,
   ): Operation<ManagedSession> {
     if (prepared.kind === "existing") {
+      if (intent.expectedAgentSessionId !== undefined) {
+        try {
+          yield* scoped(function* () {
+            let pending: Promise<AcpRuntimeHandle> | undefined;
+            yield* ensure(function* () {
+              if (pending !== undefined) {
+                yield* until(
+                  pending.then(
+                    () => undefined,
+                    () => undefined,
+                  ),
+                );
+              }
+            });
+            pending = prepared.entry.runtime.runtime.ensureSession({
+              sessionKey: prepared.sessionKey,
+              agent: agentName,
+              mode: "persistent",
+              cwd: prepared.entry.cwd,
+              expectedAgentSessionId: intent.expectedAgentSessionId,
+              // This entry already owns the runtime handle the confirmation uses.
+              onHandle: () => undefined,
+            });
+            yield* until(pending);
+          });
+        } catch {
+          yield* abandonHandle(prepared.entry, "session confirmation refused");
+          if (!holding(prepared.sessionKey)) {
+            detachPlacement(prepared.sessionKey, prepared.entry);
+          }
+          throw new AttachmentRefused({
+            class: "identity-unavailable",
+            message: "the provider did not confirm this session's retained identity",
+          });
+        }
+      }
       return prepared.entry;
     }
     const attachment = intent.attachment;
@@ -1488,6 +1551,9 @@ function* useAcpxProviderState(
           agent: agentName,
           mode: "persistent",
           cwd: prepared.placement.cwd,
+          ...(intent.expectedAgentSessionId === undefined
+            ? {}
+            : { expectedAgentSessionId: intent.expectedAgentSessionId }),
           ...(attachment === undefined ? {} : { resumeSessionId: attachment.resumeSessionId }),
           ...(newSessionOptions === undefined ? {} : { sessionOptions: newSessionOptions }),
           ...(intent.materialization === true
@@ -1516,7 +1582,7 @@ function* useAcpxProviderState(
         },
       );
     } catch (error) {
-      if (attachment === undefined) {
+      if (attachment === undefined && intent.expectedAgentSessionId === undefined) {
         throw error;
       }
       // An exact resume that the provider could not perform: it has no such
@@ -3952,6 +4018,12 @@ function* useAcpxProviderState(
       prepared.sessionKey,
       "session",
       function* (ownership) {
+        yield* ensure(() => {
+          if (!holding(prepared.sessionKey)) {
+            ownership.quiesced();
+          }
+        });
+        yield* ensure(() => releaseHandle(prepared.sessionKey));
         // An established session, reattached eagerly: its route and its durable
         // identity both exist, so validating them here is what makes a
         // mismatched or missing history refusable before any turn. A failed
@@ -3966,19 +4038,16 @@ function* useAcpxProviderState(
             const entry = yield* ensureFromPrepared(agentName, prepared, {
               ...(construction === undefined ? {} : { build: construction.build }),
               ...(resumeSessionId === undefined ? {} : { attachment: { resumeSessionId } }),
+              ...(construction?.expectedAgentSessionId === undefined
+                ? {}
+                : { expectedAgentSessionId: construction.expectedAgentSessionId }),
               state,
             });
             return entry.session;
           }),
         );
-        // Establishing a session is not owning one. The handle is released
-        // here, so nothing this provider holds afterwards is a second owner of
-        // a session a native UI may take — the next operation reattaches under
-        // its own acquisition.
-        yield* releaseHandle(prepared.sessionKey);
-        if (!holding(prepared.sessionKey)) {
-          ownership.quiesced();
-        }
+        // The owning scope releases this handle before returning the Session,
+        // so a later native UI never shares it with this confirmation.
         return session;
       },
     );

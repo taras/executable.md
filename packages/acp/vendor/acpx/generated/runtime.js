@@ -849,6 +849,12 @@ var AcpRuntimeManager = class {
 		const cwd = path.resolve(input.cwd?.trim() || this.options.cwd);
 		const agentCommand = this.options.agentRegistry.resolve(input.agent);
 		const existing = await this.options.sessionStore.load(input.sessionKey);
+		if (input.expectedAgentSessionId !== void 0) {
+			if (!existing || sessionMaterializationPending(existing) || existing.agentSessionId !== input.expectedAgentSessionId || !shouldReuseExistingRecord(existing, { cwd, agentCommand, resumeSessionId: input.resumeSessionId })) {
+				throw Object.assign(new Error("the retained native identity is unavailable for confirmation"), { code: "identity-unavailable" });
+			}
+			return await this.confirmExpectedAgentSessionId(input, structuredClone(existing));
+		}
 		// A pending materialization is occupancy, not a conversation: reusing it
 		// would resume an arrangement no backend ever accepted.
 		if (input.mode === "persistent" && existing && !sessionMaterializationPending(existing) && shouldReuseExistingRecord(existing, {
@@ -887,6 +893,23 @@ var AcpRuntimeManager = class {
 			return record;
 		} finally {
 			if (!keepClientOpen) await client.close();
+		}
+	}
+	async confirmExpectedAgentSessionId(input, record) {
+		input.onExpectedAgentSessionRecord?.(record);
+		const client = this.pendingPersistentClients.get(record.acpxRecordId) ?? this.createTurnClient(record);
+		this.pendingPersistentClients.set(record.acpxRecordId, client);
+		try {
+			await connectAndLoadSession({
+				client, record, expectedAgentSessionId: input.expectedAgentSessionId,
+				resumePolicy: "same-session-only", timeoutMs: this.options.timeoutMs
+			});
+			await this.options.sessionStore.save(record);
+			return record;
+		} catch (error) {
+			// With an expectedAgentSessionId observer the owner retains the handle on refusal.
+			if (input.onExpectedAgentSessionRecord === void 0) await this.closePendingPersistentClient(record.acpxRecordId);
+			throw error;
 		}
 	}
 	async createAndSaveRuntimeRecord(params) {
@@ -1670,6 +1693,7 @@ var AcpxRuntime = class {
 		if (!sessionName) throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
 		const agent = input.agent.trim();
 		if (!agent) throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP agent id is required.");
+		let expectedAgentSessionHandle;
 		const record = await (await this.getManager()).ensureSession({
 			sessionKey: sessionName,
 			agent,
@@ -1677,8 +1701,18 @@ var AcpxRuntime = class {
 			cwd: input.cwd ?? this.options.cwd,
 			resumeSessionId: input.resumeSessionId,
 			sessionOptions: input.sessionOptions,
-			materialization: input.materialization
+			materialization: input.materialization,
+			expectedAgentSessionId: input.expectedAgentSessionId,
+			onExpectedAgentSessionRecord: input.onHandle === void 0 ? void 0 : (record) => {
+				expectedAgentSessionHandle = this.createExpectedAgentSessionIdHandle(input, record);
+				input.onHandle(expectedAgentSessionHandle);
+			}
 		});
+		return expectedAgentSessionHandle ?? this.createExpectedAgentSessionIdHandle(input, record);
+	}
+	createExpectedAgentSessionIdHandle(input, record) {
+		const sessionName = input.sessionKey.trim();
+		const agent = input.agent.trim();
 		const handle = {
 			sessionKey: input.sessionKey,
 			backend: ACPX_BACKEND_ID,

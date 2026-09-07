@@ -24,6 +24,10 @@ type AcpRuntimeEnsureInput = {
   sessionKey: string;
   agent: string;
   mode: AcpRuntimeSessionMode;
+  /** Confirm this canonical identity through live resume/load before returning. */
+  expectedAgentSessionId?: string;
+  /** Own the handle before expectedAgentSessionId reconnect can open a child or refuse. */
+  onHandle?: (handle: AcpRuntimeHandle) => void;
   resumeSessionId?: string;
   cwd?: string;
   /**
@@ -330,10 +334,13 @@ declare class AcpRuntimeManager {
     sessionKey: string;
     agent: string;
     mode: "persistent" | "oneshot";
+    expectedAgentSessionId?: string;
+    onExpectedAgentSessionRecord?: (record: SessionRecord) => void;
     cwd?: string;
     resumeSessionId?: string;
     sessionOptions?: SessionAgentOptions;
   }): Promise<SessionRecord>;
+  private confirmExpectedAgentSessionId;
   private createAndSaveRuntimeRecord;
   private keepPersistentClient;
   startTurn(input: {
@@ -437,6 +444,7 @@ declare class AcpxRuntime implements AcpxRuntimeLike {
   private healthy;
   private manager;
   private managerPromise;
+  private createExpectedAgentSessionIdHandle;
   constructor(options: AcpRuntimeOptions, testOptions?: {
     managerFactory?: (options: AcpRuntimeOptions) => AcpRuntimeManager;
     probeRunner?: (options: AcpRuntimeOptions) => Promise<{
