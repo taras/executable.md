@@ -55,6 +55,13 @@ import type { ComponentDocumentation } from "./components/documentation.ts";
 import type { SyntaxReference } from "./syntax-reference.ts";
 import type { CapturedProfile } from "./evaluation-profile.ts";
 import type {
+  EvaluationCaptureOperation,
+  EvaluationCaptureSession,
+} from "./evaluation-composition.ts";
+import { captureEvaluationBounds } from "./evaluation-result.ts";
+import type { EvaluationBounds } from "./evaluation-result.ts";
+import type { EvaluationConfiguration } from "./evaluation-records.ts";
+import type {
   FunctionComponent,
   FunctionComponentDefinition,
   Json,
@@ -128,6 +135,7 @@ export class ComponentInvocationError extends Error {
  */
 export interface IdentityClaimant {
   (invocation: ComponentInvocation): Operation<string>;
+  prepareEvaluation?(bounds: EvaluationBounds): EvaluationCaptureOperation;
 }
 
 /**
@@ -203,6 +211,7 @@ export type ProjectProtectedContent = (syntax: SyntaxReference) => Operation<str
  * the private authority it is already holding.
  */
 export interface ProtectedSite {
+  readonly generated?: boolean;
   /**
    * The syntax reference in scope where the element was written.
    *
@@ -218,6 +227,7 @@ export interface ProtectedSite {
    * unrestricted one.
    */
   readonly evaluation: CapturedProfile | undefined;
+  readonly capture?: EvaluationCaptureSession;
   /** How this body renders its own paired content, when it has any. */
   readonly projectContent: ProjectProtectedContent | undefined;
   /** Derive a child route from this site's exact admitted implementations. */
@@ -422,6 +432,9 @@ export interface ImportSelection {
 /** What the engine holds for one invocation: the value, and the end of it. */
 export interface IssuedInvocation {
   readonly invocation: ComponentInvocation;
+  bindEvaluation(
+    project: (bounds: EvaluationBounds) => ReturnType<EvaluationCaptureOperation>,
+  ): void;
   /**
    * Enter one projection of this invocation's own content; the answer ends it.
    *
@@ -455,6 +468,7 @@ interface Issuance {
   live: boolean;
   spent: boolean;
   projecting: number;
+  evaluation?: (bounds: EvaluationBounds) => ReturnType<EvaluationCaptureOperation>;
 }
 
 let stateOf: (value: unknown) => Issuance | undefined;
@@ -836,6 +850,12 @@ export function issueInvocation(
   };
   return {
     invocation: new EngineInvocation(issuance),
+    bindEvaluation(project): void {
+      if (issuance.evaluation !== undefined || !issuance.live) {
+        throw new ComponentInvocationError("The evaluation projection is already bound or closed.");
+      }
+      issuance.evaluation = project;
+    },
     projecting(): () => void {
       issuance.projecting += 1;
       let released = false;
@@ -851,12 +871,14 @@ export function issueInvocation(
     },
     close(): void {
       issuance.live = false;
+      issuance.evaluation = undefined;
     },
   };
 }
 
 /** One domain, and the claimant that is the only way to spend it. */
 interface Minted {
+  evaluationConfiguration(): EvaluationConfiguration | undefined;
   /** The implementation this execution built for it, by identity. */
   implementation?: FunctionComponent;
   readonly domain: IdentityDomain;
@@ -868,13 +890,19 @@ interface Minted {
 
 function mintDomain(component: string): Minted {
   let active = false;
+  let preparing = true;
+  let prepared: EvaluationBounds | undefined;
   const domain: IdentityDomain = Object.freeze({ component });
-  return {
+  const minted: Minted = {
+    evaluationConfiguration: () =>
+      prepared === undefined ? undefined : { owner: component, bounds: prepared },
     domain,
     activate: () => {
+      preparing = false;
       active = true;
     },
     revoke: () => {
+      preparing = false;
       active = false;
     },
     *claim(invocation: ComponentInvocation): Operation<string> {
@@ -925,6 +953,28 @@ function mintDomain(component: string): Minted {
       return issuance.id;
     },
   };
+  minted.claim.prepareEvaluation = (bounds) => {
+    if (!preparing || prepared !== undefined) {
+      throw new ComponentInvocationError(
+        "Evaluation composition is prepared once, before installation.",
+      );
+    }
+    const captured = captureEvaluationBounds(bounds);
+    prepared = captured;
+    return function* (invocation) {
+      yield* minted.claim(invocation);
+      const issuance = stateOf(invocation);
+      const project = issuance?.evaluation;
+      if (project === undefined) {
+        throw new ComponentInvocationError(
+          "This invocation has no canonical evaluation projection.",
+        );
+      }
+      return yield* project(captured);
+    };
+  };
+  Object.freeze(minted.claim);
+  return minted;
 }
 
 /**
@@ -1018,6 +1068,7 @@ export interface IdentityRegistration extends ComponentDocumentation {
 
 /** Every domain one execution minted, and how the engine reaches them. */
 export interface IdentityInstallation {
+  evaluationConfigurations(): readonly EvaluationConfiguration[];
   readonly identities: InvocationIdentities;
   /** The registrations to make, already built from their factories. */
   readonly registrations: readonly IdentityRegistration[];
@@ -1149,6 +1200,11 @@ export function installIdentities(
   const frames: { asked: string; selected: Minted | undefined; count: number }[] = [];
 
   return {
+    evaluationConfigurations: () =>
+      [...minted.values()].flatMap((domain) => {
+        const configured = domain.evaluationConfiguration();
+        return configured === undefined ? [] : [configured];
+      }),
     identities: {
       beginImport(asked: string): ImportSelection {
         const frame = { asked, selected: undefined as Minted | undefined, count: 0 };

@@ -99,7 +99,7 @@ export default printErrors(function* (props: Record<string, Json>): Operation<st
  * a `..` further along — `docs/../*.md` — is a path the search never generates,
  * so it matches nothing for the ordinary reason and needs no special refusal.
  */
-function patterns(prop: string, value: Json | undefined): string[] {
+export function patterns(prop: string, value: Json | undefined): string[] {
   if (!Array.isArray(value)) {
     return [];
   }

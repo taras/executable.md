@@ -1967,7 +1967,8 @@ exercised was whatever the document, a repository component or middleware had
 installed by then. A profile now states a *capability* rather than a definition:
 canonical capture reads each of the host's methods off once, binds it behind a
 revocation the execution owns, and closes core's own body over the result. So a
-fragment reaches five filesystem operations and one transport — not the rest of
+fragment reaches the captured filesystem operations, including glob search,
+and one transport — not the rest of
 the host's provider, not `API.Files`, `API.Fetch` or `API.Env`, and not for
 longer than the execution that captured them. A directory an admitted fragment
 creates scopes its content through the evaluation's own cursor rather than the
@@ -2074,7 +2075,7 @@ Generated XMD is untrusted input. The evaluator preflights the complete fragment
 before its first effect and admits only explicitly allowed, already-resolved
 component identities. It refuses eval and exec blocks, imports, native
 execution, arbitrary JavaScript expressions and interpolation that reads a
-binding. Under the #762 amendment, ordinary `as` capture is admitted for selected
+binding. Ordinary `as` capture is admitted for selected
 read components, remains fragment-local, and does not grant expression access
 to the captured value. It retains the exact filtered generated source for
 replay, history and deliberate training ingestion. An incomplete evaluation can
@@ -2256,6 +2257,83 @@ have run.
 Mutation-proposal admission and workflow-bundled Markdown component admission
 remain unbuilt. Directory registration is not among them: a workflow Agent is
 given no directory to register.
+
+### Bounded evaluation composition
+
+The trusted `@executablemd/core/host` surface exports `boundedEvaluation`.
+An identity-component factory prepares it once with its execution-issued
+claimant and a frozen, closed `{ durationMs, resultBytes }` record. Both members
+are safe integers; duration is positive and the byte ceiling is nonnegative.
+Missing members, accessors, mutable records, invalid numbers and repeated or
+late preparation refuse before candidate work. Limits belong to this operation,
+not to an evaluation profile or `<Evaluate>` props. An ordinary invocation
+without this composition remains unbounded.
+
+The returned operation consumes its own genuine invocation once and projects
+its content through canonical core's private projection. Exactly one ordinary,
+read-only `<Evaluate>` completes the capture. Neither public content middleware
+nor an operation supplied by another loaded copy can author that completion.
+The public helper routes through the genuine claimant; it does not mint one.
+
+Durable-streams owns a staged child coroutine, its independent replay position,
+and ordered publication. Its root delivers a factory directly to canonical
+execution, never through context. Core binds a one-use transfer to the current
+invocation's actual content-projection scope before Evaluate starts. The caller
+supplies no context, stream, cursor or coroutine ID. Canonical generated
+invocations inherit that child owner, while ordinary projections keep their
+existing ownership. The stage and its protected routes close on success,
+refusal, cancellation and cleanup failure.
+
+The deadline owns the live projection with Effection structured cancellation.
+It covers evaluation and normal teardown; expiry stops the work and waits for
+teardown, even when cleanup finishes after the deadline. A private invocation
+settlement callback reports cleanup failure during cancellation, before a
+recoverable outcome can escape. This is local to the composed projection and
+does not change ordinary execution's failure precedence. Caller cancellation
+remains cancellation. Nested captures cannot extend an enclosing deadline or
+budget.
+
+Capture charges the compact JSON result as read values and rendered chunks
+arrive: `observations` precedes `output`, each observation orders `name` before
+`value`, nested object keys sort lexically and arrays preserve order. JSON
+syntax, escaping and UTF-8 bytes all count. Exactly the selected ceiling is
+accepted; the next byte refuses without output or partial observations. One
+native provider value may materialize before accounting; this is not a universal
+memory or provider-work quota. `encodeEvaluationResult` exposes the same wire
+spelling to trusted callers.
+
+Only acceptance within budget and successful teardown release staged admission
+and read events, in order, followed by the child Close containing the complete
+result. A safe refusal discards provisional read values and retains a normalized,
+source-bound refusal. Publication failure is terminal. A partially published
+accepted flush is retained child history, consumed at that child's replay
+position; it is not a closed result and cannot be disclosed as one.
+
+Execution checks the closed evaluation records before completed-root reuse and
+before public replay middleware can decide anything. Their structural
+fingerprint binds the exact root source and inputs, candidate source, read
+selection, ordered profile identities and forms, protected Syntax identity,
+lexical reference, filesystem scope/policy identity, capture format and bounds.
+Custom symbols providers state an immutable `identity`; captured Files state a
+frozen `{ scope, policy }` `replayIdentity`. These identify authority, not today's
+documentation, file contents or paths. Records contain data only, never providers,
+live references, projection handles or callables.
+
+Completed replay performs fresh installation and identity attestation, then
+restores historical results without repeating fragment bodies, Syntax
+documentation lookups, File reads or Glob traversal. Missing or invalid current
+attestation refuses before those effects. It does not reuse an expired claim
+or refresh information to validate history.
+
+`EvaluationCandidateError` and `EvaluationLimitError` identify the normalized
+candidate and local-bound refusals. `EvaluationStaleError` identifies changed
+authority or malformed retained history. `EvaluationInfrastructureError`
+identifies terminal setup, runtime/provider, persistence and cleanup failures,
+preserving causes. `evaluationFailure` normalizes an encountered failure without
+message matching; a plain `GeneratedXmdError` is not a recoverability marker.
+`evaluationFailureKind` reads the namespaced descriptive classification across
+loaded copies and confers no authority to recover. Public Evaluate still throws;
+the trusted surrounding operation returns an Effection `Result` after settlement.
 
 ## Local Workspace topology
 

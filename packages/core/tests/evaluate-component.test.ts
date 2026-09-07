@@ -23,7 +23,13 @@ import { API } from "@executablemd/runtime";
 import { collect } from "../src/collect.ts";
 import { Component, content } from "../src/component-api.ts";
 import { executeInstalled } from "../host.ts";
-import { directoryEntry, fileDeleteEntry, fileReadEntry, fileWriteEntry } from "../host.ts";
+import {
+  directoryEntry,
+  fileDeleteEntry,
+  fileReadEntry,
+  fileWriteEntry,
+  globReadEntry,
+} from "../host.ts";
 import type { ExecutionInstallation, FragmentEvaluationInput } from "../host.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { retainedSource } from "../src/root-source.ts";
@@ -93,6 +99,95 @@ function syntaxProfile(
 }
 
 describe("protected generated component answers", () => {
+  it("captures Glob, File and protected Syntax together, rather than losing non-rendered reads", function* () {
+    const files = recordedFiles({ "README.md": "overview" });
+    const searches: unknown[] = [];
+    const syntax = syntaxProfile();
+    if (syntax.evaluation === undefined) {
+      throw new Error("expected Syntax profile");
+    }
+    const installation: ExecutionInstallation = {
+      ...syntax,
+      evaluation: {
+        ...syntax.evaluation,
+        read: [globReadEntry(), fileReadEntry(), ...syntax.evaluation.read],
+        files: {
+          ...files,
+          *globFiles(input) {
+            searches.push(input);
+            return Ok(input.include[0] === "empty" ? [] : ["z.md", "a.md", "a.md"]);
+          },
+        },
+      },
+      *install() {
+        yield* API.Files.around({
+          *globFiles() {
+            throw new Error("ambient Glob must not run");
+          },
+        });
+      },
+    };
+    const fragment =
+      '<Glob include={["*.md"]} as="paths" />\n<File path="README.md" as="note" />\n<Glob include={["empty"]} as="emptyPaths" />\n<Syntax names={["File"]} />';
+    const result = yield* run(
+      `---\nreturns:\n  type: object\n---\n<Evaluate text={${JSON.stringify(fragment)}} as="answer" />\n<Return value={answer} />`,
+      [installation],
+    );
+    expect(result).toMatchObject({
+      observations: [
+        { name: "Glob", value: ["a.md", "z.md"] },
+        { name: "File", value: "overview" },
+        { name: "Glob", value: [] },
+        { name: "Syntax" },
+      ],
+    });
+    expect(files.performed).toEqual(["read README.md"]);
+    expect(searches).toEqual([
+      { cwd: "/workspace", include: ["*.md"], exclude: [] },
+      { cwd: "/workspace", include: ["empty"], exclude: [] },
+    ]);
+    expect(JSON.stringify(result)).toContain("Available in this evaluation");
+  });
+
+  it("preflights captures and later prohibited effects before the first captured read", function* () {
+    for (const tail of [
+      '<Glob include={["*"]} />',
+      '<Glob include={["*"]} as="not a binding" />',
+      '<Glob include={["*"]} as="note" />',
+      '<Glob include={["*"]} as={note} />',
+      '<Glob include={[]} as="paths" />',
+      '<Glob include={["../*"]} as="paths" />',
+      '<Glob include={["*"]} exclude={[""]} as="paths" />',
+      '<File path="x">write</File>',
+      "<Agent />",
+      '<Fetch url="https://example.com" />',
+      "```sh exec\necho forbidden\n```",
+    ]) {
+      const files = recordedFiles({ "README.md": "overview" });
+      let searches = 0;
+      const fragment = `<File path="README.md" as="note" />\n${tail}`;
+      const message = yield* refusal(
+        run(`<Evaluate text={${JSON.stringify(fragment)}} />`, [
+          {
+            evaluation: {
+              read: [globReadEntry(), fileReadEntry()],
+              files: {
+                ...files,
+                *globFiles() {
+                  searches++;
+                  return Ok([]);
+                },
+              },
+            },
+          },
+        ]),
+      );
+      expect(message.length).toBeGreaterThan(0);
+      expect(files.performed).toEqual([]);
+      expect(searches).toBe(0);
+    }
+  });
+
   it("routes delegated Syntax through both wrappers and collects its actual read value", function* () {
     const profile = syntaxProfile();
     if (profile.evaluation === undefined) {
@@ -933,7 +1028,7 @@ describe("Tier FE — what the element itself may say", () => {
       ["an executable code block", "```ts exec\\nconsole.log(1)\\n```\\n"],
       ["an expression prop", `<File path={somewhere} />\\n`],
       ["an interpolated binding", `<File path="a.md" />\\n{binding}\\n`],
-      ["an `as` binding", `<File path="a.md" as="kept" />\\n`],
+      ["an invalid `as` binding", `<File path="a.md" as="not a binding" />\\n`],
       ["a structural construct", `<If condition={true}>\\n<File path="a.md" />\\n</If>\\n`],
     ];
     const outcomes: Array<[string, string[]]> = [];

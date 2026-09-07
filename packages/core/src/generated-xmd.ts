@@ -113,6 +113,7 @@ import { scoped } from "effection";
 import type { Operation } from "effection";
 
 import { Component } from "./component-api.ts";
+import { asBindingViolation, capturedBinding, returnCaptureViolation } from "./invocation-rules.ts";
 import { ErrorMode } from "./errors.ts";
 import { CanonicalImports, retain } from "./components/import-authority.ts";
 import type { ImportAuthority, ImportedDefinition } from "./components/import-authority.ts";
@@ -141,9 +142,16 @@ import type {
 } from "./types.ts";
 
 /** A generated fragment this evaluator will not run, or an import it refuses. */
-export class GeneratedXmdError extends Error {
-  override name = "GeneratedXmdError";
-}
+export { GeneratedXmdError } from "./evaluation-errors.ts";
+import {
+  GeneratedXmdError,
+  EvaluationCandidateError,
+  EvaluationStaleError,
+} from "./evaluation-errors.ts";
+import type { EvaluationResultCapture } from "./evaluation-result.ts";
+import type { EvaluationCaptureSession } from "./evaluation-composition.ts";
+import { PropValidationError, validateProps } from "./validate.ts";
+import { GlobError, patterns } from "./components/Glob.ts";
 
 /** The construct classes a fragment can be refused for. */
 type Construct =
@@ -155,6 +163,8 @@ type Construct =
   | "content"
   | "form"
   | "construct"
+  | "props"
+  | "glob"
   | "request";
 
 /**
@@ -168,7 +178,7 @@ const CONSTRUCT: Record<Construct, string> = {
   block: "a generated fragment carries an executable code block, which it may not.",
   expression: "a generated fragment carries an expression prop, which it may not.",
   interpolation: "a generated fragment reads a binding through interpolation, which it may not.",
-  binding: "a generated fragment binds a result with `as`, which it may not.",
+  binding: "a generated fragment has an invalid, duplicate or missing read capture.",
   component: "a generated fragment names a component this host did not admit.",
   content:
     "a generated fragment gives content to a component this host admitted only in its " +
@@ -178,6 +188,8 @@ const CONSTRUCT: Record<Construct, string> = {
     "paired form.",
   construct: "a generated fragment carries a construct this evaluator does not admit.",
   request: "a generated fragment asks for a request this host did not admit.",
+  props: "a generated fragment supplies invalid component props.",
+  glob: "a generated fragment supplies invalid relative glob patterns.",
 };
 
 /**
@@ -901,7 +913,11 @@ class GeneratedImportAuthority implements ImportAuthority {
     return true;
   }
 
-  constructor(named: readonly Planned[], protectedBodies?: ProtectedBodies) {
+  constructor(
+    named: readonly Planned[],
+    protectedBodies?: ProtectedBodies,
+    readonly capture?: EvaluationResultCapture,
+  ) {
     const planned = new Map<string, Planned[]>();
     for (const invocation of named) {
       const queue = planned.get(invocation.name);
@@ -976,10 +992,12 @@ class GeneratedImportAuthority implements ImportAuthority {
     holdForm(planned.form, invocation);
     const value = yield* body;
     if (planned.entry.effect === "read") {
-      this.#values.push({
+      const observation = {
         name: planned.entry.name,
         value: value === undefined ? null : parseJson(value),
-      });
+      };
+      this.capture?.observation(observation);
+      this.#values.push(observation);
     }
     return value;
   }
@@ -1743,6 +1761,7 @@ function* walk(
   table: ReadonlyMap<string, Entry[]>,
   ceilings: ReadonlyMap<string, FetchRequest[]>,
   named: Planned[],
+  captures: Set<string> = new Set(),
 ): Operation<void> {
   for (const segment of segments) {
     switch (segment.type) {
@@ -1763,9 +1782,6 @@ function* walk(
         if (Object.keys(segment.expressions).length > 0) {
           throw new Refusal("expression");
         }
-        if ("as" in segment.props) {
-          throw new Refusal("binding");
-        }
         // How the element was written, read from the scan rather than from
         // anything the run could answer differently later. This is what
         // separates the two `<File>` identities, so it is decided here — once,
@@ -1775,6 +1791,38 @@ function* walk(
         if (entry === undefined) {
           throw new Refusal(form === "paired" ? "content" : "form");
         }
+        const capture = capturedBinding(segment.props.as);
+        if (
+          asBindingViolation(segment.name, segment.props.as) !== undefined ||
+          returnCaptureViolation(segment.name, entry.definition.returns !== undefined, capture) !==
+            undefined ||
+          (capture !== undefined && (entry.effect !== "read" || captures.has(capture)))
+        ) {
+          throw new Refusal("binding");
+        }
+        if (capture !== undefined) {
+          captures.add(capture);
+        }
+        const { as: _as, slot: _slot, ...props } = segment.props;
+        try {
+          yield* validateProps(segment.name, props, entry.definition.props);
+        } catch (error) {
+          if (error instanceof PropValidationError) {
+            throw new Refusal(entry.requests === undefined ? "props" : "request");
+          }
+          throw error;
+        }
+        if (entry.identity.kind === "capability" && entry.identity.key === "Glob:read") {
+          try {
+            patterns("include", props.include);
+            patterns("exclude", props.exclude);
+          } catch (error) {
+            if (error instanceof GlobError) {
+              throw new Refusal("glob");
+            }
+            throw error;
+          }
+        }
         if (entry.requests !== undefined) {
           const ceiling = ceilings.get(identityKey(entry.identity)) ?? [];
           const candidate = yield* admitCandidateRequest(segment.props);
@@ -1783,7 +1831,7 @@ function* walk(
           }
         }
         named.push({ name: entry.name, identity: entry.identity, form, entry });
-        yield* walk(segment.children, table, ceilings, named);
+        yield* walk(segment.children, table, ceilings, named, captures);
         break;
       }
       default: {
@@ -1929,6 +1977,37 @@ function isConstruct(value: string): value is Construct {
   return Object.hasOwn(CONSTRUCT, value);
 }
 
+/** Validate a closed capture's retained admission without expanding its source. */
+export type CapturedAdmissionIdentity = Pick<Policy, "allow" | "allowed" | "requests"> & {
+  readonly workspace: boolean;
+};
+
+export function assertCapturedAdmission(
+  value: unknown,
+  source: string,
+  current: CapturedAdmissionIdentity,
+): void {
+  const admission = readAdmission(parseJson(value));
+  if (admission === undefined || admission.decision !== "admitted" || admission.source !== source) {
+    throw new EvaluationStaleError(UNREADABLE);
+  }
+  if (
+    current.workspace !== (admission.policy.workspace !== undefined) ||
+    !policyHolds(admission.policy, { ...current, workspace: admission.policy.workspace }) ||
+    admission.named.some(
+      (named) =>
+        !current.allowed.some(
+          (entry) =>
+            entry.name === named.name &&
+            sameIdentity(named.identity, entry) &&
+            entry.forms.includes(named.form),
+        ),
+    )
+  ) {
+    throw new EvaluationStaleError(CEILING);
+  }
+}
+
 /**
  * Expand the admitted fragment through ordinary durable XMD effects.
  *
@@ -1948,12 +2027,16 @@ function expand(
   named: readonly Planned[],
   protectedBodies: ProtectedBodies | undefined,
   syntax: SyntaxReference | undefined,
+  session?: EvaluationCaptureSession,
 ): Operation<GeneratedObservationResult> {
   return scoped(function* () {
+    const capture = session?.capture;
     yield* ErrorMode.set("throw");
-    const authority = new GeneratedImportAuthority(named, protectedBodies);
+    const authority = new GeneratedImportAuthority(named, protectedBodies, capture);
+    const fragmentEnv = { values: {} };
     yield* Component.around(
       {
+        env: () => fragmentEnv,
         // deno-lint-ignore require-yield
         *importComponent([name], _next) {
           return authority.issue(name);
@@ -1961,31 +2044,47 @@ function expand(
       },
       { at: "min" },
     );
-    const expanded = yield* expandSegmentsWithin(
-      segments,
-      {},
-      {},
-      new Set<string>(),
-      createBlockCounter(),
-      undefined,
-      extendPath("", { f: "gen", id }),
-      0,
-      undefined,
-      // No enclosing identity table: protected invocation domains travel only
-      // through the narrowed route. Import and form selection belong to this
-      // fragment, while the reference preserves the admitting site's documentation.
-      {
-        imports: authority,
-        forms: authority.forms,
-        invoke: (fn, invocation, body) => authority.invoke(fn, invocation, body),
-        ...(protectedBodies === undefined ? {} : { protectedBodies }),
-        ...(syntax === undefined ? {} : { syntax }),
-      },
-      // A generated fragment is the engine's own text, so it owns no value body
-      // and a <Return> written into it satisfies no declaration.
-      undefined,
-    );
-    return { observations: authority.values, output: renderSegments(expanded) };
+    const counter = createBlockCounter();
+    const hideSet = new Set<string>();
+    const chunks: string[] = [];
+    const groups = capture === undefined ? [segments] : segments.map((segment) => [segment]);
+    for (let index = 0; index < groups.length; index++) {
+      const expanded = yield* expandSegmentsWithin(
+        groups[index]!,
+        {},
+        {},
+        hideSet,
+        counter,
+        undefined,
+        extendPath("", { f: "gen", id }),
+        index,
+        undefined,
+        // No enclosing identity table: protected invocation domains travel only
+        // through the narrowed route. Import and form selection belong to this
+        // fragment, while the reference preserves the admitting site's documentation.
+        {
+          ...(session === undefined ? {} : { capture: session }),
+          generated: true,
+          imports: authority,
+          forms: authority.forms,
+          invoke: (fn, invocation, body) => authority.invoke(fn, invocation, body),
+          ...(protectedBodies === undefined ? {} : { protectedBodies }),
+          ...(syntax === undefined ? {} : { syntax }),
+        },
+        // A generated fragment is the engine's own text, so it owns no value body
+        // and a <Return> written into it satisfies no declaration.
+        undefined,
+      );
+      const chunk = renderSegments(expanded);
+      if (capture === undefined) {
+        chunks.push(chunk);
+      } else {
+        capture.output(chunk);
+      }
+    }
+    return capture === undefined
+      ? { observations: authority.values, output: chunks.join("") }
+      : capture.result();
   });
 }
 
@@ -2011,6 +2110,7 @@ export function* evaluateProtectedGeneratedXmd(
   request: GeneratedXmdRequest,
   protectedBodies: ProtectedBodies | undefined,
   syntax: SyntaxReference | undefined,
+  session?: EvaluationCaptureSession,
 ): Operation<GeneratedObservationResult> {
   const allow = selection(request.allow);
   const entries = selectedEntries(request, allow);
@@ -2028,10 +2128,10 @@ export function* evaluateProtectedGeneratedXmd(
   );
   const decided = readAdmission(stored);
   if (decided === undefined) {
-    throw new GeneratedXmdError(UNREADABLE);
+    throw new EvaluationStaleError(UNREADABLE);
   }
   if (decided.decision === "refused") {
-    throw new GeneratedXmdError(CONSTRUCT[decided.construct]);
+    throw new EvaluationCandidateError(decided.construct, CONSTRUCT[decided.construct]);
   }
   // Before a single component is invoked or a single request is performed: a
   // retained admission is a grant whose non-root ceilings must be stated
@@ -2040,18 +2140,25 @@ export function* evaluateProtectedGeneratedXmd(
   // a run that lost an admission root, or moved any exact term, is asking for
   // a different grant.
   if (!policyHolds(decided.policy, policy)) {
-    throw new GeneratedXmdError(CEILING);
+    throw new EvaluationStaleError(CEILING);
   }
   // And for the exact text, on the same terms as the ceilings. An admission is
   // a decision about one fragment; a caller now holding a different one is
   // asking for a decision that was never made, so it refuses here rather than
   // quietly expanding the retained copy in its place.
   if (decided.source !== request.source) {
-    throw new GeneratedXmdError(STALE_TEXT);
+    throw new EvaluationStaleError(STALE_TEXT);
   }
 
   // The retained source is what expands, so a continuation runs exactly the
   // bytes this run admitted rather than a caller's copy of them.
   const restored = yield* preflight(decided.source, table, ceilings);
-  return yield* expand(request.id, restored.segments, restored.named, protectedBodies, syntax);
+  return yield* expand(
+    request.id,
+    restored.segments,
+    restored.named,
+    protectedBodies,
+    syntax,
+    session,
+  );
 }

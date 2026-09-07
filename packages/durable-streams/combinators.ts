@@ -34,6 +34,7 @@ import {
   rememberDurabilityFailure,
 } from "./durability.ts";
 import { ephemeral } from "./ephemeral.ts";
+import { allocateChildId, registerStagingOwner, revokeStagingOwner } from "./staging.ts";
 import { EarlyReturnDivergenceError, TerminalDivergenceError } from "./errors.ts";
 import { deserializeError, serializeError } from "./serialize.ts";
 import type { Close, Json, Workflow, WorkflowValue } from "./types.ts";
@@ -103,6 +104,8 @@ function* runDurableChild<T extends WorkflowValue>(
     durability: parentCtx.durability,
   };
   scope.set(DurableContext, childCtx);
+  registerStagingOwner(childCtx, parentCtx);
+  yield* ensure(() => revokeStagingOwner(childCtx));
 
   let closeEvent: Close | undefined;
   let suppressClose = false;
@@ -229,8 +232,7 @@ export function durableSpawn<T extends WorkflowValue>(
       const ctx = scope.expect<DurableContext>(DurableContext);
 
       // Assign deterministic child ID
-      const childIndex = ctx.childCounter++;
-      const childId = `${ctx.coroutineId}.${childIndex}`;
+      const childId = allocateChildId(ctx);
 
       // Spawn the child with durable wrapping
       return yield* spawn(() => runDurableChild(childWorkflow, childId, ctx));
@@ -263,8 +265,7 @@ export function durableAll<T extends WorkflowValue>(
       // Build child Operations, one per workflow. Each gets its own
       // deterministic coroutineId and Close event handling.
       const childOps: Operation<T>[] = workflows.map((workflow) => {
-        const childIndex = ctx.childCounter++;
-        const childId = `${ctx.coroutineId}.${childIndex}`;
+        const childId = allocateChildId(ctx);
 
         return {
           *[Symbol.iterator]() {
@@ -310,8 +311,7 @@ export function durableRace<T extends WorkflowValue>(
       // Build Operations for each child — each gets its own coroutineId
       // and Close event handling via runDurableChild.
       const childOps: Operation<T>[] = workflows.map((workflow) => {
-        const childIndex = ctx.childCounter++;
-        const childId = `${ctx.coroutineId}.${childIndex}`;
+        const childId = allocateChildId(ctx);
 
         return {
           *[Symbol.iterator]() {

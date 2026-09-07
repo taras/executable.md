@@ -11,6 +11,14 @@
  */
 
 import { Err, Ok, ensure, scoped, spawn, withResolvers, until } from "effection";
+import { captureSyntaxProvider } from "./syntax-reference.ts";
+import {
+  admitEvaluationHistory,
+  evaluationEnvironment,
+  persistEvaluationEnvironment,
+} from "./evaluation-records.ts";
+import type { EvaluationEnvironment } from "./evaluation-records.ts";
+import { EvaluationInfrastructureError, EvaluationStaleError } from "./evaluation-errors.ts";
 import type { Operation, Result, Stream } from "effection";
 import { type Api, createApi, type Operations } from "@effectionx/context-api";
 import {
@@ -1175,6 +1183,7 @@ function guardedJournal(
   root: RootDocumentSource,
   coroutineId: CoroutineId,
   admissions: readonly JournalAdmission[],
+  evaluation?: EvaluationEnvironment,
 ): DurableStream {
   const admitting: DurableStream = {
     *readAll(): Operation<DurableEvent[]> {
@@ -1186,6 +1195,7 @@ function guardedJournal(
       const retained: readonly DurableEvent[] = Object.freeze(
         retainEvents(yield* stream.readAll()),
       );
+      admitEvaluationHistory(retained, evaluation);
       // What the trusted host required of this history, on that exact snapshot,
       // in the order it was captured and stopping at the first refusal. Ahead of
       // root-history admission, ReplayGuard, terminal reuse, authored work and
@@ -1193,7 +1203,16 @@ function guardedJournal(
       for (const admission of admissions) {
         yield* admission(retained);
       }
-      admitRootHistory(retained, root, coroutineId);
+      try {
+        admitRootHistory(retained, root, coroutineId);
+      } catch (cause) {
+        if (evaluation !== undefined) {
+          throw new EvaluationStaleError("The bounded evaluation's root identity changed.", {
+            cause,
+          });
+        }
+        throw cause;
+      }
       // The same objects the admissions were held to. `readAll` is declared
       // mutable by the protocol, so this is a fresh array over the identical
       // sealed events rather than a second reading of the backend.
@@ -2564,16 +2583,31 @@ function* executeDocument(
       const evaluation =
         prepared === undefined
           ? undefined
-          : yield* prepared.seal(
-              yield* resolveComponentAnswers(prepared, canonicalImports, {
-                searchPaths: includes,
-                registry: startingRegistry,
-                bundle,
-                declared: declaredImports,
-                guarded: identity.protected,
-              }),
-              identity.protectedBodies.project,
-            );
+          : yield* scoped(function* () {
+              try {
+                return yield* prepared.seal(
+                  yield* resolveComponentAnswers(prepared, canonicalImports, {
+                    searchPaths: includes,
+                    registry: startingRegistry,
+                    bundle,
+                    declared: declaredImports,
+                    guarded: identity.protected,
+                  }),
+                  identity.protectedBodies.project,
+                );
+              } catch (cause) {
+                if (identity.evaluationConfigurations().length === 0) {
+                  throw cause;
+                }
+                if (cause instanceof EvaluationProfileError) {
+                  throw new EvaluationStaleError(
+                    "Current evaluation authority cannot be attested.",
+                    { cause },
+                  );
+                }
+                throw new EvaluationInfrastructureError("setup", cause);
+              }
+            });
 
       const authority: ExpansionAuthority = {
         imports,
@@ -2605,6 +2639,19 @@ function* executeDocument(
         // `<Evaluate>` refuses on that rather than inventing one.
         ...(evaluation === undefined ? {} : { evaluation }),
       };
+      const evaluationState = evaluationEnvironment(
+        identity.evaluationConfigurations(),
+        evaluation,
+        authority.syntax,
+        parseJson({
+          path: root.path,
+          source: root.source ?? null,
+          target: root.target ?? null,
+          props,
+        }),
+      );
+      const staging: { factory?: import("@executablemd/durable-streams").DurableStageFactory } = {};
+      const boundedAuthority = { ...authority, evaluationEnvironment: evaluationState, staging };
 
       // Install the document's runtime Component providers before durableRun
       // so the workflow inherits them: component import, modifier execution,
@@ -2678,7 +2725,7 @@ function* executeDocument(
       const returned = yield* durableRun(
         function* (): Operation<DocumentResult> {
           const issued = issueDocument<DocumentResult>(props, (claimed) =>
-            documentWorkflow(claimed, authority),
+            documentWorkflow(claimed, boundedAuthority),
           );
           try {
             return yield* beforeAnyImport(issued);
@@ -2736,6 +2783,7 @@ function* executeDocument(
             for (const prepare of preparations) {
               yield* prepare();
             }
+            yield* persistEvaluationEnvironment(evaluationState);
             // The terminal for this expansion and no other: a same-name
             // instance whose default core owns, so every public handler still
             // composes while none of them can produce a document.
@@ -2763,7 +2811,10 @@ function* executeDocument(
           }
         },
         {
-          stream: guardedJournal(journal, root, ROOT_COROUTINE, admissions),
+          stream: guardedJournal(journal, root, ROOT_COROUTINE, admissions, evaluationState),
+          staging: (factory) => {
+            staging.factory = factory;
+          },
         },
       );
       // Taken rather than read, so the handoff belongs to the run that made it.
@@ -3334,7 +3385,7 @@ function* invoke(
   const providers = Object.freeze(
     installations.flatMap((installation) => {
       const provider = installation.symbols;
-      return provider === undefined ? [] : [provider];
+      return provider === undefined ? [] : [captureSyntaxProvider(provider)];
     }),
   );
   if (providers.length > 1) {

@@ -108,6 +108,8 @@ import type { IdentityDomain } from "./invocation-identity.ts";
 import { protectedContentLease } from "./protected-content.ts";
 import type { SyntaxReference } from "./syntax-reference.ts";
 import { withInvocation } from "./invocation.ts";
+import { composeEvaluation } from "./evaluation-composition.ts";
+import { EvaluationInfrastructureError } from "./evaluation-errors.ts";
 import type { Invocation } from "./invocation.ts";
 import { ActiveProjection } from "./projection.ts";
 import type { ProjectionHandle, ProjectionRequest } from "./projection.ts";
@@ -263,6 +265,7 @@ function expandChildrenScoped(
 }
 
 interface ProjectionState {
+  stage?: import("@executablemd/durable-streams").DurableStage;
   invocation: Invocation;
   /**
    * Raised for the whole of one projection of this invocation's own content.
@@ -433,7 +436,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       // rendered before stopping. When the caller owns a region, that array is
       // the region itself and the prefix is already where the document needs it.
       const rendered: Segment[] = options.owner ?? [];
-      const task = contentScope.scope.run(function* () {
+      const work = function* () {
         try {
           yield* ErrorMode.set(options.mode);
           if (options.segments.length === 0) {
@@ -463,7 +466,19 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
         } catch (error) {
           outcome.resolve({ segments: rendered, failure: error });
         }
-      });
+      };
+      const stage = state.stage;
+      const task = contentScope.scope.run(
+        stage === undefined
+          ? work
+          : function* () {
+              try {
+                yield* stage.run(work);
+              } catch (error) {
+                outcome.resolve({ segments: rendered, failure: error });
+              }
+            },
+      );
       yield* ensure(() => task.halt());
       const result = yield* outcome.operation;
       if (result.failure !== undefined) {
@@ -531,7 +546,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
         // selection cannot settle them under the invocation's baseline. Held out
         // here so a failure still reports them alongside what rendered.
         const errors: Segment[] = [];
-        const task = contentScope.scope.run(function* () {
+        const work = function* () {
           try {
             yield* ErrorMode.set(mode);
             if (!slotErrorsEmitted && slots.errors.length > 0) {
@@ -572,7 +587,19 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
           } catch (error) {
             outcome.resolve({ segments: [...errors, ...rendered], failure: error });
           }
-        });
+        };
+        const stage = state.stage;
+        const task = contentScope.scope.run(
+          stage === undefined
+            ? work
+            : function* () {
+                try {
+                  yield* stage.run(work);
+                } catch (error) {
+                  outcome.resolve({ segments: [...errors, ...rendered], failure: error });
+                }
+              },
+        );
         yield* ensure(() => task.halt());
         return yield* outcome.operation;
       });
@@ -3068,6 +3095,9 @@ function* expandFunctionComponent(
     // in scope so it can render its invocation content through `yield* content()`.
     try {
       const output: unknown = yield* withInvocation(function* (invocation) {
+        if (authority?.capture !== undefined) {
+          yield* authority.capture.stage.bind();
+        }
         const enclosing = yield* ActiveProjection.get();
         // Minted before the handle, because the handle is what raises it: an
         // invocation names nothing while it is expanding its own content, and
@@ -3135,6 +3165,35 @@ function* expandFunctionComponent(
         // repository component, a registration, a declaration, middleware, a
         // context — obtains or influences it.
         const handle = createProjectionHandle(projectionState);
+        issued.bindEvaluation(function* (bounds) {
+          const environment = authority?.evaluationEnvironment;
+          const staging = authority?.capture?.stage.children ?? authority?.staging?.factory;
+          if (environment === undefined || staging === undefined) {
+            throw new EvaluationInfrastructureError(
+              "setup",
+              new Error("This invocation has no evaluation installation."),
+            );
+          }
+          return yield* composeEvaluation(
+            bounds,
+            function* (capture, stage) {
+              const bounded = createProjectionHandle({
+                ...projectionState,
+                stage,
+                authority: { ...authority, capture },
+              });
+              const outcome = yield* bounded.tryProject({ kind: "children", mode: "throw" });
+              if (outcome.failure !== undefined) {
+                throw outcome.failure;
+              }
+            },
+            environment,
+            name,
+            expansion.id,
+            staging,
+            authority?.capture,
+          );
+        });
         invocation.evalScope.scope.set(ActiveProjection, handle);
 
         yield* ActiveLoop.set(undefined);
@@ -3285,6 +3344,8 @@ function* expandFunctionComponent(
                 guarded(validatedProps, issued.invocation, {
                   syntax: authority?.syntax,
                   evaluation: authority?.evaluation,
+                  capture: authority?.capture,
+                  generated: authority?.generated,
                   projectContent: lease?.project,
                   narrowProtectedBodies: (implementations: Iterable<unknown>) =>
                     active ? authority?.protectedBodies?.narrow(implementations) : undefined,
@@ -3311,7 +3372,7 @@ function* expandFunctionComponent(
           }
           throw new ThrownValue(error);
         }
-      });
+      }, authority?.capture);
       if (asBinding) {
         const parentEnv = yield* env;
         if (!parentEnv) {

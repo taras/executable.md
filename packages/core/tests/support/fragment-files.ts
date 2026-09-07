@@ -34,6 +34,7 @@ export function recordedFiles(
   const entries = new Map(Object.entries(seed));
   const performed: string[] = [];
   return {
+    replayIdentity: Object.freeze({ scope: "test://workspace", policy: "read-write-v1" }),
     performed,
     entries,
     // deno-lint-ignore require-yield

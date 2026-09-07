@@ -279,6 +279,11 @@ export function fileReadEntry(): CapabilityEntry {
   return coreEntry("File", "File:read", "file:read");
 }
 
+/** Core's self-closing, value-returning captured file search. */
+export function globReadEntry(): CapabilityEntry {
+  return coreEntry("Glob", "Glob:read", "file:glob");
+}
+
 /** Core's `<File>…</File>`, admitted to write and not to read. */
 export function fileWriteEntry(): CapabilityEntry {
   return coreEntry("File", "File:write", "file:write");
@@ -342,6 +347,8 @@ export function fetchEntry(requests: readonly GeneratedRequest[]): CapabilityEnt
 
 /** What core's own entries tell an agent they do. */
 const CORE_DESCRIPTIONS: Readonly<Record<FragmentCapability, string>> = Object.freeze({
+  "file:glob":
+    "Find matching files and capture their relative paths. Written self-closing with as.",
   "file:read": "Read one file and render its text. Written self-closing.",
   "file:write": "Write what it renders to one file. Written with content.",
   "file:delete": "Remove one file. Written self-closing.",
@@ -362,6 +369,7 @@ const CORE_DESCRIPTIONS: Readonly<Record<FragmentCapability, string>> = Object.f
  * party that can assert the current one authorizes no more than the old did.
  */
 const CORE_LEGACY: Readonly<Record<FragmentCapability, readonly string[]>> = Object.freeze({
+  "file:glob": Object.freeze([]),
   "file:read": Object.freeze(["@executablemd/core#File:read"]),
   "file:write": Object.freeze(["@executablemd/core#File:write"]),
   "file:delete": Object.freeze(["@executablemd/core#File.Delete"]),
@@ -459,6 +467,7 @@ export interface CapturedEntry {
 
 /** What canonical execution keeps, and what canonical `<Evaluate>` reads. */
 export interface CapturedProfile {
+  readonly filesIdentity?: Readonly<{ scope: string; policy: string }>;
   readonly read: readonly CapturedEntry[];
   readonly write: readonly CapturedEntry[];
   readonly workspace?: FragmentWorkspaceAccess;
@@ -571,6 +580,26 @@ export interface PreparedProfile {
 export function* prepareEvaluationProfile(
   input: FragmentEvaluationInput,
 ): Operation<PreparedProfile> {
+  const statedFilesIdentity = input.files?.replayIdentity;
+  let filesIdentity: Readonly<{ scope: string; policy: string }> | undefined;
+  if (statedFilesIdentity !== undefined) {
+    const descriptors = Object.getOwnPropertyDescriptors(statedFilesIdentity);
+    const scope: unknown = descriptors.scope?.value;
+    const policy: unknown = descriptors.policy?.value;
+    if (
+      !Object.isFrozen(statedFilesIdentity) ||
+      Object.keys(descriptors).sort().join(",") !== "policy,scope" ||
+      typeof scope !== "string" ||
+      scope.length === 0 ||
+      typeof policy !== "string" ||
+      policy.length === 0
+    ) {
+      throw new EvaluationProfileError(
+        "Filesystem replay identity requires immutable scope and policy strings.",
+      );
+    }
+    filesIdentity = Object.freeze({ scope, policy });
+  }
   // Every live operation is read off the host's objects here, once, before a
   // single installation has run. What comes back is bound and revocable, and
   // the host's own objects are never consulted again.
@@ -619,6 +648,7 @@ export function* prepareEvaluationProfile(
       // them a fragment reached would depend on which table admitted it.
       const sealed = sealAnswers(answered, answers, capabilities, project);
       return Object.freeze({
+        ...(filesIdentity === undefined ? {} : { filesIdentity }),
         read: sealEntries(read, sealed),
         write: sealEntries(write, sealed),
         ...(workspace === undefined ? {} : { workspace }),

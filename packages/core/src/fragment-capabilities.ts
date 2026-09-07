@@ -32,7 +32,7 @@
  *
  * ## What is deliberately absent
  *
- * No glob, no temporary directory, no environment, no process, no elicitation
+ * No temporary directory, no environment, no process, no elicitation
  * and no agent. Those are operations the ordinary components have and an
  * admitted fragment does not, and leaving them out here is what makes that
  * true rather than a claim about what a host will remember not to admit.
@@ -42,12 +42,14 @@ import type { Operation, Result } from "effection";
 
 import type { FunctionComponentDefinition, Json, PropsSchema } from "./types.ts";
 import { content } from "./component-api.ts";
-import { ContentError, ProjectedContentError } from "./errors.ts";
+import { ContentError, filesFatalFailure, ProjectedContentError } from "./errors.ts";
 import { getExpansion } from "./expansion.ts";
 import { persistFetch } from "./fetch-journal.ts";
 import { parseResponseRecord } from "./fetch-response.ts";
 import type { FetchResponseRecord } from "./fetch-response.ts";
 import { formDispatcher } from "./invocation-identity.ts";
+import { patterns, props as globProps, returns as globReturns } from "./components/Glob.ts";
+import { EvaluationCandidateError, EvaluationInfrastructureError } from "./evaluation-errors.ts";
 
 /** A refusal an admitted fragment's own operation produced. */
 export class FragmentCapabilityError extends Error {
@@ -81,6 +83,8 @@ export interface FragmentWrite extends FragmentPath {
  * implements, so a host passes its own methods without adapting them.
  */
 export interface FragmentFileAccess {
+  readonly replayIdentity?: Readonly<{ scope: string; policy: string }>;
+  globFiles?(input: FragmentGlob): Operation<Result<string[]>>;
   /** Whether this path is admissible at all. No filesystem access. */
   checkFilePath(input: FragmentPath): Operation<Result<void>>;
   readTextFile(input: FragmentPath): Operation<Result<string>>;
@@ -95,6 +99,13 @@ export interface FragmentFileAccess {
    * the root the run is on rather than the one it started from.
    */
   workingDirectory(): Operation<string>;
+}
+
+/** A captured search under the fragment's working directory. */
+export interface FragmentGlob {
+  readonly cwd: string;
+  readonly include: string[];
+  readonly exclude: string[];
 }
 
 /**
@@ -175,12 +186,17 @@ export function captureCapabilities(input: {
       if (!alive) {
         throw new FragmentCapabilityError(REVOKED_CAPABILITY);
       }
-      return yield* operation(argument);
+      try {
+        return yield* operation(argument);
+      } catch (cause) {
+        throw new EvaluationInfrastructureError("runtime", cause);
+      }
     };
 
   const files = input.files;
   const fetching = input.fetch;
   const directory = files?.workingDirectory.bind(files);
+  const glob = files?.globFiles?.bind(files);
   const cursor: DirectoryCursor = { current: "" };
   return Object.freeze({
     cursor,
@@ -198,6 +214,7 @@ export function captureCapabilities(input: {
       ? {}
       : {
           files: Object.freeze({
+            ...(glob === undefined ? {} : { globFiles: guard(glob) }),
             checkFilePath: guard(files.checkFilePath.bind(files)),
             readTextFile: guard(files.readTextFile.bind(files)),
             writeTextFile: guard(files.writeTextFile.bind(files)),
@@ -244,11 +261,15 @@ const FETCH_PROPS: PropsSchema = {
 
 /** The schema each capability's component declares. */
 export function capabilityProps(capability: FragmentCapability): PropsSchema {
+  if (capability === "file:glob") {
+    return globProps;
+  }
   return capability === "fetch" ? FETCH_PROPS : PATH_PROPS;
 }
 
 /** Which captured operation one admitted entry runs. */
 export type FragmentCapability =
+  | "file:glob"
   | "file:read"
   | "file:write"
   | "file:delete"
@@ -259,6 +280,7 @@ export type FragmentCapability =
 export const CAPABILITY_FORMS: Readonly<
   Record<FragmentCapability, readonly ("self-closing" | "paired")[]>
 > = Object.freeze({
+  "file:glob": ["self-closing"],
   "file:read": ["self-closing"],
   "file:write": ["paired"],
   "file:delete": ["self-closing"],
@@ -319,6 +341,7 @@ export function capabilityDefinition(
       kind: "function",
       name,
       props,
+      ...(selfClosing === "file:glob" ? { returns: globReturns } : {}),
       forms: ["self-closing"],
       fn: formDispatcher({
         forms: "self-closing",
@@ -372,6 +395,50 @@ function body(
     );
   }
   const cursor = capabilities.cursor;
+  if (capability === "file:glob") {
+    const glob = files.globFiles;
+    if (glob === undefined) {
+      throw new FragmentCapabilityError(
+        "an evaluation profile admitted Glob without a captured search operation.",
+      );
+    }
+    return function* (props: Record<string, Json>): Operation<string[]> {
+      const include = patterns("include", props.include);
+      const exclude = patterns("exclude", props.exclude);
+      const found = yield* glob({ cwd: cursor.current, include, exclude });
+      if (typeof found !== "object" || found === null || typeof found.ok !== "boolean") {
+        throw new EvaluationInfrastructureError(
+          "runtime",
+          new Error("The Glob provider returned no Result."),
+        );
+      }
+      if (!found.ok) {
+        if (!(found.error instanceof Error) || filesFatalFailure(found.error) !== undefined) {
+          throw new EvaluationInfrastructureError("runtime", found.error);
+        }
+        throw new EvaluationCandidateError(
+          "glob",
+          "an admitted fragment could not search the working directory.",
+        );
+      }
+      if (
+        !Array.isArray(found.value) ||
+        found.value.some(
+          (path) =>
+            typeof path !== "string" ||
+            path.startsWith("/") ||
+            path.split("/").includes("..") ||
+            /^[A-Za-z]:[\\/]/.test(path),
+        )
+      ) {
+        throw new EvaluationInfrastructureError(
+          "runtime",
+          new Error("The Glob provider returned invalid relative paths."),
+        );
+      }
+      return [...new Set(found.value)].sort();
+    };
+  }
   if (capability === "file:read") {
     return readBody(files, cursor);
   }
@@ -385,8 +452,23 @@ function readBody(files: FragmentFileAccess, cursor: DirectoryCursor) {
   return function* read(props: Record<string, Json>): Operation<string> {
     const requested = String(props.path);
     const text = yield* files.readTextFile({ cwd: cursor.current, path: requested });
+    if (typeof text !== "object" || text === null || typeof text.ok !== "boolean") {
+      throw new EvaluationInfrastructureError(
+        "runtime",
+        new Error("The File provider returned no Result."),
+      );
+    }
     if (!text.ok) {
-      throw new FragmentCapabilityError(refusal(requested, "read"));
+      if (!(text.error instanceof Error) || filesFatalFailure(text.error) !== undefined) {
+        throw new EvaluationInfrastructureError("runtime", text.error);
+      }
+      throw new EvaluationCandidateError("read", "An admitted file could not be read.");
+    }
+    if (typeof text.value !== "string") {
+      throw new EvaluationInfrastructureError(
+        "runtime",
+        new Error("The File provider returned no text."),
+      );
     }
     return text.value;
   };

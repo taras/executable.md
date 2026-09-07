@@ -404,7 +404,11 @@ describe("Tier GX — the complete fragment is read first", () => {
     ["an expression prop", "<Probe count={1 + 1} />\n", "expression prop"],
     ["a text binding read", "<Probe />\n\nthe answer is {answer}\n", "interpolation"],
     ["a frontmatter read", "value {props.token}\n", "interpolation"],
-    ["a result binding", `<Fetch url="${URL_ONE}" as="r" />\n`, "binds a result"],
+    [
+      "an invalid result binding",
+      `<Fetch url="${URL_ONE}" as="not a binding" />\n`,
+      "read capture",
+    ],
     ["an unknown component", "<Unknown />\n", "did not admit"],
     ["a structural construct", "<If test={true}>x</If>\n", "did not admit"],
     ["an unadmitted root component", '<Dir path="/etc" />\n', "did not admit"],

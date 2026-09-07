@@ -13,6 +13,7 @@ import {
   withDurableEventRejectionOccurrence,
 } from "./guard.ts";
 import type { DurableEvent } from "./types.ts";
+import { stageDurableEvent } from "./staging.ts";
 
 interface AppendTurn {
   readonly gate: WithResolvers<void>;
@@ -125,6 +126,10 @@ export function* appendDurableEvent(ctx: DurableContext, event: DurableEvent): O
   const existing = activeDurabilityFailure(ctx);
   if (existing) {
     throw existing;
+  }
+
+  if (stageDurableEvent(ctx, event)) {
+    return;
   }
 
   yield* appendFence(ctx).hold();

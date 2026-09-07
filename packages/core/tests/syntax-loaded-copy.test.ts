@@ -32,7 +32,7 @@ import { ensure, resource, scoped, until } from "effection";
 import type { Operation } from "effection";
 import { rm } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import { DurableContext, InMemoryStream } from "@executablemd/durable-streams";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -41,17 +41,30 @@ import process from "node:process";
 
 import { Component } from "../src/component-api.ts";
 import { collect } from "../src/collect.ts";
-import { executeInstalled } from "../host.ts";
-import type { ExecutionInstallation } from "../host.ts";
+import {
+  boundedEvaluation,
+  evaluationFailureKind,
+  EvaluationLimitError,
+  executeInstalled,
+  fileReadEntry,
+} from "@executablemd/core/host";
+import type { ExecutionInstallation, EvaluationBounds, IdentityClaimant } from "../host.ts";
+import type { EvaluationCaptureOperation } from "../host.ts";
+import { recordedFiles } from "./support/fragment-files.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { SYNTAX_COMPONENT, props as syntaxProps } from "../src/components/Syntax.ts";
 import type { FunctionComponentDefinition } from "../src/types.ts";
 
-const PROTECTION_MODULE = fileURLToPath(new URL("../src/invocation-identity.ts", import.meta.url));
+const PROTECTION_MODULE = fileURLToPath(
+  new URL("./fixtures/evaluation-composition/loaded-host.ts", import.meta.url),
+);
 const REPOSITORY = fileURLToPath(new URL("../../../", import.meta.url));
 
 /** What the bundled copy exposes: its own installation, with its own tables. */
 interface LoadedCopy {
+  boundedEvaluation(claim: IdentityClaimant, bounds: EvaluationBounds): EvaluationCaptureOperation;
+  evaluationFailureKind(value: unknown): string | undefined;
+  EvaluationLimitError: new (limit: "duration" | "result-bytes") => Error;
   installIdentities(
     components: readonly unknown[],
     privateComponents: readonly unknown[],
@@ -171,6 +184,85 @@ function* refusal(operation: Operation<unknown>): Operation<string> {
 }
 
 describe("Tier SYN — a separately loaded protected implementation", () => {
+  it("routes the public composition helper across copies without minting a claim or replacing the stage owner", function* () {
+    const copy = yield* useSeparateCopy();
+    expect(copy.boundedEvaluation).not.toBe(boundedEvaluation);
+    expect(copy.EvaluationLimitError).not.toBe(EvaluationLimitError);
+    expect(copy.evaluationFailureKind(new EvaluationLimitError("duration"))).toBe("limit");
+    expect(evaluationFailureKind(new copy.EvaluationLimitError("result-bytes"))).toBe("limit");
+    expect(copy.evaluationFailureKind(new Error("EvaluationLimitError"))).toBeUndefined();
+    const files = recordedFiles({ x: "captured" });
+    let classified: string | undefined;
+    const output = yield* runRoot(
+      [
+        {
+          evaluation: { read: [fileReadEntry()], files },
+          components: [
+            {
+              name: "Capture",
+              origin: "test://loaded",
+              props: { type: "object" },
+              factory(claim) {
+                const capture = copy.boundedEvaluation(
+                  claim,
+                  Object.freeze({ durationMs: 1000, resultBytes: 65536 }),
+                );
+                return function* (_props, invocation) {
+                  let forged: unknown;
+                  try {
+                    yield* capture({ hasContent: () => true });
+                  } catch (error) {
+                    forged = error;
+                  }
+                  expect(forged).toBeInstanceOf(Error);
+                  const context = yield* DurableContext.get();
+                  if (context === undefined) {
+                    throw new Error("missing durable context");
+                  }
+                  yield* DurableContext.set({
+                    ...context,
+                    coroutineId: "forged",
+                    childCounter: 999,
+                  });
+                  const result = yield* capture(invocation);
+                  if (!result.ok) {
+                    classified = copy.evaluationFailureKind(result.error);
+                    return "refused";
+                  }
+                  return result.value.output;
+                };
+              },
+            },
+          ],
+        },
+      ],
+      "<Capture><Evaluate text={'<File path=\"x\" />'} /></Capture>",
+    );
+    expect(output).toBe("captured");
+    expect(classified).toBeUndefined();
+    expect(files.performed).toEqual(["read x"]);
+    const foreign = copy.installIdentities(
+      [
+        {
+          name: "Capture",
+          origin: "test://foreign",
+          props: { type: "object" },
+          factory(claim: IdentityClaimant) {
+            return copy.boundedEvaluation(
+              claim,
+              Object.freeze({ durationMs: 1000, resultBytes: 65536 }),
+            );
+          },
+        },
+      ],
+      [],
+      [],
+    );
+    yield* ensure(() => foreign.identities.revoke());
+    foreign.activate();
+    expect(foreign.protectedBodies.body(boundedEvaluation)).toBeUndefined();
+  });
+
   it("SYN26: an implementation another copy built answers for nothing here", function* () {
     const copy = yield* useSeparateCopy();
 

@@ -68,6 +68,10 @@ export interface ImportAuthority {
  * middleware can reach it, replace it, or add to it.
  */
 export interface ExpansionAuthority {
+  readonly generated?: boolean;
+  readonly staging?: { factory?: import("@executablemd/durable-streams").DurableStageFactory };
+  readonly evaluationEnvironment?: import("../evaluation-records.ts").EvaluationEnvironment;
+  readonly capture?: import("../evaluation-composition.ts").EvaluationCaptureSession;
   /** What a closed execution may invoke for a name. Absent for an open one. */
   readonly imports?: ImportAuthority;
   /**

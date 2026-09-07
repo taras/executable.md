@@ -154,8 +154,11 @@ function syntax(claim: IdentityClaimant): ProtectedBody {
       throw new Error(NO_REFERENCE_REFUSAL);
     }
     const expansion = yield* getExpansion();
-    return yield* persistSymbols(id, expansion.position, () =>
-      names === undefined ? reference.symbols() : reference.documentation(names),
+    return yield* persistSymbols(
+      id,
+      expansion.position,
+      () => (names === undefined ? reference.symbols() : reference.documentation(names)),
+      site.generated === true,
     );
   };
 }
@@ -193,6 +196,7 @@ function* persistSymbols(
   id: string,
   position: Readonly<SourcePosition> | undefined,
   live: () => Operation<string>,
+  generated = false,
 ): Workflow<string> {
   const stored = yield createDurableOperation<DurableJson>(
     {
@@ -201,9 +205,28 @@ function* persistSymbols(
       ...sourceDescription(position),
     },
     function* (): Operation<DurableJson> {
-      return { symbols: yield* live() };
+      try {
+        return { symbols: yield* live() };
+      } catch (error) {
+        if (generated && error instanceof UnknownComponentError) {
+          return { refusal: "syntax" };
+        }
+        throw error;
+      }
     },
   );
+  if (
+    generated &&
+    typeof stored === "object" &&
+    stored !== null &&
+    Object.keys(stored).join(",") === "refusal" &&
+    Reflect.get(stored, "refusal") === "syntax"
+  ) {
+    throw new EvaluationCandidateError(
+      "syntax",
+      "The requested component documentation is not available.",
+    );
+  }
   const symbols = readSymbols(stored);
   if (symbols === undefined) {
     // A record this version cannot read is the journal no longer describing
@@ -233,3 +256,5 @@ function readSymbols(value: unknown): string | undefined {
   }
   return symbols;
 }
+import { UnknownComponentError } from "../documentation-index.ts";
+import { EvaluationCandidateError } from "../evaluation-errors.ts";

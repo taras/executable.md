@@ -3974,6 +3974,117 @@ admission rather than making it again, and refuses before any effect if the run
 now offers different text, or states ceilings — effect classes, Workspace roots,
 pinned identities, forms or requests — the admission was not granted under.
 
+#### 5.3.3 Bounded complete-result composition
+
+A trusted identity-component factory can prepare
+`boundedEvaluation(claim, Object.freeze({ durationMs, resultBytes }))` from
+`@executablemd/core/host`, then yield the returned operation with the genuine
+invocation it receives. The operation privately projects that invocation's
+content, containing exactly one ordinary read-only `<Evaluate>`, and returns
+Effection's `Result<{ observations, output }>` after settlement. The helper is
+not a component and introduces no XMD syntax. Evaluate's existing props and the
+profile's authority-only meaning are unchanged. Unwrapped Evaluate has no
+implicit deadline or result ceiling.
+
+The bounds are a closed immutable plain record with both own data members:
+`durationMs` is a positive safe integer and `resultBytes` is a nonnegative safe
+integer. Missing or extra members, accessors, mutable inputs and invalid numbers
+refuse at preparation, before fragment effects. Preparation occurs once per
+factory before activation. Canonical execution captures the bounds by value and
+binds them to durable identity; neither later input mutation nor repeated
+preparation changes an active operation.
+
+**Capture includes the whole public result.** The compact JSON spelling orders
+the top-level members `observations`, `output`, each observation's members
+`name`, `value`, and nested object keys lexically ascending. Arrays keep their
+order. JSON syntax and escaping count as encoded UTF-8 bytes, not JavaScript
+code units. `encodeEvaluationResult` produces that spelling. Exactly the
+ceiling succeeds; the next byte refuses. Accounting happens as each rendered
+chunk or read value enters the capture, not after accumulating a complete
+unbounded result. An oversized result supplies neither a prefix nor partial
+observations. A native provider value may materialize before rejection: the
+bound is not a provider-I/O or universal memory quota.
+
+An admitted read can use ordinary `as`; it still contributes its ordered
+`{ name, value }` observation and renders according to ordinary capture rules.
+Whole-fragment preflight validates capture syntax, uniqueness and required
+captures before any read. The fragment starts with no caller bindings, exports
+none, and still cannot interpolate a binding or use executable expressions,
+imports, executable fences or unadmitted control constructs.
+
+`globReadEntry()` admits canonical self-closing Glob through captured Files,
+beside `fileReadEntry()`. The host supplies `globFiles` by value before candidate
+work; no ambient Files handler is a fallback. Glob retains its required
+`include`, optional `exclude`, and required `as`. It contributes sorted,
+deduplicated relative paths as one observation and renders nothing; no matches
+is successful `[]`. Invalid props or patterns anywhere in the fragment refuse
+before an earlier read begins.
+
+**The deadline owns the work.** Measurement begins with the composed operation
+and covers evaluation through normal teardown. Expiry cancels its structured
+work and waits for cleanup before returning the local duration refusal. Cleanup
+may finish after the deadline. Caller cancellation remains terminal, and nested
+work cannot extend an enclosing deadline or byte budget. No detached timer or
+post-hoc elapsed-time test decides the outcome.
+
+**Settlement is typed.** Public Evaluate throws every failure. The trusted
+surrounding operation returns `Err` for an evaluation failure only after cleanup:
+
+| Exported error | Meaning |
+| --- | --- |
+| `EvaluationCandidateError` | Normalized candidate parse, admission, component, form, authority, invalid request or ordinary read refusal; safe correction context, without raw host diagnostics or paths. |
+| `EvaluationLimitError` | A local `duration` or `result-bytes` ceiling. |
+| `EvaluationStaleError` | Current authority cannot be attested, a retained fact changed, or retained evaluation history is malformed. |
+| `EvaluationInfrastructureError` | Terminal `setup`, `runtime` (including provider), `persistence`, or `cleanup` failure, with original causes retained. |
+
+`evaluationFailure` normalizes encountered failures by type, never by message;
+the existing `GeneratedXmdError` base alone implies no recovery. The namespaced
+`evaluationFailureKind` classification also crosses separately loaded copies.
+It describes a failure, not permission to bypass canonical settlement. Cleanup
+failure wins terminally over success, candidate refusal and either local limit.
+Core's private invocation settlement channel makes that failure observable
+during cancellation without changing ordinary execution's failure precedence.
+
+**Durable-streams owns staging; canonical core owns its handoff.** The execution
+receives a child factory directly from durableRun and transfers a one-use stage
+to the actual content-projection scope before Evaluate begins. It is bound to
+the current execution and invocation. No caller-supplied DurableContext,
+stream, replay cursor, coroutine ID, public projection or request field is that
+capability. Middleware and another loaded copy can route or refuse a request,
+but cannot replace its staging owner or produce a canonical completed result.
+Ordinary unwrapped evaluation and ordinary content projection remain unchanged.
+
+The child has its own replay position. Admission and nested read records are
+provisional until the complete result is accepted and teardown succeeds.
+Acceptance publishes them in order before the child's closed result. A safe
+refusal discards provisional read values, including Syntax's internal symbols
+record, and retains only the source/identity-bound normalized refusal. Backend
+publication failure is terminal. A partially published accepted flush remains
+retained child history: it restores at the child's position and supplies no
+completed answer without a closed outcome. All paths close captures, timers,
+tasks, staged ownership and child protected routes.
+
+**History is checked before reuse.** The execution-owned pre-root gate validates
+successful and refused closed records, including completed-root fast paths,
+before public replay middleware. Structural fingerprints bind exact root and
+candidate source, root inputs, selected read authority, ordered admitted
+identities and forms, protected Syntax identity, lexical documentation-reference
+identity, filesystem scope/policy identity, format version and composed bounds.
+An identified custom symbols provider has an immutable own string `identity`;
+captured Files has a frozen closed `replayIdentity` containing nonempty `scope`
+and `policy` strings. Ordinary unbounded hosts need neither new declaration.
+No record contains a live reference, provider, function or protected route.
+
+Completed replay freshly installs and attests current authority, then restores
+the historical result without repeating fragment bodies, Syntax documentation
+lookups, File reads or Glob traversal. Missing or invalid attestation refuses
+before those effects. Attestation does not refresh information, resurrect an
+expired callable or treat today's values as replacements for historical answers.
+Changed bounds, profile identity/form, lexical reference or filesystem identity
+are stale before another fragment read or result reuse. An interrupted read-only
+capture without a closed result may run again, consuming already published child
+history according to its normal replay rules.
+
 ### 5.4 The root document is a component
 
 The entry point treats the root document through the same import
@@ -11128,12 +11239,24 @@ through the captured capability because there is no other way to reach it.
 | FE28 | Source, npm, and compiled symbols report `<Evaluate>` with protected origin and the approved description, and no host bootstrap is needed to make the name available. |
 | FE29 | Each execution accepts one private fragment-evaluation profile; a missing or duplicate profile refuses before paired-content production or fragment effects, and document-controlled state cannot read, replace, or widen it. |
 | FE30 | A trusted nested-run or evaluation-host layering control enters the same declarative package bootstrap through inherited and local layers. The child keeps the package registration and renders the same named documentation as the single-bootstrap control; Evaluate still admits only the identity selected by `allow`. A non-identical owner/component overlap refuses before child root or fragment effects. This receives #765's SYN25l.5 rather than creating a second collector in Evaluate. |
+| FE31 | Unwrapped Evaluate stays unbounded; prepared bounded composition succeeds below its deadline and refuses immutable-input violations before fragment work. |
+| FE32 | One fragment captures ordered Glob, File and protected Syntax results, including empty Glob. Invalid, duplicate or absent required captures and later prohibited effects perform no earlier read. |
+| FE33 | Exact 65,536-byte complete results succeed and byte 65,537 refuses without a prefix, across ASCII, multibyte text, JSON escaping, captured File and Glob values. |
+| FE34 | Deadline cancellation and caller cancellation await delayed cleanup; cleanup failure after success, refusal, overflow or expiry remains terminal. Nested captures cannot extend outer bounds. |
+| FE35 | Closed child and completed-root replay freshly attest authority but repeat no fragment or information read. Changed source, ordered identities, forms, reference, filesystem identity, format or bounds and malformed/missing records refuse before reuse. |
+| FE36 | Refusal drops provisional admission/read values, including oversized Syntax data. Publication failure yields no closed success; a partial accepted flush restores at the child cursor without disclosing an incomplete result. Retained data carries no callable authority. |
+| FE37 | Exported failure types distinguish safe refusals, limits, stale records and infrastructure without message matching. Public helper routing works across loaded copies; forged invocations and substituted public contexts cannot supply canonical completion or staging ownership. |
 
 Each refusal case needs a negative control proving no producer, middleware
 answer, request, file mutation, or other program effect occurred. The
 implementation tiers carrying the elaborated evidence are `GX` for the durable
 protocol, the ceiling table and the profile's entry rules, `CIV` for what a
 provider's stated identity is bound to, and `FT` for `<Fetch>` itself.
+The composed FE31–FE37 journeys run in `evaluation-composition.test.ts` and the
+existing Evaluate and loaded-copy tiers. Durable-streams' `staging.test.ts`
+discriminates independent child replay, delayed settlement, provisional discard,
+one-use transfer and revocation; ordinary structured-concurrency and invocation
+failure tiers retain their existing behavior.
 
 ### Tier SX — The `xmd syntax` command
 

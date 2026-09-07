@@ -118,6 +118,7 @@ export type {
   FragmentCapability,
   FragmentFetchAccess,
   FragmentFileAccess,
+  FragmentGlob,
   FragmentPath,
   FragmentWrite,
 } from "./src/fragment-capabilities.ts";
@@ -146,6 +147,7 @@ export {
   fileDeleteEntry,
   fileReadEntry,
   fileWriteEntry,
+  globReadEntry,
 } from "./src/evaluation-profile.ts";
 /**
  * The symbols a host's profile describes, when they are not the ones the
@@ -290,3 +292,16 @@ export type { AnswerConfiguration, AnswerMatcher } from "./src/answers.ts";
  */
 export { DeclarationScan } from "./src/declaration-scan.ts";
 export type { AnswersPlacement, DeclarationScanner } from "./src/declaration-scan.ts";
+export { boundedEvaluation } from "./src/evaluation-operation.ts";
+export { evaluationFailure } from "./src/evaluation-composition.ts";
+export type { EvaluationCaptureOperation } from "./src/evaluation-composition.ts";
+export type { EvaluationBounds } from "./src/evaluation-result.ts";
+export { encodeEvaluationResult } from "./src/evaluation-result.ts";
+export type { EvaluationFailureKind } from "./src/evaluation-errors.ts";
+export {
+  evaluationFailureKind,
+  EvaluationCandidateError,
+  EvaluationInfrastructureError,
+  EvaluationLimitError,
+  EvaluationStaleError,
+} from "./src/evaluation-errors.ts";

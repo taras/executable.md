@@ -67,6 +67,7 @@
  */
 
 import type { Operation } from "effection";
+import { EvaluationCandidateError } from "../evaluation-errors.ts";
 
 import { getExpansion } from "../expansion.ts";
 import { NO_PROFILE, REVOKED } from "../evaluation-profile.ts";
@@ -199,6 +200,7 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
     invocation: ComponentInvocation,
     site: ProtectedSite,
   ): Operation<unknown> {
+    site.capture?.begin();
     // The engine's own account of how the element was written, not a method on
     // the object this was handed: a wrapper can mint an object carrying
     // `hasContent`, and it cannot mint an issuance.
@@ -215,6 +217,12 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
       throw new ComponentInvocationError(NO_PROFILE);
     }
     const allow = requestedClasses(elementProps.allow) ?? ["read"];
+    if (site.capture !== undefined && allow.includes("write")) {
+      throw new EvaluationCandidateError(
+        "authority",
+        "A staged evaluation capture accepts read-only requests.",
+      );
+    }
     const stated = statedText(elementProps, profile, form);
     const entries = selectedTables(profile, allow);
 
@@ -226,6 +234,7 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
     // the authoring documentation the site already had.
     const narrowedSyntax = narrow(site.syntax, entries);
     const source = stated === undefined ? yield* project(site, narrowedSyntax) : stated;
+    site.capture?.source(source);
 
     // Read after the producer has rendered, and exactly once per occurrence: a
     // producer may itself commit mutations, and the basis this admission is
@@ -258,7 +267,14 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
       entries.admitted.map((entry) => entry.definition.fn),
     );
     try {
-      return answer(yield* evaluateProtectedGeneratedXmd(request, narrowedBodies, narrowedSyntax));
+      const result = yield* evaluateProtectedGeneratedXmd(
+        request,
+        narrowedBodies,
+        narrowedSyntax,
+        site.capture,
+      );
+      site.capture?.complete();
+      return answer(result);
     } finally {
       narrowedBodies?.close();
       leave();

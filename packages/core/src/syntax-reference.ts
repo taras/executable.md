@@ -42,6 +42,8 @@ import type { WorkflowImportAuthority } from "./components/bundle.ts";
 import type { DeclaredMarkdownComponent } from "./components/declared-markdown.ts";
 import type { IdentityComponent } from "./invocation-identity.ts";
 import type { ComponentOrigin, ComponentRegistry } from "./types.ts";
+import { canonicalFingerprint } from "./canonical.ts";
+import { parseJson } from "./json.ts";
 
 /**
  * The symbols in scope for the segments being expanded.
@@ -52,6 +54,7 @@ import type { ComponentOrigin, ComponentRegistry } from "./types.ts";
  * and answer for the vocabulary it is shown.
  */
 export interface SyntaxReference {
+  readonly identity?: string;
   /** The symbols this site describes, rendered as Markdown. */
   symbols(): Operation<string>;
   /**
@@ -96,7 +99,25 @@ export interface SyntaxReference {
  * renders them, so a host cannot make its profile print differently from the
  * way `xmd syntax` prints the same symbols.
  */
-export type SyntaxSymbolsProvider = () => Operation<SyntaxSymbols>;
+export interface SyntaxSymbolsProvider {
+  (): Operation<SyntaxSymbols>;
+  readonly identity?: string;
+}
+
+/** Capture the provider's structural identity without enumerating its symbols. */
+export function captureSyntaxProvider(provider: SyntaxSymbolsProvider): SyntaxSymbolsProvider {
+  const descriptor = Object.getOwnPropertyDescriptor(provider, "identity");
+  const identity: unknown = descriptor?.value;
+  const operation: SyntaxSymbolsProvider = () => provider();
+  return Object.freeze(
+    Object.assign(
+      operation,
+      typeof identity === "string" && identity.length > 0 && descriptor?.writable === false
+        ? { identity }
+        : {},
+    ),
+  );
+}
 
 /** The selection inputs an execution captured, as symbol construction reads them. */
 export interface CapturedSymbolInputs {
@@ -141,10 +162,44 @@ export function rootSyntaxReference(
   // ones the collection boundary captured rather than whatever the caller's
   // objects hold by the time a document asks.
   const captured = snapshotContributions(contributions);
+  const identity =
+    provider !== undefined && provider.identity === undefined
+      ? undefined
+      : canonicalFingerprint(
+          parseJson({
+            provider: provider?.identity ?? null,
+            includes: [...inputs.includes],
+            registry: [...inputs.registry].map(([name, entry]) => ({
+              name,
+              entries: [entry.reserved, entry.default].map((registered) => {
+                if (registered === undefined) {
+                  return null;
+                }
+                const { fn: _fn, ...definition } = registered.definition;
+                return { origin: registered.origin, definition };
+              }),
+            })),
+            components: inputs.components.map(({ factory: _factory, ...component }) => component),
+            declarations: inputs.declarations.map(({ privates, ...declaration }) => ({
+              ...declaration,
+              privates: (privates ?? []).map(({ factory: _factory, ...component }) => component),
+            })),
+            workflow:
+              inputs.workflow === undefined
+                ? null
+                : [...inputs.workflow.names()].map(
+                    (name) => inputs.workflow?.component(name) ?? null,
+                  ),
+            documentation: captured.map((entry) => ({
+              source: entry.source,
+              supplies: [...entry.supplies].sort(),
+            })),
+          }),
+        );
   // No admission at a root: nothing has narrowed what may execute, so the one
   // set of symbols this resolves is both what a document may write and what it
   // may read about.
-  return referencing(current, undefined, captured);
+  return referencing(current, undefined, captured, identity);
 }
 
 /**
@@ -168,8 +223,10 @@ function referencing(
    */
   admitted: SyntaxSymbols | undefined,
   contributions: readonly DocumentationContribution[],
+  identity?: string,
 ): SyntaxReference {
   return {
+    ...(identity === undefined ? {} : { identity }),
     *symbols(): Operation<string> {
       // A narrowed reference reports its admission and asks the enclosing
       // symbols for nothing — the bare form is about what runs.
@@ -187,7 +244,14 @@ function referencing(
       // unchanged. Only what may execute is replaced, so a nested author keeps
       // the documentation they had and every entry reports its availability
       // against the admission.
-      return referencing(authoring, next, contributions);
+      return referencing(
+        authoring,
+        next,
+        contributions,
+        identity === undefined
+          ? undefined
+          : canonicalFingerprint(parseJson({ reference: identity, admitted: next })),
+      );
     },
   };
 }

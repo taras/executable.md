@@ -77,7 +77,13 @@ function asError(cause: unknown): Error {
  * failure and a single `InvocationTeardownError` — each original error stays
  * reachable by identity, which is what `fatalCause()` traverses.
  */
-export function* withInvocation<T>(body: (invocation: Invocation) => Operation<T>): Operation<T> {
+export function* withInvocation<T>(
+  body: (invocation: Invocation) => Operation<T>,
+  settlement?: {
+    cancelling(): boolean;
+    teardown(error: InvocationTeardownError): void;
+  },
+): Operation<T> {
   return yield* scoped(function* () {
     let bodyFailure: Error | undefined;
     const teardownFailures: unknown[] = [];
@@ -96,6 +102,7 @@ export function* withInvocation<T>(body: (invocation: Invocation) => Operation<T
         return;
       }
       const teardown = new InvocationTeardownError(teardownFailures);
+      settlement?.teardown(teardown);
       if (bodyFailure === undefined) {
         throw teardown;
       }
@@ -132,6 +139,11 @@ export function* withInvocation<T>(body: (invocation: Invocation) => Operation<T
       try {
         resultPublished.resolve(yield* body(invocation));
       } catch (error) {
+        // A nested invocation can throw from cancellation cleanup. Re-entering
+        // suspend here would keep its cancelling owner waiting forever.
+        if (settlement?.cancelling()) {
+          throw error;
+        }
         resultPublished.reject(asError(error));
       }
       yield* suspend();
