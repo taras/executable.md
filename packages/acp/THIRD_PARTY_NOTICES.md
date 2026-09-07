@@ -7,15 +7,14 @@ license.
 ## acpx
 
 The ACP runtime under `vendor/acpx/generated` is npm `acpx@0.12.0`, carried in
-source with one local patch. `vendor/acpx/PROVENANCE.md` states the patch, the
+source with local patches. `vendor/acpx/PROVENANCE.md` states each patch, the
 upstream release commit it is taken from, and why it exists. dnt inlines this
 closure into the npm artifact, so the notice belongs with it.
 
-The snapshot is carried by issue #561 and removed by issue #566,
-<https://github.com/taras/executable.md/issues/566>, once a released upstream
-package set provides the same scoped, non-retaining transient agent-environment
-input the patch supplies and passes that issue's stated removal gate. Until then
-the patch is maintained here rather than upstreamed piecemeal.
+The patches supply a transient agent environment (#561), completing-turn
+metadata (#622), backend-accepted materialization (#648), and canonical native
+identity confirmation at reconnect (#755). Their independent upstream removal
+gates are recorded in the provenance; removing one does not remove the others.
 
 - Project: <https://github.com/openclaw/acpx>
 - Copyright (c) 2025 OpenClaw Team

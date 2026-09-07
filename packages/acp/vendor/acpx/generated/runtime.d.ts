@@ -55,6 +55,8 @@ type AcpRuntimeTurnAttachment = {
 };
 type AcpRuntimeTurnInput = {
   handle: AcpRuntimeHandle;
+  /** Live reconnect must confirm this retained canonical identity before a turn. Never persisted. */
+  expectedAgentSessionId?: string;
   text: string;
   attachments?: AcpRuntimeTurnAttachment[];
   mode: AcpRuntimePromptMode;
@@ -336,6 +338,7 @@ declare class AcpRuntimeManager {
   private keepPersistentClient;
   startTurn(input: {
     handle: AcpRuntimeHandle;
+    expectedAgentSessionId?: string;
     text: string;
     attachments?: AcpRuntimeTurnAttachment[];
     mode: AcpRuntimePromptMode;
@@ -368,6 +371,7 @@ declare class AcpRuntimeManager {
   private finalizeRuntimeTurnRecord;
   runTurn(input: {
     handle: AcpRuntimeHandle;
+    expectedAgentSessionId?: string;
     text: string;
     attachments?: AcpRuntimeTurnAttachment[];
     mode: AcpRuntimePromptMode;
