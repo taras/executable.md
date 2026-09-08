@@ -37,7 +37,6 @@ import type {
   GeneratedEffectClass,
   GeneratedMutation,
   GeneratedObservation,
-  GeneratedObservationResult,
   GeneratedRequest,
 } from "@executablemd/core/host";
 import type { SourcePosition } from "@executablemd/core";
@@ -75,12 +74,12 @@ function reads(policy: GeneratedEvaluationPolicy): GeneratedObservation[] {
 
 /**
  * Admit one generated fragment under this run's ceilings and perform what it
- * asks for, answering with what the admitted reads produced.
+ * asks for, answering with the text it rendered.
  *
- * The values rather than the rendering: an admitted `<Fetch>` written without a
- * binding renders nothing at all, and a result taken from the rendered fragment
- * would answer the Agent's question with an empty string. An admitted mutation
- * contributes nothing here — its own durable effect is the account of it.
+ * The fragment decides what its caller receives: a component written with `as`
+ * binds inside the fragment and renders nothing, and one written without `as`
+ * contributes its ordinary output. Nothing is collected on the fragment's
+ * behalf, and a mutation's own durable effect remains the account of it.
  *
  * The root selection is decided before the candidate is read, because a run
  * that cannot say which retained root an effect addresses has no ceiling to
@@ -92,7 +91,7 @@ export function* evaluateGeneratedFragment(
   source: string,
   policy: GeneratedEvaluationPolicy,
   position?: Readonly<SourcePosition>,
-): Operation<GeneratedObservationResult> {
+): Operation<string> {
   const retained = new Set(policy.workspaceRoots);
   if (retained.size !== policy.workspaceRoots.length) {
     throw new GeneratedEvaluationPolicyError(

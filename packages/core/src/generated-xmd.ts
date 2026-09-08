@@ -52,10 +52,9 @@
  * first effect — not inside the component after earlier elements have already
  * run, and never by whichever entry the host happened to list first.
  *
- * What a read produced is collected into the result. A write contributes
- * nothing to it: what it did is retained by its own ordinary durable effect,
- * and a second account of it on the result would be a second thing to keep
- * true.
+ * Each component keeps its ordinary binding and output behavior. A read
+ * written without `as` renders what it ordinarily renders and one written with
+ * `as` binds inside the fragment; nothing is copied into a separate result.
  *
  * The form holds where the component runs, too. `<File>` learns which spelling
  * it is from the invocation the engine issued (executable-mdx-spec §5.6), and
@@ -124,6 +123,8 @@ import { prepareFetchRequest, requestRecord } from "./fetch-request.ts";
 import { timeoutFetch } from "@executablemd/runtime";
 import type { FetchRequest } from "./fetch-request.ts";
 import { isJsonObject, parseJson } from "./json.ts";
+import { GeneratedDataExpressions, validateDataExpression } from "./generated-expressions.ts";
+import { capturedBinding } from "./invocation-rules.ts";
 import { renderSegments } from "./render.ts";
 import { scanSegments } from "./scanner.ts";
 import { sourceDescription } from "./source-position.ts";
@@ -166,9 +167,11 @@ type Construct =
  */
 const CONSTRUCT: Record<Construct, string> = {
   block: "a generated fragment carries an executable code block, which it may not.",
-  expression: "a generated fragment carries an expression prop, which it may not.",
+  expression:
+    "a generated fragment states an expression prop that is not declarative data over its own " +
+    "bindings.",
   interpolation: "a generated fragment reads a binding through interpolation, which it may not.",
-  binding: "a generated fragment binds a result with `as`, which it may not.",
+  binding: "a generated fragment binds a result with an `as` that is not a binding name.",
   component: "a generated fragment names a component this host did not admit.",
   content:
     "a generated fragment gives content to a component this host admitted only in its " +
@@ -570,6 +573,44 @@ export function pinnedFileRead(): GeneratedObservation {
 }
 
 /**
+ * Core's `<Json />`, admitted as trusted composition rather than as an effect.
+ *
+ * It is the one component every generated fragment may write whatever `allow`
+ * selects, because rendering a value it already holds performs nothing: there
+ * is no operation behind it to grant, so admitting it widens no authority. The
+ * exact core definition, so a same-name replacement anywhere reaches nothing
+ * here — purity is a property of this identity, never inferred from a name.
+ *
+ * Self-closing alone. `<Json>` refuses content of its own, and stating the form
+ * here puts that refusal in preflight rather than inside the component after
+ * earlier elements have run.
+ */
+export function pinnedJson(): GeneratedObservation {
+  const definition = CORE_REGISTRY.get("Json")?.default?.definition;
+  if (definition === undefined || definition.kind !== "function") {
+    throw new GeneratedXmdError("core supplies no Json component to admit.");
+  }
+  return {
+    name: "Json",
+    identity: coreIdentity("Json"),
+    definition,
+    selfClosing: true,
+  };
+}
+
+/**
+ * The always-on trusted composition table.
+ *
+ * Core's own, and not a ceiling a host states: a host cannot remove Json from a
+ * fragment's vocabulary by omitting it, and cannot add an effect to the table
+ * by naming one. A trusted host that wants another pure component states its
+ * exact definition and identity, which is a different act from this one.
+ */
+export function coreComposition(): readonly GeneratedObservation[] {
+  return [pinnedJson()];
+}
+
+/**
  * One host-registered function observation component, by the exact definition
  * the host holds.
  */
@@ -654,8 +695,8 @@ export function pinnedFileWrite(): GeneratedMutation {
  * transaction-bound one, so the removal crosses the run's ordinary effect
  * transaction rather than a path of the evaluator's own. What it did is
  * retained by the `workspace_file` effect it publishes there, and the evaluator
- * collects nothing beside it: a mutation contributes no observation, and a
- * deletion has no outcome for one to carry.
+ * invents no receipt beside it: a deletion renders nothing unless the fragment
+ * authors output around it.
  */
 export function pinnedFileDelete(): GeneratedMutation {
   const definition = CORE_REGISTRY.get("File.Delete")?.default?.definition;
@@ -684,40 +725,6 @@ export function pinnedMutation(
   legacy?: readonly string[],
 ): GeneratedMutation {
   return { name, identity, definition, form, ...(legacy === undefined ? {} : { legacy }) };
-}
-
-/**
- * What one admitted observation produced.
- *
- * The value is the component's own return, kept whatever the fragment rendered.
- * Which pinned identity produced it is not here: the admission record already
- * retains the identities the fragment named, and a second copy on the result
- * would be a second thing to keep true.
- * An admitted `<Fetch>` written without `as` renders nothing at all — a
- * component returning a non-string has nowhere to render — so a result taken
- * from the rendered text would hand the Agent an empty answer to the question it
- * asked.
- */
-export interface GeneratedObservationValue {
-  readonly name: string;
-  readonly value: Json;
-}
-
-/**
- * What one admitted fragment produced, detached from its expansion.
- *
- * Deterministic: the observations appear in the order the fragment invoked them,
- * each under the name the fragment invoked it by. Which pinned identity produced
- * one is not here — the admission record retains that — so the value a document
- * binds is the name and the return, and nothing else. The rendered text is kept
- * beside them rather than instead of them: a fragment whose elements render
- * prose still has prose, and a fragment whose elements render nothing still has
- * its values.
- */
-export interface GeneratedObservationResult {
-  readonly observations: readonly GeneratedObservationValue[];
-  /** What the fragment rendered, beside the values rather than instead of them. */
-  readonly output: string;
 }
 
 /** What a trusted host asks this evaluator to admit. */
@@ -758,9 +765,9 @@ export interface GeneratedXmdRequest {
 /**
  * One admitted identity, normalized out of the class table it came from.
  *
- * A read entry and a mutation entry differ in what they select and in what
- * they contribute to the result; everything the preflight and the retained
- * policy do with them is the same, and this is that shape.
+ * A composition entry, a read entry and a mutation entry differ in what selects
+ * them; everything the preflight and the retained policy do with them is the
+ * same, and this is that shape.
  */
 interface Entry {
   readonly name: string;
@@ -769,7 +776,14 @@ interface Entry {
   /** The form authority under this entry's definition, when a host stated one. */
   readonly dispatch?: unknown;
   readonly forms: readonly AuthoredForm[];
-  readonly effect: GeneratedEffectClass;
+  /**
+   * Which table admitted this entry.
+   *
+   * `composition` is not a `GeneratedEffectClass`: it names the always-on
+   * trusted table that carries no effect operation and that `allow` does not
+   * select between.
+   */
+  readonly effect: GeneratedEffectClass | "composition";
   /** The version-1 identity strings this entry states it succeeds. */
   readonly legacy?: readonly string[];
   readonly requests?: readonly GeneratedRequest[];
@@ -820,6 +834,17 @@ interface Policy {
   readonly workspace?: { readonly roots: readonly string[]; readonly selectedRoot: string };
   readonly allowed: readonly RetainedEntry[];
   readonly requests: readonly FetchRequest[];
+  /**
+   * Which record shape this policy was read from, for a retained one.
+   *
+   * Absent on the policy a run states now, which is always current. A version-1
+   * record was written before the trusted composition table existed, so it
+   * names none, and holding it to entries that carry no effect operation would
+   * refuse a continuation over a grant nobody widened.
+   */
+  readonly recordVersion?: 1 | 2;
+  /** How many leading entries are composition, on the policy a run states now. */
+  readonly composition?: number;
 }
 
 /** The decision this run recorded, restored from its own durable record. */
@@ -877,7 +902,6 @@ function holdForm(form: AuthoredForm, invocation: ComponentInvocation): void {
 class GeneratedImportAuthority implements ImportAuthority {
   readonly #planned: Map<string, Planned[]>;
   readonly #imports = new CanonicalImports();
-  readonly #values: GeneratedObservationValue[] = [];
   /**
    * This fragment's own selection frames.
    *
@@ -913,11 +937,6 @@ class GeneratedImportAuthority implements ImportAuthority {
     }
     this.#planned = planned;
     this.#protectedBodies = protectedBodies;
-  }
-
-  /** What each admitted read returned, in invocation order. */
-  get values(): GeneratedObservationValue[] {
-    return this.#values;
   }
 
   /** The answer canonical execution produces for this name. */
@@ -974,14 +993,7 @@ class GeneratedImportAuthority implements ImportAuthority {
       throw new GeneratedXmdError(CONSTRUCT.component);
     }
     holdForm(planned.form, invocation);
-    const value = yield* body;
-    if (planned.entry.effect === "read") {
-      this.#values.push({
-        name: planned.entry.name,
-        value: value === undefined ? null : parseJson(value),
-      });
-    }
-    return value;
+    return yield* body;
   }
 
   /** The frames this fragment's own imports record into. */
@@ -1049,6 +1061,18 @@ function selectedEntries(
   allow: readonly GeneratedEffectClass[],
 ): Entry[] {
   const entries: Entry[] = [];
+  // Before either effect table and under every selection: composition is not a
+  // class `allow` chooses between, so its entries are in the policy the same
+  // way whatever the caller asked for, and in one canonical position.
+  for (const composition of coreComposition()) {
+    entries.push({
+      name: composition.name,
+      identity: composition.identity,
+      definition: composition.definition,
+      forms: composition.selfClosing === true ? ["self-closing"] : AUTHORED_FORMS,
+      effect: "composition",
+    });
+  }
   if (allow.includes("read")) {
     if (request.observations.length === 0) {
       throw new GeneratedXmdError("a generated-XMD allowlist selected `read` with no read table.");
@@ -1222,6 +1246,7 @@ function currentPolicy(
     ...(workspace === undefined ? {} : { workspace }),
     allowed,
     requests,
+    composition: entries.filter((entry) => entry.effect === "composition").length,
   };
 }
 
@@ -1408,6 +1433,7 @@ function readPolicyTerms(
     ...(workspace === undefined ? {} : { workspace }),
     allowed: identities,
     requests,
+    recordVersion: version,
   };
 }
 
@@ -1632,11 +1658,19 @@ function policyHolds(retained: Policy, current: Policy): boolean {
   if (!sameStrings(retained.allow, current.allow)) {
     return false;
   }
-  if (retained.allowed.length !== current.allowed.length) {
+  // A version-1 record predates the trusted composition table, so it is
+  // reconciled against the effect entries alone. Composition grants nothing —
+  // its entries carry no effect operation — so a continuation held to the
+  // remainder is held to exactly the authority it was admitted under.
+  const stated =
+    retained.recordVersion === 1
+      ? current.allowed.slice(current.composition ?? 0)
+      : current.allowed;
+  if (retained.allowed.length !== stated.length) {
     return false;
   }
   const replaced = retained.allowed.some((entry, index) => {
-    const here = current.allowed[index];
+    const here = stated[index];
     return (
       here === undefined ||
       here.name !== entry.name ||
@@ -1716,7 +1750,9 @@ function* preflight(
 
   const named: Planned[] = [];
   const segments = scanSegments(source);
-  yield* walk(segments, table, ceilings, named);
+  // A generated fragment starts with no bindings: it imports none from the
+  // document that admitted it, and exports none back to it.
+  yield* walk(segments, table, ceilings, named, new Set<string>());
   return { segments, named };
 }
 
@@ -1738,11 +1774,24 @@ function* admitCandidateRequest(props: Record<string, Json>): Operation<FetchReq
   }
 }
 
+/**
+ * Whole-fragment preflight, over the scope the fragment will actually have.
+ *
+ * `scope` is the set of bindings in effect where the next segment is written.
+ * A component's `as` joins it *after* that component, so an expression cannot
+ * name the binding its own element is producing, and the names a component's
+ * children introduce stay in the child set the recursion passes down — the
+ * fragment's later siblings never see them, exactly as expansion's
+ * environments never see them. Preflight and expansion therefore refuse the
+ * same identifier, and a fragment cannot reach an effect by naming a binding
+ * that is only visible after one.
+ */
 function* walk(
   segments: readonly Segment[],
   table: ReadonlyMap<string, Entry[]>,
   ceilings: ReadonlyMap<string, FetchRequest[]>,
   named: Planned[],
+  scope: Set<string>,
 ): Operation<void> {
   for (const segment of segments) {
     switch (segment.type) {
@@ -1760,11 +1809,28 @@ function* walk(
         if (entries === undefined) {
           throw new Refusal("component");
         }
-        if (Object.keys(segment.expressions).length > 0) {
-          throw new Refusal("expression");
-        }
-        if ("as" in segment.props) {
-          throw new Refusal("binding");
+        // Data over the bindings that exist here, and refused as a class: the
+        // grammar's own diagnostic names the offending form, and a refusal of
+        // generated text may not carry the text back out (see `Refusal`).
+        //
+        // Both readings of a brace, because the scanner splits them: a brace it
+        // could read as JSON becomes a resolved prop and the text it read is
+        // kept beside it, while anything else stays as expression text. Only
+        // the second reaches expansion, so validating it alone would admit
+        // whatever the first silently rewrote — `{1e999}`, which JSON has no
+        // number for, is resolved to `null` rather than refused. The authored
+        // text is what the fragment actually stated, so it is what preflight
+        // holds the fragment to.
+        const stated = [
+          ...Object.values(segment.expressions),
+          ...Object.values(segment.authoredExpressions ?? {}),
+        ];
+        for (const expression of stated) {
+          try {
+            validateDataExpression(expression, scope);
+          } catch {
+            throw new Refusal("expression");
+          }
         }
         // How the element was written, read from the scan rather than from
         // anything the run could answer differently later. This is what
@@ -1783,7 +1849,19 @@ function* walk(
           }
         }
         named.push({ name: entry.name, identity: entry.identity, form, entry });
-        yield* walk(segment.children, table, ceilings, named);
+        // The children see this element's bindings but not its own `as`, and
+        // nothing they bind escapes back to its siblings.
+        yield* walk(segment.children, table, ceilings, named, new Set(scope));
+        // After the element, because a component's result does not exist until
+        // it has run: `<File as="x" />` beside `<Json value={x} />` is ordered,
+        // and `<Json value={x} as="x" />` names nothing.
+        if ("as" in segment.props) {
+          const bound = capturedBinding(segment.props.as);
+          if (bound === undefined) {
+            throw new Refusal("binding");
+          }
+          scope.add(bound);
+        }
         break;
       }
       default: {
@@ -1948,9 +2026,14 @@ function expand(
   named: readonly Planned[],
   protectedBodies: ProtectedBodies | undefined,
   syntax: SyntaxReference | undefined,
-): Operation<GeneratedObservationResult> {
+): Operation<string> {
   return scoped(function* () {
     yield* ErrorMode.set("throw");
+    // Every expression this expansion resolves — an ordinary prop and a
+    // declared capture alike — reads the declarative grammar rather than the
+    // trusted-document evaluator. Set on this scope, so it ends with the
+    // fragment and reaches nothing the document expands afterwards.
+    yield* GeneratedDataExpressions.set(true);
     const authority = new GeneratedImportAuthority(named, protectedBodies);
     yield* Component.around(
       {
@@ -1985,7 +2068,7 @@ function expand(
       // and a <Return> written into it satisfies no declaration.
       undefined,
     );
-    return { observations: authority.values, output: renderSegments(expanded) };
+    return renderSegments(expanded);
   });
 }
 
@@ -1997,12 +2080,12 @@ function expand(
  * `<Evaluate>` component inside the owning document expansion, and the
  * admission together with every durable effect the admitted fragment performs
  * is offered inline there, in authored order. A partial continuation offers
- * the same sequence and restores the admission and every observation that
- * already committed rather than performing them again.
+ * the same sequence and restores the admission and every effect that already
+ * committed rather than performing them again.
+ *
+ * What it answers with is the fragment's rendered text.
  */
-export function evaluateGeneratedXmd(
-  request: GeneratedXmdRequest,
-): Operation<GeneratedObservationResult> {
+export function evaluateGeneratedXmd(request: GeneratedXmdRequest): Operation<string> {
   return evaluateProtectedGeneratedXmd(request, undefined, undefined);
 }
 
@@ -2011,7 +2094,7 @@ export function* evaluateProtectedGeneratedXmd(
   request: GeneratedXmdRequest,
   protectedBodies: ProtectedBodies | undefined,
   syntax: SyntaxReference | undefined,
-): Operation<GeneratedObservationResult> {
+): Operation<string> {
   const allow = selection(request.allow);
   const entries = selectedEntries(request, allow);
   const table = admitted(entries);

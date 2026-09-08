@@ -417,12 +417,13 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       );
 
       expect(attempt.failure).toBe(undefined);
-      // Both observations read the run's own Workspace, through the ordinary
-      // transaction-bound Files provider. `<Evaluate>` answers with a value, so
-      // the document renders it where it wants text — which is what `<Json>` is
-      // for, and what the representative document does into its next prompt.
+      // Both reads went through the run's own Workspace, through the ordinary
+      // transaction-bound Files provider. Each fragment's read renders its own
+      // text, so the binding holds that text and `<Json>` renders it as the
+      // string it is — no name, no envelope, nothing collected beside it.
       expect(reported(attempt)).toContain("the retained note");
-      expect(reported(attempt)).toContain('"name": "File"');
+      expect(reported(attempt)).not.toContain('"name"');
+      expect(reported(attempt)).not.toContain("observations");
 
       const recorded = admissions(attempt.events);
       expect(recorded).toHaveLength(2);
@@ -1015,6 +1016,13 @@ describe("Tier WGAC — the standard write table", () => {
       // resumed run is held to.
       const policy = policyOf(admissions(attempt.events)[0]!);
       expect(policy?.allowed).toEqual([
+        // The trusted composition table leads every policy, whatever the
+        // selection asked for.
+        {
+          name: "Json",
+          identity: capability("@executablemd/core", "Json", "2"),
+          forms: ["self-closing"],
+        },
         {
           name: "File",
           identity: capability("@executablemd/core", "File:write", "2"),
@@ -1088,9 +1096,9 @@ describe("Tier WGAC — the standard write table", () => {
           form: "self-closing",
         },
       ]);
-      // A mutation contributes nothing: the shape a document binds is the same
-      // one every selection binds, and a deletion puts no result in it.
-      expect(JSON.parse(reported(attempt))).toEqual({ observations: [], output: "" });
+      // A deletion renders no receipt, so the fragment rendered nothing and the
+      // binding holds exactly that empty text — not an envelope describing it.
+      expect(JSON.parse(reported(attempt))).toBe("");
     });
   });
 
@@ -1155,9 +1163,10 @@ describe("Tier WGAC — what a selection binds", () => {
       );
 
       expect(attempt.failure).toBe(undefined);
-      // `as` binds the same shape for every selection, and an admitted write
-      // puts nothing in it.
-      expect(reported(attempt)).toContain('"observations": []');
+      // An admitted write renders nothing of its own, so what the binding holds
+      // is the fragment's own whitespace rather than a result object.
+      expect(reported(attempt)).not.toContain("observations");
+      expect(JSON.parse(reported(attempt).trim())).toMatch(/^\s*$/);
       expect(yield* stored(database, "/nested/out.md")).toBe("the fragment wrote this");
     });
   });
@@ -1177,10 +1186,12 @@ describe("Tier WGAC — what a selection binds", () => {
 
       expect(attempt.failure).toBe(undefined);
       const bound = reported(attempt);
-      expect(bound).toContain('"name": "File"');
+      // The read renders its own text and the write renders nothing, so what
+      // the binding holds is exactly the read's output — once, with no entry
+      // for the write and no envelope naming either of them.
       expect(bound).toContain("the retained note");
-      // One entry, not two: the write is accounted for by its own effect.
-      expect(bound.match(/"name": "File"/g)).toHaveLength(1);
+      expect(bound).not.toContain('"name"');
+      expect(bound).not.toContain("the fragment wrote this");
       expect(yield* stored(database, "/proposed.md")).toBe("the fragment wrote this");
     });
   });

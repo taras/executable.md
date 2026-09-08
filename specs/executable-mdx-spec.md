@@ -1913,7 +1913,7 @@ run but are absent from the diagnostic trace.
 | `src/fetch-request.ts` | `prepareFetchRequest()`, `FetchRequest`, `FetchRequestError` — what `<Fetch>` admits before transport (§6.18) |
 | `src/fetch-response.ts` | `detachHeaders()`, `detachStatus()`, `FetchResponseRecord` — the response detached from the provider's (§6.18) |
 | `src/fetch-journal.ts` | `persistFetch()` — the `fetch` durable effect (§6.18, §10.1) |
-| `src/generated-xmd.ts` | `evaluateGeneratedXmd()`, `pinnedFetch()`, `pinnedFileRead()`, `pinnedFileWrite()`, `pinnedFileDelete()`, `pinnedComponent()`, `pinnedMutation()`, `GeneratedEffectClass`, `GeneratedComponentForm`, `GeneratedMutation`, `GeneratedObservationResult`, `GeneratedXmdError` — admitting Agent-generated source through the trusted-host seam under a caller-selected subset of the closed effect classes `read` and `write`, resolving each name and authored form to one exact pinned identity — the self-closing `<File>` read, the paired `<File>` write and the self-closing `<File.Delete>` among them — and answering with each admitted read's own value rather than the fragment's rendering, an admitted mutation contributing none. `evaluateGeneratedXmd()` is an `Operation`, so the admission and every durable effect of the mixed expansion are offered inline by the owning expansion's own durable sequence, with no `ephemeral()` bridge; a continuation holds the admission's root snapshot as a retained basis by membership and every non-root ceiling exactly (workflow-workspace-spec §§8.4, 9) |
+| `src/generated-xmd.ts` | `evaluateGeneratedXmd()`, `pinnedFetch()`, `pinnedFileRead()`, `pinnedFileWrite()`, `pinnedFileDelete()`, `pinnedComponent()`, `pinnedMutation()`, `GeneratedEffectClass`, `GeneratedComponentForm`, `GeneratedMutation`, `GeneratedObservation`, `GeneratedRequest`, `GeneratedXmdError` — admitting Agent-generated source through the trusted-host seam under the always-on trusted composition table and a caller-selected subset of the closed effect classes `read` and `write`, resolving each name and authored form to one exact pinned identity — core Json, the self-closing `<File>` read, the paired `<File>` write and the self-closing `<File.Delete>` among them — and preserving every component's ordinary binding and output behavior. `evaluateGeneratedXmd()` returns `Operation<string>` containing the fragment's rendered text. Its admission and every generated effect use occurrence-owned identities in the existing ordinary durable sequence, with no `ephemeral()` bridge, staging or result envelope |
 | `src/components/import-authority.ts` | `CanonicalImports`, `ImportAuthority` — the witness a closed execution issues for the definition it produced and verifies where it is invoked |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/expansion.ts` | `Expansion`, `getExpansion()` — what an executable element knows about its own expansion (§5.6) |
@@ -1952,6 +1952,7 @@ run but are absent from the diagnostic trace.
 | `packages/cli/src/deno-workflow.ts` | the Deno run store and Workspace attachment; Node and Bun install the refusing host instead |
 | `packages/workflow/src/deno/workspace/files.ts` | the transaction-bound `API.Files` provider — one durable Workspace effect per document read, write, directory ensure and search |
 | `packages/workflow/src/deno/workspace/host.ts` | `withWorkflowWorkspace()` — the run's effect coordinator, logical cwd `/`, and Files provider installed together inside one execution |
+| `packages/workflow/src/generated-observations.ts` | `evaluateGeneratedFragment()` — the workflow policy adapter over `evaluateGeneratedXmd()`, returning its rendered text directly as `Operation<string>`; `GeneratedObservation` remains the read-table entry type, not an output envelope |
 | `packages/workflow/src/journal.ts` | the `workflow_run` record, canonical-record recognition, and the refusals that name differing fields without their values |
 | `packages/workflow/src/run.ts` | `workflowInstallation()` / `retainedWorkflowInstallation()` — the `ExecutionInstallation` values a trusted host passes to `executeInstalled()`, each contributing a mandatory run-identity admission and the `prepare` hook that creates or restores the run inside the durable root |
 | `packages/workflow/src/bundle.ts` | `workflowBundleInstallation()` — the `ExecutionInstallation` that closes one execution over a workflow's component bundle, carrying the pinned execution view and the admission that holds every retained component import to it |
@@ -3926,10 +3927,10 @@ component-answer profile entry. Profile sealing projects its lifetime wrapper
 from the exact protected function. `<Evaluate>` derives a fresh child route
 containing only the protected bodies among its selected sealed definitions and
 passes it, with the already narrowed lexical `SyntaxReference`, internally to
-generated evaluation. Generated import projects its form/result wrapper within
-that child route. Dispatch preserves the protected body's invocation domain,
-checks the admitted form and collects the read's value just as for an ordinary
-generated component.
+generated evaluation. Generated import projects its form wrapper within that
+child route. Dispatch preserves the protected body's invocation domain, checks
+the admitted form and returns the component's value through the ordinary
+binding/output path.
 
 The producer's authored children retain the lexical site route. The generated
 fragment receives the child route, so a component the producer can invoke is not
@@ -3952,7 +3953,19 @@ current execution's verified answers, never from a retained function or route.
 **`allow` narrows; it never grants.** It names an effect *class* — `read` or
 `write` — and the class resolves to a table the host already installed. Omitting
 it asks for `read`. A class the host installed nothing for is refused before the
-program is read.
+program is read. The admitted vocabulary is the union of the profile's
+always-on trusted composition table and the selected effect tables. The ordinary
+profile places core's exact Json definition in composition. A composition entry
+contains no effect operation and is not selected through `allow`.
+
+Bindings and structural constructs are engine-owned language syntax and need no
+profile entry. Another pure component is available only when the trusted host
+captured its exact definition and stable identity in the composition table
+before execution; purity is never inferred from a name, documentation or the
+absence of an effect entry. Conflicting names or forms across composition and
+effect tables refuse at profile capture. Generated Syntax describes the same
+union preflight and execution use, and continuation reconciles every admitted
+composition identity.
 
 **Entries name capabilities, not definitions.** A host states which operation an
 admitted name runs; canonical capture reads that operation off the host's object
@@ -3964,15 +3977,75 @@ middleware installed. A directory an admitted fragment creates scopes its
 content through the evaluation's own cursor rather than the contextual
 environment.
 
-**What it answers with** is each admitted observation's own value in invocation
-order, with whatever the fragment rendered kept beside them under `output`. It
-declares no `returns`, so the value binds by reference under `as`. An admitted
-mutation contributes nothing to it. It is deliberately not a printing boundary.
+**What it renders** is the generated fragment's ordinary output. Evaluate does
+not inspect component results and does not synthesize an observation or result
+envelope. A component without `as` contributes its ordinary output. A component
+with `as` binds its result inside the fragment and contributes no output of its
+own. Bindings, structural constructs and pure components such as `<Json>` are
+language composition, not effect classes, and remain available when `allow`
+selects read-only authority. The fragment explicitly renders any bound values it
+wants its caller to receive.
 
 **One occurrence is one durable decision.** A continuation restores the
 admission rather than making it again, and refuses before any effect if the run
 now offers different text, or states ceilings — effect classes, Workspace roots,
 pinned identities, forms or requests — the admission was not granted under.
+
+#### 5.3.3 Ordinary generated composition
+
+Generated XMD uses ordinary local bindings and pure composition. It starts with
+no caller bindings and exports none. This fragment renders one JSON value from
+two bound component results:
+
+```mdx
+<File path="package.json" as="package" />
+<Syntax as="syntax" />
+<Json value={{ package, syntax }} />
+```
+
+Whole-fragment preflight validates binding syntax and effect authority before
+any effect. `allow` governs only effectful components; it does not prohibit
+bindings, object composition, structural language constructs or pure renderers.
+Imports and executable code fences remain outside the generated program's
+authority.
+
+Generated expression props are declarative data expressions. Their recursive
+grammar admits null, string and boolean literals; finite JSON numbers;
+identifiers naming current fragment-local bindings; arrays; objects; and object
+shorthand for a binding. A JSON number may include a leading minus directly
+attached to its numeric literal. Core recognizes that form from the retained
+authored expression and requires the resulting number to be finite, so `-1` is
+data while `1e999` and `-1e999` refuse. The leading minus is part of the admitted
+numeric grammar, not general unary evaluation: `+1`, `-note`, `!note`,
+`typeof note` and every other unary expression or operator refuse, as do calls,
+constructors, binary expressions, assignment, update, spread, computed
+properties, template literals and every global identifier during whole-fragment
+preflight. Core uses Acorn to parse the existing expression syntax and
+interprets accepted nodes
+against the fragment binding environment; generated expressions never reach the
+ordinary trusted-document `new Function()` path. An unbound identifier fails as
+an ordinary binding error before the consuming component runs. The rule belongs
+to generated data composition, not to Json.
+
+**Canonical execution owns projected generated work.** Each Evaluate occurrence
+retains its admission and generated effects under identities belonging to that
+occurrence. No caller-controlled context, stream, replay cursor, coroutine
+identifier, durable owner, public projection or request field participates in
+that ownership. Two Evaluate occurrences therefore cannot consume one another's
+retained work.
+
+Each admission and generated effect is appended to the configured stream before
+its operation resumes and is visible through the ordinary history contract
+immediately. Evaluate neither stages nor rolls back those records and introduces
+no second persistence or settlement protocol. A later candidate refusal,
+ordinary failure, cancellation or interruption leaves completed effects as
+ordinary retained history. A partial continuation restores those effects and
+resumes at the first unrecorded effect.
+
+The generated projection remains structured work of its Evaluate invocation.
+The projection and all of its teardown complete before Evaluate returns and
+before later parent work begins. This ordering is observable without requiring
+a distinct durable cursor or child `Close` record.
 
 ### 5.4 The root document is a component
 
@@ -4757,12 +4830,11 @@ what comes back (§5.3, §5.6). The workflow host supplies
 authored workflow document writes where an Agent's proposed fragment should be
 admitted and performed. Its schema is closed on one required string prop and one
 optional `allow` array selecting from the closed effect classes `read` and
-`write`, and paired content is refused. It declares no `returns` and answers
-with a detached value — `{ observations: [{ name, value }], output }`, each
-admitted read's own returned value under the name the fragment invoked it by,
-with an admitted mutation contributing none — so it renders nothing where it is
-written; an ordinary `as` captures it by reference for every selection, and an
-authored `<Json>` turns it into the text a next `<Prompt>` carries. Availability is all
+`write`, and paired content is refused. It renders the generated fragment's
+ordinary output and invents no result envelope. Fragment-local `as` bindings
+suppress their components' output normally, and the fragment may render chosen
+bound values through pure components such as `<Json>`. An authored `<Let>`
+around Evaluate captures that rendered text. Availability is all
 the registration decides; the ceilings it runs under come from values the host
 captured before any document existed, and no prop, binding or middleware return
 value supplies or widens one. [Workflow workspaces](./workflow-workspace-spec.md)
@@ -8064,9 +8136,9 @@ profile's write table, as the exact self-closing identity
 fragment therefore removes one file by writing this component, and it is this
 component that runs: an admitted deletion crosses `API.Files` into the run's
 transaction-bound provider and is retained by the ordinary `workspace_file`
-effect described above. The evaluator collects nothing from it — a mutation
-contributes no observation, and a deletion has no outcome for one to carry — so
-a fragment that only deletes still answers `{ observations: [], output: "" }`.
+effect described above. The evaluator collects nothing from it and invents no
+receipt, so a fragment that only deletes renders nothing unless it authors
+output around the deletion.
 The paired spelling is refused in whole-fragment preflight, before the
 fragment's first effect, because the identity is admitted for the self-closing
 form alone.
@@ -11098,14 +11170,14 @@ through the captured capability because there is no other way to reach it.
 
 | ID | Evidence |
 | --- | --- |
-| FE1 | `text` evaluates a fragment in an ordinary run and returns `{ observations, output }`. |
-| FE2 | Paired content privately renders to the same exact text and result as the `text` form. |
+| FE1 | `text` evaluates a fragment in an ordinary run and emits the fragment's ordinary rendered output. |
+| FE2 | Paired content privately renders to the same exact program text and output as the `text` form. |
 | FE3 | `text` plus children, `source` plus either new form, missing input, and invalid `allow` refuse before producer or fragment effects. |
-| FE4 | Omitted `allow` is `read`; read permits self-closing File and refuses every write form before effects. |
+| FE4 | The trusted composition table makes exact core Json available for every selection. Omitted `allow` is `read`; read permits self-closing File and refuses every write form before effects. |
 | FE5 | `write` permits only the named host-profile write forms and never creates authority from text. |
 | FE6 | Root frontmatter, root props, `returns`, and independent `<Output>` selection refuse before effects. |
-| FE7 | With `as`, the result object is captured; without `as`, it is discarded; neither form emits fragment output. |
-| FE8 | Public `<Syntax>` and a directly nested Plan see the enclosing Evaluate vocabulary for the selected `allow`; generated text is validated against that same vocabulary. A trusted provider's delegated canonical `<Syntax>` component answer also renders inside generated XMD, through both canonical wrappers and the narrowed lexical reference. Bare output lists only admitted entries; named documentation retains the enclosing reference and reports narrowed availability. |
+| FE7 | Without `as`, Evaluate emits the fragment's output; ordinary `as` binds that text and suppresses it, and a surrounding `Let` captures the same text without a special Evaluate result. |
+| FE8 | Public `<Syntax>` and a directly nested Plan see the enclosing Evaluate vocabulary for the selected `allow`; generated text is validated against that same vocabulary. A trusted provider's delegated canonical `<Syntax>` component answer also renders inside generated XMD, through both canonical wrappers and the narrowed lexical reference. Bare output lists the always-on composition entries plus selected effects; named documentation retains the enclosing reference and reports narrowed availability. |
 | FE9 | A deferred Plan's public `<Syntax>` sees its own ordinary vocabulary; a later narrower Evaluate rejects incompatible text before effects. **Receives #758's SY20**, for the same reason. |
 | FE10 | Exact text and policy survive journal/continuation; changed text or policy refuses before effects. |
 | FE11 | Completed Plan work and completed fragment effects replay without repetition. |
@@ -11126,14 +11198,21 @@ through the captured capability because there is no other way to reach it.
 | FE26 | Protection itself grants nothing: a profile with no write table stays unable to write, and adding `<Evaluate>` to the protected table does not add a class or component identity to `allow`. |
 | FE27 | Structural constructs remain selected by structural dispatch, while repository replacements for ordinary `<File>`, `<Fetch>`, and `<Elicit>` still win at ordinary authored sites. Their replaceability does not let them enter a generated fragment unless the trusted profile admitted that exact identity and form. |
 | FE28 | Source, npm, and compiled symbols report `<Evaluate>` with protected origin and the approved description, and no host bootstrap is needed to make the name available. |
-| FE29 | Each execution accepts one private fragment-evaluation profile; a missing or duplicate profile refuses before paired-content production or fragment effects, and document-controlled state cannot read, replace, or widen it. |
+| FE29 | Each execution accepts one private fragment-evaluation profile containing exact composition, read and write tables; a missing or duplicate profile and conflicts across its tables refuse before paired-content production or fragment effects, and document-controlled state cannot read, replace, or widen it. |
 | FE30 | A trusted nested-run or evaluation-host layering control enters the same declarative package bootstrap through inherited and local layers. The child keeps the package registration and renders the same named documentation as the single-bootstrap control; Evaluate still admits only the identity selected by `allow`. A non-identical owner/component overlap refuses before child root or fragment effects. This receives #765's SYN25l.5 rather than creating a second collector in Evaluate. |
+| FE31 | One fragment binds File and protected Syntax results locally and explicitly renders a chosen object through Json. Nested literal arrays and objects, binding shorthand, finite JSON numbers and a directly attached leading minus such as `<Json value={-1} />` work in scalar, array and object positions. `1e999`, `-1e999`, `+1`, `-note`, `!note`, `typeof note`, an unbound identifier, call, operator, spread, computed property, template or global reference is refused before any earlier effect. |
+| FE32 | Generated admission and effect events follow ordinary persist-before-resume publication. A later refusal, failure, cancellation or interruption retains completed effects, and continuation resumes at the occurrence's first unrecorded effect; Evaluate adds no staging or rollback. |
+| FE33 | Each Evaluate occurrence retains its admission and generated effects under identities belonging to that occurrence; two occurrences cannot consume one another's retained work, and no caller-controlled context, stream, replay cursor, coroutine identifier or durable owner participates. A projected body installs observable structured cleanup, and later parent work proves that cleanup completed before it began. No distinct child cursor, child `Close`, staging, rollback, provisional publication or second settlement protocol is required. |
 
 Each refusal case needs a negative control proving no producer, middleware
 answer, request, file mutation, or other program effect occurred. The
 implementation tiers carrying the elaborated evidence are `GX` for the durable
 protocol, the ceiling table and the profile's entry rules, `CIV` for what a
 provider's stated identity is bound to, and `FT` for `<Fetch>` itself.
+FE31–FE33 join the existing Evaluate, generated-XMD and workflow-adapter tiers.
+Journal evidence discriminates occurrence isolation, ordinary
+persist-before-resume replay and projection cleanup ordering; existing
+structured-concurrency and invocation failure behavior remains unchanged.
 
 ### Tier SX — The `xmd syntax` command
 
@@ -11855,13 +11934,13 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
 
 | # | Test | Verify |
 |---|------|--------|
-| GXC1 | The selection | Omitting `allow` and stating `read` produce one identical retained policy; a mixed selection is retained in canonical class order, with the read table's entries before the write table's and host order inside each |
-| GXC2 | Unstateable policy | An empty selection, one class twice, a selected class with no table or an empty one, and a host table holding one name with overlapping forms or two definitions each fail before the candidate is parsed — with a deliberately unparseable candidate, no `generated_xmd` record and nothing of the candidate retained |
+| GXC1 | The selection | The trusted composition table is present under every selection. Omitting `allow` and stating `read` produce one identical retained policy; a mixed selection is retained in canonical class order, with composition before the read and write tables and host order inside each |
+| GXC2 | Unstateable policy | An empty selection, one class twice, a selected class with no table or an empty one, and composition/effect tables holding one name with overlapping forms or distinct definitions each fail before the candidate is parsed — with a deliberately unparseable candidate, no `generated_xmd` record and nothing of the candidate retained |
 | GXC3–GXC4 | Name and form | A self-closing and a paired `<File>` in one fragment resolve to the read and the write identity and are retained with their forms; the opposite form under a single-class selection is refused with no read and no write |
 | GXC5–GXC6 | Authority | No admitted name — `<File>` in either form, the versioned paired `<Dir>` or the self-closing `<File.Delete>` — is answered by a same-name repository component, the dotted one included; and Git push, pull request, issue, repository, glob and an executable block are outside the tables whatever the selection |
-| GXC7 | The result | A write-only fragment observes nothing and renders nothing; a mixed one collects the read's value and not the write's |
+| GXC7 | Ordinary composition | A write-only fragment renders nothing unless it authors output; a mixed fragment binds a read locally and renders exactly the value it explicitly selects |
 | GXC8 | Preflight | An unadmitted sibling after an admitted write, an unadmitted child under an admitted parent, and an unadmitted form after an admitted write each perform no write at all |
-| GXC10 | The form at the invocation | An admitted read still performs exactly its read and an admitted write still performs exactly its write, under a `Component.hasContent` handler outside the generated expansion that lies consistently *and* under one answering `[false, true]` / `[true, false]` — with the retained identity and form unmoved, the read's value collected, and the file bytes proving which effect ran. An admitted read beside each of them reports the chain's answer and consumes exactly one, so every case proves the handler installed and answering before it proves the element ignored it — an inert handler, and an element that consulted the chain and took the next answer, both fail. An invocation the evaluator did not receive is refused with no provider call, and a handler that observes and delegates leaves both forms running through their ordinary providers |
+| GXC10 | The form at the invocation | An admitted read still performs exactly its read and an admitted write still performs exactly its write, under a `Component.hasContent` handler outside the generated expansion that lies consistently *and* under one answering `[false, true]` / `[true, false]` — with the retained identity and form unmoved, the read's ordinary binding/output behavior intact, and the file bytes proving which effect ran. An admitted read beside each of them reports the chain's answer and consumes exactly one, so every case proves the handler installed and answering before it proves the element ignored it — an inert handler, and an element that consulted the chain and took the next answer, both fail. An invocation the evaluator did not receive is refused with no provider call, and a handler that observes and delegates leaves both forms running through their ordinary providers |
 | GXC9 | Continuation | A widened class selection, a widened admitted form, a replaced write identity and an added write identity each refuse the continuation and write nothing; the unchanged policy resumes and performs the write; and a read-only admission survives a changed write table it never selected |
 
 ### Tier GX — Generated continuation in the owning expansion
@@ -11893,13 +11972,13 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
 | WGAC4 | Host-owned roots | The stated ceiling is the run's retained roots and the root it is on, following the run as it moves, in a deterministic order; generated source cannot reach the component even while it is live |
 | WGAC5 | Host-owned requests | An empty ceiling admits no `<Fetch>` at all, an exact one admits only the request it names, and neither performs anything else |
 | WGAC6 | Distinct sites | Two `<Evaluate>` sites keep distinct durable names under a component that rebinds what a component can |
-| WGAC7 | The import boundary | Through public `importComponent` middleware: calling the implementation with an invocation it built, with the first site's routed at the second, with a live content-bearing parent's routed into the sites inside it, by keeping the declared implementation and running it at another element's invocation, and by keeping one attachment's implementation — with that attachment's whole registration record answered for the name inside a second, simultaneously live attachment — and running it at the second attachment's own `<Evaluate>` site, are each refused. Nothing is admitted and no request performed under an identity the author wrote no observation at, and neither run's database receives a record the other's expansion named: a redirected registry answer carries behavior, never the claimant this execution delivered. Honest delegation, forwarding the genuine invocation, admits each site under its own name, nested or not; and an interrupted run resumes into each site's own record — the retained observation restored without re-reading, the interrupted request performed |
-| WGAC8 | The result shape | The result carries each admitted read's name and returned value in invocation order, with the fragment's rendering under `output` — an admitted `<Fetch>` renders nothing and its response survives anyway. Which pinned identity produced one is not in the value: the retained admission holds that |
-| WGAC9 | The class selection | An empty, repeated, unknown or non-array `allow` is refused before any admission; `read`, `write` and both in either order are admitted and retained in canonical order; omitting it retains exactly `read`, and the write table is not in that policy at all |
+| WGAC7 | The import boundary | Through public `importComponent` middleware: calling the implementation with an invocation it built, with the first site's routed at the second, with a live content-bearing parent's routed into the sites inside it, by keeping the declared implementation and running it at another element's invocation, and by keeping one attachment's implementation — with that attachment's whole registration record answered for the name inside a second, simultaneously live attachment — and running it at the second attachment's own `<Evaluate>` site, are each refused. Nothing is admitted and no request performed under an identity the author did not write at that site, and neither run's database receives a record the other's expansion named: a redirected registry answer carries behavior, never the claimant this execution delivered. Honest delegation, forwarding the genuine invocation, admits each site under its own name, nested or not; and an interrupted run resumes into each site's own record — a completed read restores and the first interrupted request runs |
+| WGAC8 | Ordinary output | Evaluate emits exactly what the generated fragment renders. Bound component results emit nothing unless the fragment explicitly renders them, and no read is copied into an implicit result collection |
+| WGAC9 | The class selection | Exact core Json remains available from the trusted composition table. An empty, repeated, unknown or non-array `allow` is refused before any admission; `read`, `write` and both in either order are admitted and retained in canonical order; omitting it retains exactly composition plus read, and the write table is not in that policy at all |
 | WGAC10 | The standard write table | An admitted paired `<File>` beneath a generated `<Dir>` first recursively creates the directory through one ordinary `workspace_file` effect, then lands the file at the nested logical path through another; the retained policy holds all three standard entries with their forms, in the order the profile states them — core's paired `File:write`, paired `@executablemd/workflow/composition/dir-v2#Dir`, then core's self-closing `File.Delete` — and a `<Git.Push>` and a self-closing `<File />` are each refused under the same selection with no effect |
-| WGAC14 | The admitted deletion | A write-only fragment holding one self-closing `<File.Delete>` removes the file from the run's own Workspace, read back through the run's own transaction; it performs exactly one further `workspace_file` effect, whose outcome is `{ kind: "deleted" }`; it is retained under `@executablemd/core#File.Delete` in the self-closing form; and the document binds exactly `{ observations: [], output: "" }` with no receipt of any kind |
+| WGAC14 | The admitted deletion | A write-only fragment holding one self-closing `<File.Delete>` removes the file from the run's own Workspace, read back through the run's own transaction; it performs exactly one further `workspace_file` effect, whose outcome is `{ kind: "deleted" }`; it is retained under `@executablemd/core#File.Delete` in the self-closing form; and it renders no synthetic receipt |
 | WGAC15 | Preflight covers the deletion | A fragment placing an admitted `<File.Delete>` first and an executable code block second is refused for the block — the class proving the deletion was admitted, since a refusal names no name — and the file remains with no deletion effect performed or retained |
-| WGAC11 | What a selection binds | A write-only evaluation binds `observations: []`, and a mixed one binds exactly the read's entry while the write lands in the Workspace |
+| WGAC11 | Explicit composition | A fragment binds read results locally, composes selected values through Json, and renders no value or mutation receipt it did not explicitly render |
 | WGAC12 | Committed mutations | A completed replay of a write-enabled document journals nothing new, performs no second mutation, and leaves the retained content |
 | WGAC16 | Bundled continuation | `<Evaluate>` inside a committed bundled Markdown component, then a parent `<File>` write and the real `<Elicit>` outside it, for a generated read and a generated write alike: the real start suspends holding the exactly ordered `generated_xmd → nested workspace_file → parent workspace_file → suspension_request` subsequence; answer delivery and the completed resume leave the journal counts, that subsequence, the Workspace root-publication count and the authoritative current root unchanged; and the delivered value reaches the document after the wait. `API.Files` component calls are not evidence here — re-expansion legitimately enters that boundary before the durable effect restores |
 | WGAC17 | Directory mutation authority | `allow={["write"]}` admits the versioned paired `<Dir>` and intentionally authorizes its persistent recursive creation; a continuation retaining the former `@executablemd/workflow/composition#Dir` refuses before generated execution and creates nothing, while an unchanged current admission replays without a second ensure |

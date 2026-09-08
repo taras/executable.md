@@ -93,7 +93,7 @@ function syntaxProfile(
 }
 
 describe("protected generated component answers", () => {
-  it("routes delegated Syntax through both wrappers and collects its actual read value", function* () {
+  it("routes delegated Syntax through both wrappers and renders its ordinary output", function* () {
     const profile = syntaxProfile();
     if (profile.evaluation === undefined) {
       throw new Error("expected a Syntax evaluation profile");
@@ -125,25 +125,29 @@ describe("protected generated component answers", () => {
     }
     const stream = new InMemoryStream();
     const source = '<Syntax names={["Syntax", "File"]} />';
-    const result = yield* run(
-      `---\nreturns:\n  type: object\n---\n<Evaluate text={${JSON.stringify(source)}} as="answer" />\n<Return value={answer} />`,
-      [profile],
-      stream,
-    );
-    expect(result).toMatchObject({ observations: [{ name: "Syntax" }] });
-    if (typeof result !== "object" || result === null || Array.isArray(result)) {
-      throw new Error("expected an evaluation result");
-    }
-    expect(result.output).toContain("**Available in this evaluation:** yes");
-    expect(result.output).toContain("**Available in this evaluation:** no");
-    expect(result.observations).toEqual([{ name: "Syntax", value: result.output }]);
+    // Written without `as` inside the fragment, so the delegated answer's own
+    // text is the fragment's output and Evaluate emits exactly that.
+    const result = yield* run(`<Evaluate text={${JSON.stringify(source)}} />`, [profile], stream);
+    const rendered = String(result);
+    expect(rendered).toContain("**Available in this evaluation:** yes");
+    expect(rendered).toContain("**Available in this evaluation:** no");
     const retained = (yield* stream.readAll()).filter(
       (event) => event.type === "yield" && event.description.type === "syntax_symbols",
     );
     expect(retained).toHaveLength(1);
-    expect(retained[0]).toMatchObject({
-      result: { status: "ok", value: { symbols: result.output } },
-    });
+    // The one retained reading is the text the fragment rendered, rather than a
+    // second reading taken to fill a result the evaluator no longer builds.
+    const symbols = retained[0];
+    const value =
+      symbols?.type === "yield" && symbols.result.status === "ok"
+        ? symbols.result.value
+        : undefined;
+    const held =
+      typeof value === "object" && value !== null && !Array.isArray(value)
+        ? String(value.symbols)
+        : "";
+    expect(held.length).toBeGreaterThan(0);
+    expect(rendered).toContain(held.trim());
   });
 
   it("keeps the producer's route while the generated child admits only Syntax", function* () {
@@ -870,8 +874,13 @@ describe("Tier FE — allow selects, and never adds", () => {
       "write nested/out.md",
     ]);
     expect(files.entries.get("nested/out.md")).toBe("made");
-    // A mutation contributes no observation.
-    expect(String(output)).toContain('"observations": []');
+    // The mutations rendered nothing of their own, so what the fragment
+    // produced is its own whitespace and `<Json>` renders exactly that string.
+    // No receipt, no observation array, no envelope.
+    const rendered = String(output).trim();
+    expect(rendered.startsWith('"')).toBe(true);
+    expect(rendered.endsWith('"')).toBe(true);
+    expect(JSON.parse(rendered)).toMatch(/^\s*$/);
   });
 
   it("FE4: an admitted deletion runs, and reads are not admitted with it", function* () {
@@ -931,9 +940,11 @@ describe("Tier FE — what the element itself may say", () => {
   it("FE6: a fragment carrying a construct the evaluator does not admit refuses", function* () {
     const refused: Array<[string, string]> = [
       ["an executable code block", "```ts exec\\nconsole.log(1)\\n```\\n"],
-      ["an expression prop", `<File path={somewhere} />\\n`],
+      ["an expression naming no binding", `<File path={somewhere} />\\n`],
+      ["a computing expression prop", `<File path={"a" + ".md"} />\\n`],
+      ["a calling expression prop", `<File path={resolve("a.md")} />\\n`],
       ["an interpolated binding", `<File path="a.md" />\\n{binding}\\n`],
-      ["an `as` binding", `<File path="a.md" as="kept" />\\n`],
+      ["a malformed `as` binding", `<File path="a.md" as="not a name" />\\n`],
       ["a structural construct", `<If condition={true}>\\n<File path="a.md" />\\n</If>\\n`],
     ];
     const outcomes: Array<[string, string[]]> = [];
@@ -947,25 +958,39 @@ describe("Tier FE — what the element itself may say", () => {
     expect(outcomes).toEqual(refused.map(([what]) => [what, []]));
   });
 
-  it("FE7: `as` captures the result and emits nothing; without it nothing is emitted either", function* () {
+  it("FE7: unbound Evaluate emits the fragment's output, `as` binds that same text, and a surrounding Let captures it", function* () {
+    // Unbound: Evaluate is an ordinary text component, so what the fragment
+    // rendered is what appears where the element was written.
+    const loose = recordedFiles({ "notes.md": NOTE });
+    const unbound = yield* run(`<Evaluate text={'<File path="notes.md" />\\n'} />\n\nbetween\n`, [
+      reading(loose),
+    ]);
+    expect(String(unbound)).toContain("the retained note");
+    expect(String(unbound)).toContain("between");
+    expect(loose.performed).toEqual(["read notes.md"]);
+
+    // With `as`: the ordinary binding path takes the same text and the element
+    // emits nothing of its own. The read still happened, so this is a
+    // suppressed output rather than a skipped evaluation.
     const captured = recordedFiles({ "notes.md": NOTE });
     const bound = yield* run(
       `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\nbetween\n`,
       [reading(captured)],
     );
-    // The value went to the binding, so the element emitted nothing of its own.
     expect(String(bound)).toContain("between");
     expect(String(bound)).not.toContain("the retained note");
+    expect(captured.performed).toEqual(["read notes.md"]);
 
-    const loose = recordedFiles({ "notes.md": NOTE });
-    const unbound = yield* run(`<Evaluate text={'<File path="notes.md" />\\n'} />\n\nbetween\n`, [
-      reading(loose),
-    ]);
-    // And an unbound occurrence emits nothing either: the result is a value,
-    // and a value has nowhere to render. The read still happened.
-    expect(String(unbound)).toContain("between");
-    expect(String(unbound)).not.toContain("the retained note");
-    expect(loose.performed).toEqual(["read notes.md"]);
+    // And an ordinary structural capture around it sees exactly the text the
+    // unbound occurrence emitted — no special Evaluate result on either path.
+    const surrounded = recordedFiles({ "notes.md": NOTE });
+    const held = yield* run(
+      `<Let as="findings">\n  <Evaluate text={'<File path="notes.md" />\\n'} />\n</Let>\n\n` +
+        `<Json value={findings} />\n`,
+      [reading(surrounded)],
+    );
+    expect(String(held)).toContain("the retained note");
+    expect(surrounded.performed).toEqual(["read notes.md"]);
   });
 });
 
@@ -1279,7 +1304,9 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
     if (!isRecord(policy) || !Array.isArray(policy.allowed)) {
       throw new Error("the admission recorded no policy");
     }
-    const entry = policy.allowed[0];
+    // The trusted composition table leads every policy, so the entry this row
+    // is about is the first one the selection contributed.
+    const entry = policy.allowed.find((held) => isRecord(held) && held.name !== "Json");
     if (!isRecord(entry)) {
       throw new Error("the admission admitted nothing");
     }

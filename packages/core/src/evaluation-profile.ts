@@ -57,7 +57,7 @@ import { isFormDispatcher } from "./invocation-identity.ts";
 import type { ComponentInvocation, ProtectedBodies } from "./invocation-identity.ts";
 import type { FetchRequest } from "./fetch-request.ts";
 import { normalizeFetchRequest, requestRecord } from "./fetch-request.ts";
-import { CORE_REVISION } from "./generated-xmd.ts";
+import { CORE_REVISION, pinnedJson } from "./generated-xmd.ts";
 import type { GeneratedRequest } from "./generated-xmd.ts";
 import type { FunctionComponent, FunctionComponentDefinition, Json, PropsSchema } from "./types.ts";
 
@@ -417,7 +417,7 @@ export interface CapturedEntry {
   readonly identity: FragmentIdentity;
   readonly forms: readonly FragmentForm[];
   readonly props: PropsSchema;
-  readonly kind: "capability" | "component-answer";
+  readonly kind: "capability" | "component-answer" | "composition";
   /** Which operation this runs, for a capability entry. */
   readonly capability?: FragmentCapability;
   /** What the admitted vocabulary says this entry does, when the host said. */
@@ -459,6 +459,15 @@ export interface CapturedEntry {
 
 /** What canonical execution keeps, and what canonical `<Evaluate>` reads. */
 export interface CapturedProfile {
+  /**
+   * The pure components every evaluation may write, whatever `allow` selects.
+   *
+   * Core's own, and not a table a host states: composition carries no effect
+   * operation, so admitting it grants nothing and omitting it would take a
+   * language construct away rather than an authority. `allow` selects between
+   * the two effect tables below and never between these.
+   */
+  readonly composition: readonly CapturedEntry[];
   readonly read: readonly CapturedEntry[];
   readonly write: readonly CapturedEntry[];
   readonly workspace?: FragmentWorkspaceAccess;
@@ -520,7 +529,7 @@ interface PreparedEntry {
   readonly name: string;
   readonly identity: FragmentIdentity;
   readonly forms: readonly FragmentForm[];
-  readonly kind: "capability" | "component-answer";
+  readonly kind: "capability" | "component-answer" | "composition";
   readonly description?: string;
   readonly props?: PropsSchema;
   readonly capability?: FragmentCapability;
@@ -595,6 +604,19 @@ export function* prepareEvaluationProfile(
   // One lookup per distinct name, however many entries and tables hold it: a
   // name resolves to one implementation, and asking twice would be two chances
   // for the chain to answer differently.
+  // Core's own, built before the host's tables are examined, so a host naming
+  // one of these refuses at capture rather than shadowing it at evaluation.
+  const composition = compositionEntries();
+  const reserved = new Set(composition.map((entry) => entry.name));
+  for (const entry of [...read, ...write]) {
+    if (reserved.has(entry.name)) {
+      throw new EvaluationProfileError(
+        `an evaluation profile admitted "${entry.name}" as an effect, and it is trusted ` +
+          "composition every evaluation already has. One name is one component, and a table " +
+          "cannot give an effect to a name that performs none.",
+      );
+    }
+  }
   const answered = answeredNames([...read, ...write]);
   const workspace = input.workspace === undefined ? undefined : bindWorkspace(input.workspace);
   const deprecatedSourceAlias = input.deprecatedSourceAlias === true;
@@ -619,6 +641,7 @@ export function* prepareEvaluationProfile(
       // them a fragment reached would depend on which table admitted it.
       const sealed = sealAnswers(answered, answers, capabilities, project);
       return Object.freeze({
+        composition,
         read: sealEntries(read, sealed),
         write: sealEntries(write, sealed),
         ...(workspace === undefined ? {} : { workspace }),
@@ -631,6 +654,37 @@ export function* prepareEvaluationProfile(
       });
     },
   });
+}
+
+/**
+ * The trusted composition table, as this execution retains it.
+ *
+ * Built from the same pinned core entry the evaluator admits, so the vocabulary
+ * an agent is shown and the vocabulary preflight enforces are one fact rather
+ * than two copies of one. Nothing here is a host's to state: a composition
+ * entry runs a component that performs nothing, so there is no operation to
+ * bind and no revocation to hold.
+ */
+function compositionEntries(): readonly CapturedEntry[] {
+  return Object.freeze(
+    [pinnedJson()].map((entry) =>
+      Object.freeze({
+        name: entry.name,
+        identity: Object.freeze({
+          origin: entry.identity.origin,
+          key: entry.identity.key,
+          revision: entry.identity.revision,
+        }),
+        forms: Object.freeze<FragmentForm[]>(["self-closing"]),
+        props: detach(entry.definition.props),
+        kind: "composition" as const,
+        definition: entry.definition,
+        ...(typeof entry.definition.description === "string"
+          ? { description: entry.definition.description }
+          : {}),
+      }),
+    ),
+  );
 }
 
 /**

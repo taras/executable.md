@@ -41,6 +41,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Component, content, hasContent } from "../src/component-api.ts";
+import { pinnedJson } from "../src/generated-xmd.ts";
 import { CORE_REGISTRY } from "../src/components/registry.ts";
 import { collect } from "../src/collect.ts";
 import { retainedSource } from "../src/root-source.ts";
@@ -65,14 +66,28 @@ import type {
   GeneratedEffectClass,
   GeneratedMutation,
   GeneratedObservation,
-  GeneratedObservationResult,
-  GeneratedObservationValue,
   GeneratedXmdRequest,
   RetainedFragmentIdentity,
 } from "../host.ts";
 import type { FunctionComponentDefinition, Json, JsonObject } from "../src/types.ts";
 
 const ROOT_PATH = "workflows/agent.md";
+
+/**
+ * The trusted composition table, as every admission retains it.
+ *
+ * Core's own and not a host's, so it is in the policy whatever the selection
+ * asked for and before whatever the selection added. Written here once, because
+ * every record below has to account for it.
+ */
+const COMPOSITION = [{ name: "Json", identity: pinnedJson().identity, forms: ["self-closing"] }];
+
+/** The same entry as journal data, for a record a test forges by hand. */
+const COMPOSITION_RECORD: JsonObject = {
+  name: "Json",
+  identity: { ...pinnedJson().identity },
+  forms: ["self-closing"],
+};
 const ROOT_SOURCE = "The host ran a generated fragment.\n";
 const URL_ONE = "https://api.example.test/one";
 const URL_TWO = "https://api.example.test/two";
@@ -107,7 +122,7 @@ function probe(): GeneratedObservation {
 }
 
 describe("generated authority stays internal", () => {
-  it("ignores route and lexical-reference injection on the public request", function* () {
+  it("FE33: ignores route, reference and durable-cursor injection on the public request", function* () {
     const candidate = {
       ...request("<Probe />", [probe()]),
       get protectedBodies(): never {
@@ -116,11 +131,27 @@ describe("generated authority stays internal", () => {
       get syntax(): never {
         throw new Error("public syntax was read");
       },
+      // Where a caller would try to choose the durable owner. None of these is
+      // a member of the request, and reading one would say the evaluator had
+      // started accepting a cursor from whoever built the candidate.
+      get stream(): never {
+        throw new Error("public stream was read");
+      },
+      get coroutineId(): never {
+        throw new Error("public coroutine id was read");
+      },
+      get replayIndex(): never {
+        throw new Error("public replay cursor was read");
+      },
+      get durableContext(): never {
+        throw new Error("public durable context was read");
+      },
     };
     const result = yield* evaluate(candidate);
     expect(result.failure).toBeUndefined();
+    // Ordinary output: `<Probe />` is written without `as`, so what it returned
+    // is what it rendered, and nothing is collected beside it.
     expect(result.output).toBe("probed");
-    expect(result.values).toEqual([{ name: "Probe", value: "probed" }]);
   });
 });
 
@@ -201,8 +232,6 @@ function request(
 interface Attempt {
   /** What the fragment rendered, when it was admitted. */
   output?: string;
-  /** What each admitted observation returned, in invocation order. */
-  values?: readonly GeneratedObservationValue[];
   /** What the root document execution settled to, when it settled. */
   rendered?: Json;
   /** Why it was refused, when it was not. */
@@ -244,7 +273,7 @@ function evaluate(
 ): Operation<Attempt> {
   return scoped(function* () {
     const stream = options.stream ?? new InMemoryStream();
-    const captured: { result?: GeneratedObservationResult } = {};
+    const captured: { result?: string } = {};
     const installation = driven(function* () {
       captured.result = yield* evaluateGeneratedXmd(candidate);
       if (options.after) {
@@ -263,8 +292,7 @@ function evaluate(
     const events = yield* stream.readAll();
     if (result.ok) {
       return {
-        output: captured.result?.output ?? "",
-        values: captured.result?.observations ?? [],
+        output: captured.result ?? "",
         rendered: result.value,
         events,
       };
@@ -348,7 +376,7 @@ describe("Tier GX — the trusted-host seam", () => {
     expect(admission.description.input).toMatchObject({
       version: 2,
       workspace: { roots: ROOTS, selectedRoot: ROOTS[0] },
-      allowed: [{ name: "Probe", identity: PROBE_IDENTITY }],
+      allowed: [...COMPOSITION, { name: "Probe", identity: PROBE_IDENTITY }],
     });
     expect(admission.result).toMatchObject({
       status: "ok",
@@ -361,7 +389,7 @@ describe("Tier GX — the trusted-host seam", () => {
         policy: {
           version: 2,
           workspace: { roots: ROOTS, selectedRoot: ROOTS[0] },
-          allowed: [{ name: "Probe", identity: PROBE_IDENTITY }],
+          allowed: [...COMPOSITION, { name: "Probe", identity: PROBE_IDENTITY }],
           requests: [],
         },
       },
@@ -401,10 +429,11 @@ describe("Tier GX — the complete fragment is read first", () => {
     ],
     ["a daemon block", "```bash exec daemon\nsleep 1\n```\n", "executable code block"],
     ["a persist block", "```js eval persist\nconst a = 1;\n```\n", "executable code block"],
-    ["an expression prop", "<Probe count={1 + 1} />\n", "expression prop"],
+    ["a computing expression prop", "<Probe count={1 + 1} />\n", "declarative data"],
+    ["a calling expression prop", "<Probe count={read()} />\n", "declarative data"],
     ["a text binding read", "<Probe />\n\nthe answer is {answer}\n", "interpolation"],
     ["a frontmatter read", "value {props.token}\n", "interpolation"],
-    ["a result binding", `<Fetch url="${URL_ONE}" as="r" />\n`, "binds a result"],
+    ["a malformed result binding", `<Fetch url="${URL_ONE}" as="not a name" />\n`, "binding name"],
     ["an unknown component", "<Unknown />\n", "did not admit"],
     ["a structural construct", "<If test={true}>x</If>\n", "did not admit"],
     ["an unadmitted root component", '<Dir path="/etc" />\n', "did not admit"],
@@ -847,6 +876,112 @@ describe("Tier GX — what the run keeps", () => {
     expect(observations(again.events)).toHaveLength(1);
   });
 
+  /** Persist everything, and suspend once the *second* fetch event arrives. */
+  function holdingAfterFirst(
+    target: InMemoryStream,
+    reached: ReturnType<typeof withResolvers<void>>,
+  ): DurableStream {
+    let seen = 0;
+    return {
+      readAll: () => target.readAll(),
+      *append(event: DurableEvent): Operation<void> {
+        if (event.type === "yield" && event.description.type === "fetch") {
+          seen += 1;
+          if (seen === 2) {
+            reached.resolve();
+            yield* suspend();
+          }
+        }
+        yield* target.append(event);
+      },
+    };
+  }
+
+  it("FE32: a completed effect stays in history when a later one in the same fragment fails", function* () {
+    // Two admitted requests, and the transport fails the second. The first has
+    // already been appended before its operation resumed, so the failure below
+    // finds it in history rather than removing it: there is no staging here to
+    // roll back, which is what this row exists to say.
+    let performed = 0;
+    const transport = yield* useTransport(() => {
+      performed += 1;
+      if (performed === 2) {
+        throw new Error("the second request failed");
+      }
+      return { status: 200, body: "first" };
+    });
+    const stream = new InMemoryStream();
+
+    const attempt = yield* evaluate(
+      request(`<Fetch url="${URL_ONE}" />\n\n<Fetch url="${URL_TWO}" />\n`, [
+        pinnedFetch([{ url: URL_ONE }, { url: URL_TWO }]),
+      ]),
+      { stream },
+    );
+
+    expect(attempt.failure).toBeDefined();
+    expect(transport.performed.map((call) => call.url)).toEqual([URL_ONE, URL_TWO]);
+    // The admission and the first effect are both retained; the second is not.
+    expect(admissions(attempt.events)).toHaveLength(1);
+    expect(observations(attempt.events)).toHaveLength(1);
+  });
+
+  it("FE32: the same fragment with both requests answering is the positive control", function* () {
+    // Without this, the row above could be retaining one observation because
+    // the second element never ran rather than because the first was kept.
+    const transport = yield* useTransport(() => ({ status: 200, body: "answered" }));
+    const attempt = yield* evaluate(
+      request(`<Fetch url="${URL_ONE}" />\n\n<Fetch url="${URL_TWO}" />\n`, [
+        pinnedFetch([{ url: URL_ONE }, { url: URL_TWO }]),
+      ]),
+    );
+
+    expect(attempt.failure).toBe(undefined);
+    expect(transport.performed).toHaveLength(2);
+    expect(observations(attempt.events)).toHaveLength(2);
+  });
+
+  it("FE32: a completed effect stays in history after the run is cancelled", function* () {
+    // The first request completes and is appended; the second suspends in the
+    // transport and the run is halted underneath it. Cancellation is not a
+    // transaction boundary, so the completed effect stays exactly where it was.
+    const blocked = new InMemoryStream();
+    const reached = withResolvers<void>();
+    let performed = 0;
+
+    yield* scoped(function* () {
+      const running = yield* spawn(function* () {
+        yield* useTransport(() => {
+          performed += 1;
+          return { status: 200, body: "first" };
+        });
+        const installation = driven(function* () {
+          yield* evaluateGeneratedXmd(
+            request(`<Fetch url="${URL_ONE}" />\n\n<Fetch url="${URL_TWO}" />\n`, [
+              pinnedFetch([{ url: URL_ONE }, { url: URL_TWO }]),
+            ]),
+          );
+        });
+        yield* collect(
+          yield* executeInstalled(
+            {
+              ...retainedSource(ROOT_PATH, ROOT_SOURCE),
+              stream: holdingAfterFirst(blocked, reached),
+            },
+            [installation],
+          ),
+        );
+      });
+      yield* reached.operation;
+      yield* running.halt();
+    });
+
+    const interrupted = yield* blocked.readAll();
+    expect(admissions(interrupted)).toHaveLength(1);
+    // Exactly the completed one, retained through the halt.
+    expect(observations(interrupted)).toHaveLength(1);
+  });
+
   it("GX17: an interruption before the commit retains no observation", function* () {
     const transport = yield* useTransport(() => ({ status: 200, body: "once" }));
     const blocked = new InMemoryStream();
@@ -1018,10 +1153,10 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
 
     const first = yield* evaluate(candidate(), { after: marker(executed) });
     expect(first.failure).toBe(undefined);
-    // The mutation performed, then the marker — and the mutation contributed
-    // no observation and no receipt to the value the host reads back.
+    // The mutation performed, then the marker — and the mutation invented no
+    // receipt in the text the host reads back.
     expect(executed).toEqual(["write:proposed", "parent-marker"]);
-    expect(first.values).toEqual([]);
+    expect(first.output?.trim()).toBe("");
     expect(offered(first.events)).toEqual([
       "generated_xmd",
       "generated_write",
@@ -1071,7 +1206,6 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
 
     expect(again.failure).toBe(undefined);
     expect(again.output).toBe(first.output);
-    expect(again.values).toEqual(first.values);
     expect(executed).toEqual(["parent-marker"]);
     expect(offered(again.events)).toEqual([
       "generated_xmd",
@@ -1101,7 +1235,6 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
 
     expect(again.failure).toBe(undefined);
     expect(again.output).toBe(first.output);
-    expect(again.values).toEqual(first.values);
     expect(executed).toEqual(["parent-marker"]);
     expect(offered(again.events)).toEqual([
       "generated_xmd",
@@ -1880,7 +2013,13 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
       version: 2,
       allow: ["read"],
       workspace: { roots: [...ROOTS], selectedRoot: ROOTS[0] },
-      allowed: [{ name: "Probe", identity, forms: ["self-closing", "paired"] }],
+      // A version-2 record this build wrote would hold the trusted composition
+      // table ahead of the selection, so the control forges one that does. A row
+      // below moves part of the probe's identity and nothing else.
+      allowed: [
+        { ...COMPOSITION_RECORD },
+        { name: "Probe", identity, forms: ["self-closing", "paired"] },
+      ],
       requests: [],
     };
     return {
@@ -2607,9 +2746,6 @@ describe("Tier WGAC — the pinned read-only File", () => {
     expect(attempt.failure).toBe(undefined);
     expect(transport.performed.map((call) => call.url)).toEqual([URL_ONE]);
 
-    const values = attempt.values ?? [];
-    // Invocation order, and the exact field names a host reads.
-    expect(values.map((observation) => observation.name)).toEqual(["File", "Fetch"]);
     // The identities live in the retained admission, which is where a run is
     // held to them — not on the result, which would be a second copy of the
     // same fact.
@@ -2622,14 +2758,11 @@ describe("Tier WGAC — the pinned read-only File", () => {
     expect(JSON.stringify(named)).toContain(
       JSON.stringify(pinnedFetch([ADMITTED_REQUEST]).identity),
     );
-    expect(values[0]?.value).toBe("the retained note\n");
-    const response = values[1]?.value;
-    expect(isRecord(response)).toBe(true);
-    expect(isRecord(response) ? response.status : undefined).toBe(200);
-    expect(isRecord(response) ? response.body : undefined).toBe("answered");
-
-    // And the rendering, kept separately rather than standing in for them: the
-    // File read renders its text, the Fetch renders nothing.
+    // Ordinary composition: the File read renders its text, and the Fetch —
+    // which returns a value rather than text — renders nothing at all. Its
+    // response reached the fragment and the fragment did not ask for it, so
+    // nothing carries it outward. A fragment that wants it binds it and renders
+    // it explicitly, which is what the composition tests below do.
     expect(attempt.output).toContain("the retained note");
     expect(attempt.output).not.toContain("answered");
   });
@@ -2771,7 +2904,6 @@ describe("Tier GXC — a selection is not a grant", () => {
     expect(omitted.failure).toBe(undefined);
     expect(explicit.failure).toBe(undefined);
     expect(explicit.output).toBe(omitted.output);
-    expect(explicit.values).toEqual(omitted.values);
     // The same retained policy, down to the class it normalized to: a document
     // that says nothing and one that says `read` are held to one grant.
     expect(recordedPolicy(admittedFragments(explicit.events)[0])).toEqual(
@@ -2795,8 +2927,10 @@ describe("Tier GXC — a selection is not a grant", () => {
     // hosts asking for the same two classes must compare equal.
     expect(recordedPolicy(admittedFragments(attempt.events)[0])).toMatchObject({
       allow: ["read", "write"],
-      // The read table first, the write table second, host order inside each.
+      // Composition first, then the read table, then the write table, host
+      // order inside each.
       allowed: [
+        ...COMPOSITION,
         {
           name: "Probe",
           identity: hostIdentity("test://probe", "Probe"),
@@ -3042,14 +3176,13 @@ describe("Tier GXC — a write is not an observation", () => {
 
     expect(attempt.evaluated.failure).toBe(undefined);
     expect(attempt.files).toEqual(["write:proposed.md"]);
-    // The exact shape a document binds: no synthetic receipt for the write, and
-    // no text, because neither of these components renders any. What is left is
-    // the fragment's own line break, which is what the source had in it.
-    expect(attempt.evaluated.values).toEqual([]);
+    // The exact text a document binds: no synthetic receipt for the write, and
+    // nothing else, because neither of these components renders any. What is
+    // left is the fragment's own line break, which the source had in it.
     expect(attempt.evaluated.output?.trim()).toBe("");
   });
 
-  it("GXC7: a mixed fragment collects the read and not the write", function* () {
+  it("GXC7: a mixed fragment renders the read's own output and no receipt for the write", function* () {
     const root = yield* useWorkspace();
     yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
 
@@ -3065,8 +3198,10 @@ describe("Tier GXC — a write is not an observation", () => {
     });
 
     expect(attempt.failure).toBe(undefined);
-    // One entry, under the read identity's name, holding what the read returned.
-    expect(attempt.values).toEqual([{ name: "File", value: "the retained note\n" }]);
+    // The read is written without `as`, so its own value is its ordinary
+    // output; the write beside it renders nothing and adds no receipt.
+    expect(attempt.output).toContain("the retained note");
+    expect(attempt.output).not.toContain("proposed");
   });
 
   const PARTIAL: Array<[string, string]> = [
@@ -3294,10 +3429,10 @@ describe("Tier GXC — the authored form survives the public content chain", () 
       // One read, no write, and the file it was admitted to read is unchanged.
       expect(attempt.files).toEqual(["notes.md"]);
       expect(yield* readTextFile(join(root, "notes.md"))).toBe("the retained note\n");
-      expect(attempt.evaluated.values).toEqual([
-        { name: "Says", value: `says:${script[0]}` },
-        { name: "File", value: "the retained note\n" },
-      ]);
+      // Both are written without `as`, so each contributes its ordinary output
+      // in invocation order and nothing is collected beside them.
+      expect(String(attempt.evaluated.output)).toContain(`says:${script[0]}`);
+      expect(String(attempt.evaluated.output)).toContain("the retained note");
       // And the admission still names the identity and form it was granted for.
       expect(recordedNames(admittedFragments(attempt.evaluated.events)[0])).toEqual([
         { name: "Says", identity: hostIdentity("test://says", "Says"), form: "self-closing" },
@@ -3335,7 +3470,9 @@ describe("Tier GXC — the authored form survives the public content chain", () 
       // that queried the chain would take the second scripted answer — which
       // denies content — and read instead of writing, failing below.
       expect(answered).toEqual([script[0]]);
-      expect(attempt.evaluated.values).toEqual([{ name: "Says", value: `says:${script[0]}` }]);
+      // The read renders its own value; the write beside it renders nothing.
+      expect(String(attempt.evaluated.output)).toContain(`says:${script[0]}`);
+      expect(String(attempt.evaluated.output)).not.toContain("the fragment wrote this");
       // One write of the admitted bytes, and no read of a path the fragment
       // never asked to read.
       expect(attempt.files).toEqual(["write:proposed.md"]);
