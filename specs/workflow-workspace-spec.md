@@ -336,10 +336,15 @@ workflow answer: <run-id> (<suspension-id>)
 
 A value is accepted only when the run is `suspended`, its stop reason names a
 retained `suspension_request` event carrying the supplied suspension ID, and the
-value satisfies the response schema that request retained. Secret detection
-applies to the retained state and the answer event it would become, on the same
-terms as durable journal persistence, and is on unless `--no-secret-detection`
-disables it for that delivery. Duplicate, consumed, wrong-run, wrong-request,
+value satisfies the response schema that request retained. That schema is
+judged as draft-07 by one shared implementation which generates no code, so a
+value receives one verdict whether the run's storage is a local file or an
+object somewhere else — and the boundary that writes the value is the boundary
+that judges it, rather than accepting a judgment somebody else reports having
+made. Secret detection applies to the retained state and the answer event it
+would become, on the same terms as durable journal persistence — the same
+configured scanner, at whichever boundary writes — and is on unless
+`--no-secret-detection` disables it for that delivery. Duplicate, consumed, wrong-run, wrong-request,
 late, invalid, cancelled-run and missing-run delivery is refused, and a refusal
 leaves the run's storage unchanged. A refusal retains neither the rejected value
 nor a secret match in its diagnostic.

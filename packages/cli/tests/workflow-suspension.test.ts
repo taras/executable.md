@@ -1273,7 +1273,9 @@ describe("Tier CKX — a checkpoint a document asked for", () => {
     );
     expect(invalid.exitCode).not.toBe(0);
     expect(invalid.written.err.join(" ")).toContain("does not satisfy the response schema");
-    expect(invalid.written.err.join(" ")).toContain("/proceed must be boolean");
+    expect(invalid.written.err.join(" ")).toContain(
+      '/proceed Instance type "string" is invalid. Expected "boolean"',
+    );
     expect(yield* storageDigest(path)).toEqual(before);
 
     const accepted = yield* manage(

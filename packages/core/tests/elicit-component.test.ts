@@ -370,7 +370,10 @@ describe("Elicit: judging the answer", () => {
     const result = yield* run(workspace, document("Approve?"), constant({ decision: 7 }));
 
     expect(result.failure?.message).toContain("<Elicit />");
-    expect(result.failure?.message).toContain('"/decision" must be string');
+    // The validator's own words. What matters to a document is that the issue
+    // names where the value went wrong and what was expected there.
+    expect(result.failure?.message).toContain('"/decision" Instance type "number" is invalid');
+    expect(result.failure?.message).toContain('Expected "string"');
   });
 
   /**

@@ -19,20 +19,13 @@
  * retry belongs in visible Markdown control flow.
  */
 
-import type { ValidateFunction } from "ajv";
 import type { Operation } from "effection";
 
 import { Elicitation } from "./elicitation-api.ts";
 import type { ElicitationRequest } from "./elicitation-api.ts";
-import {
-  ParseSchemaError,
-  compileParseSchema,
-  readParseSchema,
-  validateParsed,
-} from "./components/parse-schema.ts";
+import { prepareResponseValidator } from "./elicitation-schema.ts";
+import type { ResponseValidator } from "./elicitation-schema.ts";
 import { parseJson } from "./json.ts";
-import { walkSchema } from "./schema-walk.ts";
-import type { NameKind } from "./schema-walk.ts";
 import { SchemaValidationError } from "./validate.ts";
 import type { NormalizedIssue } from "./validate.ts";
 import type { Json, JsonObject } from "./types.ts";
@@ -48,30 +41,37 @@ export class ElicitValidationError extends SchemaValidationError {
   }
 }
 
-/** A compiled question. Nothing has been asked yet. */
+/** A prepared question. Nothing has been asked yet. */
 export interface PreparedElicitation {
   /** Normalized draft-07, as the provider will receive it. */
   schema: JsonObject;
-  validate: ValidateFunction;
+  /**
+   * What judges a response against this schema.
+   *
+   * The repository's own contract rather than a validator library's type: the
+   * same judgment runs at every boundary that decides a response, including a
+   * run's owner, and none of them may depend on which library is underneath.
+   */
+  validator: ResponseValidator;
   label: string;
 }
 
 /**
- * Normalize and compile a question's schema.
+ * Normalize and admit a question's schema.
  *
  * Synchronous and effect-free: it either produces a question that can be asked
- * or throws, and a caller that has not yet begun anything can still stop.
+ * or throws, and a caller that has not yet begun anything can still stop. The
+ * judgment it prepares is the one every boundary makes — a document's provider
+ * answer here, a workflow answer delivered locally, and a workflow answer
+ * retained by a run's owner somewhere else.
  */
+// deno-lint-ignore require-yield
 export function* prepareElicitation(
   schema: Json,
   label: string = DEFAULT_LABEL,
 ): Operation<PreparedElicitation> {
-  const declaration = readParseSchema(label, schema);
-
-  refuseUnsupportedNames(label, declaration);
-  refuseExternalReferences(label, declaration);
-
-  return { schema: declaration, validate: yield* compileParseSchema(label, declaration), label };
+  const validator = prepareResponseValidator(label, schema);
+  return { schema: validator.schema, validator, label };
 }
 
 /** Ask the configured provider, and judge what it returns. */
@@ -86,7 +86,7 @@ export function* runPreparedElicitation(
   // back is `unknown` until this boundary has walked it.
   const response = parseJson(answer);
 
-  const issues = validateParsed(prepared.validate, response);
+  const issues = prepared.validator.judge(response);
   if (issues.length > 0) {
     throw new ElicitValidationError(prepared.label, issues);
   }
@@ -103,69 +103,4 @@ export function* elicit(request: {
     yield* prepareElicitation(request.schema, request.label),
     request.message,
   );
-}
-
-/**
- * Refuse `__proto__` where a schema declares it as a name.
- *
- * Two reasons, and either alone would be enough. A validated response binds
- * into the evaluation environment, and a schema is how a document says it
- * expects that name — so the safest moment to say the name is unsupported is
- * before anyone is asked for a value carrying it.
- *
- * The other is that the underlying validator loses it. Ajv builds its internal
- * tables from schema keys by assignment, so `properties: { "__proto__": … }`
- * compiles and then never applies: a response carrying that key is judged as
- * though the property had never been declared, and under
- * `additionalProperties: false` it is rejected outright. `dependencies` compiles
- * and never applies; `required` is refused by strict mode. None of those is a
- * failure a document could see or work around.
- *
- * The same string as *data* — a `const`, an `enum` member, a title, a default —
- * is untouched, because nothing reads it as a key.
- */
-function refuseUnsupportedNames(label: string, schema: JsonObject): void {
-  walkSchema(schema, {
-    subschema() {},
-    declaredName(name: string, kind: NameKind, path: string) {
-      if (name !== "__proto__") {
-        return;
-      }
-      throw new ParseSchemaError(
-        `<${label} /> schema declares "__proto__" as a ${kind} at ${path}, which is not ` +
-          "supported: the underlying validator loses that name, so the rule would " +
-          "silently not apply. Rename it, or carry the value under a different key.",
-      );
-    },
-  });
-}
-
-/**
- * Refuse a reference that leaves the document.
- *
- * Ajv reports an unreachable external reference and a mistyped local pointer
- * with the same `can't resolve reference` message, so the two are told apart
- * here — by the shape of the reference itself — rather than by reading an error
- * string. A local pointer that does not resolve is still Ajv's to report, and
- * `compileParseSchema` names it.
- *
- * `$ref` is read only at real schema positions. An object carrying `$ref` inside
- * a `const` or an `enum` member is a JSON value the author wants matched, not a
- * reference, and Ajv never resolves it — so neither does this.
- */
-function refuseExternalReferences(label: string, schema: JsonObject): void {
-  walkSchema(schema, {
-    subschema(subschema: JsonObject, path: string) {
-      const reference = subschema["$ref"];
-      if (typeof reference !== "string" || reference.startsWith("#")) {
-        return;
-      }
-      throw new ParseSchemaError(
-        `<${label} /> schema references "${reference}" at ${path}, which is outside the ` +
-          "supplied schema. Only references contained within it resolve; external file " +
-          "and HTTP(S) references are deferred to #192.",
-      );
-    },
-    declaredName() {},
-  });
 }

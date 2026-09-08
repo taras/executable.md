@@ -22,7 +22,8 @@ import { expect } from "@executablemd/test-support/expect";
 import { call, Err, Ok, type Operation, race, type Result, scoped } from "effection";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
-import { collect, inlineSource, registerComponents } from "@executablemd/core";
+import { collect, inlineSource, prepareElicitation, registerComponents } from "@executablemd/core";
+import type { JsonObject } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { retainedWorkflowInstallation } from "../src/run.ts";
 import { installRemoteInputDelivery } from "../src/remote/delivery.ts";
@@ -249,6 +250,138 @@ describe("delivering one typed value to a remote run", () => {
 
     expect(outcome.ok).toBe(false);
     expect(scripted.asked).toEqual(["wait", "retain"]);
+  });
+});
+
+describe("one judgment, wherever a response is judged", () => {
+  /**
+   * The cases the boundaries have to agree about.
+   *
+   * `multipleOf` is here because it is where the compiler this replaced and the
+   * settled draft-07 judgment disagreed: `0.3` is a multiple of `0.1`, and the
+   * value is now accepted everywhere rather than accepted at one boundary and
+   * refused at another.
+   */
+  const cases: { name: string; schema: JsonObject; value: Json; admitted: boolean }[] = [
+    { name: "a valid answer", schema: SCHEMA, value: ANSWER, admitted: true },
+    {
+      name: "an answer the schema does not admit",
+      schema: SCHEMA,
+      value: { approved: "yes" },
+      admitted: false,
+    },
+    {
+      name: "a non-representable step",
+      schema: { type: "number", multipleOf: 0.1 },
+      value: 0.3,
+      admitted: true,
+    },
+    {
+      name: "a self-contained reference",
+      schema: {
+        definitions: { flag: { type: "boolean" } },
+        type: "object",
+        properties: { approved: { $ref: "#/definitions/flag" } },
+        required: ["approved"],
+      },
+      value: { approved: true },
+      admitted: true,
+    },
+    {
+      name: "a self-contained reference the value fails",
+      schema: {
+        definitions: { flag: { type: "boolean" } },
+        type: "object",
+        properties: { approved: { $ref: "#/definitions/flag" } },
+        required: ["approved"],
+      },
+      value: { approved: "yes" },
+      admitted: false,
+    },
+  ];
+
+  it("reaches the same verdict through the document path and remote delivery", function* () {
+    const verdicts: { name: string; document: boolean; remote: boolean }[] = [];
+    for (const example of cases) {
+      // What `<Elicit>` judges a provider's answer with, and what the local
+      // host judges a delivered answer with: one prepared validator.
+      const prepared = yield* prepareElicitation(example.schema, "workflow answer");
+      const document = prepared.validator.judge(example.value).length === 0;
+
+      // The remote delivery boundary, whole: a scripted owner returns the
+      // retained wait and the production installer judges the value.
+      const scripted = scriptedLink({
+        wait: Ok(
+          waitRecord({
+            request: REQUEST,
+            responseSchema: example.schema,
+            requestFingerprint: suspensionRequestFingerprint({
+              request: REQUEST,
+              responseSchema: example.schema,
+            }),
+          }),
+        ),
+      });
+      const outcome = yield* delivered(scripted.link, {
+        value: example.value,
+        secretDetection: false,
+      });
+      verdicts.push({ name: example.name, document, remote: outcome.ok });
+    }
+
+    expect(verdicts.filter((verdict) => verdict.document !== verdict.remote)).toEqual([]);
+    expect(verdicts).toEqual(
+      cases.map((example) => ({
+        name: example.name,
+        document: example.admitted,
+        remote: example.admitted,
+      })),
+    );
+  });
+
+  /** One schema written as JSON, so every declared name survives. */
+  function parsedSchema(text: string): JsonObject {
+    const parsed: unknown = JSON.parse(text);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("the fixture schema is not an object");
+    }
+    const held: JsonObject = {};
+    for (const name of Object.getOwnPropertyNames(parsed)) {
+      held[name] = Reflect.get(parsed, name);
+    }
+    return held;
+  }
+
+  it("refuses a schema no answer can be judged against, before anything is sent", function* () {
+    const unusable: JsonObject[] = [
+      { type: "object", properties: { decision: { $ref: "other.json#/x" } } },
+      // Parsed rather than written as a literal: an object literal takes
+      // `__proto__` as the prototype and the key never exists.
+      parsedSchema('{"type":"object","properties":{"__proto__":{"type":"string"}}}'),
+      { type: "not-a-type" },
+      { type: "object", nope: 1 },
+      { $async: true, type: "object" },
+    ];
+
+    for (const schema of unusable) {
+      const scripted = scriptedLink({
+        wait: Ok(
+          waitRecord({
+            responseSchema: schema,
+            requestFingerprint: suspensionRequestFingerprint({
+              request: REQUEST,
+              responseSchema: schema,
+            }),
+          }),
+        ),
+      });
+      const outcome = yield* delivered(scripted.link, { secretDetection: false });
+      expect([JSON.stringify(schema), outcome.ok, scripted.asked]).toEqual([
+        JSON.stringify(schema),
+        false,
+        ["wait"],
+      ]);
+    }
   });
 });
 

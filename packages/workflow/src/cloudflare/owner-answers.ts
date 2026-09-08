@@ -19,7 +19,8 @@ import { WorkflowRecordMalformedError } from "../storage/errors.ts";
 import { parseJsonValue } from "../storage/members.ts";
 import { canonicalJson } from "../storage/record.ts";
 import { SUSPENSION_ANSWER, SUSPENSION_REQUEST } from "../suspension/effects.ts";
-import { judgeAgainstSchema, requireJudgeableSchema } from "../suspension/judgment.ts";
+import { prepareResponseValidator } from "@executablemd/core/elicitation";
+import type { ResponseValidator } from "@executablemd/core/elicitation";
 import { CommandError } from "./commands.ts";
 import { sha256Hex } from "./encoding.ts";
 import { heldExecution } from "./private-schema.ts";
@@ -265,14 +266,17 @@ export function retainAnswer(
 }
 
 /**
- * Check the offered value against the schema this wait retained.
+ * Judge the offered value against the schema this wait retained.
  *
- * The additional check, not the settled one. The semantics the contract names
- * are the local host's compiler, which a Worker cannot run; what this refuses
- * is a subset of what that compiler refuses, on the schemas it admits, and a
- * schema whose keywords it does not implement is refused outright rather than
- * judged with that constraint quietly skipped. A refusal names where the value
- * went wrong and never what it held.
+ * The same judgment every other boundary makes. `prepareResponseValidator` is
+ * what `<Elicit>` prepares, what local delivery judges with and what the remote
+ * client judges with, and it generates no code — so the verdict here is the
+ * verdict there, for the same schema and the same value, rather than an
+ * approximation of it.
+ *
+ * A schema that cannot be admitted at all is its own refusal: retaining a value
+ * against a schema nothing could judge would be retaining an unjudged one. A
+ * rejected value's refusal names neither the value nor what was wrong with it.
  */
 function judgeOffered(waiting: OwnerRetainedWait, answer: string): void {
   let value: Json;
@@ -283,14 +287,13 @@ function judgeOffered(waiting: OwnerRetainedWait, answer: string): void {
   } catch {
     throw new CommandError("malformed-member");
   }
+  let validator: ResponseValidator;
   try {
-    requireJudgeableSchema(schema);
+    validator = prepareResponseValidator("workflow answer", schema);
   } catch {
-    // The wait published a schema this build cannot judge an answer against.
-    // Retaining a value it could not check would be retaining an unjudged one.
     throw new CommandError("unjudgeable-schema");
   }
-  if (judgeAgainstSchema(schema, value).length > 0) {
+  if (validator.judge(value).length > 0) {
     throw new CommandError("answer-rejected");
   }
 }

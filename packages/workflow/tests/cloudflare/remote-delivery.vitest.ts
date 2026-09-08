@@ -136,7 +136,7 @@ async function deliver(
   return JSON.parse(answered);
 }
 
-function requestEvent(suspensionId = SUSPENSION): string {
+function requestEvent(suspensionId = SUSPENSION, responseSchema: Json = SCHEMA): string {
   return serializeDurableEvent({
     type: "yield",
     coroutineId: "root",
@@ -145,7 +145,7 @@ function requestEvent(suspensionId = SUSPENSION): string {
       name: suspensionId,
       suspensionId,
       request: REQUEST,
-      responseSchema: SCHEMA,
+      responseSchema,
     },
     result: { status: "ok", value: null },
   });
@@ -179,6 +179,7 @@ async function frontier(
 async function suspended(
   stub: ReturnType<typeof executor>,
   suspensionId = SUSPENSION,
+  responseSchema: Json = SCHEMA,
 ): Promise<string> {
   await connected(stub);
   const begun = await ask(stub, {
@@ -200,7 +201,7 @@ async function suspended(
     expectedJournalEventId: at.eventId,
     publication: null,
     mappings: [],
-    events: [requestEvent(suspensionId)],
+    events: [requestEvent(suspensionId, responseSchema)],
     answer: null,
   });
   expect(committed["outcome"]).toBe("performed");
@@ -600,6 +601,125 @@ describe("reaching the delivery plane through the production client", () => {
     const message = refused.ok === false ? refused.error.message : "";
     expect(message).not.toContain(presented);
     expect(message).not.toContain("deliverRequest");
+  });
+});
+
+describe("judging a delivered value at the owner", () => {
+  it("reaches the settled draft-07 verdict, including the arithmetic one", async () => {
+    const stub = executor();
+    // A wait whose schema the compiler this replaced and the shared validator
+    // disagreed about. Draft-07 says 0.3 is a multiple of 0.1, and that is the
+    // verdict every boundary now reaches.
+    await suspended(stub, SUSPENSION, { type: "number", multipleOf: 0.1 });
+
+    const accepted = await deliver(
+      stub,
+      delivery({ answer: canonicalJson(0.3), secretDetection: false }),
+    );
+    expect(accepted).toEqual({
+      outcome: "performed",
+      value: { runId: RUN_ID, suspensionId: SUSPENSION },
+    });
+    expect((await on(stub, (owner) => owner.retainedAnswers()))[0]?.["answer"]).toBe("0.3");
+  });
+
+  it("refuses a value the retained schema does not admit, and writes nothing", async () => {
+    const stub = executor();
+    await suspended(stub, SUSPENSION, { type: "number", multipleOf: 0.1 });
+    const before = await on(stub, (owner) => ({
+      answers: owner.retainedAnswers(),
+      journal: owner.journalRecords(),
+      run: owner.runRow(),
+      executions: owner.executionRows(),
+      private: owner.scratch(),
+    }));
+
+    const refused = await deliver(
+      stub,
+      delivery({ answer: canonicalJson("not a number"), secretDetection: false }),
+    );
+
+    expect(refused["refusal"]).toBe("command:answer-rejected");
+    expect(
+      await on(stub, (owner) => ({
+        answers: owner.retainedAnswers(),
+        journal: owner.journalRecords(),
+        run: owner.runRow(),
+        executions: owner.executionRows(),
+        private: owner.scratch(),
+      })),
+    ).toEqual(before);
+  });
+
+  it("resolves a self-contained reference, and refuses one that leaves", async () => {
+    const contained = executor();
+    await suspended(contained, SUSPENSION, {
+      definitions: { decision: { type: "string", enum: ["approve", "reject"] } },
+      type: "object",
+      properties: { decision: { $ref: "#/definitions/decision" } },
+      required: ["decision"],
+    });
+
+    expect(
+      (
+        await deliver(
+          contained,
+          delivery({ answer: canonicalJson({ decision: "approve" }), secretDetection: false }),
+        )
+      )["outcome"],
+    ).toBe("performed");
+
+    const leaving = executor();
+    await suspended(leaving, SUSPENSION, {
+      type: "object",
+      properties: { decision: { $ref: "other.json#/x" } },
+    });
+    const refused = await deliver(
+      leaving,
+      delivery({ answer: canonicalJson({ decision: "approve" }), secretDetection: false }),
+    );
+
+    // A schema no answer can be judged against is refused rather than retained
+    // on weaker terms.
+    expect(refused["refusal"]).toBe("command:unjudgeable-schema");
+    expect(await on(leaving, (owner) => owner.retainedAnswers())).toEqual([]);
+  });
+
+  it("judges without generating code, on the path a delivery actually takes", async () => {
+    const stub = executor();
+    await suspended(stub, SUSPENSION, { type: "number", multipleOf: 0.1 });
+    const presented = await token();
+    const named = { release: POLICY.release, token: presented, runId: RUN_ID };
+    const body = JSON.stringify(delivery({ answer: canonicalJson(0.3), secretDetection: false }));
+
+    // Counted inside the object, around the delivery itself: what the owner
+    // does when it judges a value is what is being measured, not what a helper
+    // does somewhere else. A Worker refuses code generation during a request,
+    // and the pool only hides that because it proxies `Function` into an
+    // unsafe evaluation binding.
+    const generated = await on(stub, async (owner) => {
+      const original = globalThis.Function;
+      let made = 0;
+      globalThis.Function = new Proxy(original, {
+        construct(target, args, newTarget) {
+          made += 1;
+          return Reflect.construct(target, args, newTarget);
+        },
+        apply(target, thisArg, args) {
+          made += 1;
+          return Reflect.apply(target, thisArg, args);
+        },
+      });
+      try {
+        const answered = await owner.deliverRequest(named, body);
+        return { made, answered };
+      } finally {
+        globalThis.Function = original;
+      }
+    });
+
+    expect(JSON.parse(generated.answered)["outcome"]).toBe("performed");
+    expect(generated.made).toBe(0);
   });
 });
 

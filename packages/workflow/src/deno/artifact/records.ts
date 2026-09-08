@@ -28,7 +28,7 @@
 import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
 import type { Operation } from "effection";
-import { prepareElicitation, validateParsed } from "@executablemd/core";
+import { prepareElicitation } from "@executablemd/core";
 import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/core/host";
 import type { PromptRecord } from "@executablemd/core/host";
 import { parseDurableEvent } from "@executablemd/durable-streams";
@@ -1695,7 +1695,7 @@ function* judgeRetainedAnswer(
   let issues;
   try {
     const prepared = yield* prepareElicitation(wait.responseSchema, "artifact answer");
-    issues = validateParsed(prepared.validate, answer);
+    issues = prepared.validator.judge(answer);
   } catch {
     reject("a retained response schema cannot judge the answer stored against it");
   }

@@ -34,7 +34,6 @@ import {
   prepareElicitation,
   SecretDetectedError,
   type SecretFinding,
-  validateParsed,
 } from "@executablemd/core";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
@@ -45,11 +44,6 @@ import {
   type WorkflowSuspensionRequest,
 } from "../suspension/api.ts";
 import type { RemoteDeliveryLink, RemoteRetainedWaitRecord } from "./answer-link.ts";
-import {
-  describeJudgment,
-  judgeAgainstSchema,
-  requireJudgeableSchema,
-} from "../suspension/judgment.ts";
 import {
   parseAnswerDelivery,
   type WorkflowAnswerDelivery,
@@ -116,14 +110,6 @@ function* deliverRemotely(
   const judged = yield* judgeAnswer(waiting.value, suspensionId, value);
   if (!judged.ok) {
     return judged;
-  }
-
-  // The judgment the owner will make, made here too. A schema the owner cannot
-  // judge is refused before a value is offered against it, and a disagreement
-  // between the compiler and the shared judgment stops here.
-  const shared = judgeShared(waiting.value, suspensionId, value);
-  if (!shared.ok) {
-    return shared;
   }
 
   if (secretDetection) {
@@ -215,7 +201,7 @@ function* judgeAnswer(
   let issues;
   try {
     const prepared = yield* prepareElicitation(waiting.request.responseSchema, "workflow answer");
-    issues = validateParsed(prepared.validate, value);
+    issues = prepared.validator.judge(value);
   } catch (error) {
     return Err(
       new WorkflowAnswerDeliveryError(
@@ -236,37 +222,6 @@ function* judgeAnswer(
     new WorkflowAnswerDeliveryError(
       `the value offered to ${suspensionId} does not satisfy the response schema that wait ` +
         `retained: ${described}.`,
-    ),
-  );
-}
-
-/**
- * The same judgment the owner makes, made before anything is offered.
- *
- * The owner refuses a schema it cannot judge rather than retaining a value it
- * could not check, so a wait whose schema is outside the judged subset is
- * reported here — where a caller can be told what happened — instead of
- * arriving as a bare refusal from somewhere else.
- */
-function judgeShared(waiting: RemoteRetainedWait, suspensionId: string, value: Json): Result<void> {
-  try {
-    requireJudgeableSchema(waiting.request.responseSchema);
-  } catch (error) {
-    return Err(
-      new WorkflowAnswerDeliveryError(
-        `the response schema retained for ${suspensionId} is not one an answer can be judged ` +
-          `against: ${error instanceof Error ? error.message : String(error)}`,
-      ),
-    );
-  }
-  const issues = judgeAgainstSchema(waiting.request.responseSchema, value);
-  if (issues.length === 0) {
-    return Ok();
-  }
-  return Err(
-    new WorkflowAnswerDeliveryError(
-      `the value offered to ${suspensionId} does not satisfy the response schema that wait ` +
-        `retained: ${describeJudgment(issues)}.`,
     ),
   );
 }

@@ -30,7 +30,6 @@ import {
   prepareElicitation,
   SecretDetectedError,
   type SecretFinding,
-  validateParsed,
 } from "@executablemd/core";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
@@ -254,7 +253,7 @@ function* judgeAnswer(
   let issues;
   try {
     const prepared = yield* prepareElicitation(waiting.request.responseSchema, "workflow answer");
-    issues = validateParsed(prepared.validate, value);
+    issues = prepared.validator.judge(value);
   } catch (error) {
     return Err(
       new WorkflowAnswerDeliveryError(

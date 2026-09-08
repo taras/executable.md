@@ -1030,6 +1030,17 @@ installed nearer — may answer the question or refuse it, and in both cases the
 run it affected never suspended; continuation of a suspended run is retained
 delivery state and nothing else.
 
+A response schema is judged by one implementation wherever it is judged. The
+document runtime judges what a provider returns, a local host judges a delivered
+answer, and a run whose storage lives somewhere else judges it there — inside
+the transaction that writes it, because a boundary that accepts somebody's
+report of a judgment has not made one. That is possible only because the
+judgment generates no code: a runtime that refuses code generation during a
+request cannot compile a schema it learns from a retained wait, so a validator
+that compiles could never be the one every boundary runs. It is draft-07, the
+schema is admitted against the draft-07 meta-schema before anything is asked,
+and `format` annotates without constraining.
+
 The retained request at the execution's exact current durable position is what
 authorizes entry. The controller derives the identifier for the position
 immediately behind the caller's own, requires the presented one to equal it,
