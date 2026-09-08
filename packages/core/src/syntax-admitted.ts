@@ -3,15 +3,17 @@
  *
  * An agent asked to write a fragment is told what a fragment may contain. That
  * is not the vocabulary of the site the `<Evaluate>` element was written at:
- * the evaluator admits the host's pinned identities and nothing else — no
- * executable code block, no expression prop, no interpolation, no `as` binding,
- * and none of the structural constructs an ordinary document has.
+ * the evaluator admits the trusted composition table and the host's pinned
+ * identities for the selected classes, and nothing else — no executable code
+ * block, no interpolation, and none of the structural constructs an ordinary
+ * document has.
  *
  * So the symbols built here say exactly that. The structural and built-in
  * categories are empty, because a fragment writes neither, and the components
- * are the entries the selection resolved to. Anything else would describe a
- * vocabulary the fragment does not have, and an agent told it had `<Loop>`
- * would produce a fragment the evaluator refuses whole.
+ * are the composition entries beside the ones the selection resolved to.
+ * Anything else would describe a vocabulary the fragment does not have, and an
+ * agent told it had `<Loop>` would produce a fragment the evaluator refuses
+ * whole.
  *
  * What an author may *read about* is a separate question, and this does not
  * answer it: `SyntaxReference.available()` keeps the enclosing documentation
@@ -70,8 +72,10 @@ function describe(entry: CapturedEntry): CompleteComponentSyntaxEntry {
     // nothing about it would tell an agent a name and no more.
     ...(entry.description === undefined ? {} : { description: entry.description }),
     // `as` and `context` are deliberately absent whatever the implementation
-    // declares: a fragment may bind nothing, and the evaluator refuses an `as`
-    // before the first effect. Describing them would document a spelling that
-    // refuses the whole fragment.
+    // declares, for two different reasons. Binding is engine-owned language
+    // syntax rather than something a profile entry grants, so it belongs to no
+    // entry's description; and a fragment gives content only to an entry
+    // admitted in its paired form, so describing a context would document a
+    // spelling preflight refuses.
   };
 }

@@ -541,7 +541,10 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       const transport = { performed: [] as string[] };
 
       const fake = createFakeAcp();
-      fake.script(observation(`<Fetch url="${url}" />`));
+      // The agent binds the response and renders it, which is how a value that
+      // renders nothing on its own reaches the next turn now that nothing is
+      // collected on the fragment's behalf.
+      fake.script(observation(`<Fetch url="${url}" as="answer" />\n\n<Json value={answer} />`));
       fake.script(proposal("The release notes are ready, so ship it."));
 
       const attempt = yield* runFixture(root, database, source, {
@@ -553,22 +556,22 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       expect(attempt.failure).toBe(undefined);
       expect(transport.performed).toEqual([url]);
 
-      // `<Fetch>` written without a binding renders nothing at all — a
-      // component returning a non-string has nowhere to render. The retained
-      // response still has to reach the agent, so the second prompt carries the
-      // status and the body it never saw rendered.
+      // `<Fetch>` returns a value rather than text, so it renders nothing where
+      // it is written. The fragment bound it and rendered it explicitly, and
+      // that rendering is what reaches the next prompt.
       expect(fake.prompts).toHaveLength(2);
       const second = fake.prompts[1] ?? "";
       // The complete retained response, not a summary of it: status, headers and
-      // body, under the observation's own name and in invocation order.
-      expect(second).toContain('"name": "Fetch"');
+      // body, exactly as the fragment chose to render them.
       expect(second).toContain('"status": 200');
       expect(second).toContain('"content-type"');
       expect(second).toContain("text/plain");
       expect(second).toContain("the release notes are ready");
-      // And the fragment's own rendering, kept beside the values rather than
-      // standing in for them — an uncaptured `<Fetch>` renders nothing.
-      expect(second).toContain('"output": ""');
+      // No envelope around it: nothing names the element or reports a separate
+      // rendering beside the value the fragment asked for.
+      expect(second).not.toContain('"name": "Fetch"');
+      expect(second).not.toContain('"observations"');
+      expect(second).not.toContain('"output"');
       // The first prompt had no observation yet, so the difference is the
       // observation rather than the document's own prose.
       expect(fake.prompts[0]).not.toContain("the release notes are ready");
@@ -584,7 +587,9 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       const database = yield* createRun();
       const store = makeStore();
       const live = createFakeAcp();
-      live.script(observation(`<Fetch url="${url}" />`));
+      // Bound and rendered, the same way the row above states it: a `<Fetch>`
+      // written without `as` renders nothing, so nothing would reach the turn.
+      live.script(observation(`<Fetch url="${url}" as="answer" />\n\n<Json value={answer} />`));
       live.script(proposal("The release notes are ready, so ship it."));
       const performed: string[] = [];
 

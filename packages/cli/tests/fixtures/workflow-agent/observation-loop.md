@@ -18,7 +18,7 @@ Workspace. A fragment naming anything else performs nothing at all.
 
 The conversation is bounded here, in the document, where you can read the bound.
 
-<Let as="observation" value={null} />
+<Let as="observation" value={""} />
 
 <Agent name="codex">
 <Session name="review">
@@ -47,18 +47,26 @@ to ask for something to be read, or
 
 when you have seen enough.
 
-The only element an observation may use is a self-closing file read, written
-exactly like this:
+An observation is ordinary Executable Markdown, and what this run gives back to
+you is whatever your fragment renders. A file read renders the file, so asking
+for one is a single element:
 
 ```md
 <File path="notes.md" />
 ```
 
-What the previous observation returned, if there was one. `observations` holds
-one entry per element the fragment performed, in the order it performed them,
-and `output` is whatever the fragment rendered — usually nothing:
+An element that returns a value rather than text renders nothing on its own.
+Bind it with `as` and render what you want with `<Json>`, which is always
+available to you:
 
-<Json value={observation} />
+```md
+<Fetch url="https://example.test/thing" as="answer" />
+<Json value={answer} />
+```
+
+What your previous observation rendered, if there was one:
+
+{observation}
 </Prompt>
 
 <Parse as="turn" schema={{"oneOf":[{"type":"object","properties":{"kind":{"const":"observation"},"source":{"type":"string"}},"required":["kind","source"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"proposal"},"source":{"type":"string"}},"required":["kind","source"],"additionalProperties":false}]}}>{reply}</Parse>
@@ -75,12 +83,13 @@ An observation is performed instead. `<Evaluate>` reads the whole fragment
 before it does anything, so a fragment whose second element is not admitted
 performs nothing — not even the part of it that was fine.
 
-What comes back is a value rather than text: each element's own result, in the
-order they ran. That matters because most observations render nothing at all — a
-`<Fetch>` written without a binding has nowhere to put its response — so reading
-the fragment's rendered output would tell the agent nothing. It is bound rather
-than rendered here, because the reader of this run wants the agent's answer, not
-the file it happened to open.
+What comes back is what the fragment rendered, exactly as ordinary Executable
+Markdown renders it. Nothing is collected on the agent's behalf: an element
+written without `as` contributes its own output, and one written with `as` binds
+inside the fragment and contributes none. An agent that wants a value it cannot
+see rendered — a `<Fetch>` response, say — binds it and renders it with
+`<Json>`. It is bound rather than rendered here, because the reader of this run
+wants the agent's answer, not the file it happened to open.
 
 <Evaluate source={turn.source} as="observation" />
 

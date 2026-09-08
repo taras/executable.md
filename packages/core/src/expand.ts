@@ -67,6 +67,7 @@ import {
   returnCaptureViolation,
 } from "./invocation-rules.ts";
 import { interpolate } from "./interpolate.ts";
+import { evaluateDataExpression, GeneratedDataExpressions } from "./generated-expressions.ts";
 import { interpolateEvalBindings } from "./eval-interpolate.ts";
 import {
   Component,
@@ -3525,10 +3526,11 @@ function* resolveExpressionProps(
     return resolved;
   }
 
+  const generated = yield* GeneratedDataExpressions.get();
   const evalEnv = yield* expressionEnv(componentName, Object.keys(expressions), explicitEnv);
 
   for (const [propName, expression] of Object.entries(expressions)) {
-    const result = evaluateIn(evalEnv, expression, componentName, propName);
+    const result = evaluateIn(evalEnv, expression, componentName, propName, generated === true);
 
     // A successful `undefined` is the absence of a value, and absence is
     // written by leaving the prop out (§6.5). It happens here, before
@@ -3582,8 +3584,9 @@ export function* evaluateExpression(
   propName: string,
   explicitEnv?: EvalEnv,
 ): Operation<unknown> {
+  const generated = yield* GeneratedDataExpressions.get();
   const evalEnv = yield* expressionEnv(componentName, [propName], explicitEnv);
-  return evaluateIn(evalEnv, expression, componentName, propName);
+  return evaluateIn(evalEnv, expression, componentName, propName, generated === true);
 }
 
 function* expressionEnv(
@@ -3615,7 +3618,16 @@ function evaluateIn(
   expression: string,
   componentName: string,
   propName: string,
+  generated: boolean,
 ): unknown {
+  // A generated fragment's expression is data, and the grammar that reads it
+  // never compiles anything (`generated-expressions.ts`). Its refusal travels
+  // as itself rather than under the wrapper below: the fragment has no author
+  // to tell which prop of theirs failed, and the message must not quote
+  // generated text back into a run's failure or its journal.
+  if (generated) {
+    return evaluateDataExpression(expression, evalEnv.values);
+  }
   const envKeys = Object.keys(evalEnv.values);
   const envValues = envKeys.map((key) => evalEnv.values[key]);
   try {

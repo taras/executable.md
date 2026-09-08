@@ -219,8 +219,6 @@ export type {
   GeneratedEffectClass,
   GeneratedMutation,
   GeneratedObservation,
-  GeneratedObservationResult,
-  GeneratedObservationValue,
   GeneratedRequest,
   GeneratedXmdRequest,
   RetainedFragmentIdentity,

@@ -51,14 +51,19 @@
  * written at. An agent asked to write a fragment is told what a fragment may
  * contain, which is the only description of it that is true.
  *
- * ## What it answers with
+ * ## What it renders
  *
- * Each admitted observation's own value in invocation order, with whatever the
- * fragment rendered kept beside them under `output`. A value rather than a
- * serialization: how a value becomes text is the document's decision, and it
- * has `<Json>` to make it with. An admitted write puts nothing here — what it
- * did is retained by its own ordinary durable effect, which is the
- * authoritative account of it.
+ * The generated fragment's ordinary output, and nothing synthesized beside it.
+ * Every component inside the fragment keeps its ordinary behavior: written
+ * without `as` it contributes its output, and written with `as` it binds inside
+ * the fragment and contributes none. A fragment that wants its caller to
+ * receive a value renders it explicitly, which is what `<Json>` is for.
+ *
+ * Evaluate is itself an ordinary text component here. Unbound it emits what the
+ * fragment rendered; under `as` the engine binds that text and suppresses the
+ * output, by the same rule that governs every other component. An admitted
+ * write puts nothing here — what it did is retained by its own ordinary durable
+ * effect, which is the authoritative account of it.
  *
  * It is deliberately not wrapped in `printErrors`. A refused or failed
  * evaluation must stop the authored loop unless the document put a recovery
@@ -76,7 +81,6 @@ import type {
   GeneratedEffectClass,
   GeneratedMutation,
   GeneratedObservation,
-  GeneratedObservationResult,
   GeneratedXmdRequest,
   RetainedFragmentIdentity,
 } from "../generated-xmd.ts";
@@ -176,9 +180,9 @@ const NO_PROJECTION =
  * The declaration canonical core selects for `<Evaluate>`.
  *
  * Both forms, because the two input spellings are two ways of stating the same
- * argument. No `returns`, so the value binds by reference under `as`,
- * unchecked: rewriting it on the way to the document would change what the
- * fragment observed.
+ * argument. No `returns`: what it answers with is the text the fragment
+ * rendered, which the ordinary binding path emits where the element is written
+ * or binds under `as`.
  */
 export const EVALUATE_PROTECTED: ProtectedComponent = {
   name: EVALUATE_COMPONENT,
@@ -187,7 +191,7 @@ export const EVALUATE_PROTECTED: ProtectedComponent = {
   forms: ["self-closing", "paired"],
   ...documented({
     description: 'Evaluate program text. `<Evaluate text={program} allow={["read"]} />` runs it.',
-    as: "Optional. Captures the observations and rendered output instead of emitting them.",
+    as: "Optional. Captures the fragment's rendered output instead of emitting it.",
     context: null,
   }),
   build: (claim: IdentityClaimant) => evaluate(claim),
@@ -258,7 +262,7 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
       entries.admitted.map((entry) => entry.definition.fn),
     );
     try {
-      return answer(yield* evaluateProtectedGeneratedXmd(request, narrowedBodies, narrowedSyntax));
+      return yield* evaluateProtectedGeneratedXmd(request, narrowedBodies, narrowedSyntax);
     } finally {
       narrowedBodies?.close();
       leave();
@@ -359,7 +363,11 @@ function selectedTables(
 ): SelectedTables {
   const observations: GeneratedObservation[] = [];
   const mutations: GeneratedMutation[] = [];
-  const admitted: CapturedEntry[] = [];
+  // Composition first and under every selection, so the vocabulary an agent is
+  // shown lists what it may always write before what this selection added. It
+  // is not narrowed by `allow`: a pure component performs nothing, so there is
+  // no class for a selection to withhold it from.
+  const admitted: CapturedEntry[] = [...profile.composition];
   if (allow.includes("read")) {
     if (profile.read.length === 0) {
       throw new ComponentInvocationError(NO_READ_TABLE);
@@ -464,20 +472,4 @@ function* project(site: ProtectedSite, narrowed: SyntaxReference | undefined): O
     throw new ComponentInvocationError(NO_PROJECTION);
   }
   return yield* site.projectContent(narrowed);
-}
-
-/**
- * What the document reads back: a detached value, not text.
- *
- * Copied out of the evaluator's own result rather than handed on, so the object
- * a document binds shares nothing with the evaluation that produced it.
- */
-function answer(result: GeneratedObservationResult): Json {
-  return {
-    observations: result.observations.map((observation) => ({
-      name: observation.name,
-      value: observation.value,
-    })),
-    output: result.output,
-  };
 }
