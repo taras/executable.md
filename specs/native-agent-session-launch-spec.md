@@ -440,7 +440,7 @@ Given `xmd AGENTS.md#Implementor`:
 4. XMD expands the target and renders `Session.Launch` content completely.
 5. File reads, captures, parsing, and deterministic evaluation finish or fail.
 6. `Session.Launch` takes its applicable terminal lease. At the document root
-   this is the run's foreground-terminal lease; inside `<Terminal>` it is that
+   this is the run's foreground-terminal lease; inside `<Pane>` it is that
    pane's lease through the pane-scoped native launcher. A host with no
    applicable terminal refuses here — before an agent is resolved, so learning
    that this invocation cannot launch anything costs no availability probe.
@@ -714,10 +714,10 @@ refuses an advertised agent that names its own sessions, on the same terms and
 before any provider effect; an agent whose provider returns the identity is
 unaffected, because it constructs nothing a route governs.
 
-### Terminal-grid composition
+### Grid composition
 
 Terminal ownership and Agent-session ownership remain independent when a launch
-is written inside `<Terminal>`:
+is written inside `<Pane>`:
 
 ```text
 grid foreground lease
@@ -745,7 +745,7 @@ cannot begin while the first is live there, and sequential launches work after
 the first releases it. Release requires the child, its observable descendants
 and process-group members, and every other holder of that pane terminal to be
 gone; the pane remains busy if the launcher cannot establish those facts. A
-root launch and a terminal grid contend for the root foreground lease, so
+root launch and a grid contend for the root foreground lease, so
 neither can overlap the other.
 
 None of that changes the coordinator key or acquisition. Two panes naming the
@@ -923,7 +923,7 @@ ownership, because a registry free to answer differently would name a different
 session than the one this operation prepared.
 
 At the root, V1 holds the foreground-terminal lease for the CLI execution. In a
-terminal grid, the grid holds that root lease and a launch holds only its current
+grid, the grid holds that root lease and a launch holds only its current
 pane lease. Two launches cannot concurrently own the same root or pane terminal,
 even when they name different sessions. Launches on distinct panes may run
 concurrently, and sequential launches on one terminal are ordinary composition.
@@ -1148,7 +1148,7 @@ hosts can install a controlled launcher that needs no terminal; a host that
 installs none — `xmd test`, document inspection, an embedder — refuses every
 launch, which is what keeps help and inspection free of any of this.
 
-The Deno source host and compiled binary install the first terminal-grid
+The Deno source host and compiled binary install the first grid
 provider for an ordinary foreground run when a TTY and the required tmux
 capability are available. The provider prepares one invocation-private tmux
 server and one persistent initial worker per pane. Its per-pane sockets live in
@@ -1161,7 +1161,7 @@ inherited-stdio client and no-output control client remain distinct, and loss of
 the root terminal becomes structured cancellation. A missing prerequisite
 refuses the grid before pane start.
 
-Node and Bun validate and catalog the same `<Terminal.Grid>` and `<Terminal>`
+Node and Bun validate and catalog the same `<Grid>` and `<Pane>`
 syntax but install no grid provider. Installing a grid provider advertises no
 new Agent, launch adapter, session-construction mechanism, or attachment
 capability; each `<Session.Launch>` still passes the existing independent
@@ -1192,30 +1192,32 @@ remain role and continuity identities. V1 defines no stateful-Agent model
 selection. A document can explicitly name an Agent where required, but no
 provider-specific executable or resume syntax appears in `AGENTS.md`.
 
-### Terminal package boundary
+### Grid package boundary
 
 `NativeLauncher`, `NativeLaunchRequest`, `NativeLaunchOutcome`, terminal
 reservation and output flushing are canonically exported by
-`@executablemd/terminal`. The same package owns the pane claim and the
+`@executablemd/grid`. The same package owns the pane claim and the
 provider-neutral composite endpoint that receives a native launch. The Agent
 request, construction route, session coordinator and `Session.Launch`
 component stay in their existing Agent and core modules; neither acquires a
 terminal-provider identity.
 
-`@executablemd/terminal-tmux` consumes that endpoint and supplies the physical
+`@executablemd/grid-tmux` consumes that endpoint and supplies the physical
 pane worker. It does not import core, runtime or CLI. The Deno and compiled CLI
 hosts compose the two domains and provide self-reinvocation and POSIX process
 observation; Node and Bun continue to compose neither a foreground grid
 provider nor an observer.
 
-The former `@executablemd/runtime` native-launch exports,
-`@executablemd/core` pane and terminal-provider exports, and old CLI terminal
-implementation paths are deleted. They are unshipped and carry no compatibility
-contract. Every repository consumer imports the canonical terminal packages,
-and each contextual descriptor and public error constructor has one definition.
-This extraction changes no launch request, phase, route, ownership key, durable
-record, result, diagnostic, provider advertisement, or root-versus-pane
-behavior.
+The unmerged `packages/terminal` and `packages/terminal-tmux` trees become
+`packages/grid` and `packages/grid-tmux`. The former runtime native-launch
+exports, core pane and grid-provider exports, old CLI terminal implementation
+paths, rejected package names, and old authored component names are deleted.
+They carry no compatibility contract. Every repository consumer imports the
+canonical grid packages, and each contextual descriptor and public error
+constructor has one definition. The boundary change preserves launch requests,
+phases, routes, ownership keys, durable records, results, provider
+advertisements, and root-versus-pane behavior; diagnostics that identify the
+authored constructs use `Grid` and `Pane`.
 
 ## Testing
 
@@ -1224,7 +1226,7 @@ launcher records the request, claims a known provider-native session ID, waits
 on a test-controlled operation, and exits with a selected status. It never
 starts Claude, Codex, or a model.
 
-Terminal-grid tests additionally install a controlled provider that is not
+Grid tests additionally install a controlled provider that is not
 tmux. It exposes readiness, independent pane settlement, reader close, provider
 failure, parent cancellation, and teardown completion as test-controlled
 operations while using the same core terminal authority and pane-scoped native
@@ -1382,7 +1384,7 @@ and the build binding it produces; ACP attachment to a bound client-native
 session under its exact retained identity, through runtime partitions keyed by
 agent command and build;
 an inherited root- or pane-terminal interactive child with cancellation and
-bounded reaping; composition with the terminal grid's independent pane leases
+bounded reaping; composition with the grid's independent pane leases
 without changing session ownership or durable launch identity;
 and the controlled TestAgent fixture that proves all of it without starting a
 model.
@@ -1422,7 +1424,7 @@ An adapter that cannot prove instruction injection before the first user turn
 stays unsupported rather than weakening `Session.Launch` semantics.
 
 Native UI event mirroring, XMD-rendered interactive chat, simultaneous root
-foreground sessions outside a terminal grid, automatic nested `AGENTS.md`
+foreground sessions outside a grid, automatic nested `AGENTS.md`
 discovery, bootstrap model turns, and workflow role scheduling are outside this
 contract.
 
@@ -1480,7 +1482,7 @@ Implementation review checks these frozen invariants:
     moment its handle exists; a cancellation observes and settles an ensure it
     already started before quiescence; quiescence is answered from that account;
     and a close that failed releases nothing and acknowledges none.
-24. A terminal grid holds the root foreground lease while each launch holds only
+24. A grid holds the root foreground lease while each launch holds only
     its current pane lease; distinct panes do not contend for terminal ownership,
     and one pane remains exclusive until observable processes and terminal
     holders from the prior launch are gone.
