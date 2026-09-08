@@ -44,7 +44,7 @@ import {
   type RunnerCommand,
 } from "./commands.ts";
 import { bytesOf, decodeBase64, sha256Hex } from "./encoding.ts";
-import { readRetainedAnswer } from "./owner-answers.ts";
+import { readClaimableAnswer } from "./owner-answers.ts";
 import {
   readContent,
   readExecutions,
@@ -350,7 +350,13 @@ function perform(
     };
   }
   if (command.command === "answer") {
-    const retained = readRetainedAnswer(ctx.storage, command.suspensionId);
+    // Read on the authority that ends a wait, not on the authority that opened
+    // a socket: this acquisition's own open execution, and the wait this run is
+    // actually standing at.
+    const retained = readClaimableAnswer(ctx.storage, runId, acquisitionId, {
+      suspensionId: command.suspensionId,
+      requestEventId: command.requestEventId,
+    });
     return {
       id: command.id,
       outcome: "performed",

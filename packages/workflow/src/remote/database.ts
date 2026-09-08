@@ -64,9 +64,15 @@ export interface RemoteRunLink extends OwnerLink {
    * What this run retains for one wait, if it retains anything.
    *
    * On the acquisition's own authority, because it is read to be spent: an
-   * execution asks what it may publish, and only the executor may publish.
+   * execution asks what it may publish, only the executor may publish, and the
+   * owner requires that acquisition to hold an open execution before it says
+   * anything. The request event is named because a wait's identifier is
+   * derivable and the event it was published as is not.
    */
-  pendingAnswer(suspensionId: string): Operation<Result<RemoteRetainedAnswer | undefined>>;
+  pendingAnswer(
+    suspensionId: string,
+    requestEventId: string,
+  ): Operation<Result<RemoteRetainedAnswer | undefined>>;
   /** Replace or clear the retrieval metadata, and answer with the result. */
   replaceRetrieval(
     expectedWorkspaceRootId: string,

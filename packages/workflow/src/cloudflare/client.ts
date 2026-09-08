@@ -113,6 +113,10 @@ export type PrivateRefusal =
   | "command:not-suspended"
   | "command:wrong-suspension"
   | "command:answer-unavailable"
+  | "command:answer-rejected"
+  | "command:unjudgeable-schema"
+  | "command:credential-detected"
+  | "command:answer-unauthorized"
   | "storage:foreign"
   | `storage:unsupported-version-v${number}`
   | "storage:corrupt";
@@ -198,6 +202,10 @@ export function privateRefusal(value: string): PrivateRefusal {
     case "command:not-suspended":
     case "command:wrong-suspension":
     case "command:answer-unavailable":
+    case "command:answer-rejected":
+    case "command:unjudgeable-schema":
+    case "command:credential-detected":
+    case "command:answer-unauthorized":
     case "storage:foreign":
     case "storage:corrupt":
       return value;
@@ -965,11 +973,14 @@ export function cloudflareRunLink(
      * Answered as the owner retains it, canonical text and all, so the value a
      * caller publishes is the value the owner will compare its commit against.
      */
-    *pendingAnswer(suspensionId: string): Operation<Result<RemoteRetainedAnswer | undefined>> {
+    *pendingAnswer(
+      suspensionId: string,
+      requestEventId: string,
+    ): Operation<Result<RemoteRetainedAnswer | undefined>> {
       try {
         const answered = yield* connection.ask(
           nextId(),
-          { command: "answer", suspensionId },
+          { command: "answer", suspensionId, requestEventId },
           (value) => parseRetainedAnswer(value, suspensionId),
           privateRefusal,
         );
@@ -1161,6 +1172,26 @@ export function storageFailure(refusal: PrivateRefusal): WorkflowStorageError {
   if (refusal === "command:wrong-suspension") {
     return new WorkflowRequestError(
       "this workflow run is not waiting at that suspension. A run waits at one at a time.",
+    );
+  }
+  if (refusal === "command:answer-rejected") {
+    return new WorkflowRequestError(
+      "the value offered to this wait does not satisfy the response schema that wait retained.",
+    );
+  }
+  if (refusal === "command:unjudgeable-schema") {
+    return new WorkflowRequestError(
+      "the response schema this wait retained is not one an answer can be judged against, so " +
+        "no value can be delivered to it.",
+    );
+  }
+  if (refusal === "command:credential-detected") {
+    // What was matched never travels: a diagnostic quoting it would publish
+    // exactly what the gate exists to keep out of retained state.
+    return new WorkflowRequestError(
+      "this answer was not retained because credential detection matched it. Neither the value " +
+        "nor the match is recorded. Deliver with secret detection disabled only when the value " +
+        "is known not to be a credential.",
     );
   }
   if (refusal === "command:answer-unavailable") {

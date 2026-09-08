@@ -140,12 +140,13 @@ describe("delivering one typed value to a remote run", () => {
     // The owner was asked what the run is waiting at before anything was sent
     // for retention, and the retention names what the value was judged against.
     expect(scripted.asked).toEqual(["wait", "retain"]);
+    // The retention carries the value and the gate decision and nothing else.
+    // There is no member saying the value was checked: the owner judges it.
     expect(scripted.retained[0]).toEqual({
       runId: RUN_ID,
       suspensionId: SUSPENSION,
-      requestEventId: REQUEST_EVENT,
-      requestFingerprint: FINGERPRINT,
       answer: ANSWER,
+      secretDetection: true,
     });
   });
 
@@ -183,6 +184,8 @@ describe("delivering one typed value to a remote run", () => {
     });
     expect(retained.ok).toBe(true);
     expect(opted.retained[0]?.answer).toEqual({ approved: true, note: CANARY });
+    // And the choice travels with it, because the owner applies the gate.
+    expect(opted.retained[0]?.secretDetection).toBe(false);
   });
 
   it("refuses a request that is not one, before the owner is reached", function* () {

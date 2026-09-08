@@ -131,13 +131,13 @@ export function cloudflareDeliveryLink(
 
     *retain(retention: RemoteAnswerRetention): Operation<Result<RemoteAnswerRetained>> {
       const answered = yield* ask(retention.runId, {
-        operation: "retain",
+        operation: "deliver",
         suspensionId: retention.suspensionId,
-        requestEventId: retention.requestEventId,
-        requestFingerprint: retention.requestFingerprint,
         // Canonically encoded here, once, so the bytes the owner retains are
-        // the bytes a later commit is compared against.
+        // the bytes a later commit is compared against. Everything the owner
+        // decides about this value, it decides from the value.
         answer: canonicalJson(retention.answer),
+        secretDetection: retention.secretDetection,
       });
       if (!answered.ok) {
         return answered;

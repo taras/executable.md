@@ -13,10 +13,13 @@
  * correlated to the wait it answers, which the next acquired execution to reach
  * that wait spends.
  *
- * What crosses is closed and private to this release. The value is judged
- * against the wait's response schema on the runner, where the schema compiler
- * lives; what this decides is identity — which run, which wait, which request —
- * and it decides it again inside the transaction that writes.
+ * What crosses is closed and private to this release, and there is exactly one
+ * operation that writes. It carries a value and a gate decision and nothing
+ * else: no request identity, no fingerprint, no claim that anything was
+ * checked. The owner resolves the wait itself, judges the value against the
+ * schema that wait retained, applies the gate the request selected, and only
+ * then writes — inside one transaction, having read every one of those facts
+ * again. There is no lower operation to select instead.
  */
 
 import { parseMembers, requireMemberNames } from "../storage/members.ts";
@@ -32,14 +35,8 @@ export type DeliveryAnswer =
   | { readonly outcome: "performed"; readonly value: unknown }
   | { readonly outcome: "refused"; readonly refusal: string };
 
-/** The most characters a public run id may carry. */
-const MAX_RUN_ID = 128;
-
 /** The most characters one wait's identifier may carry. */
 const MAX_SUSPENSION_ID = 256;
-
-/** The most characters one request fingerprint may carry. */
-const FINGERPRINT = /^[0-9a-f]{64}$/;
 
 /**
  * The most serialized bytes one delivery request may carry.
@@ -56,12 +53,18 @@ export const DELIVERY_REQUEST_BYTES = READ_PAGE_BYTES + READ_REQUEST_ENVELOPE;
 export type DeliveryOperation =
   | { readonly operation: "wait"; readonly suspensionId: string }
   | {
-      readonly operation: "retain";
+      readonly operation: "deliver";
       readonly suspensionId: string;
-      readonly requestEventId: string;
-      readonly requestFingerprint: string;
-      /** Canonical JSON, already encoded by the runner that judged it. */
+      /** The canonical encoding of the value being offered. */
       readonly answer: string;
+      /**
+       * Whether this value crosses the credential gate before it is retained.
+       *
+       * Required, with no default, because the choice is the caller's and
+       * omitting it must not be a way of making it. `false` is the documented
+       * opt-out and is the only way past the gate.
+       */
+      readonly secretDetection: boolean;
     };
 
 function failure(reason: string, path: string): Error {
@@ -92,16 +95,16 @@ export function parseDeliveryOperation(raw: string): DeliveryOperation {
     requireMemberNames(read, ["operation", "suspensionId"], "$", failure);
     return { operation, suspensionId: identifier(read.get("suspensionId"), "$.suspensionId") };
   }
-  if (operation === "retain") {
+  if (operation === "deliver") {
     requireMemberNames(
       read,
-      ["operation", "suspensionId", "requestEventId", "requestFingerprint", "answer"],
+      ["operation", "suspensionId", "answer", "secretDetection"],
       "$",
       failure,
     );
-    const fingerprint = read.get("requestFingerprint");
-    if (typeof fingerprint !== "string" || !FINGERPRINT.test(fingerprint)) {
-      throw failure("expected a sha-256 digest", "$.requestFingerprint");
+    const secretDetection = read.get("secretDetection");
+    if (typeof secretDetection !== "boolean") {
+      throw failure("expected a secret-gate decision", "$.secretDetection");
     }
     const answer = read.get("answer");
     if (typeof answer !== "string" || answer === "") {
@@ -122,9 +125,8 @@ export function parseDeliveryOperation(raw: string): DeliveryOperation {
     return {
       operation,
       suspensionId: identifier(read.get("suspensionId"), "$.suspensionId"),
-      requestEventId: identifier(read.get("requestEventId"), "$.requestEventId"),
-      requestFingerprint: fingerprint,
       answer,
+      secretDetection,
     };
   }
   throw failure("expected an operation this owner implements", "$.operation");
@@ -158,9 +160,8 @@ export function answerDelivery(
     runId,
     {
       suspensionId: request.suspensionId,
-      requestEventId: request.requestEventId,
-      requestFingerprint: request.requestFingerprint,
       answer: request.answer,
+      secretDetection: request.secretDetection,
     },
     now,
   );
@@ -170,8 +171,7 @@ function identifier(value: unknown, path: string): string {
   if (typeof value !== "string" || value === "") {
     throw failure("expected a non-empty identifier", path);
   }
-  const limit = path === "$.suspensionId" ? MAX_SUSPENSION_ID : MAX_RUN_ID;
-  if (value.length > limit) {
+  if (value.length > MAX_SUSPENSION_ID) {
     throw failure("expected a bounded identifier", path);
   }
   return value;

@@ -33,12 +33,21 @@ const SUSPENSION = "wait-1";
 const REQUEST = { kind: "approval", release: "1.4" };
 const SCHEMA = {
   type: "object",
-  properties: { approved: { type: "boolean" } },
+  properties: { approved: { type: "boolean" }, note: { type: "string" } },
   required: ["approved"],
   additionalProperties: false,
 };
 const ANSWER = { approved: true };
 const FINGERPRINT = sha256Hex(canonicalJson({ request: REQUEST, responseSchema: SCHEMA }));
+
+/**
+ * A synthetic credential, assembled at run time.
+ *
+ * Written out as a literal it would be rejected by push protection, and joining
+ * the parts leaves the runtime value identical — so what the gate sees here is
+ * exactly what it would see in a delivered answer.
+ */
+const CANARY = `ghp_${"abcdefghijklmnopqrstuvwxyz0123456789".slice(0, 36)}`;
 
 beforeAll(async () => {
   keys = await generateKeys();
@@ -201,18 +210,45 @@ async function suspended(
   return eventId;
 }
 
-function retention(
-  eventId: string,
-  overrides: Record<string, unknown> = {},
-): Record<string, unknown> {
+/**
+ * One delivery, as it crosses.
+ *
+ * It carries the value and the gate decision and nothing else — there is no
+ * lower operation that takes a value without them, which is the point.
+ */
+function delivery(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    operation: "retain",
+    operation: "deliver",
     suspensionId: SUSPENSION,
-    requestEventId: eventId,
-    requestFingerprint: FINGERPRINT,
     answer: canonicalJson(ANSWER),
+    secretDetection: true,
     ...overrides,
   };
+}
+
+/**
+ * Resume the suspended run on a fresh acquisition, and hold the execution open.
+ *
+ * What a claim needs: an acquisition that began an execution the run has not
+ * moved past. A settled execution and a bare admitted socket are both proved
+ * elsewhere in this file to obtain nothing.
+ */
+async function resumed(
+  stub: ReturnType<typeof executor>,
+  executionId = "execution-2",
+): Promise<void> {
+  await on(stub, (owner) => owner.dropConnections());
+  await connected(stub);
+  const begun = await ask(stub, {
+    id: `begin-${executionId}`,
+    command: "begin",
+    runId: RUN_ID,
+    action: "resume",
+    creation: null,
+    retrieval: null,
+    executionId,
+  });
+  expect(begun["outcome"]).toBe("performed");
 }
 
 describe("delivering an answer to a run's owner", () => {
@@ -231,7 +267,7 @@ describe("delivering an answer to a run's owner", () => {
       requestFingerprint: FINGERPRINT,
     });
 
-    const retained = await deliver(stub, retention(eventId));
+    const retained = await deliver(stub, delivery());
     expect(retained).toEqual({
       outcome: "performed",
       value: { runId: RUN_ID, suspensionId: SUSPENSION },
@@ -249,7 +285,7 @@ describe("delivering an answer to a run's owner", () => {
 
   it("takes nothing, and leaves a live executor exactly where it was", async () => {
     const stub = executor();
-    const eventId = await suspended(stub);
+    await suspended(stub);
     const before = await on(stub, (owner) => ({
       run: owner.runRow(),
       executions: owner.executionRows(),
@@ -259,7 +295,7 @@ describe("delivering an answer to a run's owner", () => {
       acquisition: owner.acquisitionId(),
     }));
 
-    expect(await deliver(stub, retention(eventId))).toMatchObject({ outcome: "performed" });
+    expect(await deliver(stub, delivery())).toMatchObject({ outcome: "performed" });
 
     const after = await on(stub, (owner) => ({
       run: owner.runRow(),
@@ -280,18 +316,18 @@ describe("delivering an answer to a run's owner", () => {
 
   it("re-observes one decision when its answer was lost, and refuses a different one", async () => {
     const stub = executor();
-    const eventId = await suspended(stub);
-    const first = await deliver(stub, retention(eventId));
+    await suspended(stub);
+    const first = await deliver(stub, delivery());
 
     // The same delivery again, after its answer never arrived.
-    const again = await deliver(stub, retention(eventId));
+    const again = await deliver(stub, delivery());
     expect(again).toEqual(first);
     expect(await on(stub, (owner) => owner.retainedAnswers())).toHaveLength(1);
 
     // A different value under the same wait is a second answer, not a retry.
     const conflicting = await deliver(
       stub,
-      retention(eventId, { answer: canonicalJson({ approved: false }) }),
+      delivery({ answer: canonicalJson({ approved: false }) }),
     );
     expect(conflicting).toEqual({
       outcome: "refused",
@@ -304,7 +340,7 @@ describe("delivering an answer to a run's owner", () => {
 
   it("refuses everything it is not, and writes nothing on the way", async () => {
     const stub = executor();
-    const eventId = await suspended(stub);
+    await suspended(stub);
     const before = await on(stub, (owner) => ({
       answers: owner.retainedAnswers(),
       journal: owner.journalRecords(),
@@ -313,30 +349,38 @@ describe("delivering an answer to a run's owner", () => {
 
     const refusals = {
       wrongWait: await deliver(stub, { operation: "wait", suspensionId: "wait-elsewhere" }),
-      wrongRequest: await deliver(stub, retention("event-elsewhere")),
-      wrongFingerprint: await deliver(
+      wrongRequest: await deliver(stub, delivery({ suspensionId: "wait-elsewhere" })),
+      // A value the retained schema does not admit, offered on exactly the
+      // authenticated surface a valid one is offered on.
+      rejectedValue: await deliver(stub, delivery({ answer: canonicalJson({ approved: "yes" }) })),
+      // The same surface, with content the credential gate matches.
+      credential: await deliver(
         stub,
-        retention(eventId, { requestFingerprint: "b".repeat(64) }),
+        delivery({ answer: canonicalJson({ approved: true, note: CANARY }) }),
       ),
+      // The gate decision is a required member, so omitting it is not a way of
+      // making it.
+      ungated: await deliver(stub, {
+        operation: "deliver",
+        suspensionId: SUSPENSION,
+        answer: canonicalJson(ANSWER),
+      }),
       unknownOperation: await deliver(stub, { operation: "publish" }),
       malformed: await deliver(stub, "{"),
       // An unauthenticated request is refused before the run is named, so a
       // body naming nothing this owner holds still refuses for the token.
       unauthenticatedFirst: await deliver(stub, "{", { token: "not a token" }),
-      unknownMember: await deliver(stub, { ...retention(eventId), extra: 1 }),
-      uncanonical: await deliver(stub, retention(eventId, { answer: '{"approved":true,"a":1}' })),
-      oversized: await deliver(
-        stub,
-        retention(eventId, { answer: canonicalJson("x".repeat(2_000_000)) }),
-      ),
+      unknownMember: await deliver(stub, { ...delivery(), extra: 1 }),
+      uncanonical: await deliver(stub, delivery({ answer: '{"approved":true,"a":1}' })),
+      oversized: await deliver(stub, delivery({ answer: canonicalJson("x".repeat(2_000_000)) })),
       // The token is deliberately unusable. If the release were checked after
       // it, the refusal would name the token rather than the build.
-      badRelease: await deliver(stub, retention(eventId), {
+      badRelease: await deliver(stub, delivery(), {
         release: "other-build",
         token: "not a token",
       }),
-      badToken: await deliver(stub, retention(eventId), { token: "not a token" }),
-      wrongRun: await deliver(stub, retention(eventId), { runId: "9".repeat(52) }),
+      badToken: await deliver(stub, delivery(), { token: "not a token" }),
+      wrongRun: await deliver(stub, delivery(), { runId: "9".repeat(52) }),
     };
 
     for (const [named, answered] of Object.entries(refusals)) {
@@ -344,7 +388,9 @@ describe("delivering an answer to a run's owner", () => {
     }
     expect(refusals.wrongWait["refusal"]).toBe("command:wrong-suspension");
     expect(refusals.wrongRequest["refusal"]).toBe("command:wrong-suspension");
-    expect(refusals.wrongFingerprint["refusal"]).toBe("command:stale-journal");
+    expect(refusals.rejectedValue["refusal"]).toBe("command:answer-rejected");
+    expect(refusals.credential["refusal"]).toBe("command:credential-detected");
+    expect(refusals.ungated["refusal"]).toBe("storage:corrupt");
     expect(refusals.badRelease["refusal"]).toBe("release:release-mismatch");
     expect(String(refusals.unauthenticatedFirst["refusal"]).startsWith("token:")).toBe(true);
     expect(refusals.wrongRun["refusal"]).toBe("command:wrong-run");
@@ -425,9 +471,8 @@ describe("reaching the delivery plane through the production client", () => {
       const retained = yield* link.retain({
         runId: RUN_ID,
         suspensionId: SUSPENSION,
-        requestEventId: waiting.value.requestEventId,
-        requestFingerprint: waiting.value.requestFingerprint,
         answer: ANSWER,
+        secretDetection: true,
       });
       if (!retained.ok) {
         throw retained.error;
@@ -450,7 +495,7 @@ describe("reaching the delivery plane through the production client", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.["answer"]).toBe(canonicalJson(ANSWER));
     // Two requests, and neither of them opened a socket or named a command.
-    expect(sent.map((body) => JSON.parse(body)["operation"])).toEqual(["wait", "retain"]);
+    expect(sent.map((body) => JSON.parse(body)["operation"])).toEqual(["wait", "deliver"]);
     expect(await on(stub, (owner) => owner.holders())).toBe(1);
   });
 
@@ -492,35 +537,94 @@ describe("reaching the delivery plane through the production client", () => {
 });
 
 describe("spending a retained answer", () => {
-  it("reads the retained answer back on the acquisition that may spend it", async () => {
+  it("releases the value only to an acquisition holding the open execution", async () => {
     const stub = executor();
     const eventId = await suspended(stub);
-    await deliver(stub, retention(eventId));
-
-    const answered = await ask(stub, {
-      id: "answer-1",
+    await deliver(stub, delivery());
+    const claim = (id: string) => ({
+      id,
       command: "answer",
       suspensionId: SUSPENSION,
+      requestEventId: eventId,
     });
 
-    expect(answered["outcome"]).toBe("performed");
-    expect(answered["value"]).toEqual({
+    // The socket that suspended the run is still admitted and its execution is
+    // settled. It holds no execution, so it is told nothing.
+    const settled = await ask(stub, claim("answer-settled"));
+    expect(settled).toEqual({
+      id: "answer-settled",
+      outcome: "refused",
+      refusal: "command:wrong-execution",
+    });
+
+    // A replacement acquisition that has begun nothing is in the same position.
+    await on(stub, (owner) => owner.dropConnections());
+    await connected(stub);
+    const admitted = await ask(stub, claim("answer-admitted"));
+    expect(admitted).toEqual({
+      id: "answer-admitted",
+      outcome: "refused",
+      refusal: "command:wrong-execution",
+    });
+
+    // The execution that resumed the run is the one that may read it.
+    await resumed(stub);
+    const claiming = await ask(stub, claim("answer-open"));
+    expect(claiming["outcome"]).toBe("performed");
+    expect(claiming["value"]).toEqual({
       suspensionId: SUSPENSION,
       requestEventId: eventId,
       requestFingerprint: FINGERPRINT,
       answer: canonicalJson(ANSWER),
       state: "pending",
     });
-    // A wait nothing was delivered to answers with nothing rather than failing.
+
+    // And it may read only the wait this run is standing at, named by the
+    // event that run published its request as.
     expect(
-      (await ask(stub, { id: "answer-2", command: "answer", suspensionId: "wait-2" }))["value"],
-    ).toBe(null);
+      (
+        await ask(stub, {
+          id: "answer-elsewhere",
+          command: "answer",
+          suspensionId: "wait-elsewhere",
+          requestEventId: eventId,
+        })
+      )["refusal"],
+    ).toBe("command:wrong-suspension");
+    expect(
+      (
+        await ask(stub, {
+          id: "answer-wrong-event",
+          command: "answer",
+          suspensionId: SUSPENSION,
+          requestEventId: "event-elsewhere",
+        })
+      )["refusal"],
+    ).toBe("command:wrong-suspension");
+  });
+
+  it("says nothing about a wait nothing was delivered to", async () => {
+    const stub = executor();
+    const eventId = await suspended(stub);
+    await resumed(stub);
+
+    // The wait exists and is the one this run is standing at; no value is
+    // retained for it. That is nothing rather than a refusal.
+    const answered = await ask(stub, {
+      id: "answer-1",
+      command: "answer",
+      suspensionId: SUSPENSION,
+      requestEventId: eventId,
+    });
+
+    expect(answered).toEqual({ id: "answer-1", outcome: "performed", value: null });
   });
 
   it("consumes the row and appends its event in one transaction", async () => {
     const stub = executor();
     const eventId = await suspended(stub);
-    await deliver(stub, retention(eventId));
+    await deliver(stub, delivery());
+    await resumed(stub);
     const at = await frontier(stub);
 
     const committed = await ask(stub, {
@@ -549,7 +653,8 @@ describe("spending a retained answer", () => {
   it("spends nothing and appends nothing when the two do not agree", async () => {
     const stub = executor();
     const eventId = await suspended(stub);
-    await deliver(stub, retention(eventId));
+    await deliver(stub, delivery());
+    await resumed(stub);
     const at = await frontier(stub);
     const before = await on(stub, (owner) => ({
       answers: owner.retainedAnswers(),
@@ -593,6 +698,29 @@ describe("spending a retained answer", () => {
           requestFingerprint: "c".repeat(64),
         },
       },
+      // One matching answer event, and a second one for the same wait carrying
+      // another value. One retained answer ends one wait.
+      twoForOneWait: {
+        events: [answerEvent(), answerEvent(SUSPENSION, { approved: false })],
+        answer: {
+          suspensionId: SUSPENSION,
+          requestEventId: eventId,
+          requestFingerprint: FINGERPRINT,
+        },
+      },
+      // One matching answer event, and a second one for another wait entirely.
+      twoForTwoWaits: {
+        events: [answerEvent(), answerEvent("wait-2")],
+        answer: {
+          suspensionId: SUSPENSION,
+          requestEventId: eventId,
+          requestFingerprint: FINGERPRINT,
+        },
+      },
+      // An answer event no consumption authorizes at all.
+      unauthorized: { events: [answerEvent()], answer: null },
+      // The same, for a wait nothing was ever delivered to.
+      unauthorizedElsewhere: { events: [answerEvent("wait-2")], answer: null },
     };
 
     let attempt = 0;
@@ -607,11 +735,17 @@ describe("spending a retained answer", () => {
         mappings: [],
         ...proposal,
       });
-      expect([named, refused["outcome"], refused["refusal"]]).toEqual([
-        named,
-        "refused",
-        "command:answer-unavailable",
-      ]);
+      const expected =
+        named === "twoForOneWait" ||
+        named === "twoForTwoWaits" ||
+        named === "unauthorized" ||
+        named === "unauthorizedElsewhere" ||
+        // A consumption with no answer event at all is the same violation seen
+        // from the other side: nothing it spends would end anything.
+        named === "noEvent"
+          ? "command:answer-unauthorized"
+          : "command:answer-unavailable";
+      expect([named, refused["outcome"], refused["refusal"]]).toEqual([named, "refused", expected]);
     }
 
     // Neither half happened: the row is still pending and no event was kept.
@@ -623,10 +757,52 @@ describe("spending a retained answer", () => {
     ).toEqual(before);
   });
 
+  it("refuses a consumption from an acquisition that holds no open execution", async () => {
+    const stub = executor();
+    const eventId = await suspended(stub);
+    await deliver(stub, delivery());
+    const at = await frontier(stub);
+    const before = await on(stub, (owner) => ({
+      answers: owner.retainedAnswers(),
+      journal: owner.journalRecords(),
+    }));
+    const spend = (id: string) => ({
+      id,
+      command: "commit",
+      expectedWorkspaceRootId: at.rootId,
+      expectedJournalEventId: at.eventId,
+      publication: null,
+      mappings: [],
+      events: [answerEvent()],
+      answer: {
+        suspensionId: SUSPENSION,
+        requestEventId: eventId,
+        requestFingerprint: FINGERPRINT,
+      },
+    });
+
+    // The acquisition that suspended the run: still admitted, execution
+    // settled. A socket is not an execution.
+    expect((await ask(stub, spend("spend-settled")))["refusal"]).toBe("command:wrong-execution");
+
+    // A replacement acquisition that has begun nothing.
+    await on(stub, (owner) => owner.dropConnections());
+    await connected(stub);
+    expect((await ask(stub, spend("spend-admitted")))["refusal"]).toBe("command:wrong-execution");
+
+    expect(
+      await on(stub, (owner) => ({
+        answers: owner.retainedAnswers(),
+        journal: owner.journalRecords(),
+      })),
+    ).toEqual(before);
+  });
+
   it("refuses to spend an answer a second time", async () => {
     const stub = executor();
     const eventId = await suspended(stub);
-    await deliver(stub, retention(eventId));
+    await deliver(stub, delivery());
+    await resumed(stub);
     const at = await frontier(stub);
     const spend = (id: string, expected: string | null) => ({
       id,

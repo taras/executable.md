@@ -7,21 +7,24 @@
  * against the exact wait the run is standing at, so the next execution that
  * reaches that wait finds it.
  *
- * ## Why the value is judged here rather than at the owner
+ * ## What is judged here, and what the owner judges anyway
  *
- * The wait retained a response schema, and judging a value against it means
- * compiling that schema — the same compilation `<Elicit>` uses. That compiler
- * and the secret scanner beside it are the document runtime's, and the document
- * runtime is not what a run's owner is. So the shape of this exchange follows
- * the shape of the authority: the owner says what the run is waiting at, this
- * judges the offered value against exactly that, and the owner then re-reads
- * the same facts inside its own transaction before it writes anything.
+ * The owner is the authority: it resolves the wait, judges the value against
+ * the schema that wait retained, and applies the selected credential gate,
+ * inside the transaction that writes. Nothing this module reports is taken on
+ * trust there, and no member of the retention says a value was checked.
  *
- * The fingerprint is what makes that safe. A value is judged against one
- * request, and the retention names the fingerprint of the request it was judged
- * against. An owner whose retained request has changed in between refuses,
- * rather than retaining a value that was judged against a schema this run no
- * longer waits on. Nothing is retained on the strength of a claim made here.
+ * What happens here is the document runtime's half, and it happens first
+ * because it is better at it. The schema compiler `<Elicit>` uses gives a
+ * document-shaped diagnostic naming where a value went wrong; the full secret
+ * scanner catches far more than the owner's floor. A value refused here never
+ * reaches the owner, and a value the owner refuses was refused for a reason
+ * this had no way to see.
+ *
+ * Both judgments must agree before anything is sent. The shared judgment is the
+ * one the owner will run, so running it here as well turns a disagreement
+ * between the two into a refusal on this side rather than a surprise on the
+ * other.
  */
 
 import { Err, Ok, type Operation, type Result } from "effection";
@@ -42,6 +45,11 @@ import {
   type WorkflowSuspensionRequest,
 } from "../suspension/api.ts";
 import type { RemoteDeliveryLink, RemoteRetainedWaitRecord } from "./answer-link.ts";
+import {
+  describeJudgment,
+  judgeAgainstSchema,
+  requireJudgeableSchema,
+} from "../suspension/judgment.ts";
 import {
   parseAnswerDelivery,
   type WorkflowAnswerDelivery,
@@ -110,6 +118,14 @@ function* deliverRemotely(
     return judged;
   }
 
+  // The judgment the owner will make, made here too. A schema the owner cannot
+  // judge is refused before a value is offered against it, and a disagreement
+  // between the compiler and the shared judgment stops here.
+  const shared = judgeShared(waiting.value, suspensionId, value);
+  if (!shared.ok) {
+    return shared;
+  }
+
   if (secretDetection) {
     const scanned = yield* scanDelivery(waiting.value, suspensionId, value);
     if (!scanned.ok) {
@@ -120,11 +136,11 @@ function* deliverRemotely(
   return yield* link.retain({
     runId,
     suspensionId,
-    requestEventId: waiting.value.requestEventId,
-    // What the value was judged against, named so the owner can refuse a run
-    // that moved on while this was being judged.
-    requestFingerprint: waiting.value.requestFingerprint,
     answer: value,
+    // The choice travels; the judgment does not. The owner applies the gate
+    // this names, and a value that reached here without the choice being made
+    // could not have been offered at all.
+    secretDetection,
   });
 }
 
@@ -220,6 +236,37 @@ function* judgeAnswer(
     new WorkflowAnswerDeliveryError(
       `the value offered to ${suspensionId} does not satisfy the response schema that wait ` +
         `retained: ${described}.`,
+    ),
+  );
+}
+
+/**
+ * The same judgment the owner makes, made before anything is offered.
+ *
+ * The owner refuses a schema it cannot judge rather than retaining a value it
+ * could not check, so a wait whose schema is outside the judged subset is
+ * reported here — where a caller can be told what happened — instead of
+ * arriving as a bare refusal from somewhere else.
+ */
+function judgeShared(waiting: RemoteRetainedWait, suspensionId: string, value: Json): Result<void> {
+  try {
+    requireJudgeableSchema(waiting.request.responseSchema);
+  } catch (error) {
+    return Err(
+      new WorkflowAnswerDeliveryError(
+        `the response schema retained for ${suspensionId} is not one an answer can be judged ` +
+          `against: ${error instanceof Error ? error.message : String(error)}`,
+      ),
+    );
+  }
+  const issues = judgeAgainstSchema(waiting.request.responseSchema, value);
+  if (issues.length === 0) {
+    return Ok();
+  }
+  return Err(
+    new WorkflowAnswerDeliveryError(
+      `the value offered to ${suspensionId} does not satisfy the response schema that wait ` +
+        `retained: ${describeJudgment(issues)}.`,
     ),
   );
 }

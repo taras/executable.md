@@ -19,6 +19,7 @@ import { type Operation, scoped } from "effection";
 import type { Json, JournalProvenance } from "@executablemd/durable-streams";
 import { atOwnRequest } from "../suspension/position.ts";
 import { suspensionRequestFingerprint } from "../suspension/api.ts";
+import { SUSPENSION_REQUEST } from "../suspension/effects.ts";
 import {
   type SuspensionAnswerAuthority,
   type SuspensionAnswerProvider,
@@ -65,7 +66,15 @@ function remoteAnswerProvider(run: RemoteAnsweredRun): SuspensionAnswerProvider 
         return undefined;
       }
 
-      const pending = yield* link.pendingAnswer(authority.suspensionId);
+      // The event this run published the request as, read from the run's own
+      // journal rather than derived. The owner compares it with what the run is
+      // standing at, so a claim naming the wrong one is asking about a wait
+      // rather than claiming this one.
+      const requestEventId = yield* publishedRequest(database, authority.suspensionId);
+      if (requestEventId === undefined) {
+        return undefined;
+      }
+      const pending = yield* link.pendingAnswer(authority.suspensionId, requestEventId);
       if (!pending.ok) {
         throw pending.error;
       }
@@ -123,13 +132,37 @@ function remoteAnswerProvider(run: RemoteAnsweredRun): SuspensionAnswerProvider 
   };
 }
 
+/**
+ * The journal event this run published one wait's request as.
+ *
+ * Read from the run's own history, so what the claim names is what the run
+ * retains rather than something derived from the identifier it was given.
+ */
+function* publishedRequest(
+  database: WorkflowRunDatabase,
+  suspensionId: string,
+): Operation<string | undefined> {
+  const entries = yield* database.readJournalEntries();
+  if (!entries.ok) {
+    return undefined;
+  }
+  const found = entries.value.find(
+    (entry) =>
+      entry.event.type === "yield" &&
+      entry.event.description.type === SUSPENSION_REQUEST &&
+      entry.event.description.name === suspensionId,
+  );
+  return found?.eventId;
+}
+
 /** Read one run's retained answer in a scope of its own. */
 export function readRemoteAnswer(
   link: RemoteRunLink,
   suspensionId: string,
+  requestEventId: string,
 ): Operation<RemoteRetainedAnswer | undefined> {
   return scoped(function* () {
-    const pending = yield* link.pendingAnswer(suspensionId);
+    const pending = yield* link.pendingAnswer(suspensionId, requestEventId);
     if (!pending.ok) {
       throw pending.error;
     }

@@ -51,7 +51,7 @@ import { MAX_CONTENT_BYTES } from "./commands.ts";
 import { sha256Hex } from "../workspace/sha256.ts";
 import { CommandError, type CommitCommand, type ProposedMapping } from "./commands.ts";
 import { validateRetainedRoot } from "./owner-reads.ts";
-import { consumeRetainedAnswer } from "./owner-answers.ts";
+import { consumeRetainedAnswer, requireAnswerEventsAuthorized } from "./owner-answers.ts";
 import { readRetrieval } from "../sqlite/rows.ts";
 import { bytesOf } from "./encoding.ts";
 import { STAGING_TABLE } from "./private-schema.ts";
@@ -255,10 +255,12 @@ export function applyCommit(
   }
 
   // Before the events are written, and inside the same transaction that writes
-  // them: the retained answer this proposal spends has to be spendable, and the
-  // event it is spent for has to be the one this proposal is appending.
+  // them. An answer event is authorized by a consumption or by nothing, so the
+  // two are checked together: the events this proposal appends must carry
+  // exactly the answer its consumption spends, and none if it spends none.
+  requireAnswerEventsAuthorized(command.events, command.answer);
   if (command.answer !== null) {
-    consumeRetainedAnswer(storage, command.answer, command.events, at);
+    consumeRetainedAnswer(storage, acquisitionId, command.answer, command.events, at);
   }
 
   const journalEventIds: string[] = [];

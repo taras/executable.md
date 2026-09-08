@@ -42,13 +42,22 @@ export interface RemoteRetainedWaitRecord {
   readonly requestFingerprint: string;
 }
 
-/** One judged value, offered to the owner for retention. */
+/**
+ * One value offered to a wait, for its owner to judge and retain.
+ *
+ * It carries the value and the gate decision and nothing else. There is
+ * deliberately no request identity and no claim that anything was checked: the
+ * owner resolves the wait it is answering, judges the value against the schema
+ * that wait retained, and applies the selected gate, all where the write
+ * happens. A member saying "already validated" would be a caller deciding what
+ * it is allowed to store.
+ */
 export interface RemoteAnswerRetention {
   readonly runId: string;
   readonly suspensionId: string;
-  readonly requestEventId: string;
-  readonly requestFingerprint: string;
   readonly answer: Json;
+  /** Whether the owner applies the credential gate before retaining. */
+  readonly secretDetection: boolean;
 }
 
 /** What one accepted delivery left behind. */

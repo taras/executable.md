@@ -144,7 +144,36 @@ export type CommandRefusal =
    * against a different request, or the event this commit appends is not the
    * one that answer would become. The commit is refused whole.
    */
-  | "answer-unavailable";
+  | "answer-unavailable"
+  /**
+   * The offered value is not one this wait's schema admits.
+   *
+   * The value itself never travels back with the refusal, and neither does
+   * what was wrong with it beyond this category: a diagnostic quoting either
+   * would publish, where nothing filters it, what the judgment refused.
+   */
+  | "answer-rejected"
+  /**
+   * The wait retained a schema this build cannot judge an answer against.
+   *
+   * Distinct from a rejected value: nothing is wrong with what was offered,
+   * and this owner will not retain a value it could not check.
+   */
+  | "unjudgeable-schema"
+  /**
+   * The offered value crossed the credential gate and did not pass it.
+   *
+   * What was matched is never reported, and neither is the value.
+   */
+  | "credential-detected"
+  /**
+   * A proposal's answer events are not the ones its consumption authorizes.
+   *
+   * One retained answer ends one wait with one event. A proposal appending an
+   * answer event that no consumption authorizes is forging history, and one
+   * appending more than one is ending more waits than it spends.
+   */
+  | "answer-unauthorized";
 
 export class CommandError extends Error {
   override name = "CommandError";
@@ -243,6 +272,14 @@ export interface ProposedAnswerConsumption {
 export interface AnswerCommand extends CommandEnvelope {
   readonly command: "answer";
   readonly suspensionId: string;
+  /**
+   * The exact journal event this claim says the wait's request was published as.
+   *
+   * Named because a suspension identifier is derivable and this is not: the
+   * owner compares it with what the run is actually standing at, so a caller
+   * that guessed an identifier is asking about a wait rather than claiming one.
+   */
+  readonly requestEventId: string;
 }
 
 /** The Workspace half of a proposal, when there is one. */
@@ -481,7 +518,7 @@ const MEMBERS: Record<CommandName, readonly string[]> = {
     "events",
     "answer",
   ],
-  answer: [...ENVELOPE, "suspensionId"],
+  answer: [...ENVELOPE, "suspensionId", "requestEventId"],
   retrieval: [...ENVELOPE, "expectedWorkspaceRootId", "metadata"],
   executions: [...ENVELOPE, "anchor", "after"],
   mappings: ENVELOPE,
@@ -709,7 +746,12 @@ export function parseCommand(raw: string): RunnerCommand {
     return { id, command };
   }
   if (command === "answer") {
-    return { id, command, suspensionId: text(members, "suspensionId", MAX_ID) };
+    return {
+      id,
+      command,
+      suspensionId: text(members, "suspensionId", MAX_ID),
+      requestEventId: text(members, "requestEventId", MAX_ID),
+    };
   }
   if (command === "open") {
     const runId = text(members, "runId", MAX_RUN_ID);
