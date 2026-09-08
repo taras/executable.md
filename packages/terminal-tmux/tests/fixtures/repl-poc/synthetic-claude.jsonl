@@ -1,0 +1,4 @@
+{"type":"summary","summary":"a session that has nothing to do with acceptance"}
+{"type":"user","sessionId":"claude-fixture-1","message":{"role":"user","content":[{"type":"text","text":"Ship the accepted plan"}]}}
+{"type":"assistant","sessionId":"claude-fixture-1","message":{"role":"assistant","content":[{"type":"text","text":"Done."}]}}
+{"type":"result","sessionId":"claude-fixture-1","subtype":"success"}
