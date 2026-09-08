@@ -24,6 +24,11 @@
  * own exact-origin check, which this neither repeats nor relaxes. And the root
  * import stays the root import — a repository selection under `__root__`,
  * already held to the run's exact root source by core.
+ *
+ * A completed replay takes the second half without the first, through
+ * `workflowBundleReplayInstallation()`: it imports nothing, so it is handed no
+ * source to import from, and its records are held to the name, path and object
+ * id the immutable definition declares.
  */
 
 import type { DurableEvent, Json, Yield } from "@executablemd/durable-streams";
@@ -32,6 +37,7 @@ import type {
   JournalAdmission,
   WorkflowBundleComponent,
 } from "@executablemd/core/host";
+import type { WorkflowComponentEntry } from "./storage/definition.ts";
 
 /** The root's own import, which is not a bundle member and is admitted elsewhere. */
 const ROOT = "__root__";
@@ -61,6 +67,24 @@ const REFUSALS = {
   repository:
     "A retained component import recorded a repository file, which a workflow run resolves none of.",
 } as const;
+
+/**
+ * One component a run's definition declares, as an admission holds a retained
+ * import to it.
+ *
+ * `content` is the exact pinned source, and it is present exactly when this run
+ * may also import the component. A live or partial execution holds it, so a
+ * retained record that says something else about the same object is refused
+ * against the bytes themselves. A completed replay holds none — it imports
+ * nothing and is given nothing to import — and its records are held to the name,
+ * path and object id the immutable definition retains, which is the half of
+ * this comparison that never came from the journal.
+ */
+interface DeclaredComponent {
+  readonly path: string;
+  readonly sourceHash: string;
+  readonly content?: string;
+}
 
 /**
  * Read one journal-controlled value, or answer that reading it refused.
@@ -130,13 +154,14 @@ function importedValue(event: DurableEvent): { value: unknown } | undefined | ty
  *
  * Every branch is a decision about what the record *is*, taken before anything
  * is replayed from it. A declared name must have been recorded as a bundled
- * component, with this bundle's exact path, hash, and source; an undeclared
+ * component, with the exact path and object id the definition declares — and
+ * with this run's exact source too, where this run holds one; an undeclared
  * name must not claim to be one; and a repository selection is admitted only
  * for the root, which core holds to the run's own root source.
  */
 function admitImport(
   event: DurableEvent,
-  components: ReadonlyMap<string, WorkflowBundleComponent>,
+  components: ReadonlyMap<string, DeclaredComponent>,
 ): void {
   const name = importedName(event);
   if (name === undefined || name === ROOT) {
@@ -172,12 +197,17 @@ function admitImport(
       }
     }
     const read = (member: string) => reading(() => (record as Record<string, unknown>)[member]);
-    if (
-      read("path") !== declared.path ||
-      read("sourceHash") !== declared.sourceHash ||
-      read("content") !== declared.content
-    ) {
+    if (read("path") !== declared.path || read("sourceHash") !== declared.sourceHash) {
       throw new WorkflowBundleHistoryError(REFUSALS.mismatched);
+    }
+    // The source only when this run holds one. A replay was given none, so
+    // comparing the record with itself is what there would be to do, and the
+    // object id above is the definition's rather than the history's.
+    if (declared.content !== undefined && read("content") !== declared.content) {
+      throw new WorkflowBundleHistoryError(REFUSALS.mismatched);
+    }
+    if (typeof read("content") !== "string") {
+      throw new WorkflowBundleHistoryError(REFUSALS.unreadable);
     }
     return;
   }
@@ -192,7 +222,7 @@ function admitImport(
   }
 }
 
-function admits(components: ReadonlyMap<string, WorkflowBundleComponent>): JournalAdmission {
+function admits(components: ReadonlyMap<string, DeclaredComponent>): JournalAdmission {
   // deno-lint-ignore require-yield
   return function* (retained: readonly DurableEvent[]) {
     for (const event of retained) {
@@ -222,11 +252,18 @@ export function workflowBundleInstallation(
   // Copied entry by entry at construction, so the authority this installation
   // carries is closed over these values rather than over an array the caller
   // still holds and could rewrite between installation and import.
-  const index = new Map<string, WorkflowBundleComponent>(
-    components.map((component) => [
+  const bundled = components.map((component) =>
+    Object.freeze({
+      name: component.name,
+      path: component.path,
+      sourceHash: component.sourceHash,
+      content: component.content,
+    }),
+  );
+  const index = new Map<string, DeclaredComponent>(
+    bundled.map((component) => [
       component.name,
       Object.freeze({
-        name: component.name,
         path: component.path,
         sourceHash: component.sourceHash,
         content: component.content,
@@ -235,6 +272,38 @@ export function workflowBundleInstallation(
   );
   return {
     admissions: [admits(index)],
-    bundle: { components: Object.freeze([...index.values()]) },
+    bundle: { components: Object.freeze(bundled) },
   };
+}
+
+/**
+ * Hold a completed run's retained component imports to the bundle its
+ * definition declares, and grant no authority to import one.
+ *
+ * The other half of `workflowBundleInstallation()`, for the execution that
+ * reuses a terminal instead of running. There is no execution view here because
+ * there is nothing to resolve: a completed replay answers from its recorded
+ * root Close before any name is looked up, so a source read for it would be a
+ * fetch performed for a component nobody imports. What remains is the
+ * admission, and it is exactly as strict — every retained import is held to the
+ * declared name, canonical path and object id, and a member the history never
+ * imported is neither read nor granted anything by being declared.
+ *
+ * ```ts
+ * yield* executeInstalled(options, [
+ *   retainedWorkflowInstallation(run),
+ *   workflowBundleReplayInstallation(definitionComponents(definition)),
+ * ]);
+ * ```
+ */
+export function workflowBundleReplayInstallation(
+  declared: readonly WorkflowComponentEntry[],
+): ExecutionInstallation {
+  const index = new Map<string, DeclaredComponent>(
+    declared.map((entry) => [
+      entry.name,
+      Object.freeze({ path: entry.path, sourceHash: entry.sourceHash }),
+    ]),
+  );
+  return { admissions: [admits(index)] };
 }

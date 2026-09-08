@@ -41,7 +41,13 @@ import { until } from "effection";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
+import {
+  collect,
+  execute,
+  inlineSource,
+  registerComponents,
+  retainedSource,
+} from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { durableCall, InMemoryStream } from "@executablemd/durable-streams";
 import {
@@ -403,7 +409,10 @@ function body(): (execution: WorkflowExecution) => Operation<Result<void>> {
         try {
           yield* collect(
             yield* executeInstalled(
-              { ...inlineSource("<Wait />\n"), stream: execution.stream },
+              // Reported by the path this run's definition names, as the shared
+              // CLI reports it: a completed replay is held to that agreement,
+              // and an inline identity would be a document the run is not of.
+              { ...retainedSource("workflow.md", "<Wait />\n"), stream: execution.stream },
               execution.installations,
             ),
           );

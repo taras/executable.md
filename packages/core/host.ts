@@ -71,6 +71,18 @@ export type { ExecutionInstallation, JournalAdmission } from "./src/execute.ts";
 export type { DurablePreparation } from "./src/document-request.ts";
 
 /**
+ * Text a host holds, as a root document reported by the path it came from.
+ *
+ * The same function the package root publishes, reached here because a host
+ * that supplies a root is often a host that cannot resolve the root barrel: it
+ * pulls the terminal renderer and the rest of the reader-facing surface, and a
+ * durable owner running inside a Worker has neither. This entrypoint already
+ * resolves canonical execution and nothing beyond it.
+ */
+export { retainedSource } from "./src/root-source.ts";
+export type { RetainedRootDocument } from "./src/root-source.ts";
+
+/**
  * What a trusted host declares to an execution when one of its components names
  * durable work after its own invocation — see `src/invocation-identity.ts`.
  * The claimant is delivered to the factory and published nowhere.
