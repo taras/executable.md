@@ -40,7 +40,7 @@ import { purgeStore, ReplStoreError, useReplStore } from "../poc/repl/store.ts";
 import type { ReplStore } from "../poc/repl/store.ts";
 import { claudeParser, createClaudeParser } from "../poc/repl/claude-observer.ts";
 import { codexParser } from "../poc/repl/codex-observer.ts";
-import { gatesSatisfied, runLiveProof } from "../poc/repl/live-supervisor.ts";
+import { runLiveProof, viewOnlyCloseout } from "../poc/repl/live-supervisor.ts";
 import { paneProbeOver } from "../poc/repl/live-worker.ts";
 import type { PaneActivity, TmuxCommand } from "../poc/repl/live-worker.ts";
 import type { Provider, ReplState } from "../poc/repl/state.ts";
@@ -1146,38 +1146,23 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     expect(strayAttributed).toEqual(false);
   });
 
-  it("per-provider authorization does not launch the other provider", function* () {
-    // Only Codex gates are set; a Claude proof still refuses without launching.
-    const codexOnly = {
+  it("the live delivery journey is permanently disabled at the VIEW_ONLY closeout", function* () {
+    // Under any environment — including both gates set — the supervisor launches
+    // nothing and returns the VIEW_ONLY conclusion. Reliable dispatch stays
+    // ACP-owned; there is no authorization that runs a delivery.
+    const armed = {
+      XMD_TERMINAL_REPL_CLAUDE_PROOF: "1",
+      XMD_TERMINAL_REPL_CLAUDE_MODEL_TURNS_AUTHORIZED: "1",
       XMD_TERMINAL_REPL_CODEX_PROOF: "1",
       XMD_TERMINAL_REPL_CODEX_MODEL_TURNS_AUTHORIZED: "2",
     };
-    expect(gatesSatisfied("codex", codexOnly)).toEqual(true);
-    expect(gatesSatisfied("claude", codexOnly)).toEqual(false);
-    const claudeReport = yield* runLiveProof("claude", codexOnly, BASE_SHA);
-    expect(claudeReport.verdict).toEqual("NOT_AUTHORIZED");
-    expect(claudeReport.turnBudgets.claudeSpent).toEqual(0);
-    expect(claudeReport.turnBudgets.codexSpent).toEqual(0);
-
-    const claudeOnly = {
-      XMD_TERMINAL_REPL_CLAUDE_PROOF: "1",
-      XMD_TERMINAL_REPL_CLAUDE_MODEL_TURNS_AUTHORIZED: "1",
-    };
-    expect(gatesSatisfied("claude", claudeOnly)).toEqual(true);
-    expect(gatesSatisfied("codex", claudeOnly)).toEqual(false);
-    const codexReport = yield* runLiveProof("codex", claudeOnly, BASE_SHA);
-    expect(codexReport.verdict).toEqual("NOT_AUTHORIZED");
-    expect(codexReport.turnBudgets.codexSpent).toEqual(0);
-  });
-
-  it("a wrong turn value gate refuses: previous authorization does not count", function* () {
-    const wrongTurns = {
-      XMD_TERMINAL_REPL_CODEX_PROOF: "1",
-      XMD_TERMINAL_REPL_CODEX_MODEL_TURNS_AUTHORIZED: "1",
-    };
-    expect(gatesSatisfied("codex", wrongTurns)).toEqual(false);
-    const report = yield* runLiveProof("codex", wrongTurns, BASE_SHA);
-    expect(report.verdict).toEqual("NOT_AUTHORIZED");
+    for (const provider of ["claude", "codex"] as const) {
+      const report = yield* runLiveProof(provider, armed, BASE_SHA);
+      expect(report.verdict).toEqual("VIEW_ONLY");
+      expect(report.turnBudgets.claudeSpent).toEqual(0);
+      expect(report.turnBudgets.codexSpent).toEqual(0);
+      expect((yield* validateReport(report)).valid).toEqual(true);
+    }
   });
 
   it("a provider turn opening while the buffer loads refuses before the guard", function* () {
@@ -1731,41 +1716,32 @@ describe("issue #774 — black-box REPL messaging POC", () => {
     const forbiddenField = { ...claudePass, secret: "leak" };
     expect((yield* validateReport(forbiddenField)).valid).toEqual(false);
   });
-  it("produces a valid terminal-repl-poc-report.v1 with every RP row passing", function* () {
+  it("records the VIEW_ONLY conclusion in a valid overall report", function* () {
     const passed = matrix.filter((entry) => entry.result === "pass").length;
     expect(matrix.length).toEqual(18);
     expect(passed).toEqual(18);
-    expect(tally.duplicateDeliveries).toEqual(0);
-    expect(tally.wrongPaneDeliveries).toEqual(0);
-    expect(tally.busyAdmissions).toEqual(0);
-    expect(tally.manualActivityAdmissions).toEqual(0);
+    expect(countersSafe(tally)).toEqual(true);
 
-    // The offline suite cannot spend a live turn, so its own report is the
-    // honest NOT_AUTHORIZED shape rather than an overall PASS — which the schema
-    // reserves for a run that also completed both authorized live journeys.
-    const offline: TerminalReplReport = {
-      schema: REPORT_SCHEMA,
-      verdict: "NOT_AUTHORIZED",
-      mode: "deterministic",
-      runtime: runtimeName(),
-      detail: "offline deterministic matrix; live journeys require authorization",
-      base: { sha: BASE_SHA },
-      providers: {
-        claude: { verdict: "NOT_AUTHORIZED", versionKnown: false },
-        codex: { verdict: "NOT_AUTHORIZED", versionKnown: false },
-      },
-      turnBudgets: { claudeAuthorized: 0, claudeSpent: 0, codexAuthorized: 0, codexSpent: 0 },
-      matrix,
-      counters: tally,
-      deliveries,
-      restart,
-      cleanup,
-    };
-    const validation = yield* validateReport(offline);
+    // The POC's decision is VIEW_ONLY: the offline matrix passed, but reliable
+    // dispatch is not established, so neither provider's live journey passes and
+    // the overall verdict is VIEW_ONLY rather than PASS.
+    const overall = aggregateReport(
+      { sha: BASE_SHA },
+      { sha: HEAD_SHA },
+      runtimeName(),
+      { matrix, counters: tally, restart, cleanup, deliveries },
+      viewOnlyCloseout("claude", BASE_SHA),
+      viewOnlyCloseout("codex", BASE_SHA),
+    );
+    expect(overall.verdict).toEqual("VIEW_ONLY");
+    expect(overall.mode).toEqual("overall");
+    const validation = yield* validateReport(overall);
     if (!validation.valid) {
       throw new Error(`report failed schema validation: ${validation.errors.join("; ")}`);
     }
     expect(validation.valid).toEqual(true);
+    // The exact race is recorded in the closeout detail.
+    expect(viewOnlyCloseout("claude", BASE_SHA).detail?.includes("VIEW_ONLY")).toEqual(true);
   });
 });
 

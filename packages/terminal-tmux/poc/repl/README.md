@@ -1,73 +1,62 @@
-# Black-box terminal REPL POC (issue #774)
+# Black-box terminal REPL POC (issue #774) — result: VIEW_ONLY
 
 A finite, disposable proof — not the production REPL, and not part of any package
-export. It answers one question:
+export. It asked one question:
 
 > Can generic terminal-state convergence make black-box tmux input delivery
 > reliable enough while provider session files supply authoritative acceptance and
 > completion?
 
+**The decision is VIEW_ONLY.** Passive session-file observation is sound, but
+reliable message dispatch cannot be established over black-box tmux input and
+stays ACP-owned. The reasoning and the exact race are in [`RESULT.md`](./RESULT.md).
+
 Nothing here is exported from `@executablemd/terminal-tmux`. It is reached only by
-the deterministic evidence in `packages/terminal-tmux/tests/repl-poc.test.ts` and,
-under explicit authorization, by the live supervisor here. It adds no Workflow
-capability, no journal record, no replay rule, and no workflow syntax.
+the deterministic evidence in `packages/terminal-tmux/tests/repl-poc.test.ts`. It
+adds no Workflow capability, no journal record, no replay rule, and no workflow
+syntax, and it changes no production, architecture or specification file.
 
-## The pieces
+## What the evidence establishes
 
-- `state.ts`, `actions.ts` — one Flux-style immutable state and its closed action
-  vocabulary. Actions are the only way state changes; the reducer is the only place
-  a transition is written.
-- `store.ts` — a sequence-numbered, staged-write action log. Restart replays it and
-  refuses a gap, a duplicate or a malformed record.
+- `state.ts`, `actions.ts`, `store.ts` — a Flux-style immutable store with a
+  closed action vocabulary and a sequence-numbered, staged-write log that replays
+  on restart and refuses gaps, duplicates, malformed records and illegal
+  transitions.
 - `observer.ts` with `claude-observer.ts` and `codex-observer.ts` — a strict,
-  read-only provider session-file boundary. It matches only the exact native
-  identity, advances the cursor only past a complete record, and refuses on
-  ambiguity, truncation, rotation, identity mismatch or an unsupported shape. It
-  never writes to a provider file.
-- `convergence.ts` — the generic terminal-convergence algorithm. No prompt or
-  screen-text parsing: two structurally equal snapshots across an acknowledged
-  barrier, no intervening event, and no open provider turn.
+  read-only session-file observer. It locates by exact native identity and project
+  from bounded header reads, advances the cursor only past a complete record,
+  groups Claude output by its `requestId` turn, and refuses ambiguity, truncation,
+  rotation, identity mismatch and unsupported shapes. It never writes a provider
+  file. **This is the reusable outcome.**
+- `convergence.ts` — the generic terminal-convergence algorithm. No screen-text
+  parsing: two structurally equal pane samples across an acknowledged barrier,
+  with the provider's open-turn, cursor, event count and physical size unchanged.
 - `delivery.ts` — literal delivery through a private `0600` file and a uniquely
-  named tmux buffer, with a separate submit key. Message bytes never enter a shell
-  or a tmux argument vector.
-- `controller.ts` — the message lifecycle: converge, record intent durably, paste
-  under a final guard, then confirm acceptance from the provider file. An unproved
-  outcome becomes uncertain and is never pasted again.
+  named tmux buffer, prepared before the final sample, with a separate submit key.
+- `controller.ts` — the message lifecycle: converge, prepare, final sample,
+  durable `AttemptStarted`, one guarded paste, then acceptance from the provider
+  file. Any unproved outcome becomes uncertain and is never retried.
 - `report.ts` with `report.schema.json` — the `terminal-repl-poc-report.v1`
-  artifact and its validator. It carries hashes, counters, versions, turn budgets,
-  the RP matrix and restart/cleanup evidence, and no conversation content.
-- `live-supervisor.ts`, `live-worker.ts`, `TerminalReplClaude.md`,
-  `TerminalReplCodex.md`, `ClaudeBlackBoxRepl.test.md`, `CodexBlackBoxRepl.test.md` — the gated live
-  journey. It refuses before starting any agent or opening any transcript unless
-  both of its exact gates are supplied.
+  artifact, its validator, and the overall aggregator whose `PASS` was reachable
+  only with both live provider journeys.
+- `live-worker.ts` — the terminal boundary kept as evidence: the pane probe over
+  an injectable tmux command seam and a real control-mode activity source, with
+  the single conditional guard the boundary would use.
 
-## The deterministic matrix
+## The live journey is closed out
 
-`packages/terminal-tmux/tests/repl-poc.test.ts` freezes RP1–RP18 and runs them
-against fake panes and synthetic append-only session files. The fake pane exposes
-hidden busy and manual ground truth only to the assertions, never to the
-algorithm, so a paste admitted while the pane was busy or a person was typing is
-caught. Run it with:
+The POC reached its decision without a live model turn, and the live-delivery
+journey is permanently disabled. `live-supervisor.ts`'s `runLiveProof` launches no
+coding agent and spends no turn under any environment; it returns the VIEW_ONLY
+conclusion. The grid launch documents and the two live proof documents have been
+removed.
+
+## Running the evidence
 
 ```sh
 deno task test packages/terminal-tmux/tests/repl-poc.test.ts
 ```
 
-## The live journey
-
-The live journey never runs in ordinary CI and spends real model turns. It is gated
-twice over per provider, and previous authorization does not count:
-
-```sh
-XMD_TERMINAL_REPL_CLAUDE_PROOF=1 XMD_TERMINAL_REPL_CLAUDE_MODEL_TURNS_AUTHORIZED=1 \
-  deno task xmd test packages/terminal-tmux/poc/repl/ClaudeBlackBoxRepl.test.md --raw
-
-XMD_TERMINAL_REPL_CODEX_PROOF=1 XMD_TERMINAL_REPL_CODEX_MODEL_TURNS_AUTHORIZED=2 \
-  deno task xmd test packages/terminal-tmux/poc/repl/CodexBlackBoxRepl.test.md --raw
-```
-
-Without both exact values the supervisor prints a `NOT_AUTHORIZED` report and starts
-nothing. Each provider has its own single-pane grid document, so authorizing one
-provider can never launch the other. The live journey body in `live-worker.ts` is
-unexercised until an authorized run, which is the only context allowed to spend the
-turns it needs.
+The deterministic suite freezes RP1–RP18 plus supporting boundary rows and passes
+under Deno, Node and Bun. It records the VIEW_ONLY conclusion in a schema-valid
+overall report.
