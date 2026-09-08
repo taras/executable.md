@@ -40,6 +40,7 @@ import {
   WorkflowTransactionError,
 } from "../../src/storage/errors.ts";
 import type { RemoteWorkspaceLink } from "../../src/remote/database.ts";
+import type { RemoteRetainedAnswer } from "../../src/remote/answer-link.ts";
 
 export const RUN_ID = "5cktgrv2zyutngh7bbddr2tyg2b5a567cg725hu5e7u42orerxaa";
 export const ROOT = "a".repeat(64);
@@ -165,6 +166,12 @@ function link(): RemoteWorkspaceLink {
     // deno-lint-ignore require-yield
     *frontierSnapshot(): Operation<RemoteFrontierSnapshot> {
       return frontier();
+    },
+    // deno-lint-ignore require-yield
+    *pendingAnswer(): Operation<Result<RemoteRetainedAnswer | undefined>> {
+      // These are lifecycle scripts. Nothing is delivered to their runs, and a
+      // link that answered otherwise would end a wait no script reaches.
+      return Ok(undefined);
     },
     // deno-lint-ignore require-yield
     *frontier(): Operation<never> {

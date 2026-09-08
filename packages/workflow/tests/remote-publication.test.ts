@@ -635,6 +635,7 @@ describe("what the production runner publishes", () => {
           publication: null,
           mappings: [],
           bytes: new Map(),
+          answer: null,
         };
         const committed = yield* link.commit(intent);
         expect([attempt, committed.ok]).toEqual([attempt, true]);
@@ -660,6 +661,7 @@ describe("what the production runner publishes", () => {
       publication: null,
       mappings: [],
       bytes: new Map(),
+      answer: null,
     };
     yield* link.commit(intent);
     yield* link.commit({ ...intent, events: [event("later")] });
@@ -821,6 +823,7 @@ describe("what the production runner publishes", () => {
       publication: null,
       mappings: [],
       bytes: new Map(),
+      answer: null,
     });
     expect(committed.ok).toBe(false);
   });
@@ -840,6 +843,7 @@ describe("what the production runner publishes", () => {
       publication: null,
       mappings: [],
       bytes: new Map(),
+      answer: null,
     });
     // One identity per event, or the two sides disagree about what history
     // this commit created.

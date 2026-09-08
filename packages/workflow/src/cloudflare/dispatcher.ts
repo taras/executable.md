@@ -44,6 +44,7 @@ import {
   type RunnerCommand,
 } from "./commands.ts";
 import { bytesOf, decodeBase64, sha256Hex } from "./encoding.ts";
+import { readRetainedAnswer } from "./owner-answers.ts";
 import {
   readContent,
   readExecutions,
@@ -345,7 +346,27 @@ function perform(
     return {
       id: command.id,
       outcome: "performed",
-      value: applyCommit(ctx.storage, acquisitionId, command, mintEventId),
+      value: applyCommit(ctx.storage, acquisitionId, command, mintEventId, ownerTime()),
+    };
+  }
+  if (command.command === "answer") {
+    const retained = readRetainedAnswer(ctx.storage, command.suspensionId);
+    return {
+      id: command.id,
+      outcome: "performed",
+      // The value travels as the canonical text this owner retained, so a
+      // runner comparing what it publishes with what was delivered compares the
+      // same bytes this owner will.
+      value:
+        retained === undefined
+          ? null
+          : {
+              suspensionId: retained.suspensionId,
+              requestEventId: retained.requestEventId,
+              requestFingerprint: retained.requestFingerprint,
+              answer: retained.answer,
+              state: retained.state,
+            },
     };
   }
   if (command.command === "retrieval") {

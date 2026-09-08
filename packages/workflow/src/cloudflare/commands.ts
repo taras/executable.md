@@ -73,7 +73,8 @@ export type CommandName =
   | "settle"
   | "fork-stage"
   | "fork"
-  | "fork-continue";
+  | "fork-continue"
+  | "answer";
 
 export type CommandRefusal =
   | "not-an-object"
@@ -120,7 +121,30 @@ export type CommandRefusal =
    * destination holds nothing, and the parts it names are not here — so the
    * caller's next move is to copy the source again rather than to give up.
    */
-  | "needs-transfer";
+  | "needs-transfer"
+  /**
+   * A value was offered to a run that is not waiting for one.
+   *
+   * The run is intact and this owner holds it; it is running, finished,
+   * cancelled, or stopped for something other than a durable wait. A caller
+   * acts on that rather than retrying.
+   */
+  | "not-suspended"
+  /**
+   * A value was offered to a wait this run is not standing at.
+   *
+   * A run waits at one suspension at a time. The identifier names another one,
+   * or names a request published elsewhere in this run's history.
+   */
+  | "wrong-suspension"
+  /**
+   * There is no retained answer this commit may spend.
+   *
+   * Nothing was delivered, or it was already published, or it was delivered
+   * against a different request, or the event this commit appends is not the
+   * one that answer would become. The commit is refused whole.
+   */
+  | "answer-unavailable";
 
 export class CommandError extends Error {
   override name = "CommandError";
@@ -190,6 +214,35 @@ export interface CommitCommand extends CommandEnvelope {
   readonly mappings: readonly ProposedMapping[];
   /** Exactly what `serializeDurableEvent` produced, terminating newline included. */
   readonly events: readonly string[];
+  /**
+   * The retained answer this proposal spends, when it spends one.
+   *
+   * `null` for every ordinary commit. It names a wait, the event its request
+   * was published as and the fingerprint it was delivered against, and carries
+   * no value: the owner holds the value already, and one arriving here would be
+   * the runner saying what it is owed.
+   */
+  readonly answer: ProposedAnswerConsumption | null;
+}
+
+/** Which retained answer one proposal spends. */
+export interface ProposedAnswerConsumption {
+  readonly suspensionId: string;
+  readonly requestEventId: string;
+  readonly requestFingerprint: string;
+}
+
+/**
+ * What one run retains for a wait, asked for by the acquisition that may spend
+ * it.
+ *
+ * A read rather than a mutation, and on the executor plane rather than the
+ * delivery plane, because it is read in order to be published: only the
+ * executor publishes.
+ */
+export interface AnswerCommand extends CommandEnvelope {
+  readonly command: "answer";
+  readonly suspensionId: string;
 }
 
 /** The Workspace half of a proposal, when there is one. */
@@ -403,7 +456,8 @@ export type RunnerCommand =
   | SettleCommand
   | ForkStageCommand
   | ForkCommand
-  | ForkContinueCommand;
+  | ForkContinueCommand
+  | AnswerCommand;
 
 export type CommandResult =
   | { readonly id: string; readonly outcome: "performed"; readonly value: unknown }
@@ -425,7 +479,9 @@ const MEMBERS: Record<CommandName, readonly string[]> = {
     "publication",
     "mappings",
     "events",
+    "answer",
   ],
+  answer: [...ENVELOPE, "suspensionId"],
   retrieval: [...ENVELOPE, "expectedWorkspaceRootId", "metadata"],
   executions: [...ENVELOPE, "anchor", "after"],
   mappings: ENVELOPE,
@@ -589,7 +645,8 @@ export function parseCommand(raw: string): RunnerCommand {
     command !== "settle" &&
     command !== "fork-stage" &&
     command !== "fork" &&
-    command !== "fork-continue"
+    command !== "fork-continue" &&
+    command !== "answer"
   ) {
     throw new CommandError("unknown-command");
   }
@@ -650,6 +707,9 @@ export function parseCommand(raw: string): RunnerCommand {
   }
   if (command === "mappings") {
     return { id, command };
+  }
+  if (command === "answer") {
+    return { id, command, suspensionId: text(members, "suspensionId", MAX_ID) };
   }
   if (command === "open") {
     const runId = text(members, "runId", MAX_RUN_ID);
@@ -789,6 +849,28 @@ export function parseCommand(raw: string): RunnerCommand {
     publication: publication(members.get("publication")),
     mappings: mappings(members.get("mappings")),
     events: eventRecords(members.get("events")),
+    answer: answerConsumption(members.get("answer")),
+  };
+}
+
+/**
+ * The retained answer a proposal spends, or its absence.
+ *
+ * `null` is every ordinary commit. Everything else names one wait, the exact
+ * journal event its request was published as, and the fingerprint the value was
+ * delivered against — and nothing else, because a value here would be a runner
+ * telling the owner what it retained.
+ */
+function answerConsumption(value: unknown): ProposedAnswerConsumption | null {
+  if (value === null) {
+    return null;
+  }
+  const members = object(value);
+  closed(members, ["suspensionId", "requestEventId", "requestFingerprint"]);
+  return {
+    suspensionId: text(members, "suspensionId", MAX_ID),
+    requestEventId: text(members, "requestEventId", MAX_ID),
+    requestFingerprint: digest(members, "requestFingerprint"),
   };
 }
 

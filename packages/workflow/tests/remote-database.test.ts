@@ -27,6 +27,7 @@ import {
   useRemoteRunDatabase,
 } from "../src/remote/database.ts";
 import type { RemoteFrontierSnapshot } from "../src/remote/read.ts";
+import type { RemoteRetainedAnswer } from "../src/remote/answer-link.ts";
 
 const ROOT = "a".repeat(64);
 const RUN_ID = "remote-run";
@@ -85,6 +86,12 @@ function owner(
         journalEventId: snapshot.journalEventId,
         events: snapshot.entries.map((entry) => entry.event),
       };
+    },
+    // deno-lint-ignore require-yield
+    *pendingAnswer(): Operation<Result<RemoteRetainedAnswer | undefined>> {
+      // Nothing is delivered to these runs. A handle that answered otherwise
+      // would be claiming for a wait no test here reaches.
+      return Ok(undefined);
     },
     // deno-lint-ignore require-yield
     *frontierSnapshot(): Operation<RemoteFrontierSnapshot> {

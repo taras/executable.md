@@ -67,6 +67,7 @@ import { withRemoteJournalRoute } from "./journal-route.ts";
 import { resource } from "effection";
 import { establishJournalProvenance, type DurableStream } from "@executablemd/durable-streams";
 import { useRemoteRunDatabase, type RemoteWorkspaceLink } from "./database.ts";
+import { installRemoteSuspensionAnswers } from "./answers.ts";
 import { routeRemoteRunJournal } from "./journal-route.ts";
 
 import type { TemporaryTrees } from "./invocation.ts";
@@ -223,11 +224,17 @@ export function useRemoteRun(options: RemoteRunOptions): Operation<RemoteRun> {
       yield* options.link.frontierSnapshot(),
     );
     const journal = routeRemoteRunJournal(database, options.journal);
+    const provenance = establishJournalProvenance(journal);
+    // Installed here because here is where a run's three halves exist at once:
+    // the acquisition it is reached through, the handle its execution transacts
+    // on, and the witness over the exact journal an answer would be published
+    // into. It closes with this scope, so a run that is over answers nothing.
+    yield* installRemoteSuspensionAnswers({ link: options.link, database, provenance });
     yield* provide(
       bindings.bind({
         database,
         journal,
-        provenance: establishJournalProvenance(journal),
+        provenance,
         runtime: {
           files: options.files,
           trees: options.trees,

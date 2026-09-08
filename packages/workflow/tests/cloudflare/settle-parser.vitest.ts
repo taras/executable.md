@@ -144,6 +144,7 @@ describe("a root identity in a command", () => {
       publication: { proposedWorkspaceRootId: ROOT, proposedManifest: "{}", content: [] },
       mappings: [],
       events: [],
+      answer: null,
       ...overrides,
     });
   }

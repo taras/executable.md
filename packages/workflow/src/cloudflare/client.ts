@@ -66,6 +66,7 @@ import {
   MAX_CONTENT_BYTES,
 } from "./commands.ts";
 import type { RemoteRunLink, RemoteWorkspaceLink } from "../remote/database.ts";
+import type { RemoteRetainedAnswer } from "../remote/answer-link.ts";
 import type { CreateWorkflowRunRequest } from "../storage/api.ts";
 import {
   WorkflowRunConflictError,
@@ -74,6 +75,7 @@ import {
 } from "../storage/errors.ts";
 import { isSchemaVersion, SCHEMA_VERSION } from "../sqlite/workflow-schema.ts";
 import { canonicalJson } from "../storage/record.ts";
+import { parseJsonValue } from "../storage/members.ts";
 import {
   WorkflowDatabaseCorruptError,
   WorkflowDatabaseFormatError,
@@ -108,6 +110,9 @@ export type PrivateRefusal =
   | "command:not-forkable"
   | "command:wrong-execution"
   | "command:needs-transfer"
+  | "command:not-suspended"
+  | "command:wrong-suspension"
+  | "command:answer-unavailable"
   | "storage:foreign"
   | `storage:unsupported-version-v${number}`
   | "storage:corrupt";
@@ -190,6 +195,9 @@ export function privateRefusal(value: string): PrivateRefusal {
     case "command:not-forkable":
     case "command:wrong-execution":
     case "command:needs-transfer":
+    case "command:not-suspended":
+    case "command:wrong-suspension":
+    case "command:answer-unavailable":
     case "storage:foreign":
     case "storage:corrupt":
       return value;
@@ -632,6 +640,17 @@ function commitRequest(intent: CommitIntent): Record<string, unknown> {
     // Exactly what the serializer produces, in the order the transaction
     // appended them. The owner parses each one and requires these same bytes.
     events: intent.events.map((event) => serializeDurableEvent(event)),
+    // The retained answer this proposal spends, when it spends one. It names
+    // the wait and carries no value: the owner holds the value, and checks the
+    // event above against it before it spends anything.
+    answer:
+      intent.answer === null
+        ? null
+        : {
+            suspensionId: intent.answer.suspensionId,
+            requestEventId: intent.answer.requestEventId,
+            requestFingerprint: intent.answer.requestFingerprint,
+          },
   };
 }
 
@@ -741,6 +760,72 @@ function parseConflictFields(value: unknown): readonly string[] {
     fields.push(CONFLICT_FIELDS[at] ?? "");
   }
   return Object.freeze(fields);
+}
+
+/**
+ * One retained answer, as this build reads an owner's account of it.
+ *
+ * The value arrives as the canonical text the owner retained and is parsed
+ * here: what a later commit spends is compared against those bytes, so a value
+ * this build could not read back the same way is not one it may publish.
+ */
+function parseRetainedAnswer(
+  value: unknown,
+  suspensionId: string,
+): RemoteRetainedAnswer | undefined {
+  if (value === null) {
+    return undefined;
+  }
+  const found = members(value, [
+    "suspensionId",
+    "requestEventId",
+    "requestFingerprint",
+    "answer",
+    "state",
+  ]);
+  const named = found.get("suspensionId");
+  if (named !== suspensionId) {
+    return fail("a retained answer named a different wait");
+  }
+  const state = found.get("state");
+  if (state !== "pending" && state !== "consumed") {
+    return fail("a retained answer named a state this build does not read");
+  }
+  const encoded = found.get("answer");
+  if (typeof encoded !== "string" || encoded === "") {
+    return fail("a retained answer carried no value");
+  }
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(encoded);
+  } catch {
+    return fail("a retained answer carried a value this build cannot read");
+  }
+  const answer = parseJsonValue(
+    decoded,
+    "$",
+    () => new RemoteRecordError("a retained answer carried a value this build cannot read"),
+  );
+  if (canonicalJson(answer) !== encoded) {
+    return fail("a retained answer was not canonically encoded");
+  }
+  return Object.freeze({
+    suspensionId,
+    requestEventId: text(found.get("requestEventId"), "a retained answer named no request event"),
+    requestFingerprint: text(
+      found.get("requestFingerprint"),
+      "a retained answer named no request fingerprint",
+    ),
+    answer,
+    state,
+  });
+}
+
+function text(value: unknown, reason: string): string {
+  if (typeof value !== "string" || value === "") {
+    return fail(reason);
+  }
+  return value;
 }
 
 export function cloudflareRunLink(
@@ -864,6 +949,28 @@ export function cloudflareRunLink(
             }
             return parsed;
           },
+          privateRefusal,
+        );
+        return answered.outcome === "refused"
+          ? Err(storageFailure(privateRefusal(answered.refusal)))
+          : Ok(answered.value);
+      } catch (error) {
+        return Err(translate(error));
+      }
+    },
+
+    /**
+     * What this run retains for one wait, on this acquisition's authority.
+     *
+     * Answered as the owner retains it, canonical text and all, so the value a
+     * caller publishes is the value the owner will compare its commit against.
+     */
+    *pendingAnswer(suspensionId: string): Operation<Result<RemoteRetainedAnswer | undefined>> {
+      try {
+        const answered = yield* connection.ask(
+          nextId(),
+          { command: "answer", suspensionId },
+          (value) => parseRetainedAnswer(value, suspensionId),
           privateRefusal,
         );
         return answered.outcome === "refused"
@@ -1045,6 +1152,22 @@ export function storageFailure(refusal: PrivateRefusal): WorkflowStorageError {
   }
   if (refusal === "command:capacity") {
     return new WorkflowRequestError("this run's owner cannot accept more work on this connection.");
+  }
+  if (refusal === "command:not-suspended") {
+    return new WorkflowRequestError(
+      "this workflow run is not waiting for an answer, and only a suspended run is.",
+    );
+  }
+  if (refusal === "command:wrong-suspension") {
+    return new WorkflowRequestError(
+      "this workflow run is not waiting at that suspension. A run waits at one at a time.",
+    );
+  }
+  if (refusal === "command:answer-unavailable") {
+    // Nothing retained, already published, or delivered against a different
+    // request. All three are facts about the wait rather than failures to
+    // reach the run.
+    return new WorkflowRequestError("there is no delivered answer this wait may be ended with.");
   }
   return new WorkflowTransactionError("this run's owner refused the operation.");
 }

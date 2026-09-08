@@ -808,6 +808,26 @@ export class ExecutorObject extends WorkflowOwnerObject {
   }
 
   /**
+   * Answer one typed delivery, the way a host's request route would.
+   *
+   * The same shape the read route has and the same absence of a socket: what a
+   * test proves through this is that answering a wait takes no acquisition.
+   */
+  async deliverRequest(
+    admission: { release: string | null; token: string | null; runId: string | null },
+    body: string,
+  ): Promise<string> {
+    return JSON.stringify(await run(() => this.deliver(admission, body)));
+  }
+
+  /** Every answer this run retains, as rows. */
+  retainedAnswers(): Record<string, unknown>[] {
+    return this.ctx.storage.sql
+      .exec("SELECT * FROM workflow_suspension_answers ORDER BY suspension_id")
+      .toArray();
+  }
+
+  /**
    * Append the two rows a fork writes for itself, and one ordinary row.
    *
    * The run record and the root import are what a destination replaces, so a

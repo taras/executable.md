@@ -30,9 +30,10 @@
  */
 
 import { type Api, createApi } from "@effectionx/context-api";
-import type { Operation, Result } from "effection";
+import { Err, Ok, type Operation, type Result } from "effection";
 import type { Json } from "@executablemd/core";
-import { WorkflowStorageError } from "../storage/errors.ts";
+import { checkRunId } from "../storage/create-request.ts";
+import { WorkflowRequestError, WorkflowStorageError } from "../storage/errors.ts";
 
 /** One typed value offered to one retained durable wait. */
 export interface WorkflowAnswerDelivery {
@@ -94,3 +95,97 @@ export const WorkflowInputDelivery: Api<WorkflowInputDeliveryApi> =
       throw new WorkflowInputDeliveryProviderError();
     },
   });
+
+/** A delivery whose every member has been checked rather than believed. */
+export interface CheckedAnswerDelivery {
+  readonly runId: string;
+  readonly suspensionId: string;
+  readonly value: Json;
+  readonly secretDetection: boolean;
+}
+
+const DELIVERY_MEMBERS = ["runId", "suspensionId", "value", "secretDetection"];
+
+/**
+ * The whole request, parsed as a closed shape before any member is read.
+ *
+ * The type describes what a caller meant; what arrives is whatever the language
+ * allows. A suspension id is opaque and every character of it is part of it, so
+ * the only thing asked of it is that it is a non-empty string this run could
+ * have derived.
+ */
+export function parseAnswerDelivery(
+  offered: WorkflowAnswerDelivery,
+): Result<CheckedAnswerDelivery> {
+  if (typeof offered !== "object" || offered === null || Array.isArray(offered)) {
+    return Err(new WorkflowRequestError("a delivery takes an object describing one answer."));
+  }
+  const names = new Set(Object.keys(offered));
+  const missing = DELIVERY_MEMBERS.filter((name) => !names.has(name));
+  if (missing.length > 0) {
+    return Err(new WorkflowRequestError(`the delivery is missing ${missing.join(", ")}.`));
+  }
+
+  const runId = checkRunId(Reflect.get(offered, "runId"));
+  if (!runId.ok) {
+    return runId;
+  }
+
+  const suspensionId = Reflect.get(offered, "suspensionId");
+  if (typeof suspensionId !== "string" || suspensionId === "") {
+    return Err(
+      new WorkflowRequestError(
+        "a delivery names the wait it answers, and a suspension id is a non-empty string.",
+      ),
+    );
+  }
+
+  const secretDetection = Reflect.get(offered, "secretDetection");
+  if (typeof secretDetection !== "boolean") {
+    return Err(
+      new WorkflowRequestError("a delivery says whether it crosses the secret gate, as a boolean."),
+    );
+  }
+
+  const value = retainableJson(Reflect.get(offered, "value"));
+  if (value === undefined) {
+    return Err(
+      new WorkflowRequestError(
+        "an answer is retained in this run's storage, so it must be JSON this run can store.",
+      ),
+    );
+  }
+
+  return Ok({ runId: runId.value, suspensionId, value, secretDetection });
+}
+
+/** The value, if every part of it is JSON this run can retain. */
+function retainableJson(value: unknown): Json | undefined {
+  let encoded: string | undefined;
+  try {
+    encoded = JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
+  if (encoded === undefined) {
+    return undefined;
+  }
+  const parsed: unknown = JSON.parse(encoded);
+  return isJson(parsed) ? parsed : undefined;
+}
+
+function isJson(value: unknown): value is Json {
+  if (value === null || typeof value === "string" || typeof value === "number") {
+    return true;
+  }
+  if (typeof value === "boolean") {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.every(isJson);
+  }
+  if (typeof value === "object") {
+    return Object.values(value).every(isJson);
+  }
+  return false;
+}

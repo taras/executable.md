@@ -174,6 +174,7 @@ function commit(overrides: Record<string, unknown> = {}): Record<string, unknown
     publication: nextPublication(),
     mappings: [REPOSITORY],
     events: [event("published")],
+    answer: null,
     ...overrides,
   };
 }

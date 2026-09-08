@@ -49,8 +49,9 @@ import type {
   WorkflowRunRecord,
 } from "../storage/record.ts";
 import { createTransactionGate, type OwnerLink, transactRemotely } from "./collector.ts";
-import type { EnlistWorkspace, TransactionAnchor } from "./collector.ts";
+import type { EnlistAnswer, EnlistWorkspace, TransactionAnchor } from "./collector.ts";
 import type { RemoteContent, RemoteContentRequest, RemoteFrontierSnapshot } from "./read.ts";
+import type { RemoteRetainedAnswer } from "./answer-link.ts";
 import type { RemoteInvocationSnapshot } from "./records.ts";
 import type { CreateWorkflowRunRequest } from "../storage/api.ts";
 import type { WorkspaceRootManifest } from "../workspace/root-manifest.ts";
@@ -59,6 +60,13 @@ import type { WorkspaceRootManifest } from "../workspace/root-manifest.ts";
 export interface RemoteRunLink extends OwnerLink {
   /** A fresh coherent frontier, for a read that must not use a snapshot. */
   frontierSnapshot(): Operation<RemoteFrontierSnapshot>;
+  /**
+   * What this run retains for one wait, if it retains anything.
+   *
+   * On the acquisition's own authority, because it is read to be spent: an
+   * execution asks what it may publish, and only the executor may publish.
+   */
+  pendingAnswer(suspensionId: string): Operation<Result<RemoteRetainedAnswer | undefined>>;
   /** Replace or clear the retrieval metadata, and answer with the result. */
   replaceRetrieval(
     expectedWorkspaceRootId: string,
@@ -139,6 +147,15 @@ export interface WorkspaceRoute {
   readonly enlist: EnlistWorkspace;
   /** Where this transaction began, so a coordinator can prove it has not drifted. */
   readonly anchor: TransactionAnchor;
+  /**
+   * How this transaction spends a retained answer.
+   *
+   * On the same route, and reachable on the same terms: an answer claim that
+   * cannot prove it holds this exact database and this exact live transaction
+   * cannot spend anything, which is what keeps a wait from being ended outside
+   * the transaction that publishes its answer.
+   */
+  readonly consume: EnlistAnswer;
 }
 
 const ActiveRoute: Context<WorkspaceRoute | undefined> = createContext<WorkspaceRoute | undefined>(
@@ -308,18 +325,22 @@ export function useRemoteRunDatabase(
       }
       return yield* turns.take(function* (): Operation<Result<T>> {
         try {
-          return yield* transactRemotely(link, gate, function* (transaction, enlist, anchor) {
-            // The marker and the route are installed for the body's scope
-            // alone. Outside it neither exists, so a retained transaction
-            // object reaches nothing and an unrelated scope is not mistaken for
-            // a nested one.
-            yield* ActiveTransaction.set({
-              handle,
-              enclosing: yield* ActiveTransaction.get(),
-            });
-            yield* ActiveRoute.set({ database: handle, transaction, enlist, anchor });
-            return yield* body(transaction);
-          });
+          return yield* transactRemotely(
+            link,
+            gate,
+            function* (transaction, enlist, anchor, consume) {
+              // The marker and the route are installed for the body's scope
+              // alone. Outside it neither exists, so a retained transaction
+              // object reaches nothing and an unrelated scope is not mistaken for
+              // a nested one.
+              yield* ActiveTransaction.set({
+                handle,
+                enclosing: yield* ActiveTransaction.get(),
+              });
+              yield* ActiveRoute.set({ database: handle, transaction, enlist, anchor, consume });
+              return yield* body(transaction);
+            },
+          );
         } catch (error) {
           // A body that raised, or a resource of its that failed to tear down,
           // is a failed transaction rather than a raised one: the interface

@@ -44,9 +44,9 @@
  */
 
 import type { Operation } from "effection";
-import { canonicalFingerprint, type Json } from "@executablemd/core";
+import type { Json } from "@executablemd/durable-streams";
 import { createDurableOperation, durablePosition } from "@executablemd/durable-streams";
-import type { DurablePosition, EffectDescription, Workflow } from "@executablemd/durable-streams";
+import type { EffectDescription, Workflow } from "@executablemd/durable-streams";
 import { getWorkflowRun } from "../run.ts";
 import { parseJsonValue } from "../storage/members.ts";
 import { suspensionAnswerEffect } from "./answer.ts";
@@ -56,26 +56,8 @@ import {
   WorkflowSuspensionRequestError,
   type WorkflowSuspensionRequest,
 } from "./api.ts";
-
-/** The effect type one durable wait's request is retained under. */
-export const SUSPENSION_REQUEST = "suspension_request";
-
-/**
- * The opaque name one wait has, in this run, at this position.
- *
- * A digest rather than the three values joined, because the parts are a run
- * identifier a caller chose and a coroutine identifier with its own separators;
- * joined, two different triples could spell one string. It is opaque on
- * purpose: #300 will correlate an answer to it, and a correlation key that
- * revealed the position it came from would invite guessing a neighbouring wait.
- */
-export function suspensionId(runId: string, position: DurablePosition): string {
-  return canonicalFingerprint({
-    runId,
-    coroutineId: position.coroutineId,
-    index: position.index,
-  }).slice(0, 32);
-}
+import { SUSPENSION_REQUEST, suspensionId } from "./effects.ts";
+export { SUSPENSION_REQUEST, suspensionId } from "./effects.ts";
 
 function describeSuspension(id: string, request: WorkflowSuspensionRequest): EffectDescription {
   return {

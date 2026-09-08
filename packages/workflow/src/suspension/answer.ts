@@ -44,9 +44,8 @@ import {
   type Result,
 } from "@executablemd/durable-streams";
 import { WorkflowSuspensionRequestError, type WorkflowSuspensionRequest } from "./api.ts";
-
-/** The effect type one delivered answer is retained under. */
-export const SUSPENSION_ANSWER = "suspension_answer";
+import { SUSPENSION_ANSWER } from "./effects.ts";
+export { SUSPENSION_ANSWER } from "./effects.ts";
 
 /** What a live answer publication is given, and what it may do with it. */
 export interface SuspensionAnswerAuthority {

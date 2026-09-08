@@ -33,6 +33,7 @@ import type { WorkflowRunTransaction } from "../storage/api.ts";
 export type CollectorRefusal =
   | "nested-transaction"
   | "publication-already-enlisted"
+  | "answer-already-enlisted"
   | "too-many-mappings"
   | "transaction-closed"
   | "operation-inside-body"
@@ -71,6 +72,27 @@ export interface CommitIntent {
   readonly mappings: readonly RetainedMapping[];
   /** The sealed bytes for the pieces this proposal may have to supply. */
   readonly bytes: ReadonlyMap<string, Uint8Array>;
+  /**
+   * The retained answer this transaction is spending, when it is spending one.
+   *
+   * `null` for every ordinary transaction, which is nearly all of them. It is
+   * here rather than beside the commit because consuming a delivered answer and
+   * publishing the event that answers the wait are one act: an answer consumed
+   * without its event is lost, and an event published without the consumption
+   * could be delivered twice.
+   *
+   * It names the wait and the request it answers and carries no value. The
+   * owner holds the value already; a value travelling here would be the runner
+   * saying what it is owed rather than spending what it was given.
+   */
+  readonly answer: AnswerConsumption | null;
+}
+
+/** Which retained answer one transaction spends. */
+export interface AnswerConsumption {
+  readonly suspensionId: string;
+  readonly requestEventId: string;
+  readonly requestFingerprint: string;
 }
 
 /** What the collector needs from the connection. */
@@ -157,6 +179,7 @@ export function transactRemotely<T>(
     transaction: WorkflowRunTransaction,
     enlist: EnlistWorkspace,
     anchor: TransactionAnchor,
+    consume: EnlistAnswer,
   ) => Operation<T>,
 ): Operation<Result<T>> {
   return call(function* (): Operation<Result<T>> {
@@ -234,6 +257,29 @@ export function transactRemotely<T>(
         enlisted = { attempt, mappings: Object.freeze(mappings.map(detachMapping)) };
       };
 
+      let consumption: AnswerConsumption | undefined;
+      /**
+       * How an answer claim spends the retained value inside this transaction.
+       *
+       * Private for the same reason `enlist` is: it is handed to the body, so
+       * work that never received it cannot spend an answer, and one transaction
+       * spends at most one — a second would be a second wait ending inside a
+       * unit of work that describes one.
+       */
+      const consume: EnlistAnswer = (offered: AnswerConsumption): void => {
+        if (!live) {
+          throw new RemoteTransactionError("transaction-closed");
+        }
+        if (consumption !== undefined) {
+          throw new RemoteTransactionError("answer-already-enlisted");
+        }
+        consumption = Object.freeze({
+          suspensionId: offered.suspensionId,
+          requestEventId: offered.requestEventId,
+          requestFingerprint: offered.requestFingerprint,
+        });
+      };
+
       let outcome: T;
       try {
         // A scope of its own, closed here. Everything the body started —
@@ -243,10 +289,15 @@ export function transactRemotely<T>(
         // teardown fails surface its failure after the commit had already gone
         // out, which is the one ordering that cannot be taken back.
         outcome = yield* scoped(() =>
-          body({ journal }, enlist, {
-            workspaceRootId: starting.workspaceRootId,
-            journalEventId: starting.journalEventId,
-          }),
+          body(
+            { journal },
+            enlist,
+            {
+              workspaceRootId: starting.workspaceRootId,
+              journalEventId: starting.journalEventId,
+            },
+            consume,
+          ),
         );
       } finally {
         // The handle is closed before the commit goes out, so a retained
@@ -266,6 +317,7 @@ export function transactRemotely<T>(
         publication: sealed?.publication ?? null,
         mappings: sealed?.mappings ?? [],
         bytes: sealed?.bytes ?? new Map(),
+        answer: consumption ?? null,
       });
       if (!committed.ok) {
         return committed;
@@ -310,6 +362,16 @@ export type EnlistWorkspace = (
   attempt: SealableAttempt,
   mappings?: readonly RetainedMapping[],
 ) => void;
+
+/**
+ * How an answer claim designates the retained value this transaction spends.
+ *
+ * It names the retained row rather than handing over a value, because what is
+ * being asked for is a consumption the owner performs: the owner reads what it
+ * retained, checks the event this transaction is appending against it, and
+ * marks the row spent in the same transaction that appends the event.
+ */
+export type EnlistAnswer = (consumption: AnswerConsumption) => void;
 
 /**
  * A copy nobody else holds a reference into.

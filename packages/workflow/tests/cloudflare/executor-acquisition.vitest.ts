@@ -397,6 +397,7 @@ describe("reading a runner command", () => {
       },
       mappings: [],
       events: [serializedEvent("read whole")],
+      answer: null,
     });
     // The shape is read — an unknown member or a malformed root would refuse
     // differently — and then declined on its merits: this run's frontier is not

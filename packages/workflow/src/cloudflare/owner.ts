@@ -40,6 +40,7 @@ import {
   type ReadAdmission,
   type ReadAnswer,
 } from "./read-plane.ts";
+import { answerDelivery, type DeliveryAnswer, parseDeliveryOperation } from "./delivery-plane.ts";
 import { dispatchCommand } from "./dispatcher.ts";
 import { WorkflowRecordMalformedError } from "../storage/errors.ts";
 import { discardPriorAcquisitions, PRIVATE_OBJECT_NAMES } from "./private-schema.ts";
@@ -200,6 +201,43 @@ export abstract class WorkflowOwnerObject extends DurableObject {
       return {
         outcome: "performed",
         value: answerRead(this.owned, runId, parseReadOperation(body)),
+      };
+    } catch (error) {
+      return { outcome: "refused", refusal: refusalOf(error) };
+    }
+  }
+
+  /**
+   * Answer one typed delivery, taking nothing.
+   *
+   * The same order the other two planes use — the build is compared before any
+   * token work, and the token is verified before the run is named — and then it
+   * writes exactly one row inside one transaction. No socket is accepted and no
+   * acquisition is minted or compared, so a run with a live executor can still
+   * be answered and a refusal at any step leaves the run untouched.
+   */
+  *deliver(admission: ReadAdmission, body: string): Operation<DeliveryAnswer> {
+    const { policy, verification } = this.configuration();
+    try {
+      requireSameRelease(policy.release, admission.release);
+      yield* admitToken(policy, verification, admission.token);
+      const runId = admitRunId(admission.runId);
+      const request = parseDeliveryOperation(body);
+      const now = new Date().toISOString();
+      if (request.operation === "wait") {
+        return {
+          outcome: "performed",
+          value: answerDelivery(this.owned, runId, request, now),
+        };
+      }
+      // One transaction, entered here rather than inside the answer, so every
+      // fact the retention depends on is read under the write it is about to
+      // make and a refusal rolls back having written nothing.
+      return {
+        outcome: "performed",
+        value: this.transactions.run(this.owned, () =>
+          answerDelivery(this.owned, runId, request, now),
+        ),
       };
     } catch (error) {
       return { outcome: "refused", refusal: refusalOf(error) };
