@@ -370,10 +370,13 @@ describe("Elicit: judging the answer", () => {
     const result = yield* run(workspace, document("Approve?"), constant({ decision: 7 }));
 
     expect(result.failure?.message).toContain("<Elicit />");
-    // The validator's own words. What matters to a document is that the issue
-    // names where the value went wrong and what was expected there.
-    expect(result.failure?.message).toContain('"/decision" Instance type "number" is invalid');
-    expect(result.failure?.message).toContain('Expected "string"');
+    // Where the value went wrong and which rule it broke — and not the value
+    // itself, nor the type the schema declared, because an issue is printed,
+    // bound and journaled, and neither belongs in all three.
+    expect(result.failure?.message).toContain(
+      '"/decision" must be of the type this schema declares',
+    );
+    expect(result.failure?.message).not.toContain("7");
   });
 
   /**

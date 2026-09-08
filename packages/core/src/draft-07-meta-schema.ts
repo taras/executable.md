@@ -95,7 +95,7 @@ export const DRAFT_07_META_SCHEMA: Json = {
     contentMediaType: { type: "string" },
     contentEncoding: { type: "string" },
     if: { $ref: "#" },
-    // deno-lint-ignore no-thenable
+    // oxlint-disable-next-line unicorn/no-thenable
     then: { $ref: "#" },
     else: { $ref: "#" },
     allOf: { $ref: "#/definitions/schemaArray" },

@@ -685,6 +685,103 @@ describe("judging a delivered value at the owner", () => {
     expect(await on(leaving, (owner) => owner.retainedAnswers())).toEqual([]);
   });
 
+  it("keeps a schema's data and declared names, and refuses a dangling reference", async () => {
+    // A literal that happens to carry a `format` key. Only the exact value is
+    // the value, and the key is data rather than an annotation.
+    const literal = executor();
+    await suspended(literal, SUSPENSION, { const: { format: "email", x: 1 } });
+    expect(
+      (
+        await deliver(
+          literal,
+          delivery({
+            answer: canonicalJson({ format: "email", x: 1 }),
+            secretDetection: false,
+          }),
+        )
+      )["outcome"],
+    ).toBe("performed");
+    expect((await on(literal, (owner) => owner.retainedAnswers()))[0]?.["answer"]).toBe(
+      canonicalJson({ format: "email", x: 1 }),
+    );
+
+    const altered = executor();
+    await suspended(altered, SUSPENSION, { const: { format: "email", x: 1 } });
+    const before = await on(altered, (owner) => ({
+      answers: owner.retainedAnswers(),
+      journal: owner.journalRecords(),
+      run: owner.runRow(),
+      executions: owner.executionRows(),
+      private: owner.scratch(),
+    }));
+    expect(
+      (
+        await deliver(
+          altered,
+          delivery({ answer: canonicalJson({ x: 1 }), secretDetection: false }),
+        )
+      )["refusal"],
+    ).toBe("command:answer-rejected");
+    expect(
+      await on(altered, (owner) => ({
+        answers: owner.retainedAnswers(),
+        journal: owner.journalRecords(),
+        run: owner.runRow(),
+        executions: owner.executionRows(),
+        private: owner.scratch(),
+      })),
+    ).toEqual(before);
+
+    // A property whose authored name is `format`. It is declared, so it is not
+    // an additional property, and the annotation beneath it constrains nothing.
+    const named = executor();
+    await suspended(named, SUSPENSION, {
+      type: "object",
+      properties: { format: { type: "string", format: "email" } },
+      required: ["format"],
+      additionalProperties: false,
+    });
+    expect(
+      (
+        await deliver(
+          named,
+          delivery({ answer: canonicalJson({ format: "not-email" }), secretDetection: false }),
+        )
+      )["outcome"],
+    ).toBe("performed");
+
+    // A required member the value inherits rather than holds.
+    const inherited = executor();
+    await suspended(inherited, SUSPENSION, {
+      type: "object",
+      properties: { toString: { type: "string" } },
+      required: ["toString"],
+      additionalProperties: false,
+    });
+    expect(
+      (await deliver(inherited, delivery({ answer: canonicalJson({}), secretDetection: false })))[
+        "refusal"
+      ],
+    ).toBe("command:answer-rejected");
+
+    // A reference the schema does not define is unusable, so nothing is judged
+    // against it and nothing is retained.
+    const dangling = executor();
+    await suspended(dangling, SUSPENSION, {
+      type: "object",
+      properties: { a: { $ref: "#/definitions/missing" } },
+    });
+    expect(
+      (
+        await deliver(
+          dangling,
+          delivery({ answer: canonicalJson({ a: 1 }), secretDetection: false }),
+        )
+      )["refusal"],
+    ).toBe("command:unjudgeable-schema");
+    expect(await on(dangling, (owner) => owner.retainedAnswers())).toEqual([]);
+  });
+
   it("judges without generating code, on the path a delivery actually takes", async () => {
     const stub = executor();
     await suspended(stub, SUSPENSION, { type: "number", multipleOf: 0.1 });

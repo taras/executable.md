@@ -22,6 +22,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { call, type Operation, race, scoped } from "effection";
 import { DatabaseSync } from "node:sqlite";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
+import type { JsonObject } from "@executablemd/core";
 import { collect, inlineSource, registerComponents } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { Result } from "effection";
@@ -190,9 +191,14 @@ function waiting(): Operation<unknown> {
   return suspendFor({ request: REQUEST, responseSchema: SCHEMA });
 }
 
+/** The same, for a suite that needs a wait to retain a different schema. */
+function waitingFor(responseSchema: JsonObject): () => Operation<unknown> {
+  return () => suspendFor({ request: REQUEST, responseSchema });
+}
+
 /** One run left suspended at its wait, and the identity of that wait. */
-function* suspendedRun(root: string): Operation<string> {
-  const attempted = yield* attempt(root, "start", waiting);
+function* suspendedRun(root: string, body: () => Operation<unknown> = waiting): Operation<string> {
+  const attempted = yield* attempt(root, "start", body);
   const id = attempted.notice?.suspensionId;
   if (id === undefined) {
     throw new Error("the fixture document did not reach a durable wait");
@@ -543,3 +549,112 @@ function attemptEvents(root: string): Operation<readonly DurableEvent[]> {
     }
   });
 }
+
+/**
+ * Tier WAD — the schema semantics the local boundary judges by.
+ *
+ * The same judgment a run's owner makes, reached the way a person reaches it:
+ * a real run in a real file, and the production delivery provider. What is
+ * being proved is not the validator — `packages/core` owns that — but that this
+ * boundary is the one that uses it, on the cases where a careless adapter would
+ * differ.
+ */
+describe("what the local delivery boundary admits", () => {
+  it("keeps a literal that carries `format`, and refuses an altered one", function* () {
+    const root = yield* useStorageRoot();
+    const id = yield* suspendedRun(root, waitingFor({ const: { format: "email", x: 1 } }));
+
+    const exact = yield* deliver(root, {
+      suspensionId: id,
+      value: { format: "email", x: 1 },
+      secretDetection: false,
+    });
+    expect([exact.ok, exact.ok === false && String(exact.error)]).toEqual([true, false]);
+    expect(answerRows(root)[0]?.["answer"]).toBe(JSON.stringify({ format: "email", x: 1 }));
+
+    // A second run, because the first now holds an answer.
+    const other = yield* useStorageRoot();
+    const second = yield* suspendedRun(other, waitingFor({ const: { format: "email", x: 1 } }));
+    const altered = yield* deliver(other, {
+      suspensionId: second,
+      value: { x: 1 },
+      secretDetection: false,
+    });
+    expect(altered.ok).toBe(false);
+    expect(answerRows(other)).toEqual([]);
+  });
+
+  it("keeps a declared property named `format`", function* () {
+    const root = yield* useStorageRoot();
+    const id = yield* suspendedRun(
+      root,
+      waitingFor({
+        type: "object",
+        properties: { format: { type: "string", format: "email" } },
+        required: ["format"],
+        additionalProperties: false,
+      }),
+    );
+
+    // Declared, so not an additional property; annotated, so not constrained.
+    const outcome = yield* deliver(root, {
+      suspensionId: id,
+      value: { format: "not-email" },
+      secretDetection: false,
+    });
+
+    expect([outcome.ok, outcome.ok === false && String(outcome.error)]).toEqual([true, false]);
+  });
+
+  it("treats an inherited name as a member the value does not hold", function* () {
+    const root = yield* useStorageRoot();
+    const id = yield* suspendedRun(
+      root,
+      waitingFor({
+        type: "object",
+        properties: { toString: { type: "string" } },
+        required: ["toString"],
+        additionalProperties: false,
+      }),
+    );
+
+    const missing = yield* deliver(root, { suspensionId: id, value: {}, secretDetection: false });
+    expect(missing.ok).toBe(false);
+    expect(missing.ok === false && missing.error.message).toContain("toString");
+    expect(answerRows(root)).toEqual([]);
+
+    const held = yield* deliver(root, {
+      suspensionId: id,
+      value: JSON.parse('{"toString":"held"}'),
+      secretDetection: false,
+    });
+    expect([held.ok, held.ok === false && String(held.error)]).toEqual([true, false]);
+  });
+
+  it("refuses a wait whose schema references what it does not define", function* () {
+    const root = yield* useStorageRoot();
+    const id = yield* suspendedRun(
+      root,
+      waitingFor({ type: "object", properties: { a: { $ref: "#/definitions/missing" } } }),
+    );
+
+    const outcome = yield* deliver(root, {
+      suspensionId: id,
+      value: { a: 1 },
+      secretDetection: false,
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(answerRows(root)).toEqual([]);
+  });
+
+  it("admits the value draft-07 admits, non-representable steps included", function* () {
+    const root = yield* useStorageRoot();
+    const id = yield* suspendedRun(root, waitingFor({ type: "number", multipleOf: 0.1 }));
+
+    const outcome = yield* deliver(root, { suspensionId: id, value: 0.3, secretDetection: false });
+
+    expect([outcome.ok, outcome.ok === false && String(outcome.error)]).toEqual([true, false]);
+    expect(answerRows(root)[0]?.["answer"]).toBe("0.3");
+  });
+});
