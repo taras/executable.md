@@ -33,7 +33,13 @@ const SUSPENSION = "wait-1";
 const REQUEST = { kind: "approval", release: "1.4" };
 const SCHEMA = {
   type: "object",
-  properties: { approved: { type: "boolean" }, note: { type: "string" } },
+  properties: {
+    approved: { type: "boolean" },
+    note: { type: "string" },
+    // Admitted by the schema on purpose: what refuses a credential here has to
+    // be the gate rather than the shape of the value.
+    password: { type: "string" },
+  },
   required: ["approved"],
   additionalProperties: false,
 };
@@ -48,6 +54,15 @@ const FINGERPRINT = sha256Hex(canonicalJson({ request: REQUEST, responseSchema: 
  * exactly what it would see in a delivered answer.
  */
 const CANARY = `ghp_${"abcdefghijklmnopqrstuvwxyz0123456789".slice(0, 36)}`;
+
+/**
+ * A safe canary the repository's own credential rule matches.
+ *
+ * Not an issued token and not a real secret: a credential-named field carrying
+ * an opaque-looking value. It is here because it is exactly the shape a weaker
+ * detector lets through, so it is what proves the owner runs the real gate.
+ */
+const SAFE_CANARY = "example-Purple7Elephant";
 
 beforeAll(async () => {
   keys = await generateKeys();
@@ -358,6 +373,13 @@ describe("delivering an answer to a run's owner", () => {
         stub,
         delivery({ answer: canonicalJson({ approved: true, note: CANARY }) }),
       ),
+      // The shape a weaker detector lets through and the configured gate does
+      // not. This is the whole difference between running the real gate and
+      // summarizing it.
+      safeCanary: await deliver(
+        stub,
+        delivery({ answer: canonicalJson({ approved: true, password: SAFE_CANARY }) }),
+      ),
       // The gate decision is a required member, so omitting it is not a way of
       // making it.
       ungated: await deliver(stub, {
@@ -390,6 +412,7 @@ describe("delivering an answer to a run's owner", () => {
     expect(refusals.wrongRequest["refusal"]).toBe("command:wrong-suspension");
     expect(refusals.rejectedValue["refusal"]).toBe("command:answer-rejected");
     expect(refusals.credential["refusal"]).toBe("command:credential-detected");
+    expect(refusals.safeCanary["refusal"]).toBe("command:credential-detected");
     expect(refusals.ungated["refusal"]).toBe("storage:corrupt");
     expect(refusals.badRelease["refusal"]).toBe("release:release-mismatch");
     expect(String(refusals.unauthenticatedFirst["refusal"]).startsWith("token:")).toBe(true);
@@ -402,6 +425,50 @@ describe("delivering an answer to a run's owner", () => {
         run: owner.runRow(),
       })),
     ).toEqual(before);
+  });
+
+  it("runs the configured gate, and lets only the explicit opt-out past it", async () => {
+    const stub = executor();
+    await suspended(stub);
+    const carrying = canonicalJson({ approved: true, password: SAFE_CANARY });
+    const before = await on(stub, (owner) => ({
+      answers: owner.retainedAnswers(),
+      journal: owner.journalRecords(),
+      run: owner.runRow(),
+      executions: owner.executionRows(),
+      root: owner.currentRootId(),
+      acquisition: owner.acquisitionId(),
+      private: owner.scratch(),
+    }));
+
+    // The same detection the durable journal is written through refuses it,
+    // and nothing about the run moves.
+    const gated = await deliver(stub, delivery({ answer: carrying }));
+    expect(gated["refusal"]).toBe("command:credential-detected");
+    // The refusal names a category and nothing else: not the value, not the
+    // rule, not what was matched.
+    expect(JSON.stringify(gated)).not.toContain(SAFE_CANARY);
+    expect(
+      await on(stub, (owner) => ({
+        answers: owner.retainedAnswers(),
+        journal: owner.journalRecords(),
+        run: owner.runRow(),
+        executions: owner.executionRows(),
+        root: owner.currentRootId(),
+        acquisition: owner.acquisitionId(),
+        private: owner.scratch(),
+      })),
+    ).toEqual(before);
+
+    // The documented opt-out is the only path that retains it.
+    const opted = await deliver(stub, delivery({ answer: carrying, secretDetection: false }));
+    expect(opted).toEqual({
+      outcome: "performed",
+      value: { runId: RUN_ID, suspensionId: SUSPENSION },
+    });
+    const rows = await on(stub, (owner) => owner.retainedAnswers());
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.["answer"]).toBe(carrying);
   });
 
   it("refuses a run that is not waiting, and one that is not here", async () => {

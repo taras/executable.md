@@ -40,7 +40,14 @@ import {
   type ReadAdmission,
   type ReadAnswer,
 } from "./read-plane.ts";
-import { answerDelivery, type DeliveryAnswer, parseDeliveryOperation } from "./delivery-plane.ts";
+import {
+  answerRetainedWait,
+  type DeliveryAnswer,
+  deliverySubject,
+  parseDeliveryOperation,
+  retainDeliveredAnswer,
+} from "./delivery-plane.ts";
+import { crossSecretGate } from "./owner-gate.ts";
 import { dispatchCommand } from "./dispatcher.ts";
 import { WorkflowRecordMalformedError } from "../storage/errors.ts";
 import { discardPriorAcquisitions, PRIVATE_OBJECT_NAMES } from "./private-schema.ts";
@@ -227,16 +234,27 @@ export abstract class WorkflowOwnerObject extends DurableObject {
       if (request.operation === "wait") {
         return {
           outcome: "performed",
-          value: answerDelivery(this.owned, runId, request, now),
+          value: answerRetainedWait(this.owned, runId, request.suspensionId),
         };
       }
+
+      // The gate durable journal persistence is written through, over the two
+      // framings this value would be stored in. It runs before the transaction
+      // because it is asynchronous and a Durable Object transaction cannot
+      // wait; what it read is pinned by the request identity carried into the
+      // write, which the transaction requires to still be the retained one.
+      const subject = deliverySubject(this.owned, runId, request);
+      if (request.secretDetection) {
+        yield* crossSecretGate(subject.framings);
+      }
+
       // One transaction, entered here rather than inside the answer, so every
       // fact the retention depends on is read under the write it is about to
       // make and a refusal rolls back having written nothing.
       return {
         outcome: "performed",
         value: this.transactions.run(this.owned, () =>
-          answerDelivery(this.owned, runId, request, now),
+          retainDeliveredAnswer(this.owned, runId, request, subject.requestFingerprint, now),
         ),
       };
     } catch (error) {

@@ -1,20 +1,22 @@
 /**
- * Tier WAD — what a run's owner can decide about a delivered value by itself.
+ * Tier WAD — the owner's additional schema check, and what it is not.
  *
- * A delivered value has to be judged where it is written, and a run's owner
- * cannot compile a schema or load a scanner. So both decisions are written in
- * the language itself, and what has to be true of them is different in each
- * case.
+ * The settled contract is that a delivered value satisfies its wait's response
+ * schema under the semantics the local host uses — `prepareElicitation` and
+ * `validateParsed`, which compile with `new Function`. A deployed Worker does
+ * not generate code, so a run's owner cannot run that compiler, and this module
+ * is what it runs instead.
  *
- * For the schema judgment the claim is parity: on every schema it admits it
- * reaches the same verdict as the compiler the document path uses, and it
- * admits nothing it cannot judge — a schema using an unimplemented keyword is
- * refused outright rather than judged with that constraint quietly skipped.
+ * It is **not** equivalent to that compiler and this file does not claim it is.
+ * A table of agreements is not a proof of equivalence, and there is at least
+ * one supported schema they disagree about: `{ type: "number", multipleOf: 0.1 }`
+ * accepts `0.3` here and refuses it there. That disagreement is asserted below
+ * rather than avoided, so nothing reads this table as parity.
  *
- * For the credential gate the claim is narrower and is stated as narrowly: it
- * is a floor the owner applies at the write, not a replacement for the scanner
- * the runner runs first. What it must do is match the shapes it names, leave
- * stand-ins alone, and never report what it matched.
+ * What it is for is refusing early and refusing more: the values it rejects are
+ * values the compiler rejects too, on the schemas it admits, and a schema whose
+ * keywords it does not implement is refused outright rather than judged with
+ * that constraint quietly skipped.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -27,7 +29,6 @@ import {
   requireJudgeableSchema,
   UnjudgeableSchemaError,
 } from "../src/suspension/judgment.ts";
-import { describeCredentials, sightCredentials } from "../src/suspension/credentials.ts";
 
 /** One schema, and the values a caller might offer it. */
 interface Case {
@@ -178,8 +179,8 @@ function* compiled(schema: Json, value: Json): Operation<boolean> {
   return validateParsed(prepared.validate, value).length === 0;
 }
 
-describe("judging an answer without a compiler", () => {
-  it("reaches the compiler's verdict on every schema it admits", function* () {
+describe("the owner's additional schema check", () => {
+  it("agrees with the compiler across this table, which is not equivalence", function* () {
     const disagreed: string[] = [];
     let judged = 0;
     for (const example of CASES) {
@@ -197,8 +198,20 @@ describe("judging an answer without a compiler", () => {
     }
 
     expect(disagreed).toEqual([]);
-    // The table is the evidence, so its size is part of the claim.
+    // The table's size is part of what it is worth, and its worth is bounded:
+    // agreement on these cases says nothing about the cases not in it.
     expect(judged).toBeGreaterThan(70);
+  });
+
+  it("is not equivalent to the compiler, and here is where they differ", function* () {
+    // A supported schema an ordinary wait can retain, and a value the two
+    // reach opposite verdicts on. Asserted rather than avoided: this is the
+    // exact gap that keeps the owner from being the settled authority.
+    const schema: Json = { type: "number", multipleOf: 0.1 };
+    requireJudgeableSchema(schema);
+
+    expect(yield* compiled(schema, 0.3)).toBe(false);
+    expect(judgeAgainstSchema(schema, 0.3).length === 0).toBe(true);
   });
 
   // deno-lint-ignore require-yield
@@ -234,48 +247,5 @@ describe("judging an answer without a compiler", () => {
     // And an admitted schema stays admitted, so the refusal is about the
     // keyword rather than about being cautious.
     expect(() => requireJudgeableSchema({ type: "object", title: "fine" })).not.toThrow();
-  });
-});
-
-describe("the credential gate a run's owner applies at the write", () => {
-  // deno-lint-ignore require-yield
-  it("matches issued credentials, and reports only what kind", function* () {
-    const canary = `ghp_${"abcdefghijklmnopqrstuvwxyz0123456789".slice(0, 36)}`;
-    const sighted = sightCredentials(`{"note":"${canary}"}`);
-
-    expect(sighted.map((sighting) => sighting.kind)).toEqual(["github-token"]);
-    // The value never travels with the finding, in any field of it.
-    expect(JSON.stringify(sighted)).not.toContain(canary);
-    expect(describeCredentials(sighted)).toBe("github-token");
-    expect(describeCredentials(sighted)).not.toContain(canary);
-  });
-
-  // deno-lint-ignore require-yield
-  it("matches a bearer credential and a credential-named field", function* () {
-    expect(
-      sightCredentials("Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345").map(
-        (sighting) => sighting.kind,
-      ),
-    ).toContain("bearer-credential");
-    expect(
-      sightCredentials('{"apiKey":"AbCdEf0123456789xyz"}').map((sighting) => sighting.kind),
-    ).toEqual(["credential-field"]);
-    expect(
-      sightCredentials('{"api_key":"AbCdEf0123456789xyz"}').map((sighting) => sighting.kind),
-    ).toEqual(["credential-field"]);
-  });
-
-  // deno-lint-ignore require-yield
-  it("leaves ordinary answers and stand-ins alone", function* () {
-    for (const content of [
-      '{"approved":true}',
-      '{"note":"shipped the release"}',
-      '{"apiKey":"your-api-key-here"}',
-      '{"password":"example-value"}',
-      '{"note":"short"}',
-      "",
-    ]) {
-      expect([content, sightCredentials(content)]).toEqual([content, []]);
-    }
   });
 });

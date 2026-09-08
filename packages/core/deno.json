@@ -6,7 +6,8 @@
     "./canonicalize": "./canonicalize.ts",
     "./component-name": "./component-name.ts",
     "./document-target": "./document-target.ts",
-    "./host": "./host.ts"
+    "./host": "./host.ts",
+    "./secrets": "./secrets.ts"
   },
   "imports": {
     "@effectionx/context-api": "npm:@effectionx/context-api@0.6.0",

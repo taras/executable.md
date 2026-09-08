@@ -27,7 +27,7 @@ import { WorkflowRecordMalformedError } from "../storage/errors.ts";
 import { canonicalJson } from "../storage/record.ts";
 import { CommandError } from "./commands.ts";
 import { READ_PAGE_BYTES, READ_REQUEST_ENVELOPE } from "./read-plane.ts";
-import { fingerprintOf, readRetainedWait, retainAnswer } from "./owner-answers.ts";
+import { answerFramings, fingerprintOf, readRetainedWait, retainAnswer } from "./owner-answers.ts";
 import type { OwnerStorage } from "./storage.ts";
 
 /** What a delivery answered, or why it would not. */
@@ -132,36 +132,67 @@ export function parseDeliveryOperation(raw: string): DeliveryOperation {
   throw failure("expected an operation this owner implements", "$.operation");
 }
 
-/**
- * Answer one delivery request.
- *
- * `wait` reads and writes nothing. `retain` runs inside the caller's own owner
- * transaction, which is where every fact it depends on is read again.
- */
-export function answerDelivery(
+/** What one wait retains, and the framings a value offered to it would take. */
+export interface DeliverySubject {
+  readonly requestFingerprint: string;
+  /** The retained row and the durable event, as the gate will read them. */
+  readonly framings: readonly string[];
+}
+
+/** Answer one `wait` read, which writes nothing. */
+export function answerRetainedWait(
   storage: OwnerStorage,
   runId: string,
-  request: DeliveryOperation,
+  suspensionId: string,
+): Record<string, unknown> {
+  const waiting = readRetainedWait(storage, runId, suspensionId);
+  return {
+    runId: waiting.runId,
+    suspensionId: waiting.suspensionId,
+    requestEventId: waiting.requestEventId,
+    request: waiting.request,
+    responseSchema: waiting.responseSchema,
+    requestFingerprint: fingerprintOf(waiting),
+  };
+}
+
+/**
+ * What the credential gate reads, before the transaction that writes.
+ *
+ * The gate is asynchronous and a Durable Object transaction cannot wait, so it
+ * runs here — over the framings this exact value would be stored in, built from
+ * the wait as it stands now. The identity those framings were built under
+ * travels into the transaction, which requires it to still be the one retained
+ * before it writes anything.
+ */
+export function deliverySubject(
+  storage: OwnerStorage,
+  runId: string,
+  request: { readonly suspensionId: string; readonly answer: string },
+): DeliverySubject {
+  const waiting = readRetainedWait(storage, runId, request.suspensionId);
+  const fingerprint = fingerprintOf(waiting);
+  return {
+    requestFingerprint: fingerprint,
+    framings: answerFramings(waiting, fingerprint, request.answer),
+  };
+}
+
+/** Retain one delivered answer, inside the caller's own owner transaction. */
+export function retainDeliveredAnswer(
+  storage: OwnerStorage,
+  runId: string,
+  request: { readonly suspensionId: string; readonly answer: string },
+  gatedFingerprint: string,
   now: string,
 ): Record<string, unknown> {
-  if (request.operation === "wait") {
-    const waiting = readRetainedWait(storage, runId, request.suspensionId);
-    return {
-      runId: waiting.runId,
-      suspensionId: waiting.suspensionId,
-      requestEventId: waiting.requestEventId,
-      request: waiting.request,
-      responseSchema: waiting.responseSchema,
-      requestFingerprint: fingerprintOf(waiting),
-    };
-  }
   return retainAnswer(
     storage,
     runId,
     {
       suspensionId: request.suspensionId,
       answer: request.answer,
-      secretDetection: request.secretDetection,
+      gatedFingerprint,
     },
     now,
   );

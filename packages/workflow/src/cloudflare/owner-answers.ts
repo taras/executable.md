@@ -18,7 +18,6 @@ import { readRunRecord, type Row } from "../sqlite/rows.ts";
 import { WorkflowRecordMalformedError } from "../storage/errors.ts";
 import { parseJsonValue } from "../storage/members.ts";
 import { canonicalJson } from "../storage/record.ts";
-import { sightCredentials } from "../suspension/credentials.ts";
 import { SUSPENSION_ANSWER, SUSPENSION_REQUEST } from "../suspension/effects.ts";
 import { judgeAgainstSchema, requireJudgeableSchema } from "../suspension/judgment.ts";
 import { CommandError } from "./commands.ts";
@@ -213,7 +212,16 @@ export function retainAnswer(
   offered: {
     readonly suspensionId: string;
     readonly answer: string;
-    readonly secretDetection: boolean;
+    /**
+     * The fingerprint the credential gate read this wait's request under.
+     *
+     * The gate runs before this transaction, because the scanner is
+     * asynchronous and a Durable Object transaction cannot wait. What makes
+     * that sound is this: the value is the same bytes either way, and the
+     * framings the gate read are recomputed from a request identity this
+     * requires to still be the one retained.
+     */
+    readonly gatedFingerprint: string;
   },
   now: string,
 ): { readonly runId: string; readonly suspensionId: string } {
@@ -221,8 +229,11 @@ export function retainAnswer(
   const fingerprint = fingerprintOf(waiting);
 
   judgeOffered(waiting, offered.answer);
-  if (offered.secretDetection) {
-    gateOffered(waiting, fingerprint, offered.answer);
+  if (fingerprint !== offered.gatedFingerprint) {
+    // The framings the gate read named this wait's request as it was a moment
+    // ago. A request that changed since is one this value was neither judged
+    // for nor scanned against.
+    throw new CommandError("stale-journal");
   }
 
   const already = readRetainedAnswer(storage, offered.suspensionId);
@@ -254,12 +265,14 @@ export function retainAnswer(
 }
 
 /**
- * Judge the offered value against the schema this wait retained.
+ * Check the offered value against the schema this wait retained.
  *
- * The schema is walked before the value is looked at: one it cannot judge is
- * refused rather than partly applied, so a value this accepts is one every
- * constraint its wait published was actually checked against. A refusal names
- * where the value went wrong and never what it held.
+ * The additional check, not the settled one. The semantics the contract names
+ * are the local host's compiler, which a Worker cannot run; what this refuses
+ * is a subset of what that compiler refuses, on the schemas it admits, and a
+ * schema whose keywords it does not implement is refused outright rather than
+ * judged with that constraint quietly skipped. A refusal names where the value
+ * went wrong and never what it held.
  */
 function judgeOffered(waiting: OwnerRetainedWait, answer: string): void {
   let value: Json;
@@ -283,20 +296,23 @@ function judgeOffered(waiting: OwnerRetainedWait, answer: string): void {
 }
 
 /**
- * Cross the credential gate, in both framings the value will be stored in.
+ * The two framings this value will be stored in, for the gate to read.
  *
- * The retained row and the durable event a later execution would publish, the
- * same two the local host scans. What is refused is the kind that was seen;
- * neither the value nor the match is recorded or reported.
+ * The retained row and the durable event a later execution would publish —
+ * exactly the two the local host scans, in the framing each will have.
  */
-function gateOffered(waiting: OwnerRetainedWait, fingerprint: string, answer: string): void {
+export function answerFramings(
+  waiting: OwnerRetainedWait,
+  fingerprint: string,
+  answer: string,
+): string[] {
   let value: Json;
   try {
     value = retained(JSON.parse(answer));
   } catch {
     throw new CommandError("malformed-member");
   }
-  const framings = [
+  return [
     canonicalJson({
       suspensionId: waiting.suspensionId,
       requestEventId: waiting.requestEventId,
@@ -314,11 +330,6 @@ function gateOffered(waiting: OwnerRetainedWait, fingerprint: string, answer: st
       result: { status: "ok", value },
     }),
   ];
-  for (const framing of framings) {
-    if (sightCredentials(framing).length > 0) {
-      throw new CommandError("credential-detected");
-    }
-  }
 }
 
 /**

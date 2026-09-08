@@ -1,33 +1,36 @@
 /**
- * Judging one answer against the schema its wait retained, anywhere.
+ * The additional schema check a run's owner can make for itself.
  *
- * A delivered value must satisfy the response schema the wait published before
- * it enters durable state, and the place that decides that has to be the place
- * that writes — otherwise a caller with delivery admission decides for itself.
- * A run's owner is where the write happens, and a run's owner cannot compile a
- * schema: `ajv` builds validators with `new Function`, and a Cloudflare Worker
- * refuses code generation from strings. So the judgment lives here, in the
- * language itself, and both the runner that offers a value and the owner that
- * retains it run this exact module.
+ * The settled contract is that a delivered value satisfies its wait's response
+ * schema under the semantics the local host uses: `prepareElicitation` compiles
+ * the schema and `validateParsed` judges the value. That compiler builds
+ * validators with `new Function`, and a deployed Cloudflare Worker does not
+ * generate code from strings — so a run's owner cannot run it, and this is what
+ * the owner runs instead.
+ *
+ * ## This is not that compiler, and it is not equivalent to it
+ *
+ * Nothing here claims equivalence and nothing should be read as claiming it. A
+ * table of agreements is not a proof, and there is a supported schema the two
+ * disagree about: `{ type: "number", multipleOf: 0.1 }` accepts `0.3` here and
+ * refuses it there, because the two use different arithmetic for the same
+ * keyword. The disagreement is asserted in `tests/suspension-judgment.test.ts`
+ * so it cannot be mistaken for parity.
+ *
+ * What this is, is an additional check the owner makes before it writes: on the
+ * schemas it admits it refuses values the compiler would refuse, and it refuses
+ * outright any schema whose keywords it does not implement rather than judging
+ * with that constraint quietly skipped. Making the owner's judgment *the*
+ * settled semantics needs the compiler to run there, which needs a code
+ * generation capability a Worker only has if its deployment grants one.
  *
  * ## Closed, not lenient
  *
- * Every keyword this understands is listed. A schema using anything else is not
- * judged leniently — it is refused, and the delivery with it. That is the whole
- * safety property: an unimplemented constraint can never be silently skipped,
- * so a value this accepts is a value every constraint its schema states was
- * actually checked against.
- *
- * `format` is the one exception and it matches the compiler the document path
- * uses, which is configured with `validateFormats: false`: a format annotation
- * constrains nothing on either side.
- *
- * ## What it is not
- *
- * Not a JSON Schema implementation, and not a second dialect. It is one
- * predicate over a bounded subset, held to the compiler's own verdicts by a
- * parity table, and it refuses everything outside that subset rather than
- * guessing.
+ * Every keyword this understands is listed. A schema using anything else is
+ * refused, and the delivery with it. `format` is the one exception and it
+ * matches the compiler the document path uses, which is configured with
+ * `validateFormats: false`: a format annotation constrains nothing on either
+ * side.
  */
 
 import type { Json } from "@executablemd/durable-streams";
