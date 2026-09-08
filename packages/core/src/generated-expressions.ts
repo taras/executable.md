@@ -114,6 +114,7 @@ function parsed(text: string): unknown {
 
 interface AcornNode {
   readonly type: string;
+  readonly start: number;
   readonly end: number;
 }
 
@@ -123,6 +124,8 @@ function isNode(value: unknown): value is AcornNode {
     value !== null &&
     "type" in value &&
     typeof value.type === "string" &&
+    "start" in value &&
+    typeof value.start === "number" &&
     "end" in value &&
     typeof value.end === "number"
   );
@@ -248,12 +251,21 @@ function interpret(node: unknown, values: Record<string, unknown>): Json {
  * would be admitting evaluation. The minus also has to sit on the number
  * itself — anything else beneath a unary operator, a binding or another
  * expression, is the computation this grammar refuses.
+ *
+ * *Directly* attached, which the parser will not say for us: `- 1` and
+ * `-/*gap*\/1` produce the same tree as `-1`, and they are operator spellings
+ * rather than the number JSON defines. So the literal must begin at the
+ * character after the minus, which is true only when nothing — whitespace, a
+ * line break, a comment — sits between them.
  */
 function signed(node: AcornNode): Json {
   if (!("operator" in node) || node.operator !== "-") {
     throw new DataExpressionError(FORM);
   }
   if (!("argument" in node) || !isNode(node.argument) || node.argument.type !== "Literal") {
+    throw new DataExpressionError(FORM);
+  }
+  if (node.argument.start !== node.start + 1) {
     throw new DataExpressionError(FORM);
   }
   const held = literal(node.argument);
