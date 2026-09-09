@@ -1412,6 +1412,57 @@ describe("Tier FE35 — structural constructs in a generated fragment", () => {
     expect(writable.performed).toEqual([]);
   });
 
+  /**
+   * Preflight reads every alternative and every body once. The run does
+   * neither, so a plan is addressed by the element it was made for rather than
+   * consumed from a per-name queue in walk order.
+   */
+  it("FE35: a selected write does not consume an untaken read's plan", function* () {
+    const files = recordedFiles({ "untaken.md": NOTE, "written.md": "before\n" });
+    const output = yield* run(
+      `<Evaluate text={'<If condition={false}>\\n<File path="untaken.md" />\\n` +
+        `<Else>\\n<File path="written.md">written by the fragment</File>\\n</Else>\\n</If>\\n'} ` +
+        `allow={["read", "write"]} />\n`,
+      [both(files)],
+    );
+
+    expect(String(output)).toBeTruthy();
+    // Exactly the selected write, whose own path check precedes it. The
+    // untaken read never ran, and the write did not fail a form check by
+    // taking the read's plan.
+    expect(files.performed).toEqual(["check written.md", "write written.md"]);
+    expect(files.entries.get("written.md")).toBe("written by the fragment");
+    expect(files.entries.get("untaken.md")).toBe(NOTE);
+  });
+
+  it("FE35: one authored occurrence invoked twice reuses its own plan", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    const output = yield* run(
+      `<Evaluate text={'<Each in={["a", "b"]} let="item">\\n<File path="notes.md" />\\n</Each>\\n'} ` +
+        `as="answer" />\n\n<Json value={answer} />\n`,
+      [reading(files)],
+    );
+
+    // Two iterations of one element: the second import finds the same plan
+    // rather than an exhausted queue.
+    expect(files.performed).toEqual(["read notes.md", "read notes.md"]);
+    expect(String(output)).toContain("the retained note");
+  });
+
+  it("FE35: a zero-iteration occurrence consumes no plan", function* () {
+    const files = recordedFiles({ "notes.md": NOTE, "after.md": "after\n" });
+    const output = yield* run(
+      `<Evaluate text={'<Each in={[]} let="item">\\n<File path="notes.md" />\\n</Each>\\n` +
+        `<File path="after.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
+      [reading(files)],
+    );
+
+    // The empty iteration invoked nothing, and the element after it still
+    // reached its own plan rather than one the loop was expected to spend.
+    expect(files.performed).toEqual(["read after.md"]);
+    expect(String(output)).toContain("after");
+  });
+
   it("FE35: executable code and imports stay refused inside a construct", function* () {
     const files = recordedFiles({ "notes.md": NOTE });
     const cases: Array<[string, string]> = [

@@ -1499,6 +1499,13 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
       // The agent, told the document's own vocabulary, writes something a
       // fragment may not contain. The narrower `<Evaluate>` refuses it before
       // any effect rather than running part of it.
+      //
+      // An executable fence rather than a structural construct: a `<Loop>`
+      // around an admitted read is ordinary generated composition now, so it
+      // no longer discriminates. The admitted read is written *first*, so a
+      // refusal that happened element-by-element would already have performed
+      // it — the empty recorder is what proves preflight decided the whole
+      // fragment.
       const run = yield* runDocument({
         source: [
           '<Plan as="approved">Write a program.</Plan>',
@@ -1506,7 +1513,7 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
           "<Evaluate text={approved} />",
           "",
         ].join("\n"),
-        reply: `<Loop max={2}>\n<File path="notes.md" />\n</Loop>\n`,
+        reply: '<File path="notes.md" />\n\n```bash exec\nprintf ran\n```\n',
         evaluation: profile(files),
       });
 

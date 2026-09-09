@@ -899,6 +899,28 @@ type RetainedAdmission =
  * and the method belongs to whatever object a caller passed; both are answers
  * about something other than the element (executable-mdx-spec §5.6).
  */
+/**
+ * The admission this invocation runs under, chosen by the form it was written
+ * as.
+ *
+ * The engine's own issuance decides, not the caller: a wrapper can mint an
+ * object carrying a `hasContent` method, and it cannot mint an issuance. An
+ * element whose form the host admitted for no entry under this name reaches no
+ * admission and is refused with the same diagnostic a mismatched invocation
+ * always produced.
+ */
+function plannedForm(
+  byForm: ReadonlyMap<AuthoredForm, Planned>,
+  invocation: ComponentInvocation,
+): Planned {
+  const written = invocationForm(invocation);
+  const planned = written === undefined ? undefined : byForm.get(written);
+  if (planned === undefined) {
+    throw new GeneratedXmdError(SHAPE);
+  }
+  return planned;
+}
+
 function holdForm(form: AuthoredForm, invocation: ComponentInvocation): void {
   // The engine's own account of the element, not the method on the object this
   // was handed. A wrapper can mint an object carrying that method; it cannot
@@ -930,7 +952,18 @@ function holdForm(form: AuthoredForm, invocation: ComponentInvocation): void {
  * entry preflight selected rather than of what the component returned.
  */
 class GeneratedImportAuthority implements ImportAuthority {
-  readonly #planned: Map<string, Planned[]>;
+  /**
+   * Every admission, by the name and the authored form it was made for.
+   *
+   * Two keys rather than one, and no consumption. Preflight reads every
+   * alternative and every body once; the run enters one arm of an `<If>`, and
+   * may enter one authored element many times or not at all — so a queue drawn
+   * down per import has neither the cardinality nor the order the run has. A
+   * name and a form select exactly one admission because the table says so:
+   * `admitted()` refuses one name holding two definitions, and refuses one name
+   * and form twice.
+   */
+  readonly #planned: Map<string, Map<AuthoredForm, Planned>>;
   readonly #imports = new CanonicalImports();
   /**
    * This fragment's own selection frames.
@@ -943,7 +976,7 @@ class GeneratedImportAuthority implements ImportAuthority {
   /** The form authority under each admitted name's wrapper. */
   readonly #dispatchers = new Map<string, unknown>();
   readonly #protectedBodies: ProtectedBodies | undefined;
-  readonly #invocations = new WeakMap<object, Planned>();
+  readonly #invocations = new WeakMap<object, Map<AuthoredForm, Planned>>();
 
   /**
    * A generated fragment may invoke only what the host admitted for it, so
@@ -956,14 +989,11 @@ class GeneratedImportAuthority implements ImportAuthority {
   }
 
   constructor(named: readonly Planned[], protectedBodies?: ProtectedBodies) {
-    const planned = new Map<string, Planned[]>();
+    const planned = new Map<string, Map<AuthoredForm, Planned>>();
     for (const invocation of named) {
-      const queue = planned.get(invocation.name);
-      if (queue === undefined) {
-        planned.set(invocation.name, [invocation]);
-        continue;
-      }
-      queue.push(invocation);
+      const byForm = planned.get(invocation.name) ?? new Map<AuthoredForm, Planned>();
+      byForm.set(invocation.form, invocation);
+      planned.set(invocation.name, byForm);
     }
     this.#planned = planned;
     this.#protectedBodies = protectedBodies;
@@ -971,15 +1001,19 @@ class GeneratedImportAuthority implements ImportAuthority {
 
   /** The answer canonical execution produces for this name. */
   issue(name: string): ImportedDefinition {
-    // Imports happen once per element and in the order the walk read them, so
-    // the head of this name's queue is the entry preflight selected for the
-    // element being expanded. An import the plan does not account for is an
-    // element preflight never saw, and it is refused rather than resolved.
-    const planned = this.#planned.get(name)?.shift();
-    if (planned === undefined) {
+    const byForm = this.#planned.get(name);
+    if (byForm === undefined) {
       throw new GeneratedXmdError(CONSTRUCT.component);
     }
-    const { entry, form } = planned;
+    // Every entry under one name shares one definition — the table refuses two
+    // — so the implementation is the same whichever form the element turns out
+    // to have been written as. Which *admission* it runs under is decided per
+    // invocation below, from the engine's own account of the form.
+    const [first] = [...byForm.values()];
+    if (first === undefined) {
+      throw new GeneratedXmdError(CONSTRUCT.component);
+    }
+    const entry = first.entry;
     const copy = retain(entry.definition);
     if (copy === undefined || copy.kind !== "function" || typeof copy.fn !== "function") {
       throw new GeneratedXmdError(CONSTRUCT.component);
@@ -993,11 +1027,16 @@ class GeneratedImportAuthority implements ImportAuthority {
     const admitted: FunctionComponentDefinition = {
       ...copy,
       *fn(props, invocation) {
-        holdForm(form, invocation);
+        // Per invocation, because one authored element may be entered many
+        // times and two elements of one name may be written in two forms. The
+        // admission is selected by the form the engine issued for *this*
+        // element, and an element whose form the host admitted for no entry is
+        // refused here exactly as it always was.
+        holdForm(plannedForm(byForm, invocation).form, invocation);
         return yield* implementation(props, invocation);
       },
     };
-    this.#invocations.set(admitted.fn, planned);
+    this.#invocations.set(admitted.fn, byForm);
     // The wrapper above is the answer to the import; the dispatcher underneath
     // it is the form authority. Remembered by name so `authorize` can record it
     // against core's own copy — the object expansion actually invokes — because
@@ -1018,11 +1057,11 @@ class GeneratedImportAuthority implements ImportAuthority {
     invocation: ComponentInvocation,
     body: Operation<unknown>,
   ): Operation<unknown> {
-    const planned = typeof fn === "function" ? this.#invocations.get(fn) : undefined;
-    if (planned === undefined) {
+    const byForm = typeof fn === "function" ? this.#invocations.get(fn) : undefined;
+    if (byForm === undefined) {
       throw new GeneratedXmdError(CONSTRUCT.component);
     }
-    holdForm(planned.form, invocation);
+    holdForm(plannedForm(byForm, invocation).form, invocation);
     return yield* body;
   }
 

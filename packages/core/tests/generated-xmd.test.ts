@@ -462,6 +462,45 @@ describe("Tier GX — the complete fragment is read first", () => {
     });
   }
 
+  /**
+   * One authored element invoked twice, resumed between the two effects.
+   *
+   * Preflight reads the element once and the run enters it per item, so this is
+   * the row that would catch a plan consumed from a queue: the second iteration
+   * would find nothing left. It also holds the ordinary durable contract to the
+   * repetition — the completed effect restores and the run resumes at the first
+   * unrecorded one.
+   */
+  it("GX10: a repeated occurrence resumes at its first unrecorded effect", function* () {
+    const source = `<Each in={["a", "b"]} let="item">\n<Fetch url="${URL_ONE}" as="got" />\n</Each>\n`;
+    const stream = new InMemoryStream();
+    const live = yield* useTransport(() => ({ status: 200, body: "answer" }));
+    const first = yield* evaluate(request(source, [pinnedFetch([ADMITTED_REQUEST])]), { stream });
+
+    // One authored element, entered twice, so two durable effects.
+    expect(live.performed).toHaveLength(2);
+    const events = yield* stream.readAll();
+    const fetches = events.filter(
+      (event) => event.type === "yield" && event.description.type === "fetch",
+    );
+    expect(fetches).toHaveLength(2);
+
+    // Cut the history immediately after the first of the two.
+    const cut = events.indexOf(fetches[0]);
+    const partial = events.slice(0, cut + 1);
+    const resumedTransport = yield* useTransport(() => ({ status: 200, body: "answer" }));
+    const before = resumedTransport.performed.length;
+    const resumed = yield* evaluate(request(source, [pinnedFetch([ADMITTED_REQUEST])]), {
+      stream: new InMemoryStream(partial),
+    });
+
+    // The recorded effect was restored rather than performed again, the second
+    // one ran, and the fragment rendered exactly what it rendered live.
+    expect(resumedTransport.performed.length - before).toBe(1);
+    expect(resumed.output).toBe(first.output);
+    expect(resumed.failure).toBe(undefined);
+  });
+
   it("GX4b: an unsafe construct inside an admitted element's content is refused", function* () {
     const transport = yield* useTransport(() => ({ status: 200 }));
 
