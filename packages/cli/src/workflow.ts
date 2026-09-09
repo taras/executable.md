@@ -1004,8 +1004,15 @@ export function runWorkflow(
     // controller, the answer provider, the `<Evaluate>` declaration and
     // `host.attach()` are each work for an execution that is going to import
     // nothing, perform nothing and append nothing.
-    const replayed = replay && start === undefined;
-    const prepared = replayed
+    //
+    // `replay` alone, and deliberately: a `start` naming a run that already
+    // ended is the same terminal reuse a `resume` of one is, and the candidate
+    // definition it carried is what proved the two runs are the same run rather
+    // than a second account of what that run did. The begin transaction has
+    // already held the supplied definition, base, props and bundle to the
+    // immutable record; what a caller established describes the request, and
+    // what the run retained describes the result.
+    const prepared = replay
       ? retainedReplay(record, frontier.value)
       : yield* liveDocument(record, start, database);
     if (!prepared.ok) {
@@ -1015,7 +1022,7 @@ export function runWorkflow(
 
     // Nothing beyond this point loads for a completed replay: no controller, no
     // answer provider, and no import of the adapter either one comes from.
-    const support = replayed ? undefined : yield* liveSupport(database);
+    const support = replay ? undefined : yield* liveSupport(database);
 
     // Interruption is the outcome nothing else publishes. Registered before the
     // execution starts, so a scope torn down by Ctrl-C settles the run rather

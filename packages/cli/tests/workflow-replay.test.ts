@@ -289,6 +289,8 @@ function invoke(
 /** What one document execution was given, what it rendered, and how it ended. */
 interface Rendered {
   root: unknown;
+  /** Whether any installation offered an execution view to import from. */
+  imports: boolean;
   output: string;
   result: Result<Json> | undefined;
 }
@@ -310,7 +312,14 @@ function pinnedBody(seen: Rendered[]): (execution: WorkflowExecution) => Operati
           next = yield* subscription.next();
         }
         const result = yield* running;
-        seen.push({ root: { ...execution.root }, output: next.value, result });
+        seen.push({
+          root: { ...execution.root },
+          imports: execution.installations.some(
+            (installation) => installation.bundle !== undefined,
+          ),
+          output: next.value,
+          result,
+        });
         return result.ok ? Ok(undefined) : Err(new Error(String(result.error.message)));
       }),
     );
@@ -341,6 +350,7 @@ function statusOf(invocation: Invocation): string | undefined {
 /** Everything about a run a replay must not move, read through the host itself. */
 interface Retained {
   readonly status: WorkflowRunStatus;
+  readonly stopReason: string;
   readonly executions: number;
   /** What each execution ended as, in order. `null` is one still open. */
   readonly ended: (WorkflowRunStatus | null)[];
@@ -361,6 +371,7 @@ function* retained(runs: string, runId: string): Operation<Retained> {
     }
     return {
       status: snapshot.value.record.status,
+      stopReason: JSON.stringify(snapshot.value.record.stopReason ?? null),
       executions: snapshot.value.executions.length,
       ended: snapshot.value.executions.map((execution) => execution.stopStatus ?? null),
       currentWorkspaceRootId: snapshot.value.currentWorkspaceRootId,
@@ -755,31 +766,7 @@ describe("what a completed run reaches when it is asked to run again", () => {
       // A root coroutine that ended by raising rather than by producing a
       // document result. `rootOutcome()` reads that as the run having failed,
       // and names the exact row as its reason.
-      const runId = yield* seedStaleRun(fixture, established, (definition) => [
-        forkRunRecordEvent({
-          runId: "unused",
-          base: established.established.base,
-          pinnedCommit: definition.objectId,
-        }),
-        {
-          type: "yield",
-          coroutineId: "root",
-          description: { type: "import_component", name: "__root__" },
-          result: {
-            status: "ok",
-            value: {
-              kind: "repository",
-              path: definition.rootDocumentPath,
-              content: established.established.source,
-            },
-          },
-        },
-        {
-          type: "close",
-          coroutineId: "root",
-          result: { status: "err", error: { name: "Error", message: "the executor died" } },
-        },
-      ]);
+      const runId = yield* seedStaleRun(fixture, established, raisedHistory(established));
       const before = yield* retained(fixture.runs, runId);
       expect(before.status).toBe("running");
 
@@ -811,6 +798,279 @@ describe("what a completed run reaches when it is asked to run again", () => {
     expect(executed).toBe(0);
     expect(outcome.after.journal).toBe(outcome.before.journal);
     expect(outcome.after.currentWorkspaceRootId).toBe(outcome.before.currentWorkspaceRootId);
+  });
+
+  it("WRP11: replays a completed run named again by a compatible start", function* () {
+    const asked: string[] = [];
+    const attached: string[] = [];
+    const live: Rendered[] = [];
+    const replayed: Rendered[] = [];
+
+    const outcome = yield* scoped(function* () {
+      const fixture = yield* useFixture(BUNDLED, {
+        Stage: "staged.\n",
+        Unused: "never imported.\n",
+      });
+      const runId = "compatible-1";
+
+      // Establishing the candidate is what proves the two runs are the same
+      // run, and it reads the repository. It happens before the invocation, and
+      // everything the invocation itself asks of Git is recorded separately.
+      const started = yield* scoped(function* () {
+        yield* useRepositoryGit(fixture.repository);
+        return yield* invoke(
+          { ...REQUEST, id: runId },
+          yield* startFor(fixture),
+          liveHost(fixture.runs, attached),
+          pinnedBody(live),
+        );
+      });
+      expect(started.exitCode).toBe(0);
+      expect(runIdOf(started)).toBe(runId);
+      const before = yield* retained(fixture.runs, runId);
+      expect(before.status).toBe("completed");
+
+      // The same definition and props, named at the same run. The candidate is
+      // established under a repository that answers; the invocation runs under
+      // one that refuses, so anything it asks for after admission is a planted
+      // failure.
+      const candidate = yield* scoped(function* () {
+        yield* useRepositoryGit(fixture.repository);
+        return yield* startFor(fixture);
+      });
+      const again = yield* scoped(function* () {
+        yield* useRefusingGit(asked);
+        return yield* invoke(
+          { ...REQUEST, id: runId },
+          candidate,
+          replayHost(fixture.runs, attached),
+          pinnedBody(replayed),
+        );
+      });
+      return { again, before, after: yield* retained(fixture.runs, runId) };
+    });
+
+    expect(outcome.again.exitCode).toBe(0);
+    expect(statusOf(outcome.again)).toBe("completed");
+    // Nothing was asked of the repository after admission, and nothing was
+    // attached: the candidate described the request, and the run's own history
+    // supplied the result.
+    expect(asked).toEqual([]);
+    expect(attached).toHaveLength(1);
+    expect(replayed).toHaveLength(1);
+    expect(replayed[0]?.root).toEqual({ path: "workflow.md", source: BUNDLED, retained: true });
+    expect(replayed[0]?.output).toBe(live[0]?.output);
+    expect(replayed[0]?.output).toContain("staged.");
+    expect(replayed[0]?.result?.ok).toBe(true);
+    // The live run was given a bundle to import from; the replay was not. It
+    // resolves no name, so it is granted no authority to resolve one.
+    expect(live[0]?.imports).toBe(true);
+    expect(replayed[0]?.imports).toBe(false);
+
+    expect(outcome.after.journal).toBe(outcome.before.journal);
+    expect(outcome.after.currentWorkspaceRootId).toBe(outcome.before.currentWorkspaceRootId);
+    expect(outcome.after.status).toBe("completed");
+    expect(outcome.after.stopReason).toBe(outcome.before.stopReason);
+    expect(outcome.after.executions).toBe(outcome.before.executions + 1);
+  });
+
+  it("WRP12: refuses a compatible start over a lifecycle row its result contradicts", function* () {
+    const asked: string[] = [];
+    const attached: string[] = [];
+    let executed = 0;
+
+    const outcome = yield* scoped(function* () {
+      const fixture = yield* useFixture(BUNDLED, {
+        Stage: "staged.\n",
+        Unused: "never imported.\n",
+      });
+      const established = yield* scoped(function* () {
+        yield* useRepositoryGit(fixture.repository);
+        return yield* startFor(fixture);
+      });
+
+      // The root raised, and the row says the run completed. Two accounts of
+      // one run, and a replay that reused either would be choosing between them.
+      const runId = yield* seedStaleRun(fixture, established, raisedHistory(established), {
+        status: "completed",
+      });
+      const before = yield* retained(fixture.runs, runId);
+      expect(before.status).toBe("completed");
+
+      const refused = yield* scoped(function* () {
+        yield* useRefusingGit(asked);
+        return yield* invoke(
+          { ...REQUEST, id: runId },
+          established,
+          replayHost(fixture.runs, attached),
+          // deno-lint-ignore require-yield
+          function* (): Operation<Result<void>> {
+            executed += 1;
+            return Ok(undefined);
+          },
+        );
+      });
+      const stalled = yield* retained(fixture.runs, runId);
+
+      // The next acquisition closes exactly the envelope the refusal left, and
+      // publishes no replacement outcome for the run.
+      yield* scoped(function* () {
+        yield* useRefusingGit(asked);
+        return yield* invoke(
+          { ...REQUEST, id: runId },
+          established,
+          replayHost(fixture.runs, attached),
+          // deno-lint-ignore require-yield
+          function* (): Operation<Result<void>> {
+            executed += 1;
+            return Ok(undefined);
+          },
+        );
+      });
+      return { refused, before, stalled, after: yield* retained(fixture.runs, runId) };
+    });
+
+    expect(outcome.refused.exitCode).toBe(1);
+    expect(outcome.refused.err.join(" ")).toContain("describe different outcomes");
+    // Refused before terminal reuse, before live support and before any
+    // attachment: nothing executed and nothing was asked of the repository.
+    expect(executed).toBe(0);
+    expect(asked).toEqual([]);
+    expect(attached).toEqual([]);
+    expect(statusOf(outcome.refused)).toBeUndefined();
+
+    // The one difference is the envelope begin had already inserted.
+    expect(outcome.stalled.journal).toBe(outcome.before.journal);
+    expect(outcome.stalled.currentWorkspaceRootId).toBe(outcome.before.currentWorkspaceRootId);
+    expect(outcome.stalled.status).toBe("completed");
+    expect(outcome.stalled.stopReason).toBe(outcome.before.stopReason);
+    expect(outcome.stalled.executions).toBe(outcome.before.executions + 1);
+    expect(outcome.stalled.ended.at(-1)).toBe(null);
+
+    // And the settled terminal-replay recovery closes that envelope alone: the
+    // next begin finishes it as interrupted, publishes no outcome for the run,
+    // and refuses the same contradiction again.
+    expect(outcome.after.ended).toEqual([...outcome.before.ended, "interrupted", null]);
+    expect(outcome.after.status).toBe("completed");
+    expect(outcome.after.stopReason).toBe(outcome.before.stopReason);
+    expect(outcome.after.journal).toBe(outcome.before.journal);
+  });
+
+  it("WRP13: replays a coherent failed run named again by a compatible start", function* () {
+    const asked: string[] = [];
+    const attached: string[] = [];
+    const replayed: Rendered[] = [];
+
+    const outcome = yield* scoped(function* () {
+      const fixture = yield* useFixture(BUNDLED, {
+        Stage: "staged.\n",
+        Unused: "never imported.\n",
+      });
+      const established = yield* scoped(function* () {
+        yield* useRepositoryGit(fixture.repository);
+        return yield* startFor(fixture);
+      });
+
+      // A failed row naming the exact retained result it failed at.
+      const runId = yield* seedStaleRun(fixture, established, raisedHistory(established), {
+        status: "failed",
+        reason: "root-close",
+      });
+      const before = yield* retained(fixture.runs, runId);
+      expect(before.status).toBe("failed");
+
+      const again = yield* scoped(function* () {
+        yield* useRefusingGit(asked);
+        return yield* invoke(
+          { ...REQUEST, id: runId },
+          established,
+          replayHost(fixture.runs, attached),
+          pinnedBody(replayed),
+        );
+      });
+      return { again, before, after: yield* retained(fixture.runs, runId) };
+    });
+
+    // The same failure, replayed rather than retried.
+    expect(outcome.again.exitCode).toBe(1);
+    expect(replayed).toHaveLength(1);
+    expect(replayed[0]?.result?.ok).toBe(false);
+    expect(outcome.again.err.join(" ")).toContain("the executor died");
+    expect(asked).toEqual([]);
+    expect(attached).toEqual([]);
+
+    // And the retained failed outcome is the one that stands.
+    expect(outcome.after.status).toBe("failed");
+    expect(outcome.after.stopReason).toBe(outcome.before.stopReason);
+    expect(outcome.after.journal).toBe(outcome.before.journal);
+    expect(outcome.after.currentWorkspaceRootId).toBe(outcome.before.currentWorkspaceRootId);
+  });
+
+  it("WRP14: refuses a start whose definition is not the run it names", function* () {
+    const asked: string[] = [];
+    const attached: string[] = [];
+    let executed = 0;
+
+    const outcome = yield* scoped(function* () {
+      const fixture = yield* useFixture(BUNDLED, {
+        Stage: "staged.\n",
+        Unused: "never imported.\n",
+      });
+      const runId = "incompatible-1";
+      const started = yield* scoped(function* () {
+        yield* useRepositoryGit(fixture.repository);
+        return yield* invoke(
+          { ...REQUEST, id: runId },
+          yield* startFor(fixture),
+          liveHost(fixture.runs, attached),
+          pinnedBody([]),
+        );
+      });
+      expect(started.exitCode).toBe(0);
+      const before = yield* retained(fixture.runs, runId);
+
+      // One component says something else, and it is committed. The bundle is
+      // definition identity, so this names a run of different code.
+      yield* writeTextFile(join(fixture.repository, "Stage.md"), "staged differently.\n");
+      yield* git(fixture.repository, ["add", "-A"]);
+      yield* git(fixture.repository, [
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "-m",
+        "a component changed",
+      ]);
+
+      const candidate = yield* scoped(function* () {
+        yield* useRepositoryGit(fixture.repository);
+        return yield* startFor(fixture);
+      });
+      const refused = yield* scoped(function* () {
+        yield* useRefusingGit(asked);
+        return yield* invoke(
+          { ...REQUEST, id: runId },
+          candidate,
+          replayHost(fixture.runs, attached),
+          // deno-lint-ignore require-yield
+          function* (): Operation<Result<void>> {
+            executed += 1;
+            return Ok(undefined);
+          },
+        );
+      });
+      return { refused, before, after: yield* retained(fixture.runs, runId) };
+    });
+
+    expect(outcome.refused.exitCode).toBe(1);
+    expect(outcome.refused.err.join(" ")).toContain("definition");
+    expect(statusOf(outcome.refused)).toBeUndefined();
+    // Refused inside the begin transaction, before a replay execution existed.
+    expect(executed).toBe(0);
+    expect(attached).toHaveLength(1);
+    expect(outcome.after.executions).toBe(outcome.before.executions);
+    expect(outcome.after.journal).toBe(outcome.before.journal);
+    expect(outcome.after.status).toBe(outcome.before.status);
   });
 
   it("WRP5: a run that has not ended still reconstructs, and its refusal is cleaned up", function* () {
@@ -1059,7 +1319,8 @@ function refusingSettlement(runs: string, attached: string[] = []): WorkflowHost
 function* seedStaleRun(
   fixture: Fixture,
   start: WorkflowStart,
-  events: (definition: WorkflowDefinition) => readonly DurableEvent[],
+  events: (definition: WorkflowDefinition, runId: string) => readonly DurableEvent[],
+  ending?: { readonly status: WorkflowRunStatus; readonly reason?: "root-close" },
 ): Operation<string> {
   return yield* scoped(function* () {
     const transitions = yield* useWorkflowRunHost({ root: fixture.runs });
@@ -1084,11 +1345,64 @@ function* seedStaleRun(
     if (!begun.ok) {
       throw begun.error;
     }
-    for (const event of events(start.established.definition)) {
+    for (const event of events(start.established.definition, runId)) {
       yield* begun.value.database.journal.append(event);
+    }
+    if (ending === undefined) {
+      return runId;
+    }
+    // Settled by this same acquisition, so the run is left the way an executor
+    // that finished leaves one rather than the way a lost one does.
+    const entries = yield* begun.value.database.readJournalEntries();
+    if (!entries.ok) {
+      throw entries.error;
+    }
+    const close = entries.value.find(
+      (entry) => entry.event.type === "close" && entry.event.coroutineId === "root",
+    );
+    const settled = yield* transitions.settle(acquired.value.lock, {
+      executionId: begun.value.execution.executionId,
+      status: ending.status,
+      ...(ending.reason === undefined
+        ? {}
+        : { reason: { kind: "journal", eventId: close?.eventId ?? "" } }),
+    });
+    if (!settled.ok) {
+      throw settled.error;
     }
     return runId;
   });
+}
+
+/** The history a run that raised out of its root leaves behind. */
+function raisedHistory(
+  start: WorkflowStart,
+): (definition: WorkflowDefinition, runId: string) => readonly DurableEvent[] {
+  return (definition, runId) => [
+    forkRunRecordEvent({
+      runId,
+      base: start.established.base,
+      pinnedCommit: definition.objectId,
+    }),
+    {
+      type: "yield",
+      coroutineId: "root",
+      description: { type: "import_component", name: "__root__" },
+      result: {
+        status: "ok",
+        value: {
+          kind: "repository",
+          path: definition.rootDocumentPath,
+          content: start.established.source,
+        },
+      },
+    },
+    {
+      type: "close",
+      coroutineId: "root",
+      result: { status: "err", error: { message: "the executor died", name: "Error" } },
+    },
+  ];
 }
 
 /**

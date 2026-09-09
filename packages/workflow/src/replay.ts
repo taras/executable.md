@@ -39,9 +39,9 @@ import { retainedSource } from "@executablemd/core/host";
 import type { ExecutionInstallation, RetainedRootDocument } from "@executablemd/core/host";
 import { workflowBundleReplayInstallation } from "./bundle.ts";
 import { retainedWorkflowInstallation } from "./run.ts";
-import { rootOutcome, terminal } from "./lifecycle/policy.ts";
+import { agreesWithRetainedResult, terminal } from "./lifecycle/policy.ts";
 import type { JournalEntry } from "./storage/api.ts";
-import type { DocumentExecutionCompletion, WorkflowRunRecord } from "./storage/record.ts";
+import type { WorkflowRunRecord } from "./storage/record.ts";
 
 /** The root import a run's own entry is recorded under. */
 const ROOT = "__root__";
@@ -142,28 +142,6 @@ function importedName(event: DurableEvent): string | undefined {
   }
   const name = reading(() => description.name);
   return typeof name === "string" ? name : undefined;
-}
-
-/**
- * Whether the two accounts of why this run stopped are the same account.
- *
- * A canonical outcome that names an event names the exact retained row the
- * lifecycle recorded as its reason; one that names none leaves the run with
- * none. A host code in that position describes a stop the document itself did
- * not record, which is not a terminal to replay from.
- */
-function sameReason(
-  retained: DocumentExecutionCompletion["reason"],
-  canonical: DocumentExecutionCompletion["reason"],
-): boolean {
-  if (canonical === undefined || retained === undefined) {
-    return canonical === retained;
-  }
-  return (
-    canonical.kind === "journal" &&
-    retained.kind === "journal" &&
-    canonical.eventId === retained.eventId
-  );
 }
 
 /** Whether a retained event is this document execution's own terminal. */
@@ -286,17 +264,12 @@ export function retainedReplay(
   }
 
   // The document result the journal records, and the lifecycle row that stands
-  // behind it, have to be the same outcome. `rootOutcome()` is the settled
-  // mapping — the one recovery and settlement already publish through — so this
-  // is the lifecycle's own judgment rather than a second copy of it that could
-  // drift. A row and a result claiming different terminals are damaged retained
-  // state, and neither of them is the one to replay.
-  const outcome = rootOutcome(entries);
-  if (
-    outcome === undefined ||
-    outcome.status !== record.status ||
-    !sameReason(record.stopReason, outcome.reason)
-  ) {
+  // behind it, have to be the same outcome. The judgment is the lifecycle's own
+  // — `agreesWithRetainedResult()` sits beside the recovery and settlement
+  // mappings it is derived from — rather than a second copy of it here that
+  // could drift. A row and a result claiming different terminals are damaged
+  // retained state, and neither of them is the one to replay.
+  if (!agreesWithRetainedResult(record, entries)) {
     return refuse(REFUSALS.disagreed);
   }
 

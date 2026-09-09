@@ -15,7 +15,11 @@
 
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { WorkflowRequestError } from "../storage/errors.ts";
-import type { DocumentExecutionCompletion, WorkflowRunStatus } from "../storage/record.ts";
+import type {
+  DocumentExecutionCompletion,
+  WorkflowRunStatus,
+  WorkflowStopReason,
+} from "../storage/record.ts";
 import type { JournalEntry } from "../storage/api.ts";
 
 /** An outcome that already won. A run in one of these is not made mutable again. */
@@ -52,6 +56,93 @@ export function rootOutcome(
     };
   }
   return undefined;
+}
+
+/**
+ * Whether the two accounts of why this run stopped are the same account.
+ *
+ * A reason that names an event names the exact retained row; one that names
+ * none leaves the run with none.
+ */
+function sameReason(
+  retained: DocumentExecutionCompletion["reason"],
+  canonical: DocumentExecutionCompletion["reason"],
+): boolean {
+  if (canonical === undefined || retained === undefined) {
+    return canonical === retained;
+  }
+  return (
+    canonical.kind === "journal" &&
+    retained.kind === "journal" &&
+    canonical.eventId === retained.eventId
+  );
+}
+
+/** Whether the root's recorded result says the document itself failed. */
+function documentFailed(entries: readonly JournalEntry[]): boolean {
+  for (const entry of entries) {
+    const event: DurableEvent = entry.event;
+    if (event.type !== "close" || event.coroutineId !== "root") {
+      continue;
+    }
+    if (event.result.status !== "ok") {
+      return true;
+    }
+    const value: unknown = event.result.value;
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return false;
+    }
+    return Reflect.get(value, "status") === "err";
+  }
+  return false;
+}
+
+/** Whether a reason a settlement chose is one this run's history can carry. */
+function retainedReason(
+  reason: DocumentExecutionCompletion["reason"],
+  entries: readonly JournalEntry[],
+): boolean {
+  if (reason === undefined) {
+    return false;
+  }
+  return reason.kind === "host" || entries.some((entry) => entry.eventId === reason.eventId);
+}
+
+/**
+ * Whether a run in this state is one this retained history can have produced.
+ *
+ * Two authorities publish a terminal for one root Close, and they do not always
+ * publish the same one. `rootOutcome()` above is what *recovery* publishes: it
+ * reads the coroutine's own settlement, so a document that returned a failure
+ * closed successfully and recovers as `completed` with no reason. The executor
+ * that ran the document settles from the document's own result instead, so the
+ * same Close settles as `failed`, naming whichever retained row it failed at.
+ *
+ * Both are states this system produces and neither is damaged. What no settled
+ * path produces is a run whose status contradicts the result its journal
+ * records: a `failed` row over a document that succeeded, a terminal row over a
+ * root that raised or was cancelled and says otherwise, or a reason naming
+ * something the run does not hold. Those are two accounts of one run, and a
+ * replay that reused either would be choosing between them.
+ */
+export function agreesWithRetainedResult(
+  record: { readonly status: WorkflowRunStatus; readonly stopReason?: WorkflowStopReason },
+  entries: readonly JournalEntry[],
+): boolean {
+  const canonical = rootOutcome(entries);
+  if (canonical === undefined) {
+    return false;
+  }
+  if (record.status === canonical.status) {
+    return sameReason(record.stopReason, canonical.reason);
+  }
+  // The other authority. It differs from recovery in exactly one place — a
+  // document that returned a failure — and it is the executor that watched it
+  // do so, so its reason is one it chose rather than one this can derive.
+  if (record.status !== "failed" || canonical.status !== "completed") {
+    return false;
+  }
+  return documentFailed(entries) && retainedReason(record.stopReason, entries);
 }
 
 /** What closing a dead executor's execution makes of it, and of the run. */

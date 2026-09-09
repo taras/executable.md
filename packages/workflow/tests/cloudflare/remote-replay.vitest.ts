@@ -348,6 +348,93 @@ describe("a completed run replayed through its own owner", () => {
     expect(await on(stub, (owner) => owner.holders())).toBe(0);
   });
 
+  it("replays a completed run its owner is asked to start again", async () => {
+    const stub = executor();
+    const host = lifecycleHost(stub);
+
+    const live = await run(function* (): Operation<Rendered> {
+      return yield* scoped(function* () {
+        const transitions: WorkflowExecutionTransitions = yield* useRemoteLifecycle(host);
+        const lock = yield* acquired();
+        const begun = yield* transitions.begin(lock, {
+          runId: RUN_ID,
+          action: "start",
+          creation: CREATION,
+        });
+        if (!begun.ok) {
+          throw begun.error;
+        }
+        const rendered = yield* canonical(
+          begun.value.database,
+          retainedSource("README.md", DOCUMENT),
+          [runContract()],
+        );
+        const settled = yield* transitions.settle(lock, {
+          executionId: begun.value.execution.executionId,
+          status: "completed",
+        });
+        if (!settled.ok) {
+          throw settled.error;
+        }
+        return rendered;
+      });
+    });
+
+    const before = await ownerState(stub);
+    expect(before.run?.["status"]).toBe("completed");
+
+    // The same creation named at the same run. The owner compares it with the
+    // immutable record it already holds and answers `replay`, exactly as it
+    // does for a resume — a caller supplying a candidate definition proves the
+    // two runs are the same run; it does not make the run live again.
+    const replayed = await run(function* (): Operation<Rendered> {
+      return yield* scoped(function* () {
+        const transitions: WorkflowExecutionTransitions = yield* useRemoteLifecycle(host);
+        const lock = yield* acquired();
+        const begun = yield* transitions.begin(lock, {
+          runId: RUN_ID,
+          action: "start",
+          creation: CREATION,
+        });
+        if (!begun.ok) {
+          throw begun.error;
+        }
+        expect(begun.value.replay).toBe(true);
+        const frontier = yield* begun.value.database.readJournalEntries();
+        if (!frontier.ok) {
+          throw frontier.error;
+        }
+        const prepared = retainedReplay(begun.value.record, frontier.value);
+        if (!prepared.ok) {
+          throw prepared.error;
+        }
+        const rendered = yield* canonical(begun.value.database, prepared.value.root, [
+          ...prepared.value.installations,
+        ]);
+        const settled = yield* transitions.settle(lock, {
+          executionId: begun.value.execution.executionId,
+          status: "completed",
+        });
+        if (!settled.ok) {
+          throw settled.error;
+        }
+        return rendered;
+      });
+    });
+
+    expect(replayed.output).toBe(live.output);
+    expect(replayed.result.ok).toBe(true);
+
+    const after = await ownerState(stub);
+    expect(after.journal).toEqual(before.journal);
+    expect(after.currentRootId).toBe(before.currentRootId);
+    expect(after.published).toEqual(before.published);
+    expect(after.answers).toEqual(before.answers);
+    expect(after.run?.["status"]).toBe("completed");
+    expect(after.executions).toBe(before.executions + 1);
+    expect(await on(stub, (owner) => owner.holders())).toBe(0);
+  });
+
   it("recovers a bundled run whose result committed and whose settlement did not", async () => {
     const stub = executor();
     const host = lifecycleHost(stub);
