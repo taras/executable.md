@@ -95,9 +95,9 @@ import {
 import { installWebComponents, installWebElicitation } from "@executablemd/web";
 import { timebox } from "@effectionx/timebox";
 import { timeout as runTimeout } from "@executablemd/runtime";
-import { installRunAgentStack, resolveAgentStack, resolveAuthorshipStack } from "./agent-stack.ts";
+import { installRunAgentStack, resolveAgentStack, resolvePlanWriterStack } from "./agent-stack.ts";
 import { planComponentDeclaration } from "./plan-component.ts";
-import { planAgentContext } from "./authorship-profile.ts";
+import { planAgentContext } from "./plan-writer-profile.ts";
 import { useVerboseComponent } from "./verbose-component.ts";
 import type { AgentStack } from "./agent-stack.ts";
 import { reportFailure } from "./report.ts";
@@ -888,7 +888,7 @@ export interface DocumentMode {
    * a harness that owns a temporary tree names that tree, so a test never reads,
    * creates or removes anything under a real one.
    */
-  planAuthorshipRoot?: string;
+  planWriterRoot?: string;
   /**
    * What a trusted host attaches to this one execution.
    *
@@ -1015,7 +1015,7 @@ function* runDocument(
   // learns what Agent context it has only after its own configuration has
   // been read — and a declaration built out here would have closed over the
   // absence of one before that child existed. Each caller supplies the context
-  // it settled, the authorship root it owns and the scope its host acts run in;
+  // it settled, the Plan writer root it owns and the scope its host acts run in;
   // everything else about the Component is this entrypoint's and identical for
   // all of them.
   const planDeclaration = (request: ChildPlanDeclaration): Operation<DeclaredMarkdownComponent> =>
@@ -1024,18 +1024,18 @@ function* runDocument(
       includes: include,
       context: request.context,
       ...(mode.machineSessions === undefined ? {} : { sessions: mode.machineSessions }),
-      ...(request.authorshipRoot !== undefined
-        ? { authorshipRoot: request.authorshipRoot }
-        : mode.planAuthorshipRoot === undefined
+      ...(request.planWriterRoot !== undefined
+        ? { planWriterRoot: request.planWriterRoot }
+        : mode.planWriterRoot === undefined
           ? {}
-          : { authorshipRoot: mode.planAuthorshipRoot }),
+          : { planWriterRoot: mode.planWriterRoot }),
       // Captured before the document exists, so the two acts that are this
       // host's — putting this build's adapter on disk, and opening the review
       // form — run outside the frame the Component installs around itself.
       host: request.host,
-      ...(request.observeAuthorship === undefined
+      ...(request.observePlanWriter === undefined
         ? {}
-        : { observeAuthorship: request.observeAuthorship }),
+        : { observePlanWriter: request.observePlanWriter }),
       installElicitation: request.installElicitation,
     });
 
@@ -2503,7 +2503,7 @@ function* dispatch(
       // Who writes, and nothing else. There is no permission mode to settle:
       // this command starts no program, and the ceiling authorship runs under
       // is the host's rather than the command line's.
-      const authorship = yield* resolveAuthorshipStack(
+      const authorship = yield* resolvePlanWriterStack(
         { agentProvider: config.agentProvider, defaultAgent: config.defaultAgent },
         sessions,
       );

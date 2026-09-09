@@ -88,7 +88,7 @@ fixed command preflight
   -> execute the exact packaged plan command document, which is an adapter
        -> <Plan>, the packaged Component, with the request as its Prompt
             -> announce Preparing, then build the run-profile syntax symbols
-            -> the authorship frame, and one Session inside it
+            -> the Plan writer frame, and one Session inside it
             -> generate, check, repair, review, revise, approve, explain or fail,
                announcing each phase on stderr before it happens
             -> teardown, then structural admission of the exact approved bytes
@@ -401,7 +401,7 @@ write, declared by the host with the definition and revoked with the execution.
 `<PlanInputs>` freezes the instruction identity, session placement, surface and
 whether that placement outlives the invocation, and refuses a continuation whose
 instructions render differently — as stale input, before a directory, a provider,
-a turn or a review exists. Paired `<PlanAuthorship>` installs the constrained
+a turn or a review exists. Paired `<PlanWriter>` installs the constrained
 frame and does not return until every part of it has torn down; paired
 `<PlanProgress>` says which phase is running; `<CheckDraft>` answers about one
 draft without executing it; and `<AdmitPlan>` structurally admits the approved
@@ -436,10 +436,12 @@ protocol.
 question with a public answer, and canonical core owns both, so `Plan.md` writes
 the same `<Syntax as="syntax" />` any document writes and binds the vocabulary
 directly into every authorship prompt. Its retention is core's: one
-`syntax_symbols` read per occurrence, retaining exactly
-`{ symbols: string }`, hostile-parsed on continuation so a resumed authorship is
-shown the vocabulary the run actually showed it rather than one rebuilt from a
-tree that has moved. `<PlanInputs>` retains exactly `{ instruction }` beside it,
+`syntax_symbols` read per occurrence, hostile-parsed on continuation so a resumed
+authorship is shown the vocabulary the run actually showed it rather than one
+rebuilt from a tree that has moved. This occurrence is the bare form, which names
+no component and so cannot produce the named-selection refusal the closed
+`syntax_symbols` value also admits (§5.3.1); its record is always
+`{ symbols: string }`. `<PlanInputs>` retains exactly `{ instruction }` beside it,
 so the symbols and the question are two records that can be read and reconciled
 independently, and a missing, additional or mistyped member in either refuses
 before authorship begins.
@@ -464,22 +466,22 @@ profile and does not gain the component. None of them is syntax any document may
 the caller's root, not the Prompt the caller projected, not a sibling `<Plan>`,
 not an imported component, and nothing middleware can answer.
 
-## The authorship profile
+## The Plan writer profile
 
-The authorship profile is the trusted-host assembly the packaged `<Plan>`
+The Plan writer profile is the trusted-host assembly the packaged `<Plan>`
 Component runs its authored turns under. It supplies the frozen inputs, a constrained Agent provider,
 Elicitation, the fixed first-party components and the host-declared draft check.
 The command's own execution uses no repository component search — that
 execution's include list is empty — and exposes no custom root.
 
-The frame is installed by `<PlanAuthorship>`, inside the invocation that owns it,
+The frame is installed by `<PlanWriter>`, inside the invocation that owns it,
 rather than around the execution. That is what makes it the same ceiling on both
 surfaces: an ordinary document has an execution of its own, with its own
 provider and its own capabilities, and a Plan written inside it is still written
 under this one. Broader authority in the calling document widens nothing, and the
 constrained provider reaches nothing outside the content the Component projects.
 
-### Agent authority under the authorship profile
+### Agent authority under the Plan writer profile
 
 The assistant that writes a Plan is assembled separately from the final run
 provider:
@@ -1036,7 +1038,7 @@ ending of this command does.
 | symbols an include makes unreadable | no turn, review, stdout or file |
 | a `--journal` entry the file will not take | no stdout or file; the committed prefix stays |
 | a progress destination that stops accepting bytes | no stdout or file; accepted bytes stay |
-| a host that supplies no Agent context, or a provider that cannot establish the authorship profile's ceiling | no session, no turn |
+| a host that supplies no Agent context, or a provider that cannot establish the Plan writer profile's ceiling | no session, no turn |
 | a turn that did not complete | no review, stdout or file |
 | the command document's authored `<Fail>` — stopping, the automatic explanation, or the unexpected ending after neither | no stdout or file |
 | command document teardown | no structural validation, stdout or file |

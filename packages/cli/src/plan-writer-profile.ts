@@ -1,5 +1,5 @@
 /**
- * The authorship profile — the trusted-host assembly the plan command document
+ * The Plan writer profile — the trusted-host assembly the plan command document
  * runs under, and the only thing that ever runs under it
  * (specs/plan-command-spec.md).
  *
@@ -54,7 +54,7 @@ import { API } from "@executablemd/runtime";
 import { FormOpener } from "@executablemd/web";
 
 import { hostAcpDependencies } from "./agent-stack.ts";
-import type { AuthorshipStack } from "./agent-stack.ts";
+import type { PlanWriterStack } from "./agent-stack.ts";
 import { ordinaryEvaluationProfile } from "./evaluation-profile.ts";
 import { PLAN_COMMAND_DOCUMENT, readPackagedDocument } from "./packaged-document.ts";
 
@@ -74,7 +74,7 @@ export const PLAN_COMMAND_IDENTITY = "<plan-command>";
  * compose around if one existed — and the honest answer for a profile that
  * grants no native authority is the one that grants none.
  */
-const AUTHORSHIP_PERMISSION_MODE = "deny-all";
+const PLAN_WRITER_PERMISSION_MODE = "deny-all";
 
 /** The closed answer the host gives about one candidate. */
 export interface CandidateAssessment {
@@ -123,7 +123,7 @@ export class ProgressDeliveryError extends Error {
 }
 
 /** What the host supplies to one plan command document execution. */
-export interface AuthorshipProfile {
+export interface PlanWriterProfile {
   /** The request as the person typed it. */
   request: string;
   /** The logical name every turn in this invocation belongs to. */
@@ -159,7 +159,7 @@ export interface AuthorshipProfile {
    */
   root: string;
   /** The Agent context this host can give a Plan, or why it can give none. */
-  context: Result<PlanAuthorship>;
+  context: Result<PlanWriter>;
   /**
    * The `<Plan>` declaration this command runs under.
    *
@@ -182,8 +182,8 @@ export interface AuthorshipProfile {
 }
 
 /** What building the constrained provider needs, and nothing more. */
-export interface AuthorshipProviderInputs {
-  readonly stack: AuthorshipStack;
+export interface PlanWriterProviderInputs {
+  readonly stack: PlanWriterStack;
   readonly acp?: AcpxProviderDependencies;
 }
 
@@ -198,33 +198,33 @@ export interface AuthorshipProviderInputs {
  *
  * Availability is all it decides. What writing a Plan then happens under — the
  * permission mode, the prompt-failure policy, the capability refusals and the
- * session directory — is {@link installAuthorshipFrame}'s fixed policy, identical for
+ * session directory — is {@link installPlanWriterFrame}'s fixed policy, identical for
  * every provider, so a second implementation cannot quietly bring a weaker one.
  */
-export interface PlanAuthorship {
+export interface PlanWriter {
   /** The agent this Plan conversation defaults to. */
   readonly defaultAgent: string;
   /**
    * Install this invocation's Agent provider under the fixed policy.
    *
-   * Called within `<PlanAuthorship>`, so what it registers belongs to that one
+   * Called within `<PlanWriter>`, so what it registers belongs to that one
    * invocation and goes when the invocation does. What comes back is what the
    * adapter actually assembled, so the frame can report the configuration that
    * is installed rather than the one it asked for.
    */
-  installProvider(invocation: PlanAuthorshipInvocation): Operation<PlanProviderAssembly>;
+  installProvider(invocation: PlanWriterInvocation): Operation<PlanProviderAssembly>;
 }
 
-export interface PlanAuthorshipInvocation {
+export interface PlanWriterInvocation {
   readonly workdir: string;
   readonly host: Scope;
   readonly session: string;
   readonly authoredSession?: string;
-  readonly policy: PlanAuthorshipPolicy;
+  readonly policy: PlanWriterPolicy;
 }
 
 /** The fixed policy every Plan runs under, whoever supplies the Agent. */
-export interface PlanAuthorshipPolicy {
+export interface PlanWriterPolicy {
   readonly systemInstruction: string;
   readonly permissionMode: "deny-all";
   readonly promptFailures: "fail";
@@ -250,7 +250,7 @@ export interface PlanProviderAssembly {
 }
 
 /** What a Plan's configuration turned out to be, once it is installed. */
-export type PlanAuthorshipObservation = PlanProviderAssembly;
+export type PlanWriterObservation = PlanProviderAssembly;
 
 /** What a host that supplies no Agent at all refuses a Plan with. */
 export const NO_AGENT_CONTEXT = "No Agent context was found. No Plan was returned.";
@@ -266,16 +266,16 @@ export function noAgentContextFrom(provider: string): string {
 /**
  * The production Agent context: ACPX, built from the stack this run settled.
  *
- * One concrete implementation of {@link PlanAuthorship}, and the only one
+ * One concrete implementation of {@link PlanWriter}, and the only one
  * production has. Its ACPX construction, embedded adapters, machine-session
  * assembly, system instruction, strict permission policy, empty MCP servers,
  * empty allowed tools and controlled working directory are exactly what they
  * were when this was the only way to supply one.
  */
 export function planAgentContext(
-  stack: AuthorshipStack | undefined,
+  stack: PlanWriterStack | undefined,
   acp?: AcpxProviderDependencies,
-): Result<PlanAuthorship> {
+): Result<PlanWriter> {
   if (stack === undefined) {
     return Err(new Error(NO_AGENT_CONTEXT));
   }
@@ -284,13 +284,13 @@ export function planAgentContext(
   }
   return Ok({
     defaultAgent: stack.defaultAgent,
-    *installProvider(invocation: PlanAuthorshipInvocation): Operation<PlanProviderAssembly> {
+    *installProvider(invocation: PlanWriterInvocation): Operation<PlanProviderAssembly> {
       // One assembly, used for every installation and handed back as the
       // reference. Nothing is reconstructed afterward, so a report cannot
       // describe an arrangement other than the one installed.
       const installed: PlanProviderAssembly = {
         provider: "acpx",
-        dependencies: authorshipDependencies(
+        dependencies: planWriterDependencies(
           { stack, ...(acp === undefined ? {} : { acp }) },
           invocation.workdir,
           invocation.host,
@@ -309,7 +309,7 @@ export function planAgentContext(
 }
 
 /** What claiming one conversation's directory needs, and nothing more. */
-export interface AuthorshipPlacement {
+export interface PlanWriterPlacement {
   /** Where this host keeps its authorship session directories. */
   readonly root: string;
   /** The logical name this conversation belongs to. */
@@ -318,24 +318,24 @@ export interface AuthorshipPlacement {
   readonly explicitSession: boolean;
 }
 
-/** Everything the constrained authorship frame is built from. */
-export interface AuthorshipFrame {
+/** Everything the constrained Plan writer frame is built from. */
+export interface PlanWriterFrame {
   /** This conversation's directory, already established and proven empty. */
   readonly workdir: string;
   /** The scope the two host acts run in, captured before this frame exists. */
   readonly host: Scope;
   /** The host's ability to give this invocation an Agent. */
-  readonly authorship: PlanAuthorship;
+  readonly authorship: PlanWriter;
   /** The opaque conversation identity the provider must preserve. */
   readonly session: string;
   /** The exact authored label a trusted child host may address privately. */
   readonly authoredSession?: string;
-  observe?(reference: PlanAuthorshipObservation): Operation<void>;
+  observe?(reference: PlanWriterObservation): Operation<void>;
   installElicitation(): Operation<void>;
 }
 
 /**
- * Install the constrained authorship frame on the current scope.
+ * Install the constrained Plan writer frame on the current scope.
  *
  * One function for both surfaces, because what a Plan is written under is not a
  * property of who asked for it. What leaving this scope tears down is the
@@ -348,7 +348,7 @@ export interface AuthorshipFrame {
  * host's own act from the document's — which is why the two acts that are the
  * host's run in the scope captured before this one (src/host-acts.ts).
  */
-export function* installAuthorshipFrame(frame: AuthorshipFrame): Operation<void> {
+export function* installPlanWriterFrame(frame: PlanWriterFrame): Operation<void> {
   yield* openFormsThroughHost(frame.host);
   yield* frame.installElicitation();
 
@@ -367,7 +367,7 @@ export function* installAuthorshipFrame(frame: AuthorshipFrame): Operation<void>
     host: frame.host,
     session: frame.session,
     ...(frame.authoredSession === undefined ? {} : { authoredSession: frame.authoredSession }),
-    policy: PLAN_AUTHORSHIP_POLICY,
+    policy: PLAN_WRITER_POLICY,
   });
   yield* installPlanPromptFailurePolicy();
   yield* refuseDocumentCapabilities();
@@ -392,7 +392,7 @@ export function* installAuthorshipFrame(frame: AuthorshipFrame): Operation<void>
  */
 function* installPlanPromptFailurePolicy(): Operation<void> {
   yield* installPromptFailurePolicy(function* () {
-    return PLAN_AUTHORSHIP_POLICY.promptFailures === "fail";
+    return PLAN_WRITER_POLICY.promptFailures === "fail";
   });
 }
 
@@ -410,7 +410,7 @@ function* installPlanPromptFailurePolicy(): Operation<void> {
  * that already finished — and a destination that fails takes the whole
  * conversation down with it, in that order, before anything is delivered.
  */
-export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<Result<string>> {
+export function* runPlanCommandDocument(profile: PlanWriterProfile): Operation<Result<string>> {
   // Before a directory exists, before a provider exists, and therefore before
   // any session could be placed or any turn started. A host that cannot
   // supplies no Agent context refuses rather than writing a Plan under a weaker one.
@@ -426,7 +426,7 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
     // regional install had to shadow rather than one it owns.
     yield* installAgentComponents({
       defaultAgent: context.value.defaultAgent,
-      permissionMode: PLAN_AUTHORSHIP_POLICY.permissionMode,
+      permissionMode: PLAN_WRITER_POLICY.permissionMode,
     });
     const source = yield* readPackagedDocument(PLAN_COMMAND_DOCUMENT);
     try {
@@ -538,11 +538,11 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
  * is not observable through a provider, and a case that could only watch a turn
  * fail would be reading a live agent's machine rather than this host's decision.
  */
-export function authorshipDependencies(
-  profile: AuthorshipProviderInputs,
+export function planWriterDependencies(
+  profile: PlanWriterProviderInputs,
   workdir: string,
   host: Scope,
-  policy: PlanAuthorshipPolicy = PLAN_AUTHORSHIP_POLICY,
+  policy: PlanWriterPolicy = PLAN_WRITER_POLICY,
 ): AcpxProviderDependencies {
   const assembly = hostAcpDependencies(profile.stack);
   const prepare = assembly.prepareAgent;
@@ -617,7 +617,7 @@ function* inScope<T>(scope: Scope, operation: () => Operation<T>): Operation<T> 
  * every message is the plan command document's text. Hiding a shape here would
  * be hiding a policy decision in a place nobody reviewing the workflow can read.
  */
-export const AUTHORSHIP_INSTRUCTIONS = [
+export const PLAN_WRITER_INSTRUCTIONS = [
   "You are the coding agent behind `xmd plan`. A workflow asks you for one thing",
   "at a time, on behalf of one person, and every message states what its answer has",
   "to be.",
@@ -629,9 +629,9 @@ export const AUTHORSHIP_INSTRUCTIONS = [
 ].join("\n");
 
 /** The one policy both production and controlled Plan providers consume. */
-export const PLAN_AUTHORSHIP_POLICY: PlanAuthorshipPolicy = Object.freeze({
-  systemInstruction: AUTHORSHIP_INSTRUCTIONS,
-  permissionMode: AUTHORSHIP_PERMISSION_MODE,
+export const PLAN_WRITER_POLICY: PlanWriterPolicy = Object.freeze({
+  systemInstruction: PLAN_WRITER_INSTRUCTIONS,
+  permissionMode: PLAN_WRITER_PERMISSION_MODE,
   promptFailures: "fail",
   mcpServers: Object.freeze([]),
   allowedTools: Object.freeze([]),
@@ -644,7 +644,7 @@ export const PLAN_AUTHORSHIP_POLICY: PlanAuthorshipPolicy = Object.freeze({
  * a document has no reason to read the checkout it will run in, and a policy
  * that starts there is not one.
  */
-export const DEFAULT_AUTHORSHIP_ROOT: string = join(homedir(), ".xmd", "plan", "sessions");
+export const DEFAULT_PLAN_WRITER_ROOT: string = join(homedir(), ".xmd", "plan", "sessions");
 
 /**
  * The directory one logical session's conversation runs in.
@@ -661,7 +661,7 @@ export const DEFAULT_AUTHORSHIP_ROOT: string = join(homedir(), ".xmd", "plan", "
  * session record it established last time, since a session's key includes the
  * directory it lives in.
  */
-export function authorshipDirectoryFor(root: string, session: string): string {
+export function planWriterDirectoryFor(root: string, session: string): string {
   return join(root, createHash("sha256").update(session).digest("hex"));
 }
 
@@ -679,8 +679,8 @@ export function authorshipDirectoryFor(root: string, session: string): string {
  * the first thing registered in the scope is also what puts it last in teardown,
  * after every provider, Prompt task and Elicitation resource has gone.
  */
-export function* useSessionDirectory(profile: AuthorshipPlacement): Operation<Result<string>> {
-  const directory = authorshipDirectoryFor(profile.root, profile.session);
+export function* useSessionDirectory(profile: PlanWriterPlacement): Operation<Result<string>> {
+  const directory = planWriterDirectoryFor(profile.root, profile.session);
   if (profile.explicitSession) {
     return yield* establishDirectory(directory);
   }
@@ -781,7 +781,7 @@ function* releaseSessionDirectory(directory: string, claim: DirectoryClaim): Ope
 function* refuseDocumentCapabilities(): Operation<void> {
   const refuse = (capability: string) => () => {
     throw new Error(
-      `xmd plan asked for ${capability}, which the authorship profile grants to nothing`,
+      `xmd plan asked for ${capability}, which the Plan writer profile grants to nothing`,
     );
   };
   yield* API.Files.around({

@@ -46,14 +46,14 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableStream } from "@executablemd/durable-streams";
 import { cwd } from "@executablemd/runtime";
 
-import type { AuthorshipStack } from "./agent-stack.ts";
+import type { PlanWriterStack } from "./agent-stack.ts";
 import {
-  DEFAULT_AUTHORSHIP_ROOT,
+  DEFAULT_PLAN_WRITER_ROOT,
   planAgentContext,
   ProgressDeliveryError,
   runPlanCommandDocument,
-} from "./authorship-profile.ts";
-import type { ProgressOutput } from "./authorship-profile.ts";
+} from "./plan-writer-profile.ts";
+import type { ProgressOutput } from "./plan-writer-profile.ts";
 import { createPlanJournal, journalRefusal } from "./plan-journal.ts";
 import {
   planComponentDeclaration,
@@ -88,7 +88,7 @@ export interface PlanCommand {
   /** Where the diagnostic record of this authorship goes, when one was asked for. */
   journal?: string;
   /** Who writes the Plan, settled before the command began. */
-  stack: AuthorshipStack;
+  stack: PlanWriterStack;
 }
 
 /** What the host supplies. Every entry is a decision only a host can make. */
@@ -126,7 +126,7 @@ export interface PlanDependencies {
    * one — there is no flag, no environment variable and no contextual Api to
    * reach, so a document cannot move where the ceiling lives.
    */
-  authorshipRoot?: string;
+  planWriterRoot?: string;
   /**
    * How this invocation decides a candidate is structurally a program.
    *
@@ -172,7 +172,7 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
   // session somebody can ask for again needs its directory to outlive the
   // invocation, and only the host knows whether somebody named one.
   const explicitSession = command.session !== undefined;
-  const root = deps.authorshipRoot ?? DEFAULT_AUTHORSHIP_ROOT;
+  const root = deps.planWriterRoot ?? DEFAULT_PLAN_WRITER_ROOT;
   // Built before the declaration exists, and handed to it: the packaged `<Plan>`
   // description is the declaration an ordinary run resolves, so what the draft
   // check, the admission and the gate below all ask about is the profile the
@@ -197,7 +197,7 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
       // and the final gate below is where they are resolved.
       includes: command.include,
       context,
-      authorshipRoot: root,
+      planWriterRoot: root,
       session,
       explicitSession,
       verbose: command.verbose,

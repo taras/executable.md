@@ -2859,14 +2859,33 @@ closed set of origins, and neither emitting an unknown kind nor reusing a
 neighbouring one would keep that promise. Nothing else about the shape changed.
 
 **Each occurrence reads once.** It claims the durable identity the execution
-minted for it, performs one `syntax_symbols` durable read, and retains
-exactly `{ symbols: string }`. On continuation that record is parsed as a closed
-protocol and returned without consulting the filesystem, the registry, the
-bundle, the host or the lexical reference again; a missing, additional or
-mistyped member is stale input and refuses before output or binding. Two authored
-occurrences are two identities and two reads, repeated reads of one
-binding read nothing again, and a failed or cancelled read completes
-its teardown and commits no record.
+minted for it and performs one `syntax_symbols` durable read. That read retains a
+closed value with exactly one member:
+
+```
+{ symbols: string } | { refused: non-empty string }
+```
+
+`{ symbols }` is the unchanged successful rendering — the Markdown the component
+returned. `{ refused }` retains a named selection canonical core itself refused,
+because the request asked to document a component this site does not have. Both
+are durable values rather than a value and an error: a failure crossing the
+durable boundary is rebuilt without its class and without any non-enumerable
+property, so a refusal recorded as a failure would come back on replay meaning
+less than it meant live.
+
+The component interprets that value only after publication succeeds. A retained
+refusal is therefore classified identically on a live run and on a replay, and a
+publication failure — the append, the journal, the secret gate — prevents
+interpretation entirely and remains terminal rather than becoming a refusal of
+the request. On continuation the record is parsed as a closed protocol and
+answered without consulting the filesystem, the registry, the bundle, the host or
+the lexical reference again; a missing, additional, mistyped, empty or
+simultaneous member is stale input and refuses before output or binding. Records
+written by an earlier version, which are always `{ symbols }`, remain readable
+exactly as they were. Two authored occurrences are two identities and two reads,
+repeated reads of one binding read nothing again, and a failed or cancelled read
+completes its teardown and commits no record.
 
 #### The run profile's repository declarations
 
@@ -3030,14 +3049,14 @@ refuses unless the element asking is inside the same declaration.
 `packages/cli/src/documents/Plan.md` to every ordinary run under the origin
 `@executablemd/cli/Plan.md`, paired-only, as a text component. Its body is the
 prompt, rendered once with the capabilities the calling document already has;
-what it renders is the exact approved Plan source, after the authorship frame
+what it renders is the exact approved Plan source, after the Plan writer frame
 has been dismantled and the bytes have been structurally admitted. Written bare
 it emits that source where the component is written, and `as` is ordinary text
 capture: the same bytes are bound and nothing is emitted. Neither form
 evaluates the source, and neither announces a phase: the progress `xmd plan`
 writes is a private side effect of the command surface, and an ordinary `<Plan>`
 expands no progress body at all. Its seven private
-capabilities — `<PlanInputs>`, `<PlanAuthorship>`, `<PlanProgress>`,
+capabilities — `<PlanInputs>`, `<PlanWriter>`, `<PlanProgress>`,
 `<CheckDraft>`, `<AdmitPlan>`, `<ClassifyPlanResponse>` and
 `<PlanInformation>` — are the closure those exact bytes carry, and are syntax no
 document may write. The last two serve the information loop:
@@ -3048,16 +3067,18 @@ first-block rule alone, and paired `<PlanInformation>` projects its child public
 result `{ status, text }` — exact rendered findings, or a safe reason when the
 child failed with the typed generated-request-refusal classification after its
 teardown completed. The vocabulary the Agent is shown is not among them: the
-packaged bytes write the public `<Syntax />` (§5.3.1), whose own
-`syntax_symbols` read retains exactly `{ symbols }`, so a continuation
-restores the symbols the run actually showed rather than rebuilding them, and
-`<PlanInputs>` retains exactly `{ instruction }` beside it.
+packaged bytes write the public `<Syntax />` (§5.3.1). That occurrence is the
+bare vocabulary lookup, which names no component and so cannot produce the
+selection refusal the `syntax_symbols` protocol also admits; its own record is
+therefore always `{ symbols }`, and a continuation restores the symbols the run
+actually showed rather than rebuilding them. `<PlanInputs>` retains exactly
+`{ instruction }` beside it.
 [The plan command](./plan-command-spec.md) is the contract.
 
 **Which Agent a Plan is written with is the host's to say, not the Component's.**
 The declaration carries a trusted-host capability: the agent a Plan conversation
 defaults to, and the operation that installs that one invocation's provider
-under the authorship policy. It is a closure the host supplied before the
+under the Plan writer policy. It is a closure the host supplied before the
 declaration existed — never a prop, a Context value, a registration result or
 anything a document, component or middleware can reach or replace.
 
@@ -3068,7 +3089,7 @@ controlled provider that declaration produced (specs/testing-spec.md).
 Everything else supplies none, and carries the sentence a person reads instead:
 an `xmd test` root does not resolve the name at all, and an unconfigured child
 resolves these exact bytes and is refused before a directory, a provider, a turn
-or a review exists. What the authorship frame then imposes — the permission
+or a review exists. What the Plan writer frame then imposes — the permission
 mode, the prompt-failure policy, the capability refusals, the empty session
 directory — is the same whichever provider is underneath.
 
@@ -10246,7 +10267,7 @@ trusted-host events may have no authored source.
 | Resolve components (glob) | `glob` | `resolve:{dir}` | Only when `useDurableGlobResolver` middleware is installed |
 | Read over HTTP | `fetch` | `fetch:{expansion id}` | Normalized request in `description.input`; status, detached headers and text body in the result (§6.18) |
 | Admit generated XMD | `generated_xmd` | `generated:{fragment id}` | The canonical class selection, retained roots, selected root, every selected entry as a name, identity and admitted forms, and the exact request policy in `description.input`; the admitted source, that same policy, and the identity and form of each element the fragment named in the result (workflow-workspace-spec §8.4) |
-| Read the symbols | `syntax_symbols` | `syntax_symbols:{expansion id}` | One per authored `<Syntax />` occurrence. The success payload is closed on exactly `{ symbols: string }` — the rendered Markdown the component returned — so a continuation restores the symbols the run actually showed without consulting the filesystem, registry, bundle, host or lexical reference again. A missing, additional or mistyped member is stale input and refuses before output or binding; a cancelled read completes teardown and commits nothing (§5.3.1) |
+| Read the symbols | `syntax_symbols` | `syntax_symbols:{expansion id}` | One per authored `<Syntax />` occurrence. The payload is closed on exactly one member: `{ symbols: string }`, the rendered Markdown the component returned, or `{ refused: non-empty string }`, a named selection canonical core refused. Both are durable values, interpreted only after publication succeeds, so a retained refusal is classified identically live and on replay while a publication failure prevents interpretation and stays terminal. A continuation restores from the record without consulting the filesystem, registry, bundle, host or lexical reference again; existing `{ symbols }` histories remain readable, a missing, additional, mistyped, empty or simultaneous member is stale input and refuses before output or binding, and a cancelled read completes teardown and commits nothing (§5.3.1) |
 
 ### 10.2 Example journal for a multi-component document
 
@@ -11436,7 +11457,7 @@ every refusal is proven by the phase tripwires that stayed at zero.
 | PS1–PS3 | Fixed grammar | One request preserved byte for byte and a second positional refused; every retained option accepted before and after it; every `--run` spelling answered with the migration, and every other removed option — both short aliases and the aggregate and generated property names included — answered with the one refusal that names `xmd run`, before any symbols, Agent, session, review or filesystem activity, and before `--help` can short-circuit the dispatch in either order; a name that merely begins like a property option keeps the generic unknown-option refusal; a first token of `prompt` refused in preflight rather than read as a document path, with `xmd run ./prompt` still executing a document of that name |
 | PS4/PS5 | Help | The complete `xmd plan --help` output and the program summary carry only the retained grammar, both explicit compositions and the journal warning, and no removed option appears in either; `xmd run --help` still exposes every option it configures |
 | C2–C3 | The packaged adapter and Component | The command executes the checked-in Markdown value root under `<plan-command>`, which invokes the packaged `<Plan>` Component, and the turn text is that Component's own words; generation, repair, review, revision, approval, stopping, exhaustion and the final explanation are Markdown under visible headings, every Plan-producing turn states the complete Plan requirements for itself, `<Prompt>` stays one turn, and what a person reads says each thing once however many rounds it took |
-| C4–C6 | Session and ceiling | One enclosing Session carries every turn, defaults differ per invocation and `--session` supplies the exact override; the authorship profile gives the assistant an empty host-owned directory, no MCP servers, no native tools and a private strict denial no command line reaches; a draft is data throughout, and no draft effect ever happens |
+| C4–C6 | Session and ceiling | One enclosing Session carries every turn, defaults differ per invocation and `--session` supplies the exact override; the Plan writer profile gives the assistant an empty host-owned directory, no MCP servers, no native tools and a private strict denial no command line reaches; a draft is data throughout, and no draft effect ever happens |
 | C7–C9 | Classification, bounds and presentation | Draft defects return structured facts, and a root declaring required properties is not one of them; one base draft plus three repairs, and ten presentations with no revision on the last; arbitrary source cannot close `<CodeBlock>`, the review schemas expose exactly the friendly choices for each round and state, and stopping, exhaustion and the explanation ending each reach their own authored `<Fail>` |
 | PS6–PS9 | Validation, delivery and endings | The invocation settles one structural check, and the host asks it again after the command document has completely torn down — a component removed immediately after a successful `<AdmitPlan>` is refused there and nowhere else; the exact bytes then reach exactly one of stdout or an exclusively created `--output` file, and an existing path is refused unchanged; stopping, exhaustion, a failed turn, missing Agent context, cancellation, teardown failure and that host refusal each deliver nothing at all |
 | PS10, C14 | No execution, and the result | A named session continues the planning conversation and still starts no program, and no execution callback, program journal or second-root identity exists; the shipped generation, repair and revision instructions each carry the complete titled-Plan rule, and a titled Plan of prose interleaved with components survives approval byte for byte into stdout and a file alike |

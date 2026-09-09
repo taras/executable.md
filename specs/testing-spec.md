@@ -427,14 +427,14 @@ same protected bytes every run resolves and is refused before a directory, a
 provider, an Agent turn or a review exists.
 
 Availability is the only thing that differs. What a Plan then runs under is the
-authorship frame's fixed policy: the Plan system instruction, the deny-all
+Plan writer frame's fixed policy: the Plan system instruction, the deny-all
 permission mode, the empty MCP-server and native-tool sets, the prompt-failure
 policy and the document-capability refusals, installed in one place rather than
 restated by each provider, so a second implementation cannot bring a weaker one.
 The controlled provider is installed *inside* the Plan invocation rather than
 inherited from what the child registered around itself.
 
-A configured child is given a Plan authorship root of its own, created outside
+A configured child is given a Plan writer root of its own, created outside
 that frame and removed when the child settles — the Plan sessions underneath it
 included, a named one among them, which production keeps and a test may not. The
 Plan invocation still creates and proves its own empty session directory under
@@ -448,7 +448,7 @@ A scenario reaches the Plan's own turn by its exact authored label. The trusted
 child host privately connects that label to the opaque conversation identity
 `<Plan>` derives for the invocation. Scenario selection uses the label; provider
 and scenario state remain keyed by the opaque identity and working directory.
-This mapping belongs only to the sealed Plan-authorship path, so ordinary Agent
+This mapping belongs only to the sealed Plan-writer path, so ordinary Agent
 use keeps exact-session matching and siblings share no state.
 
 Only detached declaration data enters the host-profile request. A test cannot

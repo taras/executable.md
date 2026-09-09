@@ -100,7 +100,7 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
     const names = entries.map((entry: { name?: string }) => entry?.name);
     for (const name of [
       "PlanInputs",
-      "PlanAuthorship",
+      "PlanWriter",
       "PlanProgress",
       "CheckDraft",
       "AdmitPlan",

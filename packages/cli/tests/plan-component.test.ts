@@ -9,7 +9,7 @@
  * the phases run in, and the exact bytes that come back.
  *
  * Every seam is deterministic and in process: the scriptable ACPX runtime, a
- * scripted review, a recorded draft answer, and an authorship root the case
+ * scripted review, a recorded draft answer, and an Plan writer root the case
  * created. No live agent, browser, or network belongs in this evidence.
  */
 
@@ -75,11 +75,11 @@ interface Run {
   failure: string | undefined;
   harness: PlanDeclarationHarness;
   stream: InMemoryStream;
-  /** What is in the authorship root when the run is over. */
+  /** What is in the Plan writer root when the run is over. */
   leftover: string[];
 }
 
-function* authorshipRoot(): Operation<string> {
+function* planWriterRoot(): Operation<string> {
   const root = join(tmpdir(), `xmd-plan-component-${randomUUID()}`);
   yield* ensureDir(root);
   yield* ensure(() => rm(root, { recursive: true, force: true }));
@@ -130,13 +130,13 @@ function* runDocument(options: {
    */
   normalized?: boolean;
 }): Operation<Run> {
-  const root = options.root ?? (yield* authorshipRoot());
+  const root = options.root ?? (yield* planWriterRoot());
   const stream = options.stream ?? new InMemoryStream();
   const harness =
     options.harness ??
     (yield* planDeclarationHarness({
       surface: "component",
-      authorshipRoot: root,
+      planWriterRoot: root,
       ...(options.includes === undefined ? {} : { includes: options.includes }),
       ...(options.stack === undefined ? {} : { stack: options.stack }),
       ...(options.validate === undefined ? {} : { validate: options.validate }),
@@ -233,7 +233,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     yield* useWorkingDirectory(function* (dir) {
       // A file only the caller's authority can read, written into the Prompt.
       // The body is ordinary XMD with the document's own capabilities: if it
-      // ran under the authorship ceiling instead, this read would be refused.
+      // ran under the Plan writer ceiling instead, this read would be refused.
       yield* writeTextFile(join(dir, "notes.md"), "the project notes");
 
       const run = yield* runDocument({
@@ -266,7 +266,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       const declaration = yield* planComponentDescription();
       expect((declaration.privates ?? []).map((component) => component.name)).toEqual([
         "PlanInputs",
-        "PlanAuthorship",
+        "PlanWriter",
         "PlanProgress",
         "CheckDraft",
         "AdmitPlan",
@@ -296,7 +296,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     yield* useWorkingDirectory(function* (dir) {
       const harness = yield* planDeclarationHarness({
         surface: "component",
-        authorshipRoot: `${dir}-profile`,
+        planWriterRoot: `${dir}-profile`,
         // deno-lint-ignore require-yield
         *symbols(): Operation<SyntaxSymbols> {
           throw new Error("the profile could not be described");
@@ -341,7 +341,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
 
   it("PC3: an empty Prompt reaches no catalog, session, turn or review", function* () {
     yield* useWorkingDirectory(function* () {
-      const root = yield* authorshipRoot();
+      const root = yield* planWriterRoot();
       const run = yield* runDocument({
         source: ['<Plan as="approved">   </Plan>', ""].join("\n"),
         root,
@@ -376,7 +376,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
 
   it("PC5: a host whose provider gives no Agent context refuses before placement", function* () {
     yield* useWorkingDirectory(function* () {
-      const root = yield* authorshipRoot();
+      const root = yield* planWriterRoot();
       const run = yield* runDocument({
         source: ['<Plan as="approved">Write a program.</Plan>', ""].join("\n"),
         root,
@@ -404,7 +404,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     yield* useWorkingDirectory(function* () {
       for (const name of [
         "PlanInputs",
-        "PlanAuthorship",
+        "PlanWriter",
         "PlanProgress",
         "CheckDraft",
         "AdmitPlan",
@@ -483,7 +483,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     function* asking(root: string): Operation<PlanDeclarationHarness> {
       const harness = yield* planDeclarationHarness({
         surface: "component",
-        authorshipRoot: root,
+        planWriterRoot: root,
       });
       harness.fake.script({ reply: REQUEST });
       harness.fake.script({ reply: PLAN });
@@ -496,7 +496,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         const files = recordedFiles({ "notes.md": "the retained note\n" });
         const run = yield* runDocument({
           source: SOURCE,
-          harness: yield* asking(yield* authorshipRoot()),
+          harness: yield* asking(yield* planWriterRoot()),
           reviews: [],
           evaluation: reading(files),
         });
@@ -513,7 +513,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         const files = recordedFiles({ "notes.md": "the retained note\n" });
         const run = yield* runDocument({
           source: SOURCE,
-          harness: yield* asking(yield* authorshipRoot()),
+          harness: yield* asking(yield* planWriterRoot()),
           reviews: [],
           evaluation: reading(files),
           // The presentation an ordinary `xmd run` installs, so a phase written
@@ -547,7 +547,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         const files = recordedFiles({ "notes.md": "the retained note\n" });
         const harness = yield* planDeclarationHarness({
           surface: "component",
-          authorshipRoot: yield* authorshipRoot(),
+          planWriterRoot: yield* planWriterRoot(),
         });
         // The admitted read is written first; the write sits in the arm the
         // condition never takes.
@@ -578,7 +578,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         const files = recordedFiles({ "notes.md": "the retained note\n" });
         const one = yield* runDocument({
           source: SOURCE,
-          harness: yield* asking(yield* authorshipRoot()),
+          harness: yield* asking(yield* planWriterRoot()),
           reviews: [],
           evaluation: reading(files),
           stream: first,
@@ -611,7 +611,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         const files = recordedFiles({ "notes.md": "the retained note\n" });
         const one = yield* runDocument({
           source: SOURCE,
-          harness: yield* asking(yield* authorshipRoot()),
+          harness: yield* asking(yield* planWriterRoot()),
           reviews: [],
           evaluation: reading(files),
           stream: first,
@@ -649,7 +649,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         const files = recordedFiles({ "notes.md": "the retained note\n" });
         const harness = yield* planDeclarationHarness({
           surface: "component",
-          authorshipRoot: yield* authorshipRoot(),
+          planWriterRoot: yield* planWriterRoot(),
         });
         // A name this vocabulary does not have: core refuses the selection, the
         // loop offers that refusal back, and the next turn writes the Plan.
@@ -680,7 +680,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           stream: yield* continuing(first),
           harness: yield* planDeclarationHarness({
             surface: "component",
-            authorshipRoot: yield* authorshipRoot(),
+            planWriterRoot: yield* planWriterRoot(),
             *symbols() {
               catalogs += 1;
               throw new Error("a retained syntax selection was asked live");
@@ -718,7 +718,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           "",
         ].join("\n");
 
-        const root = yield* authorshipRoot();
+        const root = yield* planWriterRoot();
         const first = new InMemoryStream();
         const files = recordedFiles({ "notes.md": "the retained note\n" });
         const one = yield* runDocument({
@@ -780,7 +780,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         const names = category.entries.map((entry) => entry.name);
         for (const priv of [
           "PlanInputs",
-          "PlanAuthorship",
+          "PlanWriter",
           "PlanProgress",
           "CheckDraft",
           "AdmitPlan",
@@ -832,7 +832,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
 
   it("PC8: two sites are two conversations, and a default directory is handed back", function* () {
     yield* useWorkingDirectory(function* () {
-      const root = yield* authorshipRoot();
+      const root = yield* planWriterRoot();
       const run = yield* runDocument({
         source: [
           '<Plan as="first">Write the first program.</Plan>',
@@ -881,7 +881,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         stream: partial,
         harness: yield* planDeclarationHarness({
           surface: "component",
-          authorshipRoot: yield* authorshipRoot(),
+          planWriterRoot: yield* planWriterRoot(),
           *symbols() {
             catalogs += 1;
             throw new Error("a restored syntax snapshot was rebuilt");
@@ -950,7 +950,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       // The draft check and the admission are one question asked twice, of a
       // tree that may have moved between them: the draft resolved everything it
       // names while the conversation was standing, and by the time the
-      // authorship frame had gone it did not. Only the second answer decides
+      // Plan writer frame had gone it did not. Only the second answer decides
       // what may be returned.
       const canonical = structuralValidation([], [yield* planComponentDescription()]);
       let answered = 0;
@@ -994,7 +994,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
 
   it("PC15: an omitted session's directory is handed back after teardown", function* () {
     yield* useWorkingDirectory(function* () {
-      const root = yield* authorshipRoot();
+      const root = yield* planWriterRoot();
       const run = yield* runDocument({
         // No `session` prop: the placement is this expansion's own, and belongs
         // to it.
@@ -1004,7 +1004,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       });
 
       expect(run.failure).toBe(undefined);
-      // Handed back non-recursively after the whole authorship frame went, which
+      // Handed back non-recursively after the whole Plan writer frame went, which
       // is the only reason the root is empty rather than holding one leaf.
       expect(run.leftover).toEqual([]);
     });
@@ -1012,7 +1012,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
 
   it("PC16: an authored session's directory is still there afterwards", function* () {
     yield* useWorkingDirectory(function* () {
-      const root = yield* authorshipRoot();
+      const root = yield* planWriterRoot();
       const run = yield* runDocument({
         source: ['<Plan session="review" as="approved">Write a program.</Plan>', ""].join("\n"),
         root,
@@ -1031,7 +1031,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
 
   it("PC17: the same site and name continue the same placement", function* () {
     yield* useWorkingDirectory(function* () {
-      const root = yield* authorshipRoot();
+      const root = yield* planWriterRoot();
       const source = ['<Plan session="review" as="approved">Write a program.</Plan>', ""].join(
         "\n",
       );
@@ -1054,7 +1054,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
 
   it("PC18: two sites writing one name are two conversations", function* () {
     yield* useWorkingDirectory(function* () {
-      const root = yield* authorshipRoot();
+      const root = yield* planWriterRoot();
       const run = yield* runDocument({
         // The same authored name at two sites. Sibling placements stay distinct,
         // exactly as sibling `<Session>` elements do, so neither answers for the
@@ -1228,7 +1228,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         normalized: true,
         harness: yield* planDeclarationHarness({
           surface: "component",
-          authorshipRoot: yield* authorshipRoot(),
+          planWriterRoot: yield* planWriterRoot(),
           verbose: true,
         }),
       });
@@ -1245,7 +1245,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         normalized: true,
         harness: yield* planDeclarationHarness({
           surface: "command",
-          authorshipRoot: yield* authorshipRoot(),
+          planWriterRoot: yield* planWriterRoot(),
         }),
       });
 
@@ -1402,7 +1402,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         "",
       ].join("\n");
 
-      const root = yield* authorshipRoot();
+      const root = yield* planWriterRoot();
       const first = new InMemoryStream();
       const one = yield* runDocument({
         source,

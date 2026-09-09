@@ -5,7 +5,7 @@
  * loader, not copied into a fixture — so what it proves is what a release does.
  * The seams around it are deterministic: a scriptable ACP runtime for the one
  * Agent turn, a scripted Elicitation answer for the review, and a test-only
- * validator in the place the authorship profile declares the production one.
+ * validator in the place the Plan writer profile declares the production one.
  *
  * The include list is empty on purpose. Repository component search must not be
  * able to supply `Loop`, `If`, `Return`, `Fail`, `CodeBlock` or the validator:
@@ -55,7 +55,7 @@ import { recordedFiles } from "../../core/tests/support/fragment-files.ts";
 import { answerProvider } from "../../core/tests/support/answer-provider.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { PLAN_COMMAND_DOCUMENT, readPackagedDocument } from "../src/packaged-document.ts";
-import { PLAN_COMMAND_IDENTITY } from "../src/authorship-profile.ts";
+import { PLAN_COMMAND_IDENTITY } from "../src/plan-writer-profile.ts";
 import type { PlanSurface } from "../src/plan-component.ts";
 import {
   AGENT,
@@ -176,7 +176,7 @@ function* runDocument(options: RunOptions = {}): Operation<CommandRun> {
   const harness = yield* scoped(function* () {
     return yield* planDeclarationHarness({
       surface: options.surface ?? "command",
-      authorshipRoot: yield* authorshipRoot(),
+      planWriterRoot: yield* planWriterRoot(),
       session: SESSION,
       explicitSession: true,
       ...(options.verbose === undefined ? {} : { verbose: options.verbose }),
@@ -272,7 +272,7 @@ const REQUEST = "ask me for my age and write the result to a file";
 const SESSION = "plan-command-regression";
 
 /** A profile root this file owns, removed when the case's scope ends. */
-function* authorshipRoot(): Operation<string> {
+function* planWriterRoot(): Operation<string> {
   const root = join(tmpdir(), `xmd-plan-command-${randomUUID()}`);
   yield* ensureDir(root);
   yield* ensure(() => rm(root, { recursive: true, force: true }));
@@ -331,7 +331,7 @@ describe("the packaged plan command document", () => {
 
     // Both gates inside the Component saw the Agent's complete close value,
     // unaltered: the draft check while the conversation was still standing, and
-    // the admission after the whole authorship frame had gone. They are the same
+    // the admission after the whole Plan writer frame had gone. They are the same
     // question asked twice, of the same exact bytes.
     expect(run.validated).toEqual([CANDIDATE, CANDIDATE]);
 
@@ -512,7 +512,7 @@ describe("the packaged plan command document", () => {
   });
 
   it("PO3: Stop announces itself before teardown and keeps its exact diagnostic", function* () {
-    /** The transcript as it stood when the authorship frame began to close. */
+    /** The transcript as it stood when the Plan writer frame began to close. */
     const atTeardown: string[] = [];
 
     const run = yield* useWorkingDirectory(function* () {
@@ -523,7 +523,7 @@ describe("the packaged plan command document", () => {
       const harness = yield* scoped(function* () {
         return yield* planDeclarationHarness({
           surface: "command",
-          authorshipRoot: yield* authorshipRoot(),
+          planWriterRoot: yield* planWriterRoot(),
           session: SESSION,
           explicitSession: true,
         });

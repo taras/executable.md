@@ -244,7 +244,7 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     // And no private capability is syntax a document may write, in any build.
     for (const name of [
       "PlanInputs",
-      "PlanAuthorship",
+      "PlanWriter",
       "PlanProgress",
       "CheckDraft",
       "AdmitPlan",

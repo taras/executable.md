@@ -123,7 +123,7 @@ of them is raised.
 <Let as="round" value={0} />
 <Let as="approved" value={null} />
 
-<PlanAuthorship
+<PlanWriter
   session={inputs.session}
   durable={inputs.durable}
   authoredSession={inputs.authoredSession}
@@ -688,7 +688,7 @@ The coding agent produced this draft:
 </Loop>
 
 </Session>
-</PlanAuthorship>
+</PlanWriter>
 
 ## Produce the approved Plan source
 

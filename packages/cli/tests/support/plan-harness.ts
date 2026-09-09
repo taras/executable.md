@@ -27,8 +27,8 @@ import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import { syntaxSymbols } from "../../src/syntax.ts";
 import { planComponentDeclaration } from "../../src/plan-component.ts";
 import type { PlanSurface, StructuralValidation } from "../../src/plan-component.ts";
-import { planAgentContext } from "../../src/authorship-profile.ts";
-import type { AuthorshipStack } from "../../src/agent-stack.ts";
+import { planAgentContext } from "../../src/plan-writer-profile.ts";
+import type { PlanWriterStack } from "../../src/agent-stack.ts";
 import type { SyntaxSymbolsProvider, DeclaredMarkdownComponent } from "@executablemd/core/host";
 import type { PlanDependencies } from "../../src/plan.ts";
 import { createFakeAcp, makeRegistry, makeStore } from "./fake-acp.ts";
@@ -97,7 +97,7 @@ export function createPlanHarness(options: {
    * developer's own home, and two cases running close together could not tell
    * whose was whose.
    */
-  authorshipRoot: string;
+  planWriterRoot: string;
   /** Replace the symbols entirely, for a case about their failure. */
   symbols?: (includes: readonly string[]) => Operation<SyntaxSymbols>;
   /**
@@ -162,7 +162,7 @@ export function createPlanHarness(options: {
         symbolCalls.push([...includes]);
         return yield* (options.symbols ?? syntaxSymbols)(includes);
       },
-      authorshipRoot: options.authorshipRoot,
+      planWriterRoot: options.planWriterRoot,
       *installElicitation() {
         yield* Elicitation.around(
           {
@@ -198,21 +198,21 @@ export function createPlanHarness(options: {
  * somewhere.
  */
 export function* useWorkingDirectory<T>(
-  body: (dir: string, authorshipRoot: string) => Operation<T>,
+  body: (dir: string, planWriterRoot: string) => Operation<T>,
 ): Operation<T> {
   const dir = join(tmpdir(), `xmd-plan-${randomUUID()}`);
   // A sibling rather than a child: the working directory is what the approved
   // document writes into and what several cases read back, and a profile root
   // inside it would show up in those listings.
-  const authorshipRoot = `${dir}-profile`;
+  const planWriterRoot = `${dir}-profile`;
   yield* ensureDir(dir);
-  yield* ensureDir(authorshipRoot);
+  yield* ensureDir(planWriterRoot);
   return yield* scoped(function* () {
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
     // Recursive, and safe because it is: everything under this root was created
     // by this scope, so nothing here can reach a directory another case or a
     // real invocation owns.
-    yield* ensure(() => rm(authorshipRoot, { recursive: true, force: true }));
+    yield* ensure(() => rm(planWriterRoot, { recursive: true, force: true }));
     yield* API.Env.around({
       // deno-lint-ignore require-yield
       *cwd() {
@@ -223,7 +223,7 @@ export function* useWorkingDirectory<T>(
     // the runtime entrypoint installs it: a document that reaches the
     // filesystem must reach the caller's, or fail.
     yield* useHostFiles();
-    return yield* body(dir, authorshipRoot);
+    return yield* body(dir, planWriterRoot);
   });
 }
 
@@ -270,10 +270,10 @@ export function timesRead(reads: readonly string[], name: string): number {
  *
  * Owning it is what makes recursive removal safe: everything under it was made
  * by this scope, so nothing here can reach a directory another case — or a real
- * invocation — is using. A case uses it as an authorship root directly, or as
+ * invocation — is using. A case uses it as an Plan writer root directly, or as
  * the home a real host places `.xmd` beneath.
  */
-export function* useAuthorshipRoot<T>(body: (root: string) => Operation<T>): Operation<T> {
+export function* usePlanWriterRoot<T>(body: (root: string) => Operation<T>): Operation<T> {
   const root = join(tmpdir(), `xmd-plan-profile-${randomUUID()}`);
   yield* ensureDir(root);
   return yield* scoped(function* () {
@@ -311,13 +311,13 @@ export interface PlanDeclarationHarness {
  *
  * The same Component bytes production ships, with the seams a case owns: the
  * scriptable ACPX runtime, a scripted review, a recorded draft answer, and an
- * authorship root the case created. Nothing here is a second implementation — the
+ * Plan writer root the case created. Nothing here is a second implementation — the
  * declaration reads `Plan.md` through the packaged loader, exactly as the
  * command and an ordinary run do.
  */
 export function* planDeclarationHarness(options: {
   surface: PlanSurface;
-  authorshipRoot: string;
+  planWriterRoot: string;
   includes?: readonly string[];
   /**
    * The symbols this case's execution describes, in place of the default below.
@@ -340,7 +340,7 @@ export function* planDeclarationHarness(options: {
   /** Whether the command surface asked for drafts and check diagnostics. */
   verbose?: boolean;
   /** Absent leaves the harness with no stack at all, as `xmd test` has none. */
-  stack?: AuthorshipStack | null;
+  stack?: PlanWriterStack | null;
   store?: FakeStore;
 }): Operation<PlanDeclarationHarness> {
   const fake = createFakeAcp();
@@ -368,7 +368,7 @@ export function* planDeclarationHarness(options: {
         agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
       },
     ),
-    authorshipRoot: options.authorshipRoot,
+    planWriterRoot: options.planWriterRoot,
     ...(options.session === undefined ? {} : { session: options.session }),
     ...(options.explicitSession === undefined ? {} : { explicitSession: options.explicitSession }),
     ...(options.verbose === undefined ? {} : { verbose: options.verbose }),

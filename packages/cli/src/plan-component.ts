@@ -27,7 +27,7 @@
  *
  * ## Why the capabilities are private
  *
- * `<PlanInputs>`, `<PlanAuthorship>`, `<PlanProgress>`, `<CheckDraft>`,
+ * `<PlanInputs>`, `<PlanWriter>`, `<PlanProgress>`, `<CheckDraft>`,
  * `<AdmitPlan>`, `<ClassifyPlanResponse>` and `<PlanInformation>` are the phases
  * of one invocation, not components anyone composes with. Freezing the inputs,
  * installing a constrained Agent frame, telling an operator which phase is
@@ -75,12 +75,12 @@ import type { DocumentValidation } from "@executablemd/core";
 import type { ComponentInvocation } from "@executablemd/core";
 
 import {
-  DEFAULT_AUTHORSHIP_ROOT,
-  installAuthorshipFrame,
+  DEFAULT_PLAN_WRITER_ROOT,
+  installPlanWriterFrame,
   useSessionDirectory,
-} from "./authorship-profile.ts";
-import type { PlanAuthorship, PlanAuthorshipObservation } from "./authorship-profile.ts";
-import type { CandidateAssessment } from "./authorship-profile.ts";
+} from "./plan-writer-profile.ts";
+import type { PlanWriter, PlanWriterObservation } from "./plan-writer-profile.ts";
+import type { CandidateAssessment } from "./plan-writer-profile.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import { PLAN_DOCUMENT, readPackagedDocument } from "./packaged-document.ts";
 import { useRunProfileRegistry } from "./syntax.ts";
@@ -183,7 +183,7 @@ export interface PlanComponentAssembly {
    * existed. No prop, binding, registration, middleware answer or separately
    * loaded copy can supply or replace one.
    */
-  readonly context: Result<PlanAuthorship>;
+  readonly context: Result<PlanWriter>;
   /** What this host states about machine-wide agent sessions, if anything. */
   readonly sessions?: MachineSessionAssembly;
   /**
@@ -194,7 +194,7 @@ export interface PlanComponentAssembly {
    * one — there is no flag, no environment variable and no contextual Api to
    * reach, so a document cannot move where authorship directories live.
    */
-  readonly authorshipRoot?: string;
+  readonly planWriterRoot?: string;
   /**
    * The logical session name this surface fixes, when it fixes one.
    *
@@ -218,7 +218,7 @@ export interface PlanComponentAssembly {
   /** The scope the two host acts run in, captured before the frame exists. */
   readonly host: Scope;
   /** A trusted host-only observation after the whole frame is installed. */
-  observeAuthorship?(observation: PlanAuthorshipObservation): Operation<void>;
+  observePlanWriter?(observation: PlanWriterObservation): Operation<void>;
   /** Who answers the review question. */
   installElicitation(): Operation<void>;
   /**
@@ -269,7 +269,7 @@ const OPTIONAL_SESSION = {
   additionalProperties: false,
 };
 
-const AUTHORSHIP_PROPS = {
+const PLAN_WRITER_PROPS = {
   type: "object",
   properties: {
     session: { type: "string", minLength: 1 },
@@ -396,7 +396,7 @@ export function* planComponentDeclaration(
     exact: true,
     privates: [
       planInputs(assembly),
-      planAuthorship(assembly),
+      planWriter(assembly),
       planProgress(assembly),
       checkDraft(validate),
       admitPlan(validate),
@@ -459,7 +459,7 @@ function describedPrivates(): readonly IdentityComponent[] {
       returns: INPUTS_RETURNS,
       forms: ["self-closing"],
     },
-    { name: "PlanAuthorship", props: AUTHORSHIP_PROPS, forms: ["paired"] },
+    { name: "PlanWriter", props: PLAN_WRITER_PROPS, forms: ["paired"] },
     { name: "PlanProgress", props: PROGRESS_PROPS, forms: ["paired"] },
     { name: "CheckDraft", props: SOURCE_PROP, returns: CHECK_RETURNS, forms: ["self-closing"] },
     { name: "AdmitPlan", props: ADMIT_PROPS, returns: { type: "string" }, forms: ["self-closing"] },
@@ -570,7 +570,7 @@ function planInputs(assembly: PlanComponentAssembly): IdentityComponent {
  *
  * The public `session` prop is the whole of the question on the component
  * surface, and it is answered here — inside the frozen inputs — because this is
- * the last place that can see it. `<PlanAuthorship>` receives a placement rather
+ * the last place that can see it. `<PlanWriter>` receives a placement rather
  * than a prop, and a placement cannot be asked whether somebody wrote it: a name
  * a caller can write again needs a directory that is still there next time, and
  * one this expansion derived belongs to this expansion and goes back with it.
@@ -601,7 +601,7 @@ function placementFor(
 }
 
 /**
- * Install the constrained authorship frame, project the workflow inside it, and
+ * Install the constrained Plan writer frame, project the workflow inside it, and
  * do not return until every part of it has finished tearing down.
  *
  * The frame is this invocation's own scope, so the provider, the authorship
@@ -610,14 +610,14 @@ function placementFor(
  * Component — the structural admission and the return — is therefore written after
  * teardown by construction rather than by a rule somebody has to remember.
  */
-function planAuthorship(assembly: PlanComponentAssembly): IdentityComponent {
+function planWriter(assembly: PlanComponentAssembly): IdentityComponent {
   return {
-    name: "PlanAuthorship",
-    origin: `${PLAN_ORIGIN}#PlanAuthorship`,
+    name: "PlanWriter",
+    origin: `${PLAN_ORIGIN}#PlanWriter`,
     forms: ["paired"],
-    props: AUTHORSHIP_PROPS,
+    props: PLAN_WRITER_PROPS,
     factory: () =>
-      function* PlanAuthorship(props: Record<string, Json>): Operation<string> {
+      function* PlanWriter(props: Record<string, Json>): Operation<string> {
         // Before a directory exists, before a provider exists, and therefore
         // before any session could be placed or any turn started. A host that
         // supplies no Agent context refuses rather than writing a Plan under
@@ -630,7 +630,7 @@ function planAuthorship(assembly: PlanComponentAssembly): IdentityComponent {
 
         const session = String(props.session);
         const established = yield* useSessionDirectory({
-          root: assembly.authorshipRoot ?? DEFAULT_AUTHORSHIP_ROOT,
+          root: assembly.planWriterRoot ?? DEFAULT_PLAN_WRITER_ROOT,
           session,
           // A placement this expansion derived belongs to it and goes back with
           // it; a name a caller wrote is one they can write again, so its
@@ -642,7 +642,7 @@ function planAuthorship(assembly: PlanComponentAssembly): IdentityComponent {
           throw established.error;
         }
 
-        yield* installAuthorshipFrame({
+        yield* installPlanWriterFrame({
           workdir: established.value,
           authorship: context.value,
           host: assembly.host,
@@ -650,9 +650,9 @@ function planAuthorship(assembly: PlanComponentAssembly): IdentityComponent {
           ...(typeof props.authoredSession === "string"
             ? { authoredSession: props.authoredSession }
             : {}),
-          ...(assembly.observeAuthorship === undefined
+          ...(assembly.observePlanWriter === undefined
             ? {}
-            : { observe: assembly.observeAuthorship }),
+            : { observe: assembly.observePlanWriter }),
           installElicitation: assembly.installElicitation,
         });
 
@@ -862,7 +862,7 @@ function* withholdSecrets(text: string): Operation<void> {
 }
 
 /**
- * Structurally admit the exact approved bytes, after the whole authorship frame
+ * Structurally admit the exact approved bytes, after the whole Plan writer frame
  * has gone.
  *
  * Nothing is executed, and the string that comes back is the string that went

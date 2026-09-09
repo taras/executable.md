@@ -1,7 +1,7 @@
 /**
  * Tier AE — embedded adapters on the run and plan paths
  * (specs/acp-client-spec.md §Command-line configuration, §The `xmd plan`
- * authorship profile).
+ * Plan writer profile).
  *
  * What a provider was built from is not observable through a provider: an agent
  * command reaches the disk only when something spawns it, and a case that
@@ -32,8 +32,8 @@ import {
   resolveAgentStack,
 } from "../src/agent-stack.ts";
 import type { AgentStack } from "../src/agent-stack.ts";
-import { authorshipDependencies } from "../src/authorship-profile.ts";
-import type { AuthorshipProviderInputs } from "../src/authorship-profile.ts";
+import { planWriterDependencies } from "../src/plan-writer-profile.ts";
+import type { PlanWriterProviderInputs } from "../src/plan-writer-profile.ts";
 import { runPlan } from "../src/plan.ts";
 import { AGENT, createPlanHarness, useWorkingDirectory } from "./support/plan-harness.ts";
 
@@ -85,7 +85,7 @@ function installingAdapters(prepared: string[]): EmbeddedAdapters {
  * Component rather than to the provider this case is about, so naming it here would
  * be describing an arrangement the ceiling never reads.
  */
-function dependenciesFrom(stack: AgentStack): AuthorshipProviderInputs {
+function dependenciesFrom(stack: AgentStack): PlanWriterProviderInputs {
   return { stack };
 }
 
@@ -130,7 +130,7 @@ describe("Tier AE — embedded adapters on the run and plan paths", () => {
     const root = adapterRoot();
     const adapters = createEmbeddedAdapters(root);
     const stack = stackWith(adapters);
-    const ceiling = authorshipDependencies(
+    const ceiling = planWriterDependencies(
       dependenciesFrom(stack),
       join(root, "workdir"),
       yield* useScope(),
@@ -166,7 +166,7 @@ describe("Tier AE — embedded adapters on the run and plan paths", () => {
   });
 
   it("AE6: the plan profile prepares its adapter through the host, not the document", function* () {
-    yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+    yield* useWorkingDirectory(function* (dir, planWriterRoot) {
       // The command an install runs, answered here rather than spawned. What the
       // case is about is which capability the preparation reaches, and a real
       // `npm install` would answer that question with a subprocess.
@@ -188,7 +188,7 @@ describe("Tier AE — embedded adapters on the run and plan paths", () => {
       );
 
       const prepared: string[] = [];
-      const harness = createPlanHarness({ authorshipRoot });
+      const harness = createPlanHarness({ planWriterRoot });
       harness.fake.script({ reply: PLAN });
       harness.script({ decision: "Approve" });
 
@@ -206,7 +206,7 @@ describe("Tier AE — embedded adapters on the run and plan paths", () => {
       // The profile refuses a command to everything inside it, and putting this
       // build's adapter on disk runs one. Preparation therefore happens in the
       // scope the command was called in — the defect that made a real
-      // `xmd plan` end with "asked for a command, which the authorship profile
+      // `xmd plan` end with "asked for a command, which the Plan writer profile
       // grants to nothing" before any turn.
       // Once per agent resolution — the document resolves one several times, and
       // preparing an agent already prepared is defined to be harmless.
