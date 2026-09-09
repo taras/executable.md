@@ -19,7 +19,14 @@ import { scoped, useScope } from "effection";
 import { installIdentities } from "../src/invocation-identity.ts";
 import type { ProtectedBodies, ProtectedSite } from "../src/invocation-identity.ts";
 
-import { prepareEvaluationProfile } from "../src/evaluation-profile.ts";
+import {
+  fileReadEntry,
+  globReadEntry,
+  prepareEvaluationProfile,
+  syntaxReadEntry,
+} from "../src/evaluation-profile.ts";
+import { CORE_ORIGIN } from "../src/components/registry.ts";
+import { props as globProps } from "../src/components/Glob.ts";
 import type {
   CapabilityEntry,
   CapturedProfile,
@@ -454,6 +461,51 @@ describe("Tier EP — a profile a host cannot state", () => {
         files: undefined,
       }),
     ).toContain("without stating the filesystem operations");
+  });
+
+  it("EP21: core's own read entries state exactly what a host may admit them as", function* () {
+    const captured = yield* capture({ read: [fileReadEntry(), globReadEntry()] });
+    const [file, glob] = captured.read;
+
+    expect(file?.identity).toEqual({ origin: CORE_ORIGIN, key: "File:read", revision: "2" });
+    expect(file?.forms).toEqual(["self-closing"]);
+    expect(file?.definition.returns).toBe(undefined);
+
+    // The search is the same component an author writes: the ordinary props,
+    // the one spelling, and a declared return — which is what makes `as`
+    // mandatory before the host's provider is asked to traverse anything.
+    expect(glob?.identity).toEqual({ origin: CORE_ORIGIN, key: "Glob", revision: "2" });
+    expect(glob?.forms).toEqual(["self-closing"]);
+    expect(glob?.props).toEqual(globProps);
+    expect(glob?.definition.returns).toEqual({ type: "array", items: { type: "string" } });
+    // A search is not an older grant renamed: nothing was ever retained under
+    // a version-1 identity for it, so it answers for none.
+    expect(glob?.legacy).toBe(undefined);
+  });
+
+  it("EP22: canonical Syntax is admitted as an answer at core's own identity", function* () {
+    const stated = syntaxReadEntry();
+
+    expect(stated.kind).toBe("component-answer");
+    expect(stated.name).toBe("Syntax");
+    expect(stated.identity).toEqual({ origin: CORE_ORIGIN, key: "Syntax", revision: "2" });
+    expect(stated.forms).toEqual(["self-closing"]);
+    // The arm carries no implementation at all: what is behind a protected name
+    // is canonical resolution's to answer, not a host's to hand over.
+    expect(Object.keys(stated)).not.toContain("capability");
+  });
+
+  it("EP23: one name admitted for two spellings that bind differently refuses", function* () {
+    // `<File>` holds two capabilities under one name legitimately, because both
+    // spellings render. A name whose spellings disagreed about what `as` meant
+    // would be one component with two answers, decided by how the element
+    // happened to be written.
+    expect(
+      yield* refusal({
+        read: [entry({ name: "File", capability: "files:glob", forms: ["self-closing"] })],
+        write: [entry({ name: "File", capability: "file:write", forms: ["paired"] })],
+      }),
+    ).toContain("bind different results");
   });
 
   it("EP16: forms are canonically ordered, so two statements of one pair match", function* () {

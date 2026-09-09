@@ -148,9 +148,12 @@ import type {
   ImportTier,
 } from "./components/import-authority.ts";
 import { PROTECTED_COMPONENTS, ProtectedImports } from "./components/protected.ts";
+import { CORE_ORIGIN } from "./components/registry.ts";
+import { CORE_REVISION } from "./generated-xmd.ts";
 import { rootSyntaxReference } from "./syntax-reference.ts";
 import { capturedDocumentation } from "./documentation-api.ts";
 import {
+  CANONICAL_PROFILE_ANSWERS,
   EvaluationProfileError,
   prepareEvaluationProfile,
   TWO_PROFILES,
@@ -798,11 +801,46 @@ function* resolveComponentAnswers(
     // A capability-only profile performs no component-chain lookup at all.
     return answers;
   }
+  // The names this profile admits under canonical core's own identity. A
+  // protected component is nobody's to answer for, so no provider states what
+  // is behind one — core does, here, and only where the entry says it expects
+  // core. A host that admits a protected name under a provider's identity is
+  // still that provider's to claim, exactly as it was.
+  const canonical = new Set(
+    prepared.answered
+      .filter(
+        ({ name, identity }) =>
+          CANONICAL_PROFILE_ANSWERS.has(name) &&
+          identity.origin === CORE_ORIGIN &&
+          identity.key === name &&
+          identity.revision === CORE_REVISION,
+      )
+      .map(({ name }) => name),
+  );
+  const canonicalProvider = canonical.size === 0 ? undefined : imports.provider(CORE_ORIGIN);
   yield* scoped(function* () {
     yield* Component.around(
       {
-        *importComponent([name], _next) {
-          return yield* resolveImportUnrecorded(name, inputs);
+        *importComponent([name, position], _next) {
+          const answer = yield* resolveImportUnrecorded(name, inputs);
+          // Stated from the innermost position, on the exact object
+          // materialization produced, so a handler composed around this one
+          // states nothing: middleware that returns this answer unchanged
+          // leaves the claim on it, and middleware that returns anything else
+          // returns something carrying no identity at all.
+          if (
+            canonicalProvider === undefined ||
+            !canonical.has(name) ||
+            answer !== inputs.guarded.get(name)
+          ) {
+            return answer;
+          }
+          const asked = canonicalProvider.open(name, position);
+          try {
+            return asked.request.claim(answer, { key: name, revision: CORE_REVISION });
+          } finally {
+            asked.close();
+          }
         },
       },
       { at: "min" },

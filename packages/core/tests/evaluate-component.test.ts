@@ -16,14 +16,21 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
-import { ensure, Ok, scoped, spawn, suspend, withResolvers } from "effection";
+import { ensure, Err, Ok, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { API } from "@executablemd/runtime";
 
 import { collect } from "../src/collect.ts";
 import { Component, content } from "../src/component-api.ts";
 import { executeInstalled } from "../host.ts";
-import { directoryEntry, fileDeleteEntry, fileReadEntry, fileWriteEntry } from "../host.ts";
+import {
+  directoryEntry,
+  fileDeleteEntry,
+  fileReadEntry,
+  fileWriteEntry,
+  globReadEntry,
+  syntaxReadEntry,
+} from "../host.ts";
 import type { ExecutionInstallation, FragmentEvaluationInput } from "../host.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { retainedSource } from "../src/root-source.ts";
@@ -1232,6 +1239,275 @@ describe("Tier FE — protection settles which implementation runs, and grants n
     expect(String(output)).toContain("the retained note");
     expect(String(output)).not.toContain("forged");
     expect(files.performed).toEqual(["read notes.md"]);
+  });
+});
+
+/**
+ * Tier FE34 — the shared read profile: File, Glob and canonical Syntax.
+ *
+ * The ordinary `read` table is three entries now, and each of them is admitted
+ * on different terms. `<File />` and `<Glob />` are capabilities: core supplies
+ * the body and closes it over the operations the host handed the profile.
+ * `<Syntax />` is a component answer at canonical core's own identity, because
+ * a protected name is nobody's to supply a second body for.
+ *
+ * What the rows below discriminate is that admitting a search did not create a
+ * second Glob. The patterns are held to the same source rules the ordinary
+ * component is, the failure sentence is normalized the same way, and the search
+ * itself reaches the captured operation and the captured working directory —
+ * never `API.Files` and never `Env.cwd`. The recorder is not installed as a
+ * provider, so a search that appears in its log went through the profile.
+ */
+describe("Tier FE34 — the shared read profile", () => {
+  /** The read table `xmd run` states, over one recorder. */
+  function shared(files: RecordedFiles): ExecutionInstallation {
+    return {
+      evaluation: {
+        read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()],
+        write: [fileWriteEntry(), fileDeleteEntry()],
+        files,
+      },
+    };
+  }
+
+  it("FE34: one fragment binds Glob, File and Syntax and renders chosen findings", function* () {
+    const files = recordedFiles({ "notes.md": NOTE, "other.md": "unused\n" });
+    const stream = new InMemoryStream();
+    const output = yield* run(
+      `<Evaluate text={'<Glob include={["notes.md"]} as="paths" />\\n` +
+        `<File path="notes.md" as="note" />\\n` +
+        `<Syntax as="vocabulary" />\\n` +
+        `<Json value={{ paths, note }} />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
+      [shared(files)],
+      stream,
+    );
+
+    const rendered = String(output);
+    expect(rendered).toContain("notes.md");
+    expect(rendered).toContain("the retained note");
+    // The vocabulary was bound rather than rendered, so nothing about it
+    // reaches the caller: the fragment renders exactly what it chose to. That
+    // the occurrence ran at all is the retained reading, not the output.
+    expect(rendered).not.toContain("Available in this evaluation");
+    expect(
+      (yield* stream.readAll()).filter(
+        (event) => event.type === "yield" && event.description.type === "syntax_symbols",
+      ),
+    ).toHaveLength(1);
+    expect(files.performed).toEqual(["glob notes.md", "read notes.md"]);
+  });
+
+  it("FE34: an empty result is the answer to a search that matched nothing", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    const output = yield* run(
+      `<Evaluate text={'<Glob include={["absent.md"]} as="paths" />\\n` +
+        `<Json value={paths} />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
+      [shared(files)],
+    );
+
+    expect(String(output)).toContain("[]");
+    expect(String(output)).not.toContain("notes.md");
+    expect(files.performed).toEqual(["glob absent.md"]);
+  });
+
+  it("FE34: a search written without `as` is refused before any traversal", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    const failed = yield* refusal(
+      run(`<Evaluate text={'<Glob include={["notes.md"]} />\\n'} />\n`, [shared(files)]),
+    );
+
+    // The entry declares what it binds, so the ordinary value-component rule
+    // decides this — and it decides before the provider is asked anything.
+    expect(failed).toContain("must be invoked with `as`");
+    expect(files.performed).toEqual([]);
+  });
+
+  it("FE34: a paired search and a paired read are both refused before any operation", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    for (const text of [
+      '<Glob include={["notes.md"]}>x</Glob>',
+      '<File path="notes.md">written by the fragment</File>',
+    ]) {
+      const failed = yield* refusal(
+        run(`<Evaluate text={${JSON.stringify(text + "\n")}} allow={["read"]} />\n`, [
+          shared(files),
+        ]),
+      );
+      expect(failed).toContain("admitted only in its self-closing form");
+    }
+    // The write table exists on this profile and `read` did not select it, so
+    // the paired spelling is refused rather than reaching the write operation.
+    expect(files.performed).toEqual([]);
+    expect(files.entries.get("notes.md")).toBe(NOTE);
+  });
+
+  it("FE34: an unusable pattern is refused with the ordinary sentence, before the search", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    for (const [pattern, expected] of [
+      ["/notes.md", "is absolute"],
+      ["../notes.md", "reaches outside the working directory"],
+      ["", "empty pattern"],
+    ] as const) {
+      const text = `<Glob include={${JSON.stringify([pattern])}} as="paths" />\n`;
+      const failed = yield* refusal(
+        run(`<Evaluate text={${JSON.stringify(text)}} as="answer" />\n`, [shared(files)]),
+      );
+      expect(failed).toContain(expected);
+    }
+    expect(files.performed).toEqual([]);
+  });
+
+  it("FE34: a provider failure becomes one safe sentence that names no path", function* () {
+    const files = recordedFiles(
+      { "notes.md": NOTE },
+      { found: () => Err(new Error("EACCES: permission denied, scandir '/private/host/root'")) },
+    );
+    const failed = yield* refusal(
+      run(`<Evaluate text={'<Glob include={["notes.md"]} as="paths" />\\n'} as="answer" />\n`, [
+        shared(files),
+      ]),
+    );
+
+    expect(failed).toContain("cannot search the working directory");
+    expect(failed).not.toContain("/private/host/root");
+    expect(failed).not.toContain("EACCES");
+    expect(files.performed).toEqual(["glob notes.md"]);
+  });
+
+  it("FE34: the search reaches the captured operation and the captured directory", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    const searched: string[] = [];
+    const reachedDocumentProvider: string[] = [];
+
+    const output = yield* scoped(function* () {
+      // Installed exactly where a document, a repository component or a
+      // middleware package would install one, and answering every search.
+      yield* API.Files.around(
+        {
+          // deno-lint-ignore require-yield
+          *globFiles([input]): Operation<never> {
+            reachedDocumentProvider.push(String(input.cwd));
+            throw new Error("the document's provider answered");
+          },
+        },
+        { at: "min" },
+      );
+      return yield* run(
+        `<Evaluate text={'<Glob include={["notes.md"]} as="paths" />\\n` +
+          `<Json value={paths} />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
+        [
+          {
+            evaluation: {
+              read: [globReadEntry()],
+              files: {
+                ...files,
+                *globFiles(input) {
+                  searched.push(input.cwd);
+                  return yield* files.globFiles(input);
+                },
+              },
+            },
+          },
+        ],
+      );
+    });
+
+    expect(String(output)).toContain("notes.md");
+    // The recorder's own logical root, which is the working directory the host
+    // stated when it built the profile — not whatever the process is in.
+    expect(searched).toEqual(["/workspace"]);
+    expect(reachedDocumentProvider).toEqual([]);
+  });
+
+  it("FE34: bare Syntax reports composition plus the read vocabulary, and nothing else", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    const output = yield* run(`<Evaluate text={'<Syntax />\\n'} allow={["read"]} />\n`, [
+      shared(files),
+    ]);
+
+    const rendered = String(output);
+    for (const name of ["`<Json>`", "`<File>`", "`<Glob>`", "`<Syntax>`"]) {
+      expect(rendered).toContain(name);
+    }
+    // The write table was not selected, so the deletion is not in the
+    // vocabulary this fragment was told it has.
+    expect(rendered).not.toContain("`<File.Delete>`");
+    expect(files.performed).toEqual([]);
+  });
+
+  it("FE34: named Syntax describes a component that stays unavailable", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    const output = yield* run(
+      `<Evaluate text={'<Syntax names={["Elicit", "Glob"]} />\\n'} allow={["read"]} />\n`,
+      [shared(files)],
+    );
+
+    const rendered = String(output);
+    expect(rendered).toContain("**Available in this evaluation:** yes");
+    expect(rendered).toContain("**Available in this evaluation:** no");
+
+    // Reading about it is not permission to run it.
+    const failed = yield* refusal(
+      run(`<Evaluate text={'<Elicit schema={{}} as="answer" />\\n'} allow={["read"]} />\n`, [
+        shared(files),
+      ]),
+    );
+    expect(failed).toContain("did not admit");
+  });
+
+  it("FE34: canonical Syntax is the answer at core's identity, and a replacement loses it", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    const seen: FunctionComponentDefinition[] = [];
+    const failed = yield* refusal(
+      scoped(function* () {
+        yield* Component.around({
+          *importComponent([name, position], next) {
+            const answer = yield* next(name, position);
+            if (name === "Syntax" && answer.kind === "function") {
+              seen.push(answer);
+              return independentWrapper(answer);
+            }
+            return answer;
+          },
+        });
+        return yield* run(`<Evaluate text={'<Syntax />\\n'} />\n`, [shared(files)]);
+      }),
+    );
+
+    // Core states what is behind the protected name from the innermost
+    // position, on the exact object materialization produced. A handler that
+    // returns anything else returns something carrying no identity at all.
+    expect(seen.length).toBeGreaterThan(0);
+    expect(failed).toContain("carries no identity");
+    expect(files.performed).toEqual([]);
+  });
+
+  it("FE34: core answers for Syntax alone, so Evaluate cannot be admitted at its identity", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    const failed = yield* refusal(
+      run(`<Evaluate text={'<Evaluate text={"inert"} />\\n'} />\n`, [
+        {
+          evaluation: {
+            read: [
+              {
+                kind: "component-answer",
+                name: "Evaluate",
+                identity: { origin: "@executablemd/core", key: "Evaluate", revision: "2" },
+                forms: ["self-closing"],
+              },
+            ],
+            files,
+          },
+        },
+      ]),
+    );
+
+    // Stating an identity is what makes a protected name admissible, and core
+    // states one for the vocabulary and nothing else: evaluation inside
+    // evaluation is a different grant from being shown what a fragment may
+    // write. The hand-written entry resolves to an answer nothing identified.
+    expect(failed).toContain("carries no identity");
+    expect(files.performed).toEqual([]);
   });
 });
 

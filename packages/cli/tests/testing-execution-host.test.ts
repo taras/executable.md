@@ -408,6 +408,53 @@ describe("nested execution under the production run host", () => {
     expect(ordinary.stdout).not.toContain("No long-form documentation");
   });
 
+  /**
+   * The run profile's read table reaches a child, whichever command hosts it.
+   *
+   * `host="run"` means the run profile, and the evaluation ceiling is part of
+   * it: a child of `xmd test` evaluates a generated fragment under exactly what
+   * `xmd run` states. So the same three read entries are here — the file, the
+   * search and the vocabulary — and the write table is still not what `read`
+   * selects.
+   */
+  it("gives a run child the ordinary read profile: File, Glob and Syntax", function* () {
+    const project = yield* useProject({
+      "notes.md": doc("the retained note"),
+      "reader.md": doc(
+        `<Evaluate text={'<Glob include={["notes.md"]} as="paths" />\\n` +
+          `<File path="notes.md" as="note" />\\n` +
+          `<Json value={{ paths, note }} />\\n'} as="answer" />`,
+        "",
+        "<Json value={answer} />",
+      ),
+      "writer.md": doc(
+        `<Evaluate text={'<File path="made.md">written by the fragment</File>\\n'} ` +
+          `allow={["read"]} />`,
+      ),
+      "README.md": doc(
+        '<Test name="run child reads">',
+        '<Execution host="run" target="./reader.md" as="child">',
+        '<CollectOutput as="output" />',
+        "",
+        '<AssertStringIncludes actual={output} expected="notes.md" />',
+        '<AssertStringIncludes actual={output} expected="the retained note" />',
+        "</Execution>",
+        "</Test>",
+        "",
+        '<Test name="run child cannot write under read">',
+        '<Execution host="run" target="./writer.md" as="child">',
+        "<AssertEquals actual={child.result.ok} expected={false} />",
+        "</Execution>",
+        "</Test>",
+      ),
+    });
+    const result = yield* runCli(["test", "README.md"], { cwd: project }).join();
+    expect(result.code).toBe(0);
+    // The refused write left nothing behind, which is what "before any
+    // operation" means for a selection that never held the write table.
+    expect(yield* readdir(project)).not.toContain("made.md");
+  });
+
   it("refuses <Execution> outside a canonical <Test>", function* () {
     const project = yield* useProject({
       "child.md": doc("child"),

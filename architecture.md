@@ -1526,10 +1526,19 @@ current root and the first document execution together.
 
 This section records the Product Owner's #762 amendment against
 `1a7b96ab6c75f29fcf82513017f6daabab4d0d82`. PR #776 delivers protected Syntax
-routing, not the information loop. #762 remains undelivered. The contracts below
-replace the earlier Planner artifacts' Syntax-only child execution, prohibition
-on file reads, output-only context, and profile-owned evaluation limits. They
-describe the accepted feature, not evidence that it is implemented at this base.
+routing and PR #786 the ordinary generated output and `as` bindings the requests
+compose with. The contracts below replace the earlier Planner artifacts'
+Syntax-only child execution, prohibition on file reads, output-only context, and
+profile-owned evaluation limits.
+
+The shared ordinary read profile below is delivered: `xmd run` and every
+`host="run"` child state one profile whose read table is canonical self-closing
+`<File />`, canonical self-closing `<Glob />` and exact canonical protected
+self-closing `<Syntax />`, with the write table unchanged. What remains
+undelivered is the rest of #762 — every built-in structural construct inside
+generated evaluation, and the Plan classifier and information loop. Those
+contracts describe the accepted feature, not evidence that it is implemented at
+this base.
 
 ### One authorship workflow, one ordinary profile
 
@@ -1688,14 +1697,21 @@ services are not in the selected read table.
 A later runtime read failure can follow an earlier successful read, but the
 failed request supplies no partial findings to a later turn.
 
-### Limits compose around Evaluate
+### Recovery composes around Evaluate
 
-Evaluate keeps its existing public props. Neither a `limits` prop nor a timeout
-or output budget in the evaluation profile is introduced. A profile states
-authority; a surrounding operation bounds the work performed with it.
+Evaluate keeps its existing public props and its existing throwing behavior. It
+gains no `limits` prop, and the evaluation profile gains no deadline and no
+output budget. A profile states authority and nothing else.
 
-Plan composes an ordinary `Let` capture, a deadline and a bounded text capture
-around the ordinary public Evaluate invocation:
+Information requests add **no local deadline and no rendered-output size limit**.
+Ordinary component behavior and the host's own limits are what bound the work,
+and the command's existing `--timeout` continues to bound the whole planning
+invocation. A request that reads a large file is an ordinary large read.
+[#788](https://github.com/taras/executable.md/issues/788) owns a general
+`<Timeout>` component as independent future work; this design deliberately adds
+no one-off Plan timer and does not depend on that issue.
+
+What Plan composes around the public component is recovery, not limiting:
 
 ```mdx
 <Let as="findings">
@@ -1703,57 +1719,44 @@ around the ordinary public Evaluate invocation:
 </Let>
 ```
 
-The limiting and capture operations are reusable structured composition, not
-another evaluator, another document root, a special Evaluate result, or a new
-public XMD component. Plan supplies the fixed values and recovery policy. An
-enclosing budget cannot be extended by nested work. Ordinary evaluations
-without these wrappers keep their existing unbounded defaults.
+Plan owns one fixed recovery policy: after the child's structured teardown it
+turns the one narrow, typed candidate failure into retry context and rethrows
+every other failure unchanged. That policy is Plan's alone. It is not another
+evaluator, another document root, a special Evaluate result, or a new public
+XMD component, and it adds no public `<Try>`, `<Catch>` or `<Finally>` surface.
 
 One Plan invocation permits eight information requests total across drafting,
-repair and revision. They neither consume nor reset the ten-draft and
-three-repair budgets. The ninth candidate is not evaluated and no next Agent
-turn starts. Review explanations do not spend this budget.
-
-The per-request deadline is ten seconds, measured from entry into the composed
-evaluation operation through normal completion. Expiry cancels the evaluation
-and waits for cleanup before reporting a limit refusal. Cleanup may take longer
-than the deadline; ten seconds is not a promise to abandon live work. An outer
-command deadline or caller cancellation remains terminal.
-
-The findings budget is 65,536 UTF-8 bytes of the fragment's rendered output.
-Exactly 65,536 bytes is accepted; byte 65,537 refuses. Fixed prompt wording and
-candidate source are not part of this budget. A value captured by the generated
-fragment and never rendered is not part of what Plan sends, so it is not charged
-as findings. Its provider may still impose its own limits.
-
-The capture accounts for rendered chunks before accepting them into findings.
-It never constructs unbounded completed output and measures it afterward.
-Overflow supplies neither a truncated finding nor a completed `findings`
-binding. Effects that completed before overflow retain their ordinary durable
-records; a presentation limit is not a transaction over program effects.
+repair and revision. Successes and safe refusals each spend one. They neither
+consume nor reset the ten-draft and three-repair budgets. The ninth candidate is
+not evaluated and no next Agent turn starts. Review explanations do not spend
+this budget.
 
 ### Failure and settlement
 
-Public Evaluate continues to throw. Generic exported failure distinctions let
-the surrounding composition separate candidate refusals, local limit refusals,
-stale authority or replay, and infrastructure or unexpected failures. Matching
-message text or treating every GeneratedXmdError as recoverable is invalid.
+Public Evaluate continues to throw. One narrow exported classification lets the
+surrounding composition separate a recoverable generated-candidate failure from
+everything else. It carries only a safe normalized reason, is recognizable
+across loaded package copies through the repository's stable namespaced
+descriptive tag, and confers no authority to recover. Matching message text or
+treating every `GeneratedXmdError` as recoverable is invalid.
 
 After successful teardown, malformed candidate XMD, unauthorized names or forms,
-invalid Syntax requests, invalid glob patterns, and ordinary read failures such
-as missing or unreadable files become actionable refusal context. Local timeout
-and findings-budget exhaustion do likewise. No refusal masquerades as successful
-Evaluate output. Reasons contain only safe normalized diagnostics, not raw host
-errors, resolved paths or secret material.
+declarative expression, binding, construct, form and prop errors, invalid Syntax
+requests, invalid glob patterns, and ordinary read failures such as missing or
+unreadable files become actionable refusal context. No refusal masquerades as
+successful Evaluate output. Reasons contain only safe normalized diagnostics,
+not raw host errors, resolved paths or secret material.
 
-Caller cancellation, the command deadline, stale input or authority, corrupt
-history, absent or broken providers, installation failure, journal failure,
-secret rejection and unexpected runtime failure stop authorship without another
-turn. A failure during cleanup is terminal even when the candidate failure
-would otherwise be recoverable. The generic bounded-operation settlement must
-expose this distinction before Plan normalizes a refusal. Existing execution
-reconciliation, which can preserve an ordinary document error ahead of ordinary
-teardown failure, is not evidence that this narrower contract already holds.
+Caller cancellation, the command's `--timeout`, stale input or authority,
+corrupt history, absent or broken providers, a Files provider that throws or
+answers with malformed infrastructure data rather than an ordinary `Err`,
+installation failure, journal failure, secret rejection and unexpected runtime
+failure stop authorship without another turn. A failure during cleanup is
+terminal even when the candidate failure would otherwise be recoverable, so
+settlement must expose that distinction before Plan normalizes a refusal.
+Existing execution reconciliation, which can preserve an ordinary document error
+ahead of ordinary teardown failure, is not evidence that this narrower contract
+already holds.
 
 The request owner acquires resources only after their cleanup is established,
 owns every task and listener, and closes its capture and protected route before
@@ -1792,7 +1795,7 @@ rendered findings are presented to the next Agent turn.
 Replay admission verifies both successes and refusals before any completed
 invocation or root is reused. The fingerprint binds source, selected classes,
 ordered admitted identities and forms, lexical documentation-reference identity,
-filesystem scope/policy identity and composed time/byte bounds.
+and filesystem scope/policy identity. There are no bound values to compare.
 It uses stable structural identity, never function serialization or replaceable
 context state. Extra effect-description fields alone do not enforce comparison.
 Changing any bound fact is stale before another turn or read. Absent, malformed
@@ -1810,9 +1813,10 @@ uses of the shared Plan component.
 
 The interfaces below follow the Product Owner's shared-profile and Glob
 decisions and the product-interface rules: name available actions, distinguish
-source from execution, and make refusals actionable. Limits remain surrounding
-composition, not Evaluate syntax. These sentences belong in packaged Markdown
-and command help, not hidden host prompts.
+source from execution, and make refusals actionable. Recovery remains
+surrounding composition, not Evaluate syntax, and there is no local limit for a
+refusal to report. These sentences belong in packaged Markdown and command help,
+not hidden host prompts.
 
 **Agent instructions**, included at initial, repair and revision sites:
 
@@ -1853,18 +1857,6 @@ value explicitly with `Json`.
 >
 > Correct the request, ask for less information, or return a complete Plan.
 
-**Timeout refusal:**
-
-> That XMD information request was refused because evaluation did not finish
-> within 10 seconds. Ask for less information in one request, or return a
-> complete Plan.
-
-**Result-size refusal:**
-
-> That XMD information request was refused because its rendered findings exceeded
-> 65,536 UTF-8 bytes. Request fewer files, fewer matching paths, or fewer component
-> details, or return a complete Plan.
-
 **Request-count exhaustion:**
 
 > Plan authorship reached the limit of 8 XMD information requests before a Plan
@@ -1876,8 +1868,8 @@ output claim. Neither surface starts a ninth evaluation or another turn.
 **Stale continuation:**
 
 > Plan authorship cannot resume because retained XMD information does not match
-> the current request, evaluation policy, or limits. Start a new Plan authorship
-> instead of continuing this one.
+> the current request or evaluation policy. Start a new Plan authorship instead
+> of continuing this one.
 
 **Default command progress:**
 
@@ -1908,7 +1900,7 @@ never interpolated into executable Markdown.
 Every durable event crosses the existing secret gate before publication, and
 captured findings cross it before verbose or Agent disclosure. The gate does not
 make file reading a credentials sandbox: sensitive files remain subject to the
-same host read policy, and secret rejection is terminal. Overflow discloses no
+same host read policy, and secret rejection is terminal. A refusal discloses no
 partial findings; already published effect history remains governed by the
 ordinary journal contract.
 
@@ -1926,24 +1918,39 @@ could appear to work while missing the contract.
 | PI3 | Return ATX and Setext H1 drafts, including closed invalid YAML and later structural errors; repair them without executing any draft. Preserve approved bytes exactly. | Classifying by full validity, finding an H1 anywhere, or stripping fences before evaluation. |
 | PI4 | Read a fixture through both Plan surfaces using the shared read profile; try a fragment containing that read followed by a write, process, network or Agent request and observe refusal before any read or prohibited action. | A lingering Syntax-only child or admission that starts the first read before inspecting the whole fragment. |
 | PI5 | Request documentation for Elicit and File, then attempt Elicit or paired File in an information request. Both remain unavailable. Bare Syntax reports the read vocabulary. | Treating documentation lookup or name availability as permission for every component form. |
-| PI6 | Observe success, refusal, timeout and overflow with deliberately delayed cleanup; the next turn starts only after cleanup. A cleanup failure stops the conversation. | Detached work, early publication, or a recoverable candidate error hiding teardown failure. |
+| PI6 | Observe success and refusal with deliberately delayed cleanup; on every ending the projection, every acquired read and the protected route finish before findings are published and before the next turn begins. A cleanup failure stops the conversation. | Detached work, early publication, or a recoverable candidate error hiding teardown failure. |
 | PI7 | Interleave information requests with initial drafts, repairs and review revisions. Eight requests share one budget; the ninth is not evaluated. Draft and repair limits remain independent. | Resetting the information counter per phase, counting a read as a draft, or resetting repairs after a read. |
-| PI8 | Resume after a completed mixed request and Agent turn with all live readers and Agent calls set to fail if reached. Historical effects restore and reproduce the same rendered findings. Changed source, selected identity, scope or bounds refuses before reuse. | Refreshing a Glob/File read, skipping identity validation on retained work, or matching only a journal operation name. |
+| PI8 | Resume after a completed mixed request and Agent turn with all live readers and Agent calls set to fail if reached. Historical effects restore and reproduce the same rendered findings. Changed source, selected authority, lexical reference, filesystem scope or capture format refuses before reuse; a partial continuation resumes at the first unrecorded effect. | Refreshing a Glob/File read, skipping identity validation on retained work, or matching only a journal operation name. |
 | PI9 | Run the same scripted mixed-request-to-approved-Plan journey through source, npm and compiled installations. Both command and embedded Plan keep the same packaged behavior. | Checking only asset hashes or shipping a source-only helper/profile change. |
-| PI10 | Complete below the request deadline, exceed it, and cancel the enclosing command. Local expiry permits recovery after cleanup; outer cancellation does not. | Post-hoc elapsed-time checks, detached timers, or changing the whole run's default timeout. |
-| PI11 | Render exactly 65,536 UTF-8 findings bytes, then 65,537, using ASCII, multibyte text and fragment-authored Json. Only the first succeeds; overflow exposes no prefix. | Counting code units, charging hidden bindings, or checking only after full output accumulation. |
+| PI10 | Refuse a malformed candidate and an ordinary missing-file read: each yields one safe retry context after cleanup. Then break the profile installation and the protected route, corrupt retained history, make the Files provider throw rather than answer `Err`, reject a secret, and cancel the enclosing command: each stops authorship. Public Evaluate keeps throwing under its own ordinary use. | Recovering every `GeneratedXmdError`, matching message text, or changing public Evaluate's semantics to report a refusal. |
+| PI11 | Compose admitted reads with branching, binding and bounded iteration — every built-in structural construct under ordinary language rules — and render selected values through Json. A prohibited component in an **untaken** branch refuses the whole fragment with zero reads, and a construct the generated root cannot supply context for fails with its ordinary structural rule rather than as an unauthorized component. | A structural allowlist, preflight that walks only the selected branch, or reporting a placement error as missing authority. |
 | PI12 | Observe default, verbose, journal and follow-up output for success/refusal, then inject a synthetic secret. Default output stays content-free; detailed findings follow settlement; the secret stops before disclosure. | Printing findings before the disclosure gate, inventing an unscanned side channel, or turning secret rejection into another Agent turn. |
 
 ### Delivery order and deferred access policy
 
-After #776, one focused generic core-completion PR supplies bounded output
-composition and settlement, typed refusals, occurrence-owned ordinary replay, and
-Glob capability admission. It preserves protected Syntax routing and ordinary
-unwrapped Evaluate behavior. The subsequent Plan product PR installs the shared
-ordinary profile in both command hosts and implements the classifier, prompts,
-request wrapper, counters, records, disclosure and distribution behavior.
-No temporary Plan-private evaluator bridges the two PRs.
+After #776 and #786, delivery is three independently reviewed PRs:
 
+1. **Shared read profile.** Canonical self-closing Glob and canonical protected
+   Syntax join self-closing File in the ordinary `read` table, through their
+   captured capabilities and the existing component-answer route, preserving
+   ordinary value, binding, persistence and replay behavior. The shared write
+   table is unchanged.
+2. **Generated structural constructs.** Every built-in structural construct
+   becomes available inside generated evaluation with its ordinary semantics,
+   declarative expressions and fragment-local bindings. Preflight validates
+   every branch and nested body before any effect, and every effectful component
+   reached through a construct stays limited by the selected authority.
+3. **The Plan loop.** Both command hosts install the shared profile, and Plan
+   gains the classifier, prompts, narrow typed recovery, counters, records,
+   progress, disclosure, journal behavior and the source/npm/compiled journeys.
+
+No temporary Plan-private evaluator bridges them.
+
+[#787](https://github.com/taras/executable.md/issues/787) owns question-based
+selection and request-aware rewriting of relevant Syntax documentation; explicit
+`names` lookup here does not wait for it.
+[#788](https://github.com/taras/executable.md/issues/788) owns the general
+`<Timeout>` component, which is why this design adds no Plan-local deadline.
 [#777](https://github.com/taras/executable.md/issues/777) owns the later workspace
 selection and user-approval escalation policy. Existing host containment remains
 in force with its stable-namespace limitation; #227 owns concurrent
@@ -2289,15 +2296,11 @@ Mutation-proposal admission and workflow-bundled Markdown component admission
 remain unbuilt. Directory registration is not among them: a workflow Agent is
 given no directory to register.
 
-### Bounded findings composition
+### Typed candidate recovery around Evaluate
 
-Plan composes ordinary `<Let>` and `<Evaluate>` with a reusable deadline and
-bounded text capture. The bounds are a frozen, closed
-`{ durationMs, outputBytes }` record. Both members are safe integers; duration
-is positive and the byte ceiling is nonnegative. Missing members, accessors,
-mutable records and invalid numbers refuse before candidate work. Limits belong
-to the surrounding operation, not to an evaluation profile or `<Evaluate>`
-props. An ordinary invocation without this composition remains unbounded.
+Plan composes ordinary `<Let>` and `<Evaluate>`. There is no deadline, no output
+budget and no bounds record: the composition adds recovery, not limiting, and an
+ordinary invocation without it behaves exactly as it does today.
 
 The composition owns the genuine invocation and projects its content through
 canonical core's private projection. Neither public content middleware nor an
@@ -2307,32 +2310,25 @@ existing ordinary durable sequence. The caller supplies no context, stream,
 cursor, coroutine ID or durable owner. This is execution-owned invocation
 routing, not a persistence capability.
 
-The deadline owns the live projection with Effection structured cancellation.
-It covers evaluation and normal teardown; expiry stops the work and waits for
-teardown, even when cleanup finishes after the deadline. A private invocation
-settlement callback reports cleanup failure during cancellation, before a
-recoverable outcome can escape. This is local to the composed projection and
-does not change ordinary execution's failure precedence. Caller cancellation
-remains cancellation. Nested captures cannot extend an enclosing deadline or
-budget.
-
-Capture charges rendered UTF-8 bytes as they arrive. Exactly the selected
-ceiling is accepted; the next byte refuses without a truncated finding or a
-completed `findings` binding. Values held only in fragment-local bindings are
-not findings and are not charged. This is not a universal memory or
-provider-work quota.
+The composition owns the live projection with Effection structured cancellation:
+it establishes cleanup before resources can outlive the operation, and it
+settles the child's success or failure only after that teardown. A private
+invocation settlement callback reports cleanup failure before a recoverable
+outcome can escape, so a cleanup failure always wins over a candidate retry.
+This is local to the composed projection and does not change ordinary
+execution's failure precedence. Caller cancellation remains cancellation.
 
 Admission and generated effects use ordinary durable publication: each event is
-persisted before its operation resumes. A safe refusal or output overflow does
-not erase completed effects. The projection and its structured teardown finish
-before Evaluate returns or later parent work begins; interruption restores
-completed effects and resumes at the first unrecorded effect.
+persisted before its operation resumes. A safe refusal does not erase completed
+effects. The projection and its structured teardown finish before Evaluate
+returns or later parent work begins; interruption restores completed effects and
+resumes at the first unrecorded effect.
 
 Execution checks the closed evaluation records before completed-root reuse and
 before public replay middleware can decide anything. Their structural
 fingerprint binds the exact root source and inputs, candidate source, read
 selection, ordered profile identities and forms, protected Syntax identity,
-lexical reference, filesystem scope/policy identity and bounds.
+lexical reference and filesystem scope/policy identity.
 Custom symbols providers state an immutable `identity`; captured Files state a
 frozen `{ scope, policy }` `replayIdentity`. These identify authority, not today's
 documentation, file contents or paths. Records contain data only, never providers,
@@ -2344,15 +2340,14 @@ documentation lookups, File reads or Glob traversal. Missing or invalid current
 attestation refuses before those effects. It does not reuse an expired claim
 or refresh information to validate history.
 
-`EvaluationCandidateError` and `EvaluationLimitError` identify the normalized
-candidate and local-bound refusals. `EvaluationStaleError` identifies changed
-authority or malformed retained history. `EvaluationInfrastructureError`
-identifies terminal setup, runtime/provider, persistence and cleanup failures,
-preserving causes. `evaluationFailure` normalizes an encountered failure without
-message matching; a plain `GeneratedXmdError` is not a recoverability marker.
-`evaluationFailureKind` reads the namespaced descriptive classification across
-loaded copies and confers no authority to recover. Public Evaluate still throws;
-the trusted surrounding operation returns an Effection `Result` after settlement.
+One narrow namespaced classification identifies the normalized recoverable
+candidate failure and carries only a safe reason. Stale authority or malformed
+retained history, and terminal setup, runtime, provider, persistence, secret and
+cleanup failures, are not that classification and are never recovered.
+Normalization reads the namespaced descriptive tag across loaded copies rather
+than matching messages, and a plain `GeneratedXmdError` is not a recoverability
+marker. Public Evaluate still throws; only the trusted surrounding operation
+turns the one recoverable class into retry context after settlement.
 
 ## Local Workspace topology
 
@@ -4687,7 +4682,7 @@ Status is measured against main.
 | history fork | creates a new run from one compatible checkpoint and retained Workspace root, under a new immutable definition and normalized props | built on the #368 stack, Deno provider only |
 | workflow Agent session | a workflow document's `<Agent>` runs under a profile the host attaches only for a live or partial run: an empty host-owned working directory instead of any Workspace, checkout or caller path, no MCP servers, an empty requested native tool set, and `deny-all` with a permission path that denies every native request and fails the turn that asked without reaching the public permission chain. Within a run a session is identified by the Agent/Session expansion identity the engine derived — the authored name is descriptive, so two sibling `<Session name="review">` elements are two sessions — routed inside a placement bound to its element and good for one use, so a kept placement cannot be substituted for the next. The conversation is retained as a row in the run's own database with the provider, resolved agent command and policy fingerprint beside it as compatibility attributes. The order is placement, the backend's acceptance of the session's first turn, the provider's canonical tagged assertion, then the mapping commit — and only then is anything that turn produced exposed. A placement is inert: it creates no provider session and writes no row. Occupancy of a provider key is not an assertion, and a record held for a first turn nobody accepted asserts nothing at all; the pre-commit window reconciles only from exactly one canonical assertion, and a missing, conflicting, replaced or ambiguous assertion is one explicit refusal that starts no replacement. Deleting a run removes the row with the run and the provider-session directory beside it, and reports the categories. The profile selects ACP-only capability explicitly — no native-launch advertisement and no client-native attachment advertisement — rather than inheriting the provider package's ordinary-run sets by omission, and it supplies no machine session coordinator, construction-route store or executable observer: a workflow session belongs to a run, and the machine-wide account describes a different thing entirely | built on the #302 stack, with the explicit ACP-only selection from #561; the portable proof that an adapter honours an empty tool set is tracked by #496 and does not widen the ceiling |
 | generated-XMD admission | admits one Agent-generated fragment through the trusted-host seam: host policy is a `read` table and a `write` table of exact pinned identities, each carrying the authored forms it is admitted for, and an authored `allow` selects a canonical non-empty subset of the closed classes — omitted means `read`. The complete source is preflighted inside one `generated_xmd` durable effect before its first generated effect; only the pinned identity the selected classes hold for that name **and** that form executes; and the admitted source, class selection, selected root, every selected entry with its forms, the identity and form of each element named, and the normalized request policy are retained in that effect's own result — so a continuation restores the decision without reading the current candidate and expands only the retained source. The roots are an as-of-admission retained basis checked by membership — the run's own later root publications and an advanced retained current root pass, while a lost admission root or lost selected root refuses — and every non-root term is checked exactly, refusing a run whose classes, identities, forms or requests have moved. The admission and every nested generated effect are offered inline by the owning expansion in authored order, so a partial continuation restores each completed one without another live execution. Each admitted effect is retained by its own ordinary record, and every component keeps its ordinary binding and output behavior | built on the #369 stack, continuation basis amended by #589; core owns the mechanics and the workflow policy wrapper is internal |
-| `<Evaluate>` | canonical core's own protected component, written where program text the document did not author should run. Core claims the name ahead of every host and author tier, so no registration, repository file, bundle member, declared Markdown component, import handler answer or second loaded copy replaces it; a handler may observe or refuse the import, and only canonical execution answers one. Protection settles which implementation runs and grants nothing: a host supplies the *ceiling* as one `ExecutionInstallation.evaluation` profile, captured by value before any installation runs, and an execution accepts one and refuses two. Its schema is closed on `text`, the workflow-only `source` alias, and an optional `allow` array selecting a non-empty duplicate-free subset of the closed effect classes `read` and `write` — omitted means `read`. The two input forms are disjoint: `text` states the program, paired content renders it, and an element stating both is refused rather than resolved by precedence. A paired producer renders under the narrowed syntax reference through an execution-owned one-shot projection that bypasses the public `content()`/`tryContent()` chain, and keeps its own operational authority while doing so. Evaluate renders the fragment's ordinary output and invents no observation or result envelope. Fragment-local `as` bindings suppress their component's output normally, and language constructs plus pure components such as `<Json>` remain available regardless of effect selection; the fragment explicitly renders any bound values it wants to expose. Every ceiling comes from values the host captured at installation — the run's retained roots and its authoritative current root read from the run's own storage per invocation, as-of-admission provenance a continuation holds by membership so the run's own later publications and an advanced retained current root invalidate nothing, core's self-closing `<File>` read, the write table of core's paired `<File>`, the workflow's `<Dir>` and core's self-closing `<File.Delete>`, and `<Fetch>` only when the captured request ceiling is non-empty — and no prop, binding, context or middleware return value supplies or widens one. An entry states what is behind a name in one of exactly two ways, and neither carries a function. A *capability* names an operation core supplies the body for: canonical capture reads the host's own operation off once, binds it behind a revocation the execution owns, and closes core's own body over it, so an admitted element reaches those operations and never `API.Files`, `API.Fetch` or `API.Env`. A *component answer* names an implementation the ordinary import chain resolves, and states only the identity a provider must have claimed for it; canonical execution resolves that name once — before the root import and before any document code, through the complete ordinary `Component.importComponent` chain and a private terminal that writes no record — and asks the identity owner about the exact final answer in one call. That call answers with the claim *and* core's own copy of what was claimed, taken when the claim was recorded: the check and the thing kept are one result, so nothing downstream reads the chain's object a second time and an answer whose members read differently on each read cannot pass a check with one reading and be sealed with another. The identity is then compared whole, and the copy — not the answer — is sealed behind the same revocation. One name states one identity, however many forms and tables hold it: two entries under one name are the two spellings of one component and share one lookup and one sealed implementation, while a second identity for that name, or a name held as both a capability and a component answer, refuses at capture rather than letting assembly order decide. Provider installation and occurrence authority are separate: installation receives a registrar that installs import middleware, and every invocation of that middleware receives a fresh request fixed to the exact name, position, provider installation, origin and resolution-window object it was asked under. Only that request may claim, and it states the answer plus key and revision without restating the name. Canonical execution closes the request synchronously when its handler returns, fails or is cancelled; an outer request remains live while it delegates and may claim a replacement after the inner handler returns. Enclosing resolution still closes in its own `finally` on success, fallback, failure or cancellation. A claim therefore requires the execution, request and exact current window to remain active, the request's fixed name to match that window, and that provider installation not to have stated a different answer in the window. Identification takes the expected window explicitly and accepts only a claim recorded for that exact object and name, so a stale request cannot answer a later same-name resolution or retag itself while another name is live. The installation is reusable: one provider may answer several admitted names and repeated resolutions through distinct requests. All of this state is held in ordinary private closures — no Context, shared symbol, public brand or module-global registry — and an unidentified middleware replacement remains a valid ordinary import answer outside fragment evaluation. A capability entry also states the exact version-1 identity strings it succeeds, which is the only thing a released untagged record reconciles against; a component answer states none. A capability-only profile performs no such lookup at all. Resolution happens at capture and never again: a fragment runs the sealed snapshot, a continuation resolves once more in its own capture and reconciles before any effect, and a provider still answering when a fragment resolves its admitted name is answering a generated import, which only canonical execution answers. A trusted layering control may enter one package bootstrap through an inherited layer and an execution-local one — documentation, registrations and the provider together — and the repeat is additive: the outer entry observes and delegates rather than claiming a second identity for an implementation that already states what it is, and a non-identical documentation overlap on one owner and component still refuses at the child collection boundary, before the root import and therefore before the provider is asked at all. `allow` selects among those tables and adds nothing to them; approval, when a workflow needs one, is authored control flow before the element. Its durable operation is named through that claimant, on the exact invocation the engine handed it and in that invocation's own frame — not from a context a document could rebind, a contextual Api answer, a definition, or a registry answer. Generated effects use occurrence-owned identities in the existing ordinary durable sequence: their records persist and replay normally, with no staging or rollback. The generated projection and its structured teardown complete before Evaluate returns and later parent work begins. It is deliberately not wrapped in `printErrors`, so a refused fragment stops the authored loop rather than becoming text the next turn could read as a read that happened | built on the #302 stack, extended by #369 |
+| `<Evaluate>` | canonical core's own protected component, written where program text the document did not author should run. Core claims the name ahead of every host and author tier, so no registration, repository file, bundle member, declared Markdown component, import handler answer or second loaded copy replaces it; a handler may observe or refuse the import, and only canonical execution answers one. Protection settles which implementation runs and grants nothing: a host supplies the *ceiling* as one `ExecutionInstallation.evaluation` profile, captured by value before any installation runs, and an execution accepts one and refuses two. Its schema is closed on `text`, the workflow-only `source` alias, and an optional `allow` array selecting a non-empty duplicate-free subset of the closed effect classes `read` and `write` — omitted means `read`. The two input forms are disjoint: `text` states the program, paired content renders it, and an element stating both is refused rather than resolved by precedence. A paired producer renders under the narrowed syntax reference through an execution-owned one-shot projection that bypasses the public `content()`/`tryContent()` chain, and keeps its own operational authority while doing so. Evaluate renders the fragment's ordinary output and invents no observation or result envelope. Fragment-local `as` bindings suppress their component's output normally, and language constructs plus pure components such as `<Json>` remain available regardless of effect selection; the fragment explicitly renders any bound values it wants to expose. Every ceiling comes from values the host captured at installation — the run's retained roots and its authoritative current root read from the run's own storage per invocation, as-of-admission provenance a continuation holds by membership so the run's own later publications and an advanced retained current root invalidate nothing, core's self-closing `<File>` read — joined in the ordinary run profile by core's self-closing `<Glob>` and canonical protected `<Syntax />` — the write table of core's paired `<File>`, the workflow's `<Dir>` and core's self-closing `<File.Delete>`, and `<Fetch>` only when the captured request ceiling is non-empty — and no prop, binding, context or middleware return value supplies or widens one. An entry states what is behind a name in one of exactly two ways, and neither carries a function. A *capability* names an operation core supplies the body for: canonical capture reads the host's own operation off once, binds it behind a revocation the execution owns, and closes core's own body over it, so an admitted element reaches those operations and never `API.Files`, `API.Fetch` or `API.Env`. A capability states what it binds wherever the ordinary component does, so an admitted `<Glob />` is the value component the ordinary one is — sharing its props, return contract, source rules and sanitized failure sentence, refusing a missing `as` and an unusable pattern before the search, and reaching the captured search operation and captured working directory rather than a provider a document arranged. A name admitted for two spellings that would bind different results refuses at capture. A *component answer* names an implementation the ordinary import chain resolves, and states only the identity a provider must have claimed for it; canonical execution resolves that name once — before the root import and before any document code, through the complete ordinary `Component.importComponent` chain and a private terminal that writes no record — and asks the identity owner about the exact final answer in one call. That call answers with the claim *and* core's own copy of what was claimed, taken when the claim was recorded: the check and the thing kept are one result, so nothing downstream reads the chain's object a second time and an answer whose members read differently on each read cannot pass a check with one reading and be sealed with another. The identity is then compared whole, and the copy — not the answer — is sealed behind the same revocation. One name states one identity, however many forms and tables hold it: two entries under one name are the two spellings of one component and share one lookup and one sealed implementation, while a second identity for that name, or a name held as both a capability and a component answer, refuses at capture rather than letting assembly order decide. Provider installation and occurrence authority are separate: installation receives a registrar that installs import middleware, and every invocation of that middleware receives a fresh request fixed to the exact name, position, provider installation, origin and resolution-window object it was asked under. Only that request may claim, and it states the answer plus key and revision without restating the name. Canonical execution closes the request synchronously when its handler returns, fails or is cancelled; an outer request remains live while it delegates and may claim a replacement after the inner handler returns. Enclosing resolution still closes in its own `finally` on success, fallback, failure or cancellation. A claim therefore requires the execution, request and exact current window to remain active, the request's fixed name to match that window, and that provider installation not to have stated a different answer in the window. Identification takes the expected window explicitly and accepts only a claim recorded for that exact object and name, so a stale request cannot answer a later same-name resolution or retag itself while another name is live. The installation is reusable: one provider may answer several admitted names and repeated resolutions through distinct requests. All of this state is held in ordinary private closures — no Context, shared symbol, public brand or module-global registry — and an unidentified middleware replacement remains a valid ordinary import answer outside fragment evaluation. A capability entry also states the exact version-1 identity strings it succeeds, which is the only thing a released untagged record reconciles against; a component answer states none. A capability-only profile performs no such lookup at all. Resolution happens at capture and never again: a fragment runs the sealed snapshot, a continuation resolves once more in its own capture and reconciles before any effect, and a provider still answering when a fragment resolves its admitted name is answering a generated import, which only canonical execution answers. A trusted layering control may enter one package bootstrap through an inherited layer and an execution-local one — documentation, registrations and the provider together — and the repeat is additive: the outer entry observes and delegates rather than claiming a second identity for an implementation that already states what it is, and a non-identical documentation overlap on one owner and component still refuses at the child collection boundary, before the root import and therefore before the provider is asked at all. `allow` selects among those tables and adds nothing to them; approval, when a workflow needs one, is authored control flow before the element. Its durable operation is named through that claimant, on the exact invocation the engine handed it and in that invocation's own frame — not from a context a document could rebind, a contextual Api answer, a definition, or a registry answer. Generated effects use occurrence-owned identities in the existing ordinary durable sequence: their records persist and replay normally, with no staging or rollback. The generated projection and its structured teardown complete before Evaluate returns and later parent work begins. It is deliberately not wrapped in `printErrors`, so a refused fragment stops the authored loop rather than becoming text the next turn could read as a read that happened | built on the #302 stack, extended by #369 |
 | generated mutation proposals | lets an Agent propose constrained executable changes that a separate admission then performs against the run's own Workspace | built on the #369 and #567 stacks, with directory creation added by #643: the standard Deno profile's write table is core's paired `File:write`, the paired `@executablemd/workflow/composition/dir-v2#Dir` and core's self-closing `File.Delete`, in that retained order and followed by any host extension. `allow={["write"]}` intentionally authorizes Dir's persistent recursive directory creation; its versioned identity makes every continuation retained under the former non-mutating Dir identity refuse before generated execution. Admitted mutations run as the ordinary components they are through the run's effect transactions, and the evaluator adds no mutation API or receipt. Approval is authored control flow before the write-enabled element. Local Git, Git-host, issue, process, execution, credential and external-write effects are outside the class |
 | Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, privately restores them, and atomically coordinates one Workspace mutation with its filtered Yield | built on the #365 stack; public document filesystem effects and the CLI lifecycle route to it on the #366 stack |
 | scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker | containment and effect-transaction POCs complete (#351, #357); production integration unbuilt |

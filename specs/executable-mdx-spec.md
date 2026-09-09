@@ -1914,6 +1914,7 @@ run but are absent from the diagnostic trace.
 | `src/fetch-response.ts` | `detachHeaders()`, `detachStatus()`, `FetchResponseRecord` — the response detached from the provider's (§6.18) |
 | `src/fetch-journal.ts` | `persistFetch()` — the `fetch` durable effect (§6.18, §10.1) |
 | `src/generated-xmd.ts` | `evaluateGeneratedXmd()`, `pinnedFetch()`, `pinnedFileRead()`, `pinnedFileWrite()`, `pinnedFileDelete()`, `pinnedComponent()`, `pinnedMutation()`, `GeneratedEffectClass`, `GeneratedComponentForm`, `GeneratedMutation`, `GeneratedObservation`, `GeneratedRequest`, `GeneratedXmdError` — admitting Agent-generated source through the trusted-host seam under the always-on trusted composition table and a caller-selected subset of the closed effect classes `read` and `write`, resolving each name and authored form to one exact pinned identity — core Json, the self-closing `<File>` read, the paired `<File>` write and the self-closing `<File.Delete>` among them — and preserving every component's ordinary binding and output behavior. `evaluateGeneratedXmd()` returns `Operation<string>` containing the fragment's rendered text. Its admission and every generated effect use occurrence-owned identities in the existing ordinary durable sequence, with no `ephemeral()` bridge, staging or result envelope |
+| `src/glob-source.ts` | `GLOB_PROPS`, `GLOB_RETURNS`, `globPatterns()`, `globFailure()` — the props, return contract, source rules and sanitized failure sentence one search is held to, shared by the ordinary `<Glob>` component and the Glob capability an evaluation profile admits, so one dialect answers both (§6.14) |
 | `src/components/import-authority.ts` | `CanonicalImports`, `ImportAuthority` — the witness a closed execution issues for the definition it produced and verifies where it is invoked |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/expansion.ts` | `Expansion`, `getExpansion()` — what an executable element knows about its own expansion (§5.6) |
@@ -3976,6 +3977,47 @@ may do is not a property of what the document, a repository component or
 middleware installed. A directory an admitted fragment creates scopes its
 content through the evaluation's own cursor rather than the contextual
 environment.
+
+A capability states what it binds when the ordinary component does. The
+admitted definition carries that return contract, so `as` is mandatory, the
+element renders nothing, and the bound value is validated — decided by the
+ordinary value-component rule, before the operation behind the entry runs. A
+name admitted for two spellings that would bind different results is refused at
+capture.
+
+**The ordinary read table is File, Glob and canonical Syntax.** `xmd run` and
+every `host="run"` child state one profile: `read` holds the self-closing
+`<File />`, the self-closing `<Glob />` and canonical `<Syntax />`, and `write`
+holds the paired `<File>…</File>` and the self-closing `<File.Delete />`
+unchanged. A `read` selection therefore never reaches a write form, and
+`<Fetch>` remains absent rather than admitted with an empty ceiling.
+
+An admitted `<Glob />` is the same element an author writes. Its props, return
+contract, source rules and sanitized failure sentence are one shared definition
+with the ordinary component, so a pattern that cannot match anything under a
+relative root is refused before the search runs, and a provider failure is
+normalized to a sentence naming no path. It performs that search through the
+captured search operation and the captured working directory, never `API.Files`
+and never `Env.cwd`, and the provider still owns matching, ordering,
+deduplication, POSIX-relative results and traversal.
+
+`<Syntax />` is admitted as a component answer at canonical core's own origin,
+key and revision, never as a capability: a protected name is one canonical core
+already owns, and a second body for it would be a second answer to what the
+name means. Canonical capture resolves it once through the ordinary import
+chain before any document code, states core's identity for the exact answer
+canonical resolution produced, reconciles that identity whole, and seals it
+through the execution's own protected-body route. Middleware may observe,
+delegate or refuse that import; an answer it replaces carries no identity and is
+refused. Admitting it grants no other authority — named documentation may
+describe a component the selection does not admit, and describing one is not
+permission to run it.
+
+Canonical core states what is behind `<Syntax />` and no other protected name.
+Stating an identity is what makes a protected name admissible, so an entry
+hand-written at `<Evaluate>`'s own canonical identity resolves to an answer
+nothing identified and is refused: being shown what a fragment may write is a
+different grant from evaluation inside evaluation.
 
 **What it renders** is the generated fragment's ordinary output. Evaluate does
 not inspect component results and does not synthesize an observation or result
@@ -8198,6 +8240,14 @@ running platform's: patterns match POSIX-relative paths everywhere, so a
 leading `/` is absolute wherever the document runs, and so is a drive-letter
 prefix. Deciding it from the host would make one document mean two things.
 
+A generated fragment writes the same element. Where a trusted host admits the
+Glob capability (§5.3.2), the props, the return contract, the source rules and
+the sanitized failure sentence are the one shared definition this section
+describes — so an author and an admitted fragment are held to one dialect and
+told the same thing about the same pattern. What differs is only the search
+behind it: the fragment reaches the operation and the working directory the host
+handed the profile, rather than `API.Files` and `Env.cwd`.
+
 #### The pattern dialect
 
 Patterns are the provider's dialect, and `<Glob>` adds no syntax:
@@ -11203,16 +11253,20 @@ through the captured capability because there is no other way to reach it.
 | FE31 | One fragment binds File and protected Syntax results locally and explicitly renders a chosen object through Json. Nested literal arrays and objects, binding shorthand, finite JSON numbers and a directly attached leading minus such as `<Json value={-1} />` work in scalar, array and object positions. `1e999`, `-1e999`, `+1`, `-note`, `!note`, `typeof note`, an unbound identifier, call, operator, spread, computed property, template or global reference is refused before any earlier effect. |
 | FE32 | Generated admission and effect events follow ordinary persist-before-resume publication. A later refusal, failure, cancellation or interruption retains completed effects, and continuation resumes at the occurrence's first unrecorded effect; Evaluate adds no staging or rollback. |
 | FE33 | Each Evaluate occurrence retains its admission and generated effects under identities belonging to that occurrence; two occurrences cannot consume one another's retained work, and no caller-controlled context, stream, replay cursor, coroutine identifier or durable owner participates. A projected body installs observable structured cleanup, and later parent work proves that cleanup completed before it began. No distinct child cursor, child `Close`, staging, rollback, provisional publication or second settlement protocol is required. |
+| FE34 | One fragment binds Glob, File and canonical Syntax and renders chosen findings through Json; an unmatched search binds `[]`. A search written without `as`, a paired search, and a paired `<File>` under a `read` selection each refuse before any operation. An unusable pattern refuses with the ordinary sentence before the search, and a provider failure becomes one safe sentence naming no path. The search reaches the captured operation and the captured working directory while a nearer `API.Files` provider is never consulted. Bare generated Syntax reports the composition table plus the selected read vocabulary and not the unselected write table; named Syntax describes a component that stays unavailable. Canonical Syntax resolves at core's own identity, and a middleware replacement of that answer refuses. Core answers for that one protected name, so an entry hand-written at `<Evaluate>`'s canonical identity is refused as an answer nothing identified. `xmd run` and a `host="run"` child of `xmd test` state the same profile. |
 
 Each refusal case needs a negative control proving no producer, middleware
 answer, request, file mutation, or other program effect occurred. The
 implementation tiers carrying the elaborated evidence are `GX` for the durable
 protocol, the ceiling table and the profile's entry rules, `CIV` for what a
 provider's stated identity is bound to, and `FT` for `<Fetch>` itself.
-FE31–FE33 join the existing Evaluate, generated-XMD and workflow-adapter tiers.
+FE31–FE34 join the existing Evaluate, generated-XMD and workflow-adapter tiers.
 Journal evidence discriminates occurrence isolation, ordinary
 persist-before-resume replay and projection cleanup ordering; existing
-structured-concurrency and invocation failure behavior remains unchanged.
+structured-concurrency and invocation failure behavior remains unchanged. FE34's
+entry-construction half — the identities, forms, props and return contract core
+states for its own read entries, and the refusal of one name whose spellings
+would bind differently — belongs to `EP`, where profile capture is tested.
 
 ### Tier SX — The `xmd syntax` command
 

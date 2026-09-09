@@ -39,6 +39,7 @@
 import type { Operation } from "effection";
 
 import { CORE_ORIGIN } from "./components/registry.ts";
+import { SYNTAX_COMPONENT } from "./components/Syntax.ts";
 import {
   CAPABILITY_FORMS,
   capabilityDefinition,
@@ -218,9 +219,10 @@ export interface FragmentEvaluationInput {
   /**
    * The entries the `read` class resolves to.
    *
-   * For both standard profiles this is exactly the self-closing `<File>`.
-   * `<Fetch>` joins it only where the host also states the exact requests it
-   * may perform.
+   * For the ordinary profile this is the self-closing `<File>`, the
+   * self-closing `<Glob>` and canonical `<Syntax />`; the workflow profile
+   * states its own. `<Fetch>` joins it only where the host also states the
+   * exact requests it may perform.
    */
   readonly read: readonly FragmentEntry[];
   /**
@@ -277,6 +279,60 @@ export interface FragmentEvaluationInput {
  */
 export function fileReadEntry(): CapabilityEntry {
   return coreEntry("File", "File:read", "file:read");
+}
+
+/**
+ * Core's `<Glob />`, admitted to select paths and nothing else.
+ *
+ * A value entry: the definition core builds for it declares what it binds, so a
+ * generated `<Glob />` written without `as` is refused before the host's
+ * provider is asked to traverse anything. What it selects is bounded the same
+ * way a read is — the captured `globFiles` operation and the captured working
+ * directory — so a search never reaches `API.Files` or `Env.cwd`, and the paths
+ * it answers with are the ones that provider produced.
+ */
+export function globReadEntry(): CapabilityEntry {
+  return coreEntry("Glob", "Glob", "files:glob");
+}
+
+/**
+ * The protected names canonical execution states what is behind, for a profile.
+ *
+ * An allowlist rather than "every protected name", because stating an identity
+ * is what makes a name admissible: a host that wrote `<Evaluate>`'s own
+ * canonical identity into its read table would otherwise obtain evaluation
+ * inside evaluation, which is a different grant from being shown a vocabulary.
+ * Core answers for the one protected name it offers a host an entry for, and a
+ * hand-written entry for any other resolves to an answer carrying no identity
+ * and is refused.
+ */
+export const CANONICAL_PROFILE_ANSWERS: ReadonlySet<string> = new Set([SYNTAX_COMPONENT]);
+
+/**
+ * Canonical `<Syntax />`, admitted as the answer the import chain gives for it.
+ *
+ * Not a capability: `<Syntax />` is canonical core's protected component, and a
+ * capability arm would be core supplying a second body for a name it already
+ * owns. So the entry states what a resolution must have answered with — core's
+ * own origin, key and revision — and canonical capture resolves the name once
+ * through the ordinary import chain, reconciles that identity, and seals the
+ * protected answer through the execution's own protected-body route.
+ *
+ * Admitting it grants no other authority. The symbols an occurrence renders
+ * describe the vocabulary the fragment has; naming a component in them is not
+ * permission to run it, and a component the fragment may only read about stays
+ * unavailable.
+ */
+export function syntaxReadEntry(): ComponentAnswerEntry {
+  return {
+    kind: "component-answer",
+    name: SYNTAX_COMPONENT,
+    identity: { origin: CORE_ORIGIN, key: SYNTAX_COMPONENT, revision: CORE_REVISION },
+    forms: ["self-closing"],
+    description:
+      "Render the components this evaluation may write, or selected documentation. " +
+      "Written self-closing.",
+  };
 }
 
 /** Core's `<File>…</File>`, admitted to write and not to read. */
@@ -343,6 +399,9 @@ export function fetchEntry(requests: readonly GeneratedRequest[]): CapabilityEnt
 /** What core's own entries tell an agent they do. */
 const CORE_DESCRIPTIONS: Readonly<Record<FragmentCapability, string>> = Object.freeze({
   "file:read": "Read one file and render its text. Written self-closing.",
+  "files:glob":
+    "Select the files under the working directory that these patterns match, as a sorted " +
+    "list of relative paths. Written self-closing and captured with `as`.",
   "file:write": "Write what it renders to one file. Written with content.",
   "file:delete": "Remove one file. Written self-closing.",
   "directory:ensure":
@@ -363,6 +422,9 @@ const CORE_DESCRIPTIONS: Readonly<Record<FragmentCapability, string>> = Object.f
  */
 const CORE_LEGACY: Readonly<Record<FragmentCapability, readonly string[]>> = Object.freeze({
   "file:read": Object.freeze(["@executablemd/core#File:read"]),
+  // Core never pinned a search entry under version 1; there is no older grant
+  // for this one to assert it authorizes no more than.
+  "files:glob": Object.freeze([]),
   "file:write": Object.freeze(["@executablemd/core#File:write"]),
   "file:delete": Object.freeze(["@executablemd/core#File.Delete"]),
   // Core never pinned a directory entry under version 1; the workflow host did,

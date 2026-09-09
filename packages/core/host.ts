@@ -119,6 +119,7 @@ export type {
   FragmentFetchAccess,
   FragmentFileAccess,
   FragmentPath,
+  FragmentSearch,
   FragmentWrite,
 } from "./src/fragment-capabilities.ts";
 /**
@@ -136,8 +137,10 @@ export { detachHeaders, detachStatus } from "./src/fetch-response.ts";
  *
  * Constructors rather than a table a host assembles from `CORE_REGISTRY`,
  * because each of them states a constraint the registry does not hold: which
- * spelling of `<File>` is being admitted, and that admitting `<Fetch>` requires
- * the exact requests it may perform.
+ * spelling of `<File>` is being admitted, that admitting `<Fetch>` requires the
+ * exact requests it may perform, and that `<Syntax />` is admitted as the
+ * answer canonical resolution gives for it rather than as a body core supplies
+ * a second time.
  */
 export {
   directoryEntry,
@@ -146,6 +149,8 @@ export {
   fileDeleteEntry,
   fileReadEntry,
   fileWriteEntry,
+  globReadEntry,
+  syntaxReadEntry,
 } from "./src/evaluation-profile.ts";
 /**
  * The symbols a host's profile describes, when they are not the ones the

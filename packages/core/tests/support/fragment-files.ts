@@ -12,7 +12,12 @@
 import type { Operation, Result } from "effection";
 import { Err, Ok } from "effection";
 
-import type { FragmentFileAccess, FragmentPath, FragmentWrite } from "../../host.ts";
+import type {
+  FragmentFileAccess,
+  FragmentPath,
+  FragmentSearch,
+  FragmentWrite,
+} from "../../host.ts";
 
 /** Every operation one fragment performed, in order, as `verb path`. */
 export interface RecordedFiles extends FragmentFileAccess {
@@ -29,7 +34,11 @@ export interface RecordedFiles extends FragmentFileAccess {
  */
 export function recordedFiles(
   seed: Record<string, string> = {},
-  options: { readonly hold?: (path: string) => Operation<void> } = {},
+  options: {
+    readonly hold?: (path: string) => Operation<void>;
+    /** What a search answers with, in place of matching the seeded entries. */
+    readonly found?: (input: FragmentSearch) => Result<string[]>;
+  } = {},
 ): RecordedFiles {
   const entries = new Map(Object.entries(seed));
   const performed: string[] = [];
@@ -51,6 +60,22 @@ export function recordedFiles(
       }
       const held = entries.get(input.path);
       return held === undefined ? Err(new Error("absent")) : Ok(held);
+    },
+    // deno-lint-ignore require-yield
+    *globFiles(input: FragmentSearch): Operation<Result<string[]>> {
+      performed.push(`glob ${input.include.join(",")}`);
+      if (options.found !== undefined) {
+        return options.found(input);
+      }
+      // The seeded entries a pattern selects, held to the same answer an
+      // ordinary provider gives: sorted, deduplicated and relative. Matching is
+      // deliberately literal — a case states the paths it means — because what
+      // a row here proves is that the search went through this operation, not
+      // that a dialect was reimplemented.
+      const matched = [...entries.keys()].filter(
+        (path) => input.include.includes(path) && !input.exclude.includes(path),
+      );
+      return Ok([...new Set(matched)].sort());
     },
     // deno-lint-ignore require-yield
     *writeTextFile(input: FragmentWrite): Operation<Result<unknown>> {
