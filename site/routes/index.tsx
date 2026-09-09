@@ -34,7 +34,7 @@ const SPEC = `${GITHUB}/blob/main/specs/executable-mdx-spec.md`;
  */
 const PLANNER_SOURCE =
   "https://github.com/taras/executable.md/blob/main/packages/cli/src/documents/Plan.md?plain=1";
-const VERSION = "v0.11.0";
+const VERSION = "v0.12.0";
 
 const STEP_NUMBER =
   `${MONO}font-size:0.8125rem;font-weight:700;letter-spacing:0.1em;color:var(--green);`;
