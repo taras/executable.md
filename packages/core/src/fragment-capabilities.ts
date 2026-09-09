@@ -48,7 +48,7 @@ import { persistFetch } from "./fetch-journal.ts";
 import { parseResponseRecord } from "./fetch-response.ts";
 import type { FetchResponseRecord } from "./fetch-response.ts";
 import { GLOB_PROPS, GLOB_RETURNS, globFailure, globPatterns } from "./glob-source.ts";
-import { markGeneratedCandidate } from "./generated-candidate.ts";
+import { markGeneratedRequestRefusal } from "./generated-request-refusal.ts";
 import { formDispatcher } from "./invocation-identity.ts";
 import { parseFilesFailure } from "@executablemd/runtime";
 
@@ -644,7 +644,7 @@ function refusal(path: string, verb: string): string {
  * ended is this run being over, and no rewrite of the text changes that.
  */
 function candidate(message: string): FragmentCapabilityError {
-  return markGeneratedCandidate(new FragmentCapabilityError(message), message);
+  return markGeneratedRequestRefusal(new FragmentCapabilityError(message), message);
 }
 
 /**

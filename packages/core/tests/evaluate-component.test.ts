@@ -22,7 +22,7 @@ import { API } from "@executablemd/runtime";
 
 import { collect } from "../src/collect.ts";
 import { Component, content } from "../src/component-api.ts";
-import { executeInstalled, generatedCandidateReason } from "../host.ts";
+import { executeInstalled, generatedRequestRefusal } from "../host.ts";
 import {
   directoryEntry,
   fileDeleteEntry,
@@ -1750,7 +1750,7 @@ describe("Tier FE34 — the shared read profile", () => {
     expect(caught).not.toBe(undefined);
     // And the failure carries the classification a trusted caller reads, with a
     // reason quoting only the name the fragment itself asked about.
-    const reason = generatedCandidateReason(caught);
+    const reason = generatedRequestRefusal(caught);
     expect(reason).toContain("NoSuchComponent");
     expect(reason).not.toContain("/");
 
@@ -1764,7 +1764,7 @@ describe("Tier FE34 — the shared read profile", () => {
       terminal = error;
     }
     expect(terminal).not.toBe(undefined);
-    expect(generatedCandidateReason(terminal)).toBe(undefined);
+    expect(generatedRequestRefusal(terminal)).toBe(undefined);
 
     // The sharper one: a symbols provider that throws, having *named its own
     // error* the way core's selection refusal reads. Infrastructure failing is
@@ -1788,7 +1788,48 @@ describe("Tier FE34 — the shared read profile", () => {
       forged = error;
     }
     expect(forged).not.toBe(undefined);
-    expect(generatedCandidateReason(forged)).toBe(undefined);
+    expect(generatedRequestRefusal(forged)).toBe(undefined);
+  });
+
+  it("FE34: a refusal whose record cannot be published is terminal and unclassified", function* () {
+    // The defect this replaces: the refusal was noticed inside the durable
+    // executor and applied to whatever error came out the other side. When
+    // publication of the result failed, the *publication* failure was the error
+    // that came out — and it was handed to the caller wearing the
+    // classification, which would start another Agent turn on a run whose
+    // journal had already stopped accepting entries.
+    //
+    // The interpretation now happens after the durable operation returns, so a
+    // result that was never recorded is never acted on.
+    class WithholdingPublication extends InMemoryStream {
+      override *append(event: DurableEvent): Operation<void> {
+        if (event.type === "yield" && event.description.type === "syntax_symbols") {
+          throw new Error("the journal would not take the syntax record");
+        }
+        yield* super.append(event);
+      }
+    }
+
+    const files = recordedFiles({ "notes.md": NOTE });
+    let caught: unknown;
+    try {
+      yield* run(
+        `<Evaluate text={'<Syntax names={["NoSuchComponent"]} />\\n'} allow={["read"]} />\n`,
+        [shared(files)],
+        new WithholdingPublication(),
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).not.toBe(undefined);
+    // The publication failure is what ended it — not the selection — and it
+    // carries no classification at all.
+    expect(String(caught)).toContain("DurablePersistenceError");
+    expect(String(caught)).not.toContain("NoSuchComponent");
+    expect(generatedRequestRefusal(caught)).toBe(undefined);
+    // The discriminating half is the row above: the same selection, against a
+    // stream that accepts the record, *is* classified.
   });
 
   it("FE34: a provider that throws is terminal, while its ordinary Err is not", function* () {
@@ -1801,7 +1842,7 @@ describe("Tier FE34 — the shared read profile", () => {
     } catch (error) {
       ordinary = error;
     }
-    expect(generatedCandidateReason(ordinary)).toContain("could not read");
+    expect(generatedRequestRefusal(ordinary)).toContain("could not read");
 
     // The same shape, answered by a provider that *throws* instead. Nothing the
     // candidate rewrites fixes a provider raising, so it carries no
@@ -1827,7 +1868,7 @@ describe("Tier FE34 — the shared read profile", () => {
       infrastructure = error;
     }
     expect(infrastructure).not.toBe(undefined);
-    expect(generatedCandidateReason(infrastructure)).toBe(undefined);
+    expect(generatedRequestRefusal(infrastructure)).toBe(undefined);
   });
 
   it("FE34: a cleanup failure beats a refusal that was already classified", function* () {
@@ -1880,7 +1921,7 @@ describe("Tier FE34 — the shared read profile", () => {
     // terminal, and a caller recovering on the classification would otherwise
     // hand an agent another turn while this run's teardown was broken.
     expect(caught).not.toBe(undefined);
-    expect(generatedCandidateReason(caught)).toBe(undefined);
+    expect(generatedRequestRefusal(caught)).toBe(undefined);
     // And it failed for the cleanup rather than earlier: a fragment refused at
     // preflight would never have run `<Held />`, and this control would prove
     // nothing about which failure wins.
@@ -1898,7 +1939,7 @@ describe("Tier FE34 — the shared read profile", () => {
     } catch (error) {
       recoverable = error;
     }
-    expect(generatedCandidateReason(recoverable)).toContain("NoSuchComponent");
+    expect(generatedRequestRefusal(recoverable)).toContain("NoSuchComponent");
   });
 
   it("FE34: core answers for Syntax alone, so Evaluate cannot be admitted at its identity", function* () {

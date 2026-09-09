@@ -638,6 +638,66 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       });
     });
 
+    it("PI8: a retained selection refusal restores without asking the provider again", function* () {
+      yield* useWorkingDirectory(function* () {
+        // The defect this replaces: the refusal was noticed in a closure inside
+        // the durable executor. On replay the executor is skipped, so the
+        // closure was unset and the retained refusal came back carrying no
+        // classification — the same request was recoverable live and terminal
+        // after a partial continuation.
+        const first = new InMemoryStream();
+        const files = recordedFiles({ "notes.md": "the retained note\n" });
+        const harness = yield* planDeclarationHarness({
+          surface: "component",
+          authorshipRoot: yield* authorshipRoot(),
+        });
+        // A name this vocabulary does not have: core refuses the selection, the
+        // loop offers that refusal back, and the next turn writes the Plan.
+        harness.fake.script({ reply: '<Syntax names={["NoSuchComponent"]} />\n' });
+        harness.fake.script({ reply: PLAN });
+        harness.script({ decision: "Approve" });
+
+        const one = yield* runDocument({
+          source: SOURCE,
+          harness,
+          reviews: [],
+          evaluation: reading(files),
+          stream: first,
+        });
+        expect(one.failure).toBe(undefined);
+        expect(one.output).toContain(`got: ${PLAN}`);
+        // Live, the refusal earned the turn that produced the Plan.
+        expect(harness.fake.prompts).toHaveLength(2);
+        expect(harness.fake.prompts[1] ?? "").toContain("NoSuchComponent");
+
+        // The partial continuation, against a provider that fails if it is
+        // reached at all. A replay that rebuilt the selection would call it.
+        let catalogs = 0;
+        const two = yield* runDocument({
+          source: SOURCE,
+          reviews: [],
+          evaluation: reading(recordedFiles({ "notes.md": "the retained note\n" })),
+          stream: yield* continuing(first),
+          harness: yield* planDeclarationHarness({
+            surface: "component",
+            authorshipRoot: yield* authorshipRoot(),
+            *symbols() {
+              catalogs += 1;
+              throw new Error("a retained syntax selection was asked live");
+            },
+          }),
+        });
+
+        // Restored, not re-decided: the same approved Plan, no live provider
+        // call, and no turn or review asked again.
+        expect(two.failure).toBe(undefined);
+        expect(two.output).toBe(one.output);
+        expect(catalogs).toBe(0);
+        expect(two.harness.fake.prompts).toEqual([]);
+        expect(two.harness.reviews).toEqual([]);
+      });
+    });
+
     it("PI8: a changed request refuses rather than resuming", function* () {
       yield* useWorkingDirectory(function* () {
         // The instruction arrives through props, which is what can actually
@@ -1425,6 +1485,12 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         ["the member is missing", () => ({})],
         ["an unknown member was added", (record) => ({ ...Object(record), extra: true })],
         ["the member has the wrong type", () => ({ symbols: 7 })],
+        // The record knows two alternatives now, and exactly one at a time. A
+        // record holding both says two different things about what this
+        // occurrence answered, and a refusal of the wrong type is no reason.
+        ["both alternatives are present", (record) => ({ ...Object(record), refused: "x" })],
+        ["the refusal has the wrong type", () => ({ refused: 7 })],
+        ["the refusal carries no reason", () => ({ refused: "" })],
       ];
 
       for (const [, replace] of cases) {

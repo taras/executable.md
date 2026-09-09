@@ -154,7 +154,7 @@ export {
 } from "./src/evaluation-profile.ts";
 /**
  * Which generated failure a trusted host may offer the candidate another chance
- * at — see `src/generated-candidate.ts`.
+ * at — see `src/generated-request-refusal.ts`.
  *
  * A reader, and deliberately not a marker: a host asks whether core classified a
  * failure as the candidate's own mistake, and cannot classify one itself. An
@@ -162,7 +162,7 @@ export {
  * exactly the class core decided, and never stale history, a revoked profile, a
  * provider that threw, a secret rejection or a teardown failure.
  */
-export { generatedCandidateReason } from "./src/generated-candidate.ts";
+export { generatedRequestRefusal } from "./src/generated-request-refusal.ts";
 /**
  * Whether an Agent answered with a Plan draft or a read-only information
  * request — see `src/plan-response.ts`.

@@ -1750,7 +1750,7 @@ What Plan composes around the public component is recovery, not limiting:
 ```
 
 Plan owns one fixed recovery policy: after the child's structured teardown it
-turns the one narrow, typed candidate failure into retry context and rethrows
+turns the one narrow, typed generated-request refusal into retry context and rethrows
 every other failure unchanged. That policy is Plan's alone. It is not another
 evaluator, another document root, a special Evaluate result, or a new public
 XMD component, and it adds no public `<Try>`, `<Catch>` or `<Finally>` surface.
@@ -1764,7 +1764,7 @@ this budget.
 ### Failure and settlement
 
 Public Evaluate continues to throw. One narrow exported classification lets the
-surrounding composition separate a recoverable generated-candidate failure from
+surrounding composition separate a generated-request refusal from
 everything else. It carries only a safe normalized reason, is recognizable
 across loaded package copies through the repository's stable namespaced
 descriptive tag, and confers no authority to recover. Matching message text or
@@ -1782,7 +1782,7 @@ corrupt history, absent or broken providers, a Files provider that throws or
 answers with malformed infrastructure data rather than an ordinary `Err`,
 installation failure, journal failure, secret rejection and unexpected runtime
 failure stop authorship without another turn. A failure during cleanup is
-terminal even when the candidate failure would otherwise be recoverable, so
+terminal even when the request refusal would otherwise permit a retry, so
 settlement must expose that distinction before Plan normalizes a refusal.
 Existing execution reconciliation, which can preserve an ordinary document error
 ahead of ordinary teardown failure, is not evidence that this narrower contract
@@ -1963,7 +1963,7 @@ could appear to work while missing the contract.
 | PI7 | Interleave information requests with initial drafts, repairs and review revisions. Eight requests share one budget; the ninth is not evaluated. Draft and repair limits remain independent. | Resetting the information counter per phase, counting a read as a draft, or resetting repairs after a read. |
 | PI8 | Resume after a completed mixed request and Agent turn with all live readers and Agent calls set to fail if reached. Historical effects restore and reproduce the same rendered findings. Changed source, selected authority, lexical reference, filesystem scope or capture format refuses before reuse; a partial continuation resumes at the first unrecorded effect. | Refreshing a Glob/File read, skipping identity validation on retained work, or matching only a journal operation name. |
 | PI9 | Run one scripted embedded mixed-request-to-approved-Plan journey through the source CLI, emitted npm bin and compiled binary. Run the command journey through the in-process production command assembly executing the exact packaged command document. At the npm and compiled boundaries, prove the command and Plan assets are packaged, the Plan origin and digest match the source bytes, its exact text contract and private closure remain intact, and canonical protected Syntax and Evaluate are present exactly once. | A source-only journey, a reconstructed test-only command host, asset hashes without an executable packaged journey, or a distribution that loses or substitutes the command document, Plan component or protected tier. |
-| PI10 | Refuse a malformed candidate and an ordinary missing-file read: each yields one safe retry context after cleanup. Then break the profile installation and the protected route, corrupt retained history, make the Files provider throw rather than answer `Err`, reject a secret, and cancel the enclosing command: each stops authorship. Public Evaluate keeps throwing under its own ordinary use. | Recovering every `GeneratedXmdError`, matching message text, or changing public Evaluate's semantics to report a refusal. |
+| PI10 | Refuse a malformed request and an ordinary missing-file read: core classifies each as a refused generated request and `<Plan>` yields one safe retry context after cleanup. Then break the profile installation and the protected route, corrupt retained history, make the Files provider throw rather than answer `Err`, reject a secret, and cancel the enclosing command: each stops authorship. Public Evaluate keeps throwing under its own ordinary use. | Recovering every `GeneratedXmdError`, matching message or serialized error name, placing the retry decision in core, or changing public Evaluate's semantics to report a refusal. |
 | PI11 | Compose admitted reads with branching, binding and bounded iteration — every built-in structural construct under ordinary language rules — and render selected values through Json. A prohibited component in an **untaken** branch refuses the whole fragment with zero reads, and a construct the generated root cannot supply context for fails with its ordinary structural rule rather than as an unauthorized component. | A structural allowlist, preflight that walks only the selected branch, or reporting a placement error as missing authority. |
 | PI12 | Observe default, verbose, journal and Agent prompts for success and refusal, then place a synthetic secret in a file read by an information request. Default output stays content-free; detailed findings follow settlement; the secret appears in no output, journal entry or Agent Prompt, starts no following turn, review or artifact, and ends with the existing terminal secret rejection. | Relying only on the Prompt event's later append gate, printing findings before the pre-disclosure check, inventing an unscanned side channel, or turning secret rejection into another Agent turn. |
 
@@ -2383,7 +2383,7 @@ attestation refuses before those effects. It does not reuse an expired claim
 or refresh information to validate history.
 
 One narrow namespaced classification identifies the normalized recoverable
-candidate failure and carries only a safe reason. Stale authority or malformed
+generated-request refusal and carries only a safe reason. Stale authority or malformed
 retained history, and terminal setup, runtime, provider, persistence, secret and
 cleanup failures, are not that classification and are never recovered.
 Normalization reads the namespaced descriptive tag across loaded copies rather

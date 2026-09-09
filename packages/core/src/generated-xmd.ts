@@ -123,7 +123,7 @@ import { prepareFetchRequest, requestRecord } from "./fetch-request.ts";
 import { timeoutFetch } from "@executablemd/runtime";
 import type { FetchRequest } from "./fetch-request.ts";
 import { isJsonObject, parseJson } from "./json.ts";
-import { markGeneratedCandidate } from "./generated-candidate.ts";
+import { markGeneratedRequestRefusal } from "./generated-request-refusal.ts";
 import { GeneratedDataExpressions, validateDataExpression } from "./generated-expressions.ts";
 import { capturedBinding } from "./invocation-rules.ts";
 import { renderSegments } from "./render.ts";
@@ -2506,7 +2506,7 @@ export function* evaluateProtectedGeneratedXmd(
     // wrong. Everything below — a moved ceiling, changed source, an unreadable
     // record — is this run's history rather than the candidate's mistake, and
     // is deliberately left unmarked so a trusted loop cannot retry it.
-    throw markGeneratedCandidate(
+    throw markGeneratedRequestRefusal(
       new GeneratedXmdError(CONSTRUCT[decided.construct]),
       CONSTRUCT[decided.construct],
     );

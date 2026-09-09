@@ -416,7 +416,8 @@ nothing, and reads no authority. Paired `<PlanInformation>` projects its child
 public `<Evaluate>`, requires `as`, renders nothing, and binds the closed
 internal result `{ status: "found" | "refused", text: string }`: exact rendered
 text on success, and a safe normalized reason when — and only when — the child
-failed with the typed generated-candidate class after its teardown completed.
+failed carrying core's generated-request-refusal classification, after its
+teardown completed.
 Every other failure is rethrown unchanged, and a teardown failure wins over a
 candidate retry. That internal status is what the workflow branches on for its
 own progress and follow-up wording; the Agent receives `text` and never the
@@ -699,7 +700,7 @@ collection and no result envelope; a value the fragment bound but did not render
 is not sent.
 
 *Recovery is narrow.* Public `<Evaluate>` still throws. The workflow recovers
-exactly one typed class — a generated candidate failure, which is malformed or
+exactly one typed class — a generated-request refusal, which is malformed or
 unauthorized generated source, a declarative expression, binding, construct,
 form or prop error, invalid admitted Syntax or Glob input, or an ordinary
 captured read reporting `Err` — and only after the child's teardown has
@@ -1102,6 +1103,6 @@ neither observation never interpreted what it wrote.
 | PI7 | Independent budgets | Requests interleave with initial, repair and revision turns; successes and refusals share one count of eight; the ten-draft and three-repair budgets are unaffected in both directions; the ninth candidate is not evaluated and starts no turn |
 | PI8 | Continuation | A completed request replays with live Agent, Syntax, File and Glob tripwires at zero; a partial continuation resumes at the first unrecorded effect; changed source, selected authority, lexical reference, Files scope or capture format refuses before reuse |
 | PI9 | Distribution | The embedded request-to-approved-Plan journey executes through source, emitted npm and compiled installations. The command journey executes through the in-process production command assembly and exact packaged command document. Npm and compiled controls verify packaged command and Plan assets, Plan identity and digest, its exact text contract and private closure, and the canonical protected Syntax/Evaluate tier |
-| PI10 | Recoverable versus terminal | A malformed candidate and an ordinary read `Err` each yield one safe retry context; missing or broken profile or protected route, a throwing Files provider, stale or corrupt history, journal or secret failure, unexpected runtime failure, teardown failure and outer cancellation each stop authorship. Public `<Evaluate>` still throws under ordinary use |
+| PI10 | Recoverable versus terminal | A malformed request and an ordinary read `Err` are each classified by core as a refused generated request, which `<Plan>` alone turns into one safe retry context; missing or broken profile or protected route, a throwing Files provider, stale or corrupt history, journal or secret failure, unexpected runtime failure, teardown failure and outer cancellation each stop authorship. Public `<Evaluate>` still throws under ordinary use |
 | PI11 | Language, not authority | Branching, binding and bounded iteration compose with admitted reads under ordinary rules, and a prohibited component in an untaken branch refuses the whole fragment with zero reads |
 | PI12 | Disclosure order | Observe default, verbose, journal and Agent prompts for success and refusal, then place a synthetic secret in a file read by an information request. Default output stays content-free; detailed findings follow settlement; the secret appears in no output, journal entry or Agent Prompt, starts no following turn, review or artifact, and ends with the existing terminal secret rejection |

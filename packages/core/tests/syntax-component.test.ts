@@ -1370,15 +1370,30 @@ describe("Tier SYN — the named form", () => {
     expect(refused).toContain("not a record this version can read");
   });
 
-  it("SYN31: refuses an unusable list before reading anything", function* () {
+  it("SYN31: retains a name it cannot document, and restores that refusal", function* () {
     const stream = new InMemoryStream();
     const unknown = yield* refusal(run('<Syntax names={["Nonexistent"]} />\n', [], stream));
     expect(unknown).toContain("Nonexistent");
-    // No successful record: the attempt and its failure are journaled, as any
-    // effect's are, but there is nothing for a continuation to restore and hand
-    // back as the symbols.
-    expect(retained(yield* stream.readAll())).toHaveLength(0);
 
+    // The refusal is *retained*, and retained as a refusal. This is the one
+    // record that is not the symbols: an error crossing the durable boundary is
+    // rebuilt without its class, so a refusal that has to mean the same thing
+    // on a replay has to be a value the record distinguishes rather than a
+    // failure the reader re-derives.
+    const [record] = retained(yield* stream.readAll());
+    if (record?.type !== "yield" || record.result.status !== "ok") {
+      throw new Error("the refusal retained no record");
+    }
+    expect(Object.keys(Object(record.result.value))).toEqual(["refused"]);
+    // Nothing is handed back as the symbols: a continuation reaches the same
+    // refusal rather than restoring text nobody was shown.
+    const resumed = yield* refusal(
+      run('<Syntax names={["Nonexistent"]} />\n', [], yield* continuing(stream)),
+    );
+    expect(resumed).toContain("Nonexistent");
+
+    // Everything the schema and the shape reader answer stays as it was: those
+    // refuse before the occurrence is claimed, so they retain nothing at all.
     for (const written of [
       "<Syntax names={[]} />",
       '<Syntax names={["Elicit", "Elicit"]} />',

@@ -63,7 +63,7 @@ import {
 } from "@executablemd/core";
 import {
   classifyPlanResponse,
-  generatedCandidateReason,
+  generatedRequestRefusal,
   sourceDigest,
 } from "@executablemd/core/host";
 import type {
@@ -818,7 +818,7 @@ function planInformation(): IdentityComponent {
           if (projected.failure === undefined) {
             return { status: "found", text: projected.text };
           }
-          const reason = generatedCandidateReason(projected.failure);
+          const reason = generatedRequestRefusal(projected.failure);
           if (reason === undefined) {
             throw projected.failure;
           }

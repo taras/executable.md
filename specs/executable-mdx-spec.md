@@ -3046,7 +3046,7 @@ closed union `"draft" | "information"` from the lexical frontmatter and
 first-block rule alone, and paired `<PlanInformation>` projects its child public
 `<Evaluate>`, requires `as`, renders nothing, and binds the closed internal
 result `{ status, text }` — exact rendered findings, or a safe reason when the
-child failed with the typed generated-candidate classification after its
+child failed with the typed generated-request-refusal classification after its
 teardown completed. The vocabulary the Agent is shown is not among them: the
 packaged bytes write the public `<Syntax />` (§5.3.1), whose own
 `syntax_symbols` read retains exactly `{ symbols }`, so a continuation
@@ -4035,25 +4035,41 @@ language composition, not effect classes, and remain available when `allow`
 selects read-only authority. The fragment explicitly renders any bound values it
 wants its caller to receive.
 
-**One narrow classification marks a recoverable generated candidate.** Public
-`<Evaluate>` throws on every failure and gains no `Result`, no props and no
-change to its output or capture behavior. What core adds is a way for a trusted
-caller to tell one class of failure apart from the rest: a namespaced
+**One narrow classification states that core refused the generated request.**
+Public `<Evaluate>` throws on every failure and gains no `Result`, no props and
+no change to its output or capture behavior. What core adds is a way for a
+trusted caller to tell one class of failure apart from the rest: a namespaced
 descriptive tag, recognizable across separately loaded package copies, carrying
 only a safe normalized reason.
 
-It marks exactly the failures a generated candidate can correct — malformed or
-unauthorized generated source, a declarative expression, binding, construct,
-form or prop error, invalid input to an admitted Syntax or Glob, and an ordinary
-captured read reporting `Err`. It is not on a missing, duplicate, revoked or
-malformed profile; a missing or broken protected route or Syntax reference; a
-Files provider that throws or answers with malformed infrastructure data rather
-than an ordinary `Err`; durability divergence, stale source or authority, or
-unreadable retained data; persistence, journal or secret-publication failure;
-unexpected runtime failure; teardown failure; or outer cancellation. The tag is
-per throw site rather than per error class, so a `GeneratedXmdError` is not by
-itself a recoverability marker and no consumer may recover one by matching its
-message.
+The classification is a fact about the failure, not a permission. Core states
+that the request's own text was refused; whether a refused request earns the
+caller another attempt is that caller's policy, and core holds no opinion about
+it.
+
+It marks exactly the failures in which core refused the request itself —
+malformed or unauthorized generated source, a declarative expression, binding,
+construct, form or prop error, invalid input to an admitted Syntax or Glob, and
+an ordinary captured read reporting `Err`. It is not on a missing, duplicate,
+revoked or malformed profile; a missing or broken protected route or Syntax
+reference; a Files provider that throws or answers with malformed infrastructure
+data rather than an ordinary `Err`; durability divergence, stale source or
+authority, or unreadable retained data; persistence, journal or
+secret-publication failure; unexpected runtime failure; teardown failure; or
+outer cancellation. The tag is per throw site rather than per error class, so a
+`GeneratedXmdError` is not by itself such a marker and no consumer may read one
+by matching its message.
+
+**A refusal that must survive replay is retained as a value, not as an error.** A
+failure crossing a durable boundary is rebuilt without its class and without any
+non-enumerable property, so a classification applied to the error is lost on
+replay. Where a refusal is recorded — canonical `<Syntax>` selection is the case
+today — the durable record holds a closed value distinguishing the successful
+result from core's own refusal, and that value is interpreted *after* the durable
+operation returns, identically on a live run and on a replay. Publication failure
+therefore prevents interpretation entirely: a result that was never recorded is
+never acted on, and the persistence, journal or secret-publication failure stays
+terminal and unclassified. Records written for a successful result are unchanged.
 
 **One occurrence is one durable decision.** A continuation restores the
 admission rather than making it again, and refuses before any effect if the run
