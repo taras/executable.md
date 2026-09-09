@@ -15,8 +15,8 @@
  * exactly once and closes a fragment-facing component over the bound result.
  * What runs inside a fragment therefore reaches:
  *
- * - only the methods this file names — read, path check, write, delete and
- *   directory creation, plus one Fetch — and not the rest of the host's
+ * - only the methods this file names — read, search, path check, write, delete
+ *   and directory creation, plus one Fetch — and not the rest of the host's
  *   provider, not `API.Files`, not `API.Fetch`, and not `API.Env`;
  * - only the working directory the host stated when it built the profile; and
  * - only for as long as the execution that captured them is alive.
@@ -32,22 +32,24 @@
  *
  * ## What is deliberately absent
  *
- * No glob, no temporary directory, no environment, no process, no elicitation
- * and no agent. Those are operations the ordinary components have and an
- * admitted fragment does not, and leaving them out here is what makes that
- * true rather than a claim about what a host will remember not to admit.
+ * No temporary directory, no environment, no process, no elicitation and no
+ * agent. Those are operations the ordinary components have and an admitted
+ * fragment does not, and leaving them out here is what makes that true rather
+ * than a claim about what a host will remember not to admit.
  */
 
 import type { Operation, Result } from "effection";
 
-import type { FunctionComponentDefinition, Json, PropsSchema } from "./types.ts";
+import type { FunctionComponentDefinition, Json, PropsSchema, ReturnsSchema } from "./types.ts";
 import { content } from "./component-api.ts";
 import { ContentError, ProjectedContentError } from "./errors.ts";
 import { getExpansion } from "./expansion.ts";
 import { persistFetch } from "./fetch-journal.ts";
 import { parseResponseRecord } from "./fetch-response.ts";
 import type { FetchResponseRecord } from "./fetch-response.ts";
+import { GLOB_PROPS, GLOB_RETURNS, globFailure, globPatterns } from "./glob-source.ts";
 import { formDispatcher } from "./invocation-identity.ts";
+import { parseFilesFailure } from "@executablemd/runtime";
 
 /** A refusal an admitted fragment's own operation produced. */
 export class FragmentCapabilityError extends Error {
@@ -70,6 +72,20 @@ export interface FragmentWrite extends FragmentPath {
 }
 
 /**
+ * One search an operation is about to perform, under the stated root.
+ *
+ * The patterns rather than a resolved list, because the provider owns matching:
+ * what an admitted fragment states is the same two prop values an author writes,
+ * already held to the shared source rules, and the search that answers them is
+ * the host's.
+ */
+export interface FragmentSearch {
+  readonly cwd: string;
+  readonly include: readonly string[];
+  readonly exclude: readonly string[];
+}
+
+/**
  * The exact filesystem operations a fragment may perform.
  *
  * A strict subset of what a host's own provider offers, listed rather than
@@ -84,6 +100,8 @@ export interface FragmentFileAccess {
   /** Whether this path is admissible at all. No filesystem access. */
   checkFilePath(input: FragmentPath): Operation<Result<void>>;
   readTextFile(input: FragmentPath): Operation<Result<string>>;
+  /** Sorted, deduplicated, POSIX-separated paths of the regular files that match. */
+  globFiles(input: FragmentSearch): Operation<Result<string[]>>;
   writeTextFile(input: FragmentWrite): Operation<Result<unknown>>;
   deleteFile(input: FragmentPath): Operation<Result<void>>;
   ensureDirectory(input: FragmentPath): Operation<Result<void>>;
@@ -200,6 +218,7 @@ export function captureCapabilities(input: {
           files: Object.freeze({
             checkFilePath: guard(files.checkFilePath.bind(files)),
             readTextFile: guard(files.readTextFile.bind(files)),
+            globFiles: guard(files.globFiles.bind(files)),
             writeTextFile: guard(files.writeTextFile.bind(files)),
             deleteFile: guard(files.deleteFile.bind(files)),
             ensureDirectory: guard(files.ensureDirectory.bind(files)),
@@ -244,12 +263,31 @@ const FETCH_PROPS: PropsSchema = {
 
 /** The schema each capability's component declares. */
 export function capabilityProps(capability: FragmentCapability): PropsSchema {
-  return capability === "fetch" ? FETCH_PROPS : PATH_PROPS;
+  if (capability === "fetch") {
+    return FETCH_PROPS;
+  }
+  // The ordinary component's own schema, not a copy of it: a fragment writes
+  // the same element an author does.
+  return capability === "files:glob" ? GLOB_PROPS : PATH_PROPS;
+}
+
+/**
+ * What a capability binds, for the ones that bind a value rather than render.
+ *
+ * Declaring it is what makes the admitted component a value component, exactly
+ * as it does for the ordinary one: the engine requires `as`, renders nothing,
+ * and validates what comes back. So a generated `<Glob />` written without a
+ * capture is refused for the ordinary reason, before the host's provider is
+ * asked to traverse anything.
+ */
+export function capabilityReturns(capability: FragmentCapability): ReturnsSchema | undefined {
+  return capability === "files:glob" ? GLOB_RETURNS : undefined;
 }
 
 /** Which captured operation one admitted entry runs. */
 export type FragmentCapability =
   | "file:read"
+  | "files:glob"
   | "file:write"
   | "file:delete"
   | "directory:ensure"
@@ -260,6 +298,7 @@ export const CAPABILITY_FORMS: Readonly<
   Record<FragmentCapability, readonly ("self-closing" | "paired")[]>
 > = Object.freeze({
   "file:read": ["self-closing"],
+  "files:glob": ["self-closing"],
   "file:write": ["paired"],
   "file:delete": ["self-closing"],
   "directory:ensure": ["paired"],
@@ -294,6 +333,11 @@ export function capabilityDefinition(
   // core supplies is one schema anyway: `<File />` and `<File>…</File>` both
   // take one `path`.
   const props = capabilityProps(selfClosing ?? paired ?? "file:read");
+  // One name binds one way. Two spellings that returned different shapes would
+  // be one component whose `as` meant two things, decided by how the element
+  // happened to be written, so the disagreement is refused here rather than
+  // resolved by whichever spelling was consulted first.
+  const returning = boundResult(name, selfClosing, paired);
 
   const read =
     selfClosing === undefined ? undefined : body(name, selfClosing, capabilities, requests);
@@ -311,6 +355,7 @@ export function capabilityDefinition(
       name,
       props,
       forms: ["self-closing", "paired"],
+      ...(returning === undefined ? {} : { returns: returning }),
       fn: formDispatcher({ forms: "both", "self-closing": read, paired: write }),
     };
   }
@@ -320,6 +365,7 @@ export function capabilityDefinition(
       name,
       props,
       forms: ["self-closing"],
+      ...(returning === undefined ? {} : { returns: returning }),
       fn: formDispatcher({
         forms: "self-closing",
         fn: read,
@@ -336,6 +382,7 @@ export function capabilityDefinition(
       name,
       props,
       forms: ["paired"],
+      ...(returning === undefined ? {} : { returns: returning }),
       fn: formDispatcher({
         forms: "paired",
         fn: write,
@@ -348,6 +395,26 @@ export function capabilityDefinition(
     };
   }
   throw new FragmentCapabilityError(`an evaluation profile admitted "${name}" for no form.`);
+}
+
+/** What one name binds, when every capability it holds binds the same thing. */
+function boundResult(
+  name: string,
+  selfClosing: FragmentCapability | undefined,
+  paired: FragmentCapability | undefined,
+): ReturnsSchema | undefined {
+  const stated = [selfClosing, paired]
+    .filter((capability): capability is FragmentCapability => capability !== undefined)
+    .map(capabilityReturns);
+  const distinct = new Set(stated.map((schema) => JSON.stringify(schema ?? null)));
+  if (distinct.size > 1) {
+    throw new FragmentCapabilityError(
+      `an evaluation profile admitted "${name}" for two spellings that bind different results. ` +
+        "One name binds one way, so which of them `as` meant would depend on how the element " +
+        "was written.",
+    );
+  }
+  return stated[0];
 }
 
 /** The body one capability runs, closed over the operations this capture bound. */
@@ -375,6 +442,9 @@ function body(
   if (capability === "file:read") {
     return readBody(files, cursor);
   }
+  if (capability === "files:glob") {
+    return globBody(files, cursor);
+  }
   if (capability === "file:delete") {
     return deleteBody(files, cursor);
   }
@@ -389,6 +459,41 @@ function readBody(files: FragmentFileAccess, cursor: DirectoryCursor) {
       throw new FragmentCapabilityError(refusal(requested, "read"));
     }
     return text.value;
+  };
+}
+
+/**
+ * The search body, held to the same source rules the ordinary `<Glob>` is.
+ *
+ * The patterns are checked before the provider is asked, so a pattern that
+ * cannot match anything is a refusal rather than an empty result, and a fragment
+ * whose text is wrong performs no traversal at all. The sentences come from
+ * `glob-source.ts`, so an author and a generated fragment are told the same
+ * thing about the same pattern — and a provider's own diagnostic never reaches
+ * either, because the failure is normalized from the parsed failure data rather
+ * than from its message.
+ */
+function globBody(files: FragmentFileAccess, cursor: DirectoryCursor) {
+  return function* search(props: Record<string, Json>): Operation<string[]> {
+    const include = globPatterns("include", props.include);
+    if (!include.ok) {
+      throw new FragmentCapabilityError(include.error.message);
+    }
+    const exclude = globPatterns("exclude", props.exclude);
+    if (!exclude.ok) {
+      throw new FragmentCapabilityError(exclude.error.message);
+    }
+    const found = yield* files.globFiles({
+      cwd: cursor.current,
+      include: include.value,
+      exclude: exclude.value,
+    });
+    if (!found.ok) {
+      throw new FragmentCapabilityError(
+        globFailure(parseFilesFailure(found.error), [...include.value, ...exclude.value]),
+      );
+    }
+    return found.value;
   };
 }
 

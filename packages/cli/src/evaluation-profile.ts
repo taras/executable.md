@@ -8,11 +8,18 @@
  *
  * ## The two tables
  *
- * `read` is core's self-closing `<File />` and nothing else. `write` is core's
- * paired `<File>…</File>` and self-closing `<File.Delete />`. A fragment run by
- * `xmd run` therefore reaches the caller's own filesystem through the Files
- * provider this command installed, and reaches nothing else at all: no network
- * read, no process, no repository, no Git, no credential and no agent.
+ * `read` is core's self-closing `<File />`, its self-closing `<Glob />` and
+ * canonical `<Syntax />`. `write` is core's paired `<File>…</File>` and
+ * self-closing `<File.Delete />`. A fragment run by `xmd run` therefore reaches
+ * the caller's own filesystem through the Files provider this command
+ * installed, and reaches nothing else at all: no network read, no process, no
+ * repository, no Git, no credential and no agent.
+ *
+ * Reading and writing stay separate spellings of one name. A selection of
+ * `read` admits `<File />` and not `<File>…</File>`, so a fragment that asks to
+ * search and read cannot also write, and `<Syntax />` describing a component
+ * says only what the vocabulary holds — a name it renders is not a name the
+ * selection admits.
  *
  * `<Fetch>` is absent rather than present-and-bounded. An unbounded network
  * read is a decision this command does not make on a document's behalf, and
@@ -32,7 +39,13 @@
  * spelling, so there is no document written against it to keep working.
  */
 
-import { fileDeleteEntry, fileReadEntry, fileWriteEntry } from "@executablemd/core/host";
+import {
+  fileDeleteEntry,
+  fileReadEntry,
+  fileWriteEntry,
+  globReadEntry,
+  syntaxReadEntry,
+} from "@executablemd/core/host";
 import type {
   ExecutionInstallation,
   FragmentEvaluationInput,
@@ -49,15 +62,21 @@ import { cwd, hostFilesHandler } from "@executablemd/runtime";
  * nothing a document, a repository component or middleware installs is between
  * a fragment and this instance.
  *
- * Only the five operations a fragment can name are copied across. The handler
- * also offers globbing and temporary directories; an admitted fragment has
- * neither, and not copying them is what makes that true.
+ * Only the six operations a fragment can name are copied across. The handler
+ * also offers temporary directories; an admitted fragment has none, and not
+ * copying it is what makes that true.
  */
 function ordinaryFiles(): FragmentFileAccess {
   const handler = hostFilesHandler();
   return {
     checkFilePath: (input) => handler.checkFilePath(input),
     readTextFile: (input) => handler.readTextFile(input),
+    globFiles: (input) =>
+      handler.globFiles({
+        cwd: input.cwd,
+        include: [...input.include],
+        exclude: [...input.exclude],
+      }),
     writeTextFile: (input) => handler.writeTextFile(input),
     deleteFile: (input) => handler.deleteFile(input),
     ensureDirectory: (input) => handler.ensureDirectory(input),
@@ -72,7 +91,7 @@ function ordinaryFiles(): FragmentFileAccess {
 /** The ceiling `xmd run` and its run children state. */
 export function ordinaryEvaluationProfile(): FragmentEvaluationInput {
   return {
-    read: [fileReadEntry()],
+    read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()],
     write: [fileWriteEntry(), fileDeleteEntry()],
     files: ordinaryFiles(),
   };

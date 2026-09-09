@@ -14,7 +14,10 @@
  * segment is `..` — is refused rather than quietly contributing nothing: an
  * empty result is the answer to "there are no such files", and it must not also
  * be the answer to "that pattern was a mistake". The same stage refuses an
- * empty pattern, which matches nothing by construction.
+ * empty pattern, which matches nothing by construction. Those rules and the
+ * sanitized sentence a failed search produces are `glob-source.ts`, shared with
+ * the Glob capability an evaluation profile admits, so one document and one
+ * generated fragment are held to one dialect.
  *
  * Everything else about matching belongs to the `API.Files` provider, which is
  * the dialect and owns the whole search. This component adds no syntax of its
@@ -43,29 +46,17 @@
 import type { Operation } from "effection";
 import { printErrors } from "../component-failures.ts";
 import { cwd, parseFilesFailure } from "@executablemd/runtime";
-import type { FilesFailureData } from "@executablemd/runtime";
 import { globFiles } from "../files.ts";
+import { GLOB_PROPS, GLOB_RETURNS, globFailure, globPatterns } from "../glob-source.ts";
 import type { Json } from "../types.ts";
-import { reason } from "./fs-error-phrases.ts";
 
-export const props = {
-  type: "object",
-  properties: {
-    include: { type: "array", items: { type: "string" }, minItems: 1 },
-    exclude: { type: "array", items: { type: "string" }, default: [] },
-  },
-  required: ["include"],
-  additionalProperties: false,
-};
+export const props = GLOB_PROPS;
 
 /**
  * Declaring `returns` is what makes this a value component: the engine requires
  * `as`, renders nothing, and validates what comes back (§6.10).
  */
-export const returns = {
-  type: "array",
-  items: { type: "string" },
-};
+export const returns = GLOB_RETURNS;
 
 /** A pattern that cannot be used, or a directory that cannot be searched. */
 export class GlobError extends Error {
@@ -76,98 +67,24 @@ export class GlobError extends Error {
 }
 
 export default printErrors(function* (props: Record<string, Json>): Operation<string[]> {
-  const include = patterns("include", props.include);
-  const exclude = patterns("exclude", props.exclude);
+  const include = globPatterns("include", props.include);
+  if (!include.ok) {
+    throw new GlobError(include.error.message);
+  }
+  const exclude = globPatterns("exclude", props.exclude);
+  if (!exclude.ok) {
+    throw new GlobError(exclude.error.message);
+  }
 
-  const found = yield* globFiles({ cwd: yield* cwd(), include, exclude });
+  const found = yield* globFiles({
+    cwd: yield* cwd(),
+    include: include.value,
+    exclude: exclude.value,
+  });
   if (!found.ok) {
-    throw failed(parseFilesFailure(found.error), [...include, ...exclude]);
+    throw new GlobError(
+      globFailure(parseFilesFailure(found.error), [...include.value, ...exclude.value]),
+    );
   }
   return found.value;
 });
-
-/**
- * The patterns a prop holds, checked for the two things that make one unusable.
- *
- * Prop validation has already established an array of strings, so the shape is
- * re-read rather than asserted (`as` would claim it instead) and a value that
- * somehow is not one contributes nothing. What validation cannot express is
- * *meaning*: patterns match paths relative to `Env.cwd`, so an absolute pattern
- * and one that starts by leaving cannot match anything a search can produce.
- *
- * Only a whole `..` first segment leaves. `..notes.md` is an ordinary name, and
- * a `..` further along — `docs/../*.md` — is a path the search never generates,
- * so it matches nothing for the ordinary reason and needs no special refusal.
- */
-function patterns(prop: string, value: Json | undefined): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  const found: string[] = [];
-  for (const pattern of value) {
-    if (typeof pattern !== "string") {
-      continue;
-    }
-    if (pattern.length === 0) {
-      throw new GlobError(
-        `${prop} holds an empty pattern, which matches nothing; ` +
-          "give a pattern relative to the working directory.",
-      );
-    }
-    if (absolute(pattern)) {
-      throw new GlobError(
-        `${prop} pattern "${pattern}" is absolute; ` +
-          "give a pattern relative to the working directory.",
-      );
-    }
-    if (pattern === ".." || pattern.startsWith("../")) {
-      throw new GlobError(`${prop} pattern "${pattern}" reaches outside the working directory.`);
-    }
-    found.push(pattern);
-  }
-  return found;
-}
-
-/**
- * Whether a pattern names an absolute location.
- *
- * Decided from the pattern's own grammar rather than the running platform's.
- * Patterns match POSIX-relative paths on every host — that is what makes one
- * document mean one thing everywhere — so a leading `/` is absolute wherever
- * this runs, and so is a drive-letter prefix, which is absolute on the host that
- * has drives and matches nothing on the hosts that do not. A leading backslash
- * is left alone: in this dialect it escapes the character after it.
- */
-function absolute(pattern: string): boolean {
-  return pattern.startsWith("/") || /^[A-Za-z]:[\\/]/.test(pattern);
-}
-
-/**
- * One sanitized sentence for a failed search.
- *
- * The two questions an author can act on are separated from the rest. A working
- * directory that is missing or is a file is something about the document's own
- * environment; a pattern the dialect cannot compile — an unterminated character
- * class — is something about the document's own text. Which pattern it was does
- * not survive the provider boundary, so the sentence lists the candidates
- * instead of naming one. They are the document's own text.
- *
- * Everything else names no path. What failed is the working directory or
- * something under it, and both are absolute paths the document did not write
- * (§1.2).
- */
-function failed(data: FilesFailureData | undefined, candidates: string[]): GlobError {
-  if (data?.phase === "target" && data.reason === "missing") {
-    return new GlobError("the working directory does not exist.");
-  }
-  if (data?.phase === "target" && data.reason === "not-directory") {
-    return new GlobError("the working directory is not a directory.");
-  }
-  if (data?.phase === "pattern") {
-    return new GlobError(
-      `one of these patterns cannot be used: ${candidates.map((p) => `"${p}"`).join(", ")}.`,
-    );
-  }
-  return new GlobError(`cannot search the working directory: ${reason(data?.reason)}.`);
-}

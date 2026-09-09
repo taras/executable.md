@@ -74,16 +74,35 @@ describe("Tier FE — the ordinary run profile", () => {
     );
   });
 
+  it("FE21: a fragment searches and reads through the profile's own operations", function* () {
+    yield* useWorkspace(
+      {
+        "notes.md": NOTE,
+        "doc.md":
+          `<Evaluate text={'<Glob include={["*.md"]} as="found" />\\n<Json value={found} />\\n'} ` +
+          `as="answer" />\n\n<Json value={answer} />\n`,
+      },
+      function* (dir) {
+        const result = yield* runCli(["run", join(dir, "doc.md")], { cwd: dir }).join();
+        expect(result.code).toBe(0);
+        expect(result.stdout).toContain("notes.md");
+      },
+    );
+  });
+
   it("FE21: a fragment cannot reach an operation the ordinary profile withheld", function* () {
     yield* useWorkspace(
       {
         "notes.md": NOTE,
-        "doc.md": `<Evaluate text={'<Glob pattern="*.md" />\\n'} />\n`,
+        "doc.md": `<Evaluate text={'<Fetch url="https://example.test/notes" />\\n'} />\n`,
       },
       function* (dir) {
         const result = yield* runCli(["run", join(dir, "doc.md")], { cwd: dir }).join();
-        // `<Glob>` is an ordinary component of this run and is not a name the
-        // fragment has: the ceiling is the profile's, not the document's.
+        // `<Fetch>` is an ordinary component of this run and is not a name the
+        // fragment has: the ceiling is the profile's, not the document's. An
+        // unbounded network read is a decision `xmd run` does not make on a
+        // document's behalf, so the identity is absent rather than admitted
+        // with an empty ceiling.
         expect(result.code).not.toBe(0);
         expect(`${result.stdout}${result.stderr}`).toContain("did not admit");
       },

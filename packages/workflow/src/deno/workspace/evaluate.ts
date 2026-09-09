@@ -124,14 +124,23 @@ function workspaceAccess(database: WorkflowRunDatabase): FragmentWorkspaceAccess
  * `API.Files` when it runs, so the provider a document, a repository component
  * or middleware installed nearer is not between a fragment and the Workspace.
  *
- * Five operations, not seven. The handler also globs and makes temporary
- * directories; an admitted fragment does neither.
+ * Six operations, not seven. The handler also makes temporary directories, and
+ * an admitted fragment never does. The search is stated because the interface
+ * lists it, and this profile admits no `<Glob>` entry for anything to reach it
+ * through — an operation a fragment may perform is one an entry names, exactly
+ * as the ordinary run's `ensureDirectory` is stated and admitted to nothing.
  */
 function workspaceFiles(database: WorkflowRunDatabase): FragmentFileAccess {
   const handler = workflowFilesHandler(database);
   return {
     checkFilePath: (input) => handler.checkFilePath(input),
     readTextFile: (input) => handler.readTextFile(input),
+    globFiles: (input) =>
+      handler.globFiles({
+        cwd: input.cwd,
+        include: [...input.include],
+        exclude: [...input.exclude],
+      }),
     writeTextFile: (input) => handler.writeTextFile(input),
     deleteFile: (input) => handler.deleteFile(input),
     ensureDirectory: (input) => handler.ensureDirectory(input),
