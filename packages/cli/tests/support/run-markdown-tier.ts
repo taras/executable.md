@@ -96,13 +96,13 @@ export function runMarkdownTier(document: string): Operation<MarkdownTierRun> {
           surface: "component",
           includes: ["components", "."],
           context: request.context,
-          ...(request.authorshipRoot === undefined
+          ...(request.planWriterRoot === undefined
             ? {}
-            : { authorshipRoot: request.authorshipRoot }),
+            : { planWriterRoot: request.planWriterRoot }),
           host: request.host,
-          ...(request.observeAuthorship === undefined
+          ...(request.observePlanWriter === undefined
             ? {}
-            : { observeAuthorship: request.observeAuthorship }),
+            : { observePlanWriter: request.observePlanWriter }),
           installElicitation: request.installElicitation,
         }),
       // This harness runs Markdown tiers, not repository work: a child that

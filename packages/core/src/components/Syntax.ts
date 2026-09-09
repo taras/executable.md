@@ -37,6 +37,8 @@ import type { Json as DurableJson, Workflow } from "@executablemd/durable-stream
 import type { Operation } from "effection";
 
 import { getExpansion } from "../expansion.ts";
+import { markGeneratedRequestRefusal } from "../generated-request-refusal.ts";
+import { SyntaxSelectionRefusal } from "../syntax-refusal.ts";
 import { ComponentInvocationError, invocationForm } from "../invocation-identity.ts";
 import type {
   ComponentInvocation,
@@ -140,7 +142,10 @@ function syntax(claim: IdentityClaimant): ProtectedBody {
       throw new ComponentInvocationError(UNISSUED_REFUSAL);
     }
     if (form === "paired") {
-      throw new ComponentInvocationError(PAIRED_REFUSAL);
+      throw markGeneratedRequestRefusal(
+        new ComponentInvocationError(PAIRED_REFUSAL),
+        PAIRED_REFUSAL,
+      );
     }
     // Read before anything is claimed or rendered, so a list this component
     // cannot answer for refuses with no durable record and no partial text.
@@ -154,9 +159,26 @@ function syntax(claim: IdentityClaimant): ProtectedBody {
       throw new Error(NO_REFERENCE_REFUSAL);
     }
     const expansion = yield* getExpansion();
-    return yield* persistSymbols(id, expansion.position, () =>
-      names === undefined ? reference.symbols() : reference.documentation(names),
-    );
+    // A refusal is *retained*, not signalled out of band. Core's own selection
+    // refusal becomes a value the record distinguishes, so it is read back the
+    // same way on a live run and on a replay; a provider that throws is not
+    // caught here at all and fails the operation, which is what keeps it
+    // terminal whatever it names its error.
+    return yield* persistSymbols(id, expansion.position, function* () {
+      try {
+        return {
+          symbols:
+            names === undefined
+              ? yield* reference.symbols()
+              : yield* reference.documentation(names),
+        };
+      } catch (error) {
+        if (error instanceof SyntaxSelectionRefusal) {
+          return { refused: error.message };
+        }
+        throw error;
+      }
+    });
   };
 }
 
@@ -179,20 +201,33 @@ function requestedNames(value: Json | undefined): readonly string[] | undefined 
   const names: string[] = [];
   for (const member of value) {
     if (typeof member !== "string" || member.length === 0) {
-      throw new ComponentInvocationError(NAMES_REFUSAL);
+      throw markGeneratedRequestRefusal(new ComponentInvocationError(NAMES_REFUSAL), NAMES_REFUSAL);
     }
     if (names.includes(member)) {
-      throw new ComponentInvocationError(DUPLICATE_REFUSAL);
+      throw markGeneratedRequestRefusal(
+        new ComponentInvocationError(DUPLICATE_REFUSAL),
+        DUPLICATE_REFUSAL,
+      );
     }
     names.push(member);
   }
   return names;
 }
 
+/**
+ * Retain what this occurrence answered, and read it back the same way whether
+ * it just happened or happened in an earlier run.
+ *
+ * The interpretation is *after* the durable operation, deliberately. If
+ * publication of the result fails — the append, the journal, the secret gate —
+ * `createDurableOperation` throws and this line is never reached, so a run that
+ * could not record the refusal does not act on it either. That failure is the
+ * run ending, and it stays terminal.
+ */
 function* persistSymbols(
   id: string,
   position: Readonly<SourcePosition> | undefined,
-  live: () => Operation<string>,
+  live: () => Operation<SyntaxRecord>,
 ): Workflow<string> {
   const stored = yield createDurableOperation<DurableJson>(
     {
@@ -201,35 +236,57 @@ function* persistSymbols(
       ...sourceDescription(position),
     },
     function* (): Operation<DurableJson> {
-      return { symbols: yield* live() };
+      return { ...(yield* live()) };
     },
   );
-  const symbols = readSymbols(stored);
-  if (symbols === undefined) {
+  const record = readSyntaxRecord(stored);
+  if (record === undefined) {
     // A record this version cannot read is the journal no longer describing
     // this run, not a component that failed: it travels as the stale input it
     // is, rather than becoming an error segment a printing boundary could turn
     // into text and carry on past.
     throw new StaleInputError(UNREADABLE_RECORD);
   }
-  return symbols;
+  if ("refused" in record) {
+    // Raised here rather than retained as an error, because a failure crossing
+    // the durable boundary is rebuilt without its class and without any
+    // non-enumerable property. Re-raising from the retained *value* is what
+    // makes a replayed refusal identical to a live one.
+    throw markGeneratedRequestRefusal(new SyntaxSelectionRefusal(record.refused), record.refused);
+  }
+  return record.symbols;
 }
 
 /**
- * The text a record holds, read as a closed protocol.
+ * What one occurrence answered: the rendered symbols, or core's own refusal of
+ * the names it was given.
  *
- * Exactly one member, a string. A record missing it, carrying a member this
- * version does not know, or holding one of the wrong type is a record this
- * version cannot read — not one to fill a default in for, because every default
- * here is a guess about what an earlier run actually showed somebody.
+ * Two alternatives rather than one, because the refusal has to survive replay
+ * and an error does not. `{ symbols }` is unchanged, so every record an earlier
+ * version wrote still reads as exactly what it meant.
  */
-function readSymbols(value: unknown): string | undefined {
+type SyntaxRecord = { readonly symbols: string } | { readonly refused: string };
+
+/**
+ * What a record holds, read as a closed protocol.
+ *
+ * Exactly one member, a string, under one of the two names this version knows.
+ * A record missing it, carrying a member this version does not know, holding
+ * both, or holding one of the wrong type is a record this version cannot read —
+ * not one to fill a default in for, because every default here is a guess about
+ * what an earlier run actually showed somebody.
+ */
+function readSyntaxRecord(value: unknown): SyntaxRecord | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }
-  const symbols = Reflect.get(value, "symbols");
-  if (Object.keys(value).length !== 1 || typeof symbols !== "string") {
+  if (Object.keys(value).length !== 1) {
     return undefined;
   }
-  return symbols;
+  const symbols = Reflect.get(value, "symbols");
+  if (typeof symbols === "string") {
+    return { symbols };
+  }
+  const refused = Reflect.get(value, "refused");
+  return typeof refused === "string" && refused.length > 0 ? { refused } : undefined;
 }

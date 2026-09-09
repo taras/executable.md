@@ -4,7 +4,7 @@
  *
  * The authorship workflow under test is the packaged `<Plan>` Component,
  * reached the way
- * the command reaches it: `runPlan` builds the authorship profile, the packaged
+ * the command reaches it: `runPlan` builds the Plan writer profile, the packaged
  * document runs inside it, and every observation here is of that document's
  * behaviour rather than of a TypeScript loop standing in for it.
  *
@@ -32,16 +32,16 @@ import type { ElicitationRequest } from "@executablemd/core";
 import { invocationSessionName, runPlan } from "../src/plan.ts";
 import type { PlanCommand } from "../src/plan.ts";
 import {
-  DEFAULT_AUTHORSHIP_ROOT,
-  authorshipDirectoryFor,
-  AUTHORSHIP_INSTRUCTIONS,
-} from "../src/authorship-profile.ts";
-import type { AuthorshipStack } from "../src/agent-stack.ts";
+  DEFAULT_PLAN_WRITER_ROOT,
+  planWriterDirectoryFor,
+  PLAN_WRITER_INSTRUCTIONS,
+} from "../src/plan-writer-profile.ts";
+import type { PlanWriterStack } from "../src/agent-stack.ts";
 import {
   ADAPTERS,
   AGENT,
   createPlanHarness,
-  useAuthorshipRoot,
+  usePlanWriterRoot,
   useWorkingDirectory,
 } from "./support/plan-harness.ts";
 import { makeStore } from "./support/fake-acp.ts";
@@ -51,13 +51,15 @@ import type { PlanHarness } from "./support/plan-harness.ts";
 const REQUEST = "write a greeting";
 
 /** A document that validates and runs. */
-const VALID = "Hello from the agent.\n";
+const VALID = "# A greeting\n\nHello from the agent.\n";
 
 /** A document that resolves no such component. */
-const UNRESOLVED = "<NoSuchComponent />\n";
+const UNRESOLVED = "# Broken\n\n<NoSuchComponent />\n";
 
 /** A root whose own source cannot be read: the frontmatter never closes. */
-const BROKEN_SOURCE = ["---", "props: [", "---", "", "hi", ""].join("\n");
+const BROKEN_SOURCE = ["---", "props: [", "---", "", "# Broken frontmatter", "", "hi", ""].join(
+  "\n",
+);
 
 /** A root whose two declared properties generate one option. */
 const COLLIDING = [
@@ -84,6 +86,8 @@ const REQUIRES_NAME = [
   "  additionalProperties: false",
   "---",
   "",
+  "# A greeting by name",
+  "",
   "Hello, {props.name}!",
   "",
 ].join("\n");
@@ -97,6 +101,8 @@ const NAME_IS_BOOLEAN = [
   "    name: { type: boolean }",
   "  additionalProperties: false",
   "---",
+  "",
+  "# A greeting by name",
   "",
   "Hello, {props.name}!",
   "",
@@ -113,6 +119,8 @@ function counting(type: "number" | "string"): string {
     "  additionalProperties: false",
     "---",
     "",
+    "# Counting",
+    "",
     "Counting to {props.count}.",
     "",
   ].join("\n");
@@ -127,7 +135,12 @@ function counting(type: "number" | "string"): string {
 const RETIRED_SENTINEL = "not this command's namespace\n";
 
 /** A Plan whose effect is visible on the filesystem if anything runs it. */
-const WRITES_A_FILE = ['<File path="drafted.txt">the draft ran</File>', ""].join("\n");
+const WRITES_A_FILE = [
+  "# Writes a file",
+  "",
+  '<File path="drafted.txt">the draft ran</File>',
+  "",
+].join("\n");
 
 /**
  * Who writes the Plan, as a dispatch settles it.
@@ -136,7 +149,7 @@ const WRITES_A_FILE = ['<File path="drafted.txt">the draft ran</File>', ""].join
  * is nothing for one to configure, and the ceiling authorship runs under is the
  * host's rather than the command line's.
  */
-const STACK: AuthorshipStack = {
+const STACK: PlanWriterStack = {
   provider: "acpx",
   defaultAgent: AGENT,
   adapters: ADAPTERS,
@@ -146,7 +159,7 @@ const STACK: AuthorshipStack = {
 function command(
   dir: string,
   request: string = REQUEST,
-  stack: AuthorshipStack = STACK,
+  stack: PlanWriterStack = STACK,
 ): PlanCommand {
   return { request, include: [dir], verbose: false, stack };
 }
@@ -267,12 +280,12 @@ describe(
   { sanitizeOps: false, sanitizeResources: false },
   () => {
     it("C2, C3, C14: the packaged program's own words ask for the document", function* () {
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
         // A repository TypeScript component, so the catalog has to state the one
         // thing it honestly cannot know without importing the module.
         yield* writeTextFile(join(dir, "Widget.ts"), "export default function Widget() {}\n");
 
-        const harness = createPlanHarness({ authorshipRoot });
+        const harness = createPlanHarness({ planWriterRoot });
         harness.fake.script({ reply: VALID });
         harness.script({ decision: "Approve" });
 
@@ -306,8 +319,10 @@ describe(
 
         // The host owns the instruction layer, and owns only the shape of an
         // answer: the catalog and the request are the program's to send.
-        expect(harness.fake.ensured[0]?.sessionOptions?.systemPrompt).toBe(AUTHORSHIP_INSTRUCTIONS);
-        expect(AUTHORSHIP_INSTRUCTIONS).not.toContain("Built-in components");
+        expect(harness.fake.ensured[0]?.sessionOptions?.systemPrompt).toBe(
+          PLAN_WRITER_INSTRUCTIONS,
+        );
+        expect(PLAN_WRITER_INSTRUCTIONS).not.toContain("Built-in components");
 
         // C3: one <Prompt> is one turn. Nothing repaired, nothing retried.
         expect(harness.fake.prompts).toHaveLength(1);
@@ -317,8 +332,8 @@ describe(
     });
 
     it("C3, C14: every turn that asks for a Plan states the whole requirement", function* () {
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const harness = createPlanHarness({ authorshipRoot });
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+        const harness = createPlanHarness({ planWriterRoot });
         // A draft that fails its check, then one that passes, then a revision.
         // Three turns, one of each kind that produces a Plan.
         harness.fake.script({ reply: UNRESOLVED });
@@ -361,8 +376,8 @@ describe(
       const keys: string[] = [];
       const directories: string[] = [];
       for (const _invocation of [0, 1]) {
-        yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-          const harness = createPlanHarness({ authorshipRoot });
+        yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+          const harness = createPlanHarness({ planWriterRoot });
           harness.fake.script({ reply: UNRESOLVED });
           harness.fake.script({ reply: UNRESOLVED });
           harness.fake.script({ reply: UNRESOLVED });
@@ -380,8 +395,8 @@ describe(
           const workdir = String(harness.fake.created[0]?.cwd);
           directories.push(workdir);
           // This suite reaches no directory this host would use for real.
-          expect(workdir.startsWith(`${authorshipRoot}${sep}`)).toBe(true);
-          expect(workdir.startsWith(DEFAULT_AUTHORSHIP_ROOT)).toBe(false);
+          expect(workdir.startsWith(`${planWriterRoot}${sep}`)).toBe(true);
+          expect(workdir.startsWith(DEFAULT_PLAN_WRITER_ROOT)).toBe(false);
         });
       }
       expect(keys[0]).not.toBe(keys[1]);
@@ -393,7 +408,7 @@ describe(
       // conversation in one directory — and one ACPX store is what turns that
       // from equal keys into an actually continued session. The root is shared
       // deliberately, and by this case alone.
-      yield* useAuthorshipRoot(function* (authorshipRoot) {
+      yield* usePlanWriterRoot(function* (planWriterRoot) {
         const store = makeStore();
         const named: string[] = [];
         const namedDirectories: string[] = [];
@@ -401,7 +416,7 @@ describe(
         const survived: boolean[] = [];
         for (const _invocation of [0, 1]) {
           yield* useWorkingDirectory(function* (dir) {
-            const harness = createPlanHarness({ authorshipRoot, store });
+            const harness = createPlanHarness({ planWriterRoot, store });
             harness.fake.script({ reply: VALID });
             harness.script({ decision: "Approve" });
 
@@ -412,7 +427,7 @@ describe(
             materializations.push(harness.fake.ensured[0]?.materialization);
             // A named conversation's directory outlives the invocation, because
             // its identity is what the next `--session ada` derives.
-            survived.push(yield* exists(authorshipDirectoryFor(authorshipRoot, "ada")));
+            survived.push(yield* exists(planWriterDirectoryFor(planWriterRoot, "ada")));
           });
         }
         expect(named[0]).toBe(named[1]);
@@ -422,8 +437,8 @@ describe(
         // derived from it. Only the leaf is the host's to keep the name out of:
         // the root above it carries a random hex UUID, which spells "ada" one
         // run in a hundred or so.
-        expect(namedDirectories[0]).toBe(authorshipDirectoryFor(authorshipRoot, "ada"));
-        expect(relative(authorshipRoot, namedDirectories[0])).not.toContain("ada");
+        expect(namedDirectories[0]).toBe(planWriterDirectoryFor(planWriterRoot, "ada"));
+        expect(relative(planWriterRoot, namedDirectories[0])).not.toContain("ada");
 
         // The second invocation continued the record the first established
         // rather than placing a second one: the store holds one, and only the
@@ -437,8 +452,8 @@ describe(
       // It exists and is empty while the turn runs, and it is gone once the
       // profile has torn down — before anything the host does with what was
       // approved.
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const harness = createPlanHarness({ authorshipRoot });
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+        const harness = createPlanHarness({ planWriterRoot });
         harness.fake.script({ reply: VALID });
         const seen: { workdir?: string; entries?: string[] } = {};
         harness.deps.installElicitation = watching(harness, function* (workdir) {
@@ -450,11 +465,11 @@ describe(
 
         expect(code).toBe(0);
         expect(seen.entries).toEqual([]);
-        expect(seen.workdir?.startsWith(`${authorshipRoot}${sep}`)).toBe(true);
+        expect(seen.workdir?.startsWith(`${planWriterRoot}${sep}`)).toBe(true);
         // Handed back non-recursively when the conversation ended, and the root
         // it lived under is still there for the next one.
         expect(yield* exists(String(seen.workdir))).toBe(false);
-        expect(yield* exists(authorshipRoot)).toBe(true);
+        expect(yield* exists(planWriterRoot)).toBe(true);
         // The approved Plan was still produced: cleanup is not a failure.
         expect(code).toBe(0);
       });
@@ -470,8 +485,8 @@ describe(
           },
         },
       ]) {
-        yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-          const harness = createPlanHarness({ authorshipRoot });
+        yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+          const harness = createPlanHarness({ planWriterRoot });
           if (ending.name === "stop") {
             harness.fake.script({ reply: VALID });
           }
@@ -484,14 +499,14 @@ describe(
           // question: the directory this ending made is gone, and nothing else
           // was made in its place.
           expect(yield* exists(String(harness.fake.created[0]?.cwd))).toBe(false);
-          expect(yield* until(readdir(authorshipRoot))).toEqual([]);
+          expect(yield* until(readdir(planWriterRoot))).toEqual([]);
         });
       }
 
       // Cancellation: the turn in flight is interrupted, and the ensure that
       // hands the directory back runs on the way out like every other one.
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const harness = createPlanHarness({ authorshipRoot });
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+        const harness = createPlanHarness({ planWriterRoot });
         harness.fake.script({ reply: VALID, manual: true });
 
         yield* scoped(function* () {
@@ -501,14 +516,14 @@ describe(
         });
 
         expect(yield* exists(String(harness.fake.created[0]?.cwd))).toBe(false);
-        expect(yield* until(readdir(authorshipRoot))).toEqual([]);
+        expect(yield* until(readdir(planWriterRoot))).toEqual([]);
       });
 
       // A failure between making the leaf and using it still hands it back. The
       // claim is taken before the `mkdir`, so there is no window in which a
       // directory exists that nothing is responsible for.
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const harness = createPlanHarness({ authorshipRoot });
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+        const harness = createPlanHarness({ planWriterRoot });
         harness.fake.script({ reply: VALID });
         // deno-lint-ignore require-yield
         harness.deps.installElicitation = function* () {
@@ -521,18 +536,18 @@ describe(
         expect(lines.join("\n")).toContain("could not install a review provider");
         // Nothing was built after it, and no empty leaf was left behind.
         expect(harness.fake.created).toHaveLength(0);
-        expect(yield* until(readdir(authorshipRoot))).toEqual([]);
+        expect(yield* until(readdir(planWriterRoot))).toEqual([]);
       });
 
       // Establishment failing for a reason of its own leaves nothing behind and
       // says what it found. The claim is already taken here, so the release runs
       // and finds no directory it was ever given — which is the one case where
       // an absent directory is the ordinary answer rather than interference.
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const blocked = join(authorshipRoot, "not-a-directory");
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+        const blocked = join(planWriterRoot, "not-a-directory");
         yield* writeTextFile(blocked, "in the way\n");
 
-        const harness = createPlanHarness({ authorshipRoot: blocked });
+        const harness = createPlanHarness({ planWriterRoot: blocked });
         harness.fake.script({ reply: VALID });
 
         const { value, lines } = yield* reported(() => runPlan(command(dir), harness.deps));
@@ -548,8 +563,8 @@ describe(
       // A leaf that disappears under a live conversation is interference, not a
       // tidy exit. The command fails terminally rather than shrugging at an
       // absent directory, and nothing it would have done next happens.
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const harness = createPlanHarness({ authorshipRoot });
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+        const harness = createPlanHarness({ planWriterRoot });
         harness.fake.script({ reply: VALID });
         harness.deps.installElicitation = watching(harness, function* (workdir) {
           yield* rm(workdir, { recursive: true, force: true });
@@ -575,8 +590,8 @@ describe(
       // something wrote there while the conversation ran, and this host
       // authorized nothing to. The draft was approved first, so what is being
       // observed is a Plan that would otherwise have been delivered.
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const harness = createPlanHarness({ authorshipRoot });
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+        const harness = createPlanHarness({ planWriterRoot });
         harness.fake.script({ reply: VALID });
         let workdir: string | undefined;
         let planted: string | undefined;
@@ -618,12 +633,12 @@ describe(
       // The same veto C10 proves, watched from the other side: by the time the
       // host reports what it decided about the approved bytes, the conversation
       // and its directory are both already gone.
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
         const widget = join(dir, "Widget.md");
         yield* writeTextFile(widget, "A widget.\n");
         const draft = ["# Uses a widget", "", "<Widget />", ""].join("\n");
 
-        const harness = createPlanHarness({ authorshipRoot });
+        const harness = createPlanHarness({ planWriterRoot });
         harness.fake.script({ reply: draft });
         let workdir: string | undefined;
         harness.deps.installElicitation = watching(harness, function* (directory) {
@@ -656,8 +671,8 @@ describe(
       // Where a real host keeps these conversations, and what the generated
       // logical name looks like. Both are identities this command owns, so both
       // are pinned rather than inferred from a directory a harness supplied.
-      expect(DEFAULT_AUTHORSHIP_ROOT.endsWith(join(".xmd", "plan", "sessions"))).toBe(true);
-      expect(DEFAULT_AUTHORSHIP_ROOT).not.toContain(join(".xmd", "prompt"));
+      expect(DEFAULT_PLAN_WRITER_ROOT.endsWith(join(".xmd", "plan", "sessions"))).toBe(true);
+      expect(DEFAULT_PLAN_WRITER_ROOT).not.toContain(join(".xmd", "prompt"));
 
       const first = invocationSessionName();
       const second = invocationSessionName();
@@ -674,17 +689,17 @@ describe(
       // must not touch is the one it would actually find. Proven after a
       // success and after an authored failure alike.
       for (const ending of ["approved", "stopped"] as const) {
-        yield* useAuthorshipRoot(function* (home) {
-          const authorshipRoot = join(home, ".xmd", "plan", "sessions");
+        yield* usePlanWriterRoot(function* (home) {
+          const planWriterRoot = join(home, ".xmd", "plan", "sessions");
           const retired = join(home, ".xmd", "prompt", "sessions");
           const sentinel = join(retired, "kept.txt");
-          yield* ensureDir(authorshipRoot);
+          yield* ensureDir(planWriterRoot);
           yield* ensureDir(retired);
           yield* writeTextFile(sentinel, RETIRED_SENTINEL);
 
           const workdirs: string[] = [];
           yield* useWorkingDirectory(function* (dir) {
-            const harness = createPlanHarness({ authorshipRoot });
+            const harness = createPlanHarness({ planWriterRoot });
             harness.fake.script({ reply: VALID });
             harness.script({ decision: ending === "approved" ? "Approve" : "Stop" });
 
@@ -696,8 +711,8 @@ describe(
           // The conversation really did run under this namespace — an empty
           // listing below would otherwise pass for a command that reached
           // neither tree — and its invocation-unique leaf was handed back.
-          expect(workdirs[0].startsWith(`${authorshipRoot}${sep}`)).toBe(true);
-          expect(yield* until(readdir(authorshipRoot))).toEqual([]);
+          expect(workdirs[0].startsWith(`${planWriterRoot}${sep}`)).toBe(true);
+          expect(yield* until(readdir(planWriterRoot))).toEqual([]);
 
           // The sibling is exactly as it was found, down to its bytes.
           expect((yield* until(readdir(join(home, ".xmd")))).sort()).toEqual(["plan", "prompt"]);
@@ -707,14 +722,14 @@ describe(
       }
     });
 
-    it("C5: the authorship profile's ceiling is the host's, and no flag widens it", function* () {
+    it("C5: the Plan writer profile's ceiling is the host's, and no flag widens it", function* () {
       // This session's own directory, empty, no MCP servers and no native tools
       // — observed while the command document is still running, because that is
       // the only moment the claim is about.
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
         yield* writeTextFile(join(dir, "secret.txt"), "the caller's tree\n");
 
-        const harness = createPlanHarness({ authorshipRoot });
+        const harness = createPlanHarness({ planWriterRoot });
         harness.fake.script({ reply: VALID });
         const seen: { cwd?: string; entries?: string[]; refusals: string[] } = { refusals: [] };
         harness.deps.installElicitation = function* () {
@@ -752,7 +767,7 @@ describe(
         // Not the caller's working directory: this session's, and empty while
         // the conversation ran.
         expect(seen.cwd).not.toBe(dir);
-        expect(seen.cwd).toBe(authorshipDirectoryFor(authorshipRoot, "ceiling"));
+        expect(seen.cwd).toBe(planWriterDirectoryFor(planWriterRoot, "ceiling"));
         expect(seen.entries).toEqual([]);
         // Stated rather than omitted: this host configures no MCP server and
         // allows no native tool on a fresh session.
@@ -760,21 +775,21 @@ describe(
         expect(harness.fake.ensured[0]?.sessionOptions?.allowedTools).toEqual([]);
         // And the command document is given nothing to act with.
         expect(seen.refusals).toEqual([
-          "xmd plan asked for a directory, which the authorship profile grants to nothing",
-          "xmd plan asked for a command, which the authorship profile grants to nothing",
-          "xmd plan asked for the network, which the authorship profile grants to nothing",
+          "xmd plan asked for a directory, which the Plan writer profile grants to nothing",
+          "xmd plan asked for a command, which the Plan writer profile grants to nothing",
+          "xmd plan asked for the network, which the Plan writer profile grants to nothing",
         ]);
       });
 
       // Something already in a named session's directory is a refusal, not a
       // cleanup. It happens before the provider exists, so no session is placed
       // and no turn is started — and what was there is still there afterwards.
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const occupied = authorshipDirectoryFor(authorshipRoot, "occupied");
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+        const occupied = planWriterDirectoryFor(planWriterRoot, "occupied");
         yield* ensureDir(occupied);
         yield* writeTextFile(join(occupied, "someone-elses.txt"), "not mine to delete\n");
 
-        const harness = createPlanHarness({ authorshipRoot });
+        const harness = createPlanHarness({ planWriterRoot });
         harness.fake.script({ reply: VALID });
 
         const { value, lines } = yield* reported(() =>
@@ -802,8 +817,8 @@ describe(
       // that could have widened it: what authorship is settled from carries a
       // provider and a default agent and no permission mode at all.
       expect("permissionMode" in STACK).toBe(false);
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const harness = createPlanHarness({ authorshipRoot });
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+        const harness = createPlanHarness({ planWriterRoot });
         harness.fake.script({ reply: VALID, requestsTool: "Bash" });
 
         const code = yield* runPlan(command(dir), harness.deps);
@@ -818,16 +833,16 @@ describe(
     it("C5: two cases' profile roots cannot see or remove one another", function* () {
       // Roots are made per scope and named by a UUID, so one case's cleanup
       // cannot reach another's directory even while both are live.
-      yield* useAuthorshipRoot(function* (mine) {
+      yield* usePlanWriterRoot(function* (mine) {
         const marker = join(mine, "mine.txt");
         yield* writeTextFile(marker, "still here\n");
 
-        yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-          expect(authorshipRoot).not.toBe(mine);
-          expect(authorshipRoot.startsWith(`${mine}${sep}`)).toBe(false);
-          expect(mine.startsWith(`${authorshipRoot}${sep}`)).toBe(false);
+        yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+          expect(planWriterRoot).not.toBe(mine);
+          expect(planWriterRoot.startsWith(`${mine}${sep}`)).toBe(false);
+          expect(mine.startsWith(`${planWriterRoot}${sep}`)).toBe(false);
 
-          const harness = createPlanHarness({ authorshipRoot });
+          const harness = createPlanHarness({ planWriterRoot });
           harness.fake.script({ reply: VALID });
           harness.script({ decision: "Approve" });
 
@@ -835,7 +850,7 @@ describe(
           expect(code).toBe(0);
           // The other root is untouched, and this one holds nothing afterwards.
           expect(yield* readTextFile(marker)).toBe("still here\n");
-          expect(yield* until(readdir(authorshipRoot))).toEqual([]);
+          expect(yield* until(readdir(planWriterRoot))).toEqual([]);
         });
 
         expect(yield* readTextFile(marker)).toBe("still here\n");
@@ -843,8 +858,8 @@ describe(
     });
 
     it("C6: a candidate is inert until the approved document runs", function* () {
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const harness = createPlanHarness({ authorshipRoot });
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+        const harness = createPlanHarness({ planWriterRoot });
         harness.fake.script({ reply: WRITES_A_FILE });
         harness.script({ decision: "Stop" });
 
@@ -860,8 +875,8 @@ describe(
 
     it("C7: a candidate defect earns a repair turn", function* () {
       // A defect the agent authored: the root's own frontmatter.
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const harness = createPlanHarness({ authorshipRoot });
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+        const harness = createPlanHarness({ planWriterRoot });
         harness.fake.script({ reply: BROKEN_SOURCE });
         harness.fake.script({ reply: VALID });
         harness.script({ decision: "Approve" });
@@ -887,8 +902,8 @@ describe(
       });
 
       // A defect the agent authored: a component this profile does not offer.
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const harness = createPlanHarness({ authorshipRoot });
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+        const harness = createPlanHarness({ planWriterRoot });
         harness.fake.script({ reply: UNRESOLVED });
         harness.fake.script({ reply: VALID });
         harness.script({ decision: "Approve" });
@@ -905,8 +920,8 @@ describe(
       // check is structural, because the values belong to whoever runs the
       // program later, and this command has no source to resolve them from. A
       // full root-props validation would send this back for repair.
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const harness = createPlanHarness({ authorshipRoot });
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+        const harness = createPlanHarness({ planWriterRoot });
         harness.fake.script({ reply: REQUIRES_NAME });
         harness.script({ decision: "Approve" });
 
@@ -920,8 +935,8 @@ describe(
 
     it("C8: one base draft, three repairs, and ten presentations", function* () {
       // Three repairs are available, and the fourth draft is what a person sees.
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const harness = createPlanHarness({ authorshipRoot });
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+        const harness = createPlanHarness({ planWriterRoot });
         harness.fake.script({ reply: UNRESOLVED });
         harness.fake.script({ reply: UNRESOLVED });
         harness.fake.script({ reply: UNRESOLVED });
@@ -938,8 +953,8 @@ describe(
 
       // A fourth invalid candidate is repair-exhausted: it reaches review with
       // its diagnostics, and there is no value that would approve it.
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const harness = createPlanHarness({ authorshipRoot });
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+        const harness = createPlanHarness({ planWriterRoot });
         for (const _draft of [0, 1, 2, 3]) {
           harness.fake.script({ reply: UNRESOLVED });
         }
@@ -963,8 +978,8 @@ describe(
 
       // Ten presentations: nine revisions, and a tenth round with nothing left
       // to revise into. Each revision starts its own repair budget.
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const harness = createPlanHarness({ authorshipRoot });
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+        const harness = createPlanHarness({ planWriterRoot });
         for (const round of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
           harness.fake.script({ reply: VALID });
           if (round < 10) {
@@ -992,9 +1007,13 @@ describe(
     });
 
     it("C9: arbitrary source cannot close the presentation, and stopping is authored", function* () {
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        // A document that holds a fence of its own, and a run of five backticks.
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+        // A document that holds a fence of its own, and a run of five
+        // backticks. Titled, so it is a draft to present rather than an
+        // information request.
         const fenced = [
+          "# Fenced content",
+          "",
           "Here is a block:",
           "",
           "```bash",
@@ -1005,7 +1024,7 @@ describe(
           "",
         ].join("\n");
 
-        const harness = createPlanHarness({ authorshipRoot });
+        const harness = createPlanHarness({ planWriterRoot });
         harness.fake.script({ reply: fenced });
         harness.script({ decision: "Approve" });
 
@@ -1021,8 +1040,8 @@ describe(
 
       // Stop reaches the command document's own `<Fail>`, with the message the
       // shipped Markdown wrote. None of that wording is the host's.
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const harness = createPlanHarness({ authorshipRoot });
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+        const harness = createPlanHarness({ planWriterRoot });
         harness.fake.script({ reply: VALID });
         harness.script({ decision: "Stop" });
 
@@ -1036,8 +1055,8 @@ describe(
       // never validated. The tenth is not a review at all — there is nothing to
       // approve and nothing left to revise into — so what ends the command is
       // the automatic explanation below rather than a decision somebody took.
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const harness = createPlanHarness({ authorshipRoot });
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+        const harness = createPlanHarness({ planWriterRoot });
         for (const round of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
           // A base draft and its three repairs, none of which validates.
           for (const _draft of [0, 1, 2, 3]) {
@@ -1072,8 +1091,8 @@ describe(
     });
 
     it("C3, C9: a tenth draft that cannot be repaired is explained automatically", function* () {
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const harness = createPlanHarness({ authorshipRoot });
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+        const harness = createPlanHarness({ planWriterRoot });
         for (const round of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
           for (const _draft of [0, 1, 2, 3]) {
             harness.fake.script({ reply: UNRESOLVED });
@@ -1134,9 +1153,9 @@ describe(
       // The bytes that leave the command are the approved candidate's, not an
       // earlier draft's: a revision replaces the whole document, and what a
       // caller reads back is the replacement.
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
         const out = join(dir, "release.md");
-        const harness = createPlanHarness({ authorshipRoot });
+        const harness = createPlanHarness({ planWriterRoot });
         harness.fake.script({ reply: counting("number") });
         harness.script({ decision: "Request changes", feedback: "count in words" });
         harness.fake.script({ reply: counting("string") });
@@ -1148,11 +1167,15 @@ describe(
         expect(yield* readTextFile(out)).toBe(counting("string"));
       });
 
-      // Nothing is stripped. A reply wrapped in a fence is not a document, so it
-      // earns repairs and a review — and what is shown is exactly what arrived.
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const wrapped = ["```md", "Hello.", "```", ""].join("\n");
-        const harness = createPlanHarness({ authorshipRoot });
+      // Nothing is stripped. A draft carrying a fence of its own reaches the
+      // review with that fence intact — what is shown is exactly what arrived.
+      //
+      // It is titled, because a response with no level-one heading is an
+      // information request rather than a draft, and this row is about what
+      // happens to a draft's bytes.
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+        const wrapped = ["# Wrapped", "", "```md", "Hello.", "```", ""].join("\n");
+        const harness = createPlanHarness({ planWriterRoot });
         for (const _draft of [0, 1, 2, 3]) {
           harness.fake.script({ reply: wrapped });
         }
@@ -1164,7 +1187,7 @@ describe(
     });
 
     it("C10: the host's own gate refuses after the command document has settled", function* () {
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
         // A repository component the draft uses. It is there while the Component
         // decides — twice, at the draft check and at the admission — and gone by
         // the time the command asks the same question for itself.
@@ -1173,7 +1196,7 @@ describe(
         const draft = ["# Uses a widget", "", "<Widget />", ""].join("\n");
         const out = join(dir, "release.md");
 
-        const harness = createPlanHarness({ authorshipRoot });
+        const harness = createPlanHarness({ planWriterRoot });
         harness.fake.script({ reply: draft });
         harness.script({ decision: "Approve" });
 
@@ -1220,7 +1243,7 @@ describe(
         });
 
         // The draft was sound, the person approved it, and the admission that
-        // followed the whole authorship frame coming down was sound too.
+        // followed the whole Plan writer frame coming down was sound too.
         expect(harness.reviews).toHaveLength(1);
         expect(harness.reviews[0].message).toContain("<Widget />");
         expect(outcomes).toEqual(["valid", "valid", "invalid"]);
@@ -1252,7 +1275,7 @@ describe(
     });
 
     it("C14: an interleaved Plan survives approval and delivery byte for byte", function* () {
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
         // What the shipped instruction asks for: the request restated in prose a
         // reader was written for, with each component beside the sentences that
         // describe what it does.
@@ -1272,7 +1295,7 @@ describe(
           "",
         ].join("\n");
 
-        const harness = createPlanHarness({ authorshipRoot });
+        const harness = createPlanHarness({ planWriterRoot });
         harness.fake.script({ reply: plan });
         harness.script({ decision: "Approve" });
 
@@ -1293,8 +1316,8 @@ describe(
     });
 
     it("C3, C9: what you read says each thing once, however many rounds it took", function* () {
-      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const harness = createPlanHarness({ authorshipRoot });
+      yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+        const harness = createPlanHarness({ planWriterRoot });
         // Round one: a draft that cannot be repaired, presented with its problems.
         for (const _draft of [0, 1, 2, 3]) {
           harness.fake.script({ reply: UNRESOLVED });
@@ -1337,8 +1360,8 @@ describe(
       // presentation or the tenth: an approvable Plan existed and you chose to
       // stop, and ten rounds of it do not accumulate into a different sentence.
       for (const rounds of [1, 10]) {
-        yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-          const harness = createPlanHarness({ authorshipRoot });
+        yield* useWorkingDirectory(function* (dir, planWriterRoot) {
+          const harness = createPlanHarness({ planWriterRoot });
           for (const round of Array.from({ length: rounds }, (_, i) => i + 1)) {
             harness.fake.script({ reply: VALID });
             if (round < rounds) {

@@ -88,7 +88,7 @@ fixed command preflight
   -> execute the exact packaged plan command document, which is an adapter
        -> <Plan>, the packaged Component, with the request as its Prompt
             -> announce Preparing, then build the run-profile syntax symbols
-            -> the authorship frame, and one Session inside it
+            -> the Plan writer frame, and one Session inside it
             -> generate, check, repair, review, revise, approve, explain or fail,
                announcing each phase on stderr before it happens
             -> teardown, then structural admission of the exact approved bytes
@@ -396,12 +396,12 @@ surfaces' endings, each written once. The command's wording is unchanged; the
 component's says that no Plan was returned rather than that nothing was output or
 run. TypeScript supplies neither the words nor the choice between them.
 
-**The five private capabilities.** They are components only these exact bytes may
+**The seven private capabilities.** They are components only these exact bytes may
 write, declared by the host with the definition and revoked with the execution.
 `<PlanInputs>` freezes the instruction identity, session placement, surface and
 whether that placement outlives the invocation, and refuses a continuation whose
 instructions render differently — as stale input, before a directory, a provider,
-a turn or a review exists. Paired `<PlanAuthorship>` installs the constrained
+a turn or a review exists. Paired `<PlanWriter>` installs the constrained
 frame and does not return until every part of it has torn down; paired
 `<PlanProgress>` says which phase is running; `<CheckDraft>` answers about one
 draft without executing it; and `<AdmitPlan>` structurally admits the approved
@@ -409,14 +409,39 @@ bytes after that teardown and retains them as one Plan artifact — the invocati
 identity, the instruction identity, the approved source, its digest and that
 successful admission — before the Component renders them.
 
+Two of the seven serve the information loop. `<ClassifyPlanResponse>` is a pure
+value component answering the closed union `"draft" | "information"` from the
+lexical frontmatter-and-first-block rule alone; it validates nothing, modifies
+nothing, and reads no authority. Paired `<PlanInformation>` projects its child
+public `<Evaluate>`, requires `as`, renders nothing, and binds the closed
+internal result `{ status: "found" | "refused", text: string }`: exact rendered
+text on success, and a safe normalized reason when — and only when — the child
+failed carrying core's generated-request-refusal classification, after its
+teardown completed.
+Every other failure is rethrown unchanged, and a teardown failure wins over a
+candidate retry. That internal status is what the workflow branches on for its
+own progress and follow-up wording; the Agent receives `text` and never the
+envelope. It owns no evaluator, profile, durable protocol, timer or meter.
+
+After deriving either complete rendered findings or a safe refusal, and before
+binding that result, `<PlanInformation>` submits the complete text to the current
+execution's authenticated secret policy. This pre-disclosure check uses the same
+scanner and enabled/disabled decision as durable publication but appends no
+event. A secret or any failure of that check is terminal, so neither progress nor
+a following Prompt can receive the text. `<PlanInformation>` consumes this
+execution-owned protection; it does not own another secret policy or durable
+protocol.
+
 **The symbols are not one of them.** What a document may write is a public
 question with a public answer, and canonical core owns both, so `Plan.md` writes
 the same `<Syntax as="syntax" />` any document writes and binds the vocabulary
 directly into every authorship prompt. Its retention is core's: one
-`syntax_symbols` read per occurrence, retaining exactly
-`{ symbols: string }`, hostile-parsed on continuation so a resumed authorship is
-shown the vocabulary the run actually showed it rather than one rebuilt from a
-tree that has moved. `<PlanInputs>` retains exactly `{ instruction }` beside it,
+`syntax_symbols` read per occurrence, hostile-parsed on continuation so a resumed
+authorship is shown the vocabulary the run actually showed it rather than one
+rebuilt from a tree that has moved. This occurrence is the bare form, which names
+no component and so cannot produce the named-selection refusal the closed
+`syntax_symbols` value also admits (§5.3.1); its record is always
+`{ symbols: string }`. `<PlanInputs>` retains exactly `{ instruction }` beside it,
 so the symbols and the question are two records that can be read and reconciled
 independently, and a missing, additional or mistyped member in either refuses
 before authorship begins.
@@ -441,22 +466,22 @@ profile and does not gain the component. None of them is syntax any document may
 the caller's root, not the Prompt the caller projected, not a sibling `<Plan>`,
 not an imported component, and nothing middleware can answer.
 
-## The authorship profile
+## The Plan writer profile
 
-The authorship profile is the trusted-host assembly the packaged `<Plan>`
+The Plan writer profile is the trusted-host assembly the packaged `<Plan>`
 Component runs its authored turns under. It supplies the frozen inputs, a constrained Agent provider,
 Elicitation, the fixed first-party components and the host-declared draft check.
 The command's own execution uses no repository component search — that
 execution's include list is empty — and exposes no custom root.
 
-The frame is installed by `<PlanAuthorship>`, inside the invocation that owns it,
+The frame is installed by `<PlanWriter>`, inside the invocation that owns it,
 rather than around the execution. That is what makes it the same ceiling on both
 surfaces: an ordinary document has an execution of its own, with its own
 provider and its own capabilities, and a Plan written inside it is still written
 under this one. Broader authority in the calling document widens nothing, and the
 constrained provider reaches nothing outside the content the Component projects.
 
-### Agent authority under the authorship profile
+### Agent authority under the Plan writer profile
 
 The assistant that writes a Plan is assembled separately from the final run
 provider:
@@ -642,6 +667,68 @@ diagnostics, and every answer must be another complete replacement Plan. The
 fourth draft with problems is repair-exhausted and goes to human review with its
 diagnostics. No fence is stripped, no Markdown substring is extracted and no
 patch is applied.
+
+**Read-only information requests.** An agent that needs to look at the project
+before writing may answer any of the three Plan-producing turns with a read-only
+XMD information request instead of a draft. The workflow evaluates that response
+through the public component under the host's own read authority, hands the
+rendered findings back as inert context, and asks again.
+
+*Classification is lexical and happens before anything else.* A response is a
+**draft** when the first nonempty body block, after optional lexically closed
+`---` frontmatter, is a nonempty ATX or Setext level-one heading. Everything else
+— an unterminated frontmatter envelope, a body block before the heading, or no
+first heading — is an **information candidate**. The frontmatter is not parsed:
+closed but invalid YAML is still a draft, and goes to the existing structural
+repair path. A draft is never evaluated and its bytes are never rewritten.
+
+*What a request may contain* is exactly the shared ordinary read profile: File,
+Glob and canonical Syntax, with core Json always available as pure composition,
+local bindings, declarative expression props, and every built-in structural
+construct. `<Plan>` selects only `read`. It installs no profile of its own,
+creates no second evaluator and starts no child execution; a trusted host that
+already stated a profile keeps it.
+
+*The budget is eight requests for one invocation*, shared across initial
+drafting, repair and revision. A success and a safe refusal each spend one. They
+neither consume nor reset the ten-draft and three-repair budgets, and those do
+not reset this one. The ninth candidate is not evaluated and starts no following
+turn. The explanation turn is outside the loop and cannot request information.
+
+*The next turn receives the fragment's complete rendered text, or one safe
+refusal*, identified as inert context rather than instructions or Plan content.
+Empty rendered output is a successful empty finding. There is no observation
+collection and no result envelope; a value the fragment bound but did not render
+is not sent.
+
+*Recovery is narrow.* Public `<Evaluate>` still throws. The workflow recovers
+exactly one typed class — a generated-request refusal, which is malformed or
+unauthorized generated source, a declarative expression, binding, construct,
+form or prop error, invalid admitted Syntax or Glob input, or an ordinary
+captured read reporting `Err` — and only after the child's teardown has
+completed. Everything else stops authorship: a missing, duplicate or revoked
+profile, a broken protected route, a Files provider that throws or answers with
+malformed infrastructure data, stale or corrupt history, persistence, journal or
+secret failure, unexpected runtime failure, teardown failure, and outer
+cancellation including the command's `--timeout`. A cleanup failure wins over a
+candidate retry. No `<Try>`, `<Catch>` or `<Finally>` surface is added.
+
+*Disclosure follows settlement.* Default progress announces the phase and the
+ordinal — `Information request 2 of 8` — and nothing about the request, the
+findings, a path or a refusal. Verbose progress adds the complete committed
+request and, after evaluation and cleanup settle, the complete findings or safe
+refusal as inert data. Embedded `<Plan>` emits no command progress into approved
+source. Durable publication crosses the existing serialized pre-append secret
+gate. Settled information text additionally crosses the same execution's
+non-durable pre-disclosure check before `<PlanInformation>` returns, so a secret
+reaches neither verbose output nor a following Agent Prompt. Secret or scanner
+failure is terminal.
+
+*Continuation is ordinary.* A completed request replays without another Agent
+turn, Syntax lookup, File read or Glob traversal; a partial continuation
+restores completed effects and resumes at the first unrecorded one. Requests add
+no durable record of their own beyond the ordinary Agent response, generated
+admission, component effects and following Prompt.
 
 **Human review.** At most ten draft presentations: the initial review plus at
 most nine revisions. The choices are the words shown, and they are the values the
@@ -951,7 +1038,7 @@ ending of this command does.
 | symbols an include makes unreadable | no turn, review, stdout or file |
 | a `--journal` entry the file will not take | no stdout or file; the committed prefix stays |
 | a progress destination that stops accepting bytes | no stdout or file; accepted bytes stay |
-| a host that supplies no Agent context, or a provider that cannot establish the authorship profile's ceiling | no session, no turn |
+| a host that supplies no Agent context, or a provider that cannot establish the Plan writer profile's ceiling | no session, no turn |
 | a turn that did not complete | no review, stdout or file |
 | the command document's authored `<Fail>` — stopping, the automatic explanation, or the unexpected ending after neither | no stdout or file |
 | command document teardown | no structural validation, stdout or file |
@@ -1009,3 +1096,15 @@ neither observation never interpreted what it wrote.
 | PO13 | A failed destination | A consumer that fails while a turn is live cancels that turn, waits for every owned teardown, attempts no artifact sink, keeps the bytes stderr accepted, and uses the exact progress-failure diagnostic |
 | PO14 | Ordering is unchanged | Cancellation, teardown failure, final validation refusal, the `--output` refusal and a successful delivery all keep their order, and no phase claims an artifact was delivered |
 | PO15 | The adapter and the symbols | The packaged adapter emits no prose of its own, and the symbols are observed exactly once, through public `<Syntax />`, after Preparing; continuation restores that observation without rebuilding it |
+| PI1 | Selected documentation, then a Plan | A request asking for named `<Syntax>` documentation returns only those details, the next turn produces a normal reviewable Plan, and no full-catalog injection occurs |
+| PI2 | Composed findings | One response binds Glob, File and Syntax and renders a chosen object through Json; the next turn receives exactly that text. An empty match renders `[]`. No Syntax-specific parser, filesystem shortcut or implicit observation collection takes part |
+| PI3 | Lexical classification | ATX and Setext H1-first responses are inert drafts, closed invalid YAML included; an unterminated frontmatter envelope, a body block before the heading and a missing heading are candidates. Approved bytes stay exact and no draft is evaluated |
+| PI4 | Both surfaces, whole-fragment refusal | `xmd plan` and embedded `<Plan>` read through the same host-installed profile, and a prohibited operation anywhere in the fragment — including an untaken branch — refuses before any read |
+| PI5 | Documentation is not authority | Named Syntax describes `<Elicit>` and paired `<File>`, and neither becomes executable; bare Syntax reports Json plus the read vocabulary |
+| PI6 | Cleanup precedes the next turn | Success and refusal both complete the projection, every acquired read and the protected route before findings are published and before the following turn begins; a cleanup failure is terminal and wins over a candidate retry |
+| PI7 | Independent budgets | Requests interleave with initial, repair and revision turns; successes and refusals share one count of eight; the ten-draft and three-repair budgets are unaffected in both directions; the ninth candidate is not evaluated and starts no turn |
+| PI8 | Continuation | A completed request replays with live Agent, Syntax, File and Glob tripwires at zero; a partial continuation resumes at the first unrecorded effect; changed source, selected authority, lexical reference, Files scope or capture format refuses before reuse |
+| PI9 | Distribution | The embedded request-to-approved-Plan journey executes through source, emitted npm and compiled installations. The command journey executes through the in-process production command assembly and exact packaged command document. Npm and compiled controls verify packaged command and Plan assets, Plan identity and digest, its exact text contract and private closure, and the canonical protected Syntax/Evaluate tier |
+| PI10 | Recoverable versus terminal | A malformed request and an ordinary read `Err` are each classified by core as a refused generated request, which `<Plan>` alone turns into one safe retry context; missing or broken profile or protected route, a throwing Files provider, stale or corrupt history, journal or secret failure, unexpected runtime failure, teardown failure and outer cancellation each stop authorship. Public `<Evaluate>` still throws under ordinary use |
+| PI11 | Language, not authority | Branching, binding and bounded iteration compose with admitted reads under ordinary rules, and a prohibited component in an untaken branch refuses the whole fragment with zero reads |
+| PI12 | Disclosure order | Observe default, verbose, journal and Agent prompts for success and refusal, then place a synthetic secret in a file read by an information request. Default output stays content-free; detailed findings follow settlement; the secret appears in no output, journal entry or Agent Prompt, starts no following turn, review or artifact, and ends with the existing terminal secret rejection |

@@ -1,7 +1,7 @@
 /**
  * Tier PH — the acts `xmd plan` performs as the host
- * (specs/plan-command-spec.md §The authorship profile,
- * specs/acp-client-spec.md §The `xmd plan` authorship profile).
+ * (specs/plan-command-spec.md §The Plan writer profile,
+ * specs/acp-client-spec.md §The `xmd plan` Plan writer profile).
  *
  * The profile refuses the command document a command, and two of the things the
  * command itself does run one: it installs this build's ACP adapter, and it opens
@@ -26,16 +26,18 @@ import type { Operation } from "effection";
 
 import { runPlan } from "../src/plan.ts";
 import type { PlanCommand } from "../src/plan.ts";
-import type { AuthorshipStack } from "../src/agent-stack.ts";
+import type { PlanWriterStack } from "../src/agent-stack.ts";
 import { ADAPTERS, AGENT, createPlanHarness, useWorkingDirectory } from "./support/plan-harness.ts";
 import type { PlanHarness } from "./support/plan-harness.ts";
 
 const REQUEST = "write a greeting";
 
 /** A Plan the host's validator accepts. */
-const PLAN = ['<File path="drafted.txt">the draft ran</File>', ""].join("\n");
+const PLAN = ["# Writes a file", "", '<File path="drafted.txt">the draft ran</File>', ""].join(
+  "\n",
+);
 
-const STACK: AuthorshipStack = {
+const STACK: PlanWriterStack = {
   provider: "acpx",
   defaultAgent: AGENT,
   adapters: ADAPTERS,
@@ -77,12 +79,12 @@ function openingHarness(harness: PlanHarness, url: string): PlanHarness {
 
 describe("Tier PH — the acts xmd plan performs as the host", () => {
   it("PH1: opening the review form reaches a command the document cannot", function* () {
-    yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+    yield* useWorkingDirectory(function* (dir, planWriterRoot) {
       const commands: string[][] = [];
       yield* recordCommands(commands);
 
       const url = "http://127.0.0.1:0/f/token/";
-      const harness = openingHarness(createPlanHarness({ authorshipRoot }), url);
+      const harness = openingHarness(createPlanHarness({ planWriterRoot }), url);
       harness.fake.script({ reply: PLAN });
       harness.script({ decision: "Approve" });
 

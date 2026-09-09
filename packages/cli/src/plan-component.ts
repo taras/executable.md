@@ -1,5 +1,5 @@
 /**
- * `<Plan>` — how this host declares the component, and the five private
+ * `<Plan>` — how this host declares the component, and the seven private
  * capabilities only its own bytes may write.
  *
  * The Component itself is `src/documents/Plan.md` rather than anything here:
@@ -27,12 +27,14 @@
  *
  * ## Why the capabilities are private
  *
- * `<PlanInputs>`, `<PlanAuthorship>`, `<PlanProgress>`, `<CheckDraft>` and
- * `<AdmitPlan>` are the phases of one invocation, not components anyone composes
- * with. Freezing the inputs, installing a constrained Agent frame, telling an
- * operator which phase is running, answering about a draft and admitting the
- * approved bytes are each meaningless outside the workflow that orders them —
- * and each carries authority the enclosing document does not have.
+ * `<PlanInputs>`, `<PlanWriter>`, `<PlanProgress>`, `<CheckDraft>`,
+ * `<AdmitPlan>`, `<ClassifyPlanResponse>` and `<PlanInformation>` are the phases
+ * of one invocation, not components anyone composes with. Freezing the inputs,
+ * installing a constrained Agent frame, telling an operator which phase is
+ * running, answering about a draft, admitting the approved bytes, deciding what
+ * an Agent just sent and settling one information request are each meaningless
+ * outside the workflow that orders them — and each carries authority the
+ * enclosing document does not have.
  * So they resolve only while canonical core is expanding these exact bytes:
  * not from the caller's root, not from the Prompt the caller projected, not from
  * a sibling `<Plan>`, and not from anything middleware can answer.
@@ -53,9 +55,17 @@ import {
   content,
   DocumentOutput,
   retainedSource,
+  scanSecrets,
+  SecretDetectedError,
+  secretPolicy,
+  tryContent,
   validateDocumentStructure,
 } from "@executablemd/core";
-import { sourceDigest } from "@executablemd/core/host";
+import {
+  classifyPlanResponse,
+  generatedRequestRefusal,
+  sourceDigest,
+} from "@executablemd/core/host";
 import type {
   DeclaredMarkdownComponent,
   IdentityClaimant,
@@ -65,12 +75,12 @@ import type { DocumentValidation } from "@executablemd/core";
 import type { ComponentInvocation } from "@executablemd/core";
 
 import {
-  DEFAULT_AUTHORSHIP_ROOT,
-  installAuthorshipFrame,
+  DEFAULT_PLAN_WRITER_ROOT,
+  installPlanWriterFrame,
   useSessionDirectory,
-} from "./authorship-profile.ts";
-import type { PlanAuthorship, PlanAuthorshipObservation } from "./authorship-profile.ts";
-import type { CandidateAssessment } from "./authorship-profile.ts";
+} from "./plan-writer-profile.ts";
+import type { PlanWriter, PlanWriterObservation } from "./plan-writer-profile.ts";
+import type { CandidateAssessment } from "./plan-writer-profile.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import { PLAN_DOCUMENT, readPackagedDocument } from "./packaged-document.ts";
 import { useRunProfileRegistry } from "./syntax.ts";
@@ -173,7 +183,7 @@ export interface PlanComponentAssembly {
    * existed. No prop, binding, registration, middleware answer or separately
    * loaded copy can supply or replace one.
    */
-  readonly context: Result<PlanAuthorship>;
+  readonly context: Result<PlanWriter>;
   /** What this host states about machine-wide agent sessions, if anything. */
   readonly sessions?: MachineSessionAssembly;
   /**
@@ -184,7 +194,7 @@ export interface PlanComponentAssembly {
    * one — there is no flag, no environment variable and no contextual Api to
    * reach, so a document cannot move where authorship directories live.
    */
-  readonly authorshipRoot?: string;
+  readonly planWriterRoot?: string;
   /**
    * The logical session name this surface fixes, when it fixes one.
    *
@@ -208,7 +218,7 @@ export interface PlanComponentAssembly {
   /** The scope the two host acts run in, captured before the frame exists. */
   readonly host: Scope;
   /** A trusted host-only observation after the whole frame is installed. */
-  observeAuthorship?(observation: PlanAuthorshipObservation): Operation<void>;
+  observePlanWriter?(observation: PlanWriterObservation): Operation<void>;
   /** Who answers the review question. */
   installElicitation(): Operation<void>;
   /**
@@ -259,7 +269,7 @@ const OPTIONAL_SESSION = {
   additionalProperties: false,
 };
 
-const AUTHORSHIP_PROPS = {
+const PLAN_WRITER_PROPS = {
   type: "object",
   properties: {
     session: { type: "string", minLength: 1 },
@@ -282,6 +292,9 @@ const PROGRESS_PROPS = {
   properties: { verbose: { type: "boolean" } },
   additionalProperties: false,
 };
+
+/** A component that takes nothing at all beyond its `as` capture. */
+const EMPTY_PROPS = { type: "object", properties: {}, additionalProperties: false };
 
 const SOURCE_PROP = {
   type: "object",
@@ -309,6 +322,38 @@ const CHECK_RETURNS = {
   type: "object",
   properties: { valid: { type: "boolean" }, diagnostics: { type: "object" } },
   required: ["valid", "diagnostics"],
+  additionalProperties: false,
+};
+
+/**
+ * What one Agent response is: a Plan draft, or a read-only information request.
+ *
+ * A closed union, because the workflow branches on it and a third answer would
+ * be a branch nobody wrote. The rule itself is core's — the frontmatter
+ * delimiters and the definition of a heading are — and this component is the
+ * thin private surface `Plan.md` reaches it through.
+ */
+const CLASSIFY_RETURNS = {
+  type: "string",
+  enum: ["draft", "information"],
+};
+
+/**
+ * What one information request settled as.
+ *
+ * Closed on purpose, and internal on purpose. The Agent receives `text` and
+ * never this envelope: `status` exists so the workflow can pick the right
+ * progress heading and the right follow-up wording, which is a decision about
+ * what to say to a person and to the next turn rather than a result the
+ * evaluation produced.
+ */
+const INFORMATION_RETURNS = {
+  type: "object",
+  properties: {
+    status: { type: "string", enum: ["found", "refused"] },
+    text: { type: "string" },
+  },
+  required: ["status", "text"],
   additionalProperties: false,
 };
 
@@ -351,10 +396,12 @@ export function* planComponentDeclaration(
     exact: true,
     privates: [
       planInputs(assembly),
-      planAuthorship(assembly),
+      planWriter(assembly),
       planProgress(assembly),
       checkDraft(validate),
       admitPlan(validate),
+      classifyPlanResponseComponent(),
+      planInformation(),
     ],
   };
   declared.push(declaration);
@@ -412,10 +459,22 @@ function describedPrivates(): readonly IdentityComponent[] {
       returns: INPUTS_RETURNS,
       forms: ["self-closing"],
     },
-    { name: "PlanAuthorship", props: AUTHORSHIP_PROPS, forms: ["paired"] },
+    { name: "PlanWriter", props: PLAN_WRITER_PROPS, forms: ["paired"] },
     { name: "PlanProgress", props: PROGRESS_PROPS, forms: ["paired"] },
     { name: "CheckDraft", props: SOURCE_PROP, returns: CHECK_RETURNS, forms: ["self-closing"] },
     { name: "AdmitPlan", props: ADMIT_PROPS, returns: { type: "string" }, forms: ["self-closing"] },
+    {
+      name: "ClassifyPlanResponse",
+      props: SOURCE_PROP,
+      returns: CLASSIFY_RETURNS,
+      forms: ["self-closing"],
+    },
+    {
+      name: "PlanInformation",
+      props: EMPTY_PROPS,
+      returns: INFORMATION_RETURNS,
+      forms: ["paired"],
+    },
   ];
   return described.map((component) => ({
     ...component,
@@ -511,7 +570,7 @@ function planInputs(assembly: PlanComponentAssembly): IdentityComponent {
  *
  * The public `session` prop is the whole of the question on the component
  * surface, and it is answered here — inside the frozen inputs — because this is
- * the last place that can see it. `<PlanAuthorship>` receives a placement rather
+ * the last place that can see it. `<PlanWriter>` receives a placement rather
  * than a prop, and a placement cannot be asked whether somebody wrote it: a name
  * a caller can write again needs a directory that is still there next time, and
  * one this expansion derived belongs to this expansion and goes back with it.
@@ -542,7 +601,7 @@ function placementFor(
 }
 
 /**
- * Install the constrained authorship frame, project the workflow inside it, and
+ * Install the constrained Plan writer frame, project the workflow inside it, and
  * do not return until every part of it has finished tearing down.
  *
  * The frame is this invocation's own scope, so the provider, the authorship
@@ -551,14 +610,14 @@ function placementFor(
  * Component — the structural admission and the return — is therefore written after
  * teardown by construction rather than by a rule somebody has to remember.
  */
-function planAuthorship(assembly: PlanComponentAssembly): IdentityComponent {
+function planWriter(assembly: PlanComponentAssembly): IdentityComponent {
   return {
-    name: "PlanAuthorship",
-    origin: `${PLAN_ORIGIN}#PlanAuthorship`,
+    name: "PlanWriter",
+    origin: `${PLAN_ORIGIN}#PlanWriter`,
     forms: ["paired"],
-    props: AUTHORSHIP_PROPS,
+    props: PLAN_WRITER_PROPS,
     factory: () =>
-      function* PlanAuthorship(props: Record<string, Json>): Operation<string> {
+      function* PlanWriter(props: Record<string, Json>): Operation<string> {
         // Before a directory exists, before a provider exists, and therefore
         // before any session could be placed or any turn started. A host that
         // supplies no Agent context refuses rather than writing a Plan under
@@ -571,7 +630,7 @@ function planAuthorship(assembly: PlanComponentAssembly): IdentityComponent {
 
         const session = String(props.session);
         const established = yield* useSessionDirectory({
-          root: assembly.authorshipRoot ?? DEFAULT_AUTHORSHIP_ROOT,
+          root: assembly.planWriterRoot ?? DEFAULT_PLAN_WRITER_ROOT,
           session,
           // A placement this expansion derived belongs to it and goes back with
           // it; a name a caller wrote is one they can write again, so its
@@ -583,17 +642,17 @@ function planAuthorship(assembly: PlanComponentAssembly): IdentityComponent {
           throw established.error;
         }
 
-        yield* installAuthorshipFrame({
+        yield* installPlanWriterFrame({
           workdir: established.value,
-          authorship: context.value,
+          planWriter: context.value,
           host: assembly.host,
           session,
           ...(typeof props.authoredSession === "string"
             ? { authoredSession: props.authoredSession }
             : {}),
-          ...(assembly.observeAuthorship === undefined
+          ...(assembly.observePlanWriter === undefined
             ? {}
-            : { observe: assembly.observeAuthorship }),
+            : { observe: assembly.observePlanWriter }),
           installElicitation: assembly.installElicitation,
         });
 
@@ -686,7 +745,124 @@ function checkDraft(validate: StructuralValidation): IdentityComponent {
 }
 
 /**
- * Structurally admit the exact approved bytes, after the whole authorship frame
+ * Which of the two things an Agent just sent.
+ *
+ * Pure, and deliberately not durable: the answer is a function of the exact
+ * response bytes, so a continuation that has the response has the answer, and a
+ * record would be a second copy of something that cannot disagree with itself.
+ * The rule lives in core, beside the Markdown parser and the frontmatter
+ * delimiters it has to agree with — a classifier that drew the body boundary
+ * differently from the structural check would send a draft to evaluation.
+ */
+function classifyPlanResponseComponent(): IdentityComponent {
+  return {
+    name: "ClassifyPlanResponse",
+    origin: `${PLAN_ORIGIN}#ClassifyPlanResponse`,
+    forms: ["self-closing"],
+    props: SOURCE_PROP,
+    returns: CLASSIFY_RETURNS,
+    // deno-lint-ignore require-yield
+    factory: () =>
+      function* ClassifyPlanResponse(props: Record<string, Json>): Operation<Json> {
+        return classifyPlanResponse(String(props.source));
+      },
+  };
+}
+
+/**
+ * Run one information request, and say how it settled.
+ *
+ * This is the only place in the workflow that turns a failure back into another
+ * turn, and it is narrow on purpose. `tryContent()` hands back the child's
+ * *original* failure rather than a boundary's account of it, which is what lets
+ * this ask core one factual question: was that failure core refusing the
+ * generated request itself? Core answers only that. Deciding that a refused
+ * request earns the agent another turn is this workflow's policy, and this is
+ * where it is made. An unmarked failure is rethrown unchanged: a revoked
+ * profile, stale history, a provider that threw, a secret rejection and a
+ * teardown failure all stop authorship here, exactly as they would without this
+ * wrapper.
+ *
+ * A refusal discards whatever the fragment had rendered before it failed. Half
+ * a finding is not a finding, and sending one would tell the next turn that a
+ * read succeeded when it did not.
+ *
+ * It owns no evaluator, no profile, no durable protocol and no timer. The child
+ * is public `<Evaluate>`, under the authority the host installed, and its own
+ * projection teardown has completed by the time this settles.
+ *
+ * ## Why the secret check is here rather than at the journal
+ *
+ * The next Prompt is a disclosure destination like the progress stream and the
+ * journal, and it is *not* durable — it reaches the Agent before any event of
+ * it is appended. So the serialized pre-append gate, which is still the
+ * authority for durable publication, cannot be what protects it: by the time
+ * that gate sees the Prompt, the Agent has it.
+ *
+ * The complete settled text therefore crosses the execution's own scanner
+ * before this returns, which is the last moment at which nothing has been
+ * disclosed. Canonical execution owns the policy and the scanner; this asks
+ * them and appends nothing.
+ */
+function planInformation(): IdentityComponent {
+  return {
+    name: "PlanInformation",
+    origin: `${PLAN_ORIGIN}#PlanInformation`,
+    forms: ["paired"],
+    props: EMPTY_PROPS,
+    returns: INFORMATION_RETURNS,
+    factory: () =>
+      function* PlanInformation(): Operation<Json> {
+        // The child and its structured teardown have both settled by the time
+        // this returns, so what is scanned below is complete text and not a
+        // fragment still able to produce more.
+        const projected = yield* tryContent();
+        const settled = ((): { status: string; text: string } => {
+          if (projected.failure === undefined) {
+            return { status: "found", text: projected.text };
+          }
+          const reason = generatedRequestRefusal(projected.failure);
+          if (reason === undefined) {
+            throw projected.failure;
+          }
+          return { status: "refused", text: reason };
+        })();
+        // Both outcomes, because a safe refusal is still text this run derived
+        // and is still about to be disclosed.
+        yield* withholdSecrets(settled.text);
+        return settled;
+      },
+  };
+}
+
+/**
+ * Refuse to disclose `text` if this execution's scanner finds a secret in it.
+ *
+ * The policy is the running execution's own, resolved here rather than
+ * captured: absent or unauthentic, it fails instead of reporting "off", so a
+ * `<PlanInformation>` interpreted outside the execution that installed the
+ * policy discloses nothing. A host that explicitly turned detection off is
+ * followed exactly — this is a consumer of that decision and never a second,
+ * always-on policy of the Plan's own.
+ *
+ * Every ending here is terminal by construction: it throws, so nothing binds,
+ * no progress is written and no following turn begins.
+ */
+function* withholdSecrets(text: string): Operation<void> {
+  const policy = yield* secretPolicy();
+  if (!policy.enabled) {
+    return;
+  }
+  const findings = yield* scanSecrets(text);
+  if (findings.length > 0) {
+    // The existing rejection, so an operator reads one sentence for this and
+    // for the journal gate, and the findings are never repeated into output.
+    throw new SecretDetectedError(findings);
+  }
+}
+
+/**
+ * Structurally admit the exact approved bytes, after the whole Plan writer frame
  * has gone.
  *
  * Nothing is executed, and the string that comes back is the string that went

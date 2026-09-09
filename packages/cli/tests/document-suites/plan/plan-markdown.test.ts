@@ -5,7 +5,7 @@
  * The row evidence lives in `Plan.test.md`; this wrapper asserts only that the
  * Markdown suite produced passing rows. What a document cannot observe about
  * itself — which provider the Plan invocation received, under what
- * restrictions, in which authorship root, and what an unconfigured child did
+ * restrictions, in which Plan writer root, and what an unconfigured child did
  * before it refused — is `../../testing-execution-host.test.ts`.
  */
 

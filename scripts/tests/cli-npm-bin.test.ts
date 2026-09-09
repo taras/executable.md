@@ -16,7 +16,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { runShell, shellQuote } from "@executablemd/test-support/launch";
 import { ensure, until } from "effection";
-import { readTextFile, rm } from "@effectionx/fs";
+import { exists, readTextFile, rm } from "@effectionx/fs";
 import { createHash } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -33,6 +33,8 @@ const PKG_DIR = "packages/cli";
 const OUT_DIR = path.join(ROOT, PKG_DIR, "npm");
 const BIN = path.join(OUT_DIR, "esm/src/node.js");
 const DOC = path.join(ROOT, "smoke-test/test-agent/README.md");
+/** The scripted request-to-approved-Plan journey every installation runs. */
+const SMOKE = path.join(ROOT, "smoke-test/plan-information/README.md");
 
 /** npm install and a full dnt type-check dominate this; the run itself is quick. */
 const TIMEOUT = 600_000;
@@ -116,6 +118,26 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     // the whole of what a built npm bin has to get right for one.
     expect(run.stdout).toContain("You chose to approve the review.");
     expect(run.stdout).not.toContain("ERROR");
+
+    // PI9 — the same scripted request-to-approved-Plan journey the compiled
+    // binary and the source checkout run, through the emitted bin under Node.
+    // A coding agent answers the drafting turn with a read-only XMD program,
+    // `<Plan>` evaluates it under the ceiling this package ships, and the
+    // findings come back as the next turn's context. The smoke document's own
+    // agent is what notices a build that lost any part of that: its second
+    // `<WhenPrompt>` answers only a prompt carrying the selected documentation,
+    // so a package missing the documentation assets or the protected tier gets
+    // no Plan written at all rather than a weaker one.
+    const planned = yield* runEmittedBin(["test", SMOKE, "--raw"]);
+    if (planned.code !== 0) {
+      throw new Error(`the emitted npm bin exited ${planned.code}\n${planned.stderr}`);
+    }
+    expect(planned.stdout).toContain("# Approved program");
+    expect(planned.stdout).toContain("the approved Plan ran");
+    expect(planned.stdout).not.toContain("ERROR");
+    // And nothing ran it: `<Plan>` renders program text, so the file that
+    // program names is still nobody's.
+    expect(yield* exists(path.join(ROOT, "planned.txt"))).toBe(false);
 
     // The Markdown this package executes itself ships beside the module that
     // reads it. dnt emits the module graph only, so an asset nothing imports is
@@ -222,10 +244,12 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     // And no private capability is syntax a document may write, in any build.
     for (const name of [
       "PlanInputs",
-      "PlanAuthorship",
+      "PlanWriter",
       "PlanProgress",
       "CheckDraft",
       "AdmitPlan",
+      "ClassifyPlanResponse",
+      "PlanInformation",
     ]) {
       expect(entries.map((entry: { name?: string }) => entry?.name)).not.toContain(name);
     }

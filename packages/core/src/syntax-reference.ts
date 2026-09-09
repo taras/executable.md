@@ -41,6 +41,7 @@ import { UnknownComponentError } from "./documentation-index.ts";
 import type { WorkflowImportAuthority } from "./components/bundle.ts";
 import type { DeclaredMarkdownComponent } from "./components/declared-markdown.ts";
 import type { IdentityComponent } from "./invocation-identity.ts";
+import { SyntaxSelectionRefusal } from "./syntax-refusal.ts";
 import type { ComponentOrigin, ComponentRegistry } from "./types.ts";
 
 /**
@@ -176,11 +177,25 @@ function referencing(
       return renderSyntaxMarkdown(admitted ?? (yield* authoring()));
     },
     *documentation(names: readonly string[]): Operation<string> {
-      // One resolution, both decisions.
+      // One resolution, both decisions. The provider is asked first and its
+      // failures propagate untouched: a symbols provider that throws is this
+      // run's infrastructure, whatever it happens to call its error.
       const readable = yield* authoring();
       const runnable = admitted ?? readable;
       const index = documentationIndexFor(contributions);
-      return renderSelectedDocumentation(select(readable, runnable, names, index));
+      // Only the selection this module performs itself is restated under core's
+      // own namespaced identity. The provider has already returned, so nothing
+      // it raised can reach this.
+      let selected;
+      try {
+        selected = select(readable, runnable, names, index);
+      } catch (error) {
+        if (error instanceof UnknownComponentError) {
+          throw new SyntaxSelectionRefusal(error.message);
+        }
+        throw error;
+      }
+      return renderSelectedDocumentation(selected);
     },
     available(next: SyntaxSymbols): SyntaxReference {
       // The enclosing authoring symbols and the enclosing contributions,
@@ -270,6 +285,9 @@ export function select(
   // rendered partially: a reader handed three of the four components they asked
   // about has no way to tell which request went unanswered.
   if (requested.size > 0) {
+    // Raised as the ordinary refusal it is. `documentation()` restates it under
+    // core's own namespaced identity, because that is the one place that knows
+    // the provider already returned successfully.
     throw new UnknownComponentError(
       `<Syntax> was asked to document ${[...requested].sort().join(", ")}, which ` +
         `${requested.size === 1 ? "is not a component" : "are not components"} available here.`,

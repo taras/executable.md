@@ -24,8 +24,8 @@ import { until } from "effection";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { cliBase, runCli } from "@executablemd/test-support/launch";
-import { AUTHORSHIP_INSTRUCTIONS, DEFAULT_AUTHORSHIP_ROOT } from "../src/authorship-profile.ts";
-import type { PlanAuthorshipObservation } from "../src/authorship-profile.ts";
+import { PLAN_WRITER_INSTRUCTIONS, DEFAULT_PLAN_WRITER_ROOT } from "../src/plan-writer-profile.ts";
+import type { PlanWriterObservation } from "../src/plan-writer-profile.ts";
 import { testingExecutionHost } from "../src/testing-host.ts";
 import { planComponentDeclaration, planComponentDescription } from "../src/plan-component.ts";
 
@@ -96,7 +96,7 @@ const PLAN_BEHAVIOR = doc(
  *
  * The marker is emitted before the failure, so it is exactly what a `<Prompt>`
  * that rendered whatever a failed turn managed to emit would hand onward. Under
- * the authorship policy no such partial reaches the draft check or the review,
+ * the Plan writer policy no such partial reaches the draft check or the review,
  * and the run ends instead.
  */
 const PARTIAL_THEN_FAILS = doc(
@@ -147,7 +147,7 @@ const PLAN_DECLARATION = [
 function* planRoots(): Operation<{ children: string[]; production: string[] }> {
   return {
     children: (yield* listing(tmpdir())).filter((entry) => entry.startsWith("xmd-child-plan-")),
-    production: yield* listing(DEFAULT_AUTHORSHIP_ROOT),
+    production: yield* listing(DEFAULT_PLAN_WRITER_ROOT),
   };
 }
 
@@ -769,7 +769,7 @@ describe("deterministic dependencies declared for a nested run", () => {
    */
   it("installs the controlled Plan configuration and removes its root after cancellation", function* () {
     const before = yield* planRoots();
-    const observed = withResolvers<PlanAuthorshipObservation>();
+    const observed = withResolvers<PlanWriterObservation>();
     const hold = withResolvers<void>();
     const host = testingExecutionHost({
       includes: [],
@@ -783,16 +783,16 @@ describe("deterministic dependencies declared for a nested run", () => {
           surface: "component",
           includes: [],
           context: request.context,
-          ...(request.authorshipRoot === undefined
+          ...(request.planWriterRoot === undefined
             ? {}
-            : { authorshipRoot: request.authorshipRoot }),
+            : { planWriterRoot: request.planWriterRoot }),
           host: request.host,
-          ...(request.observeAuthorship === undefined
+          ...(request.observePlanWriter === undefined
             ? {}
-            : { observeAuthorship: request.observeAuthorship }),
+            : { observePlanWriter: request.observePlanWriter }),
           installElicitation: request.installElicitation,
         }),
-      *observePlanAuthorship(observation): Operation<void> {
+      *observePlanWriter(observation): Operation<void> {
         observed.resolve(observation);
         yield* hold.operation;
       },
@@ -839,15 +839,15 @@ describe("deterministic dependencies declared for a nested run", () => {
     // provider's own accessors where it has them, so a provider disconnected
     // from these dependencies reports what it really has.
     const dependencies = installed.dependencies;
-    expect(dependencies.newSessionOptions?.systemPrompt).toBe(AUTHORSHIP_INSTRUCTIONS);
+    expect(dependencies.newSessionOptions?.systemPrompt).toBe(PLAN_WRITER_INSTRUCTIONS);
     expect(dependencies.newSessionOptions?.allowedTools).toEqual([]);
     expect(dependencies.mcpServers).toEqual([]);
     expect(dependencies.permissions).toBe("strict");
     const agentCwd = dependencies.agentCwd === undefined ? "" : yield* dependencies.agentCwd();
     expect(agentCwd.startsWith(join(tmpdir(), "xmd-child-plan-"))).toBe(true);
-    expect(agentCwd.startsWith(DEFAULT_AUTHORSHIP_ROOT)).toBe(false);
+    expect(agentCwd.startsWith(DEFAULT_PLAN_WRITER_ROOT)).toBe(false);
 
-    // The observer runs once the authorship frame is installed and before the
+    // The observer runs once the Plan writer frame is installed and before the
     // Component's content starts, so no Prompt has been sent yet — what is in
     // flight is the invocation holding the provider, the session directory and
     // the child root. halt() waits for all of them to finish teardown before it
@@ -863,7 +863,7 @@ describe("deterministic dependencies declared for a nested run", () => {
    * PMT4 — the prompt-failure rule, proven by a turn rather than by a value.
    *
    * `<Prompt>` ordinarily renders whatever a failed turn managed to emit and
-   * carries on. Authorship installs the opposite, and this is the difference
+   * carries on. The Plan writer policy installs the opposite, and this is the difference
    * being observed: a turn that emits part of a candidate and then fails must
    * end authorship before that partial can be checked or reviewed. A report
    * saying the policy is installed would say so however the middleware behaved.

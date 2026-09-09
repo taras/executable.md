@@ -6,7 +6,7 @@
  * whole of it and installs the registered provider into the Agent Api so a
  * document may reach it. `xmd plan` writes a program and runs none, so it
  * settles only who writes — the provider name, the default agent and the
- * adapters this build carries — and hands that to the authorship profile.
+ * adapters this build carries — and hands that to the Plan writer profile.
  * Resolving it once, here, is what keeps `DEFAULT_AGENT_NAME` from being read
  * twice and answered differently.
  *
@@ -54,11 +54,11 @@ export const DEFAULT_ADAPTER_ROOT: string = join(homedir(), ".xmd", "adapters");
  * Who writes, and what this host launches them with.
  *
  * The whole of what Plan authorship settles. There is no permission mode here
- * because the authorship frame installs its own fixed one, and no command line
+ * because the Plan writer frame installs its own fixed one, and no command line
  * selects it: the flags that choose a permission mode configure a document
  * execution, and `xmd plan` starts none.
  */
-export interface AuthorshipStack {
+export interface PlanWriterStack {
   /** The provider name the caller selected, already known to be registered. */
   provider: string;
   /** The agent every consumer defaults to, environment fallback applied. */
@@ -70,7 +70,7 @@ export interface AuthorshipStack {
 }
 
 /** Everything one `xmd run` invocation settled about agents, resolved once. */
-export interface AgentStack extends AuthorshipStack {
+export interface AgentStack extends PlanWriterStack {
   permissionMode: PermissionMode;
 }
 
@@ -82,10 +82,10 @@ export interface AgentStack extends AuthorshipStack {
  * so the same resolution serves a command that runs a document and one that
  * only writes one.
  */
-export function* resolveAuthorshipStack(
+export function* resolvePlanWriterStack(
   flags: AuthorshipFlags,
   sessions: MachineSessionAssembly | undefined,
-): Operation<Result<AuthorshipStack>> {
+): Operation<Result<PlanWriterStack>> {
   if (flags.agentProvider !== "acpx") {
     return Err(new Error(`Unknown agent provider "${flags.agentProvider}"`));
   }
@@ -111,14 +111,14 @@ export function* resolveAgentStack(
   if ("error" in config) {
     return Err(new Error(config.error));
   }
-  const authorship = yield* resolveAuthorshipStack(
+  const planWriter = yield* resolvePlanWriterStack(
     { agentProvider: flags.agentProvider, defaultAgent: config.defaultAgent },
     sessions,
   );
-  if (!authorship.ok) {
-    return authorship;
+  if (!planWriter.ok) {
+    return planWriter;
   }
-  return Ok({ ...authorship.value, permissionMode: config.permissionMode });
+  return Ok({ ...planWriter.value, permissionMode: config.permissionMode });
 }
 
 /**
@@ -134,7 +134,7 @@ export function* resolveAgentStack(
  * ones a document could replace are not ones. The two advertised sets are stated
  * by the host, not inherited.
  */
-export function hostAcpDependencies(stack: AuthorshipStack): AcpxProviderDependencies {
+export function hostAcpDependencies(stack: PlanWriterStack): AcpxProviderDependencies {
   const { sessions } = stack;
   const adapters = embeddedAdapterDependencies(stack.adapters);
   if (sessions === undefined) {

@@ -153,6 +153,34 @@ export {
   syntaxReadEntry,
 } from "./src/evaluation-profile.ts";
 /**
+ * Whether a failure is core refusing the generated request itself — see
+ * `src/generated-request-refusal.ts`.
+ *
+ * One fact, and nothing beyond it. Core states that the request's own text was
+ * refused: a construct it may not write, a form or prop written wrongly, a name
+ * that is not available here, an ordinary captured read reporting `Err`. It
+ * says nothing about whether that is correctable, whether a host may ask again,
+ * or whether another turn should happen. Those are the caller's decisions, and
+ * a host that reads this answer is the one making them.
+ *
+ * A reader, and deliberately not a marker: a host asks what core refused and
+ * cannot state a refusal itself. Everything core did not refuse this way answers
+ * `undefined` — stale history, a revoked profile, a provider that threw, a
+ * secret rejection, a teardown failure — so an answer here is never one of those
+ * wearing the same shape.
+ */
+export { generatedRequestRefusal } from "./src/generated-request-refusal.ts";
+/**
+ * Whether an Agent answered with a Plan draft or a read-only information
+ * request — see `src/plan-response.ts`.
+ *
+ * A pure function over text, carrying no authority. It is core's because the
+ * rule has to agree with core about where a Markdown body begins and what a
+ * heading is; a classifier that disagreed would send a draft to evaluation.
+ */
+export { classifyPlanResponse } from "./src/plan-response.ts";
+export type { PlanResponseKind } from "./src/plan-response.ts";
+/**
  * The symbols a host's profile describes, when they are not the ones the
  * execution would derive from its own captured inputs — see
  * `src/syntax-reference.ts`.

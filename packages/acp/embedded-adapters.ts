@@ -14,7 +14,7 @@
  * earn that, so it lives here and goes away with the thing it exists for.
  *
  * The CLI's three Agent profiles — the workflow attachment, `xmd run` and the
- * `xmd plan` authorship ceiling — are the callers.
+ * `xmd plan` Plan writer ceiling — are the callers.
  */
 
 export {

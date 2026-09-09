@@ -42,9 +42,9 @@ import { mkdir, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { NO_AGENT_CONTEXT } from "./authorship-profile.ts";
-import type { PlanAuthorship } from "./authorship-profile.ts";
-import type { PlanAuthorshipObservation } from "./authorship-profile.ts";
+import { NO_AGENT_CONTEXT } from "./plan-writer-profile.ts";
+import type { PlanWriter } from "./plan-writer-profile.ts";
+import type { PlanWriterObservation } from "./plan-writer-profile.ts";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { installChildTestAgent } from "@executablemd/test-agent";
 import type { PlanProviderAssembly } from "@executablemd/test-agent";
@@ -65,9 +65,9 @@ import type { RepositoryInstaller } from "./run-repositories.ts";
 /** What one child asks the entrypoint to build its `<Plan>` declaration from. */
 export interface ChildPlanDeclaration {
   /** The Agent context this child can give a Plan, or why it can give none. */
-  readonly context: Result<PlanAuthorship>;
-  /** The authorship root the host made for this child, when it made one. */
-  readonly authorshipRoot?: string;
+  readonly context: Result<PlanWriter>;
+  /** The Plan writer root the host made for this child, when it made one. */
+  readonly planWriterRoot?: string;
   /** The scope this child's own host acts run in. */
   readonly host: Scope;
   /**
@@ -80,7 +80,7 @@ export interface ChildPlanDeclaration {
    * therefore installs nothing and lets its own matcher provider answer.
    */
   installElicitation(): Operation<void>;
-  observeAuthorship?(observation: PlanAuthorshipObservation): Operation<void>;
+  observePlanWriter?(observation: PlanWriterObservation): Operation<void>;
 }
 
 /** What the entrypoint already decided, and a child must not decide again. */
@@ -94,7 +94,7 @@ export interface TestingHostSettings {
    * parent means, so the Component, its origin, its digest and its private
    * closure come from the entrypoint rather than from state a child could
    * reach. What the child supplies is the part only the child knows: the
-   * Agent context its own configuration settled, the authorship root the host
+   * Agent context its own configuration settled, the Plan writer root the host
    * made for it, and its own scope.
    *
    * A declaration built once out there and shared would close over the absence
@@ -130,8 +130,8 @@ export interface TestingHostSettings {
    * agent has anything to say about it.
    */
   readonly testAgentWorker: Result<readonly string[]>;
-  /** Trusted host evidence after the whole authorship frame is installed. */
-  observePlanAuthorship?(observation: PlanAuthorshipObservation): Operation<void>;
+  /** Trusted host evidence after the whole Plan writer frame is installed. */
+  observePlanWriter?(observation: PlanWriterObservation): Operation<void>;
 }
 
 /**
@@ -193,7 +193,7 @@ function selectConfiguration(request: HostProfileRequest): {
  * The Agent context a configured child gives a Plan: the controlled provider it
  * was already given, installed again for the Plan invocation that asks.
  *
- * Installed *inside* `<PlanAuthorship>` rather than inherited from what the
+ * Installed *inside* `<PlanWriter>` rather than inherited from what the
  * child registered around itself, so the Plan conversation runs under the same
  * fixed policy every Plan runs under, whichever provider is underneath. The
  * provider is the child's own partition, which is what lets a
@@ -203,7 +203,7 @@ function selectConfiguration(request: HostProfileRequest): {
  * that declares the same thing provisions all of it again, and neither reaches
  * the other.
  */
-function controlledAgentContext(installation: ChildTestAgentInstallation): Result<PlanAuthorship> {
+function controlledAgentContext(installation: ChildTestAgentInstallation): Result<PlanWriter> {
   const root = installation.components.rootProvider;
   const defaultAgent = installation.components.defaultAgent;
   if (root === undefined || defaultAgent === undefined) {
@@ -229,7 +229,7 @@ function controlledAgentContext(installation: ChildTestAgentInstallation): Resul
 }
 
 /**
- * A Plan authorship root this child owns and nothing else can reach.
+ * A Plan writer root this child owns and nothing else can reach.
  *
  * Not the child's working directory, not the outer test's, not the process
  * home and not anything a document named: an agent writing a program has no
@@ -238,7 +238,7 @@ function controlledAgentContext(installation: ChildTestAgentInstallation): Resul
  * because the Plan sessions underneath it are this child's too — including a
  * named one, which production keeps and a test may not.
  */
-function* useChildAuthorshipRoot(): Operation<string> {
+function* useChildPlanWriterRoot(): Operation<string> {
   const root = join(tmpdir(), `xmd-child-plan-${randomUUID()}`);
   yield* ensure(() => until(rm(root, { recursive: true, force: true })));
   yield* until(mkdir(root, { recursive: true }));
@@ -283,8 +283,8 @@ function* runProfileChild(
   // What this child can establish for a `<Plan>` written inside it. A child
   // nobody configured establishes nothing, which is the refusal `<Plan>` has
   // always given where no Agent context exists.
-  let context: Result<PlanAuthorship> = Err(new Error(NO_AGENT_CONTEXT));
-  let authorshipRoot: string | undefined;
+  let context: Result<PlanWriter> = Err(new Error(NO_AGENT_CONTEXT));
+  let planWriterRoot: string | undefined;
   if (testAgent !== undefined) {
     const worker = settings.testAgentWorker;
     if (!worker.ok) {
@@ -306,7 +306,7 @@ function* runProfileChild(
     // everything inside it, and owned by this child alone: the Plan invocation
     // still makes and proves its own empty session directory underneath it, and
     // the whole tree goes when this child settles however it settles.
-    authorshipRoot = yield* useChildAuthorshipRoot();
+    planWriterRoot = yield* useChildPlanWriterRoot();
     context = controlledAgentContext(agents);
   }
   // The production run profile's own vocabulary, whichever command launched the
@@ -323,16 +323,16 @@ function* runProfileChild(
     declarations: [
       yield* settings.planDeclaration({
         context,
-        ...(authorshipRoot === undefined ? {} : { authorshipRoot }),
+        ...(planWriterRoot === undefined ? {} : { planWriterRoot }),
         host: yield* useScope(),
         // Nothing, so the review is answered by whatever this child already
         // has: the `<Answers>` matcher provider installed above when the test
         // declared one, and the browser form installed for the child otherwise.
         // deno-lint-ignore require-yield
         *installElicitation(): Operation<void> {},
-        ...(settings.observePlanAuthorship === undefined
+        ...(settings.observePlanWriter === undefined
           ? {}
-          : { observeAuthorship: settings.observePlanAuthorship }),
+          : { observePlanWriter: settings.observePlanWriter }),
       }),
     ],
   });

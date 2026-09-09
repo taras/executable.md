@@ -16,9 +16,18 @@
  * code ran, and it travels lexically on canonical core's own expansion
  * authority — not through a context, where a name is not a secret.
  *
- * **One occurrence renders once.** It claims the identity this execution
- * minted, records exactly `{ symbols }`, and a continuation hands that back
- * without consulting the filesystem, the registry, the bundle or the host again.
+ * **One occurrence renders once.** It claims the identity this execution minted
+ * and records a closed payload carrying exactly one member:
+ *
+ * ```
+ * { symbols: string } | { refused: non-empty string }
+ * ```
+ *
+ * `{ symbols }` is a successful rendering; `{ refused }` is a named selection
+ * this component refused, retained as a value rather than as a failure so that a
+ * continuation reaches the same refusal it reached live. Either way a
+ * continuation answers from the record without consulting the filesystem, the
+ * registry, the bundle or the host again.
  *
  * Protection is about the answer, not about power: the component receives one
  * reference that renders symbol text and nothing else, and naming a component in
@@ -1370,15 +1379,30 @@ describe("Tier SYN — the named form", () => {
     expect(refused).toContain("not a record this version can read");
   });
 
-  it("SYN31: refuses an unusable list before reading anything", function* () {
+  it("SYN31: retains a name it cannot document, and restores that refusal", function* () {
     const stream = new InMemoryStream();
     const unknown = yield* refusal(run('<Syntax names={["Nonexistent"]} />\n', [], stream));
     expect(unknown).toContain("Nonexistent");
-    // No successful record: the attempt and its failure are journaled, as any
-    // effect's are, but there is nothing for a continuation to restore and hand
-    // back as the symbols.
-    expect(retained(yield* stream.readAll())).toHaveLength(0);
 
+    // The refusal is *retained*, and retained as a refusal. This is the one
+    // record that is not the symbols: an error crossing the durable boundary is
+    // rebuilt without its class, so a refusal that has to mean the same thing
+    // on a replay has to be a value the record distinguishes rather than a
+    // failure the reader re-derives.
+    const [record] = retained(yield* stream.readAll());
+    if (record?.type !== "yield" || record.result.status !== "ok") {
+      throw new Error("the refusal retained no record");
+    }
+    expect(Object.keys(Object(record.result.value))).toEqual(["refused"]);
+    // Nothing is handed back as the symbols: a continuation reaches the same
+    // refusal rather than restoring text nobody was shown.
+    const resumed = yield* refusal(
+      run('<Syntax names={["Nonexistent"]} />\n', [], yield* continuing(stream)),
+    );
+    expect(resumed).toContain("Nonexistent");
+
+    // Everything the schema and the shape reader answer stays as it was: those
+    // refuse before the occurrence is claimed, so they retain nothing at all.
     for (const written of [
       "<Syntax names={[]} />",
       '<Syntax names={["Elicit", "Elicit"]} />',
@@ -1859,7 +1883,7 @@ describe("Tier SYN — the site the symbols describe", () => {
 });
 
 describe("Tier SYN — the record one occurrence keeps", () => {
-  it("SYN19: the retained payload is closed on exactly { symbols }", function* () {
+  it("SYN19: a bare occurrence that rendered retains exactly { symbols }", function* () {
     const stream = new InMemoryStream();
     yield* run("<Syntax />\n", [stating(symbolsOf("Marker")).installation], stream);
     const [reference] = syntaxReads(yield* stream.readAll());

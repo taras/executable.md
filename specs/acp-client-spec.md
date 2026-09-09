@@ -553,7 +553,7 @@ what the first put there. An embedded agent never falls through to the published
 adapter ACPX's own table pins: a snapshot that cannot be verified or materialized
 refuses that agent.
 
-### The `xmd plan` authorship profile
+### The `xmd plan` Plan writer profile
 
 `xmd plan` resolves that configuration once, for the one document it executes:
 the plan command document that writes the Plan. It starts no program, so there
@@ -565,7 +565,7 @@ own machine-session assembly, all before any catalog is built or any document
 executes, so an unknown provider fails first. `DEFAULT_AGENT_NAME` is read once
 per invocation.
 
-The authorship profile takes exactly that answer. Its ceiling is the host's,
+The Plan writer profile takes exactly that answer. Its ceiling is the host's,
 assembled for that one document and not readable from the command line:
 
 | The profile's provider gets | Stated as |

@@ -123,6 +123,7 @@ import { prepareFetchRequest, requestRecord } from "./fetch-request.ts";
 import { timeoutFetch } from "@executablemd/runtime";
 import type { FetchRequest } from "./fetch-request.ts";
 import { isJsonObject, parseJson } from "./json.ts";
+import { markGeneratedRequestRefusal } from "./generated-request-refusal.ts";
 import { GeneratedDataExpressions, validateDataExpression } from "./generated-expressions.ts";
 import { capturedBinding } from "./invocation-rules.ts";
 import { renderSegments } from "./render.ts";
@@ -202,11 +203,11 @@ const CONSTRUCT: Record<Construct, string> = {
     "a generated fragment writes self-closing a component this host admitted only in its " +
     "paired form.",
   construct: "a generated fragment carries a construct this evaluator does not admit.",
-  // Distinct from `component`, because the two are different mistakes. A
+  // Distinct from `component`, because the two refuse different things. A
   // structural construct is language rather than authority: writing one badly,
-  // or writing one where the generated root supplies no context for it, is a
-  // source error the candidate can correct — not a statement that the host
-  // withheld something.
+  // or writing one where the generated root supplies no context for it, refuses
+  // the request's own source — not a statement that the host withheld
+  // something.
   structure:
     "a generated fragment writes a structural construct the language does not allow where it " +
     "was written.",
@@ -2501,7 +2502,15 @@ export function* evaluateProtectedGeneratedXmd(
     throw new GeneratedXmdError(UNREADABLE);
   }
   if (decided.decision === "refused") {
-    throw new GeneratedXmdError(CONSTRUCT[decided.construct]);
+    // The one failure in this function that is a refusal of the request itself:
+    // its own text was wrong. Everything below — a moved ceiling, changed
+    // source, an unreadable record — is this run's history rather than anything
+    // the request asked for, and is deliberately left unmarked so a caller
+    // reading the classification cannot mistake one for the other.
+    throw markGeneratedRequestRefusal(
+      new GeneratedXmdError(CONSTRUCT[decided.construct]),
+      CONSTRUCT[decided.construct],
+    );
   }
   // Before a single component is invoked or a single request is performed: a
   // retained admission is a grant whose non-root ceilings must be stated
