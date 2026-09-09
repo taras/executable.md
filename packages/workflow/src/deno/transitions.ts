@@ -501,8 +501,15 @@ export function* settleExecution(
         throw new WorkflowDocumentExecutionError(completion.executionId);
       }
       const { database } = connection;
+      const stored = readRunRow(database, path);
       finish(database, path, completion);
-      publish(database, path, completion.status, completion.reason);
+      // A replay closes only its own envelope: the terminal outcome it observed
+      // is not made mutable again, and nothing about the run — its status, its
+      // reason or when it last moved — is rewritten by an execution that was
+      // only ever going to restore what was already there.
+      if (!terminal(stored.status)) {
+        publish(database, path, completion.status, completion.reason);
+      }
       const record = readRunRow(database, path);
       if (record.runId !== hold.runId) {
         throw new WorkflowRunIdMismatchError(hold.runId, path);
@@ -836,6 +843,18 @@ export function* cancelRun(
       }
 
       const canonical = rootOutcome(readJournalEntries(database));
+      if (canonical?.kind === "damaged") {
+        // The document finished and this build cannot read what it finished
+        // as. Cancelling it would replace a result rather than end a run that
+        // had none, so nothing here changes anything.
+        return {
+          kind: "refused" as const,
+          reason: new WorkflowRequestError(
+            "workflow run: its root recorded an outcome this version cannot read, so the run " +
+              "is neither cancelled nor changed.",
+          ),
+        };
+      }
       if (canonical !== undefined) {
         // The document finished before its workflow executor disappeared. Restoring what it
         // recorded is not cancelling it.

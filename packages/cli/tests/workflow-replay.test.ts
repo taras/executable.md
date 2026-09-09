@@ -351,6 +351,12 @@ function statusOf(invocation: Invocation): string | undefined {
 interface Retained {
   readonly status: WorkflowRunStatus;
   readonly stopReason: string;
+  /**
+   * Which rule chose the reason, in terms two different runs can be compared
+   * by: a journal reason names a row, and a row's identity is its own run's.
+   */
+  readonly reasonAt: string;
+  readonly updatedAt: string;
   readonly executions: number;
   /** What each execution ended as, in order. `null` is one still open. */
   readonly ended: (WorkflowRunStatus | null)[];
@@ -369,9 +375,18 @@ function* retained(runs: string, runId: string): Operation<Retained> {
     if (!history.ok) {
       throw history.error;
     }
+    const stopReason = snapshot.value.record.stopReason;
+    const at =
+      stopReason === undefined
+        ? "none"
+        : stopReason.kind === "host"
+          ? `host:${stopReason.code}`
+          : `journal:${history.value.findIndex((entry) => entry.eventId === stopReason.eventId)}`;
     return {
       status: snapshot.value.record.status,
-      stopReason: JSON.stringify(snapshot.value.record.stopReason ?? null),
+      stopReason: JSON.stringify(stopReason ?? null),
+      reasonAt: at,
+      updatedAt: snapshot.value.record.updatedAt,
       executions: snapshot.value.executions.length,
       ended: snapshot.value.executions.map((execution) => execution.stopStatus ?? null),
       currentWorkspaceRootId: snapshot.value.currentWorkspaceRootId,
@@ -477,14 +492,18 @@ describe("what a completed run reaches when it is asked to run again", () => {
     );
 
     // The run is exactly where it was, apart from the one execution envelope
-    // the lifecycle records for the invocation that replayed it.
+    // the lifecycle records for the invocation that replayed it. A replay
+    // observes an outcome that already won, so it republishes nothing — not the
+    // status, not the reason, and not when the run last moved.
     expect(outcome.after.status).toBe("completed");
+    expect(outcome.after.stopReason).toBe(outcome.before.stopReason);
+    expect(outcome.after.updatedAt).toBe(outcome.before.updatedAt);
     expect(outcome.after.journal).toBe(outcome.before.journal);
     expect(outcome.after.currentWorkspaceRootId).toBe(outcome.before.currentWorkspaceRootId);
     expect(outcome.after.executions).toBe(outcome.before.executions + 1);
   });
 
-  it("WRP2: replays a retained failure, with the output it had rendered", function* () {
+  it("WRP2: recovers a stale failure to itself, refuses resume, and replays it", function* () {
     const asked: string[] = [];
     const attached: string[] = [];
     const live: Rendered[] = [];
@@ -494,9 +513,8 @@ describe("what a completed run reaches when it is asked to run again", () => {
       const fixture = yield* useFixture(FAILING);
 
       // The document fails and its settlement never lands, so the run is left
-      // holding a terminal nothing published. The next acquisition recovers it
-      // from that terminal, which is how a failed document becomes a run whose
-      // retained state ends without ever being resumable through Git.
+      // holding a result nothing published. Recovery reads the same result the
+      // settlement would have, and publishes the same outcome.
       const started = yield* scoped(function* () {
         yield* useRepositoryGit(fixture.repository);
         return yield* invoke(
@@ -511,7 +529,26 @@ describe("what a completed run reaches when it is asked to run again", () => {
       const before = yield* retained(fixture.runs, runId);
       expect(before.status).toBe("running");
 
-      const resumed = yield* scoped(function* () {
+      // What an uninterrupted settlement would have published, for comparison
+      // with what recovery does.
+      const uninterrupted = yield* scoped(function* () {
+        const fixtureTwo = yield* useFixture(FAILING);
+        const settled = yield* scoped(function* () {
+          yield* useRepositoryGit(fixtureTwo.repository);
+          return yield* invoke(
+            { ...REQUEST, id: "settled-1" },
+            yield* startFor(fixtureTwo),
+            liveHost(fixtureTwo.runs, []),
+            pinnedBody([]),
+          );
+        });
+        expect(settled.exitCode).toBe(1);
+        const state = yield* retained(fixtureTwo.runs, "settled-1");
+        return { status: state.status, reason: state.reasonAt };
+      });
+
+      // A resume is what the settled lifecycle refuses for a failed run.
+      const refused = yield* scoped(function* () {
         yield* useRefusingGit(asked);
         return yield* invoke(
           { ...REQUEST, action: "resume", target: runId },
@@ -520,25 +557,61 @@ describe("what a completed run reaches when it is asked to run again", () => {
           pinnedBody(replayed),
         );
       });
-      return { resumed, before, after: yield* retained(fixture.runs, runId) };
+      const recovered = yield* retained(fixture.runs, runId);
+
+      // The same run, named again by a compatible start, replays that failure.
+      const candidate = yield* scoped(function* () {
+        yield* useRepositoryGit(fixture.repository);
+        return yield* startFor(fixture);
+      });
+      const again = yield* scoped(function* () {
+        yield* useRefusingGit(asked);
+        return yield* invoke(
+          { ...REQUEST, id: runId },
+          candidate,
+          replayHost(fixture.runs, attached),
+          pinnedBody(replayed),
+        );
+      });
+      return {
+        refused,
+        again,
+        before,
+        recovered,
+        uninterrupted,
+        after: yield* retained(fixture.runs, runId),
+      };
     });
 
-    // The same failure the live execution produced, and the partial output it
-    // had rendered before it failed.
+    // Recovery published exactly what an uninterrupted settlement publishes —
+    // one semantic outcome, reached two ways.
+    expect(outcome.recovered.status).toBe(outcome.uninterrupted.status);
+    expect(outcome.recovered.status).toBe("failed");
+    expect(outcome.recovered.reasonAt).toBe(outcome.uninterrupted.reason);
+    expect(outcome.recovered.journal).toBe(outcome.before.journal);
+    // The resume is refused by the settled failed-run rule, without a replay
+    // envelope of its own.
+    expect(outcome.refused.exitCode).toBe(1);
+    expect(outcome.refused.err.join(" ")).toContain("workflow run failed");
+    expect(outcome.recovered.executions).toBe(outcome.before.executions);
+    expect(statusOf(outcome.refused)).toBeUndefined();
+
+    // The compatible start replays the same failure and the partial output it
+    // had rendered, reaching no repository and no Workspace.
     expect(replayed).toHaveLength(1);
     expect(replayed[0]?.result?.ok).toBe(false);
     expect(replayed[0]?.output).toBe(live[0]?.output);
     expect(replayed[0]?.output).toContain("partial line.");
-    expect(outcome.resumed.exitCode).toBe(1);
-
-    // No provider was reached and no row was added to the history.
+    expect(outcome.again.exitCode).toBe(1);
     expect(asked).toEqual([]);
     expect(attached).toEqual([]);
+    // And the retained failure is the one that stands, byte for byte.
+    expect(outcome.after.status).toBe("failed");
+    expect(outcome.after.stopReason).toBe(outcome.recovered.stopReason);
+    expect(outcome.after.updatedAt).toBe(outcome.recovered.updatedAt);
     expect(outcome.after.journal).toBe(outcome.before.journal);
     expect(outcome.after.currentWorkspaceRootId).toBe(outcome.before.currentWorkspaceRootId);
-    // The run follows the outcome it actually had: the terminal it replayed
-    // says the document failed, and that is what the invocation publishes.
-    expect(statusOf(outcome.resumed)).toBe("failed");
+    expect(outcome.after.executions).toBe(outcome.recovered.executions + 1);
   });
 
   it("WRP3: replays a bundled run without reading one component", function* () {
@@ -725,7 +798,9 @@ describe("what a completed run reaches when it is asked to run again", () => {
       expect(before.status).toBe("running");
       expect(live[0]?.result?.ok).toBe(false);
 
-      const resumed = yield* scoped(function* () {
+      // Recovery reads the document's own result, so a run whose document
+      // failed recovers as failed — and the settled rule then refuses a resume.
+      const refused = yield* scoped(function* () {
         yield* useRefusingGit(asked);
         return yield* invoke(
           { ...REQUEST, action: "resume", target: runId },
@@ -734,16 +809,41 @@ describe("what a completed run reaches when it is asked to run again", () => {
           pinnedBody(replayed),
         );
       });
-      return { resumed, before, after: yield* retained(fixture.runs, runId) };
+      const recovered = yield* retained(fixture.runs, runId);
+
+      const candidate = yield* scoped(function* () {
+        yield* useRepositoryGit(fixture.repository);
+        return yield* startFor(fixture);
+      });
+      const again = yield* scoped(function* () {
+        yield* useRefusingGit(asked);
+        return yield* invoke(
+          { ...REQUEST, id: runId },
+          candidate,
+          replayHost(fixture.runs, attached),
+          pinnedBody(replayed),
+        );
+      });
+      return { refused, again, before, recovered, after: yield* retained(fixture.runs, runId) };
     });
 
-    // The same failure the crashed execution produced, and the output it had
+    expect(outcome.recovered.status).toBe("failed");
+    expect(outcome.recovered.journal).toBe(outcome.before.journal);
+    expect(outcome.refused.exitCode).toBe(1);
+    expect(outcome.refused.err.join(" ")).toContain("workflow run failed");
+    expect(outcome.recovered.executions).toBe(outcome.before.executions);
+
+    // The same failure, replayed rather than retried, with the output it had
     // rendered before it failed.
+    expect(replayed).toHaveLength(1);
     expect(replayed[0]?.result?.ok).toBe(false);
     expect(replayed[0]?.output).toBe(live[0]?.output);
-    expect(outcome.resumed.exitCode).toBe(1);
+    expect(outcome.again.exitCode).toBe(1);
     expect(asked).toEqual([]);
     expect(attached).toHaveLength(1);
+    expect(outcome.after.status).toBe("failed");
+    expect(outcome.after.stopReason).toBe(outcome.recovered.stopReason);
+    expect(outcome.after.updatedAt).toBe(outcome.recovered.updatedAt);
     expect(outcome.after.journal).toBe(outcome.before.journal);
     expect(outcome.after.currentWorkspaceRootId).toBe(outcome.before.currentWorkspaceRootId);
   });
@@ -871,6 +971,7 @@ describe("what a completed run reaches when it is asked to run again", () => {
     expect(outcome.after.currentWorkspaceRootId).toBe(outcome.before.currentWorkspaceRootId);
     expect(outcome.after.status).toBe("completed");
     expect(outcome.after.stopReason).toBe(outcome.before.stopReason);
+    expect(outcome.after.updatedAt).toBe(outcome.before.updatedAt);
     expect(outcome.after.executions).toBe(outcome.before.executions + 1);
   });
 
@@ -944,6 +1045,7 @@ describe("what a completed run reaches when it is asked to run again", () => {
     expect(outcome.stalled.currentWorkspaceRootId).toBe(outcome.before.currentWorkspaceRootId);
     expect(outcome.stalled.status).toBe("completed");
     expect(outcome.stalled.stopReason).toBe(outcome.before.stopReason);
+    expect(outcome.stalled.updatedAt).toBe(outcome.before.updatedAt);
     expect(outcome.stalled.executions).toBe(outcome.before.executions + 1);
     expect(outcome.stalled.ended.at(-1)).toBe(null);
 
@@ -1002,6 +1104,7 @@ describe("what a completed run reaches when it is asked to run again", () => {
     // And the retained failed outcome is the one that stands.
     expect(outcome.after.status).toBe("failed");
     expect(outcome.after.stopReason).toBe(outcome.before.stopReason);
+    expect(outcome.after.updatedAt).toBe(outcome.before.updatedAt);
     expect(outcome.after.journal).toBe(outcome.before.journal);
     expect(outcome.after.currentWorkspaceRootId).toBe(outcome.before.currentWorkspaceRootId);
   });

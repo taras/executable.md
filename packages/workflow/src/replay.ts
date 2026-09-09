@@ -39,7 +39,7 @@ import { retainedSource } from "@executablemd/core/host";
 import type { ExecutionInstallation, RetainedRootDocument } from "@executablemd/core/host";
 import { workflowBundleReplayInstallation } from "./bundle.ts";
 import { retainedWorkflowInstallation } from "./run.ts";
-import { agreesWithRetainedResult, terminal } from "./lifecycle/policy.ts";
+import { agreesWithRetainedResult, rootOutcome, terminal } from "./lifecycle/policy.ts";
 import type { JournalEntry } from "./storage/api.ts";
 import type { WorkflowRunRecord } from "./storage/record.ts";
 
@@ -90,6 +90,9 @@ const REFUSALS = Object.freeze({
   disagreed:
     "this run's retained state and its recorded document result describe different outcomes, " +
     "so neither is the one to replay. The run is left exactly as it is.",
+  damaged:
+    "this run's recorded document result cannot be read by this version, so there is no " +
+    "outcome to restore. The run is left exactly as it is.",
 });
 
 function refuse(reason: string): Result<never> {
@@ -263,13 +266,21 @@ export function retainedReplay(
     return refuse(REFUSALS.mixed);
   }
 
-  // The document result the journal records, and the lifecycle row that stands
-  // behind it, have to be the same outcome. The judgment is the lifecycle's own
-  // — `agreesWithRetainedResult()` sits beside the recovery and settlement
-  // mappings it is derived from — rather than a second copy of it here that
-  // could drift. A row and a result claiming different terminals are damaged
-  // retained state, and neither of them is the one to replay.
-  if (!agreesWithRetainedResult(record, entries)) {
+  // What the root recorded, read once, by the lifecycle's own judgment: the
+  // same one stale recovery publishes through and the same one a settlement
+  // is held to. A second copy of it here would be a second authority.
+  //
+  // A terminal this build cannot read is refused before canonical core is
+  // handed it, because core's rejection would arrive as *this* invocation's
+  // document failure and be offered as a replacement outcome.
+  const canonical = rootOutcome(entries);
+  if (canonical === undefined) {
+    return refuse(REFUSALS.absent);
+  }
+  if (canonical.kind === "damaged") {
+    return refuse(REFUSALS.damaged);
+  }
+  if (!agreesWithRetainedResult(record, canonical)) {
     return refuse(REFUSALS.disagreed);
   }
 

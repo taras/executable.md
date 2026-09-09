@@ -44,6 +44,7 @@ import type {
   WorkflowRunCreation,
 } from "../../src/lifecycle/execution.ts";
 import { retainedReplay } from "../../src/replay.ts";
+import { DOCUMENT_FAILED } from "../../src/lifecycle/policy.ts";
 import { retainedWorkflowInstallation } from "../../src/run.ts";
 import { workflowBundleInstallation } from "../../src/bundle.ts";
 import { gitBlobId } from "../../src/git-blob.ts";
@@ -52,6 +53,8 @@ let unique = 0;
 const NOW = 1_800_000_000;
 const COMMIT = "0".repeat(40);
 const DOCUMENT = "# Remote\n\nthe owner recorded this line.\n";
+/** A document that fails: the name resolves to nothing, and nothing is searched. */
+const FAILING = "# Remote\n\npartial line.\n\n<Missing />\n";
 let keys: TestKeys;
 
 beforeAll(async () => {
@@ -515,6 +518,90 @@ describe("a completed run replayed through its own owner", () => {
     expect(after.run?.["status"]).toBe("completed");
     // The stale envelope closed and one replay envelope opened and closed.
     expect(after.executions).toBe(2);
+    expect(await on(stub, (owner) => owner.holders())).toBe(0);
+  });
+
+  it("recovers a run whose committed document result is a failure to failed", async () => {
+    const stub = executor();
+    const host = lifecycleHost(stub);
+
+    // The document failed and the connection went before anything settled. The
+    // coroutine returned, so its own settlement is `ok`; what it returned says
+    // the document failed, and that is what the run is.
+    const live = await run(function* (): Operation<Rendered> {
+      return yield* scoped(function* () {
+        const transitions: WorkflowExecutionTransitions = yield* useRemoteLifecycle(host);
+        const lock = yield* acquired();
+        const begun = yield* transitions.begin(lock, {
+          runId: RUN_ID,
+          action: "start",
+          creation: CREATION,
+        });
+        if (!begun.ok) {
+          throw begun.error;
+        }
+        return yield* canonical(begun.value.database, retainedSource("README.md", FAILING), [
+          runContract(),
+        ]);
+      });
+    });
+
+    expect(live.result.ok).toBe(false);
+    expect(live.output).toContain("partial line.");
+    const before = await ownerState(stub);
+    expect(before.run?.["status"]).toBe("running");
+
+    const replayed = await run(function* (): Operation<Rendered> {
+      return yield* scoped(function* () {
+        const transitions: WorkflowExecutionTransitions = yield* useRemoteLifecycle(host);
+        const lock = yield* acquired();
+        // A resume is what the settled lifecycle refuses for a failed run, so
+        // the run is named again by the compatible start it was created with.
+        const begun = yield* transitions.begin(lock, {
+          runId: RUN_ID,
+          action: "start",
+          creation: CREATION,
+        });
+        if (!begun.ok) {
+          throw begun.error;
+        }
+        // The owner's own recovery read the document's result, not the
+        // coroutine's settlement.
+        expect(begun.value.record.status).toBe("failed");
+        expect(begun.value.replay).toBe(true);
+        const frontier = yield* begun.value.database.readJournalEntries();
+        if (!frontier.ok) {
+          throw frontier.error;
+        }
+        const prepared = retainedReplay(begun.value.record, frontier.value);
+        if (!prepared.ok) {
+          throw prepared.error;
+        }
+        const rendered = yield* canonical(begun.value.database, prepared.value.root, [
+          ...prepared.value.installations,
+        ]);
+        const settled = yield* transitions.settle(lock, {
+          executionId: begun.value.execution.executionId,
+          status: "failed",
+          reason: { kind: "host", code: DOCUMENT_FAILED },
+        });
+        if (!settled.ok) {
+          throw settled.error;
+        }
+        return rendered;
+      });
+    });
+
+    // The same failure and the same partial output, from history alone.
+    expect(replayed.result.ok).toBe(false);
+    expect(replayed.output).toBe(live.output);
+
+    const recovered = await ownerState(stub);
+    expect(recovered.run?.["status"]).toBe("failed");
+    expect(recovered.journal).toEqual(before.journal);
+    expect(recovered.currentRootId).toBe(before.currentRootId);
+    expect(recovered.published).toEqual(before.published);
+    expect(recovered.answers).toEqual(before.answers);
     expect(await on(stub, (owner) => owner.holders())).toBe(0);
   });
 

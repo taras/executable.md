@@ -20,6 +20,7 @@ import type { Operation, Result } from "effection";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { retainedReplay } from "../src/replay.ts";
+import { DOCUMENT_FAILED } from "../src/lifecycle/policy.ts";
 import type { RetainedReplay } from "../src/replay.ts";
 import { WorkflowReplayHistoryError } from "../src/replay.ts";
 import { WorkflowBundleHistoryError } from "../src/bundle.ts";
@@ -97,6 +98,12 @@ function rootClose(value: Json): DurableEvent {
   return { type: "close", coroutineId: "root", result: { status: "ok", value } };
 }
 
+/** A document that decided it failed, as canonical core records one. */
+function documentFailure(output = ""): Json {
+  const message = "the document refused";
+  return { status: "err", output, error: { name: "Error", message, segment: { message } } };
+}
+
 /** The terminal core writes when it fails before importing a root document. */
 function preRootClose(path: string, source: string, target: string | null): DurableEvent {
   const message = "refused before the root import";
@@ -135,6 +142,9 @@ function admitted(outcome: Result<RetainedReplay>): RetainedReplay {
   }
   return outcome.value;
 }
+
+/** The reason a failure no retained row identifies is named by. */
+const HOST: WorkflowStopReason = { kind: "host", code: DOCUMENT_FAILED };
 
 /** The run record canonical execution retains before it imports anything. */
 const RUN_RECORD = forkRunRecordEvent({ runId: "replay-1", base: "main", pinnedCommit: COMMIT });
@@ -192,10 +202,12 @@ describe("the root a completed run replays on", () => {
           failure: { kind: "no-match", selector: "Missing*", matches: [], available: ["Retained"] },
         }),
       ),
-      entry(rootClose({ status: "err", output: "", error: { name: "E", message: "m" } })),
+      entry(rootClose(documentFailure())),
     ];
 
-    expect(admitted(retainedReplay(record(), history)).root).toEqual({
+    expect(
+      admitted(retainedReplay(record({ status: "failed", stopReason: HOST }), history)).root,
+    ).toEqual({
       path: "flows/root.md",
       source: SOURCE,
       retained: true,
@@ -207,7 +219,11 @@ describe("the root a completed run replays on", () => {
   it("comes from the terminal when the run failed before importing anything", function* () {
     const history = [entry(preRootClose("flows/root.md", SOURCE, null))];
 
-    expect(admitted(retainedReplay(record(), history)).root).toEqual({
+    // The document failed, so the run failed, and no retained row says where —
+    // which is exactly what the one categorical code is for.
+    expect(
+      admitted(retainedReplay(record({ status: "failed", stopReason: HOST }), history)).root,
+    ).toEqual({
       path: "flows/root.md",
       source: SOURCE,
       retained: true,
@@ -222,7 +238,7 @@ describe("the root a completed run replays on", () => {
     );
 
     const bound = [entry(preRootClose("flows/other.md", SOURCE, null))];
-    expect(reason(retainedReplay(record(), bound))).toContain(
+    expect(reason(retainedReplay(record({ status: "failed", stopReason: HOST }), bound))).toContain(
       "not the document its definition names",
     );
   });
@@ -437,6 +453,144 @@ describe("the lifecycle row and the recorded result have to agree", () => {
       entries,
     );
     expect(reason(outcome)).toContain("describe different outcomes");
+  });
+});
+
+/** One retained effect, settled the way its own operation settled. */
+function effect(name: string, settled: "ok" | "err"): DurableEvent {
+  return {
+    type: "yield",
+    coroutineId: "root",
+    description: { type: "call", name },
+    result:
+      settled === "ok"
+        ? { status: "ok", value: name }
+        : { status: "err", error: { message: `${name} failed`, name: "Error" } },
+  };
+}
+
+describe("what the root recorded, as one outcome", () => {
+  // deno-lint-ignore require-yield
+  it("reads the document's own result, not the coroutine's settlement", function* () {
+    // The coroutine returned, so its settlement is `ok`. What it returned is a
+    // document that failed, and that is what the run is.
+    const failing = [
+      entry(rootImport({ kind: "repository", path: "flows/root.md", content: SOURCE })),
+      entry(rootClose(documentFailure("partial\n"))),
+    ];
+    expect(
+      admitted(retainedReplay(record({ status: "failed", stopReason: HOST }), failing)).root,
+    ).toEqual({ path: "flows/root.md", source: SOURCE, retained: true });
+    // And a completed row over the same history is the disagreement.
+    expect(reason(retainedReplay(record(), failing))).toContain("describe different outcomes");
+  });
+
+  // deno-lint-ignore require-yield
+  it("names the exact retained row the failure stopped at", function* () {
+    const rows = [
+      entry(rootImport({ kind: "repository", path: "flows/root.md", content: SOURCE })),
+      entry(effect("early", "err")),
+      entry(effect("between", "ok")),
+      entry(effect("late", "err")),
+      entry(rootClose(documentFailure("partial\n"))),
+    ];
+    const late = rows[3]?.eventId ?? "";
+    const early = rows[1]?.eventId ?? "";
+    const between = rows[2]?.eventId ?? "";
+
+    // The last row that failed, and only that one.
+    expect(
+      admitted(
+        retainedReplay(
+          record({ status: "failed", stopReason: { kind: "journal", eventId: late } }),
+          rows,
+        ),
+      ).root.path,
+    ).toBe("flows/root.md");
+
+    const wrong: WorkflowStopReason[] = [
+      { kind: "journal", eventId: early },
+      { kind: "journal", eventId: between },
+      { kind: "journal", eventId: "event-somewhere-else" },
+      HOST,
+      { kind: "host", code: "invented-code" },
+    ];
+    for (const stopReason of wrong) {
+      const outcome = retainedReplay(record({ status: "failed", stopReason }), rows);
+      expect([
+        JSON.stringify(stopReason),
+        reason(outcome).includes("describe different outcomes"),
+      ]).toEqual([JSON.stringify(stopReason), true]);
+    }
+    // And a failure that names nothing at all.
+    expect(reason(retainedReplay(record({ status: "failed" }), rows))).toContain(
+      "describe different outcomes",
+    );
+  });
+
+  // deno-lint-ignore require-yield
+  it("refuses a document result this version cannot read", function* () {
+    const message = "the document refused";
+    const malformed: Json[] = [
+      { status: "err" },
+      { status: "err", output: "" },
+      { status: "err", output: "", error: { name: "Error", message } },
+      { status: "err", output: "", error: { name: "Error", message, segment: {} } },
+      { status: "err", output: 7, error: { name: "Error", message, segment: { message } } },
+      { status: "ok", output: "" },
+      { status: "ok", output: "", value: "", extra: 1 },
+      { status: "abandoned", output: "", value: "" },
+      "not an object at all",
+    ];
+
+    for (const value of malformed) {
+      const history = [
+        entry(rootImport({ kind: "repository", path: "flows/root.md", content: SOURCE })),
+        entry(rootClose(value)),
+      ];
+      const said = reason(retainedReplay(record(), history));
+      expect([JSON.stringify(value), said.includes("cannot be read by this version")]).toEqual([
+        JSON.stringify(value),
+        true,
+      ]);
+      // And it says nothing about what it read.
+      expect(said).not.toContain("abandoned");
+    }
+  });
+
+  // deno-lint-ignore require-yield
+  it("admits the shapes canonical execution actually writes", function* () {
+    const message = "the document refused";
+    const written: { value: Json; status: WorkflowRunStatus }[] = [
+      { value: { status: "ok", output: "done\n", value: "done\n" }, status: "completed" },
+      { value: { status: "ok", output: "", value: null }, status: "completed" },
+      {
+        value: {
+          status: "err",
+          output: "partial\n",
+          error: {
+            name: "Error",
+            message,
+            segment: { message, source: "flows/root.md" },
+            cause: "because",
+            errors: [{ name: "Error", message }],
+          },
+        },
+        status: "failed",
+      },
+    ];
+
+    for (const { value, status } of written) {
+      const history = [
+        entry(rootImport({ kind: "repository", path: "flows/root.md", content: SOURCE })),
+        entry(rootClose(value)),
+      ];
+      const outcome = retainedReplay(
+        record({ status, ...(status === "failed" ? { stopReason: HOST } : {}) }),
+        history,
+      );
+      expect([JSON.stringify(value), outcome.ok]).toEqual([JSON.stringify(value), true]);
+    }
   });
 });
 

@@ -174,10 +174,16 @@ describe("Tier WLC — cancellation and deletion", () => {
         transitions,
         { runId: "closed-1", action: "start", creation: creation() },
         function* (begun) {
+          // The coroutine returned, and what it returned is the document's own
+          // result: the shape canonical core writes, because that shape is what
+          // says whether the document completed or failed.
           yield* begun.database.journal.append({
             type: "close",
             coroutineId: "root",
-            result: { status: "ok", value: "rendered" },
+            result: {
+              status: "ok",
+              value: { status: "ok", output: "rendered", value: "rendered" },
+            },
           });
         },
       );

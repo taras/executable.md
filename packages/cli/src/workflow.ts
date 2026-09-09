@@ -73,6 +73,7 @@ import { retainedSource, validateProps } from "@executablemd/core";
 import type { PropsSchema } from "@executablemd/core";
 import type { RootDocumentSource } from "@executablemd/core";
 import {
+  retainedFailureReason,
   retainedReplay,
   retainedWorkflowInstallation,
   workflowBundleInstallation,
@@ -178,8 +179,6 @@ const EXIT_BY_STATUS: Readonly<Record<WorkflowRunStatus, number>> = Object.freez
   running: 1,
 });
 
-/** A failure the host classified, rather than an exception message it retained. */
-const HOST_FAILURE_CODE = "document-execution-failed";
 const HOST_INTERRUPTED_CODE = "executor-interrupted";
 const HOST_ORPHANED_CODE = "executor-disappeared";
 
@@ -435,22 +434,16 @@ function isRootClose(event: DurableEvent): boolean {
 /**
  * The stop reason a failure gets.
  *
- * A retained event that already crossed the secret filter is preferable to a
- * code, because it says which effect failed. Anything else becomes one
- * categorical host code: the alternative is retaining an exception message
- * beside the journal that filtered it, which is history nothing has filtered.
+ * The rule is the lifecycle's own and lives beside the outcome it belongs to: a
+ * retained event that already crossed the secret filter says which effect
+ * failed, and a failure the journal holds no row for gets the one categorical
+ * code. Stale recovery reading a dead executor's journal and a retained history
+ * held to its lifecycle row reach the same rule, because a reason chosen three
+ * ways would be three explanations of one failure.
  */
 function* failureReason(database: WorkflowRunDatabase): Operation<WorkflowStopReason> {
   const entries = yield* database.readJournalEntries();
-  if (entries.ok) {
-    for (let index = entries.value.length - 1; index >= 0; index -= 1) {
-      const entry = entries.value[index];
-      if (entry !== undefined && entry.event.result.status === "err") {
-        return { kind: "journal", eventId: entry.eventId };
-      }
-    }
-  }
-  return { kind: "host", code: HOST_FAILURE_CODE };
+  return retainedFailureReason(entries.ok ? entries.value : []);
 }
 
 /**
