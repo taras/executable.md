@@ -435,7 +435,13 @@ describe("Tier GX — the complete fragment is read first", () => {
     ["a frontmatter read", "value {props.token}\n", "interpolation"],
     ["a malformed result binding", `<Fetch url="${URL_ONE}" as="not a name" />\n`, "binding name"],
     ["an unknown component", "<Unknown />\n", "did not admit"],
-    ["a structural construct", "<If test={true}>x</If>\n", "did not admit"],
+    // Structural constructs are the language rather than the host's tables, so
+    // an ill-formed one is refused as the source mistake it is — `test` is not
+    // a prop `<If>` has — rather than as a component the host withheld.
+    ["an ill-formed structural construct", "<If test={true}>x</If>\n", "structural construct"],
+    ["a construct the generated root gives no context", "<Content />\n", "structural construct"],
+    ["a stray branch", "<Else>x</Else>\n", "structural construct"],
+    ["a break outside every loop", "<Break />\n", "structural construct"],
     ["an unadmitted root component", '<Dir path="/etc" />\n', "did not admit"],
     ["an unadmitted repository component", '<Repository name="api" />\n', "did not admit"],
     ["an unadmitted worktree component", '<Worktree name="fix" />\n', "did not admit"],
@@ -455,6 +461,45 @@ describe("Tier GX — the complete fragment is read first", () => {
       expect(attempt.failure).toContain(diagnostic);
     });
   }
+
+  /**
+   * One authored element invoked twice, resumed between the two effects.
+   *
+   * Preflight reads the element once and the run enters it per item, so this is
+   * the row that would catch a plan consumed from a queue: the second iteration
+   * would find nothing left. It also holds the ordinary durable contract to the
+   * repetition — the completed effect restores and the run resumes at the first
+   * unrecorded one.
+   */
+  it("GX10: a repeated occurrence resumes at its first unrecorded effect", function* () {
+    const source = `<Each in={["a", "b"]} let="item">\n<Fetch url="${URL_ONE}" as="got" />\n</Each>\n`;
+    const stream = new InMemoryStream();
+    const live = yield* useTransport(() => ({ status: 200, body: "answer" }));
+    const first = yield* evaluate(request(source, [pinnedFetch([ADMITTED_REQUEST])]), { stream });
+
+    // One authored element, entered twice, so two durable effects.
+    expect(live.performed).toHaveLength(2);
+    const events = yield* stream.readAll();
+    const fetches = events.filter(
+      (event) => event.type === "yield" && event.description.type === "fetch",
+    );
+    expect(fetches).toHaveLength(2);
+
+    // Cut the history immediately after the first of the two.
+    const cut = events.indexOf(fetches[0]);
+    const partial = events.slice(0, cut + 1);
+    const resumedTransport = yield* useTransport(() => ({ status: 200, body: "answer" }));
+    const before = resumedTransport.performed.length;
+    const resumed = yield* evaluate(request(source, [pinnedFetch([ADMITTED_REQUEST])]), {
+      stream: new InMemoryStream(partial),
+    });
+
+    // The recorded effect was restored rather than performed again, the second
+    // one ran, and the fragment rendered exactly what it rendered live.
+    expect(resumedTransport.performed.length - before).toBe(1);
+    expect(resumed.output).toBe(first.output);
+    expect(resumed.failure).toBe(undefined);
+  });
 
   it("GX4b: an unsafe construct inside an admitted element's content is refused", function* () {
     const transport = yield* useTransport(() => ({ status: 200 }));
