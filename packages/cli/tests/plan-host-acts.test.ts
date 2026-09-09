@@ -33,7 +33,9 @@ import type { PlanHarness } from "./support/plan-harness.ts";
 const REQUEST = "write a greeting";
 
 /** A Plan the host's validator accepts. */
-const PLAN = ['<File path="drafted.txt">the draft ran</File>', ""].join("\n");
+const PLAN = ["# Writes a file", "", '<File path="drafted.txt">the draft ran</File>', ""].join(
+  "\n",
+);
 
 const STACK: AuthorshipStack = {
   provider: "acpx",

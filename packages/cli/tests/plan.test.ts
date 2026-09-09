@@ -51,13 +51,15 @@ import type { PlanHarness } from "./support/plan-harness.ts";
 const REQUEST = "write a greeting";
 
 /** A document that validates and runs. */
-const VALID = "Hello from the agent.\n";
+const VALID = "# A greeting\n\nHello from the agent.\n";
 
 /** A document that resolves no such component. */
-const UNRESOLVED = "<NoSuchComponent />\n";
+const UNRESOLVED = "# Broken\n\n<NoSuchComponent />\n";
 
 /** A root whose own source cannot be read: the frontmatter never closes. */
-const BROKEN_SOURCE = ["---", "props: [", "---", "", "hi", ""].join("\n");
+const BROKEN_SOURCE = ["---", "props: [", "---", "", "# Broken frontmatter", "", "hi", ""].join(
+  "\n",
+);
 
 /** A root whose two declared properties generate one option. */
 const COLLIDING = [
@@ -84,6 +86,8 @@ const REQUIRES_NAME = [
   "  additionalProperties: false",
   "---",
   "",
+  "# A greeting by name",
+  "",
   "Hello, {props.name}!",
   "",
 ].join("\n");
@@ -97,6 +101,8 @@ const NAME_IS_BOOLEAN = [
   "    name: { type: boolean }",
   "  additionalProperties: false",
   "---",
+  "",
+  "# A greeting by name",
   "",
   "Hello, {props.name}!",
   "",
@@ -113,6 +119,8 @@ function counting(type: "number" | "string"): string {
     "  additionalProperties: false",
     "---",
     "",
+    "# Counting",
+    "",
     "Counting to {props.count}.",
     "",
   ].join("\n");
@@ -127,7 +135,12 @@ function counting(type: "number" | "string"): string {
 const RETIRED_SENTINEL = "not this command's namespace\n";
 
 /** A Plan whose effect is visible on the filesystem if anything runs it. */
-const WRITES_A_FILE = ['<File path="drafted.txt">the draft ran</File>', ""].join("\n");
+const WRITES_A_FILE = [
+  "# Writes a file",
+  "",
+  '<File path="drafted.txt">the draft ran</File>',
+  "",
+].join("\n");
 
 /**
  * Who writes the Plan, as a dispatch settles it.
@@ -993,8 +1006,12 @@ describe(
 
     it("C9: arbitrary source cannot close the presentation, and stopping is authored", function* () {
       yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        // A document that holds a fence of its own, and a run of five backticks.
+        // A document that holds a fence of its own, and a run of five
+        // backticks. Titled, so it is a draft to present rather than an
+        // information request.
         const fenced = [
+          "# Fenced content",
+          "",
           "Here is a block:",
           "",
           "```bash",
@@ -1148,10 +1165,14 @@ describe(
         expect(yield* readTextFile(out)).toBe(counting("string"));
       });
 
-      // Nothing is stripped. A reply wrapped in a fence is not a document, so it
-      // earns repairs and a review — and what is shown is exactly what arrived.
+      // Nothing is stripped. A draft carrying a fence of its own reaches the
+      // review with that fence intact — what is shown is exactly what arrived.
+      //
+      // It is titled, because a response with no level-one heading is an
+      // information request rather than a draft, and this row is about what
+      // happens to a draft's bytes.
       yield* useWorkingDirectory(function* (dir, authorshipRoot) {
-        const wrapped = ["```md", "Hello.", "```", ""].join("\n");
+        const wrapped = ["# Wrapped", "", "```md", "Hello.", "```", ""].join("\n");
         const harness = createPlanHarness({ authorshipRoot });
         for (const _draft of [0, 1, 2, 3]) {
           harness.fake.script({ reply: wrapped });

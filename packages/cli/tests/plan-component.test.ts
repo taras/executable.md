@@ -32,7 +32,13 @@ import {
 } from "@executablemd/core";
 import type { Json, SyntaxSymbols } from "@executablemd/core";
 import { registerComponents, validateDocument } from "@executablemd/core";
-import { executeInstalled, fileReadEntry, sourceDigest } from "@executablemd/core/host";
+import {
+  executeInstalled,
+  fileReadEntry,
+  globReadEntry,
+  sourceDigest,
+  syntaxReadEntry,
+} from "@executablemd/core/host";
 import type { FragmentEvaluationInput } from "@executablemd/core/host";
 import { recordedFiles } from "../../core/tests/support/fragment-files.ts";
 import type { RecordedFiles } from "../../core/tests/support/fragment-files.ts";
@@ -135,10 +141,17 @@ function* runDocument(options: {
       ...(options.stack === undefined ? {} : { stack: options.stack }),
       ...(options.validate === undefined ? {} : { validate: options.validate }),
     }));
+  // One scripted reply per turn this case expects, rather than one for the
+  // whole run: an unscripted turn answers with the empty string, and a document
+  // with two `<Plan>` sites would give its second site that instead of the
+  // Plan the case wrote.
+  const decisions = options.reviews ?? ["Approve"];
   if (options.reply !== undefined) {
-    harness.fake.script({ reply: options.reply });
+    for (const _ of decisions) {
+      harness.fake.script({ reply: options.reply });
+    }
   }
-  for (const decision of options.reviews ?? ["Approve"]) {
+  for (const decision of decisions) {
     harness.script({ decision });
   }
 
@@ -248,8 +261,8 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       const source = yield* readPackagedDocument(PLAN_DOCUMENT);
       // The public component, written the way any document writes it.
       expect(source).toContain('<Syntax as="syntax" />');
-      // And nothing declares a second one: the private closure is the five
-      // phases, and `Syntax` is not among them.
+      // And nothing declares a second one: the private closure is the seven
+      // phases and helpers, and `Syntax` is not among them.
       const declaration = yield* planComponentDescription();
       expect((declaration.privates ?? []).map((component) => component.name)).toEqual([
         "PlanInputs",
@@ -257,6 +270,8 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         "PlanProgress",
         "CheckDraft",
         "AdmitPlan",
+        "ClassifyPlanResponse",
+        "PlanInformation",
       ]);
 
       const run = yield* runDocument({
@@ -393,6 +408,8 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         "PlanProgress",
         "CheckDraft",
         "AdmitPlan",
+        "ClassifyPlanResponse",
+        "PlanInformation",
       ]) {
         const run = yield* runDocument({
           source: [`<${name} as="x" />`, ""].join("\n"),
@@ -409,6 +426,275 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       });
       expect(open.failure).toBeUndefined();
       expect(open.output).toContain("### `<File>`");
+    });
+  });
+
+  it("PC6b: the two information privates declare the contract they were accepted under", function* () {
+    const declaration = yield* planComponentDescription();
+    const privates = declaration.privates ?? [];
+    const classify = privates.find((one) => one.name === "ClassifyPlanResponse");
+    const information = privates.find((one) => one.name === "PlanInformation");
+
+    // A pure value component: one source string in, a closed union out.
+    expect(classify?.forms).toEqual(["self-closing"]);
+    expect(classify?.returns).toEqual({ type: "string", enum: ["draft", "information"] });
+
+    // Paired, because it projects the `<Evaluate>` written inside it; and
+    // value-returning, which is what makes `as` mandatory and stops the
+    // internal envelope ever being rendered into the Plan.
+    expect(information?.forms).toEqual(["paired"]);
+    expect(information?.returns).toEqual({
+      type: "object",
+      properties: {
+        status: { type: "string", enum: ["found", "refused"] },
+        text: { type: "string" },
+      },
+      required: ["status", "text"],
+      additionalProperties: false,
+    });
+    // It takes nothing but its capture: no evaluator, profile, timer or bound
+    // is a prop of it.
+    expect(information?.props).toEqual({
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    });
+  });
+
+  /**
+   * PI4, PI8 — the embedded surface, and what a continuation does with a
+   * request it already answered.
+   *
+   * `<Plan>` written in an ordinary document consumes the profile that document's
+   * host installed, so these rows also prove the request path is the shared one
+   * rather than something the command surface arranges.
+   */
+  describe("Tier PI — information requests from an embedded <Plan>", () => {
+    const REQUEST = '<Glob include={["notes.md"]} as="paths" />\n<Json value={paths} />\n';
+    const SOURCE = ['<Plan as="approved">Write a program.</Plan>', "", "got: {approved}", ""].join(
+      "\n",
+    );
+
+    function reading(files: RecordedFiles): FragmentEvaluationInput {
+      return { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()], files };
+    }
+
+    /** A harness whose agent answers a request first and a Plan second. */
+    function* asking(root: string): Operation<PlanDeclarationHarness> {
+      const harness = yield* planDeclarationHarness({
+        surface: "component",
+        authorshipRoot: root,
+      });
+      harness.fake.script({ reply: REQUEST });
+      harness.fake.script({ reply: PLAN });
+      harness.script({ decision: "Approve" });
+      return harness;
+    }
+
+    it("PI4: an embedded Plan reads through the document host's own profile", function* () {
+      yield* useWorkingDirectory(function* () {
+        const files = recordedFiles({ "notes.md": "the retained note\n" });
+        const run = yield* runDocument({
+          source: SOURCE,
+          harness: yield* asking(yield* authorshipRoot()),
+          reviews: [],
+          evaluation: reading(files),
+        });
+
+        expect(run.failure).toBe(undefined);
+        // The search reached the profile this *document's* host installed.
+        expect(files.performed).toEqual(["glob notes.md"]);
+        expect(run.output).toContain(`got: ${PLAN}`);
+      });
+    });
+
+    it("PI12: an embedded request emits no command progress into the document", function* () {
+      yield* useWorkingDirectory(function* () {
+        const files = recordedFiles({ "notes.md": "the retained note\n" });
+        const run = yield* runDocument({
+          source: SOURCE,
+          harness: yield* asking(yield* authorshipRoot()),
+          reviews: [],
+          evaluation: reading(files),
+          // The presentation an ordinary `xmd run` installs, so a phase written
+          // into the document would arrive here exactly as an operator would
+          // read it rather than being normalized away.
+          normalized: true,
+        });
+
+        expect(run.failure).toBe(undefined);
+        // The request happened — this is not a case where nothing ran.
+        expect(files.performed).toEqual(["glob notes.md"]);
+        // And none of the command surface's own words are in the document. The
+        // approved source is what a `<Plan>` renders; the phases belong to the
+        // command that watches one being written.
+        for (const phrase of [
+          "Inspecting XMD information",
+          "Information request",
+          "XMD information request",
+          "XMD information returned",
+          "Continuing the Plan",
+          "Drafting the Plan",
+        ]) {
+          expect(`${phrase}: ${run.output.includes(phrase)}`).toBe(`${phrase}: false`);
+        }
+        expect(run.output).toContain(`got: ${PLAN}`);
+      });
+    });
+
+    it("PI4: a prohibited operation in the request refuses with no effect", function* () {
+      yield* useWorkingDirectory(function* () {
+        const files = recordedFiles({ "notes.md": "the retained note\n" });
+        const harness = yield* planDeclarationHarness({
+          surface: "component",
+          authorshipRoot: yield* authorshipRoot(),
+        });
+        // The admitted read is written first; the write sits in the arm the
+        // condition never takes.
+        harness.fake.script({
+          reply:
+            '<File path="notes.md" as="note" />\n<If condition={note}>\n<Json value={note} />\n' +
+            '<Else>\n<File path="notes.md">written</File>\n</Else>\n</If>\n',
+        });
+        harness.fake.script({ reply: PLAN });
+        harness.script({ decision: "Approve" });
+
+        const run = yield* runDocument({
+          source: SOURCE,
+          harness,
+          reviews: [],
+          evaluation: reading(files),
+        });
+
+        expect(run.failure).toBe(undefined);
+        expect(files.performed).toEqual([]);
+        expect(files.entries.get("notes.md")).toBe("the retained note\n");
+      });
+    });
+
+    it("PI8: a completed request replays with every live reader tripped", function* () {
+      yield* useWorkingDirectory(function* () {
+        const first = new InMemoryStream();
+        const files = recordedFiles({ "notes.md": "the retained note\n" });
+        const one = yield* runDocument({
+          source: SOURCE,
+          harness: yield* asking(yield* authorshipRoot()),
+          reviews: [],
+          evaluation: reading(files),
+          stream: first,
+        });
+        expect(one.failure).toBe(undefined);
+        expect(files.performed).toEqual(["glob notes.md"]);
+
+        // The complete history, close included. Every live reader is a
+        // tripwire: a turn asked again shows in the prompts, a review in the
+        // reviews, and a search in this recorder.
+        const tripwire = recordedFiles({ "notes.md": "the retained note\n" });
+        const two = yield* runDocument({
+          source: SOURCE,
+          reviews: [],
+          evaluation: reading(tripwire),
+          stream: first,
+        });
+
+        expect(two.failure).toBe(undefined);
+        expect(two.output).toBe(one.output);
+        expect(tripwire.performed).toEqual([]);
+        expect(two.harness.fake.prompts).toEqual([]);
+        expect(two.harness.reviews).toEqual([]);
+      });
+    });
+
+    it("PI8: a partial continuation resumes at the first unrecorded effect", function* () {
+      yield* useWorkingDirectory(function* () {
+        const first = new InMemoryStream();
+        const files = recordedFiles({ "notes.md": "the retained note\n" });
+        const one = yield* runDocument({
+          source: SOURCE,
+          harness: yield* asking(yield* authorshipRoot()),
+          reviews: [],
+          evaluation: reading(files),
+          stream: first,
+        });
+        expect(one.failure).toBe(undefined);
+
+        // Without the close, the enclosing result is not complete, so expansion
+        // reaches the request again. The Agent turns and the review are durable
+        // and restore; `<Glob>` records no durable effect of its own, so it
+        // traverses again — the accepted rule rather than repeated history.
+        const resumed = recordedFiles({ "notes.md": "the retained note\n" });
+        const two = yield* runDocument({
+          source: SOURCE,
+          reviews: [],
+          evaluation: reading(resumed),
+          stream: yield* continuing(first),
+        });
+
+        expect(two.failure).toBe(undefined);
+        expect(two.output).toBe(one.output);
+        expect(resumed.performed).toEqual(["glob notes.md"]);
+        expect(two.harness.fake.prompts).toEqual([]);
+        expect(two.harness.reviews).toEqual([]);
+      });
+    });
+
+    it("PI8: a changed request refuses rather than resuming", function* () {
+      yield* useWorkingDirectory(function* () {
+        // The instruction arrives through props, which is what can actually
+        // differ on a continuation: PC23 settles that a changed authored body
+        // is never expanded, because the retained root replays instead.
+        const source = [
+          "---",
+          "props:",
+          "  type: object",
+          "  properties:",
+          "    request: { type: string }",
+          "  required: [request]",
+          "---",
+          "",
+          '<Plan as="approved">{props.request}</Plan>',
+          "",
+          "got: {approved}",
+          "",
+        ].join("\n");
+
+        const root = yield* authorshipRoot();
+        const first = new InMemoryStream();
+        const files = recordedFiles({ "notes.md": "the retained note\n" });
+        const one = yield* runDocument({
+          source,
+          props: { request: "Write a program." },
+          root,
+          harness: yield* asking(root),
+          reviews: [],
+          evaluation: reading(files),
+          stream: first,
+        });
+        expect(one.failure).toBe(undefined);
+        expect(files.performed).toEqual(["glob notes.md"]);
+
+        // A partial history, so expansion re-enters the Component rather than
+        // replaying its retained root whole — which is where the frozen inputs
+        // compare the instruction the retained authorship was made for.
+        const changed = recordedFiles({ "notes.md": "the retained note\n" });
+        const two = yield* runDocument({
+          source,
+          props: { request: "Write something else." },
+          root,
+          reviews: [],
+          evaluation: reading(changed),
+          stream: yield* continuing(first),
+        });
+
+        expect(two.failure).toContain("stale input");
+        expect(two.failure).toContain("none was written for the new instructions");
+        // Refused in the frozen inputs: before a turn, a review, or a single
+        // read of the request the retained history answered.
+        expect(changed.performed).toEqual([]);
+        expect(two.harness.fake.prompts).toEqual([]);
+        expect(two.harness.reviews).toEqual([]);
+        expect(two.output).not.toContain("got:");
+      });
     });
   });
 
@@ -438,6 +724,8 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           "PlanProgress",
           "CheckDraft",
           "AdmitPlan",
+          "ClassifyPlanResponse",
+          "PlanInformation",
         ]) {
           expect(names).not.toContain(priv);
         }
@@ -610,7 +898,9 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         source: ['<Plan as="approved">Write a program.</Plan>', "", "got: {approved}", ""].join(
           "\n",
         ),
-        reply: "<Nonexistent />\n",
+        // Titled, so it is a draft rather than an information request, and
+        // structurally broken, which is what this row is about.
+        reply: "# Broken\n\n<Nonexistent />\n",
         *validate(candidate) {
           answered += 1;
           return answered === 1
@@ -1321,7 +1611,7 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
       const files = recordedFiles({ "notes.md": "the retained note" });
       // What the agent approves is a program. `<Plan>` hands it back as a
       // string and performs none of it.
-      const PROGRAM = `<File path="notes.md" />\n`;
+      const PROGRAM = `# Read the note\n\n<File path="notes.md" />\n`;
 
       const run = yield* runDocument({
         source: [
@@ -1352,7 +1642,7 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
       const files = recordedFiles({ "notes.md": "the retained note" });
       const run = yield* runDocument({
         source: ['<Plan as="approved">Write a program.</Plan>', "", "done", ""].join("\n"),
-        reply: `<File path="notes.md" />\n`,
+        reply: `# Read the note\n\n<File path="notes.md" />\n`,
         evaluation: profile(files),
       });
 
@@ -1381,7 +1671,7 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
             "</Evaluate>",
             "",
           ].join("\n"),
-          reply: `<FE713.Read path="notes.md" />\n`,
+          reply: `# Read the note\n\n<FE713.Read path="notes.md" />\n`,
           evaluation: fixtureProfile(files),
         });
       });
@@ -1432,7 +1722,7 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
           ].join("\n"),
           // The agent writes the component it was *not* told about. It resolves
           // at the ordinary site and is not in the profile.
-          reply: `<FE713.WideOnly />\n`,
+          reply: `# Use the wide component\n\n<FE713.WideOnly />\n`,
           evaluation: fixtureProfile(files),
         });
       });
@@ -1461,8 +1751,9 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
             "",
           ].join("\n"),
           // Written against the wider catalog: the admitted read first, then
-          // the component only the authored site has.
-          reply: `<FE713.Read path="notes.md" />\n<FE713.WideOnly />\n`,
+          // the component only the authored site has. Titled, so it is a draft
+          // the review approves rather than an information request.
+          reply: `# Use the wide component\n\n<FE713.Read path="notes.md" />\n<FE713.WideOnly />\n`,
           evaluation: fixtureProfile(files),
         });
       });
@@ -1513,7 +1804,10 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
           "<Evaluate text={approved} />",
           "",
         ].join("\n"),
-        reply: '<File path="notes.md" />\n\n```bash exec\nprintf ran\n```\n',
+        // Titled, so it is a draft the review approves rather than an
+        // information request — and it still carries the executable fence the
+        // later, narrower `<Evaluate>` must refuse.
+        reply: '# Read and run\n\n<File path="notes.md" />\n\n```bash exec\nprintf ran\n```\n',
         evaluation: profile(files),
       });
 

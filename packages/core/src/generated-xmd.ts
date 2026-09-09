@@ -123,6 +123,7 @@ import { prepareFetchRequest, requestRecord } from "./fetch-request.ts";
 import { timeoutFetch } from "@executablemd/runtime";
 import type { FetchRequest } from "./fetch-request.ts";
 import { isJsonObject, parseJson } from "./json.ts";
+import { markGeneratedCandidate } from "./generated-candidate.ts";
 import { GeneratedDataExpressions, validateDataExpression } from "./generated-expressions.ts";
 import { capturedBinding } from "./invocation-rules.ts";
 import { renderSegments } from "./render.ts";
@@ -2501,7 +2502,14 @@ export function* evaluateProtectedGeneratedXmd(
     throw new GeneratedXmdError(UNREADABLE);
   }
   if (decided.decision === "refused") {
-    throw new GeneratedXmdError(CONSTRUCT[decided.construct]);
+    // The one failure in this function a candidate can act on: its own text was
+    // wrong. Everything below — a moved ceiling, changed source, an unreadable
+    // record — is this run's history rather than the candidate's mistake, and
+    // is deliberately left unmarked so a trusted loop cannot retry it.
+    throw markGeneratedCandidate(
+      new GeneratedXmdError(CONSTRUCT[decided.construct]),
+      CONSTRUCT[decided.construct],
+    );
   }
   // Before a single component is invoked or a single request is performed: a
   // retained admission is a grant whose non-root ceilings must be stated

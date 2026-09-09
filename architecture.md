@@ -1531,14 +1531,14 @@ compose with. The contracts below replace the earlier Planner artifacts'
 Syntax-only child execution, prohibition on file reads, output-only context, and
 profile-owned evaluation limits.
 
-The shared ordinary read profile below is delivered: `xmd run` and every
-`host="run"` child state one profile whose read table is canonical self-closing
-`<File />`, canonical self-closing `<Glob />` and exact canonical protected
-self-closing `<Syntax />`, with the write table unchanged. What remains
-undelivered is the rest of #762 — every built-in structural construct inside
-generated evaluation, and the Plan classifier and information loop. Those
-contracts describe the accepted feature, not evidence that it is implemented at
-this base.
+Everything below is delivered on this stack. The shared ordinary read profile —
+`xmd run` and every `host="run"` child stating one profile whose read table is
+canonical self-closing `<File />`, canonical self-closing `<Glob />` and exact
+canonical protected self-closing `<Syntax />`, with the write table unchanged.
+Every built-in structural construct inside generated evaluation, with ordinary
+semantics and whole-fragment preflight across every alternative and nested body.
+The lexical response classifier, the eight-request loop the packaged `<Plan>`
+owns, and the narrow typed recovery around the public throwing `<Evaluate>`.
 
 ### One authorship workflow, one ordinary profile
 
@@ -1927,12 +1927,23 @@ never interpolated into executable Markdown.
 > drafts, file contents, matching file paths, component documentation, and
 > refusals. It cannot be used to resume `xmd plan`.
 
-Every durable event crosses the existing secret gate before publication, and
-captured findings cross it before verbose or Agent disclosure. The gate does not
-make file reading a credentials sandbox: sensitive files remain subject to the
-same host read policy, and secret rejection is terminal. A refusal discloses no
-partial findings; already published effect history remains governed by the
-ordinary journal contract.
+Every durable event crosses the existing serialized pre-append secret gate
+before publication. Captured information text has one additional, non-durable
+pre-disclosure check. After Evaluate and its structured teardown settle, but
+before PlanInformation returns, the trusted component asks the current
+execution's authenticated secret policy to scan the complete findings or safe
+refusal. Canonical execution owns that policy and scanner; PlanInformation
+merely consumes them and appends no event. Only text that clears this check may
+reach verbose output or a following Prompt. A finding, scanner or policy
+failure, cancellation, or cleanup failure is terminal and starts no later phase
+or Agent turn. When a trusted host explicitly disabled secret detection, this
+check follows that same captured policy rather than inventing an always-on Plan
+policy.
+
+These checks do not make file reading a credentials sandbox: sensitive files
+remain subject to the same host read policy. A refusal discloses no partial
+findings; already published effect history remains governed by the ordinary
+journal contract.
 
 ### Product verification
 
@@ -1951,14 +1962,15 @@ could appear to work while missing the contract.
 | PI6 | Observe success and refusal with deliberately delayed cleanup; on every ending the projection, every acquired read and the protected route finish before findings are published and before the next turn begins. A cleanup failure stops the conversation. | Detached work, early publication, or a recoverable candidate error hiding teardown failure. |
 | PI7 | Interleave information requests with initial drafts, repairs and review revisions. Eight requests share one budget; the ninth is not evaluated. Draft and repair limits remain independent. | Resetting the information counter per phase, counting a read as a draft, or resetting repairs after a read. |
 | PI8 | Resume after a completed mixed request and Agent turn with all live readers and Agent calls set to fail if reached. Historical effects restore and reproduce the same rendered findings. Changed source, selected authority, lexical reference, filesystem scope or capture format refuses before reuse; a partial continuation resumes at the first unrecorded effect. | Refreshing a Glob/File read, skipping identity validation on retained work, or matching only a journal operation name. |
-| PI9 | Run the same scripted mixed-request-to-approved-Plan journey through source, npm and compiled installations. Both command and embedded Plan keep the same packaged behavior. | Checking only asset hashes or shipping a source-only helper/profile change. |
+| PI9 | Run one scripted embedded mixed-request-to-approved-Plan journey through the source CLI, emitted npm bin and compiled binary. Run the command journey through the in-process production command assembly executing the exact packaged command document. At the npm and compiled boundaries, prove the command and Plan assets are packaged, the Plan origin and digest match the source bytes, its exact text contract and private closure remain intact, and canonical protected Syntax and Evaluate are present exactly once. | A source-only journey, a reconstructed test-only command host, asset hashes without an executable packaged journey, or a distribution that loses or substitutes the command document, Plan component or protected tier. |
 | PI10 | Refuse a malformed candidate and an ordinary missing-file read: each yields one safe retry context after cleanup. Then break the profile installation and the protected route, corrupt retained history, make the Files provider throw rather than answer `Err`, reject a secret, and cancel the enclosing command: each stops authorship. Public Evaluate keeps throwing under its own ordinary use. | Recovering every `GeneratedXmdError`, matching message text, or changing public Evaluate's semantics to report a refusal. |
 | PI11 | Compose admitted reads with branching, binding and bounded iteration — every built-in structural construct under ordinary language rules — and render selected values through Json. A prohibited component in an **untaken** branch refuses the whole fragment with zero reads, and a construct the generated root cannot supply context for fails with its ordinary structural rule rather than as an unauthorized component. | A structural allowlist, preflight that walks only the selected branch, or reporting a placement error as missing authority. |
-| PI12 | Observe default, verbose, journal and follow-up output for success/refusal, then inject a synthetic secret. Default output stays content-free; detailed findings follow settlement; the secret stops before disclosure. | Printing findings before the disclosure gate, inventing an unscanned side channel, or turning secret rejection into another Agent turn. |
+| PI12 | Observe default, verbose, journal and Agent prompts for success and refusal, then place a synthetic secret in a file read by an information request. Default output stays content-free; detailed findings follow settlement; the secret appears in no output, journal entry or Agent Prompt, starts no following turn, review or artifact, and ends with the existing terminal secret rejection. | Relying only on the Prompt event's later append gate, printing findings before the pre-disclosure check, inventing an unscanned side channel, or turning secret rejection into another Agent turn. |
 
 ### Delivery order and deferred access policy
 
-After #776 and #786, delivery is three independently reviewed PRs:
+After #776 and #786, delivery is three independently reviewed PRs, all of them
+on this stack:
 
 1. **Shared read profile.** Canonical self-closing Glob and canonical protected
    Syntax join self-closing File in the ordinary `read` table, through their

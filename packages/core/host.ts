@@ -153,6 +153,27 @@ export {
   syntaxReadEntry,
 } from "./src/evaluation-profile.ts";
 /**
+ * Which generated failure a trusted host may offer the candidate another chance
+ * at — see `src/generated-candidate.ts`.
+ *
+ * A reader, and deliberately not a marker: a host asks whether core classified a
+ * failure as the candidate's own mistake, and cannot classify one itself. An
+ * unmarked failure is terminal, so a host that recovers on this answer recovers
+ * exactly the class core decided, and never stale history, a revoked profile, a
+ * provider that threw, a secret rejection or a teardown failure.
+ */
+export { generatedCandidateReason } from "./src/generated-candidate.ts";
+/**
+ * Whether an Agent answered with a Plan draft or a read-only information
+ * request — see `src/plan-response.ts`.
+ *
+ * A pure function over text, carrying no authority. It is core's because the
+ * rule has to agree with core about where a Markdown body begins and what a
+ * heading is; a classifier that disagreed would send a draft to evaluation.
+ */
+export { classifyPlanResponse } from "./src/plan-response.ts";
+export type { PlanResponseKind } from "./src/plan-response.ts";
+/**
  * The symbols a host's profile describes, when they are not the ones the
  * execution would derive from its own captured inputs — see
  * `src/syntax-reference.ts`.

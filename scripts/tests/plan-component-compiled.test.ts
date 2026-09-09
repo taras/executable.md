@@ -27,7 +27,7 @@ import { timebox } from "@effectionx/timebox";
 import type { ProcessResult } from "@effectionx/process";
 import { createHash } from "node:crypto";
 import { fileURLToPath as fromFileUrl } from "node:url";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,6 +36,13 @@ const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const BINARY = path.join(ROOT, "dist", "xmd");
 const COMPONENT = path.join(ROOT, "packages/cli/src/documents/Plan.md");
 const TIMEOUT = 60_000;
+
+/** The CLI as this checkout runs it, for the source half of the journey. */
+const SOURCE_ENTRY = "packages/cli/src/deno.ts";
+/** The scripted journey both installations run, relative to the checkout. */
+const SMOKE = "smoke-test/plan-information/README.md";
+/** A journey spawns an agent worker of its own, so it is not a syntax lookup. */
+const JOURNEY_TIMEOUT = 300_000;
 
 describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () => {
   it("carries the same <Plan> Component the source tree ships", function* () {
@@ -97,6 +104,8 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
       "PlanProgress",
       "CheckDraft",
       "AdmitPlan",
+      "ClassifyPlanResponse",
+      "PlanInformation",
     ]) {
       expect(names).not.toContain(name);
     }
@@ -227,5 +236,107 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
         `${option}: false`,
       );
     }
+  });
+
+  /**
+   * PI9 — one scripted request-to-approved-Plan journey, run twice.
+   *
+   * The catalog case above asks what a build *says*. This asks it to do the
+   * thing: a coding agent answers the drafting turn with a read-only XMD
+   * program, `<Plan>` evaluates it under the ceiling this build ships, and the
+   * findings come back as the next turn's context.
+   *
+   * Which is a distribution question three times over. `<Syntax>` documentation
+   * is answered from packaged assets, the protected tier that implements
+   * `<Evaluate>` ships inside the binary, and `Plan.md` is Markdown rather than
+   * a module. A build that lost any of them resolves every name in the document
+   * and then fails, and the smoke document's own agent is what notices: its
+   * second `<WhenPrompt>` answers only a prompt carrying the selected
+   * documentation.
+   *
+   * Both installations run the same file, so a divergence is a build's and not
+   * a fixture's.
+   */
+  it("answers an information request and approves a Plan, compiled and from source", function* () {
+    if (!(yield* exists(BINARY))) {
+      throw new Error(`${BINARY} is missing — run \`deno task build\` before this case`);
+    }
+
+    for (const [label, command, args] of [
+      ["compiled", BINARY, [] as string[]],
+      ["source", Deno.execPath(), ["run", "--allow-all", path.join(ROOT, SOURCE_ENTRY)]],
+    ] as const) {
+      const attempt = yield* timebox<ProcessResult>(JOURNEY_TIMEOUT, function* () {
+        return yield* exec(command, {
+          arguments: [...args, "test", SMOKE, "--raw"],
+          cwd: ROOT,
+          env: Deno.env.toObject(),
+        }).join();
+      });
+      if (attempt.timeout) {
+        throw new Error(`the ${label} installation timed out writing a Plan`);
+      }
+      const run = attempt.value;
+      expect(`${label}: ${run.code}`).toBe(`${label}: 0`);
+      // The approved program reached the document that asked for it, whole.
+      expect(`${label}: ${run.stdout.includes("# Approved program")}`).toBe(`${label}: true`);
+      expect(`${label}: ${run.stdout.includes("the approved Plan ran")}`).toBe(`${label}: true`);
+      // And nothing ran it: `<Plan>` renders program text, so the file that
+      // program names is still nobody's.
+      expect(`${label}: ${yield* exists(path.join(ROOT, "planned.txt"))}`).toBe(`${label}: false`);
+    }
+  });
+
+  /**
+   * The command document itself is embedded, not only the Component it declares.
+   *
+   * `plan-command.md` is the second packaged asset on this path and has no
+   * catalog entry, so the digest case above cannot see it. This runs the command
+   * far enough to prove the bytes are there and then stops on the one dependency
+   * a build cannot supply: an agent name that resolves to nothing.
+   *
+   * The phases are the evidence. A binary that shipped no command document
+   * fails before the first of them — there is no program to announce anything —
+   * while this one announces Preparing, builds the catalog through the protected
+   * `<Syntax />` it also embeds, and only then cannot find an agent.
+   *
+   * `HOME` is a directory this case made, so the session placement the command
+   * derives is under it and never the developer's own tree.
+   */
+  it("embeds the command document, not just the Component it declares", function* () {
+    if (!(yield* exists(BINARY))) {
+      throw new Error(`${BINARY} is missing — run \`deno task build\` before this case`);
+    }
+
+    const home = yield* until(mkdtemp(path.join(tmpdir(), "xmd-compiled-plan-home-")));
+    yield* ensure(() => rm(home, { recursive: true, force: true }));
+    const elsewhere = yield* until(mkdtemp(path.join(tmpdir(), "xmd-compiled-plan-cwd-")));
+    yield* ensure(() => rm(elsewhere, { recursive: true, force: true }));
+
+    const attempt = yield* timebox<ProcessResult>(JOURNEY_TIMEOUT, function* () {
+      return yield* exec(BINARY, {
+        arguments: ["plan", "write a greeting", "--default-agent", "no-such-agent-here"],
+        cwd: elsewhere,
+        env: { HOME: home },
+      }).join();
+    });
+    if (attempt.timeout) {
+      throw new Error("the compiled binary timed out preparing a Plan");
+    }
+    const run = attempt.value;
+
+    // It got as far as an agent, which means every packaged byte before that
+    // resolved: the command document, the `<Plan>` declaration it writes, and
+    // the protected tier its catalog phase reaches.
+    expect(run.stderr).toContain("Preparing the Plan");
+    expect(run.stderr).toContain("Getting the available XMD components");
+    expect(run.stderr).toContain("no-such-agent-here");
+    // And it is the agent that was missing, not a program.
+    expect(run.stderr).not.toContain("Cannot resolve component");
+    expect(run.stderr).not.toContain("could not read");
+    expect(run.code).not.toBe(0);
+    // Nothing was delivered and nothing reached the caller's directory.
+    expect(run.stdout).toBe("");
+    expect((yield* until(readdir(elsewhere))).length).toBe(0);
   });
 });

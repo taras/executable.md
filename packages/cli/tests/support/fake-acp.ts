@@ -320,7 +320,20 @@ export function createFakeAcp(): FakeAcp {
           prompts.push(input.text);
           turns.push(input);
           announceTurn();
-          const turn = scripted.shift() ?? { reply: "" };
+          // A turn nobody scripted is a case whose expectations and whose
+          // script disagree, and answering it with an empty reply hides that:
+          // an empty response is not something an agent produces, and a
+          // workflow that treats it as one is being tested against a fiction.
+          // Two `<Plan>` sites with one scripted reply silently gave the second
+          // site "" for exactly this reason.
+          const turn = scripted.shift();
+          if (turn === undefined) {
+            throw new Error(
+              `the fake agent was asked for turn ${prompts.length} and only ` +
+                `${prompts.length - 1} were scripted. Script one per turn the case expects. ` +
+                `The unscripted prompt began: ${JSON.stringify(input.text.slice(0, 120))}`,
+            );
+          }
           const settled = withResolvers<AcpRuntimeTurnResult>();
           const released = withResolvers<void>();
           const recordKey = input.handle.acpxRecordId ?? input.handle.sessionKey;

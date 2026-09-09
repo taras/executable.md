@@ -48,6 +48,7 @@ import { persistFetch } from "./fetch-journal.ts";
 import { parseResponseRecord } from "./fetch-response.ts";
 import type { FetchResponseRecord } from "./fetch-response.ts";
 import { GLOB_PROPS, GLOB_RETURNS, globFailure, globPatterns } from "./glob-source.ts";
+import { markGeneratedCandidate } from "./generated-candidate.ts";
 import { formDispatcher } from "./invocation-identity.ts";
 import { parseFilesFailure } from "@executablemd/runtime";
 
@@ -456,7 +457,7 @@ function readBody(files: FragmentFileAccess, cursor: DirectoryCursor) {
     const requested = String(props.path);
     const text = yield* files.readTextFile({ cwd: cursor.current, path: requested });
     if (!text.ok) {
-      throw new FragmentCapabilityError(refusal(requested, "read"));
+      throw candidate(refusal(requested, "read"));
     }
     return text.value;
   };
@@ -477,11 +478,11 @@ function globBody(files: FragmentFileAccess, cursor: DirectoryCursor) {
   return function* search(props: Record<string, Json>): Operation<string[]> {
     const include = globPatterns("include", props.include);
     if (!include.ok) {
-      throw new FragmentCapabilityError(include.error.message);
+      throw candidate(include.error.message);
     }
     const exclude = globPatterns("exclude", props.exclude);
     if (!exclude.ok) {
-      throw new FragmentCapabilityError(exclude.error.message);
+      throw candidate(exclude.error.message);
     }
     const found = yield* files.globFiles({
       cwd: cursor.current,
@@ -489,7 +490,7 @@ function globBody(files: FragmentFileAccess, cursor: DirectoryCursor) {
       exclude: exclude.value,
     });
     if (!found.ok) {
-      throw new FragmentCapabilityError(
+      throw candidate(
         globFailure(parseFilesFailure(found.error), [...include.value, ...exclude.value]),
       );
     }
@@ -502,7 +503,7 @@ function deleteBody(files: FragmentFileAccess, cursor: DirectoryCursor) {
     const requested = String(props.path);
     const removed = yield* files.deleteFile({ cwd: cursor.current, path: requested });
     if (!removed.ok) {
-      throw new FragmentCapabilityError(refusal(requested, "delete"));
+      throw candidate(refusal(requested, "delete"));
     }
     return "";
   };
@@ -516,7 +517,7 @@ function writeBody(files: FragmentFileAccess, cursor: DirectoryCursor) {
     // destination is refused renders nothing at all.
     const admitted = yield* files.checkFilePath({ cwd, path: requested });
     if (!admitted.ok) {
-      throw new FragmentCapabilityError(refusal(requested, "write"));
+      throw candidate(refusal(requested, "write"));
     }
     const text = yield* rendered(requested);
     // Resolved against the directory this element was written in, captured
@@ -524,7 +525,7 @@ function writeBody(files: FragmentFileAccess, cursor: DirectoryCursor) {
     // move where this write lands.
     const written = yield* files.writeTextFile({ cwd, path: requested, content: text });
     if (!written.ok) {
-      throw new FragmentCapabilityError(refusal(requested, "write"));
+      throw candidate(refusal(requested, "write"));
     }
     return "";
   };
@@ -539,7 +540,7 @@ function ensureBody(files: FragmentFileAccess, cursor: DirectoryCursor) {
     // nobody chose.
     const made = yield* files.ensureDirectory({ cwd: enclosing, path: requested });
     if (!made.ok) {
-      throw new FragmentCapabilityError(refusal(requested, "create"));
+      throw candidate(refusal(requested, "create"));
     }
     // And it scopes what it renders, which is what makes `<File path="out.md">`
     // inside it mean this directory's `out.md`. Scoped through the evaluation's
@@ -631,6 +632,19 @@ function fetchBody(
  */
 function refusal(path: string, verb: string): string {
   return `an admitted fragment could not ${verb} ${JSON.stringify(path)}.`;
+}
+
+/**
+ * A refusal the fragment's own text can be corrected for.
+ *
+ * An ordinary provider `Err` — a file that is not there, a directory that
+ * cannot be searched — and a pattern or form the fragment wrote wrongly are all
+ * things the candidate that produced the text can try again at. The revocation
+ * refusal is deliberately not one of them: an operation whose execution has
+ * ended is this run being over, and no rewrite of the text changes that.
+ */
+function candidate(message: string): FragmentCapabilityError {
+  return markGeneratedCandidate(new FragmentCapabilityError(message), message);
 }
 
 /**

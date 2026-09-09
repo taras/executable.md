@@ -37,6 +37,8 @@ import type { Json as DurableJson, Workflow } from "@executablemd/durable-stream
 import type { Operation } from "effection";
 
 import { getExpansion } from "../expansion.ts";
+import { markGeneratedCandidate } from "../generated-candidate.ts";
+import { SyntaxSelectionRefusal } from "../syntax-refusal.ts";
 import { ComponentInvocationError, invocationForm } from "../invocation-identity.ts";
 import type {
   ComponentInvocation,
@@ -140,7 +142,7 @@ function syntax(claim: IdentityClaimant): ProtectedBody {
       throw new ComponentInvocationError(UNISSUED_REFUSAL);
     }
     if (form === "paired") {
-      throw new ComponentInvocationError(PAIRED_REFUSAL);
+      throw markGeneratedCandidate(new ComponentInvocationError(PAIRED_REFUSAL), PAIRED_REFUSAL);
     }
     // Read before anything is claimed or rendered, so a list this component
     // cannot answer for refuses with no durable record and no partial text.
@@ -154,9 +156,39 @@ function syntax(claim: IdentityClaimant): ProtectedBody {
       throw new Error(NO_REFERENCE_REFUSAL);
     }
     const expansion = yield* getExpansion();
-    return yield* persistSymbols(id, expansion.position, () =>
-      names === undefined ? reference.symbols() : reference.documentation(names),
-    );
+    // Set inside the executor, where the refusal is still the class core threw
+    // rather than the rebuilt error that comes out the other side. A provider
+    // cannot reach this closure, and cannot become an instance of that class by
+    // naming its own error the same thing — which is the hole a name comparison
+    // would leave open.
+    let refused: string | undefined;
+    try {
+      return yield* persistSymbols(id, expansion.position, function* () {
+        try {
+          return names === undefined
+            ? yield* reference.symbols()
+            : yield* reference.documentation(names);
+        } catch (error) {
+          if (error instanceof SyntaxSelectionRefusal) {
+            refused = error.message;
+          }
+          throw error;
+        }
+      });
+    } catch (error) {
+      // Classified *here*, outside the durable operation, because the mark is a
+      // non-enumerable property and the failure that arrives here has been
+      // rebuilt without one. What decides is the flag above, set while the
+      // original was still in hand — never anything read off this error, all of
+      // which a provider could have produced.
+      //
+      // So a symbols provider that throws stays terminal whatever it names its
+      // error, and only a selection core itself refused becomes retry context.
+      if (refused !== undefined && error instanceof Error) {
+        throw markGeneratedCandidate(error, refused);
+      }
+      throw error;
+    }
   };
 }
 
@@ -179,10 +211,13 @@ function requestedNames(value: Json | undefined): readonly string[] | undefined 
   const names: string[] = [];
   for (const member of value) {
     if (typeof member !== "string" || member.length === 0) {
-      throw new ComponentInvocationError(NAMES_REFUSAL);
+      throw markGeneratedCandidate(new ComponentInvocationError(NAMES_REFUSAL), NAMES_REFUSAL);
     }
     if (names.includes(member)) {
-      throw new ComponentInvocationError(DUPLICATE_REFUSAL);
+      throw markGeneratedCandidate(
+        new ComponentInvocationError(DUPLICATE_REFUSAL),
+        DUPLICATE_REFUSAL,
+      );
     }
     names.push(member);
   }

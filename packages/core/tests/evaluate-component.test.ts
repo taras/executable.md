@@ -22,7 +22,7 @@ import { API } from "@executablemd/runtime";
 
 import { collect } from "../src/collect.ts";
 import { Component, content } from "../src/component-api.ts";
-import { executeInstalled } from "../host.ts";
+import { executeInstalled, generatedCandidateReason } from "../host.ts";
 import {
   directoryEntry,
   fileDeleteEntry,
@@ -1675,21 +1675,35 @@ describe("Tier FE34 — the shared read profile", () => {
   it("FE34: named Syntax describes a component that stays unavailable", function* () {
     const files = recordedFiles({ "notes.md": NOTE });
     const output = yield* run(
-      `<Evaluate text={'<Syntax names={["Elicit", "Glob"]} />\\n'} allow={["read"]} />\n`,
+      `<Evaluate text={'<Syntax names={["Elicit", "File", "Glob"]} />\\n'} allow={["read"]} />\n`,
       [shared(files)],
     );
 
     const rendered = String(output);
     expect(rendered).toContain("**Available in this evaluation:** yes");
     expect(rendered).toContain("**Available in this evaluation:** no");
+    // `<File>` has two forms, and the documentation describes the component
+    // rather than the entry this table admitted: the paired write form is in
+    // what a candidate reads.
+    expect(rendered).toContain("paired");
 
-    // Reading about it is not permission to run it.
-    const failed = yield* refusal(
+    // Reading about either of them is not permission to run it. `<Elicit>` is
+    // not in the table at all; `<File>`'s paired form is a write, and the read
+    // table answers only for the self-closing one.
+    const asked = yield* refusal(
       run(`<Evaluate text={'<Elicit schema={{}} as="answer" />\\n'} allow={["read"]} />\n`, [
         shared(files),
       ]),
     );
-    expect(failed).toContain("did not admit");
+    expect(asked).toContain("did not admit");
+    const wrote = yield* refusal(
+      run(`<Evaluate text={'<File path="notes.md">written</File>\\n'} allow={["read"]} />\n`, [
+        shared(files),
+      ]),
+    );
+    expect(wrote).toContain("self-closing form");
+    expect(files.performed).toEqual([]);
+    expect(files.entries.get("notes.md")).toBe(NOTE);
   });
 
   it("FE34: canonical Syntax is the answer at core's identity, and a replacement loses it", function* () {
@@ -1717,6 +1731,174 @@ describe("Tier FE34 — the shared read profile", () => {
     expect(seen.length).toBeGreaterThan(0);
     expect(failed).toContain("carries no identity");
     expect(files.performed).toEqual([]);
+  });
+
+  it("FE34: an unknown documented name is classified, and Evaluate still throws", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    let caught: unknown;
+    try {
+      yield* run(
+        `<Evaluate text={'<Syntax names={["NoSuchComponent"]} />\\n'} allow={["read"]} />\n`,
+        [shared(files)],
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    // Public Evaluate is unchanged: it throws, and nothing here returns a
+    // Result or prints a refusal in its place.
+    expect(caught).not.toBe(undefined);
+    // And the failure carries the classification a trusted caller reads, with a
+    // reason quoting only the name the fragment itself asked about.
+    const reason = generatedCandidateReason(caught);
+    expect(reason).toContain("NoSuchComponent");
+    expect(reason).not.toContain("/");
+
+    // The negative control, in the same shape: a fragment whose profile is
+    // missing fails terminally and carries no classification, so a caller that
+    // recovers on this answer cannot recover a broken installation.
+    let terminal: unknown;
+    try {
+      yield* run(`<Evaluate text={'<Syntax />\\n'} />\n`, []);
+    } catch (error) {
+      terminal = error;
+    }
+    expect(terminal).not.toBe(undefined);
+    expect(generatedCandidateReason(terminal)).toBe(undefined);
+
+    // The sharper one: a symbols provider that throws, having *named its own
+    // error* the way core's selection refusal reads. Infrastructure failing is
+    // not a mistake the candidate can correct, and the identity core states is
+    // established only around the selection it performs itself — after this
+    // provider has already returned — so this stays terminal.
+    let forged: unknown;
+    try {
+      yield* run(`<Evaluate text={'<Syntax names={["File"]} />\\n'} />\n`, [
+        shared(files),
+        {
+          // deno-lint-ignore require-yield
+          *symbols(): Operation<never> {
+            const error = new Error("the provider could not build the symbols");
+            error.name = "executablemd.core.syntax-selection-refusal";
+            throw error;
+          },
+        },
+      ]);
+    } catch (error) {
+      forged = error;
+    }
+    expect(forged).not.toBe(undefined);
+    expect(generatedCandidateReason(forged)).toBe(undefined);
+  });
+
+  it("FE34: a provider that throws is terminal, while its ordinary Err is not", function* () {
+    // The ordinary refusal first: a provider answering `Err` for a file that is
+    // not there is a mistake the fragment can correct.
+    const absent = recordedFiles({});
+    let ordinary: unknown;
+    try {
+      yield* run(`<Evaluate text={'<File path="missing.md" />\\n'} />\n`, [shared(absent)]);
+    } catch (error) {
+      ordinary = error;
+    }
+    expect(generatedCandidateReason(ordinary)).toContain("could not read");
+
+    // The same shape, answered by a provider that *throws* instead. Nothing the
+    // candidate rewrites fixes a provider raising, so it carries no
+    // classification and stops the invocation.
+    const broken = recordedFiles({});
+    let infrastructure: unknown;
+    try {
+      yield* run(`<Evaluate text={'<File path="missing.md" />\\n'} />\n`, [
+        {
+          evaluation: {
+            read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()],
+            files: {
+              ...broken,
+              // deno-lint-ignore require-yield
+              *readTextFile(): Operation<never> {
+                throw new Error("the Files provider failed");
+              },
+            },
+          },
+        },
+      ]);
+    } catch (error) {
+      infrastructure = error;
+    }
+    expect(infrastructure).not.toBe(undefined);
+    expect(generatedCandidateReason(infrastructure)).toBe(undefined);
+  });
+
+  it("FE34: a cleanup failure beats a refusal that was already classified", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    // A component whose teardown fails, admitted beside the read table. It runs
+    // first, so by the time the selection refuses below, a failing cleanup is
+    // already established.
+    const held: FunctionComponentDefinition = {
+      kind: "function",
+      name: "Held",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn(): Operation<string> {
+        yield* ensure(function* () {
+          throw new Error("the fragment's cleanup failed");
+        });
+        return "held";
+      },
+    };
+    const profile: ExecutionInstallation = {
+      evaluation: {
+        read: [
+          fileReadEntry(),
+          globReadEntry(),
+          syntaxReadEntry(),
+          {
+            kind: "component-answer",
+            name: "Held",
+            identity: { origin: "test://provider", key: "Held", revision: "1" },
+            forms: ["self-closing"],
+          },
+        ],
+        files,
+      },
+      componentAnswers: [answerProvider("Held", held)],
+    };
+
+    let caught: unknown;
+    try {
+      yield* run(
+        `<Evaluate text={'<Held />\\n<Syntax names={["NoSuchComponent"]} />\\n'} ` +
+          `allow={["read"]} />\n`,
+        [profile],
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    // The selection refused, so the closure marker was set — and it must not
+    // travel out on a failure that is not that refusal. A cleanup failure is
+    // terminal, and a caller recovering on the classification would otherwise
+    // hand an agent another turn while this run's teardown was broken.
+    expect(caught).not.toBe(undefined);
+    expect(generatedCandidateReason(caught)).toBe(undefined);
+    // And it failed for the cleanup rather than earlier: a fragment refused at
+    // preflight would never have run `<Held />`, and this control would prove
+    // nothing about which failure wins.
+    expect(String(caught)).toContain("cleanup failed");
+
+    // The discriminating pair: the same fragment without the failing teardown
+    // *is* recoverable, so the row above is about cleanup winning rather than
+    // about this selection never being classified.
+    let recoverable: unknown;
+    try {
+      yield* run(
+        `<Evaluate text={'<Syntax names={["NoSuchComponent"]} />\\n'} allow={["read"]} />\n`,
+        [shared(files)],
+      );
+    } catch (error) {
+      recoverable = error;
+    }
+    expect(generatedCandidateReason(recoverable)).toContain("NoSuchComponent");
   });
 
   it("FE34: core answers for Syntax alone, so Evaluate cannot be admitted at its identity", function* () {

@@ -55,6 +55,7 @@ import { FormOpener } from "@executablemd/web";
 
 import { hostAcpDependencies } from "./agent-stack.ts";
 import type { AuthorshipStack } from "./agent-stack.ts";
+import { ordinaryEvaluationProfile } from "./evaluation-profile.ts";
 import { PLAN_COMMAND_DOCUMENT, readPackagedDocument } from "./packaged-document.ts";
 
 /**
@@ -473,6 +474,13 @@ export function* runPlanCommandDocument(profile: AuthorshipProfile): Operation<R
             // run. Captured before any installation runs, so no prop, binding,
             // middleware answer or projected content reaches it.
             symbols: profile.symbols,
+            // The ordinary run's evaluation ceiling, so an information request
+            // this authorship evaluates reads through exactly what `xmd run`
+            // states — File, Glob and canonical Syntax, with the write table
+            // present and never selected. The host installs it, not `<Plan>`:
+            // a component that installed its own would be choosing its
+            // authority instead of being given one.
+            evaluation: ordinaryEvaluationProfile(),
           },
         ],
       );

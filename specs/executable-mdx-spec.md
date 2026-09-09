@@ -3036,11 +3036,18 @@ it emits that source where the component is written, and `as` is ordinary text
 capture: the same bytes are bound and nothing is emitted. Neither form
 evaluates the source, and neither announces a phase: the progress `xmd plan`
 writes is a private side effect of the command surface, and an ordinary `<Plan>`
-expands no progress body at all. Its five private
+expands no progress body at all. Its seven private
 capabilities — `<PlanInputs>`, `<PlanAuthorship>`, `<PlanProgress>`,
-`<CheckDraft>` and
-`<AdmitPlan>` — are the closure those exact bytes carry, and are syntax no
-document may write. The vocabulary the Agent is shown is not among them: the
+`<CheckDraft>`, `<AdmitPlan>`, `<ClassifyPlanResponse>` and
+`<PlanInformation>` — are the closure those exact bytes carry, and are syntax no
+document may write. The last two serve the information loop:
+`<ClassifyPlanResponse>` is a pure self-closing value component answering the
+closed union `"draft" | "information"` from the lexical frontmatter and
+first-block rule alone, and paired `<PlanInformation>` projects its child public
+`<Evaluate>`, requires `as`, renders nothing, and binds the closed internal
+result `{ status, text }` — exact rendered findings, or a safe reason when the
+child failed with the typed generated-candidate classification after its
+teardown completed. The vocabulary the Agent is shown is not among them: the
 packaged bytes write the public `<Syntax />` (§5.3.1), whose own
 `syntax_symbols` read retains exactly `{ symbols }`, so a continuation
 restores the symbols the run actually showed rather than rebuilding them, and
@@ -4027,6 +4034,26 @@ own. Bindings, structural constructs and pure components such as `<Json>` are
 language composition, not effect classes, and remain available when `allow`
 selects read-only authority. The fragment explicitly renders any bound values it
 wants its caller to receive.
+
+**One narrow classification marks a recoverable generated candidate.** Public
+`<Evaluate>` throws on every failure and gains no `Result`, no props and no
+change to its output or capture behavior. What core adds is a way for a trusted
+caller to tell one class of failure apart from the rest: a namespaced
+descriptive tag, recognizable across separately loaded package copies, carrying
+only a safe normalized reason.
+
+It marks exactly the failures a generated candidate can correct — malformed or
+unauthorized generated source, a declarative expression, binding, construct,
+form or prop error, invalid input to an admitted Syntax or Glob, and an ordinary
+captured read reporting `Err`. It is not on a missing, duplicate, revoked or
+malformed profile; a missing or broken protected route or Syntax reference; a
+Files provider that throws or answers with malformed infrastructure data rather
+than an ordinary `Err`; durability divergence, stale source or authority, or
+unreadable retained data; persistence, journal or secret-publication failure;
+unexpected runtime failure; teardown failure; or outer cancellation. The tag is
+per throw site rather than per error class, so a `GeneratedXmdError` is not by
+itself a recoverability marker and no consumer may recover one by matching its
+message.
 
 **One occurrence is one durable decision.** A continuation restores the
 admission rather than making it again, and refuses before any effect if the run

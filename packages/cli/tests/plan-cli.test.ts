@@ -63,7 +63,7 @@ import { makeStore } from "./support/fake-acp.ts";
 
 const REQUEST = "write a greeting";
 
-const PLAIN = "Nothing but prose.\n";
+const PLAIN = "# Prose only\n\nNothing but prose.\n";
 
 /**
  * The negative control for non-execution.
@@ -108,7 +108,7 @@ const REQUIRES_NAME = [
 ].join("\n");
 
 /** A draft that resolves no such component, for the endings that never approve. */
-const UNRESOLVED = "<NoSuchComponent />\n";
+const UNRESOLVED = "# Broken\n\n<NoSuchComponent />\n";
 
 const PROBE_HEADING = "Retired token probe";
 const PROBE_SENTINEL = "the document ran";
@@ -1398,6 +1398,96 @@ describe(
         expect(harness.fake.closes.length).toBeGreaterThan(0);
         expect(chunks).toEqual([]);
         expect((yield* until(readdir(dir))).sort()).toEqual(["tainted.jsonl"]);
+      });
+    });
+
+    it("PI12: the journal holds the complete request and its findings, as data", function* () {
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        yield* writeTextFile(join(dir, "notes.md"), `The value is ${SAFE_VALUE}.\n`);
+        const journal = join(dir, "asked.jsonl");
+        const harness = createPlanHarness({ authorshipRoot });
+        // A real read of a real file, through the ceiling this command
+        // installs. Nothing here stands in for the filesystem.
+        harness.fake.script({
+          reply: '<File path="notes.md" as="note" />\n<Json value={note} />\n',
+        });
+        harness.fake.script({ reply: CLEAN_DRAFT });
+        harness.script({ decision: "Approve" });
+
+        const { value } = yield* delivered(() =>
+          runPlan(planning(dir, undefined, undefined, { journal, verbose: true }), harness.deps),
+        );
+
+        expect(value).toBe(0);
+        const recorded = yield* readTextFile(journal);
+        // Both halves are in it: what was asked for, and what came back. The
+        // journal is the record of the exchange, not a summary of it.
+        expect(recorded).toContain("XMD information request");
+        expect(recorded).toContain("XMD information returned");
+        expect(recorded).toContain(SAFE_VALUE);
+        // As data rather than as instructions: the request is journaled inside
+        // the inert block the progress showed, and the journal still parses as
+        // the event sequence it is.
+        expect((yield* journalEvents(journal)).length).toBeGreaterThan(0);
+        // And it was written after the exchange settled, never during it.
+        expect(recorded.indexOf("XMD information request")).toBeLessThan(
+          recorded.indexOf("XMD information returned"),
+        );
+      });
+    });
+
+    it("PI12: a secret in the findings stops before they are disclosed", function* () {
+      yield* useWorkingDirectory(function* (dir, authorshipRoot) {
+        // The canary is in the *file the request reads*, so it enters through
+        // the findings rather than through a draft. PO10 covers the draft.
+        yield* writeTextFile(join(dir, "notes.md"), `The value is ${canary()}.\n`);
+        const journal = join(dir, "tainted.jsonl");
+        const harness = createPlanHarness({ authorshipRoot });
+        harness.fake.script({
+          reply: '<File path="notes.md" as="note" />\n<Json value={note} />\n',
+        });
+        // A clean draft and an approval are scripted, so the run has an ending
+        // that is not the gate available to it. Nothing else can be what
+        // stopped this.
+        harness.fake.script({ reply: CLEAN_DRAFT });
+        harness.script({ decision: "Approve" });
+
+        const { value, chunks } = yield* delivered(() =>
+          reported(() =>
+            runPlan(
+              planning(dir, join(dir, "release.md"), undefined, { journal, verbose: true }),
+              harness.deps,
+            ),
+          ),
+        );
+
+        expect(value.value).toBe(1);
+        expect(value.lines.join("\n")).toContain(
+          "secret detection rejected content before it was persisted",
+        );
+        // Terminal, not a retry: the gate is the run's ending, and nothing it
+        // found is repeated anywhere.
+        expect(value.lines.join("\n")).not.toContain(canary());
+        const transcript = harness.progress.join("");
+        expect(transcript).not.toContain(canary());
+        expect(phasesOf(transcript)).not.toContain("XMD information returned");
+        expect(yield* readTextFile(journal)).not.toContain(canary());
+        // The Agent is a disclosure destination like the progress stream and
+        // the journal, and unlike them it is not durable — the Prompt reaches
+        // the agent before any event of it is appended. So the pre-append gate
+        // cannot be what protects it, and the pre-disclosure check is: the
+        // complete settled text is scanned before `<PlanInformation>` returns,
+        // which is the last moment at which nothing has been disclosed.
+        //
+        // The discriminator for that placement: relying on the Prompt event's
+        // later append gate leaves this failing with the canary in prompt two.
+        for (const prompt of harness.fake.prompts) {
+          expect(prompt).not.toContain(canary());
+        }
+        expect(harness.fake.prompts).toHaveLength(1);
+        expect(harness.reviews).toEqual([]);
+        expect(chunks).toEqual([]);
+        expect(yield* exists(join(dir, "release.md"))).toBe(false);
       });
     });
 
