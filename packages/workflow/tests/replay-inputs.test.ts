@@ -719,6 +719,96 @@ describe("what the root recorded, as one outcome", () => {
   });
 
   // deno-lint-ignore require-yield
+  it("counts every event that names the root import, whoever recorded it", function* () {
+    const succeeded = { status: "ok", output: "done.\n", value: "done.\n" };
+    const selection = { kind: "repository", path: "flows/root.md", content: SOURCE };
+    const owned = entry(rootImport(selection));
+
+    /** The same import, recorded under another coroutine. */
+    function claimed(coroutineId: string): DurableEvent {
+      return {
+        type: "yield",
+        coroutineId,
+        description: { type: "import_component", name: "__root__" },
+        result: { status: "ok", value: selection },
+      };
+    }
+
+    const histories: { says: string; entries: JournalEntry[] }[] = [
+      {
+        says: "a child recorded a second one",
+        entries: [owned, entry(claimed("child")), entry(rootClose(succeeded))],
+      },
+      {
+        says: "a child recorded the only one",
+        entries: [entry(claimed("child")), entry(rootClose(succeeded))],
+      },
+    ];
+
+    for (const { says, entries } of histories) {
+      // Uniqueness is asked of the name, not of the ownership: a second
+      // account of the run's own entry is a history canonical core refuses.
+      expect([says, rootOutcome(entries)?.kind]).toEqual([says, "damaged"]);
+      expect([says, retainedReplay(record(), entries).ok]).toEqual([says, false]);
+    }
+
+    // And the one history this rules out nothing about.
+    expect(rootOutcome([owned, entry(rootClose(succeeded))])?.kind).toBe("outcome");
+    expect(retainedReplay(record(), [owned, entry(rootClose(succeeded))]).ok).toBe(true);
+  });
+
+  // deno-lint-ignore require-yield
+  it("holds a settled root import to the selection it must contain", function* () {
+    const succeeded = { status: "ok", output: "done.\n", value: "done.\n" };
+    const unreadable: Json[] = [
+      // The content the record must hold, missing.
+      { kind: "repository", path: "flows/root.md" },
+      // A member this form does not have.
+      { kind: "repository", path: "flows/root.md", content: SOURCE, extra: 1 },
+      // A target that is not one.
+      { kind: "repository", path: "flows/root.md", content: SOURCE, target: 7 },
+      // A recorded selection failure with no selector to replay.
+      {
+        kind: "target-failure",
+        path: "flows/root.md",
+        content: SOURCE,
+        failure: { kind: "no-match", matches: [], available: [] },
+      },
+      // A selection kind a root import never records.
+      { kind: "workflow", path: "flows/root.md", sourceHash: "abc", content: SOURCE },
+    ];
+
+    for (const value of unreadable) {
+      const entries = [entry(rootImport(value)), entry(rootClose(succeeded))];
+      // The lifecycle refuses to call the terminal authoritative…
+      expect([JSON.stringify(value), rootOutcome(entries)?.kind]).toEqual([
+        JSON.stringify(value),
+        "damaged",
+      ]);
+      // …and admission refuses through that same judgment.
+      const said = reason(retainedReplay(record(), entries));
+      expect([JSON.stringify(value), said.includes("cannot be read by this version")]).toEqual([
+        JSON.stringify(value),
+        true,
+      ]);
+    }
+
+    // A settlement that failed records no selection at all, and one whose
+    // settlement cannot be read records none either.
+    const failed = [
+      entry({
+        type: "yield",
+        coroutineId: "root",
+        description: { type: "import_component", name: "__root__" },
+        result: { status: "err", error: { message: "gone", name: "Error" } },
+      }),
+      entry(rootClose(succeeded)),
+    ];
+    expect(rootOutcome(failed)?.kind).toBe("damaged");
+    expect(retainedReplay(record(), failed).ok).toBe(false);
+  });
+
+  // deno-lint-ignore require-yield
   it("admits the shapes canonical execution actually writes", function* () {
     const message = "the document refused";
     const written: { value: Json; status: WorkflowRunStatus }[] = [

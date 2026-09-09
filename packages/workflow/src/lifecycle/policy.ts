@@ -124,7 +124,7 @@ export function rootOutcome(entries: readonly JournalEntry[]): RetainedTerminal 
   if (document.kind === "bound") {
     return imported.kind === "none" ? boundOutcome(entries) : { kind: "damaged" };
   }
-  if (imported.kind !== "one" || imported.entry.event.result.status !== "ok") {
+  if (imported.kind !== "one") {
     return { kind: "damaged" };
   }
   return document.kind === "ok"
@@ -148,25 +148,119 @@ function boundOutcome(entries: readonly JournalEntry[]): RetainedTerminal {
  */
 export type RootImports =
   | { readonly kind: "none" }
-  | { readonly kind: "one"; readonly entry: JournalEntry }
-  | { readonly kind: "many" };
+  | { readonly kind: "one"; readonly selection: RetainedRootSelection }
+  /** More than one retained event names the root import. */
+  | { readonly kind: "many" }
+  /** One does, and it is not a root import this build can read. */
+  | { readonly kind: "malformed" };
 
 export function rootImports(entries: readonly JournalEntry[]): RootImports {
-  const imports = entries.filter((entry) => isRootImport(entry.event));
+  // Every event that *names* the root import, whichever coroutine claims it.
+  // Uniqueness is asked of the name, not of the ownership: a child coroutine
+  // recording one is a second account of the run's own entry, and canonical
+  // core refuses that history rather than looking past it.
+  const imports = entries.filter((entry) => namesRootImport(entry.event));
   const only = imports[0];
   if (only === undefined) {
     return { kind: "none" };
   }
-  return imports.length === 1 ? { kind: "one", entry: only } : { kind: "many" };
+  if (imports.length !== 1 || only.event.coroutineId !== ROOT_COROUTINE) {
+    return imports.length === 1 ? { kind: "malformed" } : { kind: "many" };
+  }
+  const selection = rootSelection(only.event);
+  return selection === undefined ? { kind: "malformed" } : { kind: "one", selection };
 }
 
-function isRootImport(event: DurableEvent): boolean {
+function namesRootImport(event: DurableEvent): boolean {
   return (
     event.type === "yield" &&
-    event.coroutineId === ROOT_COROUTINE &&
     event.description.type === "import_component" &&
     event.description.name === ROOT_COMPONENT
   );
+}
+
+/**
+ * The document one retained root import selected, as its own record holds it.
+ *
+ * The shapes canonical execution writes for a root and no others: the whole
+ * document, one exact target, and a selector the document offered no single
+ * target for. A settlement that failed recorded no selection at all, and a
+ * successful one that does not hold a complete selection is a root import this
+ * build cannot read — which is a fact about the history, not about the caller
+ * asking, so it is decided here rather than by whoever asks next.
+ */
+export interface RetainedRootSelection {
+  readonly path: string;
+  readonly content: string;
+  readonly target: string | undefined;
+}
+
+function rootSelection(event: DurableEvent): RetainedRootSelection | undefined {
+  const settlement = plain(event.type === "yield" ? event.result : undefined);
+  if (settlement === undefined || settlement["status"] !== "ok") {
+    return undefined;
+  }
+  const selection = plain(settlement["value"]);
+  if (selection === undefined) {
+    return undefined;
+  }
+  const path = selection["path"];
+  const content = selection["content"];
+  const kind = selection["kind"];
+  const members = Object.keys(selection).length;
+  if (typeof path !== "string" || typeof content !== "string") {
+    return undefined;
+  }
+
+  if (kind === "repository") {
+    const target = selection["target"];
+    if (target === undefined) {
+      return members === 3 ? { path, content, target: undefined } : undefined;
+    }
+    return members === 4 && typeof target === "string" ? { path, content, target } : undefined;
+  }
+
+  if (kind === "target-failure") {
+    // The selector as the run was asked for it. Handing it back is what makes
+    // the replayed request the same request: canonical execution resolves it
+    // against the recorded document again and finds the same failure.
+    const failure = plain(selection["failure"]);
+    const selector = failure?.["selector"];
+    return members === 4 && typeof selector === "string"
+      ? { path, content, target: selector }
+      : undefined;
+  }
+
+  return undefined;
+}
+
+/**
+ * The document a terminal written before any import was about.
+ *
+ * Read from the binding `readPreRootTerminal()` above has already held to its
+ * exact closed form, so this only takes what that admitted: nothing decides
+ * here that was not decided there.
+ */
+export function preRootSelection(
+  entries: readonly JournalEntry[],
+): RetainedRootSelection | undefined {
+  const frontier = terminalFrontier(entries);
+  if (frontier.kind !== "final") {
+    return undefined;
+  }
+  const settlement = plain(frontier.entry.event.result);
+  const result = plain(settlement?.["value"]);
+  const binding = plain(result?.[ROOT_BINDING]);
+  if (binding === undefined) {
+    return undefined;
+  }
+  const path = binding["path"];
+  const source = binding["source"];
+  const target = binding["target"];
+  if (typeof path !== "string" || typeof source !== "string") {
+    return undefined;
+  }
+  return { path, content: source, target: typeof target === "string" ? target : undefined };
 }
 
 /** The coroutine a document execution's own records belong to. */

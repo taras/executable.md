@@ -781,6 +781,84 @@ describe("a completed run replayed through its own owner", () => {
     expect(await on(stub, (owner) => owner.holders())).toBe(0);
   });
 
+  it("refuses a root import no single execution recorded, and moves nothing", async () => {
+    const stub = executor();
+    const host = lifecycleHost(stub);
+
+    // A settled root, over a history in which the run's own import is claimed
+    // twice: once by the root, once by a child that could not have run it.
+    await run(function* () {
+      return yield* scoped(function* () {
+        const transitions: WorkflowExecutionTransitions = yield* useRemoteLifecycle(host);
+        const lock = yield* acquired();
+        const begun = yield* transitions.begin(lock, {
+          runId: RUN_ID,
+          action: "start",
+          creation: CREATION,
+        });
+        if (!begun.ok) {
+          throw begun.error;
+        }
+        const appended = yield* begun.value.database.transact(function* (transaction) {
+          for (const coroutineId of ["root", "child"]) {
+            yield* transaction.journal.append({
+              type: "yield",
+              coroutineId,
+              description: { type: "import_component", name: "__root__" },
+              result: {
+                status: "ok",
+                value: { kind: "repository", path: "README.md", content: DOCUMENT },
+              },
+            });
+          }
+          yield* transaction.journal.append({
+            type: "close",
+            coroutineId: "root",
+            result: {
+              status: "ok",
+              value: { status: "ok", output: "done.\n", value: "done.\n" },
+            },
+          });
+        });
+        if (!appended.ok) {
+          throw appended.error;
+        }
+      });
+    });
+
+    const before = await ownerState(stub);
+    expect(before.run?.["status"]).toBe("running");
+    const heldBefore = await on(stub, (owner) => owner.executionRows());
+
+    // The terminal reads, and the history it settled cannot say what ran.
+    const refusals = await run(function* (): Operation<Record<string, string>> {
+      return yield* scoped(function* () {
+        const transitions: WorkflowExecutionTransitions = yield* useRemoteLifecycle(host);
+        const lock = yield* acquired();
+        const started = yield* transitions.begin(lock, {
+          runId: RUN_ID,
+          action: "start",
+          creation: CREATION,
+        });
+        const resumed = yield* transitions.begin(lock, { runId: RUN_ID, action: "resume" });
+        return {
+          started: started.ok ? "admitted" : started.error.message,
+          resumed: resumed.ok ? "admitted" : resumed.error.message,
+        };
+      });
+    });
+
+    for (const said of Object.values(refusals)) {
+      expect(String(said)).toContain("cannot read");
+    }
+
+    // Neither account of the import was chosen, and recovery published nothing.
+    const after = await ownerState(stub);
+    expect(after).toEqual(before);
+    expect(await on(stub, (owner) => owner.executionRows())).toEqual(heldBefore);
+    expect(await on(stub, (owner) => owner.holders())).toBe(0);
+  });
+
   it("refuses a terminal row whose own journal it cannot read, and moves nothing", async () => {
     const ended: readonly WorkflowRunStatus[] = ["completed", "failed"];
     for (const status of ended) {

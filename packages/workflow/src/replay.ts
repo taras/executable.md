@@ -34,13 +34,13 @@
  */
 
 import { Err, Ok, type Result } from "effection";
-import type { DurableEvent } from "@executablemd/durable-streams";
 import { retainedSource } from "@executablemd/core/host";
 import type { ExecutionInstallation, RetainedRootDocument } from "@executablemd/core/host";
 import { workflowBundleReplayInstallation } from "./bundle.ts";
 import { retainedWorkflowInstallation } from "./run.ts";
 import {
   agreesWithRetainedResult,
+  preRootSelection,
   rootImports,
   rootOutcome,
   terminal,
@@ -48,9 +48,6 @@ import {
 } from "./lifecycle/policy.ts";
 import type { JournalEntry } from "./storage/api.ts";
 import type { WorkflowRunRecord } from "./storage/record.ts";
-
-/** Where core writes the document a terminal it created before importing was about. */
-const ROOT_BINDING = "root_binding";
 
 /** What a completed run hands canonical execution, and nothing else. */
 export interface RetainedReplay {
@@ -101,125 +98,6 @@ function refuse(reason: string): Result<never> {
 }
 
 /**
- * Read one journal-controlled value, or answer that reading it refused.
- *
- * As narrow as the reads a retained import is parsed through, and for the same
- * reason: a throwing accessor and a proxy trap both mean this record does not
- * describe a replay, and nothing wider should be swallowed.
- */
-function reading<T>(read: () => T): T | undefined {
-  try {
-    return read();
-  } catch {
-    return undefined;
-  }
-}
-
-/** A recorded value that is an ordinary object, or nothing. */
-function recorded(value: unknown): Record<string, unknown> | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return undefined;
-  }
-  const names = reading(() => Object.keys(value));
-  if (names === undefined) {
-    return undefined;
-  }
-  const held: Record<string, unknown> = {};
-  for (const name of names) {
-    const member = reading(() => Reflect.get(value, name));
-    if (member === undefined) {
-      return undefined;
-    }
-    held[name] = member;
-  }
-  return held;
-}
-
-/** The document one retained selection names, as a root source is built from it. */
-interface RetainedRoot {
-  readonly path: string;
-  readonly content: string;
-  readonly target: string | undefined;
-}
-
-/**
- * The selection a settled root import recorded.
- *
- * Only the shapes canonical execution writes for a root: the whole document,
- * one exact target, and a selector the document offered no single target for.
- * A settlement that failed recorded no selection at all, and is refused by the
- * caller rather than guessed at.
- */
-function rootSelection(event: DurableEvent): RetainedRoot | undefined {
-  const settlement = recorded(reading(() => (event.type === "yield" ? event.result : undefined)));
-  if (settlement === undefined || settlement["status"] !== "ok") {
-    return undefined;
-  }
-  const selection = recorded(settlement["value"]);
-  if (selection === undefined) {
-    return undefined;
-  }
-  const path = selection["path"];
-  const content = selection["content"];
-  const kind = selection["kind"];
-  const members = Object.keys(selection).length;
-  if (typeof path !== "string" || typeof content !== "string") {
-    return undefined;
-  }
-
-  if (kind === "repository") {
-    const target = selection["target"];
-    if (target === undefined) {
-      return members === 3 ? { path, content, target: undefined } : undefined;
-    }
-    return members === 4 && typeof target === "string" ? { path, content, target } : undefined;
-  }
-
-  if (kind === "target-failure") {
-    // The selector as the run was asked for it. Handing it back is what makes
-    // the replayed request the same request: canonical execution resolves it
-    // against the recorded document again and finds the same failure.
-    const failure = recorded(selection["failure"]);
-    const selector = failure?.["selector"];
-    return members === 4 && typeof selector === "string"
-      ? { path, content, target: selector }
-      : undefined;
-  }
-
-  return undefined;
-}
-
-/**
- * The document a terminal written before any import was about.
- *
- * A run can fail before it imports anything, and canonical core records which
- * document that failure was about inside the terminal itself. That binding is
- * the only account such a history has of its own root, so it is what a replay
- * of one is built from.
- */
-function boundRoot(close: DurableEvent): RetainedRoot | undefined {
-  const settlement = recorded(reading(() => close.result));
-  if (settlement === undefined || settlement["status"] !== "ok") {
-    return undefined;
-  }
-  const result = recorded(settlement["value"]);
-  const binding = recorded(result?.[ROOT_BINDING]);
-  if (binding === undefined || Object.keys(binding).length !== 3) {
-    return undefined;
-  }
-  const path = binding["path"];
-  const source = binding["source"];
-  const target = binding["target"];
-  if (typeof path !== "string" || typeof source !== "string") {
-    return undefined;
-  }
-  if (target !== null && typeof target !== "string") {
-    return undefined;
-  }
-  return { path, content: source, target: target ?? undefined };
-}
-
-/**
  * What this run's owner already holds, as the inputs one canonical replay runs
  * on — or why the state it holds describes no completed run.
  *
@@ -248,7 +126,6 @@ export function retainedReplay(
   if (frontier.kind === "mixed") {
     return refuse(REFUSALS.mixed);
   }
-  const close = frontier.entry;
 
   // What the root recorded, read once, by the lifecycle's own judgment: the
   // same one stale recovery publishes through and the same one a settlement
@@ -257,13 +134,18 @@ export function retainedReplay(
   // A terminal this build cannot read is refused before canonical core is
   // handed it, because core's rejection would arrive as *this* invocation's
   // document failure and be offered as a replacement outcome.
-  // The root's own import, read by the same rule the lifecycle reads it by, so
-  // the document this replay is built from is the one the outcome below was
-  // judged against. Answered here first only so a history recording two says
-  // so, rather than arriving as damage with nothing to distinguish it.
+  // The root's own import, read by the same rule the lifecycle reads it by —
+  // the same call, answering with the same parsed selection — so the document
+  // this replay is built from is the one the outcome below was judged against.
+  // Asked here first only so a history recording two, or recording one this
+  // build cannot read, says which rather than arriving as undifferentiated
+  // damage.
   const imports = rootImports(entries);
   if (imports.kind === "many") {
     return refuse(REFUSALS.ambiguous);
+  }
+  if (imports.kind === "malformed") {
+    return refuse(REFUSALS.malformed);
   }
 
   const canonical = rootOutcome(entries);
@@ -274,8 +156,7 @@ export function retainedReplay(
     return refuse(REFUSALS.disagreed);
   }
 
-  const retained =
-    imports.kind === "none" ? boundRoot(close.event) : rootSelection(imports.entry.event);
+  const retained = imports.kind === "none" ? preRootSelection(entries) : imports.selection;
   if (retained === undefined) {
     return refuse(REFUSALS.malformed);
   }

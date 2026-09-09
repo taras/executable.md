@@ -1398,6 +1398,121 @@ describe("what a completed run reaches when it is asked to run again", () => {
     expect(attached).toEqual([]);
   });
 
+  it("WRP18: refuses a root import it cannot hold to one readable selection", function* () {
+    const asked: string[] = [];
+    const attached: string[] = [];
+
+    const outcome = yield* scoped(function* () {
+      const fixture = yield* useFixture(PLAIN);
+      const established = yield* scoped(function* () {
+        yield* useRepositoryGit(fixture.repository);
+        return yield* startFor(fixture);
+      });
+
+      const source = established.established.source;
+      const settled: DurableEvent = {
+        type: "close",
+        coroutineId: "root",
+        result: { status: "ok", value: { status: "ok", output: "done\n", value: "done\n" } },
+      };
+
+      /** What the root import records, said in a way this build cannot hold. */
+      const unreadable: Record<string, (path: string) => readonly DurableEvent[]> = {
+        // A child recorded the root's own import a second time.
+        duplicated: (path) => [
+          rootImportEvent(path, source),
+          {
+            type: "yield",
+            coroutineId: "child",
+            description: { type: "import_component", name: "__root__" },
+            result: { status: "ok", value: { kind: "repository", path, content: source } },
+          },
+          settled,
+        ],
+        // The only import names the root, and the root did not record it.
+        disowned: (path) => [
+          {
+            type: "yield",
+            coroutineId: "child",
+            description: { type: "import_component", name: "__root__" },
+            result: { status: "ok", value: { kind: "repository", path, content: source } },
+          },
+          settled,
+        ],
+        // The selection the run replays from is missing the document itself.
+        contentless: (path) => [
+          {
+            type: "yield",
+            coroutineId: "root",
+            description: { type: "import_component", name: "__root__" },
+            result: { status: "ok", value: { kind: "repository", path } },
+          },
+          settled,
+        ],
+        // A recorded selection failure with no selector left to replay.
+        selectorless: (path) => [
+          {
+            type: "yield",
+            coroutineId: "root",
+            description: { type: "import_component", name: "__root__" },
+            result: {
+              status: "ok",
+              value: {
+                kind: "target-failure",
+                path,
+                content: source,
+                failure: { kind: "no-match", matches: [], available: [] },
+              },
+            },
+          },
+          settled,
+        ],
+      };
+
+      const refusals: Record<string, { exitCode: number; said: string; moved: boolean }> = {};
+      for (const [says, history] of Object.entries(unreadable)) {
+        const runId = yield* seedStaleRun(fixture, established, (definition, id) => [
+          forkRunRecordEvent({
+            runId: id,
+            base: established.established.base,
+            pinnedCommit: definition.objectId,
+          }),
+          ...history(definition.rootDocumentPath),
+        ]);
+        const before = yield* retained(fixture.runs, runId);
+        const refused = yield* scoped(function* () {
+          yield* useRefusingGit(asked);
+          return yield* invoke(
+            { ...REQUEST, id: runId },
+            established,
+            replayHost(fixture.runs, attached),
+            // deno-lint-ignore require-yield
+            function* (): Operation<Result<void>> {
+              return Ok(undefined);
+            },
+          );
+        });
+        const after = yield* retained(fixture.runs, runId);
+        refusals[says] = {
+          exitCode: refused.exitCode,
+          said: refused.err.join(" "),
+          moved: JSON.stringify(after) !== JSON.stringify(before),
+        };
+      }
+      return refusals;
+    });
+
+    // Each history refuses before the terminal is named, and recovery
+    // publishes nothing over a run it cannot say the root of.
+    for (const [says, refusal] of Object.entries(outcome)) {
+      expect([says, refusal.exitCode]).toEqual([says, 1]);
+      expect([says, refusal.said.includes("cannot read")]).toEqual([says, true]);
+      expect([says, refusal.moved]).toEqual([says, false]);
+    }
+    expect(asked).toEqual([]);
+    expect(attached).toEqual([]);
+  });
+
   it("WRP5: a run that has not ended still reconstructs, and its refusal is cleaned up", function* () {
     const asked: string[] = [];
     const attached: string[] = [];
