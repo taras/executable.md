@@ -174,9 +174,19 @@ describe("Tier WLC — cancellation and deletion", () => {
         transitions,
         { runId: "closed-1", action: "start", creation: creation() },
         function* (begun) {
-          // The coroutine returned, and what it returned is the document's own
-          // result: the shape canonical core writes, because that shape is what
-          // says whether the document completed or failed.
+          // The history canonical execution writes: the root's own import, then
+          // the document result it returned. Both halves matter — the result's
+          // own status is what says whether the document completed or failed,
+          // and an ordinary result is one a run records after importing.
+          yield* begun.database.journal.append({
+            type: "yield",
+            coroutineId: "root",
+            description: { type: "import_component", name: "__root__" },
+            result: {
+              status: "ok",
+              value: { kind: "repository", path: "workflow.md", content: "rendered" },
+            },
+          });
           yield* begun.database.journal.append({
             type: "close",
             coroutineId: "root",

@@ -26,8 +26,8 @@
 
 import { appendFile } from "node:fs/promises";
 import process from "node:process";
-import { durableCall, durableRun } from "@executablemd/durable-streams";
-import type { Workflow } from "@executablemd/durable-streams";
+import { createDurableOperation, durableCall, durableRun } from "@executablemd/durable-streams";
+import type { Json, Workflow } from "@executablemd/durable-streams";
 import { main, until } from "effection";
 import { WorkflowLifecycle, WorkflowStorageError } from "../../mod.ts";
 import { useWorkflowRunHost } from "../../deno.ts";
@@ -40,14 +40,31 @@ const DEFINITION = {
   rootDocumentPath: "workflows/release.md",
 } as const;
 
+/** What this run's document is, as its own history records it. */
+const SOURCE = "# Release\n";
+
 /**
  * Three durable operations, so replay has an order to preserve.
  *
  * Each one's side effect is a line in the marker file, which is what makes
  * "did this run again" observable from outside the process.
+ *
+ * The root's own import comes first and the result is the document result
+ * canonical execution returns, because a workflow run's journal is a document
+ * execution's: the lifecycle reads the root import and that result to decide
+ * what the run became, and a history missing either is one no execution
+ * produces. Both are durable, so a second process restores them rather than
+ * recording them again — which is the thing this file exists to observe.
  */
-function work(marker: string): () => Workflow<string> {
-  return function* (): Workflow<string> {
+function work(marker: string): () => Workflow<Json> {
+  return function* (): Workflow<Json> {
+    yield createDurableOperation(
+      { type: "import_component", name: "__root__" },
+      // deno-lint-ignore require-yield
+      function* (): Workflow<Json> {
+        return { kind: "repository", path: DEFINITION.rootDocumentPath, content: SOURCE };
+      },
+    );
     const first = yield* durableCall("first", function* () {
       yield* until(appendFile(marker, "first\n"));
       return "one";
@@ -60,7 +77,8 @@ function work(marker: string): () => Workflow<string> {
       yield* until(appendFile(marker, "third\n"));
       return "three";
     });
-    return [first, second, third].join(",");
+    const rendered = [first, second, third].join(",");
+    return { status: "ok", output: rendered, value: rendered };
   };
 }
 
@@ -97,7 +115,11 @@ main(function* () {
   }
   const { database, execution } = opened.value;
 
-  const value = yield* durableRun(work(marker), { stream: database.journal });
+  const result = yield* durableRun(work(marker), { stream: database.journal });
+  const value =
+    typeof result === "object" && result !== null && !Array.isArray(result)
+      ? Reflect.get(result, "value")
+      : undefined;
 
   const settled = yield* transitions.settle(executorLock, {
     executionId: execution.executionId,

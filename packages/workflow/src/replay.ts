@@ -41,17 +41,13 @@ import { workflowBundleReplayInstallation } from "./bundle.ts";
 import { retainedWorkflowInstallation } from "./run.ts";
 import {
   agreesWithRetainedResult,
+  rootImports,
   rootOutcome,
   terminal,
   terminalFrontier,
 } from "./lifecycle/policy.ts";
 import type { JournalEntry } from "./storage/api.ts";
 import type { WorkflowRunRecord } from "./storage/record.ts";
-
-/** The root import a run's own entry is recorded under. */
-const ROOT = "__root__";
-
-const IMPORT_COMPONENT = "import_component";
 
 /** Where core writes the document a terminal it created before importing was about. */
 const ROOT_BINDING = "root_binding";
@@ -137,19 +133,6 @@ function recorded(value: unknown): Record<string, unknown> | undefined {
     held[name] = member;
   }
   return held;
-}
-
-/** Whether a retained event is recognizably a settled component import. */
-function importedName(event: DurableEvent): string | undefined {
-  if (reading(() => event.type) !== "yield") {
-    return undefined;
-  }
-  const description = reading(() => (event.type === "yield" ? event.description : undefined));
-  if (description === undefined || reading(() => description.type) !== IMPORT_COMPONENT) {
-    return undefined;
-  }
-  const name = reading(() => description.name);
-  return typeof name === "string" ? name : undefined;
 }
 
 /** The document one retained selection names, as a root source is built from it. */
@@ -274,6 +257,15 @@ export function retainedReplay(
   // A terminal this build cannot read is refused before canonical core is
   // handed it, because core's rejection would arrive as *this* invocation's
   // document failure and be offered as a replacement outcome.
+  // The root's own import, read by the same rule the lifecycle reads it by, so
+  // the document this replay is built from is the one the outcome below was
+  // judged against. Answered here first only so a history recording two says
+  // so, rather than arriving as damage with nothing to distinguish it.
+  const imports = rootImports(entries);
+  if (imports.kind === "many") {
+    return refuse(REFUSALS.ambiguous);
+  }
+
   const canonical = rootOutcome(entries);
   if (canonical === undefined || canonical.kind === "damaged") {
     return refuse(REFUSALS.damaged);
@@ -282,13 +274,8 @@ export function retainedReplay(
     return refuse(REFUSALS.disagreed);
   }
 
-  const imports = entries.filter((entry) => importedName(entry.event) === ROOT);
-  if (imports.length > 1) {
-    return refuse(REFUSALS.ambiguous);
-  }
-
-  const imported = imports[0];
-  const retained = imported === undefined ? boundRoot(close.event) : rootSelection(imported.event);
+  const retained =
+    imports.kind === "none" ? boundRoot(close.event) : rootSelection(imports.entry.event);
   if (retained === undefined) {
     return refuse(REFUSALS.malformed);
   }

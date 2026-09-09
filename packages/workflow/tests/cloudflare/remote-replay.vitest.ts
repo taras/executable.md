@@ -38,6 +38,7 @@ import type { RemoteLifecycleHost } from "../../src/remote/lifecycle.ts";
 import type { RemoteExecutorConnection } from "../../src/remote/lifecycle-link.ts";
 import type { RemoteReadPlane } from "../../src/remote/read.ts";
 import type { WorkflowRunDatabase } from "../../src/storage/api.ts";
+import type { WorkflowRunStatus } from "../../src/storage/record.ts";
 import { WorkflowLifecycle } from "../../src/lifecycle/api.ts";
 import type {
   WorkflowExecutionTransitions,
@@ -778,6 +779,84 @@ describe("a completed run replayed through its own owner", () => {
     expect(after).toEqual(before);
     expect(await on(stub, (owner) => owner.executionRows())).toEqual(heldBefore);
     expect(await on(stub, (owner) => owner.holders())).toBe(0);
+  });
+
+  it("refuses a terminal row whose own journal it cannot read, and moves nothing", async () => {
+    const ended: readonly WorkflowRunStatus[] = ["completed", "failed"];
+    for (const status of ended) {
+      const stub = executor();
+      const host = lifecycleHost(stub);
+
+      // A row that already says the run ended, over a result nothing can read.
+      await run(function* () {
+        return yield* scoped(function* () {
+          const transitions: WorkflowExecutionTransitions = yield* useRemoteLifecycle(host);
+          const lock = yield* acquired();
+          const begun = yield* transitions.begin(lock, {
+            runId: RUN_ID,
+            action: "start",
+            creation: CREATION,
+          });
+          if (!begun.ok) {
+            throw begun.error;
+          }
+          const appended = yield* begun.value.database.transact(function* (transaction) {
+            yield* transaction.journal.append({
+              type: "yield",
+              coroutineId: "root",
+              description: { type: "import_component", name: "__root__" },
+              result: {
+                status: "ok",
+                value: { kind: "repository", path: "README.md", content: DOCUMENT },
+              },
+            });
+            yield* transaction.journal.append({
+              type: "close",
+              coroutineId: "root",
+              result: { status: "ok", value: { status: "err" } },
+            });
+          });
+          if (!appended.ok) {
+            throw appended.error;
+          }
+          const settled = yield* transitions.settle(lock, {
+            executionId: begun.value.execution.executionId,
+            status,
+            ...(status === "failed" ? { reason: { kind: "host", code: DOCUMENT_FAILED } } : {}),
+          });
+          if (!settled.ok) {
+            throw settled.error;
+          }
+        });
+      });
+
+      const before = await ownerState(stub);
+      expect(before.run?.["status"]).toBe(status);
+
+      const refusals = await run(function* (): Operation<Record<string, string>> {
+        return yield* scoped(function* () {
+          const transitions: WorkflowExecutionTransitions = yield* useRemoteLifecycle(host);
+          const lock = yield* acquired();
+          const started = yield* transitions.begin(lock, {
+            runId: RUN_ID,
+            action: "start",
+            creation: CREATION,
+          });
+          const resumed = yield* transitions.begin(lock, { runId: RUN_ID, action: "resume" });
+          return {
+            started: started.ok ? "admitted" : started.error.message,
+            resumed: resumed.ok ? "admitted" : resumed.error.message,
+          };
+        });
+      });
+
+      expect(String(refusals["started"])).toContain("cannot read");
+      expect(String(refusals["resumed"])).toContain("cannot read");
+      // A terminal row does not vouch for the journal beneath it: no replay
+      // envelope was inserted and nothing was published.
+      expect(await ownerState(stub)).toEqual(before);
+      expect(await on(stub, (owner) => owner.holders())).toBe(0);
+    }
   });
 
   it("hands the run to the next connection when the replay's own ends", async () => {

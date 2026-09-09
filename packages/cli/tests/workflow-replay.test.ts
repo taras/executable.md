@@ -1258,6 +1258,83 @@ describe("what a completed run reaches when it is asked to run again", () => {
     expect(outcome.after).toEqual(outcome.before);
   });
 
+  it("WRP17: refuses a terminal row whose own journal it cannot read", function* () {
+    const asked: string[] = [];
+    const attached: string[] = [];
+    let executed = 0;
+
+    const outcome = yield* scoped(function* () {
+      const fixture = yield* useFixture(BUNDLED, {
+        Stage: "staged.\n",
+        Unused: "never imported.\n",
+      });
+      const established = yield* scoped(function* () {
+        yield* useRepositoryGit(fixture.repository);
+        return yield* startFor(fixture);
+      });
+
+      // A row that already says the run ended, over a result nothing can read.
+      // The row does not vouch for the journal: both accounts have to agree
+      // before either is reused.
+      const ended: readonly WorkflowRunStatus[] = ["completed", "failed"];
+      const seen: { status: WorkflowRunStatus; before: Retained; after: Retained; said: string }[] =
+        [];
+      for (const status of ended) {
+        const runId = yield* seedStaleRun(fixture, established, damagedHistory(established), {
+          status,
+        });
+        const before = yield* retained(fixture.runs, runId);
+        expect([status, before.status]).toEqual([status, status]);
+
+        const said = yield* scoped(function* () {
+          yield* useRefusingGit(asked);
+          const started = yield* invoke(
+            { ...REQUEST, id: runId },
+            established,
+            replayHost(fixture.runs, attached),
+            // deno-lint-ignore require-yield
+            function* (): Operation<Result<void>> {
+              executed += 1;
+              return Ok(undefined);
+            },
+          );
+          const resumed =
+            status === "completed"
+              ? yield* invoke(
+                  { ...REQUEST, action: "resume", target: runId },
+                  undefined,
+                  replayHost(fixture.runs, attached),
+                  // deno-lint-ignore require-yield
+                  function* (): Operation<Result<void>> {
+                    executed += 1;
+                    return Ok(undefined);
+                  },
+                )
+              : started;
+          expect([status, started.exitCode, resumed.exitCode]).toEqual([status, 1, 1]);
+          expect([status, statusOf(started), statusOf(resumed)]).toEqual([
+            status,
+            undefined,
+            undefined,
+          ]);
+          return `${started.err.join(" ")} ${resumed.err.join(" ")}`;
+        });
+
+        seen.push({ status, before, after: yield* retained(fixture.runs, runId), said });
+      }
+      return seen;
+    });
+
+    for (const { status, before, after, said } of outcome) {
+      // Nothing was inserted, closed or published for either row.
+      expect([status, after]).toEqual([status, before]);
+      expect([status, said.includes("cannot read")]).toEqual([status, true]);
+    }
+    expect(executed).toBe(0);
+    expect(asked).toEqual([]);
+    expect(attached).toEqual([]);
+  });
+
   it("WRP16: refuses a history holding a second result, without choosing one", function* () {
     const asked: string[] = [];
     const attached: string[] = [];

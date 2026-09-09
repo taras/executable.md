@@ -20,6 +20,7 @@ import type { Operation, Result } from "effection";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { retainedReplay } from "../src/replay.ts";
+import { rootOutcome } from "../src/lifecycle/policy.ts";
 import { DOCUMENT_FAILED } from "../src/lifecycle/policy.ts";
 import type { RetainedReplay } from "../src/replay.ts";
 import { WorkflowReplayHistoryError } from "../src/replay.ts";
@@ -618,6 +619,102 @@ describe("what the root recorded, as one outcome", () => {
         JSON.stringify(value),
         true,
       ]);
+    }
+  });
+
+  // deno-lint-ignore require-yield
+  it("correlates the terminal with the import history around it", function* () {
+    const message = "refused before the root import";
+    const bound = {
+      status: "err",
+      output: "",
+      error: { name: "Error", message, segment: { message } },
+      root_binding: { path: "flows/root.md", source: SOURCE, target: null },
+    };
+    const imported = rootImport({ kind: "repository", path: "flows/root.md", content: SOURCE });
+    const succeeded = { status: "ok", output: "done.\n", value: "done.\n" };
+
+    // The two histories any execution can produce.
+    const canonical: { says: string; entries: JournalEntry[]; status: WorkflowRunStatus }[] = [
+      {
+        says: "imported, then a result",
+        entries: [entry(imported), entry(rootClose(succeeded))],
+        status: "completed",
+      },
+      {
+        says: "no import, and the bound failure",
+        entries: [entry(rootClose(bound))],
+        status: "failed",
+      },
+    ];
+    for (const { says, entries, status } of canonical) {
+      expect([says, rootOutcome(entries)?.kind]).toEqual([says, "outcome"]);
+      const outcome = retainedReplay(
+        record({ status, ...(status === "failed" ? { stopReason: HOST } : {}) }),
+        entries,
+      );
+      expect([says, outcome.ok]).toEqual([says, true]);
+    }
+
+    // And the ones none can. A binding is written only by a run that imported
+    // nothing; an ordinary result is written only by one that imported.
+    const impossible: { says: string; entries: JournalEntry[]; status: WorkflowRunStatus }[] = [
+      {
+        says: "imported, then the bound failure",
+        entries: [entry(imported), entry(rootClose(bound))],
+        status: "failed",
+      },
+      {
+        says: "no import, and an ordinary failure",
+        entries: [entry(rootClose(documentFailure("partial\n")))],
+        status: "failed",
+      },
+      {
+        says: "no import, and a success",
+        entries: [entry(rootClose(succeeded))],
+        status: "completed",
+      },
+      {
+        says: "an import that failed, then a result",
+        entries: [
+          entry({
+            type: "yield",
+            coroutineId: "root",
+            description: { type: "import_component", name: "__root__" },
+            result: { status: "err", error: { message: "gone", name: "Error" } },
+          }),
+          entry(rootClose(succeeded)),
+        ],
+        status: "completed",
+      },
+      {
+        says: "an import another coroutine recorded",
+        entries: [
+          entry({
+            type: "yield",
+            coroutineId: "child",
+            description: { type: "import_component", name: "__root__" },
+            result: {
+              status: "ok",
+              value: { kind: "repository", path: "flows/root.md", content: SOURCE },
+            },
+          }),
+          entry(rootClose(succeeded)),
+        ],
+        status: "completed",
+      },
+    ];
+    for (const { says, entries, status } of impossible) {
+      // Stale recovery classifies it as damage rather than publishing from it.
+      expect([says, rootOutcome(entries)?.kind]).toEqual([says, "damaged"]);
+      // And admission refuses it rather than building a root from it.
+      const said = reason(
+        retainedReplay(
+          record({ status, ...(status === "failed" ? { stopReason: HOST } : {}) }),
+          entries,
+        ),
+      );
+      expect([says, said.includes("cannot be read by this version")]).toEqual([says, true]);
     }
   });
 

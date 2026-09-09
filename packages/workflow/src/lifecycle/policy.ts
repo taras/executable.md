@@ -113,10 +113,67 @@ export function rootOutcome(entries: readonly JournalEntry[]): RetainedTerminal 
   if (document === undefined) {
     return { kind: "damaged" };
   }
-  return document === "ok"
+  // The terminal has to agree with the history around it. A binding is written
+  // only by a run that failed before importing anything, so a history that
+  // imported its root and then recorded one describes two different executions;
+  // and an ordinary document result is what a run produces *after* importing,
+  // so one recorded with no import behind it describes a document nothing
+  // named. Neither is a history any execution can produce, and reading the
+  // terminal alone cannot tell either of them apart from the real thing.
+  const imported = rootImports(entries);
+  if (document.kind === "bound") {
+    return imported.kind === "none" ? boundOutcome(entries) : { kind: "damaged" };
+  }
+  if (imported.kind !== "one" || imported.entry.event.result.status !== "ok") {
+    return { kind: "damaged" };
+  }
+  return document.kind === "ok"
     ? { kind: "outcome", status: "completed", reason: undefined }
     : { kind: "outcome", status: "failed", reason: retainedFailureReason(entries) };
 }
+
+/** The outcome a run that failed before importing anything recorded. */
+function boundOutcome(entries: readonly JournalEntry[]): RetainedTerminal {
+  return { kind: "outcome", status: "failed", reason: retainedFailureReason(entries) };
+}
+
+/**
+ * The root import this history recorded, when it recorded exactly one.
+ *
+ * The root's own import is the entry every other record of the run hangs from,
+ * and canonical core admits a terminal history only when one coroutine — this
+ * one — recorded exactly one. Both the recovery that publishes an outcome from
+ * a terminal and the admission that reuses one ask this, so neither can accept
+ * a history the other refuses.
+ */
+export type RootImports =
+  | { readonly kind: "none" }
+  | { readonly kind: "one"; readonly entry: JournalEntry }
+  | { readonly kind: "many" };
+
+export function rootImports(entries: readonly JournalEntry[]): RootImports {
+  const imports = entries.filter((entry) => isRootImport(entry.event));
+  const only = imports[0];
+  if (only === undefined) {
+    return { kind: "none" };
+  }
+  return imports.length === 1 ? { kind: "one", entry: only } : { kind: "many" };
+}
+
+function isRootImport(event: DurableEvent): boolean {
+  return (
+    event.type === "yield" &&
+    event.coroutineId === ROOT_COROUTINE &&
+    event.description.type === "import_component" &&
+    event.description.name === ROOT_COMPONENT
+  );
+}
+
+/** The coroutine a document execution's own records belong to. */
+const ROOT_COROUTINE = "root";
+
+/** The name canonical execution records the run's own document import under. */
+const ROOT_COMPONENT = "__root__";
 
 /**
  * Where the root's terminal sits in a history, when it sits anywhere.
@@ -158,13 +215,15 @@ export function terminalFrontier(entries: readonly JournalEntry[]): TerminalFron
  * missing a member, carrying one of the wrong type, or carrying a member this
  * form does not have is not a result to reuse.
  */
-function readDocumentResult(value: unknown): "ok" | "err" | undefined {
+function readDocumentResult(value: unknown): { kind: "ok" | "err" | "bound" } | undefined {
   const result = plain(value);
   if (result === undefined || typeof result["output"] !== "string") {
     return undefined;
   }
   if (result["status"] === "ok") {
-    return names(result, ["status", "output", "value"]) && "value" in result ? "ok" : undefined;
+    return names(result, ["status", "output", "value"]) && "value" in result
+      ? { kind: "ok" }
+      : undefined;
   }
   if (result["status"] !== "err") {
     return undefined;
@@ -175,10 +234,10 @@ function readDocumentResult(value: unknown): "ok" | "err" | undefined {
     // whole form is what makes that import-free history attributable to one
     // document at all. Anything else wearing a binding is a terminal core did
     // not write.
-    return readPreRootTerminal(result) ? "err" : undefined;
+    return readPreRootTerminal(result) ? { kind: "bound" } : undefined;
   }
   return names(result, ["status", "output", "error"]) && readDocumentFailure(result["error"])
-    ? "err"
+    ? { kind: "err" }
     : undefined;
 }
 
@@ -366,19 +425,23 @@ export function closingOutcome(
   storedStatus: WorkflowRunStatus,
   canonical: RetainedTerminal | undefined,
 ): Closing {
-  if (terminal(storedStatus)) {
-    return { status: "interrupted", reason: INTERRUPTED, publishes: false, damaged: false };
-  }
-  if (canonical === undefined) {
-    return { status: "interrupted", reason: INTERRUPTED, publishes: true, damaged: false };
-  }
-  if (canonical.kind === "damaged") {
+  // Damage first, and before the stored status is consulted at all. A run whose
+  // row already says `completed` is not a run whose journal is therefore safe:
+  // the two accounts have to agree before either is reused, and a row cannot
+  // vouch for history nothing can read.
+  if (canonical?.kind === "damaged") {
     // The document finished and this build cannot read what it finished as.
     // Calling that an interruption would say the executor went without saying
     // anything, which is the one thing this history rules out; closing its
     // execution would say the same about the execution. So nothing here is
     // decided at all, and the caller is told why.
     return { status: storedStatus, reason: undefined, publishes: false, damaged: true };
+  }
+  if (terminal(storedStatus)) {
+    return { status: "interrupted", reason: INTERRUPTED, publishes: false, damaged: false };
+  }
+  if (canonical === undefined) {
+    return { status: "interrupted", reason: INTERRUPTED, publishes: true, damaged: false };
   }
   return { status: canonical.status, reason: canonical.reason, publishes: true, damaged: false };
 }
