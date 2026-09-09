@@ -88,27 +88,62 @@ export type RetainedTerminal =
   | { readonly kind: "damaged" };
 
 export function rootOutcome(entries: readonly JournalEntry[]): RetainedTerminal | undefined {
-  for (const entry of entries) {
-    const event: DurableEvent = entry.event;
-    if (event.type !== "close" || event.coroutineId !== "root") {
-      continue;
-    }
-    if (event.result.status !== "ok") {
-      return {
-        kind: "outcome",
-        status: event.result.status === "cancelled" ? "cancelled" : "failed",
-        reason: { kind: "journal", eventId: entry.eventId },
-      };
-    }
-    const document = readDocumentResult(event.result.value);
-    if (document === undefined) {
-      return { kind: "damaged" };
-    }
-    return document === "ok"
-      ? { kind: "outcome", status: "completed", reason: undefined }
-      : { kind: "outcome", status: "failed", reason: retainedFailureReason(entries) };
+  const frontier = terminalFrontier(entries);
+  if (frontier.kind === "absent") {
+    return undefined;
   }
-  return undefined;
+  if (frontier.kind === "mixed") {
+    // Two results, or work recorded after the one result: a history no single
+    // execution produced. Choosing one of them would be this build deciding
+    // which execution the run was.
+    return { kind: "damaged" };
+  }
+  const event: DurableEvent = frontier.entry.event;
+  if (event.type !== "close") {
+    return { kind: "damaged" };
+  }
+  if (event.result.status !== "ok") {
+    return {
+      kind: "outcome",
+      status: event.result.status === "cancelled" ? "cancelled" : "failed",
+      reason: { kind: "journal", eventId: frontier.entry.eventId },
+    };
+  }
+  const document = readDocumentResult(event.result.value);
+  if (document === undefined) {
+    return { kind: "damaged" };
+  }
+  return document === "ok"
+    ? { kind: "outcome", status: "completed", reason: undefined }
+    : { kind: "outcome", status: "failed", reason: retainedFailureReason(entries) };
+}
+
+/**
+ * Where the root's terminal sits in a history, when it sits anywhere.
+ *
+ * One execution records one result, and records it last. A history holding two,
+ * or holding anything after the one it stands behind, is not one execution's —
+ * and reading it as though the first of them were authoritative is how a
+ * lifecycle row comes to be published from history nobody can account for. Both
+ * the recovery that publishes an outcome and the admission that reuses one ask
+ * this, so neither can decide the question the other way.
+ */
+export type TerminalFrontier =
+  | { readonly kind: "absent" }
+  | { readonly kind: "mixed" }
+  | { readonly kind: "final"; readonly entry: JournalEntry };
+
+export function terminalFrontier(entries: readonly JournalEntry[]): TerminalFrontier {
+  const closes = entries.filter(
+    (entry) => entry.event.type === "close" && entry.event.coroutineId === "root",
+  );
+  const only = closes[0];
+  if (only === undefined) {
+    return { kind: "absent" };
+  }
+  return closes.length === 1 && entries[entries.length - 1] === only
+    ? { kind: "final", entry: only }
+    : { kind: "mixed" };
 }
 
 /**
@@ -134,14 +169,71 @@ function readDocumentResult(value: unknown): "ok" | "err" | undefined {
   if (result["status"] !== "err") {
     return undefined;
   }
-  if (!names(result, ["status", "output", "error", ROOT_BINDING])) {
-    return undefined;
+  if (ROOT_BINDING in result) {
+    // A binding is not decoration a failure may carry. Core writes one in
+    // exactly one situation — it failed before importing anything — and the
+    // whole form is what makes that import-free history attributable to one
+    // document at all. Anything else wearing a binding is a terminal core did
+    // not write.
+    return readPreRootTerminal(result) ? "err" : undefined;
   }
-  return readDocumentFailure(result["error"]) ? "err" : undefined;
+  return names(result, ["status", "output", "error"]) && readDocumentFailure(result["error"])
+    ? "err"
+    : undefined;
 }
 
 /** Where core records which document a terminal it wrote before importing was about. */
 const ROOT_BINDING = "root_binding";
+
+/**
+ * Whether a failure carrying a binding is the exact terminal core writes before
+ * it has imported anything.
+ *
+ * The form is `recordedPreRootTerminal()`'s in `packages/core/src/execute.ts`,
+ * and every part of it is load-bearing: nothing was rendered, so the output is
+ * empty; no segment failed, so the description repeats the failure's own
+ * message and says nothing else; and the binding names the document — its path,
+ * the supplied text for an inline root and nothing for a file one, and the
+ * selector as written — which is the only thing making a history with no root
+ * import about one document rather than any.
+ */
+function readPreRootTerminal(result: Record<string, unknown>): boolean {
+  if (!names(result, ["status", "output", "error", ROOT_BINDING]) || result["output"] !== "") {
+    return false;
+  }
+  const failure = plain(result["error"]);
+  if (
+    failure === undefined ||
+    !names(failure, ["name", "message", "segment", "cause"]) ||
+    typeof failure["name"] !== "string" ||
+    typeof failure["message"] !== "string" ||
+    ("cause" in failure && typeof failure["cause"] !== "string")
+  ) {
+    return false;
+  }
+  const segment = plain(failure["segment"]);
+  if (
+    segment === undefined ||
+    !names(segment, ["message"]) ||
+    segment["message"] !== failure["message"]
+  ) {
+    return false;
+  }
+  const binding = plain(result[ROOT_BINDING]);
+  if (binding === undefined || !names(binding, ["path", "source", "target"])) {
+    return false;
+  }
+  const path = binding["path"];
+  const source = binding["source"];
+  const target = binding["target"];
+  return (
+    typeof path === "string" &&
+    (source === null || typeof source === "string") &&
+    (target === null || typeof target === "string") &&
+    "source" in binding &&
+    "target" in binding
+  );
+}
 
 /** Whether a described failure is the closed form core writes. */
 function readDocumentFailure(value: unknown): boolean {
@@ -248,6 +340,16 @@ export interface Closing {
   readonly reason: DocumentExecutionCompletion["reason"];
   /** Whether the run's own status follows the execution's, or stays as it is. */
   readonly publishes: boolean;
+  /**
+   * Whether this run's own terminal is one this build cannot read.
+   *
+   * Distinct from "nothing to publish", and the distinction is the whole point:
+   * a run with nothing to publish is one to go on with, and this is a run whose
+   * document already ended in a way nothing here can account for. Losing it
+   * between recovery and the caller is how an unreadable terminal came to
+   * authorize a second execution.
+   */
+  readonly damaged: boolean;
 }
 
 /**
@@ -256,28 +358,43 @@ export interface Closing {
  * A replay whose terminal state was preserved closes only its own execution:
  * the authoritative outcome stays exactly as it was. Otherwise a retained root
  * Close proves the canonical outcome won, and without one the executor was
- * interrupted. A root Close this build cannot read is neither: it proves the
- * document finished, so the run is not made interrupted, and it says nothing
- * this can publish.
+ * interrupted. A root Close this build cannot read is none of those: it proves
+ * the document finished, so nothing about the run or the execution it left is
+ * decided here, and the caller is refused instead.
  */
 export function closingOutcome(
   storedStatus: WorkflowRunStatus,
   canonical: RetainedTerminal | undefined,
 ): Closing {
   if (terminal(storedStatus)) {
-    return { status: "interrupted", reason: INTERRUPTED, publishes: false };
+    return { status: "interrupted", reason: INTERRUPTED, publishes: false, damaged: false };
   }
   if (canonical === undefined) {
-    return { status: "interrupted", reason: INTERRUPTED, publishes: true };
+    return { status: "interrupted", reason: INTERRUPTED, publishes: true, damaged: false };
   }
   if (canonical.kind === "damaged") {
     // The document finished and this build cannot read what it finished as.
     // Calling that an interruption would say the executor went without saying
-    // anything, which is the one thing this history rules out — so the dead
-    // executor's execution closes and the run is left exactly as it is.
-    return { status: "interrupted", reason: INTERRUPTED, publishes: false };
+    // anything, which is the one thing this history rules out; closing its
+    // execution would say the same about the execution. So nothing here is
+    // decided at all, and the caller is told why.
+    return { status: storedStatus, reason: undefined, publishes: false, damaged: true };
   }
-  return { status: canonical.status, reason: canonical.reason, publishes: true };
+  return { status: canonical.status, reason: canonical.reason, publishes: true, damaged: false };
+}
+
+/**
+ * What a caller is told when the run it named holds a terminal nothing can read.
+ *
+ * One sentence, shared by every provider and every action, and carrying nothing
+ * the history held: what is unreadable is retained data, and a diagnostic that
+ * quoted it would publish exactly what it exists to refuse.
+ */
+export function damagedTerminalRefusal(): WorkflowRequestError {
+  return new WorkflowRequestError(
+    "workflow run: its root recorded a document result this version cannot read, so the run " +
+      "is neither advanced nor changed. The run is left exactly as it is.",
+  );
 }
 
 /**

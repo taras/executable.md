@@ -40,6 +40,7 @@ import {
   admissionRefusal,
   type Closing,
   closingOutcome,
+  damagedTerminalRefusal,
   INTERRUPTED,
   rootOutcome,
   terminal,
@@ -190,6 +191,14 @@ interface Recovery {
   /** Absent when there is no run yet, which only a `start` may go on from. */
   readonly status?: WorkflowRunStatus;
   readonly closed?: DocumentExecutionRecord;
+  /**
+   * Whether this run's own terminal is one this build cannot read.
+   *
+   * Carried out of recovery rather than collapsed into the stored status: an
+   * unreadable terminal is not a run to go on with, and a caller that saw only
+   * `running` would begin another execution over it.
+   */
+  readonly damaged?: boolean;
 }
 
 interface Refused {
@@ -247,6 +256,10 @@ function beginOnce(
   }
 
   const recovery = recover(connection, path, hold, request);
+
+  if (recovery.damaged === true) {
+    return { kind: "refused", reason: damagedTerminalRefusal() };
+  }
 
   // A file can exist and hold nothing — created by an interrupted attempt, or
   // left empty by something else. Existence is not a run, so a resume that
@@ -633,12 +646,18 @@ interface Reconciled {
  * addressed to; failing both, the execution was interrupted.
  */
 function reconcile(database: DatabaseSync, path: string, stored: WorkflowRunRecord): Recovery {
+  const closing = closingOutcome(stored.status, rootOutcome(readJournalEntries(database)));
+  if (closing.damaged) {
+    // Nothing is decided here and nothing is written: whatever the previous
+    // executor left stays exactly as it left it, because this build cannot say
+    // what the document it ran did.
+    return { status: stored.status, damaged: true };
+  }
+
   const unfinished = reading(database, SELECT_UNFINISHED).all().map(readDocumentExecution);
   if (unfinished.length === 0) {
     return { status: stored.status };
   }
-
-  const closing = closingOutcome(stored.status, rootOutcome(readJournalEntries(database)));
 
   let last: DocumentExecutionRecord | undefined;
   for (const execution of unfinished) {
@@ -847,13 +866,7 @@ export function* cancelRun(
         // The document finished and this build cannot read what it finished
         // as. Cancelling it would replace a result rather than end a run that
         // had none, so nothing here changes anything.
-        return {
-          kind: "refused" as const,
-          reason: new WorkflowRequestError(
-            "workflow run: its root recorded an outcome this version cannot read, so the run " +
-              "is neither cancelled nor changed.",
-          ),
-        };
+        return { kind: "refused" as const, reason: damagedTerminalRefusal() };
       }
       if (canonical !== undefined) {
         // The document finished before its workflow executor disappeared. Restoring what it

@@ -39,7 +39,12 @@ import { retainedSource } from "@executablemd/core/host";
 import type { ExecutionInstallation, RetainedRootDocument } from "@executablemd/core/host";
 import { workflowBundleReplayInstallation } from "./bundle.ts";
 import { retainedWorkflowInstallation } from "./run.ts";
-import { agreesWithRetainedResult, rootOutcome, terminal } from "./lifecycle/policy.ts";
+import {
+  agreesWithRetainedResult,
+  rootOutcome,
+  terminal,
+  terminalFrontier,
+} from "./lifecycle/policy.ts";
 import type { JournalEntry } from "./storage/api.ts";
 import type { WorkflowRunRecord } from "./storage/record.ts";
 
@@ -147,11 +152,6 @@ function importedName(event: DurableEvent): string | undefined {
   return typeof name === "string" ? name : undefined;
 }
 
-/** Whether a retained event is this document execution's own terminal. */
-function isRootClose(event: DurableEvent): boolean {
-  return reading(() => event.type === "close" && event.coroutineId === "root") === true;
-}
-
 /** The document one retained selection names, as a root source is built from it. */
 interface RetainedRoot {
   readonly path: string;
@@ -252,19 +252,20 @@ export function retainedReplay(
     return refuse(REFUSALS.live);
   }
 
-  const closes = entries.filter((entry) => isRootClose(entry.event));
-  const close = closes[0];
-  if (close === undefined) {
-    return refuse(REFUSALS.absent);
-  }
   // The terminal is the frontier, and there is one of it. A history holding a
   // second result, or continuing past the one it stands behind, is one whose
   // lifecycle row and journal describe different moments of the run — and
-  // reconciling those is not a replay's to do.
-  const last = entries[entries.length - 1];
-  if (closes.length !== 1 || last === undefined || !isRootClose(last.event)) {
+  // reconciling those is not a replay's to do. The same reading decides it for
+  // stale recovery, so neither can accept what the other refuses; what this
+  // adds is only which way it refused.
+  const frontier = terminalFrontier(entries);
+  if (frontier.kind === "absent") {
+    return refuse(REFUSALS.absent);
+  }
+  if (frontier.kind === "mixed") {
     return refuse(REFUSALS.mixed);
   }
+  const close = frontier.entry;
 
   // What the root recorded, read once, by the lifecycle's own judgment: the
   // same one stale recovery publishes through and the same one a settlement
@@ -274,10 +275,7 @@ export function retainedReplay(
   // handed it, because core's rejection would arrive as *this* invocation's
   // document failure and be offered as a replacement outcome.
   const canonical = rootOutcome(entries);
-  if (canonical === undefined) {
-    return refuse(REFUSALS.absent);
-  }
-  if (canonical.kind === "damaged") {
+  if (canonical === undefined || canonical.kind === "damaged") {
     return refuse(REFUSALS.damaged);
   }
   if (!agreesWithRetainedResult(record, canonical)) {

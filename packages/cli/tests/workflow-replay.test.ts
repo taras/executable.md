@@ -1176,6 +1176,151 @@ describe("what a completed run reaches when it is asked to run again", () => {
     expect(outcome.after.status).toBe(outcome.before.status);
   });
 
+  it("WRP15: refuses every action over a terminal it cannot read, and moves nothing", function* () {
+    const asked: string[] = [];
+    const attached: string[] = [];
+    let executed = 0;
+
+    const outcome = yield* scoped(function* () {
+      const fixture = yield* useFixture(BUNDLED, {
+        Stage: "staged.\n",
+        Unused: "never imported.\n",
+      });
+      const established = yield* scoped(function* () {
+        yield* useRepositoryGit(fixture.repository);
+        return yield* startFor(fixture);
+      });
+
+      // A run left `running`, with an execution nobody closed, over a root
+      // result this build cannot read.
+      const runId = yield* seedStaleRun(fixture, established, damagedHistory(established));
+      const before = yield* retained(fixture.runs, runId);
+      expect(before.status).toBe("running");
+      expect(before.ended).toEqual([null]);
+
+      const body = () =>
+        // deno-lint-ignore require-yield
+        function* (): Operation<Result<void>> {
+          executed += 1;
+          return Ok(undefined);
+        };
+
+      const outcomes = yield* scoped(function* () {
+        yield* useRefusingGit(asked);
+        const started = yield* invoke(
+          { ...REQUEST, id: runId },
+          established,
+          replayHost(fixture.runs, attached),
+          body(),
+        );
+        const resumed = yield* invoke(
+          { ...REQUEST, action: "resume", target: runId },
+          undefined,
+          replayHost(fixture.runs, attached),
+          body(),
+        );
+        const cancelled = yield* scoped(function* () {
+          const err: string[] = [];
+          const error = console.error;
+          yield* ensure(() => {
+            console.error = error;
+          });
+          console.error = (...parts: unknown[]) => err.push(parts.map(String).join(" "));
+          const managed = yield* runWorkflowManagement(
+            { action: "cancel", runId },
+            replayHost(fixture.runs, attached),
+          );
+          return { exitCode: managed.exitCode, out: [], err };
+        });
+        return { started, resumed, cancelled };
+      });
+      return { ...outcomes, before, after: yield* retained(fixture.runs, runId) };
+    });
+
+    // Every action refuses, with the one sentence and nothing the history held.
+    for (const [name, invocation] of Object.entries(outcome)) {
+      if (name === "before" || name === "after") {
+        continue;
+      }
+      const said = "err" in invocation ? invocation.err.join(" ") : "";
+      expect([name, "exitCode" in invocation ? invocation.exitCode : 0]).toEqual([name, 1]);
+      expect([name, said.includes("cannot read")]).toEqual([name, true]);
+      expect([name, said.includes("status:")]).toEqual([name, false]);
+    }
+
+    // No live authority was constructed and no document ran.
+    expect(executed).toBe(0);
+    expect(asked).toEqual([]);
+    expect(attached).toEqual([]);
+
+    // Nothing at all changed: not the run row, not the journal, not the
+    // Workspace root, and not the execution the previous executor left open.
+    expect(outcome.after).toEqual(outcome.before);
+  });
+
+  it("WRP16: refuses a history holding a second result, without choosing one", function* () {
+    const asked: string[] = [];
+    const attached: string[] = [];
+
+    const outcome = yield* scoped(function* () {
+      const fixture = yield* useFixture(PLAIN);
+      const established = yield* scoped(function* () {
+        yield* useRepositoryGit(fixture.repository);
+        return yield* startFor(fixture);
+      });
+
+      // Two results, and a row recorded after the first of them. No single
+      // execution produced this, so neither result is the run's.
+      const runId = yield* seedStaleRun(fixture, established, (definition, id) => {
+        const events: DurableEvent[] = [
+          forkRunRecordEvent({
+            runId: id,
+            base: established.established.base,
+            pinnedCommit: definition.objectId,
+          }),
+          rootImportEvent(definition.rootDocumentPath, established.established.source),
+          {
+            type: "close",
+            coroutineId: "root",
+            result: { status: "ok", value: { status: "ok", output: "first\n", value: "first\n" } },
+          },
+          {
+            type: "close",
+            coroutineId: "root",
+            result: {
+              status: "ok",
+              value: { status: "ok", output: "second\n", value: "second\n" },
+            },
+          },
+        ];
+        return events;
+      });
+      const before = yield* retained(fixture.runs, runId);
+
+      const refused = yield* scoped(function* () {
+        yield* useRefusingGit(asked);
+        return yield* invoke(
+          { ...REQUEST, id: runId },
+          established,
+          replayHost(fixture.runs, attached),
+          // deno-lint-ignore require-yield
+          function* (): Operation<Result<void>> {
+            return Ok(undefined);
+          },
+        );
+      });
+      return { refused, before, after: yield* retained(fixture.runs, runId) };
+    });
+
+    expect(outcome.refused.exitCode).toBe(1);
+    expect(outcome.refused.err.join(" ")).toContain("cannot read");
+    expect(statusOf(outcome.refused)).toBeUndefined();
+    // Neither result was chosen, and nothing was published from either.
+    expect(outcome.after).toEqual(outcome.before);
+    expect(asked).toEqual([]);
+    expect(attached).toEqual([]);
+  });
+
   it("WRP5: a run that has not ended still reconstructs, and its refusal is cleaned up", function* () {
     const asked: string[] = [];
     const attached: string[] = [];
@@ -1477,35 +1622,59 @@ function* seedStaleRun(
   });
 }
 
+/**
+ * A history whose root recorded a result this build cannot read.
+ *
+ * The `Close` says the document ended; what it says it ended as is not the
+ * closed form canonical core writes, so nothing here can name the outcome.
+ */
+function damagedHistory(
+  start: WorkflowStart,
+): (definition: WorkflowDefinition, runId: string) => readonly DurableEvent[] {
+  return (definition, runId) => {
+    const events: DurableEvent[] = [
+      forkRunRecordEvent({
+        runId,
+        base: start.established.base,
+        pinnedCommit: definition.objectId,
+      }),
+      rootImportEvent(definition.rootDocumentPath, start.established.source),
+      { type: "close", coroutineId: "root", result: { status: "ok", value: { status: "err" } } },
+    ];
+    return events;
+  };
+}
+
+/** The root import canonical execution records before anything else. */
+function rootImportEvent(path: string, content: string): DurableEvent {
+  return {
+    type: "yield",
+    coroutineId: "root",
+    description: { type: "import_component", name: "__root__" },
+    result: { status: "ok", value: { kind: "repository", path, content } },
+  };
+}
+
 /** The history a run that raised out of its root leaves behind. */
 function raisedHistory(
   start: WorkflowStart,
 ): (definition: WorkflowDefinition, runId: string) => readonly DurableEvent[] {
-  return (definition, runId) => [
-    forkRunRecordEvent({
-      runId,
-      base: start.established.base,
-      pinnedCommit: definition.objectId,
-    }),
-    {
-      type: "yield",
-      coroutineId: "root",
-      description: { type: "import_component", name: "__root__" },
-      result: {
-        status: "ok",
-        value: {
-          kind: "repository",
-          path: definition.rootDocumentPath,
-          content: start.established.source,
-        },
+  return (definition, runId) => {
+    const events: DurableEvent[] = [
+      forkRunRecordEvent({
+        runId,
+        base: start.established.base,
+        pinnedCommit: definition.objectId,
+      }),
+      rootImportEvent(definition.rootDocumentPath, start.established.source),
+      {
+        type: "close",
+        coroutineId: "root",
+        result: { status: "err", error: { message: "the executor died", name: "Error" } },
       },
-    },
-    {
-      type: "close",
-      coroutineId: "root",
-      result: { status: "err", error: { message: "the executor died", name: "Error" } },
-    },
-  ];
+    ];
+    return events;
+  };
 }
 
 /**

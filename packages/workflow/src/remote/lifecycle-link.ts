@@ -42,7 +42,19 @@ export interface RemoteBegun {
  */
 export type RemoteLifecycleAnswer<T> =
   | { readonly kind: "performed"; readonly value: T }
-  | { readonly kind: "refused"; readonly refusal: "cancelled" | "resume-failed" | "terminal" };
+  | { readonly kind: "refused"; readonly refusal: RemoteLifecycleRefusal };
+
+/**
+ * A condition of the run itself, as an owner names one.
+ *
+ * Each is a fact a caller acts on rather than a failure to translate, and each
+ * carries nothing the run holds.
+ */
+export type RemoteLifecycleRefusal =
+  | "cancelled"
+  | "resume-failed"
+  | "terminal"
+  | "damaged-terminal";
 
 /** Which committed checkpoint of which run a fork continues. */
 export interface RemoteForkOrigin {

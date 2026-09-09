@@ -694,6 +694,92 @@ describe("a completed run replayed through its own owner", () => {
     expect(await on(stub, (owner) => owner.holders())).toBe(0);
   });
 
+  it("refuses every action over a terminal it cannot read, and moves nothing", async () => {
+    const stub = executor();
+    const host = lifecycleHost(stub);
+
+    // A run left `running`, with an execution nobody closed, over a root result
+    // this build cannot read.
+    await run(function* () {
+      return yield* scoped(function* () {
+        const transitions: WorkflowExecutionTransitions = yield* useRemoteLifecycle(host);
+        const lock = yield* acquired();
+        const begun = yield* transitions.begin(lock, {
+          runId: RUN_ID,
+          action: "start",
+          creation: CREATION,
+        });
+        if (!begun.ok) {
+          throw begun.error;
+        }
+        const appended = yield* begun.value.database.transact(function* (transaction) {
+          yield* transaction.journal.append({
+            type: "yield",
+            coroutineId: "root",
+            description: { type: "import_component", name: "__root__" },
+            result: {
+              status: "ok",
+              value: { kind: "repository", path: "README.md", content: DOCUMENT },
+            },
+          });
+          yield* transaction.journal.append({
+            type: "close",
+            coroutineId: "root",
+            result: { status: "ok", value: { status: "err" } },
+          });
+        });
+        if (!appended.ok) {
+          throw appended.error;
+        }
+      });
+    });
+
+    const before = await ownerState(stub);
+    expect(before.run?.["status"]).toBe("running");
+    expect(before.executions).toBe(1);
+    const heldBefore = await on(stub, (owner) => owner.executionRows());
+    expect(heldBefore[0]?.["stopped_at"]).toBe(null);
+
+    // Every action the owner offers over this run, refused by the owner itself.
+    // Cancellation first: it takes an acquisition of its own, so it cannot ask
+    // while another connection holds the run.
+    expect(await on(stub, (owner) => owner.holders())).toBe(0);
+    const cancelled = await run(function* (): Operation<string> {
+      return yield* scoped(function* () {
+        yield* useRemoteLifecycle(host);
+        const outcome = yield* WorkflowLifecycle.operations.cancel(RUN_ID);
+        return outcome.ok ? "cancelled" : outcome.error.message;
+      });
+    });
+    const refusals = await run(function* (): Operation<Record<string, string>> {
+      return yield* scoped(function* () {
+        const transitions: WorkflowExecutionTransitions = yield* useRemoteLifecycle(host);
+        const lock = yield* acquired();
+        const started = yield* transitions.begin(lock, {
+          runId: RUN_ID,
+          action: "start",
+          creation: CREATION,
+        });
+        const resumed = yield* transitions.begin(lock, { runId: RUN_ID, action: "resume" });
+        return {
+          started: started.ok ? "admitted" : started.error.message,
+          resumed: resumed.ok ? "admitted" : resumed.error.message,
+        };
+      });
+    });
+
+    for (const said of [refusals["started"], refusals["resumed"], cancelled]) {
+      expect(String(said)).toContain("cannot read");
+    }
+
+    // Nothing at all changed: not the run row, not the journal, not the
+    // Workspace state, and not the execution the previous executor left open.
+    const after = await ownerState(stub);
+    expect(after).toEqual(before);
+    expect(await on(stub, (owner) => owner.executionRows())).toEqual(heldBefore);
+    expect(await on(stub, (owner) => owner.holders())).toBe(0);
+  });
+
   it("hands the run to the next connection when the replay's own ends", async () => {
     const stub = executor();
     const host = lifecycleHost(stub);

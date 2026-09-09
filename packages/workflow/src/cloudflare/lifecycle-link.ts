@@ -33,12 +33,23 @@ import type {
   RemoteLifecycleAnswer,
   RemoteLifecycleLink,
 } from "../remote/lifecycle-link.ts";
+import type { RemoteLifecycleRefusal } from "../remote/lifecycle-link.ts";
 import { WorkflowRecordMalformedError, WorkflowRunConflictError } from "../storage/errors.ts";
 import { parseRemoteExecution } from "../remote/records.ts";
 import type { AnchoringReadLink, OwnerConnection } from "./client.ts";
 import { privateRefusal, storageFailure, translate } from "./client.ts";
 
-const REFUSALS = new Set(["cancelled", "resume-failed", "terminal"]);
+/** The conditions an owner may name, and the only ones this build reads. */
+const REFUSALS: readonly RemoteLifecycleRefusal[] = [
+  "cancelled",
+  "resume-failed",
+  "terminal",
+  "damaged-terminal",
+];
+
+function refusalOf(value: unknown): RemoteLifecycleRefusal | undefined {
+  return REFUSALS.find((refusal) => refusal === value);
+}
 
 function fail(reason: string): never {
   throw new WorkflowRecordMalformedError("lifecycle answer this run's owner returned", reason);
@@ -79,13 +90,11 @@ function answered<T>(
     );
   }
   if (refusal !== null) {
-    if (typeof refusal !== "string" || !REFUSALS.has(refusal)) {
+    const named = refusalOf(refusal);
+    if (named === undefined) {
       return fail("it named no condition this build reads");
     }
-    if (refusal !== "cancelled" && refusal !== "resume-failed" && refusal !== "terminal") {
-      return fail("it named no condition this build reads");
-    }
-    return { kind: "refused", refusal };
+    return { kind: "refused", refusal: named };
   }
   return { kind: "performed", value: read(held) };
 }
@@ -306,7 +315,8 @@ export function cloudflareLifecycleLink(
     const found = members(value, ["conflict", "refusal", "value"]);
     const refusal = found.get("refusal");
     if (refusal !== null) {
-      if (refusal !== "cancelled" && refusal !== "resume-failed" && refusal !== "terminal") {
+      const named = refusalOf(refusal);
+      if (named === undefined) {
         return Err(
           new WorkflowRecordMalformedError(
             "lifecycle answer this run's owner returned",
@@ -314,7 +324,7 @@ export function cloudflareLifecycleLink(
           ),
         );
       }
-      return Ok({ kind: "refused", refusal });
+      return Ok({ kind: "refused", refusal: named });
     }
     const conflict = found.get("conflict");
     if (conflict !== null) {

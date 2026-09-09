@@ -559,6 +559,69 @@ describe("what the root recorded, as one outcome", () => {
   });
 
   // deno-lint-ignore require-yield
+  it("recognizes the exact terminal core writes before it imports anything", function* () {
+    const message = "refused before the root import";
+    const binding = { path: "flows/root.md", source: SOURCE, target: null };
+    const failure = { name: "Error", message, segment: { message } };
+
+    // The one form core can produce here, and the run it describes.
+    const valid = [
+      entry(rootClose({ status: "err", output: "", error: failure, root_binding: binding })),
+    ];
+    expect(retainedReplay(record({ status: "failed", stopReason: HOST }), valid).ok).toBe(true);
+
+    const impossible: Json[] = [
+      // A binding that is not one.
+      { status: "err", output: "", error: failure, root_binding: 7 },
+      { status: "err", output: "", error: failure, root_binding: [] },
+      // A binding missing a member, carrying an extra one, or mistyping one.
+      {
+        status: "err",
+        output: "",
+        error: failure,
+        root_binding: { path: "flows/root.md", source: SOURCE },
+      },
+      { status: "err", output: "", error: failure, root_binding: { ...binding, extra: 1 } },
+      { status: "err", output: "", error: failure, root_binding: { ...binding, path: 7 } },
+      { status: "err", output: "", error: failure, root_binding: { ...binding, source: 7 } },
+      { status: "err", output: "", error: failure, root_binding: { ...binding, target: 7 } },
+      // A binding on a result core could not have written it beside: nothing is
+      // rendered before the root import, no segment failed, and a failure that
+      // aggregated others got past it.
+      { status: "err", output: "partial\n", error: failure, root_binding: binding },
+      {
+        status: "err",
+        output: "",
+        error: { name: "Error", message, segment: { message: "something else" } },
+        root_binding: binding,
+      },
+      {
+        status: "err",
+        output: "",
+        error: { name: "Error", message, segment: { message, source: "flows/root.md" } },
+        root_binding: binding,
+      },
+      {
+        status: "err",
+        output: "",
+        error: { name: "Error", message, segment: { message }, errors: [] },
+        root_binding: binding,
+      },
+      { status: "ok", output: "", value: "", root_binding: binding },
+    ];
+
+    for (const value of impossible) {
+      const said = reason(
+        retainedReplay(record({ status: "failed", stopReason: HOST }), [entry(rootClose(value))]),
+      );
+      expect([JSON.stringify(value), said.includes("cannot be read by this version")]).toEqual([
+        JSON.stringify(value),
+        true,
+      ]);
+    }
+  });
+
+  // deno-lint-ignore require-yield
   it("admits the shapes canonical execution actually writes", function* () {
     const message = "the document refused";
     const written: { value: Json; status: WorkflowRunStatus }[] = [

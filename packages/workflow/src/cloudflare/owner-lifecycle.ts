@@ -62,7 +62,9 @@ export type LifecycleRefusal =
   /** Resume or start reached a run that was cancelled. */
   | "cancelled"
   /** Cancellation reached a run whose outcome already won. */
-  | "terminal";
+  | "terminal"
+  /** The run's own root recorded a result this build cannot read. */
+  | "damaged-terminal";
 
 /** What one begin committed, as the runner is allowed to know it. */
 export interface BegunValue {
@@ -204,12 +206,22 @@ function reconcile(
   storage: OwnerStorage,
   stored: WorkflowRunRecord,
   now: () => string,
-): { status: WorkflowRunStatus; recovered: DocumentExecutionRecord | null } {
+): {
+  status: WorkflowRunStatus;
+  recovered: DocumentExecutionRecord | null;
+  damaged?: boolean;
+} {
+  const closing = closingOutcome(stored.status, rootOutcome(journalEntries(storage)));
+  if (closing.damaged) {
+    // Nothing is decided here and nothing is written: whatever the previous
+    // executor left stays exactly as it left it, because this build cannot say
+    // what the document it ran did.
+    return { status: stored.status, recovered: null, damaged: true };
+  }
   const open = unfinished(storage);
   if (open.length === 0) {
     return { status: stored.status, recovered: null };
   }
-  const closing = closingOutcome(stored.status, rootOutcome(journalEntries(storage)));
   let last: DocumentExecutionRecord | null = null;
   for (const execution of open) {
     finish(
@@ -274,6 +286,9 @@ export function beginRun(
     }
 
     const recovered = reconcile(storage, stored, now);
+    if (recovered.damaged === true) {
+      return { conflict: null, refusal: "damaged-terminal", value: null };
+    }
     // The recovery above stays committed whatever this decides: what the
     // previous executor's execution became is not undone by this caller being
     // told it may not continue.
@@ -390,6 +405,10 @@ export function cancelRunOnOwner(
       return { conflict: null, refusal: "terminal", value: null };
     }
     const recovered = reconcile(storage, stored, now);
+    if (recovered.damaged === true) {
+      // Cancelling would replace a result rather than end a run that had none.
+      return { conflict: null, refusal: "damaged-terminal", value: null };
+    }
     if (terminal(recovered.status) || recovered.status === "cancelled") {
       // The document finished before its executor disappeared. Restoring what
       // it recorded is not cancelling it.

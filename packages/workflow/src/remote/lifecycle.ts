@@ -39,6 +39,7 @@ import type {
   WorkflowForkRequest,
   WorkflowRunCreation,
 } from "../lifecycle/execution.ts";
+import { damagedTerminalRefusal } from "../lifecycle/policy.ts";
 import type { WorkflowRunDatabase } from "../storage/api.ts";
 import type { CreateWorkflowRunRequest } from "../storage/api.ts";
 import type { DocumentExecutionCompletion, WorkflowRunRecord } from "../storage/record.ts";
@@ -60,6 +61,7 @@ import type {
   RemoteForkCommit,
   RemoteForkPart,
   RemoteLifecycleLink,
+  RemoteLifecycleRefusal,
 } from "./lifecycle-link.ts";
 
 export type { RemoteExecutorConnection };
@@ -292,6 +294,9 @@ export function* useRemoteLifecycle(
       }
       answeredNow(runId, addressed);
       if (answered.value.kind === "refused") {
+        if (answered.value.refusal === "damaged-terminal") {
+          return Err(damagedTerminalRefusal());
+        }
         return Err(
           new WorkflowRequestError(
             answered.value.refusal === "terminal"
@@ -985,10 +990,10 @@ function creationRequest(runId: string, creation: WorkflowRunCreation): CreateWo
   };
 }
 
-function refusalError(
-  refusal: "cancelled" | "resume-failed" | "terminal",
-  runId: string,
-): WorkflowStorageError {
+function refusalError(refusal: RemoteLifecycleRefusal, runId: string): WorkflowStorageError {
+  if (refusal === "damaged-terminal") {
+    return damagedTerminalRefusal();
+  }
   if (refusal === "cancelled") {
     return new WorkflowRequestError(`workflow run ${JSON.stringify(runId)} was cancelled.`);
   }
