@@ -45,6 +45,8 @@ import type {
 } from "../../src/lifecycle/execution.ts";
 import { retainedReplay } from "../../src/replay.ts";
 import { retainedWorkflowInstallation } from "../../src/run.ts";
+import { workflowBundleInstallation } from "../../src/bundle.ts";
+import { gitBlobId } from "../../src/git-blob.ts";
 
 let unique = 0;
 const NOW = 1_800_000_000;
@@ -162,6 +164,29 @@ const CREATION: WorkflowRunCreation = {
   base: "main",
   props: {},
 };
+
+/** One component the definition is closed over, named the way Git names it. */
+const STAGE = { name: "Stage", path: "Stage.md", content: "staged.\n" };
+const STAGE_HASH = gitBlobId(STAGE.content, "sha1");
+const BUNDLED_DOCUMENT = "# Remote\n\n<Stage />\n";
+
+const BUNDLED: WorkflowRunCreation = {
+  definition: {
+    ...CREATION.definition,
+    components: [{ name: STAGE.name, path: STAGE.path, sourceHash: STAGE_HASH }],
+  },
+  base: "main",
+  props: {},
+};
+
+/** The run contract every execution of this run installs. */
+function runContract(): ExecutionInstallation {
+  return retainedWorkflowInstallation({
+    runId: RUN_ID,
+    base: CREATION.base,
+    pinnedCommit: COMMIT,
+  });
+}
 
 /** What one document execution rendered, and how it ended. */
 interface Rendered {
@@ -320,6 +345,178 @@ describe("a completed run replayed through its own owner", () => {
     // The one durable change: the lifecycle envelope this invocation recorded.
     expect(after.executions).toBe(before.executions + 1);
     // And it is closed, so the run is not left looking live.
+    expect(await on(stub, (owner) => owner.holders())).toBe(0);
+  });
+
+  it("recovers a bundled run whose result committed and whose settlement did not", async () => {
+    const stub = executor();
+    const host = lifecycleHost(stub);
+
+    // The runner committed the document's result and its connection went
+    // before it settled. Nothing about time says so; the socket closing does.
+    const live = await run(function* (): Operation<Rendered> {
+      return yield* scoped(function* () {
+        const transitions: WorkflowExecutionTransitions = yield* useRemoteLifecycle(host);
+        const lock = yield* acquired();
+        const begun = yield* transitions.begin(lock, {
+          runId: RUN_ID,
+          action: "start",
+          creation: BUNDLED,
+        });
+        if (!begun.ok) {
+          throw begun.error;
+        }
+        return yield* canonical(
+          begun.value.database,
+          retainedSource("README.md", BUNDLED_DOCUMENT),
+          [runContract(), workflowBundleInstallation([{ ...STAGE, sourceHash: STAGE_HASH }])],
+        );
+      });
+    });
+
+    expect(live.result.ok).toBe(true);
+    expect(live.output).toContain("staged.");
+    const before = await ownerState(stub);
+    // The crash window: the outcome is committed and the lifecycle row is not.
+    expect(before.run?.["status"]).toBe("running");
+    expect(before.executions).toBe(1);
+    expect(await on(stub, (owner) => owner.holders())).toBe(0);
+
+    const replayed = await run(function* (): Operation<Rendered> {
+      return yield* scoped(function* () {
+        const transitions: WorkflowExecutionTransitions = yield* useRemoteLifecycle(host);
+        const lock = yield* acquired();
+        const begun = yield* transitions.begin(lock, { runId: RUN_ID, action: "resume" });
+        if (!begun.ok) {
+          throw begun.error;
+        }
+        // The owner's own transaction recognized the retained result, closed
+        // the stale execution and published the terminal it implies.
+        expect(begun.value.replay).toBe(true);
+        expect(begun.value.record.status).toBe("completed");
+        const frontier = yield* begun.value.database.readJournalEntries();
+        if (!frontier.ok) {
+          throw frontier.error;
+        }
+        const prepared = retainedReplay(begun.value.record, frontier.value);
+        if (!prepared.ok) {
+          throw prepared.error;
+        }
+        const rendered = yield* canonical(begun.value.database, prepared.value.root, [
+          ...prepared.value.installations,
+        ]);
+        const settled = yield* transitions.settle(lock, {
+          executionId: begun.value.execution.executionId,
+          status: "completed",
+        });
+        if (!settled.ok) {
+          throw settled.error;
+        }
+        return rendered;
+      });
+    });
+
+    // Byte for byte, including the bundled component, from history alone.
+    expect(replayed.output).toBe(live.output);
+    expect(replayed.result.ok).toBe(true);
+
+    const after = await ownerState(stub);
+    expect(after.journal).toEqual(before.journal);
+    expect(after.currentRootId).toBe(before.currentRootId);
+    expect(after.published).toEqual(before.published);
+    expect(after.answers).toEqual(before.answers);
+    expect(after.run?.["status"]).toBe("completed");
+    // The stale envelope closed and one replay envelope opened and closed.
+    expect(after.executions).toBe(2);
+    expect(await on(stub, (owner) => owner.holders())).toBe(0);
+  });
+
+  it("refuses a lifecycle row its retained result contradicts, and moves nothing", async () => {
+    const stub = executor();
+    const host = lifecycleHost(stub);
+
+    // A run whose journal records that its root ended by raising, settled as
+    // though it had completed. The two cannot both be this run's outcome.
+    await run(function* () {
+      return yield* scoped(function* () {
+        const transitions: WorkflowExecutionTransitions = yield* useRemoteLifecycle(host);
+        const lock = yield* acquired();
+        const begun = yield* transitions.begin(lock, {
+          runId: RUN_ID,
+          action: "start",
+          creation: CREATION,
+        });
+        if (!begun.ok) {
+          throw begun.error;
+        }
+        const { database } = begun.value;
+        const appended = yield* database.transact(function* (transaction) {
+          yield* transaction.journal.append({
+            type: "yield",
+            coroutineId: "root",
+            description: { type: "import_component", name: "__root__" },
+            result: {
+              status: "ok",
+              value: { kind: "repository", path: "README.md", content: DOCUMENT },
+            },
+          });
+          // The members in the order the protocol's own parser rebuilds them.
+          // The owner requires a proposed event to serialize back to the exact
+          // bytes it was sent as, so a differently ordered record is refused
+          // while the command is still being read.
+          yield* transaction.journal.append({
+            type: "close",
+            coroutineId: "root",
+            result: { status: "err", error: { message: "the executor died", name: "Error" } },
+          });
+        });
+        if (!appended.ok) {
+          throw appended.error;
+        }
+        const settled = yield* transitions.settle(lock, {
+          executionId: begun.value.execution.executionId,
+          status: "completed",
+        });
+        if (!settled.ok) {
+          throw settled.error;
+        }
+      });
+    });
+
+    const before = await ownerState(stub);
+    expect(before.run?.["status"]).toBe("completed");
+
+    const refusal = await run(function* (): Operation<string> {
+      return yield* scoped(function* () {
+        const transitions: WorkflowExecutionTransitions = yield* useRemoteLifecycle(host);
+        const lock = yield* acquired();
+        const begun = yield* transitions.begin(lock, { runId: RUN_ID, action: "resume" });
+        if (!begun.ok) {
+          throw begun.error;
+        }
+        const frontier = yield* begun.value.database.readJournalEntries();
+        if (!frontier.ok) {
+          throw frontier.error;
+        }
+        const prepared = retainedReplay(begun.value.record, frontier.value);
+        if (prepared.ok) {
+          throw new Error("expected the contradictory retained state to be refused");
+        }
+        return prepared.error.message;
+      });
+    });
+
+    expect(refusal).toContain("describe different outcomes");
+    // Nothing this run holds moved, and no replacement outcome was published:
+    // the one difference is the envelope the begin boundary had to insert, and
+    // the settled recovery closes exactly that.
+    const after = await ownerState(stub);
+    expect(after.journal).toEqual(before.journal);
+    expect(after.currentRootId).toBe(before.currentRootId);
+    expect(after.published).toEqual(before.published);
+    expect(after.answers).toEqual(before.answers);
+    expect(after.run?.["status"]).toBe("completed");
+    expect(after.executions).toBe(before.executions + 1);
     expect(await on(stub, (owner) => owner.holders())).toBe(0);
   });
 

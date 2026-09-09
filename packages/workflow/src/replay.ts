@@ -39,10 +39,9 @@ import { retainedSource } from "@executablemd/core/host";
 import type { ExecutionInstallation, RetainedRootDocument } from "@executablemd/core/host";
 import { workflowBundleReplayInstallation } from "./bundle.ts";
 import { retainedWorkflowInstallation } from "./run.ts";
-import { terminal } from "./lifecycle/policy.ts";
+import { rootOutcome, terminal } from "./lifecycle/policy.ts";
 import type { JournalEntry } from "./storage/api.ts";
-import { definitionComponents } from "./storage/definition.ts";
-import type { WorkflowRunRecord, WorkflowRunStatus } from "./storage/record.ts";
+import type { DocumentExecutionCompletion, WorkflowRunRecord } from "./storage/record.ts";
 
 /** The root import a run's own entry is recorded under. */
 const ROOT = "__root__";
@@ -88,6 +87,9 @@ const REFUSALS = Object.freeze({
   document:
     "this run's retained root document is not the document its definition names. The run is " +
     "left exactly as it is.",
+  disagreed:
+    "this run's retained state and its recorded document result describe different outcomes, " +
+    "so neither is the one to replay. The run is left exactly as it is.",
 });
 
 function refuse(reason: string): Result<never> {
@@ -140,6 +142,28 @@ function importedName(event: DurableEvent): string | undefined {
   }
   const name = reading(() => description.name);
   return typeof name === "string" ? name : undefined;
+}
+
+/**
+ * Whether the two accounts of why this run stopped are the same account.
+ *
+ * A canonical outcome that names an event names the exact retained row the
+ * lifecycle recorded as its reason; one that names none leaves the run with
+ * none. A host code in that position describes a stop the document itself did
+ * not record, which is not a terminal to replay from.
+ */
+function sameReason(
+  retained: DocumentExecutionCompletion["reason"],
+  canonical: DocumentExecutionCompletion["reason"],
+): boolean {
+  if (canonical === undefined || retained === undefined) {
+    return canonical === retained;
+  }
+  return (
+    canonical.kind === "journal" &&
+    retained.kind === "journal" &&
+    canonical.eventId === retained.eventId
+  );
 }
 
 /** Whether a retained event is this document execution's own terminal. */
@@ -232,19 +256,6 @@ function boundRoot(close: DurableEvent): RetainedRoot | undefined {
 }
 
 /**
- * Whether a run in this state replays what it retained rather than continuing.
- *
- * The one place a caller needs the question answered before it has a frontier
- * to read. A resume that is going to replay must not fetch a definition on the
- * way in, and the retained status is what says so while the run is still being
- * admitted. It is not the decision — `retainedReplay()` is, from the history
- * itself — it is what keeps live retrieval from happening ahead of one.
- */
-export function replaysRetainedResult(status: WorkflowRunStatus): boolean {
-  return terminal(status);
-}
-
-/**
  * What this run's owner already holds, as the inputs one canonical replay runs
  * on — or why the state it holds describes no completed run.
  *
@@ -274,6 +285,21 @@ export function retainedReplay(
     return refuse(REFUSALS.mixed);
   }
 
+  // The document result the journal records, and the lifecycle row that stands
+  // behind it, have to be the same outcome. `rootOutcome()` is the settled
+  // mapping — the one recovery and settlement already publish through — so this
+  // is the lifecycle's own judgment rather than a second copy of it that could
+  // drift. A row and a result claiming different terminals are damaged retained
+  // state, and neither of them is the one to replay.
+  const outcome = rootOutcome(entries);
+  if (
+    outcome === undefined ||
+    outcome.status !== record.status ||
+    !sameReason(record.stopReason, outcome.reason)
+  ) {
+    return refuse(REFUSALS.disagreed);
+  }
+
   const imports = entries.filter((entry) => importedName(entry.event) === ROOT);
   if (imports.length > 1) {
     return refuse(REFUSALS.ambiguous);
@@ -300,7 +326,7 @@ export function retainedReplay(
         base: record.base,
         pinnedCommit: record.definition.objectId,
       }),
-      workflowBundleReplayInstallation(definitionComponents(record.definition)),
+      workflowBundleReplayInstallation(record.definition),
     ],
   });
 }

@@ -73,10 +73,8 @@ import { retainedSource, validateProps } from "@executablemd/core";
 import type { PropsSchema } from "@executablemd/core";
 import type { RootDocumentSource } from "@executablemd/core";
 import {
-  definitionComponents,
   retainedReplay,
   retainedWorkflowInstallation,
-  replaysRetainedResult,
   workflowBundleInstallation,
   WORKFLOW_RUN_STATUSES,
   WorkflowLifecycle,
@@ -960,17 +958,6 @@ export function runWorkflow(
     }
     const { lock: executorLock } = acquired.value;
 
-    // A resumed run closed over a component bundle reconstructs it here: under
-    // the executor lock, from the retained commit, and before the execution
-    // record exists. A component that is gone, changed, or unreachable leaves
-    // the run's lifecycle records exactly as they are rather than adding an
-    // attempt that never began.
-    const reconstructed = yield* reconstructedSources(request, runId);
-    if (!reconstructed.ok) {
-      report(reconstructed.error.message);
-      return { exitCode: 1 };
-    }
-
     // One transaction: whatever the previous workflow executor left is reconciled, this
     // action is admitted against what that left behind, and the execution is
     // recorded — or none of it is. A fork's one transaction is its whole
@@ -1004,15 +991,23 @@ export function runWorkflow(
     const completed = frontier.value.some((entry) => isRootClose(entry.event));
 
     // A resume of a run that already ended replays what its own history holds.
-    // Decided here, from the admitted frontier, and therefore ahead of every
-    // live-only construction below it: the retained definition, this host's own
-    // adapter, the suspension controller, the answer provider, the `<Evaluate>`
-    // declaration and `host.attach()`. Each of those is work for an execution
-    // that is going to import nothing, perform nothing and append nothing.
+    // The lifecycle decided that, in the transaction above: it reconciled
+    // whatever the previous executor left, published the canonical terminal a
+    // retained root result implies, and answered `replay`. Nothing before this
+    // point may decide it — a run whose executor committed its document result
+    // and disappeared before settling still reads `running`, and treating that
+    // status as live is what sent a completed replay to a checkout it may not
+    // have.
+    //
+    // So the definition is fetched here or not at all, and everything below is
+    // downstream of the same answer: this host's own adapter, the suspension
+    // controller, the answer provider, the `<Evaluate>` declaration and
+    // `host.attach()` are each work for an execution that is going to import
+    // nothing, perform nothing and append nothing.
     const replayed = replay && start === undefined;
     const prepared = replayed
       ? retainedReplay(record, frontier.value)
-      : yield* liveDocument(record, start, database, reconstructed.value);
+      : yield* liveDocument(record, start, database);
     if (!prepared.ok) {
       report(prepared.error.message);
       return { exitCode: 1 };
@@ -1366,9 +1361,8 @@ function* liveDocument(
   record: WorkflowRunRecord,
   start: WorkflowStart | undefined,
   database: WorkflowRunDatabase,
-  reconstructed: RetainedSources | undefined,
 ): Operation<Result<RetainedReplay>> {
-  const sources = yield* documentSource(start, database, reconstructed);
+  const sources = yield* documentSource(start, database);
   if (!sources.ok) {
     return sources;
   }
@@ -1392,14 +1386,14 @@ function* liveDocument(
 function* documentSource(
   start: WorkflowStart | undefined,
   database: WorkflowRunDatabase,
-  reconstructed: RetainedSources | undefined,
 ): Operation<Result<RetainedSources>> {
   if (start !== undefined) {
     return Ok({ source: start.established.source, components: start.established.components });
   }
-  if (reconstructed !== undefined) {
-    return Ok(reconstructed);
-  }
+  // The root and every component this run is closed over, from the retained
+  // commit, in one read: `loadRetainedDefinition()` reconstructs the bundle
+  // when the definition names one. The admitted run record is what says which
+  // commit that is, so this asks the run rather than an earlier snapshot of it.
   return yield* loadRetainedDefinition(database.record.definition, database.retrieval?.metadata);
 }
 
@@ -1431,51 +1425,6 @@ function* liveSupport(database: WorkflowRunDatabase): Operation<LiveSupport> {
     controller: createSuspensionController({ database }),
     declaration: { components: evaluationComponents(database) },
   };
-}
-
-/**
- * The pinned sources a resumed run closed over a bundle needs before it begins.
- *
- * Answers with nothing for a `start`, which established its own bundle from Git
- * before it asked storage for anything, and for a run whose definition names no
- * components — that one keeps loading its root after the run has been admitted,
- * because a run that ended is not one to fetch a definition for.
- *
- * A run this host cannot inspect answers with nothing too. What that run is,
- * and whether this action may advance it, is the begin transition's to decide,
- * and answering it here would report a different refusal for the same fact.
- *
- * So does a run whose retained state already ended, and for a reason of its
- * own: that run replays what its history holds and imports nothing, so a bundle
- * fetched for it would be live retrieval performed for components nobody
- * resolves.
- */
-function* reconstructedSources(
-  request: WorkflowRequest,
-  runId: string,
-): Operation<Result<RetainedSources | undefined>> {
-  if (request.action !== "resume") {
-    return Ok(undefined);
-  }
-  const snapshot = yield* WorkflowLifecycle.operations.inspect(runId);
-  if (!snapshot.ok) {
-    return Ok(undefined);
-  }
-  // A run whose retained state already ended replays from its own history, and
-  // the sources that replay is held to come out of that history rather than out
-  // of a checkout. Reconstructing a bundle from Git for it would be live
-  // retrieval performed for components nothing is going to import. Whether the
-  // history actually describes a completed run is decided after admission, from
-  // the frontier the owner answers with, and a run that claims to have ended
-  // without one refuses there rather than falling back to this.
-  if (replaysRetainedResult(snapshot.value.record.status)) {
-    return Ok(undefined);
-  }
-  const { definition } = snapshot.value.record;
-  if (definitionComponents(definition).length === 0) {
-    return Ok(undefined);
-  }
-  return yield* loadRetainedDefinition(definition, snapshot.value.retrieval?.metadata);
 }
 
 /**

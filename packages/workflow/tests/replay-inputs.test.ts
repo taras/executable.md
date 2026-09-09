@@ -19,14 +19,18 @@ import { expect } from "@executablemd/test-support/expect";
 import type { Operation, Result } from "effection";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import type { ExecutionInstallation } from "@executablemd/core/host";
-import { replaysRetainedResult, retainedReplay } from "../src/replay.ts";
+import { retainedReplay } from "../src/replay.ts";
 import type { RetainedReplay } from "../src/replay.ts";
 import { WorkflowReplayHistoryError } from "../src/replay.ts";
 import { WorkflowBundleHistoryError } from "../src/bundle.ts";
 import { forkRunRecordEvent } from "../src/journal-events.ts";
 import type { JournalEntry } from "../src/storage/api.ts";
 import type { WorkflowComponentEntry } from "../src/storage/definition.ts";
-import type { WorkflowRunRecord, WorkflowRunStatus } from "../src/storage/record.ts";
+import type {
+  WorkflowRunRecord,
+  WorkflowRunStatus,
+  WorkflowStopReason,
+} from "../src/storage/record.ts";
 
 const ROOT_ID = "a".repeat(64);
 const COMMIT = "0".repeat(40);
@@ -35,17 +39,20 @@ const SOURCE = "# Retained\n\ndone.\n";
 function record(
   overrides: {
     readonly status?: WorkflowRunStatus;
+    readonly stopReason?: WorkflowStopReason;
     readonly rootDocumentPath?: string;
+    readonly objectFormat?: "sha1" | "sha256";
     readonly components?: readonly WorkflowComponentEntry[];
   } = {},
 ): WorkflowRunRecord {
   const components = overrides.components;
+  const stopReason = overrides.stopReason;
   return {
     runId: "replay-1",
     definition: {
       version: 1,
       kind: "git",
-      objectFormat: "sha1",
+      objectFormat: overrides.objectFormat ?? "sha1",
       objectId: COMMIT,
       rootDocumentPath: overrides.rootDocumentPath ?? "flows/root.md",
       ...(components === undefined ? {} : { components }),
@@ -53,6 +60,7 @@ function record(
     base: "main",
     props: {},
     status: overrides.status ?? "completed",
+    ...(stopReason === undefined ? {} : { stopReason }),
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   };
@@ -227,11 +235,6 @@ describe("retained state that describes no completed run", () => {
     for (const status of live) {
       const outcome = retainedReplay(record({ status }), completedHistory());
       expect([status, reason(outcome).includes("not terminal")]).toEqual([status, true]);
-      expect([status, replaysRetainedResult(status)]).toEqual([status, false]);
-    }
-    const ended: readonly WorkflowRunStatus[] = ["completed", "failed"];
-    for (const status of ended) {
-      expect([status, replaysRetainedResult(status)]).toEqual([status, true]);
     }
   });
 
@@ -332,11 +335,143 @@ describe("retained state that describes no completed run", () => {
   });
 });
 
+describe("the lifecycle row and the recorded result have to agree", () => {
+  /** One history whose root result is the outcome this case is about. */
+  function ending(close: DurableEvent): { entries: JournalEntry[]; closeEventId: string } {
+    const entries = [
+      entry(rootImport({ kind: "repository", path: "flows/root.md", content: SOURCE })),
+      entry(close),
+    ];
+    return { entries, closeEventId: entries[1]?.eventId ?? "" };
+  }
+
+  const failure = { name: "Error", message: "the run did not finish" };
+
+  // deno-lint-ignore require-yield
+  it("accepts a successful result under a completed run", function* () {
+    const { entries } = ending(rootClose({ status: "ok", output: "", value: "" }));
+
+    expect(admitted(retainedReplay(record(), entries)).root.path).toBe("flows/root.md");
+  });
+
+  // deno-lint-ignore require-yield
+  it("accepts a failed result under a failed run naming that exact event", function* () {
+    const { entries, closeEventId } = ending({
+      type: "close",
+      coroutineId: "root",
+      result: { status: "err", error: failure },
+    });
+
+    const outcome = retainedReplay(
+      record({ status: "failed", stopReason: { kind: "journal", eventId: closeEventId } }),
+      entries,
+    );
+    expect(admitted(outcome).root.path).toBe("flows/root.md");
+  });
+
+  // deno-lint-ignore require-yield
+  it("refuses every pairing the settled lifecycle cannot produce", function* () {
+    const errored: DurableEvent = {
+      type: "close",
+      coroutineId: "root",
+      result: { status: "err", error: failure },
+    };
+    const cancelled: DurableEvent = {
+      type: "close",
+      coroutineId: "root",
+      result: { status: "cancelled" },
+    };
+    const succeeded = rootClose({ status: "ok", output: "", value: "" });
+
+    const cases: { says: string; close: DurableEvent; status: WorkflowRunStatus; reason?: true }[] =
+      [
+        { says: "a successful result under a failed run", close: succeeded, status: "failed" },
+        { says: "a failed result under a completed run", close: errored, status: "completed" },
+        { says: "a cancelled result under a completed run", close: cancelled, status: "completed" },
+        { says: "a cancelled result under a failed run", close: cancelled, status: "failed" },
+        { says: "a failed run naming no reason at all", close: errored, status: "failed" },
+        {
+          says: "a failed run naming another event",
+          close: errored,
+          status: "failed",
+          reason: true,
+        },
+      ];
+
+    for (const { says, close, status, reason: elsewhere } of cases) {
+      const { entries } = ending(close);
+      const outcome = retainedReplay(
+        record({
+          status,
+          ...(elsewhere === true
+            ? { stopReason: { kind: "journal", eventId: "event-somewhere-else" } }
+            : {}),
+        }),
+        entries,
+      );
+      expect([says, reason(outcome).includes("describe different outcomes")]).toEqual([says, true]);
+    }
+  });
+
+  // deno-lint-ignore require-yield
+  it("refuses a failed run whose reason is a host code rather than the event", function* () {
+    const { entries } = ending({
+      type: "close",
+      coroutineId: "root",
+      result: { status: "err", error: failure },
+    });
+
+    const outcome = retainedReplay(
+      record({ status: "failed", stopReason: { kind: "host", code: "document-execution-failed" } }),
+      entries,
+    );
+    expect(reason(outcome)).toContain("describe different outcomes");
+  });
+
+  // deno-lint-ignore require-yield
+  it("refuses a completed run carrying a stop reason of its own", function* () {
+    const { entries, closeEventId } = ending(rootClose({ status: "ok", output: "", value: "" }));
+
+    const outcome = retainedReplay(
+      record({ status: "completed", stopReason: { kind: "journal", eventId: closeEventId } }),
+      entries,
+    );
+    expect(reason(outcome)).toContain("describe different outcomes");
+  });
+});
+
+/**
+ * The object ids `git hash-object -t blob` gives these exact bytes.
+ *
+ * Committed constants rather than a computation, because a test that derived
+ * them from the same function it is checking would agree with itself. They came
+ * from Git, and `packages/workflow/tests/git-blob.test.ts` holds the arithmetic
+ * to Git's own answers and to FIPS 180-4's published ones.
+ */
+const STAGED = "staged.\n";
+const STAGED_SHA1 = "4eb53b7fd720524e22040757b43e821f817ff0eb";
+const STAGED_SHA256 = "bee278bf729e0ac11f0bd6bf2ec94b1536d51883bd6e426ac32ec0a94afe76ca";
+const UNUSED_SHA1 = "0b42d358385c85db1957138c7a200ad153514209";
+/** Four characters and seven bytes, so Git's framing cannot use the string length. */
+const WIDE = "caf\u00e9 \u{1f409}\n";
+const WIDE_SHA1 = "c4ae463ec163e7b0b1a47ca6f0d5a2205d3643dc";
+
 describe("the bundle a completed replay is held to", () => {
   const declared: readonly WorkflowComponentEntry[] = [
-    { name: "Stage", path: "flows/Stage.md", sourceHash: "1".repeat(40) },
-    { name: "Unused", path: "flows/Unused.md", sourceHash: "2".repeat(40) },
+    { name: "Stage", path: "flows/Stage.md", sourceHash: STAGED_SHA1 },
+    { name: "Unused", path: "flows/Unused.md", sourceHash: UNUSED_SHA1 },
   ];
+
+  /** One retained import of the declared `Stage`, as canonical execution wrote it. */
+  function staged(overrides: Record<string, Json> = {}): DurableEvent {
+    return componentImport("Stage", {
+      kind: "workflow",
+      path: "flows/Stage.md",
+      sourceHash: STAGED_SHA1,
+      content: STAGED,
+      ...overrides,
+    });
+  }
 
   it("grants no authority to import anything", function* () {
     const replay = admitted(retainedReplay(record({ components: declared }), completedHistory()));
@@ -350,44 +485,86 @@ describe("the bundle a completed replay is held to", () => {
     }
   });
 
-  it("admits an import the definition declares, by path and object id", function* () {
+  it("admits an import whose bytes are the object the definition names", function* () {
     const replay = admitted(retainedReplay(record({ components: declared }), completedHistory()));
-    const held = componentImport("Stage", {
-      kind: "workflow",
-      path: "flows/Stage.md",
-      sourceHash: "1".repeat(40),
-      content: "staged.\n",
-    });
 
-    expect(yield* admit(replay.installations, [RUN_RECORD, held])).toBe(undefined);
+    expect(yield* admit(replay.installations, [RUN_RECORD, staged()])).toBe(undefined);
   });
 
-  it("refuses one recorded under another path, hash or name", function* () {
+  it("admits the same under sha256, and where bytes outnumber characters", function* () {
+    const cases: { format: "sha1" | "sha256"; hash: string; content: string }[] = [
+      { format: "sha256", hash: STAGED_SHA256, content: STAGED },
+      { format: "sha1", hash: WIDE_SHA1, content: WIDE },
+    ];
+
+    for (const { format, hash, content } of cases) {
+      const components: readonly WorkflowComponentEntry[] = [
+        { name: "Stage", path: "flows/Stage.md", sourceHash: hash },
+      ];
+      const replay = admitted(
+        retainedReplay(record({ components, objectFormat: format }), completedHistory()),
+      );
+      const held = componentImport("Stage", {
+        kind: "workflow",
+        path: "flows/Stage.md",
+        sourceHash: hash,
+        content,
+      });
+      expect([format, yield* admit(replay.installations, [RUN_RECORD, held])]).toEqual([
+        format,
+        undefined,
+      ]);
+
+      // The same identity, other bytes. Repeating an object id is not being it.
+      const altered = componentImport("Stage", {
+        kind: "workflow",
+        path: "flows/Stage.md",
+        sourceHash: hash,
+        content: `${content}ALTERED\n`,
+      });
+      expect(yield* admit(replay.installations, [RUN_RECORD, altered])).toEqual(
+        expect.any(WorkflowBundleHistoryError),
+      );
+    }
+  });
+
+  it("refuses altered bytes under the object id the definition declares", function* () {
+    const replay = admitted(retainedReplay(record({ components: declared }), completedHistory()));
+    // The exact declared path and object id, and content that is not that
+    // object. This is the record a history rewritten in place would carry.
+    const altered = staged({ content: "ALTERED\n" });
+
+    const refused = yield* admit(replay.installations, [RUN_RECORD, altered]);
+    expect(refused).toEqual(expect.any(WorkflowBundleHistoryError));
+    // And it says nothing about what it read.
+    expect(String(refused)).not.toContain("ALTERED");
+    expect(String(refused)).not.toContain("flows/Stage.md");
+  });
+
+  it("refuses one recorded under another path, hash, name or kind", function* () {
     const replay = admitted(retainedReplay(record({ components: declared }), completedHistory()));
     const wrong: DurableEvent[] = [
-      componentImport("Stage", {
-        kind: "workflow",
-        path: "flows/Elsewhere.md",
-        sourceHash: "1".repeat(40),
-        content: "staged.\n",
-      }),
+      staged({ path: "flows/Elsewhere.md" }),
+      // A different object id, and content that really is that object: the
+      // definition still does not name it.
       componentImport("Stage", {
         kind: "workflow",
         path: "flows/Stage.md",
-        sourceHash: "9".repeat(40),
-        content: "staged.\n",
+        sourceHash: UNUSED_SHA1,
+        content: "never imported.\n",
       }),
       componentImport("Undeclared", {
         kind: "workflow",
         path: "flows/Stage.md",
-        sourceHash: "1".repeat(40),
-        content: "staged.\n",
+        sourceHash: STAGED_SHA1,
+        content: STAGED,
       }),
       componentImport("Stage", {
         kind: "repository",
         path: "flows/Stage.md",
-        content: "staged.\n",
+        content: STAGED,
       }),
+      staged({ content: 7 }),
     ];
 
     for (const event of wrong) {

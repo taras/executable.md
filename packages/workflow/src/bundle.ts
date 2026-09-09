@@ -28,7 +28,9 @@
  * A completed replay takes the second half without the first, through
  * `workflowBundleReplayInstallation()`: it imports nothing, so it is handed no
  * source to import from, and its records are held to the name, path and object
- * id the immutable definition declares.
+ * id the immutable definition declares — with the recorded bytes named as a
+ * Git blob and required to *be* that object rather than merely to repeat its
+ * id beside itself.
  */
 
 import type { DurableEvent, Json, Yield } from "@executablemd/durable-streams";
@@ -37,7 +39,9 @@ import type {
   JournalAdmission,
   WorkflowBundleComponent,
 } from "@executablemd/core/host";
-import type { WorkflowComponentEntry } from "./storage/definition.ts";
+import { definitionComponents } from "./storage/definition.ts";
+import type { WorkflowDefinition } from "./storage/definition.ts";
+import { gitBlobId } from "./git-blob.ts";
 
 /** The root's own import, which is not a bundle member and is admitted elsewhere. */
 const ROOT = "__root__";
@@ -72,18 +76,20 @@ const REFUSALS = {
  * One component a run's definition declares, as an admission holds a retained
  * import to it.
  *
- * `content` is the exact pinned source, and it is present exactly when this run
- * may also import the component. A live or partial execution holds it, so a
- * retained record that says something else about the same object is refused
- * against the bytes themselves. A completed replay holds none — it imports
- * nothing and is given nothing to import — and its records are held to the name,
- * path and object id the immutable definition retains, which is the half of
- * this comparison that never came from the journal.
+ * `holds` is where the two halves of this contract differ, and it is the only
+ * place they may. A live or partial execution has already read the pinned
+ * source from the definition's own commit, so a retained record is held to
+ * those exact bytes. A completed replay has no pinned source and no repository
+ * to ask for one, so it does what Git does: it names the recorded bytes as a
+ * blob under the definition's own object format and requires that name to be
+ * the object id the definition declares. Either way the bytes are
+ * authenticated — repeating an object id beside unrelated bytes is not.
  */
 interface DeclaredComponent {
   readonly path: string;
   readonly sourceHash: string;
-  readonly content?: string;
+  /** Whether these exact bytes are the object this run's definition names. */
+  holds(content: string): boolean;
 }
 
 /**
@@ -154,8 +160,8 @@ function importedValue(event: DurableEvent): { value: unknown } | undefined | ty
  *
  * Every branch is a decision about what the record *is*, taken before anything
  * is replayed from it. A declared name must have been recorded as a bundled
- * component, with the exact path and object id the definition declares — and
- * with this run's exact source too, where this run holds one; an undeclared
+ * component, with the exact path and object id the definition declares, and
+ * with bytes that are that object; an undeclared
  * name must not claim to be one; and a repository selection is admitted only
  * for the root, which core holds to the run's own root source.
  */
@@ -197,17 +203,16 @@ function admitImport(
       }
     }
     const read = (member: string) => reading(() => (record as Record<string, unknown>)[member]);
-    if (read("path") !== declared.path || read("sourceHash") !== declared.sourceHash) {
-      throw new WorkflowBundleHistoryError(REFUSALS.mismatched);
-    }
-    // The source only when this run holds one. A replay was given none, so
-    // comparing the record with itself is what there would be to do, and the
-    // object id above is the definition's rather than the history's.
-    if (declared.content !== undefined && read("content") !== declared.content) {
-      throw new WorkflowBundleHistoryError(REFUSALS.mismatched);
-    }
-    if (typeof read("content") !== "string") {
+    const content = read("content");
+    if (typeof content !== "string") {
       throw new WorkflowBundleHistoryError(REFUSALS.unreadable);
+    }
+    if (
+      read("path") !== declared.path ||
+      read("sourceHash") !== declared.sourceHash ||
+      !declared.holds(content)
+    ) {
+      throw new WorkflowBundleHistoryError(REFUSALS.mismatched);
     }
     return;
   }
@@ -266,7 +271,9 @@ export function workflowBundleInstallation(
       Object.freeze({
         path: component.path,
         sourceHash: component.sourceHash,
-        content: component.content,
+        // The bytes themselves, because this run has them: they were read from
+        // the definition's own commit before it existed.
+        holds: (content: string) => content === component.content,
       }),
     ]),
   );
@@ -297,12 +304,19 @@ export function workflowBundleInstallation(
  * ```
  */
 export function workflowBundleReplayInstallation(
-  declared: readonly WorkflowComponentEntry[],
+  definition: WorkflowDefinition,
 ): ExecutionInstallation {
+  const { objectFormat } = definition;
   const index = new Map<string, DeclaredComponent>(
-    declared.map((entry) => [
+    definitionComponents(definition).map((entry) => [
       entry.name,
-      Object.freeze({ path: entry.path, sourceHash: entry.sourceHash }),
+      Object.freeze({
+        path: entry.path,
+        sourceHash: entry.sourceHash,
+        // Named the way Git names a blob, under this definition's own object
+        // format, and required to be the object the definition declares.
+        holds: (content: string) => gitBlobId(content, objectFormat) === entry.sourceHash,
+      }),
     ]),
   );
   return { admissions: [admits(index)] };
