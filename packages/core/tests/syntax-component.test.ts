@@ -16,9 +16,18 @@
  * code ran, and it travels lexically on canonical core's own expansion
  * authority — not through a context, where a name is not a secret.
  *
- * **One occurrence renders once.** It claims the identity this execution
- * minted, records exactly `{ symbols }`, and a continuation hands that back
- * without consulting the filesystem, the registry, the bundle or the host again.
+ * **One occurrence renders once.** It claims the identity this execution minted
+ * and records a closed payload carrying exactly one member:
+ *
+ * ```
+ * { symbols: string } | { refused: non-empty string }
+ * ```
+ *
+ * `{ symbols }` is a successful rendering; `{ refused }` is a named selection
+ * this component refused, retained as a value rather than as a failure so that a
+ * continuation reaches the same refusal it reached live. Either way a
+ * continuation answers from the record without consulting the filesystem, the
+ * registry, the bundle or the host again.
  *
  * Protection is about the answer, not about power: the component receives one
  * reference that renders symbol text and nothing else, and naming a component in
@@ -1874,7 +1883,7 @@ describe("Tier SYN — the site the symbols describe", () => {
 });
 
 describe("Tier SYN — the record one occurrence keeps", () => {
-  it("SYN19: the retained payload is closed on exactly { symbols }", function* () {
+  it("SYN19: a bare occurrence that rendered retains exactly { symbols }", function* () {
     const stream = new InMemoryStream();
     yield* run("<Syntax />\n", [stating(symbolsOf("Marker")).installation], stream);
     const [reference] = syntaxReads(yield* stream.readAll());

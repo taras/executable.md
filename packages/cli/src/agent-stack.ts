@@ -111,14 +111,14 @@ export function* resolveAgentStack(
   if ("error" in config) {
     return Err(new Error(config.error));
   }
-  const authorship = yield* resolvePlanWriterStack(
+  const planWriter = yield* resolvePlanWriterStack(
     { agentProvider: flags.agentProvider, defaultAgent: config.defaultAgent },
     sessions,
   );
-  if (!authorship.ok) {
-    return authorship;
+  if (!planWriter.ok) {
+    return planWriter;
   }
-  return Ok({ ...authorship.value, permissionMode: config.permissionMode });
+  return Ok({ ...planWriter.value, permissionMode: config.permissionMode });
 }
 
 /**

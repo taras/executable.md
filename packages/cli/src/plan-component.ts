@@ -644,7 +644,7 @@ function planWriter(assembly: PlanComponentAssembly): IdentityComponent {
 
         yield* installPlanWriterFrame({
           workdir: established.value,
-          authorship: context.value,
+          planWriter: context.value,
           host: assembly.host,
           session,
           ...(typeof props.authoredSession === "string"

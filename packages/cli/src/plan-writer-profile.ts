@@ -325,7 +325,7 @@ export interface PlanWriterFrame {
   /** The scope the two host acts run in, captured before this frame exists. */
   readonly host: Scope;
   /** The host's ability to give this invocation an Agent. */
-  readonly authorship: PlanWriter;
+  readonly planWriter: PlanWriter;
   /** The opaque conversation identity the provider must preserve. */
   readonly session: string;
   /** The exact authored label a trusted child host may address privately. */
@@ -362,7 +362,7 @@ export function* installPlanWriterFrame(frame: PlanWriterFrame): Operation<void>
   //
   // Which provider it is belongs to the host that supplied the capability. What
   // does not is everything below: one policy, whoever is underneath it.
-  const assembly = yield* frame.authorship.installProvider({
+  const assembly = yield* frame.planWriter.installProvider({
     workdir: frame.workdir,
     host: frame.host,
     session: frame.session,

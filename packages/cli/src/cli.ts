@@ -2503,12 +2503,12 @@ function* dispatch(
       // Who writes, and nothing else. There is no permission mode to settle:
       // this command starts no program, and the ceiling authorship runs under
       // is the host's rather than the command line's.
-      const authorship = yield* resolvePlanWriterStack(
+      const planWriter = yield* resolvePlanWriterStack(
         { agentProvider: config.agentProvider, defaultAgent: config.defaultAgent },
         sessions,
       );
-      if (!authorship.ok) {
-        console.error(authorship.error.message);
+      if (!planWriter.ok) {
+        console.error(planWriter.error.message);
         yield* exit(1);
         break;
       }
@@ -2520,7 +2520,7 @@ function* dispatch(
           ...(config.session === undefined ? {} : { session: config.session }),
           verbose: config.verbose,
           ...(config.journal === undefined ? {} : { journal: config.journal }),
-          stack: authorship.value,
+          stack: planWriter.value,
         },
         {
           ...(sessions === undefined ? {} : { sessions }),
