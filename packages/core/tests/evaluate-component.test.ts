@@ -952,7 +952,11 @@ describe("Tier FE — what the element itself may say", () => {
       ["a calling expression prop", `<File path={resolve("a.md")} />\\n`],
       ["an interpolated binding", `<File path="a.md" />\\n{binding}\\n`],
       ["a malformed `as` binding", `<File path="a.md" as="not a name" />\\n`],
-      ["a structural construct", `<If condition={true}>\\n<File path="a.md" />\\n</If>\\n`],
+      // A well-formed construct around this read is admitted now (FE35). What
+      // stays refused is a construct the generated root supplies no context
+      // for, and one written where the construct that gives it meaning is not.
+      ["a construct with no generated context", `<Content />\\n<File path="a.md" />\\n`],
+      ["a stray branch", `<Else>\\n<File path="a.md" />\\n</Else>\\n`],
     ];
     const outcomes: Array<[string, string[]]> = [];
     for (const [what, fragment] of refused) {
@@ -1239,6 +1243,188 @@ describe("Tier FE — protection settles which implementation runs, and grants n
     expect(String(output)).toContain("the retained note");
     expect(String(output)).not.toContain("forged");
     expect(files.performed).toEqual(["read notes.md"]);
+  });
+});
+
+/**
+ * Tier FE35 — every built-in structural construct, inside a generated fragment.
+ *
+ * `allow` selects effect tables. It never selected the language, and these rows
+ * are what makes that observable: a fragment composes admitted reads with
+ * branching, binding and bounded iteration under exactly the ordinary rules,
+ * while the components those constructs reach stay held to the selected
+ * authority.
+ *
+ * The discriminating half is the untaken path. Preflight walks every branch,
+ * every `<Case>` and every body before the first effect, so a prohibited
+ * component in an arm this run would never enter refuses the whole fragment
+ * with the recorder's log still empty.
+ */
+describe("Tier FE35 — structural constructs in a generated fragment", () => {
+  it("FE35: branching, binding and bounded iteration compose with admitted reads", function* () {
+    const files = recordedFiles({ "notes.md": NOTE, "other.md": "second\n" });
+    const output = yield* run(
+      `<Evaluate text={'<Let as="wanted" value={["notes.md"]} />\\n` +
+        `<Each in={wanted} let="path" as="seen">\\n<File path="notes.md" as="note" />\\n` +
+        `<Json value={note} />\\n</Each>\\n` +
+        `<If condition={true}>\\n<Json value={seen} />\\n<Else>\\nnot taken\\n</Else>\\n</If>\\n'} ` +
+        `as="answer" />\n\n<Json value={answer} />\n`,
+      [reading(files)],
+    );
+
+    const rendered = String(output);
+    expect(rendered).toContain("the retained note");
+    expect(rendered).not.toContain("not taken");
+    // One admitted read, reached through the constructs rather than around them.
+    expect(files.performed).toEqual(["read notes.md"]);
+  });
+
+  it("FE35: a prohibited component in an untaken branch refuses at zero reads", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    const cases: Array<[string, string]> = [
+      // The arm the condition never selects. The write is refused by form,
+      // which is the read selection speaking, not the branch.
+      [
+        `<If condition={true}>\\n<File path="notes.md" />\\n` +
+          `<Else>\\n<File path="notes.md">written</File>\\n</Else>\\n</If>\\n`,
+        "admitted only in its self-closing form",
+      ],
+      // The `<Case>` the matcher never reaches.
+      [
+        `<Switch value={"a"}>\\n<Case value={"a"}>\\n<File path="notes.md" />\\n</Case>\\n` +
+          `<Case default>\\n<Elicit schema={{}} as="x" />\\n</Case>\\n</Switch>\\n`,
+        "did not admit",
+      ],
+    ];
+    for (const [fragment, expected] of cases) {
+      const failed = yield* refusal(
+        run(`<Evaluate text={'${fragment}'} allow={["read"]} />\n`, [reading(files)]),
+      );
+      expect(failed).toContain(expected);
+    }
+    // The whole point: the admitted read in the *taken* arm never happened,
+    // because the fragment was refused before any of it ran.
+    expect(files.performed).toEqual([]);
+    expect(files.entries.get("notes.md")).toBe(NOTE);
+  });
+
+  it("FE35: a body binding does not escape, and alternatives cannot feed each other", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    const cases: string[] = [
+      // An `<Each>` body may run no times at all, so what it binds is not
+      // something a later sibling can be promised.
+      `<Each in={["a"]} let="item">\\n<File path="notes.md" as="inner" />\\n</Each>\\n` +
+        `<Json value={inner} />\\n`,
+      // Two arms of one `<If>` are alternatives: the arm that runs is the arm
+      // the other one did not, so neither can read the other's binding.
+      `<If condition={true}>\\n<File path="notes.md" as="taken" />\\n` +
+        `<Else>\\n<Json value={taken} />\\n</Else>\\n</If>\\n`,
+      // The same for two `<Case>` branches, in source order and against the
+      // fallback alike.
+      `<Switch value={"a"}>\\n<Case value={"a"}>\\n<File path="notes.md" as="first" />\\n</Case>\\n` +
+        `<Case default>\\n<Json value={first} />\\n</Case>\\n</Switch>\\n`,
+    ];
+    for (const fragment of cases) {
+      const failed = yield* refusal(
+        run(`<Evaluate text={'${fragment}'} allow={["read"]} />\n`, [reading(files)]),
+      );
+      expect(failed).toContain("declarative data");
+    }
+    // Refused whole, so the admitted read in each fragment never happened.
+    expect(files.performed).toEqual([]);
+  });
+
+  it("FE35: Loop, a valid Break and PrintErrors run around an admitted read", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    const output = yield* run(
+      `<Evaluate text={'<Loop max={3}>\\n<PrintErrors>\\n<File path="notes.md" />\\n` +
+        `</PrintErrors>\\n<Break />\\n</Loop>\\n'} as="answer" />\n\n<Json value={answer} />\n`,
+      [reading(files)],
+    );
+
+    // Each of these has its own handler rather than falling through to the
+    // generic structural refusal: the loop ran, the break ended it after one
+    // pass, and the region rendered the read it wrapped.
+    expect(String(output)).toContain("the retained note");
+    expect(files.performed).toEqual(["read notes.md"]);
+  });
+
+  it("FE35: an Each item does not escape, and its capture does", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    // The item binding belongs to the body.
+    const leaked = yield* refusal(
+      run(
+        `<Evaluate text={'<Each in={["a"]} let="item">\\nx\\n</Each>\\n<Json value={item} />\\n'} />\n`,
+        [reading(files)],
+      ),
+    );
+    expect(leaked).toContain("declarative data");
+
+    // The capture is written for the caller and survives the construct.
+    const captured = yield* run(
+      `<Evaluate text={'<Each in={["a"]} let="item" as="all">\\nx\\n</Each>\\n` +
+        `<Json value={all} />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
+      [reading(files)],
+    );
+    expect(String(captured)).toContain("x");
+    expect(files.performed).toEqual([]);
+  });
+
+  it("FE35: every nested body is preflighted, including ones chosen at runtime", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    const cases: Array<[string, string]> = [
+      // A paired `<Answer>`'s children are its template, and which answer is
+      // chosen is a runtime question — so every one of them is proved first.
+      [
+        `<Answers>\\n<Answer value={{}}>\\nApprove <Elicit schema={{}} as="x" />?\\n</Answer>\\n` +
+          `<File path="notes.md" />\\n</Answers>\\n`,
+        "did not admit",
+      ],
+      // And the ordinary `<Answers>` body — the region whose elicitations the
+      // matchers answer — is walked like any other region.
+      [
+        `<Answers>\\n<Answer template="pick?" value={{}} />\\n` +
+          `<Elicit schema={{}} as="x" />\\n</Answers>\\n`,
+        "did not admit",
+      ],
+    ];
+    for (const [fragment, expected] of cases) {
+      const failed = yield* refusal(
+        run(`<Evaluate text={'${fragment}'} allow={["read"]} />\n`, [reading(files)]),
+      );
+      expect(failed).toContain(expected);
+    }
+    expect(files.performed).toEqual([]);
+
+    // A `<Break>` in a component's own body cannot break a loop that encloses
+    // the invocation, so it is stray even written inside one. `<Dir>` is
+    // admitted paired here, so the refusal is about the `<Break>` rather than
+    // about the element hosting it.
+    const writable = recordedFiles({ "notes.md": NOTE });
+    const stray = yield* refusal(
+      run(
+        `<Evaluate text={'<Loop max={2}>\\n<Dir path="d">\\n<Break />\\n</Dir>\\n</Loop>\\n'} ` +
+          `allow={["write"]} />\n`,
+        [both(writable)],
+      ),
+    );
+    expect(stray).toContain("structural construct");
+    expect(writable.performed).toEqual([]);
+  });
+
+  it("FE35: executable code and imports stay refused inside a construct", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    const cases: Array<[string, string]> = [
+      ["```bash exec\\nprintf ran\\n```", "executable code block"],
+      ["{caller}", "interpolation"],
+    ];
+    for (const [body, expected] of cases) {
+      const failed = yield* refusal(
+        run(`<Evaluate text={'<If condition={true}>\\n${body}\\n</If>\\n'} />\n`, [reading(files)]),
+      );
+      expect(failed).toContain(expected);
+    }
+    expect(files.performed).toEqual([]);
   });
 });
 

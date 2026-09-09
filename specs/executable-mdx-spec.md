@@ -4051,6 +4051,60 @@ bindings, object composition, structural language constructs or pure renderers.
 Imports and executable code fences remain outside the generated program's
 authority.
 
+**Every built-in structural construct is available, with its ordinary
+semantics.** `Content`, `Output`, `Return`, `Let`, `Each`, `If`, `Else`,
+`Switch`, `Case`, `Loop`, `Break`, `PrintErrors`, `Answers` and `Answer` are
+engine-owned language rather than component authority. A generated fragment
+composes admitted reads with branching, binding and bounded iteration, and the
+source rules deciding each construct are the same ones ordinary validation and
+expansion read — one construct means one thing whether a person or an Agent
+wrote it.
+
+Preflight dispatches a reserved structural name to those rules **before** it
+consults the admitted table, so a construct is never reported as a component the
+host withheld. It walks every branch, every `<Case>`, every iteration body and
+every nested region — including a path the run will not take — before the
+fragment's first effect. A prohibited component in an untaken branch therefore
+refuses the whole fragment with no read performed. Every effectful component
+reached through a construct remains held to the selected authority.
+
+Runtime-dependent behavior stays at runtime. A condition, a matcher, a `max` an
+expression computes, and a read that fails are values: preflight proves the
+source and the authority of every possible path without evaluating conditions or
+fabricating values.
+
+Binding ownership is stated per region. A component's children do not escape to
+later siblings, and a component's own `as` becomes visible only to later
+siblings.
+
+An `<Each>` body is a fresh scope seeded with the enclosing bindings and the
+item binding. Nothing the body binds survives it — the body runs once per item
+and may run no times at all — so only `<Each as>` joins the enclosing scope.
+
+The alternatives of an `<If>` and the `<Case>` branches of a `<Switch>` are
+mutually exclusive, so every arm, every matcher and every branch body is checked
+from the same incoming bindings. One alternative therefore cannot supply a
+binding to another. Once all of them are proved, the union of what they can
+produce becomes visible after the construct, which preserves the
+runtime-dependent behavior: reading a binding only one alternative makes fails
+when the value is needed rather than at preflight.
+
+`<Loop>`, `<PrintErrors>` and `<Let>` bodies are transparent regions that read
+and write the enclosing binding environment.
+
+A construct written where the generated root supplies no ordinary context fails
+with its ordinary structural rule rather than as an unauthorized component.
+`<Content>`, `<Output>` and `<Return>` have no such context in a fragment: there
+is no caller content to claim, no independent output region to select and no
+value body to answer. `<Else>`, `<Case>` and `<Answer>` are consumed by the
+construct that gives them meaning, so reaching one directly is a stray element,
+and `<Break>` requires a lexically enclosing `<Loop>`.
+
+Admission records are unchanged. Constructs keep their exact spelling and
+nesting in the retained source, never join the retained list of named component
+identities, and the record version is unchanged. A historical refusal remains a
+refusal on replay; only a fresh invocation obtains the new admission decision.
+
 Generated expression props are declarative data expressions. Their recursive
 grammar admits null, string and boolean literals; finite JSON numbers;
 identifiers naming current fragment-local bindings; arrays; objects; and object
@@ -11253,6 +11307,7 @@ through the captured capability because there is no other way to reach it.
 | FE31 | One fragment binds File and protected Syntax results locally and explicitly renders a chosen object through Json. Nested literal arrays and objects, binding shorthand, finite JSON numbers and a directly attached leading minus such as `<Json value={-1} />` work in scalar, array and object positions. `1e999`, `-1e999`, `+1`, `-note`, `!note`, `typeof note`, an unbound identifier, call, operator, spread, computed property, template or global reference is refused before any earlier effect. |
 | FE32 | Generated admission and effect events follow ordinary persist-before-resume publication. A later refusal, failure, cancellation or interruption retains completed effects, and continuation resumes at the occurrence's first unrecorded effect; Evaluate adds no staging or rollback. |
 | FE33 | Each Evaluate occurrence retains its admission and generated effects under identities belonging to that occurrence; two occurrences cannot consume one another's retained work, and no caller-controlled context, stream, replay cursor, coroutine identifier or durable owner participates. A projected body installs observable structured cleanup, and later parent work proves that cleanup completed before it began. No distinct child cursor, child `Close`, staging, rollback, provisional publication or second settlement protocol is required. |
+| FE35 | A fragment composes admitted reads with `<Let>`, `<Each>`, `<If>`/`<Else>` and `<Switch>`/`<Case>` under ordinary rules, performing exactly the reads the taken paths name. A prohibited component in an untaken `<Else>` arm or an unreached `<Case>` refuses the whole fragment with zero reads, and the refusal names the selected authority rather than the branch. An `<Each>` item binding does not escape its body while `<Each as>` does, and a binding the body itself makes cannot be read after the construct. Neither arm of an `<If>` nor either `<Case>` of a `<Switch>` can read a binding another alternative produces; each such refusal performs no read. A `<Loop>` holding a valid `<Break>` and a `<PrintErrors>` region around an admitted read completes, proving those constructs reach their own handlers rather than a generic structural refusal. A prohibited component inside a paired `<Answer>`'s template children, and one in the ordinary `<Answers>` body, are each refused before any effect. An executable fence and an interpolated caller binding stay refused inside a construct. An ill-formed construct, one the generated root gives no context for, a stray branch and a `<Break>` outside every `<Loop>` are refused as structural mistakes rather than as withheld components. |
 | FE34 | One fragment binds Glob, File and canonical Syntax and renders chosen findings through Json; an unmatched search binds `[]`. A search written without `as`, a paired search, and a paired `<File>` under a `read` selection each refuse before any operation. An unusable pattern refuses with the ordinary sentence before the search, and a provider failure becomes one safe sentence naming no path. The search reaches the captured operation and the captured working directory while a nearer `API.Files` provider is never consulted. Bare generated Syntax reports the composition table plus the selected read vocabulary and not the unselected write table; named Syntax describes a component that stays unavailable. Canonical Syntax resolves at core's own identity, and a middleware replacement of that answer refuses. Core answers for that one protected name, so an entry hand-written at `<Evaluate>`'s canonical identity is refused as an answer nothing identified. `xmd run` and a `host="run"` child of `xmd test` state the same profile. |
 
 Each refusal case needs a negative control proving no producer, middleware
@@ -11260,7 +11315,7 @@ answer, request, file mutation, or other program effect occurred. The
 implementation tiers carrying the elaborated evidence are `GX` for the durable
 protocol, the ceiling table and the profile's entry rules, `CIV` for what a
 provider's stated identity is bound to, and `FT` for `<Fetch>` itself.
-FE31–FE34 join the existing Evaluate, generated-XMD and workflow-adapter tiers.
+FE31–FE35 join the existing Evaluate, generated-XMD and workflow-adapter tiers.
 Journal evidence discriminates occurrence isolation, ordinary
 persist-before-resume replay and projection cleanup ordering; existing
 structured-concurrency and invocation failure behavior remains unchanged. FE34's

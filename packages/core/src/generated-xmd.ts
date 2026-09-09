@@ -129,11 +129,32 @@ import { renderSegments } from "./render.ts";
 import { scanSegments } from "./scanner.ts";
 import { sourceDescription } from "./source-position.ts";
 import { RESERVED_STRUCTURAL } from "./structural.ts";
+// The ordinary source rules, read rather than reimplemented: a construct means
+// one thing whether a person wrote it or an Agent did.
+import {
+  answersViolations,
+  answerViolations,
+  breakViolations,
+  eachCaptureBinding,
+  eachItemBinding,
+  eachViolations,
+  ifConditionViolation,
+  ifPropsViolation,
+  ifStructure,
+  isBlankText,
+  letBindingName,
+  letViolations,
+  loopViolations,
+  printErrorsViolations,
+  switchStructure,
+} from "./structural-rules.ts";
+import type { StructuralViolation } from "./structural-rules.ts";
 import { installFormSelections, invocationForm } from "./invocation-identity.ts";
 import type { FormSelections, ProtectedBodies } from "./invocation-identity.ts";
 import type { ComponentInvocation } from "./invocation-identity.ts";
 import type { SyntaxReference } from "./syntax-reference.ts";
 import type {
+  ComponentElement,
   FunctionComponentDefinition,
   Json,
   JsonObject,
@@ -156,6 +177,7 @@ type Construct =
   | "content"
   | "form"
   | "construct"
+  | "structure"
   | "request";
 
 /**
@@ -180,6 +202,14 @@ const CONSTRUCT: Record<Construct, string> = {
     "a generated fragment writes self-closing a component this host admitted only in its " +
     "paired form.",
   construct: "a generated fragment carries a construct this evaluator does not admit.",
+  // Distinct from `component`, because the two are different mistakes. A
+  // structural construct is language rather than authority: writing one badly,
+  // or writing one where the generated root supplies no context for it, is a
+  // source error the candidate can correct — not a statement that the host
+  // withheld something.
+  structure:
+    "a generated fragment writes a structural construct the language does not allow where it " +
+    "was written.",
   request: "a generated fragment asks for a request this host did not admit.",
 };
 
@@ -1792,6 +1822,7 @@ function* walk(
   ceilings: ReadonlyMap<string, FetchRequest[]>,
   named: Planned[],
   scope: Set<string>,
+  lexical: Lexical = ROOT_LEXICAL,
 ): Operation<void> {
   for (const segment of segments) {
     switch (segment.type) {
@@ -1805,6 +1836,15 @@ function* walk(
         throw new Refusal("block");
       }
       case "component": {
+        // Structural names are language, not authority, so they are decided
+        // before the admitted table is consulted — exactly as expansion decides
+        // them before it resolves a component. A construct that reached the
+        // table lookup would be refused as a component the host withheld, which
+        // is a different and misleading thing to tell a candidate.
+        if (RESERVED_STRUCTURAL.has(segment.name)) {
+          yield* structural(segment, table, ceilings, named, scope, lexical);
+          break;
+        }
         const entries = table.get(segment.name);
         if (entries === undefined) {
           throw new Refusal("component");
@@ -1850,8 +1890,11 @@ function* walk(
         }
         named.push({ name: entry.name, identity: entry.identity, form, entry });
         // The children see this element's bindings but not its own `as`, and
-        // nothing they bind escapes back to its siblings.
-        yield* walk(segment.children, table, ceilings, named, new Set(scope));
+        // nothing they bind escapes back to its siblings. They are a component
+        // body rather than a transparent region, so the lexical facts reset:
+        // a `<Break>` written in a component's own body cannot break a loop
+        // that encloses the invocation.
+        yield* walk(segment.children, table, ceilings, named, new Set(scope), ROOT_LEXICAL);
         // After the element, because a component's result does not exist until
         // it has run: `<File as="x" />` beside `<Json value={x} />` is ordered,
         // and `<Json value={x} as="x" />` names nothing.
@@ -1868,6 +1911,311 @@ function* walk(
         throw new Refusal("construct");
       }
     }
+  }
+}
+
+/**
+ * The lexical facts a construct is decided against.
+ *
+ * Only what a construct's own rule actually consults. `<Break>` is legal
+ * because a `<Loop>` encloses it lexically — not because one is running — so
+ * that is a property of where it was written and travels down the walk.
+ */
+interface Lexical {
+  readonly insideLoop: boolean;
+}
+
+/**
+ * What encloses the fragment's own top level.
+ *
+ * A generated fragment is not a component body and not a value body: there is
+ * no caller content for `<Content>` to claim, no output region for `<Output>`
+ * to select, and no value body for `<Return>` to answer. It is also not inside
+ * a loop.
+ */
+const ROOT_LEXICAL: Lexical = Object.freeze({ insideLoop: false });
+
+/** A typed empty table, so an absent one reads as no expressions rather than as `{}`. */
+const NO_EXPRESSIONS: Record<string, string> = {};
+
+/**
+ * Every expression prop one element states, held to the fragment's own scope.
+ *
+ * Both readings of a brace, because the scanner splits them: a brace it could
+ * read as JSON becomes a resolved prop with the original token kept beside it,
+ * while anything else stays as expression text. Validating only the second
+ * would admit whatever the first silently rewrote — `{1e999}`, which JSON has
+ * no number for, resolves to `null` rather than refusing.
+ */
+function stated(segment: ComponentElement, scope: ReadonlySet<string>): void {
+  const expressions = [
+    ...Object.values(segment.expressions),
+    ...Object.values(segment.authoredExpressions ?? NO_EXPRESSIONS),
+  ];
+  for (const expression of expressions) {
+    try {
+      validateDataExpression(expression, scope);
+    } catch {
+      throw new Refusal("expression");
+    }
+  }
+}
+
+/** The structural names that only their own parent may consume. */
+const CONSUMED_BY_PARENT: ReadonlySet<string> = new Set(["Else", "Case", "Answer"]);
+
+/**
+ * The structural names the generated root supplies no context for.
+ *
+ * Each of these is ordinary language wherever its context exists, and a
+ * fragment is simply not that place. Refused as a structural mistake rather
+ * than as withheld authority, because nothing about the host's tables would
+ * make one of them work.
+ */
+const NO_GENERATED_CONTEXT: ReadonlySet<string> = new Set(["Content", "Output", "Return"]);
+
+/**
+ * One structural construct, held to the ordinary source rules.
+ *
+ * The rules come from `structural-rules.ts` — the same module ordinary
+ * validation and expansion read — so a construct means one thing wherever it is
+ * written. What is different here is only *when*: every branch, every `<Case>`,
+ * every body and every path the run will not take is walked before the
+ * fragment's first effect, so a prohibited component in an untaken branch
+ * refuses the whole fragment rather than being discovered after an earlier read
+ * already happened.
+ *
+ * What stays at runtime stays at runtime. A condition, a matcher, a `max` an
+ * expression computes and a read that fails are values, and preflight proves
+ * the source and the authority of every possible path without fabricating one.
+ */
+function* structural(
+  segment: ComponentElement,
+  table: ReadonlyMap<string, Entry[]>,
+  ceilings: ReadonlyMap<string, FetchRequest[]>,
+  named: Planned[],
+  scope: Set<string>,
+  lexical: Lexical,
+): Operation<void> {
+  const name = segment.name;
+  // Consumed by the construct that gives them meaning, so reaching one here is
+  // an element written where that construct is not.
+  if (CONSUMED_BY_PARENT.has(name) || NO_GENERATED_CONTEXT.has(name)) {
+    throw new Refusal("structure");
+  }
+
+  // The construct's own props, over the bindings in effect where it was
+  // written.
+  stated(segment, scope);
+
+  if (name === "Break") {
+    refuseStructure(breakViolations(segment, lexical.insideLoop));
+    return;
+  }
+
+  if (name === "If") {
+    refuseStructure(ifPropsViolation(segment));
+    if (!("condition" in segment.props) && !("condition" in segment.expressions)) {
+      refuseStructure(ifConditionViolation(segment));
+    }
+    const structure = ifStructure(segment);
+    refuseStructure(structure.violations);
+    // Both arms, whichever the condition would select, and each from the same
+    // incoming bindings. A prohibited component in the arm this run never
+    // enters still refuses the whole fragment.
+    yield* alternatives(
+      [{ body: structure.whenTrue }, { body: structure.whenFalse }],
+      table,
+      ceilings,
+      named,
+      scope,
+      lexical,
+    );
+    return;
+  }
+
+  if (name === "Switch") {
+    const structure = switchStructure(segment);
+    refuseStructure(structure.violations);
+    const branches = [...structure.matching, ...(structure.fallback ? [structure.fallback] : [])];
+    // Each branch is an alternative to the others, so each is checked from the
+    // bindings that reach the `<Switch>` — including its matcher, which is the
+    // branch's own expression and is validated whether or not the comparison
+    // would ever reach it.
+    yield* alternatives(
+      branches.map((branch) => ({ matcher: branch.element, body: branch.element.children })),
+      table,
+      ceilings,
+      named,
+      scope,
+      lexical,
+    );
+    return;
+  }
+
+  if (name === "Loop") {
+    refuseStructure(loopViolations(segment));
+    // Inside for the body alone: a `<Break>` after the loop is as stray as one
+    // written where no loop ever was.
+    yield* transparent(segment.children, table, ceilings, named, scope, {
+      ...lexical,
+      insideLoop: true,
+    });
+    return;
+  }
+
+  if (name === "PrintErrors") {
+    refuseStructure(printErrorsViolations(segment));
+    yield* transparent(segment.children, table, ceilings, named, scope, lexical);
+    return;
+  }
+
+  if (name === "Answers") {
+    refuseStructure(answersViolations(segment));
+    // Its `<Answer>` children are the matchers; everything else is the region
+    // whose elicitations they answer. Both are walked — the matchers because
+    // which one is chosen is a runtime question, and the body because it is
+    // ordinary segments.
+    const body: Segment[] = [];
+    for (const child of segment.children) {
+      if (child.type === "component" && child.name === "Answer") {
+        refuseStructure(answerViolations(child));
+        stated(child, scope);
+        yield* transparent(child.children, table, ceilings, named, scope, lexical);
+        continue;
+      }
+      if (!isBlankText(child)) {
+        body.push(child);
+      }
+    }
+    yield* transparent(body, table, ceilings, named, scope, lexical);
+    return;
+  }
+
+  if (name === "Let") {
+    refuseStructure(letViolations(segment));
+    yield* transparent(segment.children, table, ceilings, named, scope, lexical);
+    // After its own body, like a component's `as`: a `<Let>` cannot name the
+    // binding it is producing.
+    const bound = letBindingName(segment);
+    if (bound === undefined) {
+      throw new Refusal("structure");
+    }
+    scope.add(bound);
+    return;
+  }
+
+  if (name === "Each") {
+    refuseStructure(eachViolations(segment));
+    const item = eachItemBinding(segment);
+    if (item === undefined) {
+      throw new Refusal("structure");
+    }
+    // A fresh scope, seeded with what encloses the construct and the item this
+    // iteration names. Nothing the body binds survives it: the body runs once
+    // per item and may run no times at all, so a binding made inside it is not
+    // something a later sibling can be promised. What the construct offers its
+    // caller is the one capture it was asked for.
+    const body = new Set(scope);
+    body.add(item);
+    yield* walk(segment.children, table, ceilings, named, body, lexical);
+    const capture = eachCaptureBinding(segment);
+    if (capture !== undefined) {
+      scope.add(capture);
+    }
+    return;
+  }
+
+  // Every structural name is either handled above or refused above, and
+  // `RESERVED_STRUCTURAL` is derived from the declarations, so a name added
+  // there without a rule here arrives as an ordinary structural refusal rather
+  // than as silently admitted syntax.
+  throw new Refusal("structure");
+}
+
+/** One of several regions the run chooses between, with its own matcher. */
+interface Alternative {
+  /** The element carrying the branch's own expression, when it has one. */
+  readonly matcher?: ComponentElement;
+  readonly body: readonly Segment[];
+}
+
+/**
+ * Regions the run chooses *between*, checked from one incoming snapshot.
+ *
+ * The alternatives of an `<If>` or a `<Switch>` are mutually exclusive, so none
+ * of them may be checked against bindings another one produced: doing that in
+ * source order would let the second arm read a binding only the first makes,
+ * and admit a fragment whose second arm cannot run. Each is therefore walked
+ * from the bindings that reach the construct.
+ *
+ * What they may all contribute is what comes *after*. Once every alternative
+ * has been proved, the union of what they produce becomes visible past the
+ * construct — the accepted runtime-dependent behavior, where reading a binding
+ * only one alternative makes fails when the value is needed rather than at
+ * preflight.
+ */
+function* alternatives(
+  branches: readonly Alternative[],
+  table: ReadonlyMap<string, Entry[]>,
+  ceilings: ReadonlyMap<string, FetchRequest[]>,
+  named: Planned[],
+  scope: Set<string>,
+  lexical: Lexical,
+): Operation<void> {
+  const incoming: ReadonlySet<string> = new Set(scope);
+  const outgoing = new Set<string>();
+  for (const branch of branches) {
+    if (branch.matcher !== undefined) {
+      stated(branch.matcher, incoming);
+    }
+    const region = new Set(incoming);
+    yield* walk(branch.body, table, ceilings, named, region, lexical);
+    for (const bound of region) {
+      if (!incoming.has(bound)) {
+        outgoing.add(bound);
+      }
+    }
+  }
+  for (const bound of outgoing) {
+    scope.add(bound);
+  }
+}
+
+/**
+ * A region that runs in the environment enclosing it.
+ *
+ * `<If>` arms, `<Case>` bodies, `<Loop>` and `<PrintErrors>` bodies and a
+ * `<Let>` body are transparent: expansion expands them against the same live
+ * environment, so a binding one of them produces is visible after the construct
+ * and preflight says so too. Which arm actually ran is a runtime question, and
+ * a fragment that reads a binding only one arm produces fails where it always
+ * would — when the value is needed.
+ */
+function* transparent(
+  segments: readonly Segment[],
+  table: ReadonlyMap<string, Entry[]>,
+  ceilings: ReadonlyMap<string, FetchRequest[]>,
+  named: Planned[],
+  scope: Set<string>,
+  lexical: Lexical,
+): Operation<void> {
+  const region = new Set(scope);
+  yield* walk(segments, table, ceilings, named, region, lexical);
+  for (const bound of region) {
+    scope.add(bound);
+  }
+}
+
+/** Refuse when the ordinary source rules found anything wrong. */
+function refuseStructure(
+  found: StructuralViolation | readonly StructuralViolation[] | undefined,
+): void {
+  if (found === undefined) {
+    return;
+  }
+  if (Array.isArray(found) ? found.length > 0 : true) {
+    throw new Refusal("structure");
   }
 }
 

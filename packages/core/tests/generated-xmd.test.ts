@@ -435,7 +435,13 @@ describe("Tier GX — the complete fragment is read first", () => {
     ["a frontmatter read", "value {props.token}\n", "interpolation"],
     ["a malformed result binding", `<Fetch url="${URL_ONE}" as="not a name" />\n`, "binding name"],
     ["an unknown component", "<Unknown />\n", "did not admit"],
-    ["a structural construct", "<If test={true}>x</If>\n", "did not admit"],
+    // Structural constructs are the language rather than the host's tables, so
+    // an ill-formed one is refused as the source mistake it is — `test` is not
+    // a prop `<If>` has — rather than as a component the host withheld.
+    ["an ill-formed structural construct", "<If test={true}>x</If>\n", "structural construct"],
+    ["a construct the generated root gives no context", "<Content />\n", "structural construct"],
+    ["a stray branch", "<Else>x</Else>\n", "structural construct"],
+    ["a break outside every loop", "<Break />\n", "structural construct"],
     ["an unadmitted root component", '<Dir path="/etc" />\n', "did not admit"],
     ["an unadmitted repository component", '<Repository name="api" />\n', "did not admit"],
     ["an unadmitted worktree component", '<Worktree name="fix" />\n', "did not admit"],

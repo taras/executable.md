@@ -1602,7 +1602,37 @@ Availability of File does not admit its paired write form. Describing a
 component neither imports it nor grants its effects.
 
 Bindings and structural constructs are engine-owned language syntax and require
-no profile entry. A trusted host may add another pure component only by placing
+no profile entry. Every built-in construct is available inside a generated
+fragment with its ordinary semantics — `Content`, `Output`, `Return`, `Let`,
+`Each`, `If`, `Else`, `Switch`, `Case`, `Loop`, `Break`, `PrintErrors`,
+`Answers` and `Answer` — decided by the same source rules ordinary validation
+and expansion read, so a construct means one thing whether a person or an Agent
+wrote it. Preflight dispatches a reserved name to those rules before the
+admitted table is consulted, which is why a construct is never reported as a
+component the host withheld; a construct the generated root supplies no context
+for, a stray branch, and a `<Break>` outside every `<Loop>` fail with their
+ordinary structural rule instead.
+
+Preflight walks every branch, every `<Case>`, every iteration body and every
+nested region before the first effect, so a prohibited component in a path the
+run never takes refuses the whole fragment with no read performed, while every
+effectful component a construct reaches stays held to the selected authority.
+What a value decides stays at runtime: a condition, a matcher, a computed `max`
+and a failing read are evaluated where they always were.
+
+Binding ownership is stated per region. Component children do not escape. An
+`<Each>` body is a fresh scope holding the enclosing bindings and the item, and
+nothing it binds survives it, because that body may run no times at all — only
+`<Each as>` joins the enclosing scope. The alternatives of an `<If>` and the
+`<Case>` branches of a `<Switch>` are checked from one incoming snapshot, so no
+alternative supplies a binding to another; the union of what they can produce
+becomes visible afterwards, which keeps reading a binding only one arm makes a
+runtime failure rather than a preflight refusal. `<Loop>`, `<PrintErrors>` and
+`<Let>` bodies read and write the enclosing environment. Constructs keep their
+exact spelling in the retained source, never join the retained named-component
+list, and change no record version.
+
+A trusted host may add another pure component only by placing
 its exact definition and stable identity in the composition table captured
 before execution. It is not inferred to be pure from its name, documentation or
 absence from an effect table. Names and forms across composition and effect
