@@ -153,14 +153,21 @@ export {
   syntaxReadEntry,
 } from "./src/evaluation-profile.ts";
 /**
- * Which generated failure a trusted host may offer the candidate another chance
- * at — see `src/generated-request-refusal.ts`.
+ * Whether a failure is core refusing the generated request itself — see
+ * `src/generated-request-refusal.ts`.
  *
- * A reader, and deliberately not a marker: a host asks whether core classified a
- * failure as the candidate's own mistake, and cannot classify one itself. An
- * unmarked failure is terminal, so a host that recovers on this answer recovers
- * exactly the class core decided, and never stale history, a revoked profile, a
- * provider that threw, a secret rejection or a teardown failure.
+ * One fact, and nothing beyond it. Core states that the request's own text was
+ * refused: a construct it may not write, a form or prop written wrongly, a name
+ * that is not available here, an ordinary captured read reporting `Err`. It
+ * says nothing about whether that is correctable, whether a host may ask again,
+ * or whether another turn should happen. Those are the caller's decisions, and
+ * a host that reads this answer is the one making them.
+ *
+ * A reader, and deliberately not a marker: a host asks what core refused and
+ * cannot state a refusal itself. Everything core did not refuse this way answers
+ * `undefined` — stale history, a revoked profile, a provider that threw, a
+ * secret rejection, a teardown failure — so an answer here is never one of those
+ * wearing the same shape.
  */
 export { generatedRequestRefusal } from "./src/generated-request-refusal.ts";
 /**

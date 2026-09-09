@@ -775,10 +775,13 @@ function classifyPlanResponseComponent(): IdentityComponent {
  * This is the only place in the workflow that turns a failure back into another
  * turn, and it is narrow on purpose. `tryContent()` hands back the child's
  * *original* failure rather than a boundary's account of it, which is what lets
- * this ask core whether that exact failure is one the candidate can correct.
- * An unmarked failure is rethrown unchanged: a revoked profile, stale history, a
- * provider that threw, a secret rejection and a teardown failure all stop
- * authorship here, exactly as they would without this wrapper.
+ * this ask core one factual question: was that failure core refusing the
+ * generated request itself? Core answers only that. Deciding that a refused
+ * request earns the agent another turn is this workflow's policy, and this is
+ * where it is made. An unmarked failure is rethrown unchanged: a revoked
+ * profile, stale history, a provider that threw, a secret rejection and a
+ * teardown failure all stop authorship here, exactly as they would without this
+ * wrapper.
  *
  * A refusal discards whatever the fragment had rendered before it failed. Half
  * a finding is not a finding, and sending one would tell the next turn that a

@@ -457,7 +457,7 @@ function readBody(files: FragmentFileAccess, cursor: DirectoryCursor) {
     const requested = String(props.path);
     const text = yield* files.readTextFile({ cwd: cursor.current, path: requested });
     if (!text.ok) {
-      throw candidate(refusal(requested, "read"));
+      throw refusedRequest(refusal(requested, "read"));
     }
     return text.value;
   };
@@ -478,11 +478,11 @@ function globBody(files: FragmentFileAccess, cursor: DirectoryCursor) {
   return function* search(props: Record<string, Json>): Operation<string[]> {
     const include = globPatterns("include", props.include);
     if (!include.ok) {
-      throw candidate(include.error.message);
+      throw refusedRequest(include.error.message);
     }
     const exclude = globPatterns("exclude", props.exclude);
     if (!exclude.ok) {
-      throw candidate(exclude.error.message);
+      throw refusedRequest(exclude.error.message);
     }
     const found = yield* files.globFiles({
       cwd: cursor.current,
@@ -490,7 +490,7 @@ function globBody(files: FragmentFileAccess, cursor: DirectoryCursor) {
       exclude: exclude.value,
     });
     if (!found.ok) {
-      throw candidate(
+      throw refusedRequest(
         globFailure(parseFilesFailure(found.error), [...include.value, ...exclude.value]),
       );
     }
@@ -503,7 +503,7 @@ function deleteBody(files: FragmentFileAccess, cursor: DirectoryCursor) {
     const requested = String(props.path);
     const removed = yield* files.deleteFile({ cwd: cursor.current, path: requested });
     if (!removed.ok) {
-      throw candidate(refusal(requested, "delete"));
+      throw refusedRequest(refusal(requested, "delete"));
     }
     return "";
   };
@@ -517,7 +517,7 @@ function writeBody(files: FragmentFileAccess, cursor: DirectoryCursor) {
     // destination is refused renders nothing at all.
     const admitted = yield* files.checkFilePath({ cwd, path: requested });
     if (!admitted.ok) {
-      throw candidate(refusal(requested, "write"));
+      throw refusedRequest(refusal(requested, "write"));
     }
     const text = yield* rendered(requested);
     // Resolved against the directory this element was written in, captured
@@ -525,7 +525,7 @@ function writeBody(files: FragmentFileAccess, cursor: DirectoryCursor) {
     // move where this write lands.
     const written = yield* files.writeTextFile({ cwd, path: requested, content: text });
     if (!written.ok) {
-      throw candidate(refusal(requested, "write"));
+      throw refusedRequest(refusal(requested, "write"));
     }
     return "";
   };
@@ -540,7 +540,7 @@ function ensureBody(files: FragmentFileAccess, cursor: DirectoryCursor) {
     // nobody chose.
     const made = yield* files.ensureDirectory({ cwd: enclosing, path: requested });
     if (!made.ok) {
-      throw candidate(refusal(requested, "create"));
+      throw refusedRequest(refusal(requested, "create"));
     }
     // And it scopes what it renders, which is what makes `<File path="out.md">`
     // inside it mean this directory's `out.md`. Scoped through the evaluation's
@@ -635,15 +635,19 @@ function refusal(path: string, verb: string): string {
 }
 
 /**
- * A refusal the fragment's own text can be corrected for.
+ * A refusal of what the fragment asked for.
  *
  * An ordinary provider `Err` — a file that is not there, a directory that
  * cannot be searched — and a pattern or form the fragment wrote wrongly are all
- * things the candidate that produced the text can try again at. The revocation
- * refusal is deliberately not one of them: an operation whose execution has
- * ended is this run being over, and no rewrite of the text changes that.
+ * refusals of the request itself. The revocation refusal is deliberately not
+ * one of them: an operation whose execution has ended is this run being over,
+ * and what the fragment asked for is not what was wrong with it.
+ *
+ * The distinction is the whole of what this states. What a caller does with a
+ * refused request — ask again, stop, report it — is that caller's decision, and
+ * nothing here holds an opinion about it.
  */
-function candidate(message: string): FragmentCapabilityError {
+function refusedRequest(message: string): FragmentCapabilityError {
   return markGeneratedRequestRefusal(new FragmentCapabilityError(message), message);
 }
 

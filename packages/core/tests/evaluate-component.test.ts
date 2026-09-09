@@ -1768,7 +1768,7 @@ describe("Tier FE34 — the shared read profile", () => {
 
     // The sharper one: a symbols provider that throws, having *named its own
     // error* the way core's selection refusal reads. Infrastructure failing is
-    // not a mistake the candidate can correct, and the identity core states is
+    // not a refusal of what the request asked for, and the identity core states is
     // established only around the selection it performs itself — after this
     // provider has already returned — so this stays terminal.
     let forged: unknown;
@@ -1834,7 +1834,7 @@ describe("Tier FE34 — the shared read profile", () => {
 
   it("FE34: a provider that throws is terminal, while its ordinary Err is not", function* () {
     // The ordinary refusal first: a provider answering `Err` for a file that is
-    // not there is a mistake the fragment can correct.
+    // not there is a refusal of what the fragment asked for.
     const absent = recordedFiles({});
     let ordinary: unknown;
     try {
@@ -1928,18 +1928,18 @@ describe("Tier FE34 — the shared read profile", () => {
     expect(String(caught)).toContain("cleanup failed");
 
     // The discriminating pair: the same fragment without the failing teardown
-    // *is* recoverable, so the row above is about cleanup winning rather than
+    // *is* classified, so the row above is about cleanup winning rather than
     // about this selection never being classified.
-    let recoverable: unknown;
+    let classified: unknown;
     try {
       yield* run(
         `<Evaluate text={'<Syntax names={["NoSuchComponent"]} />\\n'} allow={["read"]} />\n`,
         [shared(files)],
       );
     } catch (error) {
-      recoverable = error;
+      classified = error;
     }
-    expect(generatedRequestRefusal(recoverable)).toContain("NoSuchComponent");
+    expect(generatedRequestRefusal(classified)).toContain("NoSuchComponent");
   });
 
   it("FE34: core answers for Syntax alone, so Evaluate cannot be admitted at its identity", function* () {
