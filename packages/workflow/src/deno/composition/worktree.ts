@@ -23,7 +23,7 @@ import {
   type WorktreeRecord,
 } from "../../composition/records.ts";
 import type { StoredRepository } from "../workspace/repositories.ts";
-import type { PrivateWorkspaceTransaction } from "../workspace/private.ts";
+import type { WorkspaceAttachmentView } from "../../workspace/effects.ts";
 import {
   addWorktree,
   checkoutReadable,
@@ -189,7 +189,7 @@ export function* performWorktree(
 }
 
 export function* prepareWorktreeAttachment(
-  workspace: PrivateWorkspaceTransaction,
+  workspace: WorkspaceAttachmentView,
   root: string,
   record: WorktreeRecord,
   subject: string,

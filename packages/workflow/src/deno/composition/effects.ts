@@ -21,7 +21,7 @@ import {
   RepositoryCompositionProtocolError,
 } from "../../composition/errors.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
-import { workspaceEffectsFor } from "../../workspace/effects.ts";
+import { workspaceHostFor } from "../../workspace/effects.ts";
 import type { WorkspaceFilesystem } from "../../workspace/filesystem.ts";
 import { WorkflowStorageError } from "../../storage/errors.ts";
 import { savepoint } from "../transaction.ts";
@@ -158,7 +158,7 @@ function* compositionEffect(
     metadata: WorkspaceMetadata,
   ) => Operation<CompositionOutcome>,
 ): Workflow<unknown> {
-  return yield workspaceEffectsFor(database).create(description, perform);
+  return yield workspaceHostFor(database).create(description, perform);
 }
 
 /**

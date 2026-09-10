@@ -45,15 +45,17 @@ import {
   type Result as DurableResult,
   serializeError,
 } from "@executablemd/durable-streams";
-import { ensure, type Operation, scoped } from "effection";
+import { ensure, Err, Ok, type Operation, type Result, scoped } from "effection";
 import type { WorkflowRunDatabase, WorkflowRunTransaction } from "../storage/api.ts";
 import { WorkflowTransactionError } from "../storage/errors.ts";
 import type { WorkspaceFilesystem } from "../workspace/filesystem.ts";
 import { isJournaledEffectFailure } from "../workspace/failure.ts";
 import type { WorkspaceMetadata } from "../workspace/metadata.ts";
 import type { AgentSessions } from "../storage/agent-session.ts";
+import type { WorkspaceAttachmentView } from "../workspace/effects.ts";
 import { activeWorkspaceRoute, type WorkspaceRoute } from "./database.ts";
 import { createInvocationMappings } from "./mappings.ts";
+import type { RetainedMapping } from "./publication.ts";
 import { Transaction } from "../workspace/savepoint.ts";
 import {
   type Attempt,
@@ -353,6 +355,110 @@ export function createRemoteWorkspaceEffect<T extends Json>(
   // created against one run and coordinated by another that holds it.
   workspaceEffectOwners.claim(executionIdentity, bound);
   return createOwnedDurableWorkspaceOperation(description, execute, executionIdentity);
+}
+
+/**
+ * Read this run's retained Workspace for one ephemeral attachment.
+ *
+ * The two things an attachment may see, over a tree this invocation owns. The
+ * root is materialized here and the materialization is this scope's, so the
+ * export the body takes out of it survives and the tree does not: native Git
+ * runs afterwards, against files, with no owner read and no transaction held
+ * open across it.
+ *
+ * Nothing durable happens. No root is published, no mapping is staged, and the
+ * owner is asked for one coherent snapshot and the content that snapshot names.
+ */
+export function readRemoteWorkspace<T>(
+  run: RemoteRun,
+  body: (view: WorkspaceAttachmentView) => Operation<T>,
+): Operation<Result<T>> {
+  return scoped(function* () {
+    const bound = bindings.of(run);
+    if (bound === undefined) {
+      unavailable("this is not a remote run this build opened.");
+    }
+    const { runtime } = bound;
+    const reject = (reason: string): never => unavailable(reason);
+    try {
+      const snapshot = yield* runtime.reads.invocationSnapshot();
+      const materialization = yield* useMaterialization(
+        runtime.files,
+        runtime.trees,
+        runtime.reads,
+        snapshot.workspaceRootId,
+        reject,
+      );
+      // Live for as long as this read is. An attachment that kept the
+      // filesystem would be holding a directory this scope is about to remove.
+      let live = true;
+      yield* ensure(() => {
+        live = false;
+      });
+      const authorize = (): void => {
+        if (!live) {
+          unavailable("this remote Workspace read is over.");
+        }
+      };
+      const mappings = createInvocationMappings(snapshot, authorize);
+      const filesystem = runtime.createFilesystem(materialization.at, authorize);
+      return Ok(yield* body({ filesystem, metadata: mappings.metadata }));
+    } catch (error) {
+      return Err(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+}
+
+/**
+ * Read and commit this run's Agent-session mappings, in one transaction.
+ *
+ * Two halves that must not be confused. The body runs on the runner, where the
+ * provider is, and the mappings it reads are the ones the owner admitted; what
+ * it changed is collected as bounded deltas and submitted to the owner, which
+ * revalidates the subject under its own transaction and commits all of them or
+ * none. No provider call happens inside that transaction — there is no
+ * transaction open while the body runs — and a body that failed or was
+ * cancelled sends nothing at all.
+ */
+export function transactRemoteAgentSessions<T>(
+  run: RemoteRun,
+  body: (sessions: AgentSessions) => Operation<T>,
+): Operation<Result<T>> {
+  return scoped(function* () {
+    const bound = bindings.of(run);
+    if (bound === undefined) {
+      unavailable("this is not a remote run this build opened.");
+    }
+    const { runtime, database } = bound;
+    let value: T;
+    let deltas: readonly RetainedMapping[];
+    try {
+      const snapshot = yield* runtime.reads.invocationSnapshot();
+      const mappings = createInvocationMappings(snapshot, () => undefined);
+      // The body first, and outside any transaction: establishing or asserting
+      // a conversation is provider work, and an owner transaction is not a
+      // place a provider call may happen.
+      value = yield* body(mappings.agentSessions);
+      deltas = mappings.deltas();
+    } catch (error) {
+      return Err(error instanceof Error ? error : new Error(String(error)));
+    }
+    if (deltas.length === 0) {
+      // Nothing was staged, so there is nothing for the owner to decide.
+      return Ok(value);
+    }
+    // One transaction that carries mappings and nothing else: no event, no
+    // publication, no answer. The owner revalidates each subject against what
+    // it holds and commits every delta or refuses them together.
+    return yield* database.transact(function* (transaction) {
+      const route = yield* activeWorkspaceRoute(database, transaction);
+      if (route === undefined) {
+        unavailable("this transaction is not the one this run's mappings may be retained in.");
+      }
+      route.enlistMappings(deltas);
+      return value;
+    });
+  });
 }
 
 function coordinator(run: BoundRun): WorkspaceCoordinationProvider {

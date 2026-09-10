@@ -13,7 +13,7 @@
  * not either half against a fixture of the other.
  */
 
-import { env, runInDurableObject } from "cloudflare:test";
+import { env, evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 import { run, scoped, until, type Operation } from "effection";
 import { remoteOwnerClient } from "../../src/cloudflare/configured.ts";
@@ -277,7 +277,7 @@ describe("the owner's request boundary", () => {
     expect(await on(stubFor(runId), (owner) => owner.holders())).toBe(0);
   });
 
-  it("keeps the upgraded socket authoritative between separate object accesses", async () => {
+  it("keeps the upgraded socket authoritative across a real eviction", async () => {
     const runId = runOf();
     const built = await client(runId);
     const outcome = await run(function* (): Operation<Record<string, unknown>> {
@@ -289,12 +289,13 @@ describe("the owner's request boundary", () => {
         // The acquisition is registered on the socket's attachment, which is
         // what an evicted object reads back — nothing about it is in memory.
         const before = yield* until(on(stubFor(runId), (owner) => owner.holders()));
-        // Read again through a separate access to the object. Nothing about
-        // the acquisition is in this instance's memory — it is the socket's
-        // serialized attachment, which is the same mechanism a hibernated
-        // object restores from — and the socket the runner still holds is the
-        // one that has to remain authoritative either way.
+        // The object is really evicted, with this client's socket still open.
+        // Nothing about the acquisition is in the instance that comes back: it
+        // is the socket's serialized attachment, which is what a hibernated
+        // object restores from.
+        yield* until(evictDurableObject(stubFor(runId)));
         const evicted = yield* until(on(stubFor(runId), (owner) => owner.holders()));
+        // The same client, over the same link, after that eviction.
         const opened = yield* admitted.value.link.open(runId, null);
         return {
           admitted: true,

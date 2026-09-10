@@ -45,13 +45,21 @@ import { installRemoteInputDelivery } from "../remote/delivery.ts";
 import { useRemoteLifecycleReads } from "../remote/inspection.ts";
 import {
   createRemoteWorkspaceEffect,
+  readRemoteWorkspace,
+  transactRemoteAgentSessions,
   useRemoteRun,
   useRemoteWorkspaceEffects,
   withRemoteWorkspaceEffects,
 } from "../remote/workspace.ts";
-import { useWorkspaceEffects, type WorkspaceMutation } from "../workspace/effects.ts";
+import {
+  useWorkspaceHost,
+  type WorkspaceAttachmentView,
+  type WorkspaceMutation,
+} from "../workspace/effects.ts";
+import type { AgentSessions } from "../storage/agent-session.ts";
 import { withDocumentCapabilities } from "./workspace/host.ts";
-import type { WorkflowWorkspaceOptions } from "./workspace/host.ts";
+import { permittedWorkspaceOptions } from "./workspace/published.ts";
+import type { WorkflowWorkspaceOptions } from "./workspace/published.ts";
 import { WorkflowRequestError } from "../storage/errors.ts";
 import { installRemoteWorkflowLifecycle } from "./remote-host.ts";
 import { createRemoteWorkspaceFilesystem } from "./remote-workspace-files.ts";
@@ -89,6 +97,13 @@ export interface RemoteWorkflowRunnerOptions {
    * here is read from a flag, an environment variable, a prop or a global, and
    * an absent member installs the capability's unconfigured behavior rather
    * than a different one.
+   *
+   * The published options, not the broad internal ones. A substituted
+   * repository host, a Git-host transport or an invocation observer is a seam
+   * through which a credential this run acquires would become visible to
+   * whoever supplied it, and this is a public export: what it accepts is what
+   * a *host* owns, and the projection into the internal shape is explicit
+   * rather than a spread of whatever arrived.
    */
   readonly capabilities?: WorkflowWorkspaceOptions;
 }
@@ -178,7 +193,7 @@ export function* useRemoteWorkflowRunner(
       // together because either half alone is wrong: the rules without the
       // binding would reach whatever filesystem an entrypoint left in scope,
       // and the binding without the rules would be a coordinator nothing asks.
-      yield* useWorkspaceEffects(database, {
+      yield* useWorkspaceHost(database, {
         create<Value extends Json>(
           description: EffectDescription,
           mutate: WorkspaceMutation<Value>,
@@ -187,10 +202,26 @@ export function* useRemoteWorkflowRunner(
             mutate(filesystem, metadata),
           );
         },
+
+        read<Value>(
+          body: (view: WorkspaceAttachmentView) => Operation<Value>,
+        ): Operation<Result<Value>> {
+          return readRemoteWorkspace(run, body);
+        },
+
+        sessions<Value>(
+          body: (sessions: AgentSessions) => Operation<Value>,
+        ): Operation<Result<Value>> {
+          return transactRemoteAgentSessions(run, body);
+        },
       });
       return yield* withRemoteWorkspaceEffects(
         run,
-        withDocumentCapabilities(database, operation, options.capabilities ?? {}),
+        withDocumentCapabilities(
+          database,
+          operation,
+          permittedWorkspaceOptions(options.capabilities ?? {}),
+        ),
       );
     },
   };

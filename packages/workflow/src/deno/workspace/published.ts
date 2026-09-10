@@ -26,7 +26,10 @@ import type { GitHubIssuesOptions } from "../issue/github.ts";
 import type { GitHubPullRequestsOptions } from "../composition/pull-request-reads.ts";
 import type { HelperAssembly } from "../composition/credential-helper.ts";
 import { withWorkflowWorkspace as withBroadWorkspace } from "./host.ts";
-import type { WorkflowAgentInstaller } from "./host.ts";
+import type {
+  WorkflowAgentInstaller,
+  WorkflowWorkspaceOptions as BroadWorkflowWorkspaceOptions,
+} from "./host.ts";
 
 /**
  * What a host may configure, and the whole of it.
@@ -62,16 +65,19 @@ export interface WorkflowWorkspaceOptions {
   readonly agent?: WorkflowAgentInstaller;
 }
 
-/** Run `operation` with this run's Workspace attached, as a host installs it. */
-export function withWorkflowWorkspace<T>(
-  database: WorkflowRunDatabase,
-  operation: Operation<T>,
-  options: WorkflowWorkspaceOptions = {},
-): Operation<T> {
-  // Projected member by member. A spread would carry whatever else a caller put
-  // on the object, and reading an unknown property is how a getter somebody
-  // else wrote gets to run.
-  return withBroadWorkspace(database, operation, {
+/**
+ * The broad options these narrow ones permit, and nothing else.
+ *
+ * Member by member, because a spread would carry whatever else a caller put on
+ * the object and reading an unknown property is how a getter somebody else
+ * wrote gets to run. Shared with the runner assembly, which projects the same
+ * published options into the same internal shape: two projections of one
+ * boundary would eventually differ, and the difference would be a seam.
+ */
+export function permittedWorkspaceOptions(
+  options: WorkflowWorkspaceOptions,
+): BroadWorkflowWorkspaceOptions {
+  return {
     ...(options.gitHubIssues === undefined ? {} : { gitHubIssues: options.gitHubIssues }),
     ...(options.gitHubPullRequests === undefined
       ? {}
@@ -89,5 +95,14 @@ export function withWorkflowWorkspace<T>(
         }),
     ...(options.helper === undefined ? {} : { helper: options.helper }),
     ...(options.agent === undefined ? {} : { agent: options.agent }),
-  });
+  };
+}
+
+/** Run `operation` with this run's Workspace attached, as a host installs it. */
+export function withWorkflowWorkspace<T>(
+  database: WorkflowRunDatabase,
+  operation: Operation<T>,
+  options: WorkflowWorkspaceOptions = {},
+): Operation<T> {
+  return withBroadWorkspace(database, operation, permittedWorkspaceOptions(options));
 }

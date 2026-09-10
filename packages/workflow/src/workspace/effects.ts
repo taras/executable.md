@@ -21,12 +21,13 @@
  * never what says a database, journal or publication target belongs to a run.
  */
 
-import { ensure, type Operation } from "effection";
+import { ensure, type Operation, type Result } from "effection";
 import type { DurableEffect, EffectDescription, Json } from "@executablemd/durable-streams";
 import type { WorkflowRunDatabase } from "../storage/api.ts";
 import { WorkflowTransactionError } from "../storage/errors.ts";
 import type { WorkspaceFilesystem } from "./filesystem.ts";
 import type { WorkspaceMetadata } from "./metadata.ts";
+import type { AgentSessions } from "../storage/agent-session.ts";
 
 /**
  * What a Workspace mutation is given.
@@ -40,8 +41,29 @@ export type WorkspaceMutation<T extends Json> = (
   metadata: WorkspaceMetadata,
 ) => Operation<T>;
 
-/** What a host contributes: one effect for one mutation of one run. */
-export interface WorkspaceEffectBinding {
+/**
+ * What an ephemeral attachment is allowed to see.
+ *
+ * A checkout is rebuilt from the Workspace and proved to be the retained one on
+ * every partial execution, and doing that needs two things: the bytes, and the
+ * record that names them. It needs nothing else — no publication, no capture,
+ * no restore, no root selection — so this is the whole of what it is handed,
+ * and a host cannot hand it more by supplying a wider object.
+ */
+export interface WorkspaceAttachmentView {
+  readonly filesystem: WorkspaceFilesystem;
+  readonly metadata: WorkspaceMetadata;
+}
+
+/**
+ * What a host contributes for one run, and the whole of it.
+ *
+ * Three things, because a document reaches exactly three kinds of Workspace
+ * work: the effect a mutation becomes, the read an ephemeral attachment needs,
+ * and the transaction an Agent-session mapping is retained by. Everything else
+ * the rules do is arithmetic above these.
+ */
+export interface WorkspaceHostBinding {
   /**
    * The effect that performs this mutation.
    *
@@ -53,18 +75,37 @@ export interface WorkspaceEffectBinding {
     description: EffectDescription,
     mutate: WorkspaceMutation<T>,
   ): DurableEffect<T>;
+  /**
+   * Read this run's retained Workspace for one ephemeral attachment.
+   *
+   * Nothing durable happens here: a checkout is exported to a host directory
+   * and proved, and the Workspace is left exactly as it was found. The scope
+   * this opens closes before native work runs against what it exported, so no
+   * transaction and no owner read is held across a Git process.
+   */
+  read<T>(body: (view: WorkspaceAttachmentView) => Operation<T>): Operation<Result<T>>;
+  /**
+   * Read and commit this run's Agent-session mappings, in one transaction.
+   *
+   * The narrow half of the run's retained state, and the only half a host
+   * installing an Agent profile needs. A conversation and the row naming it are
+   * one fact, so the mapping this returns is retained by the run's own owner or
+   * by nothing — and the provider that establishes the conversation is never
+   * called from inside that transaction.
+   */
+  sessions<T>(body: (sessions: AgentSessions) => Operation<T>): Operation<Result<T>>;
 }
 
 const bindings = (() => {
-  const held = new WeakMap<WorkflowRunDatabase, WorkspaceEffectBinding>();
+  const held = new WeakMap<WorkflowRunDatabase, WorkspaceHostBinding>();
   return {
-    attach(database: WorkflowRunDatabase, binding: WorkspaceEffectBinding): void {
+    attach(database: WorkflowRunDatabase, binding: WorkspaceHostBinding): void {
       held.set(database, binding);
     },
     detach(database: WorkflowRunDatabase): void {
       held.delete(database);
     },
-    of(database: WorkflowRunDatabase): WorkspaceEffectBinding | undefined {
+    of(database: WorkflowRunDatabase): WorkspaceHostBinding | undefined {
       return held.get(database);
     },
   };
@@ -77,13 +118,23 @@ const bindings = (() => {
  * ends, however it ends — so an effect created after the attachment is over
  * finds nothing rather than a stale filesystem or a closed transaction.
  */
-export function* useWorkspaceEffects(
+export function* useWorkspaceHost(
   database: WorkflowRunDatabase,
-  binding: WorkspaceEffectBinding,
+  binding: WorkspaceHostBinding,
 ): Operation<void> {
+  // What was bound before, restored when this scope ends. A handle's own host
+  // binds one when it opens the handle at all — reading a mapping needs no
+  // attachment — and an attachment binds a narrower one for as long as the
+  // document runs. Detaching to nothing would leave the handle unusable for
+  // the rest of its own life.
+  const outer = bindings.of(database);
   bindings.attach(database, binding);
   yield* ensure(() => {
-    bindings.detach(database);
+    if (outer === undefined) {
+      bindings.detach(database);
+      return;
+    }
+    bindings.attach(database, outer);
   });
 }
 
@@ -95,7 +146,7 @@ export function* useWorkspaceEffects(
  * agreed to perform, and performing it against whatever filesystem happens to
  * be in scope is the one outcome that must not be possible.
  */
-export function workspaceEffectsFor(database: WorkflowRunDatabase): WorkspaceEffectBinding {
+export function workspaceHostFor(database: WorkflowRunDatabase): WorkspaceHostBinding {
   const binding = bindings.of(database);
   if (binding === undefined) {
     throw new WorkflowTransactionError(
@@ -104,4 +155,20 @@ export function workspaceEffectsFor(database: WorkflowRunDatabase): WorkspaceEff
     );
   }
   return binding;
+}
+
+/**
+ * Read and commit this run's Agent-session mappings, wherever it lives.
+ *
+ * The same name and the same narrow behavior a host installing an Agent profile
+ * has always used, answered by whichever host attached this exact handle. A
+ * conversation and the row naming it are one fact, so what the body stages is
+ * retained by the run's own owner or by nothing — and no provider call happens
+ * inside that transaction.
+ */
+export function transactAgentSessions<T>(
+  database: WorkflowRunDatabase,
+  body: (sessions: AgentSessions) => Operation<T>,
+): Operation<Result<T>> {
+  return workspaceHostFor(database).sessions(body);
 }

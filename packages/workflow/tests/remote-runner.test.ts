@@ -17,18 +17,10 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { Ok, type Operation, scoped, until } from "effection";
-import { mkdir, writeFile } from "node:fs/promises";
-import { collect, execute, inlineSource } from "@executablemd/core";
-import { API, useHostFiles } from "@executablemd/runtime";
-import type { HostFilesEvent } from "@executablemd/runtime";
+import { Ok, type Operation, scoped, sleep, spawn, suspend } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import { encodeBase64 } from "../src/cloudflare/encoding.ts";
 import { cloudflareReadLink, cloudflareRunLink } from "../src/cloudflare/client.ts";
 import { cloudflareLifecycleLink } from "../src/cloudflare/lifecycle-link.ts";
-import { type OwnerSocket, type SocketListener, useOwnerConnection } from "../src/remote/client.ts";
-import { captureWorkspace, type CapturedWorkspace } from "../src/remote/materialize.ts";
-import { runnerFiles, useRunnerTrees } from "../src/deno/remote-files.ts";
 import { WorkflowLifecycle } from "../src/lifecycle/api.ts";
 import type { ExecutorLock } from "../src/lifecycle/api.ts";
 import type { WorkflowExecutionTransitions } from "../src/lifecycle/execution.ts";
@@ -37,7 +29,22 @@ import { useRemoteWorkflowRunner } from "../src/deno/remote-runner.ts";
 import type { RemoteRunnerOwner, RemoteWorkflowRunner } from "../src/deno/remote-runner.ts";
 import type { RemoteReadPlane } from "../src/remote/read.ts";
 import { WorkflowRequestError } from "../src/storage/errors.ts";
-import { installedHost, RUN_ID, type Script } from "./support/remote-lifecycle-host.ts";
+import { installedHost, type Script } from "./support/remote-lifecycle-host.ts";
+import {
+  document,
+  published,
+  RUN_ID,
+  scriptedOwner,
+  type ScriptedRetention,
+  startingTree,
+  useHostSpy,
+} from "./support/remote-owner-script.ts";
+import { useOwnerConnection } from "../src/remote/client.ts";
+import { transactAgentSessions, workspaceHostFor } from "../src/workspace/effects.ts";
+import type { CapturedWorkspace } from "../src/remote/materialize.ts";
+import { locatorFingerprintOf } from "../src/composition/locator.ts";
+import { agentSessionKey } from "../src/storage/agent-session.ts";
+import { durableRun, type Workflow } from "@executablemd/durable-streams";
 
 /** One scripted owner, and every run its acquisitions were opened for. */
 function ownerOf(script: Script = {}): { owner: RemoteRunnerOwner; acquisitions: string[] } {
@@ -162,215 +169,15 @@ function foreignHandle(): WorkflowRunDatabase {
   };
 }
 
-/**
- * One owner, scripted at the wire.
- *
- * Everything above it is production code: the real client, the real lifecycle,
- * the real database handle, the real coordinator and the real runner
- * facilities. What this stands in for is the object that would answer — so what
- * a test can say afterwards is what the runner actually sent it, and what it
- * committed.
- */
-function scriptedOwner(captured: CapturedWorkspace) {
-  const sent: Record<string, unknown>[] = [];
-  const commits: Record<string, unknown>[] = [];
-  let currentRoot = captured.root.rootId;
-  let refusal: string | undefined;
-  let lost = false;
-
-  function frontier(): Record<string, unknown> {
-    return {
-      record: {
-        runId: RUN_ID,
-        definition: {
-          version: 1,
-          kind: "git",
-          objectFormat: "sha1",
-          objectId: "0".repeat(40),
-          rootDocumentPath: "README.md",
-        },
-        base: "main",
-        props: {},
-        status: "running",
-        createdAt: "2026-09-10T00:00:00.000Z",
-        updatedAt: "2026-09-10T00:00:00.000Z",
-      },
-      retrieval: null,
-      workspaceRootId: currentRoot,
-      journalEventId: null,
-    };
-  }
-
-  function begun(executionId: string): Record<string, unknown> {
-    return {
-      frontier: frontier(),
-      // Exactly the members an execution that has not stopped declares.
-      execution: { executionId, startedAt: "2026-09-10T00:00:01.000Z" },
-      replay: false,
-      recovered: null,
-    };
-  }
-
-  function answer(request: Record<string, unknown>): Record<string, unknown> {
-    const command = request["command"];
-    if (command === "open" || command === "frontier") {
-      return { outcome: "performed", value: frontier() };
-    }
-    if (command === "begin") {
-      // A lifecycle answer is one of three fields and never two: the value, a
-      // refusal, or the immutable fields a creation conflicts on.
-      return {
-        outcome: "performed",
-        value: {
-          conflict: null,
-          refusal: null,
-          value: begun(String(request["executionId"])),
-        },
-      };
-    }
-    if (command === "mappings") {
-      return {
-        outcome: "performed",
-        value: {
-          workspaceRootId: currentRoot,
-          journalEventId: null,
-          repositories: [],
-          worktrees: [],
-          agentSessions: [],
-        },
-      };
-    }
-    if (command === "root") {
-      return {
-        outcome: "performed",
-        value: { workspaceRootId: currentRoot, manifest: captured.root.manifest },
-      };
-    }
-    if (command === "content") {
-      const digest = String(request["digest"]);
-      const bytes =
-        request["kind"] === "manifest"
-          ? captured.contents.get(digest)?.manifestBytes
-          : captured.blobs.get(digest);
-      if (bytes === undefined) {
-        throw new Error("asked for content this owner does not hold");
-      }
-      return {
-        outcome: "performed",
-        value: {
-          kind: request["kind"],
-          digest,
-          size: bytes.length,
-          bytes: encodeBase64(bytes),
-        },
-      };
-    }
-    if (command === "stage") {
-      const encoded = String(request["bytes"] ?? "");
-      const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
-      return {
-        outcome: "performed",
-        value: {
-          kind: request["kind"],
-          digest: request["digest"],
-          size: (encoded.length / 4) * 3 - padding,
-        },
-      };
-    }
-    if (command === "settle") {
-      return { outcome: "performed", value: { status: "completed" } };
-    }
-    commits.push(request);
-    const publication = request["publication"];
-    // Scripted for the Workspace proposal rather than for every append: an
-    // owner that refused the run's own journal rows would end the document
-    // before it ever reached the effect under test.
-    const proposing = publication !== null && publication !== undefined;
-    if (lost && proposing) {
-      return { outcome: "lost" };
-    }
-    if (refusal !== undefined && proposing) {
-      return { outcome: "refused", refusal };
-    }
-    const events = Array.isArray(request["events"]) ? request["events"] : [];
-    // The owner publishes what it validated, and the frontier moves with it.
-    if (publication !== null && publication !== undefined) {
-      currentRoot = String(Reflect.get(publication, "proposedWorkspaceRootId"));
-    }
-    return {
-      outcome: "performed",
-      value: {
-        workspaceRootId: currentRoot,
-        journalEventIds: events.map((_entry, index) => `event-${index}`),
-      },
-    };
-  }
-
-  const listeners = new Map<string, Set<SocketListener>>();
-  const socket: OwnerSocket = {
-    send(data: string): void {
-      const request: Record<string, unknown> = JSON.parse(data);
-      sent.push(request);
-      const response = answer(request);
-      if (response["outcome"] === "lost") {
-        for (const listener of listeners.get("close") ?? []) {
-          listener({});
-        }
-        return;
-      }
-      for (const listener of listeners.get("message") ?? []) {
-        listener({ data: JSON.stringify({ id: request["id"], ...response }) });
-      }
-    },
-    close(): void {},
-    addEventListener(type, listener): void {
-      const found = listeners.get(type) ?? new Set<SocketListener>();
-      found.add(listener);
-      listeners.set(type, found);
-    },
-    removeEventListener(type, listener): void {
-      listeners.get(type)?.delete(listener);
-    },
-  };
-
-  return {
-    socket,
-    sent,
-    commits,
-    get currentRoot(): string {
-      return currentRoot;
-    },
-    refuse(reason: string): void {
-      refusal = reason;
-    },
-    lose(): void {
-      lost = true;
-    },
-  };
-}
-
-/** A small starting tree, captured so the scripted owner can serve it. */
-function* startingTree(): Operation<CapturedWorkspace> {
-  const files = runnerFiles();
-  const trees = yield* useRunnerTrees();
-  const root = yield* trees.create("source");
-  yield* until(writeFile(`${root}/README.md`, "starting\n", { mode: 0o644 }));
-  yield* until(mkdir(`${root}/docs`, { mode: 0o755 }));
-  return yield* captureWorkspace(
-    files,
-    (logical) => (logical === "/" ? root : `${root}${logical}`),
-    (reason) => {
-      throw new Error(reason);
-    },
-  );
-}
-
 /** One runner over a scripted owner reached through the production client. */
-function* wired(captured: CapturedWorkspace): Operation<{
+function* wired(
+  captured: CapturedWorkspace,
+  retained: ScriptedRetention = {},
+): Operation<{
   owner: ReturnType<typeof scriptedOwner>;
   runner: RemoteWorkflowRunner;
 }> {
-  const owner = scriptedOwner(captured);
+  const owner = scriptedOwner(captured, retained);
   const connection = yield* useOwnerConnection(owner.socket);
   let identifier = 0;
   const next = () => `command-${(identifier += 1)}`;
@@ -405,51 +212,6 @@ function* wired(captured: CapturedWorkspace): Operation<{
     scratchRoot: "/tmp/xmd-remote-runner-live",
   });
   return { owner, runner };
-}
-
-/**
- * The ambient host filesystem a runtime entrypoint installs, watched.
- *
- * The real provider rather than a stand-in, at the position a host installs it
- * and with a working directory a workflow run must never resolve against. What
- * a test says afterwards is whether a document reached it at all.
- */
-function* useHostSpy(): Operation<HostFilesEvent[]> {
-  const seen: HostFilesEvent[] = [];
-  yield* API.Env.around(
-    {
-      // deno-lint-ignore require-yield
-      *cwd(): Operation<string> {
-        return "/nowhere-the-workflow-may-reach";
-      },
-    },
-    { at: "min" },
-  );
-  yield* useHostFiles({ observe: (event) => seen.push(event) });
-  return seen;
-}
-
-/**
- * The commits that proposed a Workspace, out of everything the owner was asked
- * to commit.
- *
- * A run's journal lives on its owner, so every ordinary append — the root
- * import, a component import, the terminal — reaches it as a commit of its own.
- * What a Workspace effect adds to one is the publication, and that is what
- * these tests are counting.
- */
-function published(commits: readonly Record<string, unknown>[]): Record<string, unknown>[] {
-  return commits.filter((intent) => {
-    const publication = intent["publication"];
-    return publication !== null && publication !== undefined;
-  });
-}
-
-/** One authored document, executed as this run's root inside the attachment. */
-function document(source: string, database: WorkflowRunDatabase): Operation<Json> {
-  return scoped(function* () {
-    return yield* collect(yield* execute({ ...inlineSource(source), stream: database.journal }));
-  });
 }
 
 describe("a runner for a run whose storage is somewhere else", () => {
@@ -645,6 +407,215 @@ describe("a runner for a run whose storage is somewhere else", () => {
     expect(outcomes.failed.commits).toBe(1);
     expect(outcomes.failed.root).not.toBe(outcomes.failed.before);
     expect(outcomes.failed.said).toBe("raised:Error");
+  });
+
+  it("reads the retained Workspace an ephemeral attachment needs, and keeps nothing", function* () {
+    /** A repository this owner already retains, at a path the root contains. */
+    const stored = {
+      record: {
+        name: "app",
+        locatorFingerprint: locatorFingerprintOf("https://git.example.invalid/octo/app.git"),
+        requestedBase: null,
+        creationCommit: "9".repeat(40),
+        primaryBranch: "main",
+        objectFormat: "sha1",
+        checkoutPath: "/docs",
+      },
+      locator: "https://git.example.invalid/octo/app.git",
+    };
+
+    const outcome = yield* scoped(function* () {
+      const captured = yield* startingTree();
+      const { owner, runner } = yield* wired(captured, { repositories: [stored] });
+      const transitions = yield* runner.useRunHost();
+      const database = yield* opened(transitions, yield* acquired());
+      return yield* runner.attach(
+        database,
+        (function* (): Operation<Record<string, unknown>> {
+          // Exactly what a Repository reattachment asks of the run: the record
+          // that names the checkout, and the bytes at it. No Deno lease, no
+          // Deno private workspace, and no transaction held while it reads.
+          const read = yield* workspaceHostFor(database).read(function* (view) {
+            const record = view.metadata.readRepository("app");
+            const entries = yield* view.filesystem.readdir("/");
+            const readme = yield* view.filesystem.readTextFile("/README.md");
+            return {
+              named: record?.record.checkoutPath,
+              locator: record?.locator,
+              entries: entries.map((entry) => entry.name).toSorted(),
+              readme,
+            };
+          });
+          if (!read.ok) {
+            throw read.error;
+          }
+          return { ...read.value, commits: published(owner.commits).length };
+        })(),
+      );
+    });
+
+    // The retained record and the retained bytes, from the owner's own
+    // snapshot and the root it named.
+    expect(outcome["named"]).toBe("/docs");
+    expect(outcome["locator"]).toBe("https://git.example.invalid/octo/app.git");
+    expect(outcome["entries"]).toEqual(["README.md", "docs"]);
+    expect(outcome["readme"]).toBe("starting\n");
+    // Nothing durable happened: no proposal, no publication, no mapping.
+    expect(outcome["commits"]).toBe(0);
+  });
+
+  it("retains an Agent-session mapping at the owner, in one transaction", function* () {
+    // The key is derived from the identity rather than chosen: a record whose
+    // key does not follow from what it names is one no owner retains.
+    const identity = {
+      provider: "acpx",
+      agentCommand: "/usr/bin/claude",
+      sessionIdentity: "expansion-1",
+    };
+    const session = {
+      ...identity,
+      sessionKey: agentSessionKey(identity),
+      policy: "policy-1",
+      assertion: { kind: "acp", value: "conversation-1" },
+      createdAt: "2026-09-10T00:00:00.000Z",
+    };
+
+    const outcomes = yield* scoped(function* () {
+      /** One Agent-session body, under an owner that already retains this. */
+      function* attempt(
+        retained: ScriptedRetention,
+        body: (sessions: {
+          read(key: string): unknown;
+          commit(record: typeof session): void;
+        }) => Operation<string>,
+      ): Operation<{ said: string; mappings: number; publications: number }> {
+        return yield* scoped(function* () {
+          const captured = yield* startingTree();
+          const { owner, runner } = yield* wired(captured, retained);
+          const transitions = yield* runner.useRunHost();
+          const database = yield* opened(transitions, yield* acquired());
+          let said: string;
+          try {
+            said = yield* runner.attach(
+              database,
+              (function* (): Operation<string> {
+                const committed = yield* transactAgentSessions(database, body);
+                return committed.ok ? committed.value : `refused:${committed.error.name}`;
+              })(),
+            );
+          } catch (error) {
+            said = error instanceof Error ? `raised:${error.name}` : "raised:other";
+          }
+          const mapped = owner.commits.filter((intent) => {
+            const mappings = intent["mappings"];
+            return Array.isArray(mappings) && mappings.length > 0;
+          });
+          return {
+            said,
+            mappings: mapped.length,
+            publications: published(owner.commits).length,
+          };
+        });
+      }
+
+      return {
+        // Nothing retained yet: the mapping is staged and the owner commits it.
+        retained: yield* attempt({}, function* (sessions) {
+          sessions.commit(session);
+          return "committed";
+        }),
+        // The same mapping already retained: reading it is enough, and there is
+        // nothing for the owner to decide.
+        already: yield* attempt({ agentSessions: [session] }, function* (sessions) {
+          return sessions.read(session.sessionKey) === undefined ? "absent" : "read";
+        }),
+        // A different conversation under the same identity: refused where the
+        // rules live, and never sent.
+        conflicting: yield* attempt(
+          { agentSessions: [session] },
+          // deno-lint-ignore require-yield
+          function* (sessions) {
+            sessions.commit({ ...session, assertion: { kind: "acp", value: "another" } });
+            return "committed";
+          },
+        ),
+        // A body that failed after staging sends no mapping at all.
+        failed: yield* attempt(
+          {},
+          // deno-lint-ignore require-yield
+          function* (sessions) {
+            sessions.commit(session);
+            throw new Error("PlantedAgentFailure");
+          },
+        ),
+      };
+    });
+
+    // One mapping-only transaction, and no Workspace proposal with it.
+    expect(outcomes.retained.said).toBe("committed");
+    expect(outcomes.retained.mappings).toBe(1);
+    expect(outcomes.retained.publications).toBe(0);
+    // Reading what the owner admitted stages nothing.
+    expect(outcomes.already.said).toBe("read");
+    expect(outcomes.already.mappings).toBe(0);
+    // A conflicting assertion never replaces the retained one.
+    expect(outcomes.conflicting.said).toContain("refused:");
+    expect(outcomes.conflicting.mappings).toBe(0);
+    // And a failure before the commit retains nothing.
+    expect(outcomes.failed.said).toContain("refused:");
+    expect(outcomes.failed.mappings).toBe(0);
+  });
+
+  it("cancels an in-flight attachment without proposing anything", function* () {
+    const outcome = yield* scoped(function* () {
+      const captured = yield* startingTree();
+      const { owner, runner } = yield* wired(captured);
+      const transitions = yield* runner.useRunHost();
+      const database = yield* opened(transitions, yield* acquired());
+      const reached = { inside: false };
+      // The attachment is halted while the document is inside its own effect,
+      // which is where a real cancellation arrives: between the mutation and
+      // the commit the collector would have sent.
+      const running = yield* spawn(() =>
+        runner.attach(
+          database,
+          (function* (): Operation<string> {
+            const binding = workspaceHostFor(database);
+            yield* (function* (): Operation<void> {
+              const effect = binding.create(
+                { type: "workspace", name: "cancelled" },
+                function* (filesystem): Operation<Json> {
+                  yield* filesystem.writeFile("/NOTES.md", "never committed\n", 0o644);
+                  reached.inside = true;
+                  // Nothing settles this: the halt below is what ends it.
+                  yield* suspend();
+                  return "unreachable";
+                },
+              );
+              function* workflow(): Workflow<void> {
+                yield effect;
+              }
+              return yield* durableRun(workflow, { stream: database.journal });
+            })();
+            return "unreachable";
+          })(),
+        ),
+      );
+      // Let the effect get inside its mutation, then halt the attachment.
+      while (!reached.inside) {
+        yield* sleep(1);
+      }
+      yield* running.halt();
+      return { owner, inside: reached.inside };
+    });
+
+    // The document got as far as writing into its attempt, and the owner was
+    // never asked to commit any of it.
+    expect(outcome.inside).toBe(true);
+    expect(published(outcome.owner.commits)).toEqual([]);
+    // The attachment's own scope is over, so the temporary trees it
+    // materialized into are gone with it.
+    expect(outcome.owner.commits.every((intent) => intent["publication"] === null)).toBe(true);
   });
 
   it("reads and delivers without taking an acquisition", function* () {

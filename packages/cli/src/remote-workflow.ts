@@ -21,6 +21,7 @@
 
 import { ensure, resource, until, type Operation } from "effection";
 import { remoteOwnerClient, useRemoteWorkflowRunner } from "@executablemd/workflow/deno";
+import type { WorkflowWorkspaceOptions } from "@executablemd/workflow/deno";
 import type {
   OwnerHttpRequest,
   OwnerHttpResponse,
@@ -58,6 +59,21 @@ export interface RemoteWorkflowConfiguration {
    * transport it controls.
    */
   readonly transport?: OwnerTransport;
+  /**
+   * What a live or partial attachment installs beyond the run's own Workspace.
+   *
+   * The host-owned inputs and only those: which issue tracker this program
+   * authorizes, which pull requests a document may read, how this host
+   * assembles its credential helper, and which Agent profile it installs.
+   * There is no member for a substituted repository host, a Git-host transport
+   * or an invocation observer, because each of those is a seam through which a
+   * credential this run acquires would become visible to whoever supplied it.
+   *
+   * Explicit, like everything else here. Nothing is read from a flag, an
+   * environment variable, a document prop or a global, and an absent member
+   * keeps the capability's unconfigured behavior.
+   */
+  readonly capabilities?: WorkflowWorkspaceOptions;
 }
 
 /**
@@ -81,6 +97,11 @@ export function* useRemoteWorkflowHost(
   const runner = yield* useRemoteWorkflowRunner({
     owner: client,
     scratchRoot: configuration.scratchRoot,
+    // Projected member by member, as the published boundary is everywhere
+    // else: a spread would carry whatever else a caller put on the object.
+    ...(configuration.capabilities === undefined
+      ? {}
+      : { capabilities: permitted(configuration.capabilities) }),
   });
   return {
     useRunHost(): Operation<WorkflowExecutionTransitions> {
@@ -138,5 +159,32 @@ function platformTransport(): OwnerTransport {
         yield* provide(yield* until(settled));
       });
     },
+  };
+}
+
+/**
+ * The capability inputs this host passes on, and the whole of them.
+ *
+ * Named one at a time rather than forwarded: what a trusted caller may
+ * configure is a closed list, and reading a property nobody declared is how a
+ * getter somebody else wrote gets to run.
+ */
+function permitted(options: WorkflowWorkspaceOptions): WorkflowWorkspaceOptions {
+  return {
+    ...(options.gitHubIssues === undefined ? {} : { gitHubIssues: options.gitHubIssues }),
+    ...(options.gitHubPullRequests === undefined
+      ? {}
+      : {
+          gitHubPullRequests: {
+            ...(options.gitHubPullRequests.allowed === undefined
+              ? {}
+              : { allowed: options.gitHubPullRequests.allowed }),
+            ...(options.gitHubPullRequests.endpoint === undefined
+              ? {}
+              : { endpoint: options.gitHubPullRequests.endpoint }),
+          },
+        }),
+    ...(options.helper === undefined ? {} : { helper: options.helper }),
+    ...(options.agent === undefined ? {} : { agent: options.agent }),
   };
 }

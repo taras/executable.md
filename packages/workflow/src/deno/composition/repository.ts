@@ -23,7 +23,7 @@ import {
   type RepositoryCreationRequest,
   type RepositoryRecord,
 } from "../../composition/records.ts";
-import type { PrivateWorkspaceTransaction } from "../workspace/private.ts";
+import type { WorkspaceAttachmentView } from "../../workspace/effects.ts";
 import {
   checkoutPrimary,
   checkoutReadable,
@@ -165,7 +165,7 @@ export function* performRepository(
 }
 
 export function* prepareRepositoryAttachment(
-  workspace: PrivateWorkspaceTransaction,
+  workspace: WorkspaceAttachmentView,
   root: string,
   record: RepositoryRecord,
   subject: string,

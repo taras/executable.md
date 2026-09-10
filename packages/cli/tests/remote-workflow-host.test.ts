@@ -32,7 +32,15 @@ import type {
 } from "@executablemd/workflow/deno";
 import { OwnerEndpointError } from "@executablemd/workflow/deno";
 import { useRemoteWorkflowHost } from "../src/remote-workflow.ts";
+import type { RemoteWorkflowConfiguration } from "../src/remote-workflow.ts";
 import type { WorkflowHost } from "../src/workflow.ts";
+import {
+  document,
+  published,
+  scriptedOwner,
+  startingTree,
+  useHostSpy,
+} from "../../workflow/tests/support/remote-owner-script.ts";
 
 const RUN_ID = "5cktgrv2zyutngh7bbddr2tyg2b5a567cg725hu5e7u42orerxaa";
 const OTHER_RUN = "4bxsfqu1yxtsmfg6aaccq1sxf1a4z456bf614gt4d6t31nqdqwzz";
@@ -160,6 +168,24 @@ function foreignDatabase(): WorkflowRunDatabase {
   };
 }
 
+/**
+ * What a caller may configure, at the type level.
+ *
+ * The published boundary excludes a substituted repository host, a Git-host
+ * transport and an invocation observer, because each is a seam through which a
+ * credential this run acquires would become visible to whoever supplied it.
+ * That exclusion is a property of the *type*, so this is where it is asserted:
+ * adding `composition` back to what the public configuration accepts stops this
+ * file compiling.
+ */
+type Capabilities = NonNullable<RemoteWorkflowConfiguration["capabilities"]>;
+type NoComposition = "composition" extends keyof Capabilities ? never : true;
+type NoObserver = "observe" extends keyof Capabilities ? never : true;
+type NoAccess = "access" extends keyof NonNullable<Capabilities["gitHubPullRequests"]>
+  ? never
+  : true;
+const NARROW: [NoComposition, NoObserver, NoAccess] = [true, true, true];
+
 describe("the configured remote workflow host", () => {
   it("has the four methods a host has, and no others", function* () {
     const owner = scripted();
@@ -168,6 +194,9 @@ describe("the configured remote workflow host", () => {
       return Object.keys(built).toSorted();
     });
     expect(assembled).toEqual(["attach", "useDelivery", "useLifecycle", "useRunHost"]);
+    // And what it may be configured with is the host-owned list, proved above
+    // where the property lives.
+    expect(NARROW).toEqual([true, true, true]);
     // Constructing a host reaches no owner: no token was minted, no request was
     // sent and nothing was upgraded.
     expect(owner.tokens).toEqual([]);
@@ -314,6 +343,73 @@ describe("the configured remote workflow host", () => {
     });
     expect(outcome).toBe("already-running");
     expect(owner.sockets).toEqual([]);
+  });
+
+  it("runs an authored File through the configured public host", function* () {
+    const outcome = yield* scoped(function* () {
+      const captured = yield* startingTree();
+      const owner = scriptedOwner(captured);
+      // The configured public host, over a transport whose socket is that
+      // scripted owner. Everything between the two is production code: the
+      // client, its three planes, the runner and the attachment.
+      const built = yield* useRemoteWorkflowHost({
+        runId: RUN_ID,
+        endpoint: ENDPOINT,
+        release: RELEASE,
+        // deno-lint-ignore require-yield
+        *token(): Operation<string> {
+          return "token-1";
+        },
+        scratchRoot: "/tmp/xmd-remote-public-host",
+        transport: {
+          // deno-lint-ignore require-yield
+          *request(): Operation<OwnerHttpResponse> {
+            throw new Error("PLANTED-REQUEST-PLANE-REACHED");
+          },
+          connect(): Operation<OwnerSocket> {
+            return resource(function* (provide) {
+              yield* provide(owner.socket);
+            });
+          },
+        },
+      });
+      const transitions = yield* built.useRunHost();
+      const taken = yield* WorkflowLifecycle.operations.acquireExecutor(RUN_ID);
+      if (!taken.ok || taken.value.kind !== "acquired") {
+        throw new Error("expected the configured host to take the acquisition");
+      }
+      const begun = yield* transitions.begin(taken.value.lock, {
+        runId: RUN_ID,
+        action: "resume",
+      });
+      if (!begun.ok) {
+        throw begun.error;
+      }
+      const database = begun.value.database;
+      const ambient = yield* useHostSpy();
+      const rendered = yield* built.attach(
+        database,
+        document(
+          ["# Remote", "", '<File path="NOTES.md">through the public host</File>'].join("\n"),
+          database,
+        ),
+      );
+      return {
+        attached: String(rendered).trimEnd(),
+        owner,
+        before: captured.root.rootId,
+        ambient,
+      };
+    });
+
+    expect(outcome.attached).toBe("# Remote");
+    // The ambient host filesystem was never asked, and the owner received one
+    // proposal carrying the new root and the effect's own journal row.
+    expect(outcome.ambient).toEqual([]);
+    const proposals = published(outcome.owner.commits);
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]?.["expectedWorkspaceRootId"]).toBe(outcome.before);
+    expect(JSON.stringify(proposals[0]?.["publication"])).toContain("/NOTES.md");
   });
 
   it("attaches nothing it did not open", function* () {

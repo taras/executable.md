@@ -115,7 +115,7 @@ export type {
   AgentSessionResolution,
   ProviderAssertion,
 } from "./src/deno/workspace/agent-sessions.ts";
-export { transactAgentSessions } from "./src/deno/workspace/private.ts";
+export { transactAgentSessions } from "./src/workspace/effects.ts";
 export type { AgentSessions } from "./src/deno/workspace/agent-sessions.ts";
 export {
   WORKSPACE_GIT_ADD,

@@ -55,7 +55,12 @@ import type {
   WorkflowRunRecord,
 } from "../storage/record.ts";
 import { createTransactionGate, type OwnerLink, transactRemotely } from "./collector.ts";
-import type { EnlistAnswer, EnlistWorkspace, TransactionAnchor } from "./collector.ts";
+import type {
+  EnlistAnswer,
+  EnlistMappings,
+  EnlistWorkspace,
+  TransactionAnchor,
+} from "./collector.ts";
 import type { RemoteContent, RemoteContentRequest, RemoteFrontierSnapshot } from "./read.ts";
 import type { RemoteRetainedAnswer } from "./answer-link.ts";
 import type { RemoteInvocationSnapshot } from "./records.ts";
@@ -158,6 +163,8 @@ export interface WorkspaceRoute {
   readonly database: WorkflowRunDatabase;
   readonly transaction: WorkflowRunTransaction;
   readonly enlist: EnlistWorkspace;
+  /** How this transaction retains mappings with no Workspace proposal. */
+  readonly enlistMappings: EnlistMappings;
   /** Where this transaction began, so a coordinator can prove it has not drifted. */
   readonly anchor: TransactionAnchor;
   /**
@@ -379,7 +386,7 @@ export function useRemoteRunDatabase(
           return yield* transactRemotely(
             link,
             gate,
-            function* (transaction, enlist, anchor, consume) {
+            function* (transaction, enlist, anchor, consume, enlistMappings) {
               // The marker and the route are installed for the body's scope
               // alone. Outside it neither exists, so a retained transaction
               // object reaches nothing and an unrelated scope is not mistaken for
@@ -388,7 +395,14 @@ export function useRemoteRunDatabase(
                 handle,
                 enclosing: yield* ActiveTransaction.get(),
               });
-              yield* ActiveRoute.set({ database: handle, transaction, enlist, anchor, consume });
+              yield* ActiveRoute.set({
+                database: handle,
+                transaction,
+                enlist,
+                enlistMappings,
+                anchor,
+                consume,
+              });
               return yield* body(transaction);
             },
           );

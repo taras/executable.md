@@ -180,6 +180,7 @@ export function transactRemotely<T>(
     enlist: EnlistWorkspace,
     anchor: TransactionAnchor,
     consume: EnlistAnswer,
+    enlistMappings: EnlistMappings,
   ) => Operation<T>,
 ): Operation<Result<T>> {
   return call(function* (): Operation<Result<T>> {
@@ -246,7 +247,7 @@ export function transactRemotely<T>(
         if (!live) {
           throw new RemoteTransactionError("transaction-closed");
         }
-        if (enlisted !== undefined) {
+        if (enlisted !== undefined || stagedMappings !== undefined) {
           throw new RemoteTransactionError("publication-already-enlisted");
         }
         if (mappings.length > MAX_MAPPINGS) {
@@ -255,6 +256,29 @@ export function transactRemotely<T>(
         // The mappings are detached now, because they are the caller's values.
         // The Workspace itself is not read until sealing.
         enlisted = { attempt, mappings: Object.freeze(mappings.map(detachMapping)) };
+      };
+
+      let stagedMappings: readonly RetainedMapping[] | undefined;
+      /**
+       * How a transaction retains mappings without proposing a Workspace.
+       *
+       * An Agent-session mapping is a fact about a conversation rather than
+       * about bytes: the run's Workspace does not move, and nothing is
+       * published. It is here rather than as an option on `enlist` because the
+       * two are different proposals — one carries a root and one does not —
+       * and one transaction makes at most one of them.
+       */
+      const enlistMappings: EnlistMappings = (mappings: readonly RetainedMapping[]): void => {
+        if (!live) {
+          throw new RemoteTransactionError("transaction-closed");
+        }
+        if (enlisted !== undefined || stagedMappings !== undefined) {
+          throw new RemoteTransactionError("publication-already-enlisted");
+        }
+        if (mappings.length > MAX_MAPPINGS) {
+          throw new RemoteTransactionError("too-many-mappings");
+        }
+        stagedMappings = Object.freeze(mappings.map(detachMapping));
       };
 
       let consumption: AnswerConsumption | undefined;
@@ -297,6 +321,7 @@ export function transactRemotely<T>(
               journalEventId: starting.journalEventId,
             },
             consume,
+            enlistMappings,
           ),
         );
       } finally {
@@ -315,7 +340,7 @@ export function transactRemotely<T>(
         // A private snapshot. The collector's own array never leaves.
         events: appended.map((event) => structuredClone(event)),
         publication: sealed?.publication ?? null,
-        mappings: sealed?.mappings ?? [],
+        mappings: sealed?.mappings ?? stagedMappings ?? [],
         bytes: sealed?.bytes ?? new Map(),
         answer: consumption ?? null,
       });
@@ -362,6 +387,9 @@ export type EnlistWorkspace = (
   attempt: SealableAttempt,
   mappings?: readonly RetainedMapping[],
 ) => void;
+
+/** How a transaction retains mappings with no Workspace proposal at all. */
+export type EnlistMappings = (mappings: readonly RetainedMapping[]) => void;
 
 /**
  * How an answer claim designates the retained value this transaction spends.
