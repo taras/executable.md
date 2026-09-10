@@ -915,6 +915,36 @@ A later executor is what turns retained delivery into progress: it consumes the
 value inside the run's own transaction, appends the accepted event once, and
 only then may execution continue past the wait.
 
+**The owner parses, and the owner transacts.** A request is adopted by the owner alone: it validates the release identity of the connection before parsing anything, parses the request itself rather than accepting a caller's account of it, and opens and commits every transaction. Content arrives content-addressed and is validated against the name it arrived under before it is stored, and against the expected Workspace root before it is published. The runner parses only responses. A caller therefore cannot describe a state change into existence, and a refusal is a refusal of a request the owner read.
+
+**Creation happens once, and is immutable.** Creating a run initializes pristine storage with the immutable run record, its retrieval metadata, an empty Workspace, the first execution record and `running`, in one transaction. A second compatible creation of the same run id finds that run rather than making another: one owner, one run, one initial root, one lifecycle. A creation whose immutable identity conflicts with what the owner holds is refused, and so is one meeting storage that is damaged or not pristine — in both cases nothing is written, and the distinct condition is what the caller is told.
+
+**Lookup answers one committed reading, and creates nothing.** An exact lookup returns the complete run storage of §9.4 as a handle the caller may transact against. Absent, foreign, incompatible, damaged, unparseable, wrong-run and closed-scope lookups stay distinct conditions; none of them creates, repairs or partially answers, and a handle whose scope has ended answers nothing.
+
+**One execution is one envelope.** Beginning inserts exactly one document-execution record — its identity minted by the caller so a retried request is the same bytes and an owner cannot begin a second execution for a request it already answered — and publishes the run state that goes with it in the same transaction, against the exact expected root. Settlement closes that same record with the semantic outcome and its exact stop reason, in one transaction, and only a settled record's status may be reported. An injected failure on either side exposes the whole old state or the whole new one.
+
+**Stale recovery needs no timer.** An unfinished record found after acquisition belonged to the previous executor and is proven stale by the closed connection rather than by a timestamp, PID, timeout or status row. The next acquisition reconciles the retained root history first, restores or closes that execution accordingly, and only then begins another; a committed effect is never repeated, and cancellation instead finishes that exact stale execution and publishes `cancelled` without beginning one.
+
+**Fork copies from one selected source, or does nothing.** A fork names one source prefix and root and produces one destination run and one lineage. The destination commits whole or not at all, its copied prefix outlives the source, and an incompatible selection or a failure part-way mutates neither the source nor the destination.
+
+**A handle's authority ends with its scope.** Teardown closes the handle and, for an executor, releases ownership; it rolls back nothing already committed and settles nothing that was not settled. Closing the connection is the only staleness proof a remote host needs, and a closed one authorizes nothing while leaving every committed transaction exactly as it was.
+
+### 9.9 A retained terminal, and what may be concluded from it
+
+A finished run is read before it is trusted, and one shared judgment does the reading, because a conclusion reached two ways is two contracts. Recovery publishing an outcome and admission reusing one ask the same functions of the same events.
+
+**One semantic outcome.** A root `Close` has two layers and both decide something. The outer layer is the coroutine's own settlement: it returned, it was raised out of, or it was cancelled. Returning is what a document does whether it succeeded or failed, so an outer `ok` says only that the value beneath it is the document's own result, and that result's `status` is what decides `completed` or `failed`. A returned value that is not a document result at all is neither outcome. A failed run names its reason exactly: the last retained row that failed, or — for a failure raised outside any durable operation — one categorical code, and never a message lifted out of an exception.
+
+**One final terminal.** Exactly one final root `Close` may exist. A second one, or any work recorded after the one that is there, is a history no single execution produced; the run is damaged rather than resolved, because choosing between them would be this build deciding which execution the run was.
+
+**The terminal has to agree with the history around it.** A run that failed before importing anything carries the root binding core writes for exactly that case, and no root import. A run that produced an ordinary document result carries exactly one root import: exactly one retained event names it, whichever coroutine recorded it, and that one event belongs to the root coroutine. Either shape found with the other's history is damaged.
+
+**The root import is read by canonical execution's own parser.** The same function that admits a partial history parses the retained selection here, so a selection the executor would refuse cannot publish an outcome instead. It proves rather than recognizes: the retained document parses; an exact target is canonically encoded and resolves against that document to the exact target recorded; and a recorded selection failure re-derives from the same selector to the same kind, matches and available catalog, so a failure record reduced to its selector, carrying another catalog, or naming a selector that actually resolves is not a failure any selection produced. A selection that named no target is raised out of the root import, so the document never ran and a successful result beside one is two histories rather than one.
+
+**Damage outranks the row.** History those readings refuse is damaged, and damage decides before the stored status does. A run whose row says `completed` or `failed` over a terminal that cannot be read is not advanced, not re-settled and not published: start, resume and cancel each refuse before an execution record exists, before an acquisition performs anything, and before Git, a Workspace or any provider is reached. What the run keeps is exactly what it had — the row, the journal, the Workspace frontier and any unfinished execution the previous executor left open. Stale recovery reads the same judgment first and publishes nothing over damaged history.
+
+**A coherent terminal replays, and changes only its own envelope.** A completed or failed run named again is replayed rather than refused, under whichever command named it. The replay opens its own document-execution record and closes it, and the run row is left exactly what it was, `updatedAt` included: an outcome that already won does not become mutable again by being read. What the replay runs on comes from the run's own retained state and nowhere else — the root document its root import retained, and the component bundle rebuilt from the immutable definition with each retained component's bytes named the way Git names a blob and compared to the object id the definition holds. No repository, working tree, live import, Workspace, Agent, process, Git-host, Issue, Project or credential provider is reached, no effect is performed again, no native operation starts, no retained answer is consumed and no event is appended. A retained root that does not agree with the run's own definition path refuses before anything is replayed from it.
+
 ## 10. The document filesystem of a run
 
 A host attaches one run's Workspace to a document execution with
@@ -981,7 +1011,4 @@ uncontained filesystem this boundary exists to prevent.
 
 ## 11. Intentionally excluded
 
-Public `xmd workflow` lifecycle commands; lifecycle transition policy, executor
-leases and stale-owner recovery; public root selection, history checkpoints and
-forks; workflow-owned worktrees; and deterministic Git and GitHub effects.
-Retained roots and private restoration do not expose any of those behaviors.
+Public `xmd workflow` lifecycle commands; public root selection, history checkpoints and forks; workflow-owned worktrees; and deterministic Git and GitHub effects. Retained roots and private restoration do not expose any of those behaviors. The lifecycle policy those commands are built on — which transitions exist, what a stale executor's unfinished execution becomes, and what a retained terminal permits — is specified by §9.6, §9.8 and §9.9 here and by [Workflow workspaces](./workflow-workspace-spec.md) §3, and reaching it is not something a retained root or a restoration does.

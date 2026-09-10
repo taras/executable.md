@@ -10044,12 +10044,12 @@ The seven tiers below are the frozen evidence names for the software factory
 specified by
 [the software factory](./github-actions-software-factory-spec.md) and by
 [Workflow workspaces](./workflow-workspace-spec.md) §§3.8, 7.8-7.11, 10.3, 10.5-10.7
-and 13.2, and by [the software factory](./github-actions-software-factory-spec.md) §11.2. Every construct and host they name is **specified; implementation
-unbuilt**, so these tiers name the scenarios an implementation is accepted
-against rather than tests that exist. Each lists the finite structural
+and 13.2, and by [the software factory](./github-actions-software-factory-spec.md) §11.2. Each lists the finite structural
 scenarios — success, refusal, stale authority, interruption and cancellation,
 teardown, replay, and denied Agent or generated-XMD authority — and no
 malformed-input permutation without a distinct structural consequence.
+
+Most of what they name is **specified; implementation unbuilt**, so those tiers name the scenarios an implementation is accepted against rather than tests that exist. Tier WRH is the exception: rows WRH1-WRH16 are implemented and have committed evidence, listed with the tier, while WRH17-WRH22 remain unbuilt with the machine-wait work they belong to. Nothing in the other six tiers is built.
 
 ### Tier WRH — Remote host, executor and delivery separation
 
@@ -10080,6 +10080,31 @@ and [Workflow runs](./workflow-spec.md) §9.8.
 | WRH22 | Resume without authority | An explicit resume with neither a pending wake nor operator-resume authority ends nothing: it reports the same machine wait and settles `suspended` again |
 | WRH15 | Release identity | Connection admission validates an exact immutable runner and owner build or protocol fingerprint from trusted deployment configuration and refuses a mismatch closed, before request parsing, acquisition or state access; no message shape is adapted, downgraded or negotiated, and no transport record is journaled, exported or authored |
 | WRH16 | Ownership split | Connection admission, request parsing, transaction lifetime and stale recovery belong to the owner; provider attachment and cancellation of its own execution belong to the runner; content is produced by the runner and validated by the owner |
+
+**Where WRH1-WRH16 are proved.** Every row below has committed evidence at two levels: the owner's own behavior against a real Durable Object under `workerd`, and the provider-neutral decisions against a scripted owner. Paths are relative to `packages/`.
+
+| # | Owner evidence (real Durable Object) | Provider-neutral and host evidence |
+|---|---|---|
+| WRH1 | `workflow/tests/cloudflare/remote-storage.vitest.ts`, `workflow/tests/cloudflare/remote-owner.vitest.ts` | `workflow/tests/remote-storage.test.ts` |
+| WRH2 | `workflow/tests/cloudflare/executor-acquisition.vitest.ts`, `workflow/tests/cloudflare/remote-lifecycle.vitest.ts`, `workflow/tests/cloudflare/remote-publish.vitest.ts` | `workflow/tests/remote-lifecycle.test.ts` |
+| WRH3 | `workflow/tests/cloudflare/executor-acquisition.vitest.ts` | `workflow/tests/remote-lifecycle.test.ts` |
+| WRH4 | `workflow/tests/cloudflare/remote-lifecycle.vitest.ts` | `workflow/tests/remote-recovery.test.ts` |
+| WRH5 | `workflow/tests/cloudflare/remote-publish.vitest.ts`, `workflow/tests/cloudflare/remote-workspace.vitest.ts` | `workflow/tests/remote-publication.test.ts` |
+| WRH6 | `workflow/tests/cloudflare/remote-publish.vitest.ts`, `workflow/tests/cloudflare/remote-storage.vitest.ts` | `workflow/tests/remote-publication.test.ts`, `workflow/tests/remote-storage.test.ts` |
+| WRH7 | `workflow/tests/cloudflare/remote-delivery.vitest.ts` | `workflow/tests/remote-delivery.test.ts`, `workflow/tests/delivery-gate.test.ts` |
+| WRH8 | `workflow/tests/cloudflare/remote-delivery.vitest.ts` | `workflow/tests/remote-delivery.test.ts` |
+| WRH9 | `workflow/tests/cloudflare/remote-delivery.vitest.ts` | `workflow/tests/remote-delivery.test.ts`, `workflow/tests/workflow-suspension-answer.test.ts` |
+| WRH10 | `workflow/tests/cloudflare/remote-read-plane.vitest.ts` | `workflow/tests/remote-inspection.test.ts` |
+| WRH11 | `workflow/tests/cloudflare/executor-acquisition.vitest.ts`, `workflow/tests/cloudflare/remote-lifecycle.vitest.ts` | `workflow/tests/remote-lifecycle.test.ts` |
+| WRH12 | `workflow/tests/cloudflare/remote-replay.vitest.ts` | `workflow/tests/replay-inputs.test.ts`, `workflow/tests/git-blob.test.ts`, `cli/tests/workflow-replay.test.ts` |
+| WRH13 | — the suites import the runtime-named entrypoint and nothing else does | `workflow/tests/host-neutrality.test.ts`, `workflow/tests/public-entrypoint.test.ts`, `cli/tests/workflow-host-boundary.test.ts` |
+| WRH14 | `workflow/tests/cloudflare/remote-lifecycle.vitest.ts` | `cli/tests/workflow-host-boundary.test.ts`, `cli/tests/workflow-cli.test.ts` |
+| WRH15 | `workflow/tests/cloudflare/executor-acquisition.vitest.ts`, `workflow/tests/cloudflare/remote-delivery.vitest.ts` | — admission is the owner's, and only the owner can refuse before parsing |
+| WRH16 | `workflow/tests/cloudflare/remote-owner.vitest.ts`, `workflow/tests/cloudflare/settle-parser.vitest.ts`, `workflow/tests/cloudflare/owner-storage.vitest.ts` | `workflow/tests/remote-client.test.ts`, `workflow/tests/remote-publication.test.ts` |
+
+Two rows are narrower than their sentence reads, and the narrowing is not incidental. WRH7's terminal-decision subject is a factory record that does not exist yet, so what is built and proved is answer delivery and its consumption; the plane it arrives on takes no acquisition either way. WRH12 is proved against the whole terminal-history contract of [Workflow runs](./workflow-spec.md) §9.9 rather than against a readable-selection parser alone: `cli/tests/workflow-replay.test.ts` carries the eighteen host-level cases — coherent completed and failed replay, compatible `start --id` and completed `resume`, exact failure recovery, refusal of an unreadable terminal, a duplicated or disowned root import and an unverifiable selection, envelope-only settlement with the terminal run row preserved, and no Git, provider or attachment reached on any of them — and `workflow/tests/cloudflare/remote-replay.vitest.ts` proves the same conclusions where the retained state is a real Durable Object's.
+
+Fork has no row of its own in this tier because it is not remote-specific: §11 owns it, and the remote implementation is evidenced by `workflow/tests/remote-fork.test.ts`, `workflow/tests/remote-staged-fork.test.ts` and `workflow/tests/cloudflare/remote-fork.vitest.ts`.
 
 ### Tier WGI — Authenticated GitHub ingress
 

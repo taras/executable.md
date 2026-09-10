@@ -2502,6 +2502,8 @@ Workspace, Agent or external providers. It still reconstructs the bundle and
 still applies that admission, so retained output is accepted only for a history
 this run is a run of.
 
+Where the inputs for that come from depends on what the host still has. A local `resume` reads the retained components from the retained commit, because the repository is there. A completed replay may have nothing but the run's own storage — an ephemeral runner holds no clone — so it is assembled from retained state alone: the root document its own root import retained, and the bundle rebuilt from the immutable definition with each retained component's bytes named the way Git names a blob and compared to the object id the definition already holds. That is the same admission reaching the same conclusion from evidence the run carries, rather than a weaker one. Which histories are readable enough to be replayed at all, and what a replay may change, is [Workflow runs](./workflow-spec.md) §9.9.
+
 A partial replay that reaches a completed Git-host effect may still reconstruct
 what that effect needed locally — a Push rebuilds its checkout from the Workspace
 in order to name the request it is asking about — and then hands back the
@@ -3754,7 +3756,7 @@ import nothing Cloudflare-specific.
 
 **The host assembly contract does not change.** `WorkflowHost` keeps its four methods — `useRunHost()`, `useLifecycle()`, `useDelivery()` and `attach()` — and the Cloudflare adapter is one more implementation of them beside the Deno one. Starting, looking up, executing, delivering into and inspecting a run are lifecycle operations reached *through* that boundary, exactly as they are locally; they are not replacement method names, and no fifth method appears. A remote host receives no transitions type of its own either. What a remote adapter changes is where each of those four reaches, not what the shared CLI asks for.
 
-**The transition types those methods speak are provider-neutral.** `WorkflowExecutionTransitions`, `WorkflowBeginRequest`, `WorkflowExecutionBegun`, `WorkflowForkRequest`, `WorkflowForkSelection` and `WorkflowRunCreation` describe what any host's lifecycle does, not what one adapter retains, and they are already defined in the provider-neutral lifecycle module. They become package-root public types, and the Deno entrypoint may keep re-exporting them for source compatibility without owning their meaning. Runtime-specific implementations and retained encodings — SQLite, DOFS, run-id hashing, filesystem paths — stay behind their runtime-named entrypoints, which is the boundary that rationale was always about. That export move is the first implementation story's work; #710 settles that the types are neutral, and performs no production change.
+**The transition types those methods speak are provider-neutral.** `WorkflowExecutionTransitions`, `WorkflowBeginRequest`, `WorkflowExecutionBegun`, `WorkflowForkRequest`, `WorkflowForkSelection` and `WorkflowRunCreation` describe what any host's lifecycle does, not what one adapter retains, and they are already defined in the provider-neutral lifecycle module. They become package-root public types, and the Deno entrypoint may keep re-exporting them for source compatibility without owning their meaning. Runtime-specific implementations and retained encodings — SQLite, DOFS, run-id hashing, filesystem paths — stay behind their runtime-named entrypoints, which is the boundary that rationale was always about. They are package-root public types now, and the Deno entrypoint re-exports them for source compatibility without owning their meaning.
 
 Executor ownership is one authenticated WebSocket connection whose lifetime is the acquisition. The owner registers the exact acquisition on admission and invalidates it on close; there is no duration, expiry, renewal, heartbeat, generation record or liveness poll, and a close rolls back nothing already committed. Every mutating transaction validates that exact acquisition and the expected Workspace root together.
 
@@ -3792,9 +3794,15 @@ Privacy of the transport is not privacy of the authority. These constraints are 
 
 Delivery and inspection reach the owner without an acquisition, under §3.8, on authenticated paths of their own.
 
+#### What the owner implements, and what assembling it still needs
+
+Everything above is implemented behind the four methods and nothing wider: creating a run and finding it, coherent reads of its committed state, lifecycle transitions and terminal settlement, stale recovery at the next acquisition, fork and the staged candidate a fork is admitted by, root validation and atomic Workspace publication, typed delivery and its later consumption, read-only inspection and history, and canonical completed replay. The owner refuses in its own vocabulary and mutates nothing when it does, on every one of those paths.
+
+What does not exist yet is the assembly that would let a caller choose that host: there is no configured public client factory, no runtime selector, no endpoint, release-identity or OIDC supplier assembly, no CLI flag, prop or environment reading for any of it, and no deployment. The shipped CLI assembles the local host only, and none of the behavior above waits on that assembly — what it waits on is somebody deciding, in configuration, which host a run belongs to.
+
 #### What completed replay does and does not reach
 
-A completed run replays there as it does locally: it attaches no Workspace, Agent, process, Git, Git-host, Issue, Project or credential provider and performs no effect a second time. It does reach the run's durable owner, because that is where the retained result is; an ephemeral client holds nothing of its own to replay from. Reading retained completion from the owner that holds it is not attaching a provider, and the distinction is the whole point of the rule: what a completed replay must not do is contact an *external* service or repeat an effect, not refrain from reading its own history.
+A completed run replays there as it does locally: it attaches no Workspace, Agent, process, Git, Git-host, Issue, Project or credential provider and performs no effect a second time. It does reach the run's durable owner, because that is where the retained result is; an ephemeral client holds nothing of its own to replay from. Reading retained completion from the owner that holds it is not attaching a provider, and the distinction is the whole point of the rule: what a completed replay must not do is contact an *external* service or repeat an effect, not refrain from reading its own history. What it reads, and what makes a retained terminal readable at all, is [Workflow runs](./workflow-spec.md) §9.9: one final root `Close`, one semantic outcome, a root import parsed by canonical execution's own parser and verified against the document it recorded, damage outranking the stored row, and a coherent replay changing nothing but the execution envelope it opened.
 
 ## 14. Contract inventory
 
@@ -3804,17 +3812,17 @@ A completed run replays there as it does locally: it attaches no Workspace, Agen
 | retained run record and filtered journal | built by #291 |
 | caller-owned storage transaction | built by #291; Workspace mutations join it in #365 |
 | provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; document deletion (§10.1) built by #567 for both providers; process capabilities unbuilt (#218) |
-| `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; both acquire #367's executor lock |
+| `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; both acquire #367's executor lock. The same two lifecycle actions are implemented against the durable owner, where the acquisition is the connection rather than the lock; no CLI selector reaches them yet |
 | `<Repository>`, `<Worktree>` and `<Dir>` composition | built by #293, Deno provider only |
 | transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | built by #294, Deno provider only |
 | `<Issue>` read and upsert, and the `issue_effect` boundary (§10.3) | built by #296; GitHub middleware, Deno host |
 | `<PullRequest.Reviews>`, `<PullRequest.Comments>`, `<PullRequest.Checks>` (§7.7) | built by #576; GitHub middleware, Deno host. Named by canonical URL and asked of `PullRequestApi`, which carries the upsert too; ordinary durable reads rather than reconciled effects, inheritable by a fork; complete or unavailable, never truncated. Which URLs may be read is operator configuration |
-| lifecycle status/list/history | built by #367 |
-| lifecycle cancel/delete and executor lock | built by #367 |
+| lifecycle status/list/history | built by #367; the durable owner answers the same three from one committed reading, taking no acquisition, attaching nothing and appending nothing |
+| lifecycle cancel/delete and executor lock | built by #367; remote cancellation follows what the run retains and takes an acquisition of its own, and a terminal the owner cannot read refuses cancellation without mutating anything |
 | durable suspension request and executor-lock release | built by #367 |
-| `xmd workflow answer` and the `suspension_answer` effect | built by #300 |
+| `xmd workflow answer` and the `suspension_answer` effect | built by #300; delivery and consumption are implemented on the owner's own authenticated path, which takes no acquisition, and the response schema is judged by the boundary that writes the value (§3.5) |
 | workflow scheduling (watchers, unattended iteration, remote hosts) | #300 |
-| history fork | built (§11); Deno provider only |
+| history fork | built (§11); both providers — the owner copies one selected prefix and its roots into a destination that commits whole or not at all, over a staged candidate assembled without contacting it, and a refusal mutates neither side |
 | XMD artifact export, inspection and fork source | specified in `specs/xmd-artifact-spec.md`; `xmd workflow export` and artifact `status`/`history` are built, Deno provider only. The artifact-backed fork remains unbuilt |
 | Agent session portability evidence in an artifact | specified in `specs/xmd-artifact-spec.md` §2.5; the format and its complete verifier are built. Provider bundle capture, Agent-aware export, intrinsic Agent-aware inspection and artifact-backed fork are unbuilt |
 | workflow Agent isolation | built by #302: no directory attachment, an empty host-owned working directory, no MCP servers, an empty requested tool set and deny-all with a failing permission path; the portable no-tool proof is tracked by #496 |
@@ -3832,7 +3840,8 @@ A completed run replays there as it does locally: it attaches no Workspace, Agen
 | `Evidence.Run` trusted native evidence execution (§10.5) | specified by #710; implementation unbuilt |
 | `Project.Status` and the Project-provider boundary (§10.6) | specified by #710; implementation unbuilt |
 | factory protocol records consumed by these effects | specified by #710 and owned normatively by [the software factory](./github-actions-software-factory-spec.md) §11.2, which this specification links to rather than duplicating: `Git.Merge`'s publish ceiling reads the Stage 7 decision, `PullRequest.Merged`'s wait is one of those records, and `Project.Status` projects a stage through the configured stage-to-option table |
-| remote lifecycle host, executor connection, versioned runner transport and remote topology (§3.8, §13.2) — the existing four-method `WorkflowHost` boundary, with a Cloudflare implementation beside the Deno one | specified by #710; implementation unbuilt |
-| terminal-decision delivery on the delivery plane (§3.8) | specified by #710; implementation unbuilt |
+| remote lifecycle host, executor connection, versioned runner transport and remote topology (§3.8, §13.2) — the existing four-method `WorkflowHost` boundary, with a Cloudflare implementation beside the Deno one | the internal implementation is built by #698: one SQLite-backed Durable Object per run, connection-lifetime acquisition, owner-side parsing and transactions, release identity at admission, and provider-neutral remote adapters behind the same four methods. The configured public host assembly — client factory, runtime selector, endpoint/release/OIDC supplier assembly, CLI configuration and deployment — is unbuilt |
+| terminal-decision delivery on the delivery plane (§3.8) | specified by #710; implementation unbuilt. Answer delivery and consumption on that plane are built by #698; a terminal decision as a delivery subject belongs to the factory records that define it |
+| canonical completed replay from retained state (§9, §13.2) | built by #698 for both providers: the retained root document and the bundle admission come from the run's own committed state, component bytes are authenticated by Git blob identity, an unreadable terminal, import or selection refuses before anything is replayed, and a coherent replay changes only the execution envelope it opened |
 | Worker JavaScript | deferred |
 | bundled workerd local host | omitted; POC #347 / PR #348 retained as provider evidence |
