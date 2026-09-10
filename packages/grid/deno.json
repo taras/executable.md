@@ -1,0 +1,11 @@
+{
+  "name": "@executablemd/grid",
+  "version": "0.11.0",
+  "exports": {
+    ".": "./mod.ts",
+    "./lifecycle": "./lifecycle.ts",
+    "./processes": "./processes.ts",
+    "./posix": "./posix.ts",
+    "./test": "./testing.ts"
+  }
+}

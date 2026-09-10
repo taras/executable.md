@@ -20,7 +20,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 // node:fs/promises primitive directly.
 import { realpath } from "node:fs/promises";
 import { readTextFile, stat } from "@executablemd/runtime";
-import type { NativeLaunchOutcome, NativeLaunchRequest } from "@executablemd/terminal";
+import type { NativeLaunchOutcome, NativeLaunchRequest } from "@executablemd/grid";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { encodeMessage, formatRoute, parseWorkerMessage, PROBE_INSTANCE } from "./protocol.ts";
 import type { ControllerMessage, WorkerMessage } from "./protocol.ts";

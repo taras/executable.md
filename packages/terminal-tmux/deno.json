@@ -1,8 +1,0 @@
-{
-  "name": "@executablemd/terminal-tmux",
-  "version": "0.11.0",
-  "exports": {
-    ".": "./mod.ts",
-    "./test": "./testing.ts"
-  }
-}

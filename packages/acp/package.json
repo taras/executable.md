@@ -10,8 +10,8 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "1.3.0",
     "@executablemd/core": "workspace:*",
+    "@executablemd/grid": "workspace:*",
     "@executablemd/runtime": "workspace:*",
-    "@executablemd/terminal": "workspace:*",
     "acpx": "0.12.0",
     "effection": "4.1.0"
   }

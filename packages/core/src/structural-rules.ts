@@ -1038,18 +1038,18 @@ export function answerViolations(segment: ComponentElement): StructuralViolation
 const TERMINAL_GRID_PROPS = new Set(["columns"]);
 const TERMINAL_PROPS = new Set(["title"]);
 
-/** What a `<Terminal>` written outside the grid that lays it out says. */
-export function strayTerminalMessage(): string {
+/** What a `<Pane>` written outside the grid that lays it out says. */
+export function strayPaneMessage(): string {
   return (
-    "<Terminal> must be a direct child of <Terminal.Grid>. <Terminal> is reserved: it never " +
+    "<Pane> must be a direct child of <Grid>. <Pane> is reserved: it never " +
     "resolves a component, and only the grid it belongs to can place it."
   );
 }
 
-/** What a `<Terminal.Grid>` written inside another grid says. */
-export function nestedTerminalGridMessage(): string {
+/** What a `<Grid>` written inside another grid says. */
+export function nestedGridMessage(): string {
   return (
-    "<Terminal.Grid> cannot be written inside another <Terminal.Grid>. A grid lays out the " +
+    "<Grid> cannot be written inside another <Grid>. A grid lays out the " +
     "panes it is written with, so one pane cannot become a grid of its own."
   );
 }
@@ -1061,18 +1061,16 @@ export function nestedTerminalGridMessage(): string {
  * document is only being read, and an expression's answer is checked here too
  * once expansion has evaluated it.
  */
-export function terminalColumns(columns: Json): Result<number> {
+export function gridColumns(columns: Json): Result<number> {
   if (typeof columns !== "number") {
     return Err(
-      new Error(
-        `Prop "columns" on <Terminal.Grid> must be a positive integer, not ${jsonKind(columns)}.`,
-      ),
+      new Error(`Prop "columns" on <Grid> must be a positive integer, not ${jsonKind(columns)}.`),
     );
   }
   if (!Number.isInteger(columns) || columns < 1) {
     return Err(
       new Error(
-        `Prop "columns" on <Terminal.Grid> must be a positive integer. Got: ` +
+        `Prop "columns" on <Grid> must be a positive integer. Got: ` +
           `${JSON.stringify(columns)}.`,
       ),
     );
@@ -1080,31 +1078,31 @@ export function terminalColumns(columns: Json): Result<number> {
   return Ok(columns);
 }
 
-/** What a `<Terminal.Grid>` naming no column count at all says. */
-export function terminalColumnsMissingMessage(): string {
-  return '<Terminal.Grid> requires a "columns" prop (a positive integer).';
+/** What a `<Grid>` naming no column count at all says. */
+export function gridColumnsMissingMessage(): string {
+  return '<Grid> requires a "columns" prop (a positive integer).';
 }
 
 /** The label one pane displays, or why `title` rejects it. */
-export function terminalTitle(title: Json): Result<string> {
+export function paneTitle(title: Json): Result<string> {
   if (typeof title !== "string") {
     return Err(
-      new Error(`Prop "title" on <Terminal> must be a non-empty string, not ${jsonKind(title)}.`),
+      new Error(`Prop "title" on <Pane> must be a non-empty string, not ${jsonKind(title)}.`),
     );
   }
   if (title.length === 0) {
-    return Err(new Error('Prop "title" on <Terminal> must be a non-empty string. Got: "".'));
+    return Err(new Error('Prop "title" on <Pane> must be a non-empty string. Got: "".'));
   }
   return Ok(title);
 }
 
-/** What a `<Terminal>` naming no title at all says. */
-export function terminalTitleMissingMessage(): string {
-  return '<Terminal> requires a "title" prop (the label the pane displays).';
+/** What a `<Pane>` naming no title at all says. */
+export function paneTitleMissingMessage(): string {
+  return '<Pane> requires a "title" prop (the label the pane displays).';
 }
 
 /** One pane a grid lays out, and where it sat among its siblings. */
-export interface TerminalPane {
+export interface Pane {
   readonly element: ComponentElement;
   /** The child index the pane was written at. */
   readonly index: number;
@@ -1117,52 +1115,50 @@ export interface TerminalPane {
   readonly form: "paired" | "self-closing";
 }
 
-/** How a `<Terminal.Grid>` body divides into panes, and what the division got wrong. */
-export interface TerminalGridStructure {
+/** How a `<Grid>` body divides into panes, and what the division got wrong. */
+export interface GridStructure {
   readonly violations: StructuralViolation[];
   /** The direct panes, in authored order. */
-  readonly panes: TerminalPane[];
+  readonly panes: Pane[];
 }
 
 /** Which of a pane's two forms was written: its own markdown, or a shell. */
-function paneForm(segment: ComponentElement): TerminalPane["form"] {
+function paneForm(segment: ComponentElement): Pane["form"] {
   return segment.selfClosing ? "self-closing" : "paired";
 }
 
-/** Everything one `<Terminal>` pane decides from what the author wrote (spec §6.21). */
-function terminalPaneViolations(segment: ComponentElement): StructuralViolation[] {
+/** Everything one `<Pane>` pane decides from what the author wrote (spec §6.21). */
+function paneViolations(segment: ComponentElement): StructuralViolation[] {
   const found: StructuralViolation[] = [];
   const unknownProp = authoredPropNames(segment).find((name) => !TERMINAL_PROPS.has(name));
   if (unknownProp !== undefined) {
     found.push(
       violation(
         "structural-usage-invalid",
-        "Terminal",
-        `<Terminal> only accepts a "title" prop. Got: "${unknownProp}".`,
+        "Pane",
+        `<Pane> only accepts a "title" prop. Got: "${unknownProp}".`,
         segment,
       ),
     );
   }
 
   if ("title" in segment.props) {
-    const title = terminalTitle(segment.props.title);
+    const title = paneTitle(segment.props.title);
     if (!title.ok) {
-      found.push(violation("structural-usage-invalid", "Terminal", title.error.message, segment));
+      found.push(violation("structural-usage-invalid", "Pane", title.error.message, segment));
     }
   } else if (!("title" in segment.expressions)) {
-    found.push(
-      violation("structural-usage-invalid", "Terminal", terminalTitleMissingMessage(), segment),
-    );
+    found.push(violation("structural-usage-invalid", "Pane", paneTitleMissingMessage(), segment));
   }
   return found;
 }
 
 /**
- * Every `<Terminal>` and `<Terminal.Grid>` below a grid that the grid does not
+ * Every `<Pane>` and `<Grid>` below a grid that the grid does not
  * lay out. The walk stops at a nested grid, which is reported where it sits and
  * owns whatever is written beneath it.
  */
-function misplacedTerminalViolations(children: Segment[]): StructuralViolation[] {
+function misplacedPaneViolations(children: Segment[]): StructuralViolation[] {
   const found: StructuralViolation[] = [];
 
   const walk = (segments: Segment[], depth: number): void => {
@@ -1170,23 +1166,14 @@ function misplacedTerminalViolations(children: Segment[]): StructuralViolation[]
       if (segment.type !== "component") {
         continue;
       }
-      if (segment.name === "Terminal.Grid") {
+      if (segment.name === "Grid") {
         if (depth > 0) {
-          found.push(
-            violation(
-              "structural-usage-invalid",
-              "Terminal.Grid",
-              nestedTerminalGridMessage(),
-              segment,
-            ),
-          );
+          found.push(violation("structural-usage-invalid", "Grid", nestedGridMessage(), segment));
         }
         continue;
       }
-      if (segment.name === "Terminal" && depth > 0) {
-        found.push(
-          violation("structural-usage-invalid", "Terminal", strayTerminalMessage(), segment),
-        );
+      if (segment.name === "Pane" && depth > 0) {
+        found.push(violation("structural-usage-invalid", "Pane", strayPaneMessage(), segment));
       }
       walk(segment.children, depth + 1);
     }
@@ -1197,48 +1184,44 @@ function misplacedTerminalViolations(children: Segment[]): StructuralViolation[]
 }
 
 /**
- * Divide a `<Terminal.Grid>` body into its panes and validate the division
+ * Divide a `<Grid>` body into its panes and validate the division
  * (spec §6.21). Everything here is read from source, so a grid whose layout the
  * author got wrong is refused before `columns` is evaluated, before a pane's
- * content expands, and before any terminal provider is asked for anything.
+ * content expands, and before any grid provider is asked for anything.
  *
  * The panes are the grid's direct children and only they: a control structure
  * that would produce panes as it ran cannot be one, because which panes exist
  * is what the grid must know before it opens anything.
  */
-export function terminalGridStructure(segment: ComponentElement): TerminalGridStructure {
+export function gridStructure(segment: ComponentElement): GridStructure {
   const violations: StructuralViolation[] = [];
-  const panes: TerminalPane[] = [];
+  const panes: Pane[] = [];
 
   const unknownProp = authoredPropNames(segment).find((name) => !TERMINAL_GRID_PROPS.has(name));
   if (unknownProp !== undefined) {
     violations.push(
       violation(
         "structural-usage-invalid",
-        "Terminal.Grid",
-        `<Terminal.Grid> only accepts a "columns" prop. Got: "${unknownProp}".`,
+        "Grid",
+        `<Grid> only accepts a "columns" prop. Got: "${unknownProp}".`,
       ),
     );
   }
   if ("columns" in segment.props) {
-    const columns = terminalColumns(segment.props.columns);
+    const columns = gridColumns(segment.props.columns);
     if (!columns.ok) {
-      violations.push(
-        violation("structural-usage-invalid", "Terminal.Grid", columns.error.message),
-      );
+      violations.push(violation("structural-usage-invalid", "Grid", columns.error.message));
     }
   } else if (!("columns" in segment.expressions)) {
-    violations.push(
-      violation("structural-usage-invalid", "Terminal.Grid", terminalColumnsMissingMessage()),
-    );
+    violations.push(violation("structural-usage-invalid", "Grid", gridColumnsMissingMessage()));
   }
   if (segment.selfClosing) {
     violations.push(
       violation(
         "structural-usage-invalid",
-        "Terminal.Grid",
-        "<Terminal.Grid> holds the panes it lays out, so it is written paired: " +
-          '<Terminal.Grid columns={2}><Terminal title="One" /></Terminal.Grid>.',
+        "Grid",
+        "<Grid> holds the panes it lays out, so it is written paired: " +
+          '<Grid columns={2}><Pane title="One" /></Grid>.',
       ),
     );
   }
@@ -1249,32 +1232,28 @@ export function terminalGridStructure(segment: ComponentElement): TerminalGridSt
       continue;
     }
     substantive++;
-    if (child.type !== "component" || child.name !== "Terminal") {
+    if (child.type !== "component" || child.name !== "Pane") {
       violations.push(
         violation(
           "structural-usage-invalid",
-          "Terminal.Grid",
-          `<Terminal.Grid> holds only <Terminal> panes. Found ${describeSegment(child)} ` +
+          "Grid",
+          `<Grid> holds only <Pane> panes. Found ${describeSegment(child)} ` +
             "directly inside it. Write control flow inside a pane instead.",
           child.type === "component" ? child : undefined,
         ),
       );
       continue;
     }
-    violations.push(...terminalPaneViolations(child));
+    violations.push(...paneViolations(child));
     panes.push({ element: child, index, ordinal: panes.length, form: paneForm(child) });
   }
 
   if (!segment.selfClosing && substantive === 0) {
     violations.push(
-      violation(
-        "structural-usage-invalid",
-        "Terminal.Grid",
-        "<Terminal.Grid> requires at least one <Terminal> pane.",
-      ),
+      violation("structural-usage-invalid", "Grid", "<Grid> requires at least one <Pane> pane."),
     );
   }
 
-  violations.push(...misplacedTerminalViolations(segment.children));
+  violations.push(...misplacedPaneViolations(segment.children));
   return { violations, panes };
 }

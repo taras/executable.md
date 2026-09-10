@@ -1,10 +1,10 @@
 /**
- * Which hosts open a terminal grid, and which only describe one
+ * Which hosts open a grid, and which only describe one
  * (architecture.md §Package ownership).
  *
  * Host composition, not a terminal implementation — which is why it sits here
  * rather than under a `terminal/` path. The domain is
- * `@executablemd/terminal`'s and the provider is `@executablemd/terminal-tmux`'s;
+ * `@executablemd/grid`'s and the provider is `@executablemd/grid-tmux`'s;
  * what this module does is decide, per entrypoint, whether to install them.
  *
  * The Deno source entrypoint and the compiled binary present grids when the
@@ -14,7 +14,7 @@
  * than part-way through one.
  *
  * That is a fact about the host, so the entrypoint states it rather than this
- * module inferring it. `unsupportedTerminalGrid` is the honest half of the same
+ * module inferring it. `unsupportedGrid` is the honest half of the same
  * choice: it installs nothing, and the refusal a document meets is the one core
  * already gives when no provider is installed.
  */
@@ -22,18 +22,18 @@
 import { ensure, race, resource, withResolvers } from "effection";
 import type { Operation } from "effection";
 import process from "node:process";
-import { Execution, installTerminalGridProfile } from "@executablemd/core";
+import { Execution, installGridProfile } from "@executablemd/core";
 import { command as hostCommand } from "@executablemd/runtime";
-import { installDenoTerminalProcesses } from "@executablemd/terminal/posix";
+import { installDenoTerminalProcesses } from "@executablemd/grid/posix";
 import {
   installTmuxGridProvider,
   PANE_WORKER_COMMAND,
   TMUX_PROVIDER,
-} from "@executablemd/terminal-tmux";
-import type { TmuxProviderDependencies } from "@executablemd/terminal-tmux";
+} from "@executablemd/grid-tmux";
+import type { TmuxProviderDependencies } from "@executablemd/grid-tmux";
 
-/** How a host installs whatever presents its terminal grids. */
-export type TerminalGridInstaller = () => Operation<void>;
+/** How a host installs whatever presents its grids. */
+export type GridInstaller = () => Operation<void>;
 
 /**
  * A host that describes grids and presents none.
@@ -42,8 +42,8 @@ export type TerminalGridInstaller = () => Operation<void>;
  * still validated, and core's own refusal is what a document meets when it asks
  * for one to be shown.
  */
-export function* unsupportedTerminalGrid(): Operation<void> {
-  yield* installTerminalGridProfile();
+export function* unsupportedGrid(): Operation<void> {
+  yield* installGridProfile();
 }
 
 /**
@@ -184,9 +184,7 @@ export function useHangup(): Operation<Operation<void>> {
  * executable is what makes a pane work in the compiled distribution, where
  * there is no script to run.
  */
-export function foregroundTerminalGrid(
-  overrides: Partial<TmuxProviderDependencies> = {},
-): TerminalGridInstaller {
+export function foregroundGrid(overrides: Partial<TmuxProviderDependencies> = {}): GridInstaller {
   return function* (): Operation<void> {
     const hangup = yield* useHangup();
     // The observer goes in beside the provider, in the same scope: a host that
@@ -201,7 +199,7 @@ export function foregroundTerminalGrid(
       size: windowSize,
       ...overrides,
     });
-    yield* installTerminalGridProfile({ provider: TMUX_PROVIDER, label: TMUX_PROVIDER });
+    yield* installGridProfile({ provider: TMUX_PROVIDER, label: TMUX_PROVIDER });
     yield* useHangupCancellation(hangup);
   };
 }

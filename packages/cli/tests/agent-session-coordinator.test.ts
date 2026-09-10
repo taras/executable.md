@@ -29,7 +29,7 @@ import {
   createDenoAgentSessionCoordinator,
   hasDenoAgentSessionCoordinator,
 } from "@executablemd/runtime";
-import { installControlledLauncher } from "@executablemd/terminal/test";
+import { installControlledLauncher } from "@executablemd/grid/test";
 import type { AgentSessionCoordinator } from "@executablemd/runtime";
 import {
   ADVERTISED_CLIENT_NATIVE_ATTACHMENT,
@@ -40,7 +40,7 @@ import {
 } from "@executablemd/acp";
 import type { AgentSessionRouteStore, NativeAdapter, NativeBinding } from "@executablemd/acp";
 import type { ExecutableObserver } from "@executablemd/runtime";
-import type { NativeLaunchRequest } from "@executablemd/terminal";
+import type { NativeLaunchRequest } from "@executablemd/grid";
 import { createFakeObserver } from "../../acp/tests/helpers.ts";
 import {
   sessionCoordinatorRoot,

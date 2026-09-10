@@ -27,10 +27,10 @@ import type {
   PreparedLaunchRecord,
   Session,
 } from "@executablemd/core";
-import { flushOutput, NativeLauncher, reserveTerminal } from "@executablemd/terminal";
-import { installControlledLauncher } from "@executablemd/terminal/test";
+import { flushOutput, NativeLauncher, reserveTerminal } from "@executablemd/grid";
+import { installControlledLauncher } from "@executablemd/grid/test";
 import type { AgentSessionCoordinator } from "@executablemd/runtime";
-import type { NativeLaunchRequest } from "@executablemd/terminal";
+import type { NativeLaunchRequest } from "@executablemd/grid";
 import { createAcpxProvider } from "../src/provider.ts";
 import type { AcpxProviderDependencies } from "../src/provider.ts";
 import {
